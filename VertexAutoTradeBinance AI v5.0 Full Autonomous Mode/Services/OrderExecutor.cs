@@ -383,7 +383,7 @@ namespace VertexAutoTradeBinance8.Services
                         ConsoleReportFormatter.TPPlaced(_logger, i + 1, tpPrice, tpQty);
                     }
 
-                    if (totalPlanned >= openedQty)
+                    if (totalPlanned >= openedQty)   
                         break;
                 }
             }
