@@ -1,4 +1,9 @@
-﻿using Binance.Net.Clients;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Binance.Net.Clients;
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using CryptoExchange.Net.Objects;
@@ -42,9 +47,9 @@ namespace VertexAutoTradeBinance8.Services
         {
             using var client = _factory.CreateRestClient();
 
-            // --- 1) Позиции с RETRY (чтобы не сносить ордера до появления позиции)
+            // 1) Позиции с RETRY — ждём пока лимит реально превратится в позицию
             var posInfo = await GetPositionsWithRetryAsync(client, symbol, ct);
-            if (posInfo == null || posInfo.Data == null)
+            if (posInfo == null || !posInfo.Success || posInfo.Data == null)
             {
                 _logger.LogWarning("[SUPERVISOR] Failed to load positions for {symbol}", symbol);
                 return;
@@ -53,10 +58,10 @@ namespace VertexAutoTradeBinance8.Services
             var longPos = posInfo.Data.FirstOrDefault(p => p.PositionSide == PositionSide.Long);
             var shortPos = posInfo.Data.FirstOrDefault(p => p.PositionSide == PositionSide.Short);
 
-            // --- 2) Все открытые ордера
+            // 2) Все открытые ордера по символу
             var openOrders = await LoadOrders(client, symbol);
 
-            // --- 3) Свечи М1 для трейлинга
+            // 3) Свечи М1 для трейлинга
             IReadOnlyList<BinanceFuturesUsdtKline>? klines1m = null;
             try
             {
@@ -71,10 +76,10 @@ namespace VertexAutoTradeBinance8.Services
             await HandleSideAsync(client, symbol, PositionSide.Short, shortPos, openOrders, lastSignal, klines1m, ct);
         }
 
-        // RETRY-обёртка для позиций: даём бирже время зафиксировать факт открытия
-        // RETRY-обёртка для позиций: даём бирже время зафиксировать факт открытия
-        private async Task<WebCallResult<BinancePositionDetailsUsdt[]>>
-        GetPositionsWithRetryAsync(
+        // ======================================================================
+        // RETRY ДЛЯ ПОЗИЦИЙ — Binance возвращает массив
+        // ======================================================================
+        private async Task<WebCallResult<BinancePositionDetailsUsdt[]>> GetPositionsWithRetryAsync(
             BinanceRestClient client,
             string symbol,
             CancellationToken ct)
@@ -82,6 +87,7 @@ namespace VertexAutoTradeBinance8.Services
             const int maxAttempts = 5;
             var delay = TimeSpan.FromMilliseconds(200);
 
+            // тип совпадает с тем, что возвращает Binance.Net
             WebCallResult<BinancePositionDetailsUsdt[]> last = null!;
 
             for (int i = 0; i < maxAttempts; i++)
@@ -93,12 +99,10 @@ namespace VertexAutoTradeBinance8.Services
 
                 if (res.Success && res.Data != null)
                 {
-                    var arr = res.Data; // <-- массив BinancePositionDetailsUsdt[]
+                    var longPos = res.Data.FirstOrDefault(x => x.PositionSide == PositionSide.Long);
+                    var shortPos = res.Data.FirstOrDefault(x => x.PositionSide == PositionSide.Short);
 
-                    var longPos = arr.FirstOrDefault(x => x.PositionSide == PositionSide.Long);
-                    var shortPos = arr.FirstOrDefault(x => x.PositionSide == PositionSide.Short);
-
-                    // позиция появилась → возвращаем сразу
+                    // Если хотя бы одна сторона уже имеет физический объём — позиция открыта
                     if ((longPos != null && longPos.Quantity != 0m) ||
                         (shortPos != null && shortPos.Quantity != 0m))
                     {
@@ -112,9 +116,6 @@ namespace VertexAutoTradeBinance8.Services
             return last;
         }
 
-
-
-
         private async Task<List<BinanceUsdFuturesOrder>> LoadOrders(BinanceRestClient client, string symbol)
         {
             var res = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol);
@@ -126,50 +127,118 @@ namespace VertexAutoTradeBinance8.Services
         // ======================================================================
         // SIDE PROCESSOR
         // ======================================================================
+        /* private async Task HandleSideAsync(
+             BinanceRestClient client,
+             string symbol,
+             PositionSide side,
+             BinancePositionDetailsUsdt? pos,
+             List<BinanceUsdFuturesOrder> allOrders,
+             TradeSignal? signal,
+             IReadOnlyList<BinanceFuturesUsdtKline>? klines,
+             CancellationToken ct)
+         {
+             decimal qty = pos != null ? Math.Abs(pos.Quantity) : 0m;
+
+             var orders = allOrders.Where(o => o.PositionSide == side).ToList();
+             var oppositeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+             // === НЕТ ПОЗИЦИИ: ЧИСТИМ ТОЛЬКО ЗАЩИТНЫЕ SL/TP, НЕ ТРОГАЕМ ВХОДНЫЕ ОРДЕРА ===
+             if (qty <= 0)
+             {
+                 await CleanupSideOrders(client, symbol, side, orders);
+                 _logger.LogInformation("[SUPERVISOR] No position for {symbol} {side} → only SL/TP cleanup", symbol, side);
+                 return;
+             }
+
+             // --- ЗАЩИТНЫЕ ОРДЕРА ПО СТОРОНЕ ---
+             var protectiveOrders = orders
+                 .Where(o =>
+                     o.Side == oppositeSide &&
+                     (o.Type == FuturesOrderType.Stop ||
+                      o.Type == FuturesOrderType.StopMarket ||
+                      o.Type == FuturesOrderType.TakeProfit ||
+                      o.Type == FuturesOrderType.TakeProfitMarket ||
+                      o.Type == FuturesOrderType.Limit)) // TP от OrderExecutor — обычный LIMIT
+                 .ToList();
+
+             bool hasSl = protectiveOrders.Any(o =>
+                 o.Type == FuturesOrderType.Stop || o.Type == FuturesOrderType.StopMarket);
+
+             bool hasTp = protectiveOrders.Any(o =>
+                 o.Type == FuturesOrderType.TakeProfit ||
+                 o.Type == FuturesOrderType.TakeProfitMarket ||
+                 (o.Type == FuturesOrderType.Limit && o.Side == oppositeSide));
+
+             // === ЖЁСТКАЯ ГАРАНТИЯ: ЕСЛИ ЕСТЬ ПОЗИЦИЯ, ДОЛЖНЫ БЫТЬ SL и TP ===
+             if (!hasSl)
+             {
+                 _logger.LogWarning("[SUPERVISOR] {symbol} {side}: POSITION HAS NO SL → CREATE EMERGENCY SL",
+                     symbol, side);
+                 await CreateSL(client, symbol, side, qty, signal);
+             }
+
+             if (!hasTp)
+             {
+                 _logger.LogWarning("[SUPERVISOR] {symbol} {side}: POSITION HAS NO TP → CREATE EMERGENCY TP",
+                     symbol, side);
+                 await CreateTP(client, symbol, side, qty, signal);
+             }
+
+             // Перечитываем ордера после возможного создания защиты
+             orders = (await LoadOrders(client, symbol))
+                 .Where(o => o.PositionSide == side)
+                 .ToList();
+
+             await MultiLayerTrailing(client, symbol, side, qty, signal, orders, klines);
+         }
+         */
         private async Task HandleSideAsync(
-            BinanceRestClient client,
-            string symbol,
-            PositionSide side,
-            BinancePositionDetailsUsdt? pos,
-            List<BinanceUsdFuturesOrder> allOrders,
-            TradeSignal? signal,
-            IReadOnlyList<BinanceFuturesUsdtKline>? klines,
-            CancellationToken ct)
+     BinanceRestClient client,
+     string symbol,
+     PositionSide side,
+     BinancePositionDetailsUsdt? pos,
+     List<BinanceUsdFuturesOrder> allOrders,
+     TradeSignal? signal,
+     IReadOnlyList<BinanceFuturesUsdtKline>? klines,
+     CancellationToken ct)
         {
             decimal qty = pos != null ? Math.Abs(pos.Quantity) : 0m;
 
-            var orders = allOrders.Where(o => o.PositionSide == side).ToList();
-            var oppositeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-
-            // === НЕТ ПОЗИЦИИ: ЧИСТИМ ТОЛЬКО ЗАЩИТНЫЕ SL/TP, НЕ ТРОГАЕМ ВХОДНЫЕ ОРДЕРА ===
+            // ----------------------------------------------------------
+            // 1) ЕСТЬ ЛИ ПОЗИЦИЯ?
+            // ----------------------------------------------------------
             if (qty <= 0)
             {
-                await CleanupSideOrders(client, symbol, side, orders);
-                _logger.LogInformation("[SUPERVISOR] No position for {symbol} {side} → only SL/TP cleanup", symbol, side);
-                return;
+                _logger.LogInformation("[SUPERVISOR] {symbol} {side}: no position → skip", symbol, side);
+                return; // ❗ НИЧЕГО НЕ УДАЛЯЕТ И НЕ СОЗДАЁТ
             }
 
-            bool hasSl = orders.Any(o => o.Side == oppositeSide &&
-                                         (o.Type == FuturesOrderType.Stop ||
-                                          o.Type == FuturesOrderType.StopMarket));
+            // ----------------------------------------------------------
+            // 2) ИЩЕМ ТЕКУЩИЙ SL
+            // ----------------------------------------------------------
+            var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
-            bool hasTp = orders.Any(o => o.Side == oppositeSide &&
-                                         (o.Type == FuturesOrderType.TakeProfit ||
-                                          o.Type == FuturesOrderType.TakeProfitMarket));
+            var slOrder = allOrders.FirstOrDefault(o =>
+                o.Side == closeSide &&
+                (o.Type == FuturesOrderType.Stop || o.Type == FuturesOrderType.StopMarket)
+            );
 
-            if (!hasSl)
-                await CreateSL(client, symbol, side, qty, signal);
+            if (slOrder == null)
+            {
+                _logger.LogWarning("[SUPERVISOR] {symbol} {side}: SL not found (will try TRAIL later)", symbol, side);
+                return; // ❗ НЕ СОЗДАЁТ SL
+            }
 
-            if (!hasTp)
-                await CreateTP(client, symbol, side, qty, signal);
-
-            await MultiLayerTrailing(client, symbol, side, qty, signal, orders, klines);
+            // ----------------------------------------------------------
+            // 3) ТРЕЙЛИМ ТОЛЬКО SL, TP НЕ ТРОГАЕМ НИКОГДА
+            // ----------------------------------------------------------
+            await MultiLayerTrailing(client, symbol, side, qty, signal, allOrders, klines);
         }
 
         /// <summary>
         /// Чистим ТОЛЬКО защитные ордера (SL/TP) по стороне, не трогая входные лимит/маркет.
         /// </summary>
-        private async Task CleanupSideOrders(
+    /*    private async Task CleanupSideOrders(
             BinanceRestClient client,
             string symbol,
             PositionSide side,
@@ -225,9 +294,9 @@ namespace VertexAutoTradeBinance8.Services
                 timeInForce: TimeInForce.GoodTillCanceled);
 
             if (res.Success)
-                _logger.LogInformation($"[SUPERVISOR] SL CREATED {symbol} {sl} qty={qty}");
+                _logger.LogInformation("[SUPERVISOR] SL CREATED {symbol} {sl} qty={qty}", symbol, sl, qty);
             else
-                _logger.LogError($"[SUPERVISOR] SL ERROR {symbol}: {res.Error}");
+                _logger.LogError("[SUPERVISOR] SL ERROR {symbol}: {err}", symbol, res.Error);
         }
 
         // ======================================================================
@@ -255,11 +324,11 @@ namespace VertexAutoTradeBinance8.Services
                 positionSide: side);
 
             if (res.Success)
-                _logger.LogInformation($"[SUPERVISOR] TP CREATED {symbol} trigger={trigger} qty={qty}");
+                _logger.LogInformation("[SUPERVISOR] TP CREATED {symbol} trigger={trigger} qty={qty}", symbol, trigger, qty);
             else
-                _logger.LogError($"[SUPERVISOR] TP ERROR {symbol}: {res.Error}");
+                _logger.LogError("[SUPERVISOR] TP ERROR {symbol}: {err}", symbol, res.Error);
         }
-
+        */
         // ======================================================================
         // MULTI-LAYER TRAILING SYSTEM (PRO LEVEL)
         // ======================================================================
@@ -272,13 +341,18 @@ namespace VertexAutoTradeBinance8.Services
             List<BinanceUsdFuturesOrder> orders,
             IReadOnlyList<BinanceFuturesUsdtKline>? klines)
         {
-            if (signal == null || klines == null || klines.Count < 50)
+            if (signal == null || klines == null || klines.Count < 50 || qty <= 0)
                 return;
 
             var slOrder = orders.FirstOrDefault(o =>
-                o.Type == FuturesOrderType.Stop || o.Type == FuturesOrderType.StopMarket);
+                o.Side == (side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy) &&
+                (o.Type == FuturesOrderType.Stop || o.Type == FuturesOrderType.StopMarket));
 
-            if (slOrder == null) return;
+            if (slOrder == null)
+            {
+                _logger.LogWarning("[SUPERVISOR] {symbol} {side}: TRAILING skipped — SL order not found", symbol, side);
+                return;
+            }
 
             decimal mark = klines.Last().ClosePrice;
 
@@ -372,6 +446,7 @@ namespace VertexAutoTradeBinance8.Services
             if (oldSl <= 0 || newSl <= 0)
                 return;
 
+            // Не ухудшаем позицию
             if (side == PositionSide.Long && newSl <= oldSl) return;
             if (side == PositionSide.Short && newSl >= oldSl) return;
 

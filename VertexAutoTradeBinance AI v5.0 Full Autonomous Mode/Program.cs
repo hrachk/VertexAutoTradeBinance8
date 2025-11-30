@@ -33,6 +33,10 @@ public class Program
                 services.AddSingleton<AiSelfLearningService>();
                 services.AddSingleton<AiModelSnapshotService>();
                 services.AddSingleton<TradeResultMonitorService>();
+                services.AddSingleton<CheckAfterFillService>();
+                services.AddSingleton<TradeSignalMemoryService>();
+                services.AddSingleton<OrderTracerService>();
+                services.AddSingleton<RecoverLostOrdersService>();
 
                 services.AddSingleton<AiLiquidityClusterService>();
                 services.AddSingleton<StrategyEngine>();

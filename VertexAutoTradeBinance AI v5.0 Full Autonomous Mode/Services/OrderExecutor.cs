@@ -1,9 +1,10 @@
+using Binance.Net.Clients;
+using Binance.Net.Enums;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Binance.Net.Enums;
-using Microsoft.Extensions.Logging;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -14,17 +15,23 @@ namespace VertexAutoTradeBinance8.Services
         private readonly BinanceClientFactory _factory;
         private readonly SymbolInfoService _symbolInfo;
         private readonly TradeResultMonitorService _tradeMonitor;
+        private readonly OrderTracerService _orderTracer;          // <=== НОВОЕ
+        private readonly TradeSignalMemoryService _signalMemory;   // <=== если ещё не добавлял (для 4.2)
 
         public OrderExecutor(
             ILogger<OrderExecutor> logger,
             BinanceClientFactory factory,
             SymbolInfoService symbolInfo,
-            TradeResultMonitorService tradeMonitor)
+            TradeResultMonitorService tradeMonitor,
+            OrderTracerService orderTracer,
+            TradeSignalMemoryService signalMemory)
         {
             _logger = logger;
             _factory = factory;
             _symbolInfo = symbolInfo;
             _tradeMonitor = tradeMonitor;
+            _orderTracer = orderTracer;
+            _signalMemory = signalMemory;
         }
 
         private decimal RoundToTick(decimal price, decimal tick)
@@ -33,8 +40,48 @@ namespace VertexAutoTradeBinance8.Services
             return Math.Round(price / tick) * tick;
         }
 
+        //=== SAFETY: аварийное закрытие позиции маркетом ======================
+        private async Task<bool> ClosePositionMarketAsync(
+            BinanceRestClient client,
+            string symbol,
+            PositionSide positionSide,
+            decimal qty)
+        {
+            if (qty <= 0m)
+                return true;
+
+            var side = positionSide == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+            var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: symbol,
+                side: side,
+                type: FuturesOrderType.Market,
+                quantity: qty,
+                positionSide: positionSide);
+
+            if (!res.Success)
+            {
+                _logger.LogError(
+                    "❌ [SAFETY] Market close FAILED for {symbol} side={side} qty={qty}: {err}",
+                    symbol, positionSide, qty, res.Error);
+                return false;
+            }
+
+            _logger.LogWarning(
+                "✅ [SAFETY] Position {symbol} side={side} qty={qty} closed MARKET due to SL failure",
+                symbol, positionSide, qty);
+
+            return true;
+        }
+
+        //====================================================================
+        // MAIN
+        //====================================================================
         public async Task PlaceOrderAsync(TradeSignal signal, decimal quantity, CancellationToken ct = default)
         {
+            _logger.LogWarning("[ENTRY] PlaceOrderAsync CALLED for {Symbol} side={Side} qty={Qty}",
+        signal.Symbol, signal.Side, quantity);
+
             using var client = _factory.CreateRestClient();
 
             var side = signal.Side == SignalSide.Buy ? OrderSide.Buy : OrderSide.Sell;
@@ -60,18 +107,25 @@ namespace VertexAutoTradeBinance8.Services
 
             decimal rawDiffPct = Math.Abs(mark - signal.EntryPrice) / mark * 100m;
 
-            // --- пороги для "старого" сигнала
-            const decimal maxLateEntryPct = 0.35m;   // если ушло дальше 0.35% — сигнал уже старый
-            const decimal superSignalMarketDiff = 0.03m; // для SUPER-сигната >0.03% — чистый маркет
 
-            // если обычный сигнал и рынок уже улетел далеко — пропускаем
-            if (signal.IsSuperSignal != true && rawDiffPct > maxLateEntryPct)
+
+           
+           
+            // Допустимый сдвиг цены от сигнальной
+            const decimal maxLateEntryPct = 0.8m;           // было 0.35m   // обычный сигнал, если цена ушла дальше → скипаем
+
+            // Супер-сигнал: если цена сильно убежала — сразу чистый Market
+            const decimal superSignalMarketDiff = 0.10m;    // было 0.03m   // SUPER-сигнал: при большом diff → чистый Market
+
+
+            if (!signal.IsSuperSignal && rawDiffPct > maxLateEntryPct)
             {
                 _logger.LogWarning(
-                    "[ENTRY] Skip {symbol}: diff={diff:F4}% > {maxDiff:F2}% (late signal)",
+                    "[ENTRY][SKIP] {0}: rawDiff={1:F4}% > maxLate={2:F2}%",
                     signal.Symbol, rawDiffPct, maxLateEntryPct);
                 return;
             }
+
 
             bool isSuper = signal.IsSuperSignal == true;
 
@@ -84,16 +138,15 @@ namespace VertexAutoTradeBinance8.Services
                     ? RoundToTick(slTrig - tick, tick)
                     : RoundToTick(slTrig + tick, tick);
 
-            // Консольный репорт заполним после вычисления стартового entry
             decimal initialEntry = RoundToTick(signal.EntryPrice, tick);
 
             // =========================================================
-            // 4) EXECUTION LOOP (умный вход v4.3)
+            // 4) EXECUTION LOOP (умный вход v4.4)
             // =========================================================
             const int maxAttempts = 7;
-            const decimal qtyStepFactor = 0.80m;          // при ошибках маржи режем объём до 80%
-            const decimal chaseMaxSlippagePct = 0.20m;    // максимум 0.20 % от исходного entry
-            const decimal chaseRecenterTicks = 2m;        // смещение на несколько тиков вокруг mark
+            const decimal qtyStepFactor = 0.80m;
+            const decimal chaseMaxSlippagePct = 0.5m;
+            const decimal chaseRecenterTicks = 2m;
             const int chaseDelayMs = 800;
 
             bool entryDone = false;
@@ -123,12 +176,11 @@ namespace VertexAutoTradeBinance8.Services
                     return;
                 }
 
-                // --- обновляем MARK каждый цикл, чтобы не входить "вслепую"
+                // обновляем MARK
                 markResult = await client.UsdFuturesApi.ExchangeData.GetMarkPriceAsync(signal.Symbol);
                 if (markResult.Success)
                     mark = markResult.Data.MarkPrice;
 
-                // --- считаем отклонение от ИСХОДНОГО уровня входа сигнала
                 decimal totalDiffPct = Math.Abs(mark - signal.EntryPrice) / mark * 100m;
 
                 if (!isSuper && totalDiffPct > maxLateEntryPct)
@@ -137,36 +189,35 @@ namespace VertexAutoTradeBinance8.Services
                         _logger,
                         signal.Symbol,
                         $"late entry: diff={totalDiffPct:F4}% > {maxLateEntryPct:F2}%");
+
+
+                    _logger.LogWarning(
+        "[ENTRY] SKIP {symbol}: totalDiff={diff:F4}% > maxLateEntry={max:F2}%",
+        signal.Symbol, totalDiffPct, maxLateEntryPct);
+
+
                     return;
                 }
 
-                // =====================================================
-                // ВЫБОР ФАКТИЧЕСКОГО ENTRY
-                // =====================================================
+                // ---------- выбор ENTRY ----------
                 decimal entry;
 
                 if (isMarketEntry)
                 {
-                    // SUPER-SIGNAL: чистый MARKET, только контролируем notional
                     entry = mark;
                 }
                 else
                 {
-                    // Умный лимитник: если цена ещё не дала наш уровень — ждём.
-                    // Если уже проскочила за уровень, но в пределах chaseMaxSlippagePct —
-                    // ставим лимит ближе к mark, чтобы не "улетал" без нас.
                     bool wantShort = side == OrderSide.Sell;
 
                     if (wantShort)
                     {
                         if (mark >= signal.EntryPrice)
                         {
-                            // цена ещё выше/рядом — ждём лимитом у уровня сигнала
                             entry = RoundToTick(signal.EntryPrice, tick);
                         }
                         else
                         {
-                            // цена уже ниже нашего уровня → проскальзывание
                             if (totalDiffPct > chaseMaxSlippagePct)
                             {
                                 ConsoleReportFormatter.EntryFailedHard(
@@ -181,7 +232,6 @@ namespace VertexAutoTradeBinance8.Services
                     }
                     else
                     {
-                        // LONG
                         if (mark <= signal.EntryPrice)
                         {
                             entry = RoundToTick(signal.EntryPrice, tick);
@@ -202,7 +252,7 @@ namespace VertexAutoTradeBinance8.Services
                     }
                 }
 
-                // --- проверка minNotional под новый entry
+                // minNotional под текущий entry
                 if (qty * entry < minNotional)
                 {
                     var needed = minNotional / entry;
@@ -250,7 +300,6 @@ namespace VertexAutoTradeBinance8.Services
                     attempt,
                     maxAttempts);
 
-                // --- типичные проблемы маржи / фильтров → просто уменьшаем объём и пробуем снова
                 if (code is -2019 or -4164 or -1013 or -1111)
                 {
                     qty = Math.Floor((qty * qtyStepFactor) / step) * step;
@@ -261,7 +310,6 @@ namespace VertexAutoTradeBinance8.Services
                     continue;
                 }
 
-                // остальные ошибки — не пытаемся бесконечно биться
                 ConsoleReportFormatter.EntryFailedHard(
                     _logger,
                     signal.Symbol,
@@ -321,7 +369,7 @@ namespace VertexAutoTradeBinance8.Services
                 openedQty);
 
             // =========================================================
-            // 6) STOP LOSS
+            // 6) STOP LOSS  (сильная защита)
             // =========================================================
             var slSideReal = signal.Side == SignalSide.Buy ? OrderSide.Sell : OrderSide.Buy;
 
@@ -334,11 +382,48 @@ namespace VertexAutoTradeBinance8.Services
                 price: slLimit,
                 timeInForce: TimeInForce.GoodTillCanceled,
                 positionSide: positionSide);
+            if (slOrder.Success && slOrder.Data != null)
+            {
+                _logger.LogInformation($"[SUPERVISOR] SL CREATED {signal.Symbol} {signal.StopLoss} qty={qty}");
+                _orderTracer.Register(signal.Symbol, slOrder.Data.Id);    // <===
+            }
 
             if (!slOrder.Success)
                 _logger.LogError("❌ SL ERROR {Symbol}: {Error}", signal.Symbol, slOrder.Error);
             else
+            {
                 ConsoleReportFormatter.SLPlaced(_logger, slTrig, slLimit, openedQty);
+
+                if (slOrder.Data != null)
+                    _orderTracer.Register(signal.Symbol, slOrder.Data.Id);   // <=== ВАЖНО
+            }
+
+
+            if (!slOrder.Success)
+            {
+                _logger.LogError("❌ SL ERROR {Symbol}: {Error}", signal.Symbol, slOrder.Error);
+
+                // === SAFETY: если SL не поставился → закрываем позицию MARKET ===
+                var closed = await ClosePositionMarketAsync(
+                    client,
+                    signal.Symbol,
+                    positionSide,
+                    openedQty);
+
+                if (!closed)
+                {
+                    _logger.LogError(
+                        "🚨 [CRITICAL] Position {symbol} left WITHOUT SL and market close failed. CHECK MANUALLY!",
+                        signal.Symbol);
+                }
+
+                // дальше TP не ставим, выходим
+                return;
+            }
+            else
+            {
+                ConsoleReportFormatter.SLPlaced(_logger, slTrig, slLimit, openedQty);
+            }
 
             // =========================================================
             // 7) TAKE PROFITS (Multi-TP)
@@ -371,7 +456,19 @@ namespace VertexAutoTradeBinance8.Services
                         price: tpPrice,
                         timeInForce: TimeInForce.GoodTillCanceled,
                         positionSide: positionSide);
+                    if (!tpOrder.Success)
+                    {
+                        _logger.LogError("❌ TP{Index} ERROR {Symbol}: {Err}",
+                            i + 1, signal.Symbol, tpOrder.Error);
+                    }
+                    else
+                    {
+                        totalPlanned += tpQty;
+                        ConsoleReportFormatter.TPPlaced(_logger, i + 1, tpPrice, tpQty);
 
+                        if (tpOrder.Data != null)
+                            _orderTracer.Register(signal.Symbol, tpOrder.Data.Id);   // <=== ВАЖНО
+                    }
                     if (!tpOrder.Success)
                     {
                         _logger.LogError("❌ TP{Index} ERROR {Symbol}: {Err}",
@@ -383,7 +480,16 @@ namespace VertexAutoTradeBinance8.Services
                         ConsoleReportFormatter.TPPlaced(_logger, i + 1, tpPrice, tpQty);
                     }
 
-                    if (totalPlanned >= openedQty)   
+                    if (tpOrder.Success && tpOrder.Data != null)
+                    {
+                        totalPlanned += tpQty;
+                        _logger.LogInformation($"[SUPERVISOR] TP CREATED {signal.Symbol} trigger={signal.TakeProfit} qty={qty}");
+                        _orderTracer.Register(signal.Symbol, tpOrder.Data.Id);    // <===
+                    }
+
+
+
+                    if (totalPlanned >= openedQty)
                         break;
                 }
             }
@@ -399,6 +505,14 @@ namespace VertexAutoTradeBinance8.Services
             _logger.LogInformation(
                 "[AI-LEARN] ENTRY RECORDED for {Symbol} entry≈{Entry}, sl={SL}",
                 signal.Symbol, initialEntry, slTrig);
+
+            _logger.LogInformation(
+    "[AI-LEARN] ENTRY RECORDED for {Symbol} entry≈{Entry}, sl={SL}",
+    signal.Symbol, initialEntry, slTrig);
+
+            // сохраняем последний сигнал для CheckAfterFill / Recover
+            _signalMemory.Save(signal);
+
         }
     }
 }

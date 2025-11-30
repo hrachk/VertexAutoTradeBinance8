@@ -1,7 +1,7 @@
 //  -----------------------------------------------------------------------------
 //   STRATEGY ENGINE — PRO RANGE PATCH + LIQUIDITY GRAB + SMART BREAKOUT + FIX PACK
-//   Пакет FIX: SmartRegime confidence, ATR-фильтры, импульсные свечи, TP/SL по TF.
-//   Совместимо с VertexAutoTradeBinance8, имена классов/методов не меняются.
+//   FIX 4.4: Adaptive SmartRegime Threshold (volatility + trend slope + regime).
+//   Полностью совместимо с VertexAutoTradeBinance8.
 //  -----------------------------------------------------------------------------
 
 using System;
@@ -43,28 +43,24 @@ namespace VertexAutoTradeBinance8.Strategy
             _smartRegimeService = smartRegimeService;
         }
 
-        // -------------------------------------------------------------------------------------
-        // ATR/TP/SL настройки по таймфрейму
-        // -------------------------------------------------------------------------------------
+        // -------------------------------------------------------------------------
+        // ATR/TP/SL настройки (без изменений)
+        // -------------------------------------------------------------------------
         private static (decimal slMult, decimal tp1Mult, decimal tp2Mult, decimal tp3Mult) GetAtrConfig(KlineInterval interval)
         {
             return interval switch
             {
-                KlineInterval.OneMinute or KlineInterval.FiveMinutes
-                    => (0.8m, 1.5m, 2.3m, 3.2m),   // M1/M5: SL ~0.8 ATR, TP растянуты
-                KlineInterval.FifteenMinutes
-                    => (1.2m, 1.6m, 2.4m, 3.4m),   // M15: SL дальше, TP пошире
-                KlineInterval.OneHour or KlineInterval.FourHour
-                    => (2.0m, 1.8m, 2.8m, 3.8m),   // H1/H4: трендовые ходы
-                KlineInterval.OneDay
-                    => (2.5m, 2.0m, 3.0m, 4.5m),   // D1: большие ходы
+                KlineInterval.OneMinute or KlineInterval.FiveMinutes => (0.8m, 1.5m, 2.3m, 3.2m),
+                KlineInterval.FifteenMinutes => (1.2m, 1.6m, 2.4m, 3.4m),
+                KlineInterval.OneHour or KlineInterval.FourHour => (2.0m, 1.8m, 2.8m, 3.8m),
+                KlineInterval.OneDay => (2.5m, 2.0m, 3.0m, 4.5m),
                 _ => (1.0m, 1.5m, 2.3m, 3.2m)
             };
         }
 
-        // -------------------------------------------------------------------------------------
-        // EMA helper
-        // -------------------------------------------------------------------------------------
+        // -------------------------------------------------------------------------
+        // EMA helper (без изменений)
+        // -------------------------------------------------------------------------
         private static decimal Ema(IReadOnlyList<BinanceFuturesUsdtKline> klines, int period, int index)
         {
             int start = Math.Max(0, index - period + 1);
@@ -72,32 +68,28 @@ namespace VertexAutoTradeBinance8.Strategy
 
             decimal ema = klines[start].ClosePrice;
             for (int i = start + 1; i <= index; i++)
-            {
                 ema = klines[i].ClosePrice * k + ema * (1 - k);
-            }
+
             return ema;
         }
 
-        // -------------------------------------------------------------------------------------
-        // ATR helper (с защитой индексов)
-        // -------------------------------------------------------------------------------------
+        // -------------------------------------------------------------------------
+        // ATR helper (без изменений)
+        // -------------------------------------------------------------------------
         private static decimal Atr(IReadOnlyList<BinanceFuturesUsdtKline> klines, int period, int lastIndex)
         {
-            if (klines == null || klines.Count < period + 1)
-                return 0;
-
-            if (lastIndex <= 0 || lastIndex >= klines.Count)
-                return 0;
+            if (klines == null || klines.Count < period + 1) return 0;
+            if (lastIndex <= 0 || lastIndex >= klines.Count) return 0;
 
             int start = lastIndex - period + 1;
-            if (start <= 0)
-                start = 1; // чтобы prev = klines[i-1] не ушёл в -1
+            if (start <= 0) start = 1;
 
             decimal sumTr = 0;
             for (int i = start; i <= lastIndex; i++)
             {
                 var k = klines[i];
                 var prev = klines[i - 1];
+
                 decimal tr1 = k.HighPrice - k.LowPrice;
                 decimal tr2 = Math.Abs(k.HighPrice - prev.ClosePrice);
                 decimal tr3 = Math.Abs(k.LowPrice - prev.ClosePrice);
@@ -105,15 +97,12 @@ namespace VertexAutoTradeBinance8.Strategy
             }
 
             int bars = lastIndex - start + 1;
-            if (bars <= 0)
-                return 0;
-
-            return sumTr / bars;
+            return bars > 0 ? sumTr / bars : 0;
         }
 
-        // -------------------------------------------------------------------------------------
-        // Фильтры по свече: импульс/до́джи
-        // -------------------------------------------------------------------------------------
+        // -------------------------------------------------------------------------
+        // Фильтры по свече (без изменений)
+        // -------------------------------------------------------------------------
         private static decimal GetTrueRange(BinanceFuturesUsdtKline current, BinanceFuturesUsdtKline prev)
         {
             var tr1 = current.HighPrice - current.LowPrice;
@@ -124,54 +113,37 @@ namespace VertexAutoTradeBinance8.Strategy
 
         private static bool IsTooBigImpulseBar(BinanceFuturesUsdtKline current, BinanceFuturesUsdtKline prev, decimal atr)
         {
-            if (atr <= 0)
-                return false;
-
-            var tr = GetTrueRange(current, prev);
-            return tr >= atr * 1.8m; // > 1.8 ATR — бешеный импульс, лучше не лезть
+            if (atr <= 0) return false;
+            return GetTrueRange(current, prev) >= atr * 1.8m;
         }
 
         private static bool IsTooSmallBody(BinanceFuturesUsdtKline current, decimal atr)
         {
-            if (atr <= 0)
-                return true;
-
-            var body = Math.Abs(current.ClosePrice - current.OpenPrice);
-            return body < atr * 0.15m; // до́джи/шум — не входим
+            if (atr <= 0) return true;
+            return Math.Abs(current.ClosePrice - current.OpenPrice) < atr * 0.15m;
         }
 
-        // -------------------------------------------------------------------------------------
-        // RANGE: LIQUIDITY GRAB ENTRY DETECTION
-        // -------------------------------------------------------------------------------------
-        private TradeSignal? TryLiquidityGrab(
-            string symbol,
-            KlineInterval interval,
-            IReadOnlyList<BinanceFuturesUsdtKline> klines)
+        // -------------------------------------------------------------------------
+        // RANGE: LIQUIDITY GRAB (без изменений)
+        // -------------------------------------------------------------------------
+        private TradeSignal? TryLiquidityGrab(string symbol, KlineInterval interval, IReadOnlyList<BinanceFuturesUsdtKline> klines)
         {
-            if (klines == null || klines.Count < 30)
-                return null;
+            if (klines == null || klines.Count < 30) return null;
 
             int last = klines.Count - 1;
-            if (last < 1)
-                return null;
+            if (last < 1) return null;
 
             var c = klines[last];
             var prev = klines[last - 1];
 
             decimal atr = Atr(klines, 14, last);
-            if (atr <= 0)
-                return null;
+            if (atr <= 0) return null;
 
-            // защита от бешеного импульса и микросвечей
-            if (IsTooBigImpulseBar(c, prev, atr))
-                return null;
-
-            if (IsTooSmallBody(c, atr))
-                return null;
+            if (IsTooBigImpulseBar(c, prev, atr)) return null;
+            if (IsTooSmallBody(c, atr)) return null;
 
             var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(interval);
 
-            // Long Grab — сильный хвост вниз + возврат в диапазон
             bool longGrab =
                 c.LowPrice < prev.LowPrice &&
                 c.ClosePrice > prev.LowPrice &&
@@ -190,7 +162,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     EntryPrice = entry,
                     StopLoss = sl,
                     Atr = atr,
-                    TakeProfits = new List<decimal>
+                    TakeProfits = new()
                     {
                         entry + atr * tp1Mult,
                         entry + atr * tp2Mult,
@@ -203,7 +175,6 @@ namespace VertexAutoTradeBinance8.Strategy
                 };
             }
 
-            // Short Grab — хвост вверх + возврат под уровень
             bool shortGrab =
                 c.HighPrice > prev.HighPrice &&
                 c.ClosePrice < prev.HighPrice &&
@@ -222,7 +193,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     EntryPrice = entry,
                     StopLoss = sl,
                     Atr = atr,
-                    TakeProfits = new List<decimal>
+                    TakeProfits = new()
                     {
                         entry - atr * tp1Mult,
                         entry - atr * tp2Mult,
@@ -238,41 +209,32 @@ namespace VertexAutoTradeBinance8.Strategy
             return null;
         }
 
-        // -------------------------------------------------------------------------------------
-        // PULLBACK EMA21
-        // -------------------------------------------------------------------------------------
-        private TradeSignal? TryPullbackEma21(
-            string symbol,
-            KlineInterval interval,
-            IReadOnlyList<BinanceFuturesUsdtKline> klines)
+        // -------------------------------------------------------------------------
+        // PULLBACK EMA21 (без изменений)
+        // -------------------------------------------------------------------------
+        private TradeSignal? TryPullbackEma21(string symbol, KlineInterval interval, IReadOnlyList<BinanceFuturesUsdtKline> klines)
         {
-            if (klines == null || klines.Count < 30)
-                return null;
+            if (klines == null || klines.Count < 30) return null;
 
             int last = klines.Count - 1;
-            if (last < 1)
-                return null;
+            if (last < 1) return null;
 
             var c = klines[last];
             var prev = klines[last - 1];
 
             decimal ema = Ema(klines, 21, last);
             decimal atr = Atr(klines, 14, last);
-            if (atr <= 0)
-                return null;
+            if (atr <= 0) return null;
 
-            // фильтр по свечам
-            if (IsTooBigImpulseBar(c, prev, atr))
-                return null;
-
-            if (IsTooSmallBody(c, atr))
-                return null;
+            if (IsTooBigImpulseBar(c, prev, atr)) return null;
+            if (IsTooSmallBody(c, atr)) return null;
 
             var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(interval);
 
-            bool bull = c.ClosePrice > c.OpenPrice &&
-                        c.LowPrice <= ema &&
-                        c.ClosePrice > ema;
+            bool bull =
+                c.ClosePrice > c.OpenPrice &&
+                c.LowPrice <= ema &&
+                c.ClosePrice > ema;
 
             if (bull)
             {
@@ -289,7 +251,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     Timeframe = interval.ToString(),
                     Time = c.CloseTime,
                     Reason = "PULLBACK_EMA21_LONG",
-                    TakeProfits = new List<decimal>
+                    TakeProfits = new()
                     {
                         entry + atr * tp1Mult,
                         entry + atr * tp2Mult,
@@ -298,9 +260,10 @@ namespace VertexAutoTradeBinance8.Strategy
                 };
             }
 
-            bool bear = c.ClosePrice < c.OpenPrice &&
-                        c.HighPrice >= ema &&
-                        c.ClosePrice < ema;
+            bool bear =
+                c.ClosePrice < c.OpenPrice &&
+                c.HighPrice >= ema &&
+                c.ClosePrice < ema;
 
             if (bear)
             {
@@ -317,7 +280,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     Timeframe = interval.ToString(),
                     Time = c.CloseTime,
                     Reason = "PULLBACK_EMA21_SHORT",
-                    TakeProfits = new List<decimal>
+                    TakeProfits = new()
                     {
                         entry - atr * tp1Mult,
                         entry - atr * tp2Mult,
@@ -329,17 +292,13 @@ namespace VertexAutoTradeBinance8.Strategy
             return null;
         }
 
-        // -------------------------------------------------------------------------------------
-        // MAIN SIGNAL GENERATOR
-        // -------------------------------------------------------------------------------------
-        public TradeSignal? GenerateSignal(
-            string symbol,
-            KlineInterval interval,
-            IReadOnlyList<BinanceFuturesUsdtKline> klines)
+        // -------------------------------------------------------------------------
+        // MAIN SIGNAL GENERATOR (FIX 4.4 ADAPTIVE SMART REGIME)
+        // -------------------------------------------------------------------------
+        public TradeSignal? GenerateSignal(string symbol, KlineInterval interval, IReadOnlyList<BinanceFuturesUsdtKline> klines)
         {
             _logger.LogInformation("\n[DEBUG][{Symbol}][{TF}] STRATEGY START", symbol, interval);
 
-            // Жёсткая защита от null / пустых данных
             if (klines == null)
             {
                 _logger.LogError("[DEBUG][{Symbol}][{TF}] ERROR: klines == null → SKIP", symbol, interval);
@@ -354,13 +313,12 @@ namespace VertexAutoTradeBinance8.Strategy
 
             if (klines.Count < 30)
             {
-                _logger.LogWarning(
-                    "[DEBUG][{Symbol}][{TF}] TOO FEW BARS: {Count} < 30 → SKIP",
+                _logger.LogWarning("[DEBUG][{Symbol}][{TF}] TOO FEW BARS: {Count} < 30 → SKIP",
                     symbol, interval, klines.Count);
                 return null;
             }
 
-            // 1) Корреляционный фильтр с BTCUSDT (как было)
+            // Корреляция с BTC (без изменений)
             if (!string.Equals(symbol, "BTCUSDT", StringComparison.OrdinalIgnoreCase))
             {
                 var corr = _correlationService.GetCorrelation("BTCUSDT", symbol);
@@ -373,41 +331,74 @@ namespace VertexAutoTradeBinance8.Strategy
                 }
             }
 
-            // 2) Smart Regime
+            // === SMART REGIME EVALUATION ===
             var smart = _smartRegimeService.Evaluate(symbol, interval, klines);
             var regime = smart.BaseRegime;
 
             _logger.LogInformation(
                 "[DEBUG][{Symbol}][{TF}] REGIME={Regime} smart={Smart} slope={Slope:P2} vol={Vol:P2} conf={Conf:P0}",
-                symbol,
-                interval,
-                regime,
+                symbol, interval, regime, smart.SmartType,
+                smart.TrendSlopePercent, smart.VolatilityPercent, smart.Confidence);
+
+            // === FIX 4.4 — ADAPTIVE THRESHOLD ===
+            int GetAdaptiveThreshold(
+                MarketRegime baseRegime,
+                SmartRegimeType smartType,
+                decimal vol,
+                decimal slope)
+            {
+                int threshold = baseRegime switch
+                {
+                    MarketRegime.Range => 35,
+                    MarketRegime.VolatileChop => 40,
+                    MarketRegime.StrongUpTrend => 60,
+                    MarketRegime.StrongDownTrend => 60,
+                    MarketRegime.Unknown => 45,
+                    _ => 45
+                };
+
+
+
+                // SmartRegime refinement
+                if (smartType is SmartRegimeType.SmartRange or SmartRegimeType.SmartSqueeze)
+                    threshold = Math.Min(threshold, 35);
+                else if (smartType == SmartRegimeType.SmartStrongTrend)
+                    threshold = Math.Max(threshold, 60);
+
+                // volatility: 0.001 = 0.10%
+                if (vol < 0.001m) threshold -= 10;
+                else if (vol > 0.003m) threshold += 10;
+
+                // slope: 0.007 = 0.70%
+                if (Math.Abs(slope) > 0.007m)
+                    threshold += 5;
+
+                if (threshold < 25) threshold = 25;
+                if (threshold > 80) threshold = 80;
+
+                return threshold;
+            }
+
+            int adaptiveThreshold = GetAdaptiveThreshold(
+                smart.BaseRegime,
                 smart.SmartType,
-                smart.TrendSlopePercent,
                 smart.VolatilityPercent,
-                smart.Confidence);
+                smart.TrendSlopePercent
+            );
 
-            // Если уверенность в режиме низкая — не входим
-            if (smart.Confidence < 0.55m)
+            if (smart.Confidence < adaptiveThreshold)
             {
-                _logger.LogInformation(
-                    "[DEBUG][{Symbol}][{TF}] SmartRegime confidence {Conf:P0} < 55% → SKIP",
-                    symbol, interval, smart.Confidence);
+                _logger.LogDebug(
+                    "[{Symbol}] AdaptiveRegime: confidence={Conf}% < threshold={Thr}% → SKIP",
+                    symbol, smart.Confidence, adaptiveThreshold);
                 return null;
             }
 
-            // При опасной «рубке» рынка — просто не лезем
-            if (smart.IsDangerChopZone && smart.Confidence >= 0.4m)
-            {
-                _logger.LogInformation(
-                    "[DEBUG][{Symbol}][{TF}] SmartRegime=ChopZone (danger) → SKIP",
-                    symbol, interval);
-                return null;
-            }
-
+            // ---------------------------------------------------------------------
+            // SIGNAL GENERATION
+            // ---------------------------------------------------------------------
             TradeSignal? baseSignal = null;
 
-            // 3) Логика входа с учётом SmartRegime
             bool isRangeLike =
                 regime == MarketRegime.Range ||
                 smart.SmartType == SmartRegimeType.SmartRange ||
@@ -420,45 +411,35 @@ namespace VertexAutoTradeBinance8.Strategy
 
             if (isRangeLike)
             {
-                // В диапазоне первым делом ищем захват ликвидности
                 baseSignal = TryLiquidityGrab(symbol, interval, klines)
                              ?? TryPullbackEma21(symbol, interval, klines);
             }
             else if (isStrongTrendLike)
             {
-                // Сильный тренд — Pullback EMA21
                 baseSignal = TryPullbackEma21(symbol, interval, klines);
             }
             else
             {
-                // Остальные режимы — дефолтная логика по EMA21
                 baseSignal = TryPullbackEma21(symbol, interval, klines);
             }
 
             if (baseSignal == null)
             {
-                _logger.LogInformation("[DEBUG][{Symbol}][{TF}] GEN → No signal", symbol, interval);
+                _logger.LogInformation("[DEBUG][{Symbol}][{TF}] GEN → NO SIGNAL", symbol, interval);
                 return null;
             }
 
-            // 4) Pattern Filter — безопасный, без NRE
+            // Pattern filter (без изменений)
             var pattern = _patternEngineService.Analyze(symbol, interval, klines);
-
             if (pattern != null)
             {
                 if (pattern.Score >= 0.30m)
                 {
-                    if (pattern.Direction == 1 && baseSignal.Side == SignalSide.Buy)
+                    bool matchLong = pattern.Direction == 1 && baseSignal.Side == SignalSide.Buy;
+                    bool matchShort = pattern.Direction == -1 && baseSignal.Side == SignalSide.Sell;
+
+                    if (!matchLong && !matchShort && pattern.Score >= 0.60m)
                     {
-                        // паттерн за LONG — ок
-                    }
-                    else if (pattern.Direction == -1 && baseSignal.Side == SignalSide.Sell)
-                    {
-                        // паттерн за SHORT — ок
-                    }
-                    else if (pattern.Score >= 0.60m)
-                    {
-                        // сильный паттерн против сигнала — баним
                         _logger.LogInformation(
                             "[DEBUG][{Symbol}][{TF}] Pattern block: dir={Dir} score={Score:F2}",
                             symbol, interval, pattern.Direction, pattern.Score);
@@ -467,18 +448,19 @@ namespace VertexAutoTradeBinance8.Strategy
                 }
             }
 
-            // 5) Liquidity Cluster Filter & Adjustments
+            // Liquidity clusters (без изменений)
             baseSignal = _liquidityClusterService.FilterAndAdjust(baseSignal);
             if (baseSignal == null)
                 return null;
 
-            // 6) AI Dynamic Risk Tag
+            // AI learning risk
             var riskW = _aiLearning.GetDynamicRiskWeight(symbol, regime);
             baseSignal.Reason += $"|AIrisk={riskW:F2}";
 
             _logger.LogInformation(
                 "[DEBUG][{Symbol}][{TF}] FINAL SIGNAL side={Side} entry={Entry:F2} sl={SL:F2} reason={Reason}",
-                symbol, interval, baseSignal.Side, baseSignal.EntryPrice, baseSignal.StopLoss, baseSignal.Reason);
+                symbol, interval, baseSignal.Side, baseSignal.EntryPrice,
+                baseSignal.StopLoss, baseSignal.Reason);
 
             return baseSignal;
         }
