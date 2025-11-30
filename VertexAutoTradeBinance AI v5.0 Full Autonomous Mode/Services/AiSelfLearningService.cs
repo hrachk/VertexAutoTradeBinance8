@@ -332,6 +332,46 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
 
         public void RecordTrade(
+    string symbol,
+    decimal entryPrice,
+    decimal exitPrice,
+    decimal liquidationPrice,
+    bool isWin,
+    MarketRegime regime,
+    TradeSignal? signal = null)
+        {
+            // ========================================================
+            // 1. Ручные сигналы — НЕ ОБУЧАЮТ AI
+            // ========================================================
+            if (signal != null && signal.IsManual)
+            {
+                _logger.LogInformation(
+                    "[AI-LEARN] Manual trade detected → SKIP learning. symbol={Symbol}, regime={Regime}",
+                    symbol, regime);
+
+                // Но можно записать отдельно статистику ручных входов
+                // (оставлю тебе возможность — пока просто пропускаем)
+                return;
+            }
+
+            // ========================================================
+            // 2. Обычный трейд бота → нормальное обучение
+            // ========================================================
+            if (entryPrice <= 0 || exitPrice <= 0)
+                return;
+
+            // Рассчёт RR
+            decimal rr = Math.Abs(exitPrice - entryPrice) /
+                         Math.Max(1, Math.Abs(entryPrice * 0.001m));
+
+            if (!isWin)
+                rr = -Math.Abs(rr);
+
+            RegisterTradeResult(symbol, regime, rr, isWin);
+        }
+
+        /*
+        public void RecordTrade(
             string symbol,
             decimal entryPrice,
             decimal exitPrice,
@@ -350,5 +390,6 @@ namespace VertexAutoTradeBinance8.Services
 
             RegisterTradeResult(symbol, regime, rr, isWin);
         }
+        */
     }
 }

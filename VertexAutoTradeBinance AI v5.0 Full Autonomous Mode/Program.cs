@@ -37,6 +37,8 @@ public class Program
                 services.AddSingleton<TradeSignalMemoryService>();
                 services.AddSingleton<OrderTracerService>();
                 services.AddSingleton<RecoverLostOrdersService>();
+                services.AddSingleton<TradeSignalMemoryService>();
+                services.AddSingleton<ManualPositionHandler>();
 
                 services.AddSingleton<AiLiquidityClusterService>();
                 services.AddSingleton<StrategyEngine>();

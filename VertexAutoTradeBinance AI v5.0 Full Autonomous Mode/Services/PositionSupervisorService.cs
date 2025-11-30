@@ -1,13 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using Binance.Net.Clients;
+﻿using Binance.Net.Clients;
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using CryptoExchange.Net.Objects;
-using Microsoft.Extensions.Logging;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -21,6 +15,8 @@ namespace VertexAutoTradeBinance8.Services
         private readonly AiSelfLearningService _aiLearning;
         private readonly MarketDataService _marketData;
         private readonly AiMarketRegimeService _regime;
+        private readonly ManualPositionHandler _manualHandler;
+        MarketRegime regimeNow;
 
         public PositionSupervisorService(
             ILogger<PositionSupervisorService> logger,
@@ -29,7 +25,8 @@ namespace VertexAutoTradeBinance8.Services
             AiStopLossOptimizer slOptimizer,
             AiSelfLearningService aiLearning,
             MarketDataService marketData,
-            AiMarketRegimeService regime)
+            AiMarketRegimeService regime,
+            ManualPositionHandler manualHandler)
         {
             _logger = logger;
             _factory = factory;
@@ -38,14 +35,37 @@ namespace VertexAutoTradeBinance8.Services
             _aiLearning = aiLearning;
             _marketData = marketData;
             _regime = regime;
+            _manualHandler = manualHandler;
+             regimeNow = MarketRegime.Range;
         }
 
         // ======================================================================
         // MAIN SUPERVISE
         // ======================================================================
-        public async Task SuperviseAsync(string symbol, TradeSignal lastSignal, CancellationToken ct)
+        public async Task SuperviseAsync(string symbol, TradeSignal? lastSignal, CancellationToken ct)
         {
             using var client = _factory.CreateRestClient();
+
+
+            // --- 0. Если lastSignal отсутствует — проверяем ручную позицию ---
+            var posRes = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol);
+
+            if (posRes.Success && posRes.Data != null)
+            {
+                var manualPos = posRes.Data
+        .ToList()
+        .Find(x => Math.Abs(x.Quantity) > 0);
+
+                if (manualPos != null && lastSignal == null)
+                {
+                    lastSignal = _manualHandler.ConvertManualToSignal(manualPos);
+
+                    _logger.LogWarning(
+                        "[MANUAL] Обнаружена ручная позиция {symbol}, qty={qty}. Создан виртуальный сигнал → контроль активирован.",
+                        symbol, manualPos);
+                }
+            }
+
 
             // 1) Позиции с RETRY — ждём пока лимит реально превратится в позицию
             var posInfo = await GetPositionsWithRetryAsync(client, symbol, ct);
@@ -63,9 +83,13 @@ namespace VertexAutoTradeBinance8.Services
 
             // 3) Свечи М1 для трейлинга
             IReadOnlyList<BinanceFuturesUsdtKline>? klines1m = null;
+           
             try
             {
-                klines1m = await _marketData.GetKlines(symbol, KlineInterval.OneMinute, 200);
+                klines1m = await _marketData.GetKlines(symbol, KlineInterval.OneMinute, 160);
+                var rr = _regime.DetectRegime(symbol, Binance.Net.Enums.KlineInterval.OneMinute, klines1m);
+                if (rr != null)
+                    regimeNow = rr.Regime;
             }
             catch (Exception ex)
             {
@@ -84,7 +108,7 @@ namespace VertexAutoTradeBinance8.Services
             string symbol,
             CancellationToken ct)
         {
-            const int maxAttempts = 5;
+            const int maxAttempts = 10;
             var delay = TimeSpan.FromMilliseconds(200);
 
             // тип совпадает с тем, что возвращает Binance.Net
@@ -109,6 +133,7 @@ namespace VertexAutoTradeBinance8.Services
                         return res;
                     }
                 }
+
 
                 await Task.Delay(delay, ct);
             }
@@ -391,7 +416,7 @@ namespace VertexAutoTradeBinance8.Services
                 _ => signal.StopLoss
             };
 
-            await UpdateSL(client, symbol, side, qty, slOrder, signal.EntryPrice, targetSl);
+            await UpdateSL(client, symbol, side, qty, slOrder, signal.EntryPrice, targetSl, signal);
         }
 
         private decimal CalculateAtr(IReadOnlyList<BinanceFuturesUsdtKline> kl)
@@ -434,19 +459,20 @@ namespace VertexAutoTradeBinance8.Services
         // UPDATE SL
         // ======================================================================
         private async Task UpdateSL(
-            BinanceRestClient client,
-            string symbol,
-            PositionSide side,
-            decimal qty,
-            BinanceUsdFuturesOrder slOrder,
-            decimal entry,
-            decimal newSl)
+     BinanceRestClient client,
+     string symbol,
+     PositionSide side,
+     decimal qty,
+     BinanceUsdFuturesOrder slOrder,
+     decimal entry,
+     decimal newSl,
+     TradeSignal? signal = null)
         {
             decimal oldSl = slOrder.StopPrice ?? slOrder?.Price ?? 0m;
             if (oldSl <= 0 || newSl <= 0)
                 return;
 
-            // Не ухудшаем позицию
+            // --- НЕ УХУДШАЕМ SL ---
             if (side == PositionSide.Long && newSl <= oldSl) return;
             if (side == PositionSide.Short && newSl >= oldSl) return;
 
@@ -456,8 +482,10 @@ namespace VertexAutoTradeBinance8.Services
             decimal s = Math.Round(newSl / tick) * tick;
             decimal limit = side == PositionSide.Long ? s - tick : s + tick;
 
+            // CANCEL OLD SL
             await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, slOrder.Id);
 
+            // PLACE NEW SL
             await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol,
                 side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
@@ -468,14 +496,40 @@ namespace VertexAutoTradeBinance8.Services
                 positionSide: side,
                 timeInForce: TimeInForce.GoodTillCanceled);
 
-            _logger.LogInformation("[SUPERVISOR] TRAIL SL UPDATED {symbol} {old} → {ns}",
-                symbol, oldSl, s);
+            _logger.LogInformation("[SUPERVISOR] TRAIL SL UPDATED {symbol} {old} → {ns}", symbol, oldSl, s);
+
+            // ============================================================
+            //             AI-LEARNING: Record Trade Result
+            // ============================================================
+
+            // Получаем POS, чтобы взять liquidationPrice
+            var posRaw = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol);
+            decimal liq = 0m;
+
+            if (posRaw.Success && posRaw.Data != null)
+            {
+                var p = posRaw.Data.FirstOrDefault(x => x.PositionSide == side);
+                if (p != null)
+                    liq = p.LiquidationPrice; // Binance даёт это поле
+            }
 
             bool win = side == PositionSide.Long
                 ? s > entry
                 : s < entry;
 
-            _aiLearning.RecordTrade(symbol, entry, s, 0m, win);
+           
+
+
+            _aiLearning.RecordTrade(
+                symbol: symbol,
+                entryPrice: entry,
+                exitPrice: s,
+                liquidationPrice: liq,
+                isWin: win,
+                regime: regimeNow,
+                signal: signal  // <===== ВАЖНО
+            );
         }
+
     }
 }

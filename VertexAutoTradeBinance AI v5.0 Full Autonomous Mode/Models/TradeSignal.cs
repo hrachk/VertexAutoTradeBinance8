@@ -41,6 +41,16 @@ public class TradeSignal
     /// </summary>
     public bool IsSuperSignal { get; set; }
 
+ 
+
+        /// <summary>Флаг: сигнал создан из ручной позиции пользователя.</summary>
+        public bool IsManual { get; set; }
+
+        /// <summary>Оценка AI (0..1), если нужно отделять "одобренные" сигналы от остальных.</summary>
+        public decimal? AiQuality { get; set; }
+   
+
+
     public decimal GetTpPart(int index)
     {
         // возвращает часть позиции для TP1 / TP2 / TP3
