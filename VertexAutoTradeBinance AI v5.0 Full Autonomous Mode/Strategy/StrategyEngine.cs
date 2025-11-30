@@ -4,12 +4,8 @@
 //   работа на всех ТФ. Совместимо с VertexAutoTradeBinance8, имена НЕ меняем.
 //  -----------------------------------------------------------------------------
 
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
-using Microsoft.Extensions.Logging;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 
