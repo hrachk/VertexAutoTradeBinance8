@@ -1,7 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using Binance.Net.Objects.Models.Futures;
-using Microsoft.Extensions.Logging;
+﻿using Binance.Net.Objects.Models.Futures;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services

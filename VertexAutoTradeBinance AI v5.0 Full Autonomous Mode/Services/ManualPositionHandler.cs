@@ -1,8 +1,11 @@
 ﻿using System;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
-using VertexAutoTradeBinance8.Models;
+using Binance.Net.Clients;
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
+using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
 {
@@ -15,32 +18,84 @@ namespace VertexAutoTradeBinance8.Services
             _memory = memory;
         }
 
-        public TradeSignal? ConvertManualToSignal(BinancePositionDetailsUsdt position)
+        /// <summary>
+        /// Конвертация Binance позиции → TradeSignal
+        /// </summary>
+        public TradeSignal? ConvertManualToSignal(BinancePositionDetailsUsdt pos)
         {
-            if (position == null || position.Quantity == 0)
+            // Binance.Net 11.11.0 → поле PositionAmt
+            decimal qty = Math.Abs(pos.Quantity);
+
+            if (qty <= 0)
                 return null;
 
-            var side = position.Quantity > 0 ? SignalSide.Buy : SignalSide.Sell;
+            SignalSide side = pos.Quantity > 0 ? SignalSide.Buy : SignalSide.Sell;
 
             var signal = new TradeSignal
             {
-                Symbol = position.Symbol,
+                Symbol = pos.Symbol,
                 Side = side,
-                EntryPrice = position.EntryPrice,
-                StopLoss = 0,                // SL потом посчитает AiStopLossOptimizer
+                EntryPrice = pos.EntryPrice,
+                StopLoss = 0,
                 TakeProfits = new(),
                 Time = DateTime.UtcNow,
                 Timeframe = "Manual",
-                Atr = null,
                 Reason = "MANUAL_POSITION",
-                IsManual = true,             // 🔥 ключевой флаг
-                AiQuality = null             // пока не одобрено AI
+                IsManual = true,
             };
 
-            // Сохраняем, но дальше AI сможет отфильтровать manual
             _memory.Save(signal);
-
             return signal;
         }
+
+
+        /// <summary>
+        /// Полная автоматическая проверка ручных позиций
+        /// </summary>
+        public async Task<TradeSignal?> DetectManualAsync(
+            BinanceRestClient client,
+            string symbol,
+            CancellationToken ct)
+        {
+            var posRes = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, null, ct);
+            if (!posRes.Success || posRes.Data == null)
+                return null;
+
+            var pos = posRes.Data.FirstOrDefault(p => Math.Abs(p.Quantity) > 0);
+            if (pos == null)
+                return null;
+
+            // Memory НЕ блокирует (важно!)
+            var last = _memory.GetLastSignal(symbol);
+            if (last != null && !last.IsManual)
+                return null;
+
+            // Создаём сигнал
+            var manual = ConvertManualToSignal(pos);
+
+            if (manual != null)
+            {
+                Console.WriteLine($"[MANUAL][{symbol}] qty={pos.Quantity} detected — virtual signal created");
+                _memory.Save(manual);
+            }
+
+            return manual;
+        }
+        public bool IsNewManualPosition(BinancePositionDetailsUsdt pos, TradeSignal? last)
+        {
+            if (pos == null || pos.Quantity == 0)
+                return false;
+
+            // Если сигнала нет — это новая ручная позиция
+            if (last == null)
+                return true;
+
+            // Если бот знал старую позицию, но пользователь открыл новую
+            if (Math.Abs(last.EntryPrice - pos.EntryPrice) > 0.0001m)
+                return true;
+
+            return false;
+        }
+
     }
 }

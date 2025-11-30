@@ -1,7 +1,4 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Logging;
-using System.Threading;
-using System.Threading.Tasks;
 using VertexAutoTradeBinance8.Services;
 
 namespace VertexAutoTradeBinance8.API.Controllers
