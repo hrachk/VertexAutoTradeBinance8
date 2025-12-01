@@ -51,6 +51,7 @@ public class Program
                 services.AddSingleton<OrderCleanerService>();
                 services.AddSingleton<PositionSupervisorService>();
                 services.AddSingleton<SmartRegimeService>();
+                services.AddSingleton<RealContextSupervisor>();
 
               
 
