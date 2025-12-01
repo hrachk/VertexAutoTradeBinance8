@@ -1,7 +1,8 @@
 ﻿// ==================================================================================
-// PositionSupervisorService — FINAL PATCH FOR Binance.Net 11.11.0
+// PositionSupervisorService — FINAL PATCH FOR Binance.Net 11.11.0 (with SL/TP auto-repair)
 // ==================================================================================
 
+using System.Collections.Concurrent;
 using Binance.Net.Clients;
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
@@ -21,6 +22,12 @@ namespace VertexAutoTradeBinance8.Services
         private readonly AiMarketRegimeService _regime;
         private readonly ManualPositionHandler _manualHandler;
         private MarketRegime regimeNow;
+
+        // === Счётчики отказов при восстановлении SL/TP ===
+        private readonly ConcurrentDictionary<string, int> _slRepairAttempts = new();
+        private readonly ConcurrentDictionary<string, int> _tpRepairAttempts = new();
+
+        private static string BuildKey(string symbol, PositionSide side) => $"{symbol}:{side}";
 
         public PositionSupervisorService(
             ILogger<PositionSupervisorService> logger,
@@ -154,7 +161,7 @@ namespace VertexAutoTradeBinance8.Services
                     var longPos = res.Data.FirstOrDefault(x => x.PositionSide == PositionSide.Long);
                     var shortPos = res.Data.FirstOrDefault(x => x.PositionSide == PositionSide.Short);
 
-                    // FIX: Binance.Net 11.11 uses PositionAmt
+                    // FIX: Binance.Net 11.11 uses Quantity for size
                     if ((longPos != null && longPos.Quantity != 0m) ||
                         (shortPos != null && shortPos.Quantity != 0m))
                     {
@@ -177,56 +184,17 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // ======================================================================
-        // PROCESS SIDE
+        // PROCESS SIDE (с авто-ремонтом SL/TP и аварийным выходом)
         // ======================================================================
-        //private async Task HandleSideAsync(
-        //    BinanceRestClient client,
-        //    string symbol,
-        //    PositionSide side,
-        //    BinancePositionDetailsUsdt? pos,
-        //    List<BinanceUsdFuturesOrder> allOrders,
-        //    TradeSignal? signal,
-        //    IReadOnlyList<BinanceFuturesUsdtKline>? klines,
-        //    CancellationToken ct)
-        //{
-        //    decimal qty = pos != null ? Math.Abs(pos.Quantity) : 0m;
-
-        //    if (qty <= 0)
-        //    {
-        //        _logger.LogInformation("[SUPERVISOR] {symbol} {side}: no existing position", symbol, side);
-        //        return;
-        //    }
-
-        //    var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-
-        //    var slOrder = allOrders.FirstOrDefault(o =>
-        //        o.Side == closeSide &&
-        //        (o.Type == FuturesOrderType.Stop ||
-        //         o.Type == FuturesOrderType.StopMarket));
-
-        //    if (slOrder == null)
-        //    {
-        //        _logger.LogWarning("[SUPERVISOR] {symbol} {side}: NO SL FOUND — cannot trail", symbol, side);
-        //        return;
-        //    }
-
-        //    await MultiLayerTrailing(client, symbol, side, qty, signal, allOrders, klines);
-        //}
-
-        // ======================================================================
-        // MULTI-LAYER TRAILING  — unchanged
-        // ======================================================================
-        // (оставлено как было, без изменений — всё работает)
-
         private async Task HandleSideAsync(
-    BinanceRestClient client,
-    string symbol,
-    PositionSide side,
-    BinancePositionDetailsUsdt? pos,
-    List<BinanceUsdFuturesOrder> allOrders,
-    TradeSignal? signal,
-    IReadOnlyList<BinanceFuturesUsdtKline>? klines,
-    CancellationToken ct)
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            BinancePositionDetailsUsdt? pos,
+            List<BinanceUsdFuturesOrder> allOrders,
+            TradeSignal? signal,
+            IReadOnlyList<BinanceFuturesUsdtKline>? klines,
+            CancellationToken ct)
         {
             decimal qty = pos != null ? Math.Abs(pos.Quantity) : 0m;
 
@@ -237,6 +205,7 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+            var key = BuildKey(symbol, side);
 
             var orders = allOrders.Where(o => o.PositionSide == side).ToList();
 
@@ -248,23 +217,63 @@ namespace VertexAutoTradeBinance8.Services
                 o.Side == closeSide &&
                 (o.Type == FuturesOrderType.TakeProfit || o.Type == FuturesOrderType.TakeProfitMarket));
 
+            decimal? markPrice = klines?.LastOrDefault()?.ClosePrice;
+
             // ============================
-            // 1) Если нет SL — создаём
+            // 1) Если нет SL — создаём + retry + аварийный выход
             // ============================
             if (sl == null)
             {
-                await CreateEmergencySL(client, symbol, side, qty, signal);
-                _logger.LogWarning("[SUPERVISOR][{symbol}] SL восстановлен (user removed)", symbol);
+                bool ok = await CreateEmergencySL(client, symbol, side, qty, signal, ct);
+                if (!ok)
+                {
+                    int count = _slRepairAttempts.AddOrUpdate(key, 1, (_, v) => v + 1);
+                    _logger.LogError(
+                        "[SUPERVISOR][{symbol}][{side}] SL repair failed (attempt {count})",
+                        symbol, side, count);
+
+                    if (count >= 3 && pos != null && markPrice.HasValue &&
+                        IsPositionInDanger(pos, markPrice.Value, side))
+                    {
+                        _logger.LogError(
+                            "[SUPERVISOR][{symbol}][{side}] SL repair FAILED x3 + DANGER → EMERGENCY MARKET CLOSE",
+                            symbol, side);
+
+                        await EmergencyClosePositionAsync(client, symbol, side, qty, ct);
+                        return;
+                    }
+                }
+                else
+                {
+                    _slRepairAttempts.AddOrUpdate(key, 0, (_, __) => 0);
+                    _logger.LogWarning("[SUPERVISOR][{symbol}] SL восстановлен (user removed)", symbol);
+                }
+
+                // После SL-ремонта в этом цикле trailing не делаем
                 return;
             }
 
             // ============================
-            // 2) Если нет TP — создаём
+            // 2) Если нет TP — создаём + retry (+ без жёсткого стопа)
             // ============================
             if (tp == null)
             {
-                await CreateEmergencyTP(client, symbol, side, qty, signal);
-                _logger.LogWarning("[SUPERVISOR][{symbol}] TP восстановлен (user removed)", symbol);
+                bool ok = await CreateEmergencyTP(client, symbol, side, qty, signal, ct);
+                if (!ok)
+                {
+                    int count = _tpRepairAttempts.AddOrUpdate(key, 1, (_, v) => v + 1);
+                    _logger.LogError(
+                        "[SUPERVISOR][{symbol}][{side}] TP repair failed (attempt {count})",
+                        symbol, side, count);
+
+                    // Для TP не режем позицию жёстко, просто продолжаем жить со SL
+                }
+                else
+                {
+                    _tpRepairAttempts.AddOrUpdate(key, 0, (_, __) => 0);
+                    _logger.LogWarning("[SUPERVISOR][{symbol}] TP восстановлен (user removed)", symbol);
+                }
+
                 return;
             }
 
@@ -274,59 +283,142 @@ namespace VertexAutoTradeBinance8.Services
             await MultiLayerTrailing(client, symbol, side, qty, signal, orders, klines);
         }
 
-
-        private async Task CreateEmergencySL(
-    BinanceRestClient client,
-    string symbol,
-    PositionSide side,
-    decimal qty,
-    TradeSignal? signal)
-        {
-            if (signal == null || qty <= 0)
-                return;
-
-            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-            decimal tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
-
-            decimal sl = Math.Round(signal.StopLoss / tick) * tick;
-            decimal limit = side == PositionSide.Long ? sl - tick : sl + tick;
-
-            var o = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol,
-                side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
-                FuturesOrderType.Stop,
-                quantity: qty,
-                stopPrice: sl,
-                price: limit,
-                positionSide: side);
-
-            _logger.LogInformation("[SUPERVISOR] SL CREATED {symbol} sl={sl}", symbol, sl);
-        }
-
-        private async Task CreateEmergencyTP(
+        // ======================================================================
+        // EMERGENCY SL / TP
+        // ======================================================================
+        private async Task<bool> CreateEmergencySL(
             BinanceRestClient client,
             string symbol,
             PositionSide side,
             decimal qty,
-            TradeSignal? signal)
+            TradeSignal? signal,
+            CancellationToken ct)
         {
-            if (signal == null || signal.TakeProfits.Count == 0)
-                return;
+            try
+            {
+                if (signal == null || qty <= 0)
+                    return false;
 
-            decimal trigger = signal.TakeProfits.First();
+                var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+                decimal tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
 
-            var o = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol,
-                side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
-                FuturesOrderType.TakeProfitMarket,
-                quantity: qty,
-                stopPrice: trigger,
-                positionSide: side);
+                decimal sl = Math.Round(signal.StopLoss / tick) * tick;
+                decimal limit = side == PositionSide.Long ? sl - tick : sl + tick;
 
-            _logger.LogInformation("[SUPERVISOR] TP CREATED {symbol} tp={tp}", symbol, trigger);
+                var o = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol,
+                    side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
+                    FuturesOrderType.Stop,
+                    quantity: qty,
+                    price: limit,
+                    positionSide: side,
+                    stopPrice: sl,
+                    timeInForce: TimeInForce.GoodTillCanceled,
+                    ct: ct);
+
+                if (!o.Success)
+                {
+                    _logger.LogError("[SUPERVISOR][{symbol}] SL create error: {err}", symbol, o.Error);
+                    return false;
+                }
+
+                _logger.LogInformation("[SUPERVISOR] SL CREATED {symbol} sl={sl}", symbol, sl);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SUPERVISOR][{symbol}] Exception while creating SL", symbol);
+                return false;
+            }
         }
 
+        private async Task<bool> CreateEmergencyTP(
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            TradeSignal? signal,
+            CancellationToken ct)
+        {
+            try
+            {
+                if (signal == null || signal.TakeProfits.Count == 0 || qty <= 0)
+                    return false;
 
+                decimal trigger = signal.TakeProfits.First();
+
+                var o = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol,
+                    side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
+                    FuturesOrderType.TakeProfitMarket,
+                    quantity: qty,
+                    stopPrice: trigger,
+                    positionSide: side,
+                    timeInForce: TimeInForce.GoodTillCanceled,
+                    ct: ct);
+
+                if (!o.Success)
+                {
+                    _logger.LogError("[SUPERVISOR][{symbol}] TP create error: {err}", symbol, o.Error);
+                    return false;
+                }
+
+                _logger.LogInformation("[SUPERVISOR] TP CREATED {symbol} tp={tp}", symbol, trigger);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SUPERVISOR][{symbol}] Exception while creating TP", symbol);
+                return false;
+            }
+        }
+
+        // ======================================================================
+        // EMERGENCY MARKET CLOSE (reduceOnly)
+        // ======================================================================
+        private async Task EmergencyClosePositionAsync(
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            CancellationToken ct)
+        {
+            try
+            {
+                if (qty <= 0)
+                    return;
+
+                var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol,
+                    closeSide,
+                    FuturesOrderType.Market,
+                    quantity: qty,
+                    positionSide: side,
+                    reduceOnly: true,
+                    ct: ct);
+
+                if (!res.Success)
+                {
+                    _logger.LogError(
+                        "[SUPERVISOR][{symbol}][{side}] EMERGENCY CLOSE FAILED: {err}",
+                        symbol, side, res.Error);
+                }
+                else
+                {
+                    _logger.LogError(
+                        "[SUPERVISOR][{symbol}][{side}] EMERGENCY CLOSE DONE qty={qty}",
+                        symbol, side, qty);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[SUPERVISOR][{symbol}][{side}] Exception while EMERGENCY CLOSE",
+                    symbol, side);
+            }
+        }
 
         // ======================================================================
         // MULTI-LAYER TRAILING SYSTEM (PRO LEVEL)
@@ -430,17 +522,17 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // ======================================================================
-        // UPDATE SL
+        // UPDATE SL + AI LEARNING
         // ======================================================================
         private async Task UpdateSL(
-     BinanceRestClient client,
-     string symbol,
-     PositionSide side,
-     decimal qty,
-     BinanceUsdFuturesOrder slOrder,
-     decimal entry,
-     decimal newSl,
-     TradeSignal? signal = null)
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            BinanceUsdFuturesOrder slOrder,
+            decimal entry,
+            decimal newSl,
+            TradeSignal? signal = null)
         {
             decimal oldSl = slOrder.StopPrice ?? slOrder?.Price ?? 0m;
             if (oldSl <= 0 || newSl <= 0)
@@ -475,8 +567,6 @@ namespace VertexAutoTradeBinance8.Services
             // ============================================================
             //             AI-LEARNING: Record Trade Result
             // ============================================================
-
-            // Получаем POS, чтобы взять liquidationPrice
             var posRaw = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol);
             decimal liq = 0m;
 
@@ -484,15 +574,12 @@ namespace VertexAutoTradeBinance8.Services
             {
                 var p = posRaw.Data.FirstOrDefault(x => x.PositionSide == side);
                 if (p != null)
-                    liq = p.LiquidationPrice; // Binance даёт это поле
+                    liq = p.LiquidationPrice;
             }
 
             bool win = side == PositionSide.Long
                 ? s > entry
                 : s < entry;
-
-           
-
 
             _aiLearning.RecordTrade(
                 symbol: symbol,
@@ -501,9 +588,32 @@ namespace VertexAutoTradeBinance8.Services
                 liquidationPrice: liq,
                 isWin: win,
                 regime: regimeNow,
-                signal: signal  // <===== ВАЖНО
+                signal: signal
             );
         }
 
+        // ======================================================================
+        // DANGER DETECTION (для аварийного выхода)
+        // ======================================================================
+        private bool IsPositionInDanger(BinancePositionDetailsUsdt pos, decimal mark, PositionSide side)
+        {
+            if (pos == null) return false;
+            if (mark <= 0) return false;
+
+            var liq = pos.LiquidationPrice;
+            if (liq <= 0) return false;
+
+            // Насколько близко к ликвидации
+            var distanceToLiq = Math.Abs(mark - liq) / mark;
+
+            // Сильный минус относительно входа
+            var entry = pos.EntryPrice;
+            bool heavyLoss = side == PositionSide.Long
+                ? mark < entry * 0.985m          // -1.5% и больше вниз
+                : mark > entry * 1.015m;         // +1.5% и больше против шорта
+
+            // Опасность: близко к ликвидации и уже серьёзный минус
+            return distanceToLiq < 0.01m && heavyLoss; // <1% до ликвидации
+        }
     }
 }

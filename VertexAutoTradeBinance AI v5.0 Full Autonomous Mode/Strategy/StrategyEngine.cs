@@ -464,6 +464,26 @@ namespace VertexAutoTradeBinance8.Strategy
         }
 
         // -------------------------------------------------------------------------------------
+        // FAST TREND OVERRIDE: чистый сильный тренд → ослабляем фильтр уверенности
+        // -------------------------------------------------------------------------------------
+        private static bool IsFastTrendOverride(SmartRegimeInfo smart)
+        {
+            bool strongTrend =
+                smart.BaseRegime == MarketRegime.StrongUpTrend ||
+                smart.BaseRegime == MarketRegime.StrongDownTrend;
+
+            bool smartStrong =
+                smart.SmartType == SmartRegimeType.SmartStrongTrend;
+
+            // ~1.8%+ наклон, до 1% волатильность, уверенность не ниже ~35%
+            bool slopeOk = Math.Abs(smart.TrendSlopePercent) >= 0.018m;
+            bool volOk = smart.VolatilityPercent > 0m && smart.VolatilityPercent <= 0.010m;
+            bool confOk = smart.Confidence >= 0.35m;
+
+            return strongTrend && smartStrong && slopeOk && volOk && confOk;
+        }
+
+        // -------------------------------------------------------------------------------------
         // MAIN SIGNAL GENERATOR
         // -------------------------------------------------------------------------------------
         public TradeSignal? GenerateSignal(
@@ -529,11 +549,18 @@ namespace VertexAutoTradeBinance8.Strategy
                 smart.VolatilityPercent,
                 smart.TrendSlopePercent);
 
+            // Порог переводим в долю (0..1), как и Confidence
+            decimal adaptiveThresholdFrac = adaptiveThreshold / 100m;
+            decimal safetyBuffer = 0.10m; // -10% как раньше, но в долях
+
+            // FAST TREND OVERRIDE: в сверхчистом тренде не режем по порогу
+            bool fastTrendOverride = IsFastTrendOverride(smart);
+
             // мягко, но всё ещё фильтруем по уверенности
-            if (smart.Confidence < adaptiveThreshold - 10)
+            if (!fastTrendOverride && smart.Confidence < adaptiveThresholdFrac - safetyBuffer)
             {
                 _logger.LogDebug(
-                    "[{Symbol}][{TF}] AdaptiveRegime: confidence={Conf}% < threshold={Thr}% → SKIP",
+                    "[{Symbol}][{TF}] AdaptiveRegime: confidence={Conf:P0} < threshold={Thr}% → SKIP",
                     symbol, interval, smart.Confidence, adaptiveThreshold);
                 return null;
             }
@@ -553,11 +580,11 @@ namespace VertexAutoTradeBinance8.Strategy
                  regime == MarketRegime.StrongDownTrend ||
                  smart.SmartType == SmartRegimeType.SmartTrend ||
                  smart.SmartType == SmartRegimeType.SmartStrongTrend)
-                && smart.Confidence >= 0.40m         // ≈ 40%
-                && Math.Abs(smart.TrendSlopePercent) >= 0.0045m  // ≥ ~0.45% наклон
-                && smart.VolatilityPercent <= 0.40m              // не сверх-волатильно
-                && smart.TrendSlopePercent != 0     // есть реальный наклон
-                && smart.VolatilityPercent <= 0.40m;   // не сверх-волатильно
+                && (smart.Confidence >= 0.40m || fastTrendOverride)  // 40%+ или override
+                && Math.Abs(smart.TrendSlopePercent) >= 0.0045m       // ≥ ~0.45% наклон
+                && smart.VolatilityPercent <= 0.40m                   // не сверх-волатильно
+                && smart.TrendSlopePercent != 0                       // есть реальный наклон
+                && smart.VolatilityPercent <= 0.40m;                  // не сверх-волатильно
 
             TradeSignal? baseSignal = null;
 
