@@ -1,4 +1,6 @@
-﻿using VertexAutoTradeBinance8.Services;
+﻿using Microsoft.Extensions.Options;
+using VertexAutoTradeBinance8.Configuration;
+using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Strategy;
 
 namespace VertexAutoTradeBinance8;
@@ -9,6 +11,7 @@ public class Program
     {
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         Console.InputEncoding = System.Text.Encoding.UTF8;
+
 
         using IHost host = Host.CreateDefaultBuilder(args)
             .ConfigureLogging(logging =>
@@ -51,9 +54,9 @@ public class Program
                 services.AddSingleton<OrderCleanerService>();
                 services.AddSingleton<PositionSupervisorService>();
                 services.AddSingleton<SmartRegimeService>();
-               // services.AddSingleton<RealContextSupervisor>();
+                // services.AddSingleton<RealContextSupervisor>();
 
-              
+                services.AddSingleton(sp => sp.GetRequiredService<IOptions<TradingOptions>>().Value);
 
                 services.AddHostedService<TradingWorker>();
                 services.AddSingleton<PredictiveEngineV4ConfirmationService>();

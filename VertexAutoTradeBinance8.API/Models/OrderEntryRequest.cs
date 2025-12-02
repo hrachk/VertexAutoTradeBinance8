@@ -9,6 +9,7 @@ public class OrderEntryRequest
 
     public decimal EntryPrice { get; set; }
     public decimal StopLoss { get; set; }
+    public decimal Leverage { get; set; }
 
     /// <summary>
     /// Пользовательский множитель риска (1 = стандартный риск, 0.5 = половина и т.д.)

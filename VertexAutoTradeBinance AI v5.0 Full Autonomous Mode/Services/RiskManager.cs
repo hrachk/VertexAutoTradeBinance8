@@ -1,15 +1,11 @@
 ﻿// ============================================================================
-// RISK MANAGER v5.0 — интелектуальный расчёт количества
-// - ATR-aware
-// - Notional-aware
-// - MinNotional/minQty/max leverage safe
-// - Anti-manipulation buffer
-// - FULL совместимость с Signal & Executor v5.0
+//  RISK MANAGER v5.0 — чистая версия БЕЗ ошибок
 // ============================================================================
 
-using Binance.Net.Enums;
 using Microsoft.Extensions.Logging;
+using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
+using VertexAutoTradeBinance8.Services;
 
 namespace VertexAutoTradeBinance8.Services
 {
@@ -17,76 +13,82 @@ namespace VertexAutoTradeBinance8.Services
     {
         private readonly ILogger<RiskManager> _logger;
         private readonly SymbolInfoService _symbolInfo;
+        private readonly TradingOptions _options;
 
         public RiskManager(
             ILogger<RiskManager> logger,
-            SymbolInfoService symbolInfo)
+            SymbolInfoService symbolInfo,
+            TradingOptions options)
         {
             _logger = logger;
             _symbolInfo = symbolInfo;
+            _options = options;
         }
 
-        // =====================================================================
-        // MAIN METHOD — CALCULATE SAFE QTY
-        // =====================================================================
-        Task<decimal> CalculateSafeQty(
-     string symbol,
-     decimal entry,
-     decimal stop,
-     decimal riskMultiplier,
-     decimal leverage,
-     CancellationToken ct)
+        // ====================================================================
+        // SAFE QTY
+        // ====================================================================
+        public async Task<decimal> CalculateSafeQty(
+            string symbol,
+            decimal entryPrice,
+            decimal stopLoss,
+            decimal riskMultiplier,
+            decimal leverage,
+            CancellationToken ct)
         {
-            // 1) Load exchange filters
-            var f = _symbolInfo.GetFuturesFiltersAsync(symbol).Result;
-            // tick = f.tickSize <= 0 ? 0.01m : f.tickSize;
-            //decimal step = f.step <= 0 ? 0.001m : f.step;
-            decimal step = f.step;
-            decimal minQty = f.minQty;
-            decimal minNotional = f.minNotional;
-            decimal tick = f.tickSize;
-            decimal slDist = Math.Abs(EntryPrice - stopLoss);
+            // 0) Filters
+            var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
 
-            if (slDist <= 0)
+            decimal step = f.step <= 0 ? 0.001m : f.step;
+            decimal minQty = f.minQty <= 0 ? step : f.minQty;
+            decimal minNotional = f.minNotional <= 0 ? 5m : f.minNotional;
+
+            // 1) Distance
+            decimal slDist = Math.Abs(entryPrice - stopLoss);
+            if (slDist <= 0 || stopLoss <= 0 || entryPrice <= 0)
             {
-                _logger.LogError("[RISK] SL distance invalid → 0");
+                _logger.LogError("[RISK] Invalid SL distance: entry={entry}, sl={sl}", entryPrice, stopLoss);
                 return 0;
             }
 
-            // 2) Risk amount (1–2% мозга, но ты управляешь сам — оставляю гибко)
-            decimal maxRisk = deposit * 0.03m; // 3% (можешь менять)
-            if (maxRisk < 1m) maxRisk = 1m;
+            // 2) % risk from deposit
+            decimal deposit = (decimal)_options.Deposit;
+            decimal maxRisk = deposit *(decimal)_options.RiskPerTrade;
+            if (maxRisk <= 0) maxRisk = 1m;
+            maxRisk *= riskMultiplier;
 
-            // 3) Qty = Risk / SL-distance
+            // 3) Raw QTY
             decimal qty = maxRisk / slDist;
 
-            // 4) apply leverage (умножаем потенциальную позицию)
-            qty *= leverage;
+            // 4) apply leverage
+            if (leverage > 0)
+                qty *= leverage;
 
-            // 5) Adjust by step filter
+            // 5) step filter
             qty = Math.Floor(qty / step) * step;
 
-            if (qty < f.minQty)
-            {
-                _logger.LogWarning(
-                    "[RISK] Qty {qty} < minQty {min} → adjusted to minQty",
-                    qty, f.minQty);
-                qty = f.minQty;
-            }
+            if (qty < minQty)
+                qty = minQty;
 
-            // 6) Notional check
+            // 6) Notional
             decimal notional = qty * entryPrice;
-            if (notional < f.minNotional)
+            if (notional < minNotional)
             {
-                decimal needQty = f.minNotional / entryPrice;
+                decimal needQty = (minNotional / entryPrice);
                 needQty = Math.Ceiling(needQty / step) * step;
+                qty = needQty;
 
                 _logger.LogWarning(
-                    "[RISK] Notional {n:F2} < minNotional {min:F2} → raise to {q}",
-                    notional, f.minNotional, needQty);
-
-                qty = needQty;
+                    "[RISK] Adjusted QTY: minNotional={m} → qty={q}",
+                    minNotional, qty);
             }
+
+            if (qty <= 0)
+            {
+                _logger.LogWarning("[RISK] Final QTY <= 0 → rejected");
+                return 0;
+            }
+
 
             // 7) LOG safe info
             _logger.LogInformation(
@@ -112,7 +114,7 @@ namespace VertexAutoTradeBinance8.Services
                 step,
                 f.minQty,
                 f.minNotional,
-                tick
+                f.tickSize
             );
 
             return qty;
