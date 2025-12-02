@@ -49,6 +49,7 @@ public class TradeSignal
         /// <summary>Оценка AI (0..1), если нужно отделять "одобренные" сигналы от остальных.</summary>
         public decimal? AiQuality { get; set; }
    
+    public decimal? Leverage { get; set; }
 
 
     public decimal GetTpPart(int index)

@@ -1,63 +1,49 @@
 ﻿using Binance.Net.Enums;
-using Binance.Net.Objects.Models.Futures;
+using VertexAutoTradeBinance8.Models;
 
-namespace VertexAutoTradeBinance8.Models
+namespace VertexAutoTradeBinance8.Services
 {
-    /// <summary>
-    /// Реальный контекст позиции: точная инфа о позиции, PnL, side, entry, SL/TP.
-    /// Используется Supervisor, OrderExecutor, AI.
-    /// </summary>
     public class RealPositionContext
     {
-        public string Symbol { get; init; } = string.Empty;
+        //// --- ОРИГИНАЛЬНЫЕ ПОЛЯ ПО ФАКТУ ПОЗИЦИИ ---
+        //public string Symbol { get; set; } = string.Empty;
 
-        public decimal Quantity { get; init; }
-        public decimal EntryPrice { get; init; }
-        public decimal MarkPrice { get; set; }
+        //public PositionSide Side { get; set; } = PositionSide.Both;   // Long/Short/Both
 
-        public PositionSide Side { get; init; }
+        //public decimal Entry { get; set; }      // Entry price
+        //public decimal Mark { get; set; }       // Mark price
+        //public decimal Qty { get; set; }        // Absolute quantity
+        //public decimal Leverage { get; set; }   // Position leverage
+        //public decimal Liquidation { get; set; } // Liq price (important for SL logic)
 
-        public decimal UnrealizedPnl { get; set; }
-        public decimal Leverage { get; init; }
+        //// --- ПОЛЯ ОКРУЖЕНИЯ ---
+        //public MarketRegime Regime { get; set; } = MarketRegime.Unknown;
 
-        public decimal? StopLoss { get; set; }
-        public List<decimal> TakeProfits { get; set; } = new();
+        //public IReadOnlyList<Binance.Net.Objects.Models.Futures.BinanceFuturesUsdtKline>? Klines { get; set; }
 
-        public bool HasSL => StopLoss.HasValue && StopLoss.Value > 0;
-        public bool HasTP => TakeProfits != null && TakeProfits.Count > 0;
+        //public bool ManipulationDetected { get; set; } = false;
 
-        public DateTime LastUpdate { get; set; } = DateTime.UtcNow;
+        //public List<Binance.Net.Objects.Models.Futures.BinanceUsdFuturesOrder> Orders { get; set; }
+        //    = new List<Binance.Net.Objects.Models.Futures.BinanceUsdFuturesOrder>();
 
-        public bool IsLong => Side == PositionSide.Long;
-        public bool IsShort => Side == PositionSide.Short;
+        //// --- СЛ / ТП ИЗ НАШЕГО ПОСЛЕДНЕГО СИГНАЛА ---
+        //public TradeSignal? Signal { get; set; }
 
-        /// <summary>
-        /// Если режим BOTH, вычисляем реальное направление.
-        /// </summary>
-        public PositionSide ResolveDynamicSide()
-        {
-            if (Side != PositionSide.Both)
-                return Side;
+        //// --- ФЛАГ: позиция создана руками ---
+        //public bool IsManual { get; set; } = false;
 
-            if (MarkPrice > EntryPrice)
-                return PositionSide.Long;
+        //// --- HELPERS ---
+        //public decimal DistanceToSL =>
+        //    Signal == null ? 0 : Math.Abs(Mark - Signal.StopLoss);
 
-            return PositionSide.Short;
-        }
+        //public decimal DistanceToTP =>
+        //    Signal == null || Signal.TakeProfits.Count == 0
+        //        ? 0
+        //        : Math.Abs(Signal.TakeProfits[0] - Mark);
 
-        /// <summary>
-        /// Проверяем, выгодно ли устанавливать SL — не “в упор”.
-        /// </summary>
-        public bool IsSlTooClose(decimal safeDistance)
-        {
-            if (!HasSL) return false;
-
-            var resolved = ResolveDynamicSide();
-
-            if (resolved == PositionSide.Long)
-                return StopLoss >= MarkPrice - safeDistance;
-
-            return StopLoss <= MarkPrice + safeDistance;
-        }
+        //public override string ToString()
+        //{
+        //    return $"{Symbol} {Side} qty={Qty} entry={Entry} mark={Mark} regime={Regime}";
+        //}
     }
 }

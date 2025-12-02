@@ -1,5 +1,6 @@
 ﻿using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
+using CryptoExchange.Net.Requests;
 using Microsoft.Extensions.Options;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
@@ -239,7 +240,16 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
-            var qty = await _risk.CalculateQuantityAsync(symbol, signal.EntryPrice, signal.StopLoss, riskMultiplier);
+            var qty = await _riskManager.CalculateSafeQty(
+    signal.Symbol,
+    signal.EntryPrice,
+    signal.StopLoss,
+    _risk.RiskMultiplier,
+    _risk.Leverage ?? 1m,
+    ct);
+
+
+
             if (qty <= 0)
             {
                 ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "❌ QTY=0", "Размер позиции 0");
@@ -251,7 +261,7 @@ namespace VertexAutoTradeBinance8
 
             await _orderCleaner.CleanupOutdatedOrdersAsync(symbol, signal, ct);
 
-            await _executor.PlaceOrderAsync(signal, qty, ct);
+            await _executor.ExecuteAsync(signal, qty, ct);
             await _positionSupervisorService.SuperviseAsync(symbol, signal, ct);
 
             ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "🟩 OK",
