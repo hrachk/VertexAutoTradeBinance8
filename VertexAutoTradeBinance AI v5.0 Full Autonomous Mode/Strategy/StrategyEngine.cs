@@ -522,9 +522,9 @@ namespace VertexAutoTradeBinance8.Strategy
         // MAIN SIGNAL GENERATOR
         // -------------------------------------------------------------------------------------
         public TradeSignal? GenerateSignal(
-            string symbol,
-            KlineInterval interval,
-            IReadOnlyList<BinanceFuturesUsdtKline> klines)
+      string symbol,
+      KlineInterval interval,
+      IReadOnlyList<BinanceFuturesUsdtKline> klines)
         {
             _logger.LogInformation("\n[DEBUG][{Symbol}][{TF}] STRATEGY START", symbol, interval);
 
@@ -548,10 +548,20 @@ namespace VertexAutoTradeBinance8.Strategy
                 return null;
             }
 
-            // 1) Корреляция с BTC
+            // 1) Корреляция с BTC — с защитой
             if (!string.Equals(symbol, "BTCUSDT", StringComparison.OrdinalIgnoreCase))
             {
-                var corr = _correlationService.GetCorrelation("BTCUSDT", symbol);
+                decimal? corr = null;
+                try
+                {
+                    corr = _correlationService.GetCorrelation("BTCUSDT", symbol);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "[DEBUG][{Symbol}][{TF}] CorrFilter ERROR → пропускаем фильтр корреляции",
+                        symbol, interval);
+                }
 
                 if (corr.HasValue && Math.Abs(corr.Value) < 0.10m)
                 {
@@ -562,37 +572,22 @@ namespace VertexAutoTradeBinance8.Strategy
                 }
             }
 
-            // 2) Smart Regime
-            var smart = _smartRegimeService.Evaluate(symbol, interval, klines);
+            // 2) Smart Regime — с защитой
+            SmartRegimeInfo smart;
+            try
+            {
+                smart = _smartRegimeService.Evaluate(symbol, interval, klines);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[DEBUG][{Symbol}][{TF}] SmartRegimeService.Evaluate ERROR → SKIP",
+                    symbol, interval);
+                return null;
+            }
+
             var regime = smart.BaseRegime;
 
-            // ---------------------------------------------------------
-            // 2.1 HIGH TIMEFRAME SAFETY MODE (1H + 1D)
-            // ---------------------------------------------------------
-            var highTF = HighTimeframeSafetyFilter.Instance;
-
-            var highResult = highTF.EvaluateAsync(symbol, CancellationToken.None)
-                                   .GetAwaiter()
-                                   .GetResult();
-
-            if (highResult.SwingModeEnabled)
-            {
-                _logger.LogInformation(
-                    "[{Symbol}][{TF}] HIGH-TF MODE: strong1H={H1} strong1D={D1} → riskMult={R:F2}",
-                    symbol,
-                    interval,
-                    highResult.StrongTrend1H,
-                    highResult.StrongTrend1D,
-                    highResult.SwingRiskMultiplier);
-
-                smart.HighTfSafetyMode = true;
-                smart.SafetyRiskMultiplier = highResult.SwingRiskMultiplier;
-            }
-            else
-            {
-                smart.HighTfSafetyMode = false;
-                smart.SafetyRiskMultiplier = 1m;
-            }
             _logger.LogInformation(
                 "[DEBUG][{Symbol}][{TF}] REGIME={Regime} smart={Smart} slope={Slope:P2} vol={Vol:P2} conf={Conf:P0}",
                 symbol,
@@ -652,6 +647,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 regime == MarketRegime.StrongDownTrend ||
                 smart.SmartType == SmartRegimeType.SmartStrongTrend;
 
+            // 3) Базовый сигнал по текущему режиму
             if (isRangeLikeRegime)
             {
                 baseSignal = TryLiquidityGrab(symbol, interval, klines)
@@ -666,6 +662,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 baseSignal = TryPullbackEma21(symbol, interval, klines);
             }
 
+            // 3.1) SOFT safe mode, если нет жёсткого сигнала
             if (baseSignal == null && softModeAllowed)
             {
                 var soft = CreateSoftSafeSignal(symbol, interval, klines, smart);
@@ -684,40 +681,60 @@ namespace VertexAutoTradeBinance8.Strategy
                 return null;
             }
 
-           
-
-            // 4) Pattern Filter
-            var pattern = _patternEngineService.Analyze(symbol, interval, klines);
-
-            if (pattern != null && pattern.Score >= 0.30m)
+            // 4) Pattern Filter — с защитой
+            try
             {
-                bool sameDir =
-                    (pattern.Direction == 1 && baseSignal.Side == SignalSide.Buy) ||
-                    (pattern.Direction == -1 && baseSignal.Side == SignalSide.Sell);
+                var pattern = _patternEngineService.Analyze(symbol, interval, klines);
 
-                if (!sameDir && pattern.Score >= 0.60m)
+                if (pattern != null && pattern.Score >= 0.30m)
                 {
-                    _logger.LogInformation(
-                        "[DEBUG][{Symbol}][{TF}] Pattern block: dir={Dir} score={Score:F2}",
-                        symbol, interval, pattern.Direction, pattern.Score);
-                    return null;
+                    bool sameDir =
+                        (pattern.Direction == 1 && baseSignal.Side == SignalSide.Buy) ||
+                        (pattern.Direction == -1 && baseSignal.Side == SignalSide.Sell);
+
+                    if (!sameDir && pattern.Score >= 0.60m)
+                    {
+                        _logger.LogInformation(
+                            "[DEBUG][{Symbol}][{TF}] Pattern block: dir={Dir} score={Score:F2}",
+                            symbol, interval, pattern.Direction, pattern.Score);
+                        return null;
+                    }
                 }
             }
-
-            // 5) Liquidity Cluster Filter
-            baseSignal = _liquidityClusterService.FilterAndAdjust(baseSignal);
-            if (baseSignal == null)
-                return null;
-
-            // 6) AI Dynamic Risk Tag
-            var riskW = _aiLearning.GetDynamicRiskWeight(symbol, regime);
-            baseSignal.Reason += $"|AIrisk={riskW:F2}";
-
-
-            if (baseSignal != null)
+            catch (Exception ex)
             {
-                baseSignal.SafetyRiskMultiplier = smart.SafetyRiskMultiplier;
-                baseSignal.HighTfSafetyMode = smart.HighTfSafetyMode;
+                _logger.LogError(ex,
+                    "[DEBUG][{Symbol}][{TF}] PatternEngine ERROR → игнорируем паттерны",
+                    symbol, interval);
+            }
+
+            // 5) Liquidity Cluster Filter — с защитой
+            try
+            {
+                baseSignal = _liquidityClusterService.FilterAndAdjust(baseSignal);
+                if (baseSignal == null)
+                    return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[DEBUG][{Symbol}][{TF}] LiquidityClusterService ERROR → используем базовый сигнал без корректировок",
+                    symbol, interval);
+                // оставляем baseSignal как есть
+            }
+
+            // 6) AI Dynamic Risk Tag — с защитой
+            try
+            {
+                var riskW = _aiLearning.GetDynamicRiskWeight(symbol, regime);
+                baseSignal.Reason += $"|AIrisk={riskW:F2}";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[DEBUG][{Symbol}][{TF}] AiSelfLearningService.GetDynamicRiskWeight ERROR → AIrisk=1.00",
+                    symbol, interval);
+                baseSignal.Reason += "|AIrisk=1.00";
             }
 
             _logger.LogInformation(
@@ -726,5 +743,6 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return baseSignal;
         }
+
     }
 }

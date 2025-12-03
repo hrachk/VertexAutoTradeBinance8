@@ -204,9 +204,10 @@ namespace VertexAutoTradeBinance8
             {
                 signal = _strategy.GenerateSignal(symbol, timeframe, klines);
             }
-            catch
+            catch (Exception ex)
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "❌ ERR", "Ошибка стратегии");
+                _logger.LogError(ex, "[STRATEGY ERROR] {symbol} {tf}", symbol, timeframe);
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "❌ ERR", ex.GetType().Name);
                 return;
             }
 

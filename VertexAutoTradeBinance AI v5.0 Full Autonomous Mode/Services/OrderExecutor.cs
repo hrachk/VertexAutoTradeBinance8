@@ -54,6 +54,7 @@ namespace VertexAutoTradeBinance8.Services
             decimal step = filters.step <= 0 ? 0.001m : filters.step;
             decimal tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
 
+            // шаг
             quantity = Math.Floor(quantity / step) * step;
             if (quantity < filters.minQty)
             {
@@ -61,6 +62,23 @@ namespace VertexAutoTradeBinance8.Services
                 ConsoleReportFormatter.EntryFailedHard(_logger, signal.Symbol,
                     $"QTY {quantity} < minQty {filters.minQty}");
                 return OrderResult.Fail("QTY_TOO_SMALL");
+            }
+
+            // 🔥 НОВОЕ: защита по minNotional, чтобы не ловить -4164
+            decimal notional = quantity * signal.EntryPrice;
+            if (filters.minNotional > 0 && notional < filters.minNotional)
+            {
+                decimal needQty = filters.minNotional / signal.EntryPrice;
+                needQty = Math.Ceiling(needQty / step) * step;
+
+                _logger.LogWarning(
+                    "[ORDER] Notional {notional:F2} < minNotional {minNotional} → bump qty {oldQty} → {newQty}",
+                    notional,
+                    filters.minNotional,
+                    quantity,
+                    needQty);
+
+                quantity = needQty;
             }
 
             // -----------------------------------------------------------------
