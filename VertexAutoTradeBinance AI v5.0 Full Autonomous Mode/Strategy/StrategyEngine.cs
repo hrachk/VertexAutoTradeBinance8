@@ -684,6 +684,8 @@ namespace VertexAutoTradeBinance8.Strategy
                 return null;
             }
 
+           
+
             // 4) Pattern Filter
             var pattern = _patternEngineService.Analyze(symbol, interval, klines);
 
@@ -710,6 +712,13 @@ namespace VertexAutoTradeBinance8.Strategy
             // 6) AI Dynamic Risk Tag
             var riskW = _aiLearning.GetDynamicRiskWeight(symbol, regime);
             baseSignal.Reason += $"|AIrisk={riskW:F2}";
+
+
+            if (baseSignal != null)
+            {
+                baseSignal.SafetyRiskMultiplier = smart.SafetyRiskMultiplier;
+                baseSignal.HighTfSafetyMode = smart.HighTfSafetyMode;
+            }
 
             _logger.LogInformation(
                 "[DEBUG][{Symbol}][{TF}] FINAL SIGNAL side={Side} entry={Entry:F2} sl={SL:F2} reason={Reason}",

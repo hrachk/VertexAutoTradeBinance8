@@ -55,13 +55,16 @@ public class OrdersController : ControllerBase
         };
 
         // риск как в TradingWorker, но без AI-grade – используем переданный multiplier
+   
         var qty = await _riskManager.CalculateSafeQty(
-      signal.Symbol,
-      signal.EntryPrice,
-      signal.StopLoss,
-      request.RiskMultiplier,
-      Math.Max(request.Leverage, 1m),  // 👉 фикс
-      ct);
+            signal.Symbol,
+            signal.EntryPrice,
+            signal.StopLoss,
+            request.RiskMultiplier,
+            signal.SafetyRiskMultiplier,   // ✔ ПРАВИЛЬНО
+            signal.Leverage ?? 1m,
+            ct);
+
 
         if (qty <= 0m)
             return BadRequest(new { error = "Calculated quantity is 0. Check risk settings / prices." });

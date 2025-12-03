@@ -10,11 +10,10 @@ namespace VertexAutoTradeBinance8.Services
         private readonly object _lock = new();
 
         private static readonly string FilePath =
-    Path.Combine(AppContext.BaseDirectory, "ai_learning.json");
+            Path.Combine(AppContext.BaseDirectory, "ai_learning.json");
 
         private static readonly string BackupPath =
             Path.Combine(AppContext.BaseDirectory, "ai_learning_backup.json");
-
 
         private DateTime _lastSnapshot = DateTime.MinValue;
         private readonly TimeSpan SnapshotInterval = TimeSpan.FromMinutes(15);
@@ -25,7 +24,6 @@ namespace VertexAutoTradeBinance8.Services
         public AiSelfLearningService(ILogger<AiSelfLearningService> logger)
         {
             _logger = logger;
-
             Load();
         }
 
@@ -64,7 +62,11 @@ namespace VertexAutoTradeBinance8.Services
             public List<AiRegimeStatsDto> Regimes { get; set; } = new();
         }
 
-        public class AiLearningState
+        /// <summary>
+        /// Снапшот для сохранения/загрузки (бывший AiLearningState).
+        /// Название изменено, чтобы не путаться с Models.AiLearningState.
+        /// </summary>
+        public class AiLearningSnapshot
         {
             public DateTime CreatedAtUtc { get; set; }
             public List<AiSymbolStatsDto> Symbols { get; set; } = new();
@@ -90,7 +92,7 @@ namespace VertexAutoTradeBinance8.Services
                     if (string.IsNullOrWhiteSpace(json))
                         return;
 
-                    var state = JsonSerializer.Deserialize<AiLearningState>(json);
+                    var state = JsonSerializer.Deserialize<AiLearningSnapshot>(json);
                     if (state != null)
                         ImportState(state);
 
@@ -98,7 +100,7 @@ namespace VertexAutoTradeBinance8.Services
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "AI-Learning: FAILED to load memory. Restoring from backup...");
+                    _logger.LogError(ex, "AI-Learning: FAILED to load memory. Restoring from backup.");
 
                     // Восстановление из бэкапа
                     try
@@ -106,7 +108,7 @@ namespace VertexAutoTradeBinance8.Services
                         if (File.Exists(BackupPath))
                         {
                             var json = File.ReadAllText(BackupPath);
-                            var state = JsonSerializer.Deserialize<AiLearningState>(json);
+                            var state = JsonSerializer.Deserialize<AiLearningSnapshot>(json);
 
                             if (state != null)
                             {
@@ -246,11 +248,11 @@ namespace VertexAutoTradeBinance8.Services
         // EXPORT / IMPORT
         // =====================================================================
 
-        public AiLearningState ExportState()
+        public AiLearningSnapshot ExportState()
         {
             lock (_lock)
             {
-                var state = new AiLearningState
+                var state = new AiLearningSnapshot
                 {
                     CreatedAtUtc = DateTime.UtcNow
                 };
@@ -280,7 +282,7 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
-        public void ImportState(AiLearningState? state)
+        public void ImportState(AiLearningSnapshot? state)
         {
             lock (_lock)
             {
@@ -327,56 +329,27 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
 
         public void RecordTrade(
-    string symbol,
-    decimal entryPrice,
-    decimal exitPrice,
-    decimal liquidationPrice,
-    bool isWin,
-    MarketRegime regime,
-    TradeSignal? signal = null)
-        {
-            // ========================================================
-            // 1. Ручные сигналы — НЕ ОБУЧАЮТ AI
-            // ========================================================
-            if (signal != null && signal.IsManual)
-            {
-                _logger.LogInformation(
-                    "[AI-LEARN] Manual trade detected → SKIP learning. symbol={Symbol}, regime={Regime}",
-                    symbol, regime);
-
-                // Но можно записать отдельно статистику ручных входов
-                // (оставлю тебе возможность — пока просто пропускаем)
-                return;
-            }
-
-            // ========================================================
-            // 2. Обычный трейд бота → нормальное обучение
-            // ========================================================
-            if (entryPrice <= 0 || exitPrice <= 0)
-                return;
-
-            // Рассчёт RR
-            decimal rr = Math.Abs(exitPrice - entryPrice) /
-                         Math.Max(1, Math.Abs(entryPrice * 0.001m));
-
-            if (!isWin)
-                rr = -Math.Abs(rr);
-
-            RegisterTradeResult(symbol, regime, rr, isWin);
-        }
-
-        /*
-        public void RecordTrade(
             string symbol,
             decimal entryPrice,
             decimal exitPrice,
             decimal liquidationPrice,
             bool isWin,
-            MarketRegime regime = MarketRegime.Range)
+            MarketRegime regime,
+            TradeSignal? signal = null)
         {
+            // 1. Manual trades → не обучаем AI
+            if (signal != null && signal.IsManual)
+            {
+                _logger.LogInformation(
+                    "[AI-LEARN] Manual trade detected → SKIP learning. symbol={Symbol}, regime={Regime}",
+                    symbol, regime);
+                return;
+            }
+
             if (entryPrice <= 0 || exitPrice <= 0)
                 return;
 
+            // RR по простому (можно улучшать позже)
             decimal rr = Math.Abs(exitPrice - entryPrice) /
                          Math.Max(1, Math.Abs(entryPrice * 0.001m));
 
@@ -385,6 +358,5 @@ namespace VertexAutoTradeBinance8.Services
 
             RegisterTradeResult(symbol, regime, rr, isWin);
         }
-        */
     }
 }

@@ -241,14 +241,15 @@ namespace VertexAutoTradeBinance8
             }
 
 
-            var qty = await _risk.CalculateSafeQty(
-     symbol,
-     signal.EntryPrice,
-     signal.StopLoss,
-     riskMultiplier,
-     smart.SafetyRiskMultiplier,   // 💥 теперь ОФИЦИАЛЬНЫЙ параметр
-     signal.Leverage ?? 1m,
-     ct);
+             var qty = await _risk.CalculateSafeQty(
+                 symbol,
+                 signal.EntryPrice,
+                 signal.StopLoss,
+                 riskMultiplier,
+                 signal.SafetyRiskMultiplier,   // ✔ ПРАВИЛЬНО
+                 signal.Leverage ?? 1m,
+                 ct);
+
 
             if (qty <= 0)
             {
@@ -263,6 +264,14 @@ namespace VertexAutoTradeBinance8
 
             await _executor.ExecuteAsync(signal, qty, ct);
             await _positionSupervisorService.SuperviseAsync(symbol, signal, ct);
+
+
+//            _aiLearning.LearnFromOrder(
+//    symbol,
+//    win: signal.TakeProfits.Count > 0, // упрощённо: если TP был сработан
+//    atr: signal.Atr ?? 0.01m,
+//    slDist: Math.Abs(signal.EntryPrice - signal.StopLoss)
+//);
 
             ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "🟩 OK",
                 $"Вход qty={qty:F4}");

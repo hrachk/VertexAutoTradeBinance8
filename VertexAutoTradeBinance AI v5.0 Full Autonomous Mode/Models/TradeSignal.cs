@@ -41,10 +41,12 @@ public class TradeSignal
     /// </summary>
     public bool IsSuperSignal { get; set; }
 
- 
+    public decimal SafetyRiskMultiplier { get; set; } = 1m;
+    public bool HighTfSafetyMode { get; set; } = false;
 
-        /// <summary>Флаг: сигнал создан из ручной позиции пользователя.</summary>
-        public bool IsManual { get; set; }
+
+    /// <summary>Флаг: сигнал создан из ручной позиции пользователя.</summary>
+    public bool IsManual { get; set; }
 
         /// <summary>Оценка AI (0..1), если нужно отделять "одобренные" сигналы от остальных.</summary>
         public decimal? AiQuality { get; set; }

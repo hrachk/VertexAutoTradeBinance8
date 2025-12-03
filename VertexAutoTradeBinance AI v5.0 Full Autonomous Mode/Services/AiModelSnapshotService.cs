@@ -1,10 +1,4 @@
-﻿using System;
-using System.IO;
-using System.Linq;
-using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Logging;
+﻿using System.Text.Json;
 
 namespace VertexAutoTradeBinance8.Services
 {
@@ -40,7 +34,7 @@ namespace VertexAutoTradeBinance8.Services
         /// Сохранение снапшота на диск.
         /// </summary>
         public async Task SaveSnapshotAsync(
-            AiSelfLearningService.AiLearningState state,
+            AiSelfLearningService.AiLearningSnapshot state,
             CancellationToken ct = default)
         {
             try
@@ -77,7 +71,7 @@ namespace VertexAutoTradeBinance8.Services
         /// <summary>
         /// Загружает последний доступный снапшот (по дате в имени файла).
         /// </summary>
-        public async Task<AiSelfLearningService.AiLearningState?> LoadLatestAsync(
+        public async Task<AiSelfLearningService.AiLearningSnapshot?> LoadLatestAsync(
             CancellationToken ct = default)
         {
             try
@@ -92,7 +86,7 @@ namespace VertexAutoTradeBinance8.Services
                 var latest = files.OrderBy(f => f).Last();
                 var json = await File.ReadAllTextAsync(latest, ct);
 
-                var state = JsonSerializer.Deserialize<AiSelfLearningService.AiLearningState>(json);
+                var state = JsonSerializer.Deserialize<AiSelfLearningService.AiLearningSnapshot>(json);
                 if (state != null)
                 {
                     var symbolsCount = state.Symbols?.Count ?? 0;
