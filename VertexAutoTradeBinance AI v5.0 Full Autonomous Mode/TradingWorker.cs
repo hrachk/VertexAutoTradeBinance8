@@ -240,13 +240,13 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
-
-             var qty = await _risk.CalculateSafeQty(
+            var safety = signal?.SafetyRiskMultiplier ?? 1.0m;
+            var qty = await _risk.CalculateSafeQty(
                  symbol,
                  signal.EntryPrice,
                  signal.StopLoss,
                  riskMultiplier,
-                 signal.SafetyRiskMultiplier,   // ✔ ПРАВИЛЬНО
+                 safety,   // ✔ ПРАВИЛЬНО
                  signal.Leverage ?? 1m,
                  ct);
 
