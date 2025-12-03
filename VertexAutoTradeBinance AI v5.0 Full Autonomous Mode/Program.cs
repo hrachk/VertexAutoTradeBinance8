@@ -54,7 +54,7 @@ public class Program
                 services.AddSingleton<OrderCleanerService>();
                 services.AddSingleton<PositionSupervisorService>();
                 services.AddSingleton<SmartRegimeService>();
-                // services.AddSingleton<RealContextSupervisor>();
+                 services.AddSingleton<TradeStateManager>();
 
                 services.AddSingleton(sp => sp.GetRequiredService<IOptions<TradingOptions>>().Value);
 

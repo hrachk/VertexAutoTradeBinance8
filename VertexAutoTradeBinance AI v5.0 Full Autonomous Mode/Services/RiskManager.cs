@@ -1,8 +1,5 @@
-﻿// ============================================================================
-//  RISK MANAGER v5.1 — с live-балансом + правильным maxRisk + notional guard
-// ============================================================================
-
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using Binance.Net.Clients;
@@ -20,12 +17,12 @@ namespace VertexAutoTradeBinance8.Services
         public RiskManager(
             ILogger<RiskManager> logger,
             SymbolInfoService symbolInfo,
-            TradingOptions options,
+            IOptions<TradingOptions> options,
             BinanceClientFactory factory)
         {
             _logger = logger;
             _symbolInfo = symbolInfo;
-            _options = options;
+            _options = options.Value;
             _factory = factory;
         }
 
@@ -33,13 +30,13 @@ namespace VertexAutoTradeBinance8.Services
         // SAFE QTY
         // ====================================================================
         public async Task<decimal> CalculateSafeQty(
-      string symbol,
-      decimal entryPrice,
-      decimal stopLoss,
-      decimal riskMultiplier,
-      decimal safetyRiskMultiplier,   // ← ДОБАВЛЕН
-      decimal leverage,
-      CancellationToken ct)
+            string symbol,
+            decimal entryPrice,
+            decimal stopLoss,
+            decimal riskMultiplier,
+            decimal safetyRiskMultiplier,
+            decimal leverage,
+            CancellationToken ct)
         {
             // объединяем два риска
             decimal finalRisk = riskMultiplier * safetyRiskMultiplier;
@@ -51,7 +48,7 @@ namespace VertexAutoTradeBinance8.Services
 
             decimal step = f.step <= 0 ? 0.001m : f.step;
             decimal minQty = f.minQty <= 0 ? step : f.minQty;
-            decimal minNotional = f.minNotional <= 0 ? 5m : f.minNotional;
+            decimal exchangeMinNotional = f.minNotional <= 0 ? 5m : f.minNotional;
 
             // LIVE BALANCE
             using var client = _factory.CreateRestClient();
@@ -92,6 +89,7 @@ namespace VertexAutoTradeBinance8.Services
 
             decimal notional = qty * entryPrice;
 
+            // ограничение по свободным средствам * плечо
             if (notional > free * leverage)
             {
                 qty = Math.Floor((free * leverage) / entryPrice / step) * step;
@@ -99,6 +97,20 @@ namespace VertexAutoTradeBinance8.Services
 
             if (qty <= 0)
                 return 0;
+
+            // === Глобальный минимум по notional ===
+            notional = qty * entryPrice;
+
+            decimal configMinNotional = _options.MinNotional <= 0 ? 35m : _options.MinNotional;
+            decimal requiredMinNotional = Math.Max(exchangeMinNotional, configMinNotional);
+
+            if (notional < requiredMinNotional)
+            {
+                _logger.LogInformation(
+                    "[RISK][{Symbol}] Notional {Notional:F2} < required min {Min:F2} → skip signal",
+                    symbol, notional, requiredMinNotional);
+                return 0;
+            }
 
             return qty;
         }

@@ -1,14 +1,13 @@
 //  -----------------------------------------------------------------------------
-//   STRATEGY ENGINE v5.0
-//   PRO RANGE PATCH + LIQUIDITY GRAB + SMART BREAKOUT + FIX PACK
-//   FIX 5.0:
-//     - Normalize entry/SL (чтобы entry != stopLoss)
-//     - Минимальная дистанция по ATR → больше нет QTY=0 из-за dist ~ 0
-//     - Совместимо с VertexAutoTradeBinance8, имена НЕ меняем.
+//   STRATEGY ENGINE v6.0
+//   PRO RANGE PATCH + LIQUIDITY GRAB + SMART BREAKOUT + GLOBAL RR FILTER
 //  -----------------------------------------------------------------------------
 
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 
@@ -23,6 +22,7 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly AiPatternEngineService _patternEngineService;
         private readonly AiSelfLearningService _aiLearning;
         private readonly SmartRegimeService _smartRegimeService;
+        private readonly TradingOptions _tradingOptions;
 
         public StrategyEngine(
             ILogger<StrategyEngine> logger,
@@ -31,7 +31,8 @@ namespace VertexAutoTradeBinance8.Strategy
             AiMarketRegimeService marketRegimeService,
             AiPatternEngineService patternEngineService,
             AiSelfLearningService aiLearning,
-            SmartRegimeService smartRegimeService)
+            SmartRegimeService smartRegimeService,
+            IOptions<TradingOptions> tradingOptions)
         {
             _logger = logger;
             _correlationService = correlationService;
@@ -40,6 +41,7 @@ namespace VertexAutoTradeBinance8.Strategy
             _patternEngineService = patternEngineService;
             _aiLearning = aiLearning;
             _smartRegimeService = smartRegimeService;
+            _tradingOptions = tradingOptions.Value;
         }
 
         // -------------------------------------------------------------------------------------
@@ -172,6 +174,36 @@ namespace VertexAutoTradeBinance8.Strategy
             {
                 s.StopLoss = s.EntryPrice + minDist;
             }
+        }
+
+        // -------------------------------------------------------------------------------------
+        // RR FILTER: TP1 ≥ MinRiskReward * SL
+        // -------------------------------------------------------------------------------------
+        private bool CheckMinRiskReward(TradeSignal s)
+        {
+            var minRr = _tradingOptions.MinRiskReward <= 0 ? 2.0m : _tradingOptions.MinRiskReward;
+
+            if (s.EntryPrice <= 0 || s.StopLoss <= 0)
+                return false;
+
+            var slDist = Math.Abs(s.EntryPrice - s.StopLoss);
+            if (slDist <= 0)
+                return false;
+
+            decimal? tp1 = null;
+
+            if (s.TakeProfits != null && s.TakeProfits.Count > 0)
+                tp1 = s.TakeProfits[0];
+            else if (s.TakeProfit.HasValue)
+                tp1 = s.TakeProfit.Value;
+
+            if (!tp1.HasValue || tp1.Value <= 0)
+                return false;
+
+            var tpDist = Math.Abs(tp1.Value - s.EntryPrice);
+            var rr = tpDist / slDist;
+
+            return rr >= minRr;
         }
 
         // -------------------------------------------------------------------------------------
@@ -522,9 +554,9 @@ namespace VertexAutoTradeBinance8.Strategy
         // MAIN SIGNAL GENERATOR
         // -------------------------------------------------------------------------------------
         public TradeSignal? GenerateSignal(
-      string symbol,
-      KlineInterval interval,
-      IReadOnlyList<BinanceFuturesUsdtKline> klines)
+            string symbol,
+            KlineInterval interval,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines)
         {
             _logger.LogInformation("\n[DEBUG][{Symbol}][{TF}] STRATEGY START", symbol, interval);
 
@@ -721,6 +753,18 @@ namespace VertexAutoTradeBinance8.Strategy
                     "[DEBUG][{Symbol}][{TF}] LiquidityClusterService ERROR → используем базовый сигнал без корректировок",
                     symbol, interval);
                 // оставляем baseSignal как есть
+            }
+
+            // === 5.1) Глобальный RR-фильтр: TP1 ≥ MinRiskReward * SL ===
+            if (!CheckMinRiskReward(baseSignal))
+            {
+                _logger.LogInformation(
+                    "[DEBUG][{Symbol}][{TF}] RR filter: RR < {MinRr}: entry={Entry:F4}, sl={Sl:F4} → SKIP",
+                    symbol, interval,
+                    _tradingOptions.MinRiskReward <= 0 ? 2.0m : _tradingOptions.MinRiskReward,
+                    baseSignal.EntryPrice,
+                    baseSignal.StopLoss);
+                return null;
             }
 
             // 6) AI Dynamic Risk Tag — с защитой
