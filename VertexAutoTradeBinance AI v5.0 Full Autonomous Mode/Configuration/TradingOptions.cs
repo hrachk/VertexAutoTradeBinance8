@@ -13,4 +13,6 @@ public class TradingOptions
     public decimal MinAtrSlMult { get; set; } = 1.25m;   // минимум SL = 1.25 ATR
     public decimal MinNotional { get; set; } = 35m;     // минимум позиция в USDT
     public decimal MinRiskReward { get; set; } = 2.0m;   // TP1 ≥ 2 * SL
+    public decimal MinNotionalUsd { get; set; } = 30m;
+    public int CooldownMinutes { get; internal set; }
 }

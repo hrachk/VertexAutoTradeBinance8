@@ -1,5 +1,8 @@
-﻿using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
+﻿// ============================================================================
+//  RISK MANAGER v5.2 — live-баланс + правильный maxRisk + global minNotional
+// ============================================================================
+
+using Microsoft.Extensions.Logging;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using Binance.Net.Clients;
@@ -17,12 +20,12 @@ namespace VertexAutoTradeBinance8.Services
         public RiskManager(
             ILogger<RiskManager> logger,
             SymbolInfoService symbolInfo,
-            IOptions<TradingOptions> options,
+            TradingOptions options,
             BinanceClientFactory factory)
         {
             _logger = logger;
             _symbolInfo = symbolInfo;
-            _options = options.Value;
+            _options = options;
             _factory = factory;
         }
 
@@ -34,7 +37,7 @@ namespace VertexAutoTradeBinance8.Services
             decimal entryPrice,
             decimal stopLoss,
             decimal riskMultiplier,
-            decimal safetyRiskMultiplier,
+            decimal safetyRiskMultiplier,   // ← AI safety factor
             decimal leverage,
             CancellationToken ct)
         {
@@ -48,7 +51,11 @@ namespace VertexAutoTradeBinance8.Services
 
             decimal step = f.step <= 0 ? 0.001m : f.step;
             decimal minQty = f.minQty <= 0 ? step : f.minQty;
+
+            // minNotional: максимум из биржевого и конфигного
             decimal exchangeMinNotional = f.minNotional <= 0 ? 5m : f.minNotional;
+            decimal configMinNotional = _options.MinNotionalUsd > 0 ? _options.MinNotionalUsd : 0m;
+            decimal minNotional = Math.Max(exchangeMinNotional, configMinNotional);
 
             // LIVE BALANCE
             using var client = _factory.CreateRestClient();
@@ -72,7 +79,7 @@ namespace VertexAutoTradeBinance8.Services
                 return 0;
 
             // CORRECT MAX RISK
-            decimal maxRisk = free * 0.03m;   // базовый риск
+            decimal maxRisk = free * 0.03m;   // базовый риск 3%
             maxRisk *= finalRisk;             // учитываем safetyRiskMultiplier
 
             if (maxRisk < 1m) maxRisk = 1m;
@@ -89,7 +96,29 @@ namespace VertexAutoTradeBinance8.Services
 
             decimal notional = qty * entryPrice;
 
-            // ограничение по свободным средствам * плечо
+            // проверяем global minNotional
+            if (notional < minNotional)
+            {
+                // Пытаемся поднять qty до minNotional
+                decimal needQty = minNotional / entryPrice;
+                needQty = Math.Ceiling(needQty / step) * step;
+
+                // но не выше максимума, доступного по балансу
+                decimal maxQtyByBalance = (free * leverage) / entryPrice;
+                maxQtyByBalance = Math.Floor(maxQtyByBalance / step) * step;
+
+                qty = Math.Min(needQty, maxQtyByBalance);
+                notional = qty * entryPrice;
+
+                if (qty <= 0 || notional < minNotional)
+                {
+                    _logger.LogWarning(
+                        "[RISK] Notional {notional:F2} < minNotional {minNotional:F2} → SKIP TRADE",
+                        notional, minNotional);
+                    return 0;
+                }
+            }
+
             if (notional > free * leverage)
             {
                 qty = Math.Floor((free * leverage) / entryPrice / step) * step;
@@ -97,20 +126,6 @@ namespace VertexAutoTradeBinance8.Services
 
             if (qty <= 0)
                 return 0;
-
-            // === Глобальный минимум по notional ===
-            notional = qty * entryPrice;
-
-            decimal configMinNotional = _options.MinNotional <= 0 ? 35m : _options.MinNotional;
-            decimal requiredMinNotional = Math.Max(exchangeMinNotional, configMinNotional);
-
-            if (notional < requiredMinNotional)
-            {
-                _logger.LogInformation(
-                    "[RISK][{Symbol}] Notional {Notional:F2} < required min {Min:F2} → skip signal",
-                    symbol, notional, requiredMinNotional);
-                return 0;
-            }
 
             return qty;
         }

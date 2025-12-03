@@ -62,10 +62,6 @@ namespace VertexAutoTradeBinance8.Services
             public List<AiRegimeStatsDto> Regimes { get; set; } = new();
         }
 
-        /// <summary>
-        /// Снапшот для сохранения/загрузки (бывший AiLearningState).
-        /// Название изменено, чтобы не путаться с Models.AiLearningState.
-        /// </summary>
         public class AiLearningSnapshot
         {
             public DateTime CreatedAtUtc { get; set; }
@@ -93,16 +89,20 @@ namespace VertexAutoTradeBinance8.Services
                         return;
 
                     var state = JsonSerializer.Deserialize<AiLearningSnapshot>(json);
-                    if (state != null)
+                    if (state != null && state.Symbols.Count > 0)
+                    {
                         ImportState(state);
-
-                    _logger.LogInformation("AI-Learning: memory loaded successfully ({FilePath})", FilePath);
+                        _logger.LogInformation("AI-Learning: memory loaded successfully ({FilePath})", FilePath);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("AI-Learning: file exists but contains NO symbols → skip load");
+                    }
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "AI-Learning: FAILED to load memory. Restoring from backup.");
 
-                    // Восстановление из бэкапа
                     try
                     {
                         if (File.Exists(BackupPath))
@@ -110,7 +110,7 @@ namespace VertexAutoTradeBinance8.Services
                             var json = File.ReadAllText(BackupPath);
                             var state = JsonSerializer.Deserialize<AiLearningSnapshot>(json);
 
-                            if (state != null)
+                            if (state != null && state.Symbols.Count > 0)
                             {
                                 ImportState(state);
                                 _logger.LogWarning("AI-Learning: restored from backup file");
@@ -131,6 +131,20 @@ namespace VertexAutoTradeBinance8.Services
             {
                 try
                 {
+                    // ❗ FIX: НЕ СОХРАНЯТЬ ПУСТУЮ МОДЕЛЬ
+                    if (_stats.Count == 0)
+                    {
+                        _logger.LogWarning("AI-Learning: SAVE skipped → no symbols in memory");
+                        return;
+                    }
+
+                    bool hasTrades = _stats.Values.Any(r => r.Values.Any(x => x.Trades > 0));
+                    if (!hasTrades)
+                    {
+                        _logger.LogWarning("AI-Learning: SAVE skipped → no trades recorded");
+                        return;
+                    }
+
                     var state = ExportState();
                     var json = JsonSerializer.Serialize(state, new JsonSerializerOptions
                     {
@@ -154,7 +168,10 @@ namespace VertexAutoTradeBinance8.Services
             if (DateTime.UtcNow - _lastSnapshot > SnapshotInterval)
             {
                 _lastSnapshot = DateTime.UtcNow;
-                Save();
+
+                // ❗ FIX: Snapshot only if there is data
+                if (_stats.Count > 0 && _stats.Values.Any(r => r.Values.Any(x => x.Trades > 0)))
+                    Save();
             }
         }
 
@@ -203,7 +220,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // DYNAMIC RISK WEIGHT
+        // RISK WEIGHT
         // =====================================================================
 
         public decimal GetDynamicRiskWeight(string symbol, MarketRegime regime)
@@ -214,9 +231,6 @@ namespace VertexAutoTradeBinance8.Services
                     !regimes.TryGetValue(regime, out var rs) ||
                     rs.Trades < 5)
                 {
-                    _logger.LogDebug(
-                        "[AI-LEARN] RiskWeight {Symbol} {Regime}: no stats → 1.00",
-                        symbol, regime);
                     return 1.0m;
                 }
 
@@ -234,13 +248,7 @@ namespace VertexAutoTradeBinance8.Services
                 else if (winRate <= 0.35m)
                     weight = 0.60m;
 
-                weight = Math.Clamp(weight, 0.5m, 1.5m);
-
-                _logger.LogInformation(
-                    "[AI-LEARN] RiskWeight {Symbol} {Regime}: WR={WR:P1}, avgRR={RR:F2} → weight={W:F2}",
-                    symbol, regime, winRate, avgRr, weight);
-
-                return weight;
+                return Math.Clamp(weight, 0.5m, 1.5m);
             }
         }
 
@@ -288,7 +296,7 @@ namespace VertexAutoTradeBinance8.Services
             {
                 if (state == null || state.Symbols.Count == 0)
                 {
-                    _logger.LogWarning("[AI-LEARN] ImportState: empty snapshot");
+                    _logger.LogWarning("[AI-LEARN] ImportState: empty snapshot → SKIP");
                     return;
                 }
 
@@ -325,7 +333,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // CONVENIENCE FOR SUPERVISOR / PROTECTORS
+        // TRADE RECORDING
         // =====================================================================
 
         public void RecordTrade(
@@ -337,19 +345,16 @@ namespace VertexAutoTradeBinance8.Services
             MarketRegime regime,
             TradeSignal? signal = null)
         {
-            // 1. Manual trades → не обучаем AI
             if (signal != null && signal.IsManual)
             {
                 _logger.LogInformation(
-                    "[AI-LEARN] Manual trade detected → SKIP learning. symbol={Symbol}, regime={Regime}",
-                    symbol, regime);
+                    "[AI-LEARN] Manual trade detected → SKIP");
                 return;
             }
 
             if (entryPrice <= 0 || exitPrice <= 0)
                 return;
 
-            // RR по простому (можно улучшать позже)
             decimal rr = Math.Abs(exitPrice - entryPrice) /
                          Math.Max(1, Math.Abs(entryPrice * 0.001m));
 

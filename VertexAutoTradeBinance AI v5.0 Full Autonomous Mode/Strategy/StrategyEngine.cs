@@ -1,13 +1,12 @@
 //  -----------------------------------------------------------------------------
-//   STRATEGY ENGINE v6.0
-//   PRO RANGE PATCH + LIQUIDITY GRAB + SMART BREAKOUT + GLOBAL RR FILTER
+//   STRATEGY ENGINE v5.1
+//   - Dynamic RR filter (ATR + volatility + regime)
+//   - Soft entry + liquidity + AI risk as before
+//   - Имена и сигнатуры полностью совместимы с VertexAutoTradeBinance8
 //  -----------------------------------------------------------------------------
 
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 
@@ -22,7 +21,6 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly AiPatternEngineService _patternEngineService;
         private readonly AiSelfLearningService _aiLearning;
         private readonly SmartRegimeService _smartRegimeService;
-        private readonly TradingOptions _tradingOptions;
 
         public StrategyEngine(
             ILogger<StrategyEngine> logger,
@@ -31,8 +29,7 @@ namespace VertexAutoTradeBinance8.Strategy
             AiMarketRegimeService marketRegimeService,
             AiPatternEngineService patternEngineService,
             AiSelfLearningService aiLearning,
-            SmartRegimeService smartRegimeService,
-            IOptions<TradingOptions> tradingOptions)
+            SmartRegimeService smartRegimeService)
         {
             _logger = logger;
             _correlationService = correlationService;
@@ -41,7 +38,6 @@ namespace VertexAutoTradeBinance8.Strategy
             _patternEngineService = patternEngineService;
             _aiLearning = aiLearning;
             _smartRegimeService = smartRegimeService;
-            _tradingOptions = tradingOptions.Value;
         }
 
         // -------------------------------------------------------------------------------------
@@ -174,36 +170,6 @@ namespace VertexAutoTradeBinance8.Strategy
             {
                 s.StopLoss = s.EntryPrice + minDist;
             }
-        }
-
-        // -------------------------------------------------------------------------------------
-        // RR FILTER: TP1 ≥ MinRiskReward * SL
-        // -------------------------------------------------------------------------------------
-        private bool CheckMinRiskReward(TradeSignal s)
-        {
-            var minRr = _tradingOptions.MinRiskReward <= 0 ? 2.0m : _tradingOptions.MinRiskReward;
-
-            if (s.EntryPrice <= 0 || s.StopLoss <= 0)
-                return false;
-
-            var slDist = Math.Abs(s.EntryPrice - s.StopLoss);
-            if (slDist <= 0)
-                return false;
-
-            decimal? tp1 = null;
-
-            if (s.TakeProfits != null && s.TakeProfits.Count > 0)
-                tp1 = s.TakeProfits[0];
-            else if (s.TakeProfit.HasValue)
-                tp1 = s.TakeProfit.Value;
-
-            if (!tp1.HasValue || tp1.Value <= 0)
-                return false;
-
-            var tpDist = Math.Abs(tp1.Value - s.EntryPrice);
-            var rr = tpDist / slDist;
-
-            return rr >= minRr;
         }
 
         // -------------------------------------------------------------------------------------
@@ -551,6 +517,73 @@ namespace VertexAutoTradeBinance8.Strategy
         }
 
         // -------------------------------------------------------------------------------------
+        // DYNAMIC RR FILTER (ATR + volatility + regime)
+        // -------------------------------------------------------------------------------------
+        private decimal GetDynamicMinRr(
+            string symbol,
+            KlineInterval interval,
+            SmartRegimeInfo smart,
+            TradeSignal signal)
+        {
+            // ATR в процентах от цены
+            decimal atrPct = 0m;
+            if (signal.Atr.HasValue && signal.Atr.Value > 0 && signal.EntryPrice > 0)
+                atrPct = signal.Atr.Value / signal.EntryPrice;
+
+            var regime = smart.BaseRegime;
+            var smartType = smart.SmartType;
+            var vol = smart.VolatilityPercent;
+            var slope = smart.TrendSlopePercent;
+
+            bool isSqueeze =
+                regime == MarketRegime.Range ||
+                smartType == SmartRegimeType.SmartSqueeze;
+
+            bool isStrongTrendLike =
+                regime == MarketRegime.StrongUpTrend ||
+                regime == MarketRegime.StrongDownTrend ||
+                smartType == SmartRegimeType.SmartStrongTrend;
+
+            bool strongSlope = Math.Abs(slope) >= 0.02m;   // ≥ 2% наклон на TF
+            bool highVol = vol >= 0.015m || atrPct >= 0.015m;   // > 1.5%
+            bool lowVol = vol <= 0.005m || atrPct <= 0.005m;    // < 0.5%
+
+            decimal minRr = 2.0m; // базовый
+
+            if (isSqueeze)
+            {
+                // рынок в капкане → требуем максимальный запас по RR
+                minRr = 2.5m;
+            }
+            else if (isStrongTrendLike && strongSlope)
+            {
+                // сильный тренд + норм/высокая волатильность → можно ослабить RR
+                if (highVol)
+                    minRr = 1.7m; // хай-вола: swing-амплитуда большая
+                else
+                    minRr = 1.8m;
+            }
+            else
+            {
+                // слабый / обычный тренд
+                if (lowVol)
+                    minRr = 2.2m; // рынок вязкий → требуем больше RR
+                else
+                    minRr = 2.0m;
+            }
+
+            // safety-коридор
+            if (minRr < 1.4m) minRr = 1.4m;
+            if (minRr > 2.6m) minRr = 2.6m;
+
+            _logger.LogDebug(
+                "[{Symbol}][{TF}] Dynamic RR: minRR={MinRR:F2}, regime={Regime}, smart={Smart}, slope={Slope:P2}, vol={Vol:P2}, atr%={AtrPct:P2}",
+                symbol, interval, minRr, regime, smartType, slope, vol, atrPct);
+
+            return minRr;
+        }
+
+        // -------------------------------------------------------------------------------------
         // MAIN SIGNAL GENERATOR
         // -------------------------------------------------------------------------------------
         public TradeSignal? GenerateSignal(
@@ -755,18 +788,6 @@ namespace VertexAutoTradeBinance8.Strategy
                 // оставляем baseSignal как есть
             }
 
-            // === 5.1) Глобальный RR-фильтр: TP1 ≥ MinRiskReward * SL ===
-            if (!CheckMinRiskReward(baseSignal))
-            {
-                _logger.LogInformation(
-                    "[DEBUG][{Symbol}][{TF}] RR filter: RR < {MinRr}: entry={Entry:F4}, sl={Sl:F4} → SKIP",
-                    symbol, interval,
-                    _tradingOptions.MinRiskReward <= 0 ? 2.0m : _tradingOptions.MinRiskReward,
-                    baseSignal.EntryPrice,
-                    baseSignal.StopLoss);
-                return null;
-            }
-
             // 6) AI Dynamic Risk Tag — с защитой
             try
             {
@@ -779,6 +800,33 @@ namespace VertexAutoTradeBinance8.Strategy
                     "[DEBUG][{Symbol}][{TF}] AiSelfLearningService.GetDynamicRiskWeight ERROR → AIrisk=1.00",
                     symbol, interval);
                 baseSignal.Reason += "|AIrisk=1.00";
+            }
+
+            // 7) DYNAMIC RR FILTER
+            if (baseSignal.TakeProfits != null && baseSignal.TakeProfits.Count > 0)
+            {
+                decimal tp1 = baseSignal.TakeProfits[0];
+                decimal slDist = Math.Abs(baseSignal.EntryPrice - baseSignal.StopLoss);
+                decimal tpDist = Math.Abs(tp1 - baseSignal.EntryPrice);
+
+                if (slDist <= 0 || tpDist <= 0)
+                {
+                    _logger.LogInformation(
+                        "[DEBUG][{Symbol}][{TF}] RR filter: invalid distances slDist={SlDist:F6}, tpDist={TpDist:F6} → SKIP",
+                        symbol, interval, slDist, tpDist);
+                    return null;
+                }
+
+                decimal rr = tpDist / slDist;
+                decimal minRr = GetDynamicMinRr(symbol, interval, smart, baseSignal);
+
+                if (rr < minRr)
+                {
+                    _logger.LogInformation(
+                        "[DEBUG][{Symbol}][{TF}] RR filter: RR {RR:F2} < minRR {MinRR:F2}: entry={Entry:F4}, sl={SL:F4}, tp1={TP1:F4} → SKIP",
+                        symbol, interval, rr, minRr, baseSignal.EntryPrice, baseSignal.StopLoss, tp1);
+                    return null;
+                }
             }
 
             _logger.LogInformation(

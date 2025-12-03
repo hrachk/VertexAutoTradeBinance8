@@ -50,7 +50,7 @@ namespace VertexAutoTradeBinance8
                 {KlineInterval.OneMinute, TimeSpan.FromSeconds(2)},
                 {KlineInterval.FiveMinutes, TimeSpan.FromSeconds(25)},
                 {KlineInterval.FifteenMinutes, TimeSpan.FromSeconds(60)},
-                {KlineInterval.ThirtyMinutes, TimeSpan.FromMinutes(2)},   // <-- ДОБАВИЛ
+                {KlineInterval.ThirtyMinutes, TimeSpan.FromMinutes(2)},
                 {KlineInterval.OneHour, TimeSpan.FromMinutes(5)},
                 {KlineInterval.FourHour, TimeSpan.FromMinutes(240)},
                 {KlineInterval.OneDay, TimeSpan.FromMinutes(30)},
@@ -175,6 +175,24 @@ namespace VertexAutoTradeBinance8
             return false;
         }
 
+        private bool IsInCooldown(string symbol)
+        {
+            var cooldownMinutes = _tradingOptions.CooldownMinutes;
+            if (cooldownMinutes <= 0)
+                return false;
+
+            if (!_lastTradeTime.TryGetValue(symbol, out var last))
+                return false;
+
+            var cooldown = TimeSpan.FromMinutes(cooldownMinutes);
+            return DateTime.UtcNow - last < cooldown;
+        }
+
+        private void MarkTrade(string symbol)
+        {
+            _lastTradeTime[symbol] = DateTime.UtcNow;
+        }
+
         // ================================================================
         // SYMBOL PROCESSOR
         // ================================================================
@@ -217,6 +235,14 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
+            // Глобальный кулдаун по символу после сделки
+            if (IsInCooldown(symbol))
+            {
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "🕒 CD", "Cooldown после сделки");
+                _logger.LogInformation("[CD][{symbol}] Cooldown in effect, skip new trade", symbol);
+                return;
+            }
+
             ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "🟢 SIG",
                 $"{(signal.Side == SignalSide.Buy ? "LONG" : "SHORT")} @ {signal.EntryPrice:F4}");
 
@@ -247,10 +273,9 @@ namespace VertexAutoTradeBinance8
                  signal.EntryPrice,
                  signal.StopLoss,
                  riskMultiplier,
-                 safety,   // ✔ ПРАВИЛЬНО
+                 safety,
                  signal.Leverage ?? 1m,
                  ct);
-
 
             if (qty <= 0)
             {
@@ -263,9 +288,18 @@ namespace VertexAutoTradeBinance8
 
             await _orderCleaner.CleanupOutdatedOrdersAsync(symbol, signal, ct);
 
-            await _executor.ExecuteAsync(signal, qty, ct);
+            var orderResult = await _executor.ExecuteAsync(signal, qty, ct);
+            if (!orderResult.Success)
+            {
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "❌ ORD", "Ошибка ордера");
+                return;
+            }
+
+            // Помечаем, что по символу была сделка → включаем cooldown
+            MarkTrade(symbol);
+
             await _positionSupervisorService.SuperviseAsync(symbol, signal, ct);
- 
+
             ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "🟩 OK",
                 $"Вход qty={qty:F4}");
         }

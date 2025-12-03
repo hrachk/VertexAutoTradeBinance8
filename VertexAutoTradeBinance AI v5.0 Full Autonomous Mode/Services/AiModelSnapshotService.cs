@@ -2,10 +2,6 @@
 
 namespace VertexAutoTradeBinance8.Services
 {
-    /// <summary>
-    /// Отвечает за сохранение и загрузку AI-снапшотов на диск.
-    /// Формат файлов: ./ai-models/ai-model-YYYYMMDD.json
-    /// </summary>
     public class AiModelSnapshotService
     {
         private readonly ILogger<AiModelSnapshotService> _logger;
@@ -30,28 +26,26 @@ namespace VertexAutoTradeBinance8.Services
         private string BuildFileName(DateTime utcNow)
             => Path.Combine(_folder, $"ai-model-{utcNow:yyyyMMdd}.json");
 
-        /// <summary>
-        /// Сохранение снапшота на диск.
-        /// </summary>
         public async Task SaveSnapshotAsync(
             AiSelfLearningService.AiLearningSnapshot state,
             CancellationToken ct = default)
         {
             try
             {
+                // ❗ FIX: Не сохранять пустой снапшот
+                if (state.Symbols == null || state.Symbols.Count == 0)
+                {
+                    _logger.LogWarning("🤖 AI-МОДЕЛЬ: снапшот не сохранён → нет символов");
+                    return;
+                }
+
                 state.CreatedAtUtc = DateTime.UtcNow;
 
-                var opts = new JsonSerializerOptions
-                {
-                    WriteIndented = true
-                };
-
+                var opts = new JsonSerializerOptions { WriteIndented = true };
                 var json = JsonSerializer.Serialize(state, opts);
                 var path = BuildFileName(state.CreatedAtUtc);
 
                 await File.WriteAllTextAsync(path, json, ct);
-
-                var symbolsCount = state.Symbols?.Count ?? 0;
 
                 _logger.LogInformation(
                     "\n🤖 AI-МОДЕЛЬ: снапшот сохранён\n" +
@@ -60,7 +54,7 @@ namespace VertexAutoTradeBinance8.Services
                     "• Символов:  {Count}\n",
                     path,
                     state.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm:ss"),
-                    symbolsCount);
+                    state.Symbols.Count);
             }
             catch (Exception ex)
             {
@@ -68,9 +62,6 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
-        /// <summary>
-        /// Загружает последний доступный снапшот (по дате в имени файла).
-        /// </summary>
         public async Task<AiSelfLearningService.AiLearningSnapshot?> LoadLatestAsync(
             CancellationToken ct = default)
         {
@@ -87,31 +78,28 @@ namespace VertexAutoTradeBinance8.Services
                 var json = await File.ReadAllTextAsync(latest, ct);
 
                 var state = JsonSerializer.Deserialize<AiSelfLearningService.AiLearningSnapshot>(json);
-                if (state != null)
-                {
-                    var symbolsCount = state.Symbols?.Count ?? 0;
 
-                    _logger.LogInformation(
-                        "\n🤖 AI-МОДЕЛЬ: загружен сохранённый снапшот\n" +
-                        "• Файл:      {Path}\n" +
-                        "• Время UTC: {Time}\n" +
-                        "• Символов:  {Count}\n",
-                        latest,
-                        state.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm:ss"),
-                        symbolsCount);
-                }
-                else
+                // ❗ FIX: пустые снапшоты игнорируем
+                if (state == null || state.Symbols == null || state.Symbols.Count == 0)
                 {
-                    _logger.LogWarning(
-                        "🤖 AI-СНАПШОТ: не удалось десериализовать файл {Path}",
-                        latest);
+                    _logger.LogWarning("🤖 AI-МОДЕЛЬ: найден пустой файл снапшота → SKIP {Path}", latest);
+                    return null;
                 }
+
+                _logger.LogInformation(
+                    "\n🤖 AI-МОДЕЛЬ: загружен сохранённый снапшот\n" +
+                    "• Файл:      {Path}\n" +
+                    "• Время UTC: {Time}\n" +
+                    "• Символов:  {Count}\n",
+                    latest,
+                    state.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm:ss"),
+                    state.Symbols.Count);
 
                 return state;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "🤖 AI-СНАПШОТ: ошибка при загрузке последнего снапшота");
+                _logger.LogError(ex, "🤖 AI-МОДЕЛЬ: ошибка при загрузке последнего снапшота");
                 return null;
             }
         }
