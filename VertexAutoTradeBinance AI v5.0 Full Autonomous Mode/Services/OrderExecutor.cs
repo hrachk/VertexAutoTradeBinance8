@@ -1,9 +1,10 @@
 // ============================================================================
-// ORDER EXECUTOR v5.1 — FIX -1106
-// - УДАЛЁН reduceOnly ИЗ ENTRY ПОЛНОСТЬЮ
+// ORDER EXECUTOR v5.2 — Smart UI + Safe Filters
+// - УДАЛЁН reduceOnly ИЗ ENTRY (как в v5.1)
 // - Binance.Net 11.11.0 совместимость
 // - Smart LIMIT/MARKET Entry
 // - PositionSide Long/Short корректный
+// - Красивый консольный UI через ConsoleReportFormatter
 // ============================================================================
 
 using Binance.Net.Clients;
@@ -40,106 +41,163 @@ namespace VertexAutoTradeBinance8.Services
         {
             using var client = _factory.CreateRestClient();
 
-            // 1) direction
             var side = signal.Side == SignalSide.Buy ? OrderSide.Buy : OrderSide.Sell;
-            PositionSide posSide = signal.Side == SignalSide.Buy
+            var posSide = signal.Side == SignalSide.Buy
                 ? PositionSide.Long
                 : PositionSide.Short;
 
-            // 2) filters
+            // -----------------------------------------------------------------
+            // 1) EXCHANGE FILTERS
+            // -----------------------------------------------------------------
             var filters = await _symbolInfo.GetFuturesFiltersAsync(signal.Symbol);
-            decimal step = filters.step;
-            decimal tick = filters.tickSize;
 
-            // 3) qty adjust
+            decimal step = filters.step <= 0 ? 0.001m : filters.step;
+            decimal tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
+
             quantity = Math.Floor(quantity / step) * step;
             if (quantity < filters.minQty)
             {
                 _logger.LogError("[ORDER] Qty {qty} < minQty {min}", quantity, filters.minQty);
+                ConsoleReportFormatter.EntryFailedHard(_logger, signal.Symbol,
+                    $"QTY {quantity} < minQty {filters.minQty}");
                 return OrderResult.Fail("QTY_TOO_SMALL");
             }
 
-            // 4) Get mark price
+            // -----------------------------------------------------------------
+            // 2) MARK PRICE / SLIPPAGE
+            // -----------------------------------------------------------------
             var markRes = await client.UsdFuturesApi.ExchangeData.GetMarkPriceAsync(signal.Symbol, ct: ct);
-            decimal mark = markRes.Success ? markRes.Data.MarkPrice : signal.EntryPrice;
-            if (mark <= 0) mark = signal.EntryPrice;
+            decimal mark = (markRes.Success && markRes.Data != null)
+                ? markRes.Data.MarkPrice
+                : signal.EntryPrice;
 
-            // SMART ENTRY decision
-            bool useLimit;
-            decimal slipPct = Math.Abs(mark - signal.EntryPrice) / mark * 100m;
+            if (mark <= 0)
+                mark = signal.EntryPrice;
 
-            useLimit = slipPct <= 0.25m; // LIMIT предпочтительно
+            decimal slipPct = mark > 0
+                ? Math.Abs(mark - signal.EntryPrice) / mark * 100m
+                : 0m;
+
+            bool useLimit = slipPct <= 0.25m; // как в v5.1 — LIMIT, если не сильно уехали
 
             _logger.LogInformation(
                 "[ORDER][{symbol}] ENTRY: use {type} (slip={slip:F4} %)",
                 signal.Symbol,
                 useLimit ? "LIMIT" : "MARKET",
-                slipPct
-            );
+                slipPct);
 
-            // LIMIT PRICE
+            // -----------------------------------------------------------------
+            // 3) LIMIT PRICE
+            // -----------------------------------------------------------------
             decimal limitPrice = signal.EntryPrice;
+
             if (useLimit)
             {
-                limitPrice = side == OrderSide.Buy
-                    ? Math.Round((mark - tick * 2) / tick) * tick
-                    : Math.Round((mark + tick * 2) / tick) * tick;
-            }
-
-            BinanceUsdFuturesOrder placed = null;
-
-            // =====================================================================
-            // SEND ENTRY — reduceOnly УДАЛЁН
-            // =====================================================================
-            if (useLimit)
-            {
-                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol: signal.Symbol,
-                    side: side,
-                    type: FuturesOrderType.Limit,
-                    quantity: quantity,
-                    price: limitPrice,
-                    positionSide: posSide,
-                    workingType: WorkingType.Mark,
-                    timeInForce: TimeInForce.GoodTillCanceled,
-                    ct: ct
-                );
-
-                if (!res.Success || res.Data == null)
+                // Чуть лучше поджимаем к текущему mark, не заходя за рынок
+                if (side == OrderSide.Buy)
                 {
-                    _logger.LogError("[ORDER][{symbol}] LIMIT ERROR: {err}", signal.Symbol, res.Error);
-                    return OrderResult.Fail(res.Error?.Message ?? "LIMIT_ERROR");
+                    var raw = mark - tick * 2;
+                    limitPrice = Math.Round(raw / tick) * tick;
+                    if (limitPrice <= 0)
+                        limitPrice = signal.EntryPrice; // fallback
                 }
-
-                placed = res.Data;
-            }
-            else
-            {
-                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol: signal.Symbol,
-                    side: side,
-                    type: FuturesOrderType.Market,
-                    quantity: quantity,
-                    positionSide: posSide,
-                    workingType: WorkingType.Mark,
-                    ct: ct
-                );
-
-                if (!res.Success || res.Data == null)
+                else
                 {
-                    _logger.LogError("[ORDER][{symbol}] MARKET ERROR: {err}", signal.Symbol, res.Error);
-                    return OrderResult.Fail(res.Error?.Message ?? "MARKET_ERROR");
+                    var raw = mark + tick * 2;
+                    limitPrice = Math.Round(raw / tick) * tick;
+                    if (limitPrice <= 0)
+                        limitPrice = signal.EntryPrice;
                 }
-
-                placed = res.Data;
             }
 
-            // =====================================================================
-            // RETURN RESULT
-            // =====================================================================
-            decimal entry = placed.AveragePrice > 0
+            // Красивый отчёт по подготовке входа (SL сейчас только из сигнала)
+            ConsoleReportFormatter.EntryPrep(
+                _logger,
+                signal.Symbol,
+                side == OrderSide.Buy ? "LONG" : "SHORT",
+                signal.EntryPrice,
+                signal.StopLoss,
+                signal.StopLoss,
+                quantity,
+                step,
+                tick);
+
+            BinanceUsdFuturesOrder? placed = null;
+
+            try
+            {
+                // =================================================================
+                // 4) SEND ENTRY (без reduceOnly)
+                // =================================================================
+                if (useLimit)
+                {
+                    var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol: signal.Symbol,
+                        side: side,
+                        type: FuturesOrderType.Limit,
+                        quantity: quantity,
+                        price: limitPrice,
+                        positionSide: posSide,
+                        workingType: WorkingType.Mark,
+                        timeInForce: TimeInForce.GoodTillCanceled,
+                        ct: ct);
+
+                    if (!res.Success || res.Data == null)
+                    {
+                        _logger.LogError("[ORDER][{symbol}] LIMIT ERROR: {err}", signal.Symbol, res.Error);
+                        ConsoleReportFormatter.EntryFailedHard(
+                            _logger,
+                            signal.Symbol,
+                            res.Error?.Message ?? "LIMIT_ERROR");
+                        return OrderResult.Fail(res.Error?.Message ?? "LIMIT_ERROR");
+                    }
+
+                    placed = res.Data;
+                }
+                else
+                {
+                    var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol: signal.Symbol,
+                        side: side,
+                        type: FuturesOrderType.Market,
+                        quantity: quantity,
+                        positionSide: posSide,
+                        workingType: WorkingType.Mark,
+                        ct: ct);
+
+                    if (!res.Success || res.Data == null)
+                    {
+                        _logger.LogError("[ORDER][{symbol}] MARKET ERROR: {err}", signal.Symbol, res.Error);
+                        ConsoleReportFormatter.EntryFailedHard(
+                            _logger,
+                            signal.Symbol,
+                            res.Error?.Message ?? "MARKET_ERROR");
+                        return OrderResult.Fail(res.Error?.Message ?? "MARKET_ERROR");
+                    }
+
+                    placed = res.Data;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[ORDER][{symbol}] EXCEPTION on entry", signal.Symbol);
+                ConsoleReportFormatter.EntryFailedHard(_logger, signal.Symbol, ex.Message);
+                return OrderResult.Fail(ex.Message);
+            }
+
+            // -----------------------------------------------------------------
+            // 5) RESULT
+            // -----------------------------------------------------------------
+            decimal entry = placed!.AveragePrice > 0
                 ? placed.AveragePrice
                 : limitPrice;
+
+            ConsoleReportFormatter.EntrySuccess(
+                _logger,
+                signal.Symbol,
+                quantity,
+                entry,
+                attempt: 1);
 
             return OrderResult.Successs(entry, quantity, placed.Id);
         }

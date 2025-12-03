@@ -38,5 +38,9 @@ namespace VertexAutoTradeBinance8.Models
         public bool IsDangerChopZone { get; set; }
         public bool AllowAggressiveTrendEntries { get; set; }
         public bool AllowCounterTrendEntries { get; set; }
+        public bool HighTfSafetyMode { get; set; } = false;
+
+        public decimal SafetyRiskMultiplier { get; set; } = 1m;
+
     }
 }

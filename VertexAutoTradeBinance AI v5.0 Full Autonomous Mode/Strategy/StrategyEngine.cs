@@ -566,6 +566,33 @@ namespace VertexAutoTradeBinance8.Strategy
             var smart = _smartRegimeService.Evaluate(symbol, interval, klines);
             var regime = smart.BaseRegime;
 
+            // ---------------------------------------------------------
+            // 2.1 HIGH TIMEFRAME SAFETY MODE (1H + 1D)
+            // ---------------------------------------------------------
+            var highTF = HighTimeframeSafetyFilter.Instance;
+
+            var highResult = highTF.EvaluateAsync(symbol, CancellationToken.None)
+                                   .GetAwaiter()
+                                   .GetResult();
+
+            if (highResult.SwingModeEnabled)
+            {
+                _logger.LogInformation(
+                    "[{Symbol}][{TF}] HIGH-TF MODE: strong1H={H1} strong1D={D1} → riskMult={R:F2}",
+                    symbol,
+                    interval,
+                    highResult.StrongTrend1H,
+                    highResult.StrongTrend1D,
+                    highResult.SwingRiskMultiplier);
+
+                smart.HighTfSafetyMode = true;
+                smart.SafetyRiskMultiplier = highResult.SwingRiskMultiplier;
+            }
+            else
+            {
+                smart.HighTfSafetyMode = false;
+                smart.SafetyRiskMultiplier = 1m;
+            }
             _logger.LogInformation(
                 "[DEBUG][{Symbol}][{TF}] REGIME={Regime} smart={Smart} slope={Slope:P2} vol={Vol:P2} conf={Conf:P0}",
                 symbol,

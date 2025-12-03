@@ -240,21 +240,15 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
-    //        var qty = await _riskManager.CalculateSafeQty(
-    //signal.Symbol,
-    //signal.EntryPrice,
-    //signal.StopLoss,
-    //_risk.RiskMultiplier,
-    //_risk.Leverage ?? 1m,
-    //ct);
 
             var qty = await _risk.CalculateSafeQty(
-    symbol,
-    signal.EntryPrice,
-    signal.StopLoss,
-    riskMultiplier,
-    signal.Leverage ?? 1m,   // 👉 фикс
-    ct);
+     symbol,
+     signal.EntryPrice,
+     signal.StopLoss,
+     riskMultiplier,
+     smart.SafetyRiskMultiplier,   // 💥 теперь ОФИЦИАЛЬНЫЙ параметр
+     signal.Leverage ?? 1m,
+     ct);
 
             if (qty <= 0)
             {

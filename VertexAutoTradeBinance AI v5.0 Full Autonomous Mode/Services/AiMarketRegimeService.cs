@@ -29,6 +29,72 @@ namespace VertexAutoTradeBinance8.Services
             _logger = logger;
         }
 
+        // =====================================================================
+        // SAFE KLINES LOADER (ДЛЯ HighTimeframeSafetyFilter)
+        // =====================================================================
+        public async Task<IReadOnlyList<BinanceFuturesUsdtKline>> LoadKlinesSafe(
+            string symbol,
+            KlineInterval interval,
+            int limit)
+        {
+            try
+            {
+                // Твой MarketDataService уже делает все правильно,
+                // но мы не можем использовать его здесь — поэтому
+                // тянем свечи через BinanceClientFactory (упрощённый вариант).
+                using var client = new Binance.Net.Clients.BinanceRestClient();
+
+                var res = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
+                    symbol,
+                    interval,
+                    limit: limit);
+
+                if (!res.Success || res.Data == null)
+                {
+
+                    _logger.LogWarning(
+                        "[REGIME] LoadKlinesSafe FAIL {symbol} {tf}: {err}",
+                        symbol,
+                        interval,
+                        res.Error);
+                    return Array.Empty<BinanceFuturesUsdtKline>();
+                }
+                   
+
+                // === КОНВЕРТАЦИЯ В BinanceFuturesUsdtKline ===
+                var list = res.Data
+                    .Select(k => new BinanceFuturesUsdtKline
+                    {
+                        OpenTime = k.OpenTime,
+                        OpenPrice = k.OpenPrice,
+                        HighPrice = k.HighPrice,
+                        LowPrice = k.LowPrice,
+                        ClosePrice = k.ClosePrice,
+                        Volume = k.Volume,
+                        CloseTime = k.CloseTime,
+                        QuoteVolume = k.QuoteVolume,
+                        TakerBuyBaseVolume = k.TakerBuyBaseVolume,
+                        TakerBuyQuoteVolume = k.TakerBuyQuoteVolume,
+                         TradeCount = k.TradeCount
+                    })
+                    .ToList();
+
+                return list;
+
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[REGIME] LoadKlinesSafe EX {symbol} {tf}",
+                    symbol,
+                    interval);
+
+
+
+                return Array.Empty<BinanceFuturesUsdtKline>();
+            }
+        }
+
         public MarketRegimeResult DetectRegime(
             string symbol,
             KlineInterval interval,
