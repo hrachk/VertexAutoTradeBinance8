@@ -9,10 +9,10 @@ namespace VertexAutoTradeBinance8.Services
         private readonly object _lock = new();
 
         private static readonly string FilePath =
-            Path.Combine(AppContext.BaseDirectory, "ai_learning.json");
+            Path.Combine(AppContext.BaseDirectory, "ai-models/ai_learning.json");
 
         private static readonly string BackupPath =
-            Path.Combine(AppContext.BaseDirectory, "ai_learning_backup.json");
+            Path.Combine(AppContext.BaseDirectory, "ai-models/ai_learning_backup.json");
 
         private DateTime _lastSnapshot = DateTime.MinValue;
         private readonly TimeSpan SnapshotInterval = TimeSpan.FromMinutes(15);
@@ -39,6 +39,14 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         // MODELS
         // =====================================================================
+        private static readonly JsonSerializerOptions JsonOptions = new()
+        {
+            WriteIndented = true,
+            PropertyNameCaseInsensitive = true,
+            AllowTrailingCommas = true,
+            ReadCommentHandling = JsonCommentHandling.Skip,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        };
 
         public class MarketState
         {
@@ -326,42 +334,103 @@ namespace VertexAutoTradeBinance8.Services
         {
             try
             {
-                if (File.Exists(FilePath))
+                // === 1) Авто-создание файла, если он отсутствует ===
+                if (!File.Exists(FilePath))
                 {
-                    var json = File.ReadAllText(FilePath);
-                    var data = JsonSerializer.Deserialize<
-                        Dictionary<string, Dictionary<MarketRegime, RegimeStats>>>(json);
+                    var empty = JsonSerializer.Serialize(
+                        new Dictionary<string, Dictionary<MarketRegime, RegimeStats>>(),
+                        JsonOptions);
 
-                    if (data != null)
-                    {
-                        foreach (var kv in data)
-                            _stats[kv.Key] = kv.Value;
-                    }
+                    File.WriteAllText(FilePath, empty);
+                    File.WriteAllText(BackupPath, empty);
+
+                    _logger.LogInformation("[AI] Создан новый пустой ai_learning.json");
+                    return;
+                }
+
+
+                var json = File.ReadAllText(FilePath);
+
+                // Загружаем сырые данные как Dictionary<string, JsonElement>
+                var raw = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json, JsonOptions);
+                if (raw == null)
+                    return;
+
+                // Создаём чистый контейнер
+                var cleaned = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var kv in raw)
+                {
+                    // 🎯 ВАЖНО: фильтруем весь мусор
+                    if (kv.Key.Equals("CreatedAtUtc", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (kv.Key.Equals("SnapshotVersion", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (kv.Key.Equals("Meta", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    cleaned[kv.Key] = kv.Value;
+                }
+
+                // Теперь сериализуем очищенный JSON
+                var purifiedJson = JsonSerializer.Serialize(cleaned, JsonOptions);
+
+                // И десериализуем в нашу структуру
+                var data = JsonSerializer.Deserialize<
+                    Dictionary<string, Dictionary<MarketRegime, RegimeStats>>
+                >(purifiedJson, JsonOptions);
+
+                if (data != null)
+                {
+                    foreach (var kv in data)
+                        _stats[kv.Key] = kv.Value;
+
+                    return;
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[AI] LOAD ERROR → попытка отката");
+            }
 
-                try
+            // === БЭКАП ===
+            try
+            {
+                if (!File.Exists(BackupPath))
+                    return;
+
+                var json = File.ReadAllText(BackupPath);
+
+                // Повторяем процесс загрузки бэкапа
+                var raw = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json, JsonOptions);
+                if (raw == null)
+                    return;
+
+                var cleaned = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+                foreach (var kv in raw)
                 {
-                    if (File.Exists(BackupPath))
-                    {
-                        var json = File.ReadAllText(BackupPath);
-                        var data = JsonSerializer.Deserialize<
-                            Dictionary<string, Dictionary<MarketRegime, RegimeStats>>>(json);
+                    if (kv.Key.Equals("CreatedAtUtc", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (kv.Key.Equals("SnapshotVersion", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (kv.Key.Equals("Meta", StringComparison.OrdinalIgnoreCase)) continue;
 
-                        if (data != null)
-                            foreach (var kv in data)
-                                _stats[kv.Key] = kv.Value;
-                    }
+                    cleaned[kv.Key] = kv.Value;
                 }
-                catch
+
+                var purifiedJson = JsonSerializer.Serialize(cleaned, JsonOptions);
+
+                var data = JsonSerializer.Deserialize<
+                    Dictionary<string, Dictionary<MarketRegime, RegimeStats>>
+                >(purifiedJson, JsonOptions);
+
+                if (data != null)
                 {
-                    // ignored
+                    foreach (var kv in data)
+                        _stats[kv.Key] = kv.Value;
                 }
             }
+            catch
+            {
+                // ignored
+            }
         }
+
 
         // =====================================================================
         // PERIODIC SNAPSHOT (каждые 15 минут)
