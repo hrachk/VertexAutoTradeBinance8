@@ -42,6 +42,39 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         /// <summary>
+        /// Динамический множитель SL по ATR и волатильности/режиму.
+        /// </summary>
+        private static decimal GetDynamicSlAtrMult(string trend, decimal atrPct)
+        {
+            // atrPct ожидаем в долях (0.001 = 0.1 %)
+            bool strongTrend = trend == "UP" || trend == "DOWN";
+            bool ultraLowVol = atrPct < 0.0010m;    // <0.10%
+            bool lowVol = atrPct < 0.0020m;    // <0.20%
+            bool highVol = atrPct > 0.0040m;    // >0.40%
+
+            if (strongTrend)
+            {
+                if (ultraLowVol)
+                    return 1.0m;   // чистый сильный тренд — SL ближе
+                if (lowVol)
+                    return 1.2m;   // нормальный тренд
+                if (highVol)
+                    return 1.5m;   // тренд, но рывки — SL шире
+                return 1.3m;
+            }
+            else
+            {
+                // Range / Squeeze / непонятный режим — шире SL
+                if (ultraLowVol)
+                    return 1.4m;
+                if (highVol)
+                    return 1.8m;
+
+                return 1.6m;
+            }
+        }
+
+        /// <summary>
         /// Полная версия – используется там, где есть и klines, и AiDecision.
         /// </summary>
         public decimal OptimizeSl(
@@ -65,7 +98,9 @@ namespace VertexAutoTradeBinance8.Services
 
             decimal dist = Math.Abs(signal.EntryPrice - oldSl);
 
+            // ==========================
             // 1) низкий шум + тренд → чуть поджать SL
+            // ==========================
             if ((decision.Trend == "UP" || decision.Trend == "DOWN") &&
                 decision.AtrPct < 0.0015m &&         // < 0.15 %
                 dist > atr14 * 0.5m)
@@ -77,7 +112,9 @@ namespace VertexAutoTradeBinance8.Services
                     newSl = signal.EntryPrice + (dist - tighten);
             }
 
+            // ==========================
             // 2) анти-стопхант по хвостам
+            // ==========================
             decimal upperWick = last.HighPrice - Math.Max(last.OpenPrice, last.ClosePrice);
             decimal lowerWick = Math.Min(last.OpenPrice, last.ClosePrice) - last.LowPrice;
 
@@ -92,34 +129,27 @@ namespace VertexAutoTradeBinance8.Services
                 if (candidate > newSl) newSl = candidate;
             }
 
-            // 3) ГЛОБАЛЬНЫЙ МИНИМУМ SL ПО ATR ДЛЯ 15m (и аналогичных)
-            //    Timeframe записан в TradeSignal.Timeframe как строка enum'а KlineInterval.
-            if (!string.IsNullOrWhiteSpace(signal.Timeframe))
+            // ==========================
+            // 3) ДИНАМИЧЕСКИЙ SL по ATR (минимальная дистанция)
+            // ==========================
+            decimal dynMult = GetDynamicSlAtrMult(decision.Trend, decision.AtrPct);
+            decimal minDist = atr14 * dynMult;
+
+            decimal currentDist = Math.Abs(signal.EntryPrice - newSl);
+            if (currentDist < minDist)
             {
-                var tf = signal.Timeframe;
-
-                // Для FifteenMinutes делаем минимум 1.2 ATR (глобально, не только для LINK)
-                if (tf.Contains("FifteenMinutes", StringComparison.OrdinalIgnoreCase))
-                {
-                    decimal minAtrMult = 1.2m; // 1.2–1.5 ATR: стартуем с 1.2, чтобы не душить
-                    decimal minDist = atr14 * minAtrMult;
-
-                    decimal currDist = Math.Abs(signal.EntryPrice - newSl);
-                    if (minDist > 0m && currDist < minDist)
-                    {
-                        if (signal.Side == SignalSide.Buy)
-                            newSl = signal.EntryPrice - minDist;
-                        else if (signal.Side == SignalSide.Sell)
-                            newSl = signal.EntryPrice + minDist;
-                    }
-                }
+                // расширяем SL до нужной глубины
+                if (signal.Side == SignalSide.Buy)
+                    newSl = signal.EntryPrice - minDist;
+                else
+                    newSl = signal.EntryPrice + minDist;
             }
 
             if (newSl != oldSl)
             {
                 _logger.LogInformation(
-                    "AI-SL OPTIMIZER {Symbol}: oldSL={Old:F4}, newSL={New:F4}, trend={Trend}, atr={Atr:F4}, atr%={AtrPct:P2}",
-                    symbol, oldSl, newSl, decision.Trend, atr14, decision.AtrPct);
+                    "AI-SL OPTIMIZER {Symbol}: oldSL={Old:F4}, newSL={New:F4}, trend={Trend}, atr%={AtrPct:P2}, dynMult={Mult:F2}",
+                    symbol, oldSl, newSl, decision.Trend, decision.AtrPct, dynMult);
             }
 
             return newSl;
@@ -162,6 +192,19 @@ namespace VertexAutoTradeBinance8.Services
             {
                 var candidate = last.HighPrice + atr14 * 0.2m;
                 if (candidate > newSl) newSl = candidate;
+            }
+
+            // Без AiDecision — просто гарантируем минимальную глубину 1.2–1.6 ATR
+            decimal minMult = 1.4m;
+            decimal minDist = atr14 * minMult;
+            decimal currentDist = Math.Abs(entryPrice - newSl);
+
+            if (currentDist < minDist)
+            {
+                if (side == SignalSide.Buy)
+                    newSl = entryPrice - minDist;
+                else
+                    newSl = entryPrice + minDist;
             }
 
             if (newSl != oldSl)

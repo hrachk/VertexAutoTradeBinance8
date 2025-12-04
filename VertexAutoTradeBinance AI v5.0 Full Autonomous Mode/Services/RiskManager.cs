@@ -1,8 +1,4 @@
-﻿// ============================================================================
-//  RISK MANAGER v5.2 — live-баланс + правильный maxRisk + global minNotional
-// ============================================================================
-
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using Binance.Net.Clients;
@@ -37,14 +33,20 @@ namespace VertexAutoTradeBinance8.Services
             decimal entryPrice,
             decimal stopLoss,
             decimal riskMultiplier,
-            decimal safetyRiskMultiplier,   // ← AI safety factor
+            decimal safetyRiskMultiplier,   // AI + сигнал
             decimal leverage,
             CancellationToken ct)
         {
-            // объединяем два риска
+            // 1) Сводим всё к одному финальному коэффициенту риска
             decimal finalRisk = riskMultiplier * safetyRiskMultiplier;
-            if (finalRisk < 0.1m)
-                finalRisk = 0.1m;
+
+            // Базовый коридор: от 0.5x до 2.0x
+            if (finalRisk < 0.5m) finalRisk = 0.5m;
+            if (finalRisk > 2.0m) finalRisk = 2.0m;
+
+            // Если риск-модель даёт совсем “ядерный” сигнал — чуть расширяем
+            if (riskMultiplier > 1.5m && safetyRiskMultiplier > 1.0m)
+                finalRisk = Math.Min(finalRisk * 1.1m, 2.3m);
 
             // 0) Filters
             var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
@@ -52,10 +54,10 @@ namespace VertexAutoTradeBinance8.Services
             decimal step = f.step <= 0 ? 0.001m : f.step;
             decimal minQty = f.minQty <= 0 ? step : f.minQty;
 
-            // minNotional: максимум из биржевого и конфигного
-            decimal exchangeMinNotional = f.minNotional <= 0 ? 5m : f.minNotional;
-            decimal configMinNotional = _options.MinNotionalUsd > 0 ? _options.MinNotionalUsd : 0m;
-            decimal minNotional = Math.Max(exchangeMinNotional, configMinNotional);
+            // если биржа не даёт minNotional → fallback из конфига
+            decimal minNotional = f.minNotional > 0
+                ? f.minNotional
+                : (_options.MinNotionalGuard > 0 ? _options.MinNotionalGuard : 5m);
 
             // LIVE BALANCE
             using var client = _factory.CreateRestClient();
@@ -78,13 +80,21 @@ namespace VertexAutoTradeBinance8.Services
             if (slDist <= 0)
                 return 0;
 
-            // CORRECT MAX RISK
-            decimal maxRisk = free * 0.03m;   // базовый риск 3%
-            maxRisk *= finalRisk;             // учитываем safetyRiskMultiplier
+            // 2) CORRECT MAX RISK
+            // базовый риск с учётом настроек TradingOptions
+            decimal baseRiskPercent = _options.BaseRiskPercent > 0
+                ? _options.BaseRiskPercent
+                : 0.03m; // 3% по умолчанию
 
+            decimal maxRisk = free * baseRiskPercent;
+            maxRisk *= finalRisk; // AI-скейлинг
+
+            // Жёсткие границы по абсолютному риску
             if (maxRisk < 1m) maxRisk = 1m;
+            if (maxRisk > free * 0.20m) // не рискуем >20% депо в одной сделке
+                maxRisk = free * 0.20m;
 
-            // RAW QTY
+            // 3) RAW QTY
             decimal qty = maxRisk / slDist;
 
             if (leverage > 0)
@@ -96,39 +106,29 @@ namespace VertexAutoTradeBinance8.Services
 
             decimal notional = qty * entryPrice;
 
-            // проверяем global minNotional
+            // защитный фильтр по notional: не меньше minNotional и не больше free * leverage
             if (notional < minNotional)
             {
-                // Пытаемся поднять qty до minNotional
-                decimal needQty = minNotional / entryPrice;
-                needQty = Math.Ceiling(needQty / step) * step;
-
-                // но не выше максимума, доступного по балансу
-                decimal maxQtyByBalance = (free * leverage) / entryPrice;
-                maxQtyByBalance = Math.Floor(maxQtyByBalance / step) * step;
-
-                qty = Math.Min(needQty, maxQtyByBalance);
-                notional = qty * entryPrice;
-
-                if (qty <= 0 || notional < minNotional)
-                {
-                    _logger.LogWarning(
-                        "[RISK] Notional {notional:F2} < minNotional {minNotional:F2} → SKIP TRADE",
-                        notional, minNotional);
-                    return 0;
-                }
+                _logger.LogWarning(
+                    "[RISK] Notional {notional:F2} < minNotional {minNotional:F2} → SKIP",
+                    notional, minNotional);
+                return 0;
             }
 
             if (notional > free * leverage)
             {
                 qty = Math.Floor((free * leverage) / entryPrice / step) * step;
+                notional = qty * entryPrice;
             }
 
-            if (qty <= 0)
+            if (qty <= 0 || notional <= 0)
                 return 0;
+
+            _logger.LogInformation(
+                "[RISK] {symbol}: free={free:F2}, maxRisk={maxRisk:F2}, finalRisk={fr:F2}, qty={qty:F4}, notional={notional:F2}",
+                symbol, free, maxRisk, finalRisk, qty, notional);
 
             return qty;
         }
-
     }
 }

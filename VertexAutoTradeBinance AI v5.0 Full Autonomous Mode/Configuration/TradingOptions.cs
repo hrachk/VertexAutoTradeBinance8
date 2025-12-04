@@ -15,4 +15,15 @@ public class TradingOptions
     public decimal MinRiskReward { get; set; } = 2.0m;   // TP1 ≥ 2 * SL
     public decimal MinNotionalUsd { get; set; } = 30m;
     public int CooldownMinutes { get; internal set; }
+
+    // ---  НОВЫЕ ПОЛЯ ---
+
+    /// <summary>Базовый риск → по умолчанию 1.0% если не указано</summary>
+    public decimal BaseRiskPercent { get; set; } = 1.0m;
+
+    /// <summary>Минимальный размер позиции после AI-скейлинга</summary>
+    public decimal MinNotionalGuard { get; set; } = 30m;
+
+    /// <summary>Минимальный процент → если позиция получается слишком маленькой</summary>
+    public decimal MinNotionalGuardPercent { get; set; } = 0.003m; // 0.3% капитала
 }

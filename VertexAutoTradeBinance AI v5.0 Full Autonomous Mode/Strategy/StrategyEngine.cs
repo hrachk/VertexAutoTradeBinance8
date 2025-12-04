@@ -791,7 +791,8 @@ namespace VertexAutoTradeBinance8.Strategy
             // 6) AI Dynamic Risk Tag — с защитой
             try
             {
-                var riskW = _aiLearning.GetDynamicRiskWeight(symbol, regime);
+                 
+                var riskW = _aiLearning.GetAiRiskAdjustment(symbol, regime);
                 baseSignal.Reason += $"|AIrisk={riskW:F2}";
             }
             catch (Exception ex)
