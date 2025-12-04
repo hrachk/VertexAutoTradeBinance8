@@ -18,96 +18,17 @@ namespace VertexAutoTradeBinance8.Services
         private DateTime _lastSnapshot = DateTime.MinValue;
         private readonly TimeSpan SnapshotInterval = TimeSpan.FromMinutes(15);
 
-        // =====================================================================
-        // CORE STORAGE (твоя оригинальная структура)
-        // =====================================================================
         private readonly Dictionary<string, Dictionary<MarketRegime, RegimeStats>> _stats
             = new(StringComparer.OrdinalIgnoreCase);
 
-        // =====================================================================
-        // ML MODULE: расширенная статистика по сигналам
-        // =====================================================================
-
-        private readonly Dictionary<string, AiSymbolMlStats> _mlStats
-            = new(StringComparer.OrdinalIgnoreCase);
-
-        // ---------------- ML internal model ----------------
-        private class AiSymbolMlStats
+        public AiSelfLearningService(ILogger<AiSelfLearningService> logger)
         {
-            public string Symbol { get; }
-            public int TotalTrades { get; private set; }
-            public decimal EmaRr { get; private set; }
-            public decimal EmaWinRate { get; private set; }
-
-            // контекст по режимам
-            public readonly Dictionary<MarketRegime, MlRegimeStats> Regimes
-                = new();
-
-            public AiSymbolMlStats(string symbol)
-            {
-                Symbol = symbol;
-            }
-
-            public void Update(decimal rr, bool isWin, MarketRegime regime)
-            {
-                TotalTrades++;
-
-                // EMA RR
-                if (TotalTrades == 1)
-                    EmaRr = rr;
-                else
-                    EmaRr = EmaRr * 0.90m + rr * 0.10m;
-
-                // EMA winrate
-                decimal winVal = isWin ? 1m : 0m;
-                if (TotalTrades == 1)
-                    EmaWinRate = winVal;
-                else
-                    EmaWinRate = EmaWinRate * 0.95m + winVal * 0.05m;
-
-                // per-regime stats
-                if (!Regimes.TryGetValue(regime, out var rs))
-                {
-                    rs = new MlRegimeStats(regime);
-                    Regimes[regime] = rs;
-                }
-
-                rs.Update(rr, isWin);
-            }
-        }
-
-        private class MlRegimeStats
-        {
-            public MarketRegime Regime { get; }
-            public int Trades { get; private set; }
-            public decimal EmaRr { get; private set; }
-            public decimal EmaWinRate { get; private set; }
-
-            public MlRegimeStats(MarketRegime reg)
-            {
-                Regime = reg;
-            }
-
-            public void Update(decimal rr, bool isWin)
-            {
-                Trades++;
-
-                if (Trades == 1)
-                    EmaRr = rr;
-                else
-                    EmaRr = EmaRr * 0.9m + rr * 0.1m;
-
-                decimal winVal = isWin ? 1m : 0m;
-
-                if (Trades == 1)
-                    EmaWinRate = winVal;
-                else
-                    EmaWinRate = EmaWinRate * 0.95m + winVal * 0.05m;
-            }
+            _logger = logger;
+            Load();
         }
 
         // =====================================================================
-        // ORIGINAL MODELS (без изменений)
+        // INTERNAL MODELS
         // =====================================================================
 
         private class RegimeStats
@@ -141,6 +62,10 @@ namespace VertexAutoTradeBinance8.Services
             public List<AiRegimeStatsDto> Regimes { get; set; } = new();
         }
 
+        /// <summary>
+        /// Снапшот для сохранения/загрузки (бывший AiLearningState).
+        /// Название изменено, чтобы не путаться с Models.AiLearningState.
+        /// </summary>
         public class AiLearningSnapshot
         {
             public DateTime CreatedAtUtc { get; set; }
@@ -148,7 +73,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // LOAD / SAVE (оставил твой код 1:1)
+        // LOAD / SAVE
         // =====================================================================
 
         private void Load()
@@ -168,20 +93,16 @@ namespace VertexAutoTradeBinance8.Services
                         return;
 
                     var state = JsonSerializer.Deserialize<AiLearningSnapshot>(json);
-                    if (state != null && state.Symbols.Count > 0)
-                    {
+                    if (state != null)
                         ImportState(state);
-                        _logger.LogInformation("AI-Learning: memory loaded successfully ({FilePath})", FilePath);
-                    }
-                    else
-                    {
-                        _logger.LogWarning("AI-Learning: file exists but contains NO symbols → skip load");
-                    }
+
+                    _logger.LogInformation("AI-Learning: memory loaded successfully ({FilePath})", FilePath);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "AI-Learning: FAILED to load memory. Restoring from backup.");
 
+                    // Восстановление из бэкапа
                     try
                     {
                         if (File.Exists(BackupPath))
@@ -189,7 +110,7 @@ namespace VertexAutoTradeBinance8.Services
                             var json = File.ReadAllText(BackupPath);
                             var state = JsonSerializer.Deserialize<AiLearningSnapshot>(json);
 
-                            if (state != null && state.Symbols.Count > 0)
+                            if (state != null)
                             {
                                 ImportState(state);
                                 _logger.LogWarning("AI-Learning: restored from backup file");
@@ -210,19 +131,6 @@ namespace VertexAutoTradeBinance8.Services
             {
                 try
                 {
-                    if (_stats.Count == 0)
-                    {
-                        _logger.LogWarning("AI-Learning: SAVE skipped → no symbols in memory");
-                        return;
-                    }
-
-                    bool hasTrades = _stats.Values.Any(r => r.Values.Any(x => x.Trades > 0));
-                    if (!hasTrades)
-                    {
-                        _logger.LogWarning("AI-Learning: SAVE skipped → no trades recorded");
-                        return;
-                    }
-
                     var state = ExportState();
                     var json = JsonSerializer.Serialize(state, new JsonSerializerOptions
                     {
@@ -246,14 +154,12 @@ namespace VertexAutoTradeBinance8.Services
             if (DateTime.UtcNow - _lastSnapshot > SnapshotInterval)
             {
                 _lastSnapshot = DateTime.UtcNow;
-
-                if (_stats.Count > 0 && _stats.Values.Any(r => r.Values.Any(x => x.Trades > 0)))
-                    Save();
+                Save();
             }
         }
 
         // =====================================================================
-        // TRADE REGISTRATION + ML UPDATE
+        // REGISTER TRADE RESULT
         // =====================================================================
 
         public void RegisterTradeResult(
@@ -264,9 +170,6 @@ namespace VertexAutoTradeBinance8.Services
         {
             lock (_lock)
             {
-                // ===========================
-                // ORIGINAL STATISTICS
-                // ===========================
                 if (!_stats.TryGetValue(symbol, out var regimes))
                 {
                     regimes = new Dictionary<MarketRegime, RegimeStats>();
@@ -290,20 +193,9 @@ namespace VertexAutoTradeBinance8.Services
 
                 rs.LastUpdateUtc = DateTime.UtcNow;
 
-                // ===========================
-                // NEW ML ENGINE UPDATE
-                // ===========================
-                if (!_mlStats.TryGetValue(symbol, out var ml))
-                {
-                    ml = new AiSymbolMlStats(symbol);
-                    _mlStats[symbol] = ml;
-                }
-
-                ml.Update(rr, isWin, regime);
-
                 _logger.LogInformation(
-                    "[AI-LEARN] {Symbol} regime={Regime}, trades={Trades}, win={Wins}, rr={RR:F2}, emaRR={emaR:F2}, emaWin={ew:F2}",
-                    symbol, regime, rs.Trades, rs.Wins, rr, ml.EmaRr, ml.EmaWinRate);
+                    "[AI-LEARN] {Symbol} regime={Regime}, trades={Trades}, win={Wins}, rr={RR:F2}",
+                    symbol, regime, rs.Trades, rs.Wins, rr);
 
                 Save();
                 AutoSnapshotIfNeeded();
@@ -311,41 +203,49 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // ML-BASED RISK ADJUSTMENT
+        // DYNAMIC RISK WEIGHT
         // =====================================================================
 
-        public decimal GetAiRiskAdjustment(string symbol, MarketRegime regime)
+        public decimal GetDynamicRiskWeight(string symbol, MarketRegime regime)
         {
             lock (_lock)
             {
-                if (!_mlStats.TryGetValue(symbol, out var ml) || ml.TotalTrades < 10)
-                    return 1.0m;
-
-                decimal adj = 1.0m;
-
-                // ГЛОБАЛЬНОЕ качество символа
-                if (ml.EmaWinRate > 0.60m && ml.EmaRr > 1.2m)
-                    adj *= 1.25m;
-
-                if (ml.EmaWinRate < 0.40m)
-                    adj *= 0.80m;
-
-                // Качество конкретного режима
-                if (ml.Regimes.TryGetValue(regime, out var reg))
+                if (!_stats.TryGetValue(symbol, out var regimes) ||
+                    !regimes.TryGetValue(regime, out var rs) ||
+                    rs.Trades < 5)
                 {
-                    if (reg.EmaWinRate > 0.65m && reg.EmaRr > 1.3m && reg.Trades > 5)
-                        adj *= 1.30m;
-
-                    if (reg.EmaWinRate < 0.35m && reg.Trades > 5)
-                        adj *= 0.75m;
+                    _logger.LogDebug(
+                        "[AI-LEARN] RiskWeight {Symbol} {Regime}: no stats → 1.00",
+                        symbol, regime);
+                    return 1.0m;
                 }
 
-                return Math.Clamp(adj, 0.5m, 1.7m);
+                decimal winRate = rs.WinRate;
+                decimal avgRr = rs.AvgRr;
+
+                decimal weight = 1.0m;
+
+                if (winRate >= 0.65m && avgRr >= 1.20m)
+                    weight = 1.35m;
+                else if (winRate >= 0.55m && avgRr >= 1.00m)
+                    weight = 1.15m;
+                else if (winRate <= 0.45m && avgRr < 1.00m)
+                    weight = 0.80m;
+                else if (winRate <= 0.35m)
+                    weight = 0.60m;
+
+                weight = Math.Clamp(weight, 0.5m, 1.5m);
+
+                _logger.LogInformation(
+                    "[AI-LEARN] RiskWeight {Symbol} {Regime}: WR={WR:P1}, avgRR={RR:F2} → weight={W:F2}",
+                    symbol, regime, winRate, avgRr, weight);
+
+                return weight;
             }
         }
 
         // =====================================================================
-        // EXPORT / IMPORT (оставил твоё)
+        // EXPORT / IMPORT
         // =====================================================================
 
         public AiLearningSnapshot ExportState()
@@ -388,12 +288,11 @@ namespace VertexAutoTradeBinance8.Services
             {
                 if (state == null || state.Symbols.Count == 0)
                 {
-                    _logger.LogWarning("[AI-LEARN] ImportState: empty snapshot → SKIP");
+                    _logger.LogWarning("[AI-LEARN] ImportState: empty snapshot");
                     return;
                 }
 
                 _stats.Clear();
-                _mlStats.Clear(); // reset ML
 
                 foreach (var sym in state.Symbols)
                 {
@@ -402,9 +301,6 @@ namespace VertexAutoTradeBinance8.Services
 
                     var regimes = new Dictionary<MarketRegime, RegimeStats>();
                     _stats[sym.Symbol] = regimes;
-
-                    var ml = new AiSymbolMlStats(sym.Symbol);
-                    _mlStats[sym.Symbol] = ml;
 
                     foreach (var r in sym.Regimes)
                     {
@@ -418,14 +314,6 @@ namespace VertexAutoTradeBinance8.Services
                             MinRr = r.MinRr,
                             LastUpdateUtc = r.LastUpdateUtc
                         };
-
-                        // ML warm-up
-                        for (int i = 0; i < r.Trades; i++)
-                        {
-                            bool win = i < r.Wins;
-                            decimal rr = r.SumRr / Math.Max(1, r.Trades);
-                            ml.Update(rr, win, r.Regime);
-                        }
                     }
                 }
 
@@ -437,7 +325,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // EXTERNAL RECORD API (оставил твой)
+        // CONVENIENCE FOR SUPERVISOR / PROTECTORS
         // =====================================================================
 
         public void RecordTrade(
@@ -449,15 +337,19 @@ namespace VertexAutoTradeBinance8.Services
             MarketRegime regime,
             TradeSignal? signal = null)
         {
+            // 1. Manual trades → не обучаем AI
             if (signal != null && signal.IsManual)
             {
-                _logger.LogInformation("[AI-LEARN] Manual trade detected → SKIP");
+                _logger.LogInformation(
+                    "[AI-LEARN] Manual trade detected → SKIP learning. symbol={Symbol}, regime={Regime}",
+                    symbol, regime);
                 return;
             }
 
             if (entryPrice <= 0 || exitPrice <= 0)
                 return;
 
+            // RR по простому (можно улучшать позже)
             decimal rr = Math.Abs(exitPrice - entryPrice) /
                          Math.Max(1, Math.Abs(entryPrice * 0.001m));
 

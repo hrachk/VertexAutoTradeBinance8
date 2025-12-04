@@ -792,7 +792,7 @@ namespace VertexAutoTradeBinance8.Strategy
             try
             {
                  
-                var riskW = _aiLearning.GetAiRiskAdjustment(symbol, regime);
+                var riskW = _aiLearning.GetDynamicRiskWeight(symbol, regime);
                 baseSignal.Reason += $"|AIrisk={riskW:F2}";
             }
             catch (Exception ex)

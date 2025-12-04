@@ -96,7 +96,7 @@ namespace VertexAutoTradeBinance8.Services
                 }
 
                 // 5) AI-Risk (self-learning)
-                var riskW = _aiRisk.GetAiRiskAdjustment(symbol, mr.Regime);
+                var riskW = _aiRisk.GetDynamicRiskWeight(symbol, mr.Regime);
                 if (riskW < 0.80m)
                     lev -= 1;    // AI считает инструмент опасным
                 else if (riskW > 1.20m)
