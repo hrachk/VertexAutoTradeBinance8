@@ -1,7 +1,8 @@
 //  -----------------------------------------------------------------------------
-//   STRATEGY ENGINE v5.1
-//   - Dynamic RR filter (ATR + volatility + regime)
-//   - Soft entry + liquidity + AI risk as before
+//   STRATEGY ENGINE v6.0 (QUANT-REALTIME MAX)
+//   - Dynamic RR filter (ATR + volatility + regime + AI TrendPredict)
+//   - Soft entry + liquidity + AI risk как было
+//   - QUANT-REALTIME: RecordMarketState для AiSelfLearningService
 //   - Имена и сигнатуры полностью совместимы с VertexAutoTradeBinance8
 //  -----------------------------------------------------------------------------
 
@@ -517,7 +518,7 @@ namespace VertexAutoTradeBinance8.Strategy
         }
 
         // -------------------------------------------------------------------------------------
-        // DYNAMIC RR FILTER (ATR + volatility + regime)
+        // DYNAMIC RR FILTER (ATR + volatility + regime + AI TrendPredict)
         // -------------------------------------------------------------------------------------
         private decimal GetDynamicMinRr(
             string symbol,
@@ -570,6 +571,43 @@ namespace VertexAutoTradeBinance8.Strategy
                     minRr = 2.2m; // рынок вязкий → требуем больше RR
                 else
                     minRr = 2.0m;
+            }
+
+            // --- AI TREND PREDICTOR (QUANT-REALTIME MAX) --------------------
+            AiSelfLearningService.AiTrendPrediction? trend = null;
+            try
+            {
+                trend = _aiLearning.PredictTrend(symbol, regime, slope, vol);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[{Symbol}][{TF}] PredictTrend ERROR → using base dynamic RR only",
+                    symbol, interval);
+            }
+
+            if (trend != null && trend.Direction != 0)
+            {
+                bool sameDir =
+                    (trend.Direction > 0 && signal.Side == SignalSide.Buy) ||
+                    (trend.Direction < 0 && signal.Side == SignalSide.Sell);
+
+                if (sameDir)
+                {
+                    // тренд и сигнал совпадают → чуть смягчаем RR
+                    minRr *= trend.RrBias;           // RrBias < 1.0
+                }
+                else
+                {
+                    // сигнал против AI-тренда → ужесточаем RR
+                    var extra = (1.0m - trend.RrBias);
+                    if (extra < 0) extra = 0;
+                    minRr *= 1.0m + extra;           // +0…0.25
+                }
+
+                _logger.LogDebug(
+                    "[{Symbol}][{TF}] TrendPredict: dir={Dir}, conf={Conf:P0}, rrBias={Bias:F2} → adjMinRR={MinRR:F2}",
+                    symbol, interval, trend.Direction, trend.Confidence, trend.RrBias, minRr);
             }
 
             // safety-коридор
@@ -662,6 +700,26 @@ namespace VertexAutoTradeBinance8.Strategy
                 smart.TrendSlopePercent,
                 smart.VolatilityPercent,
                 smart.Confidence);
+
+            // 2.1) QUANT-REALTIME: фиксируем MarketState для обучения
+            try
+            {
+                var atr14 = Atr(klines, 14, klines.Count - 1);
+                _aiLearning.RecordMarketState(
+                    symbol: symbol,
+                    timeframe: interval.ToString(),
+                    regime: smart.BaseRegime,
+                    trendSlopePercent: smart.TrendSlopePercent,
+                    volatilityPercent: smart.VolatilityPercent,
+                    atr: atr14,
+                    confidence: smart.Confidence);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[{Symbol}][{TF}] RecordMarketState ERROR → QUANT snapshot skipped",
+                    symbol, interval);
+            }
 
             int adaptiveThreshold = GetAdaptiveThreshold(
                 smart.BaseRegime,
@@ -791,14 +849,13 @@ namespace VertexAutoTradeBinance8.Strategy
             // 6) AI Dynamic Risk Tag — с защитой
             try
             {
-                 
-                var riskW = _aiLearning.GetDynamicRiskWeight(symbol, regime);
+                var riskW = _aiLearning.GetAiRiskAdjustment(symbol, regime);
                 baseSignal.Reason += $"|AIrisk={riskW:F2}";
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex,
-                    "[DEBUG][{Symbol}][{TF}] AiSelfLearningService.GetDynamicRiskWeight ERROR → AIrisk=1.00",
+                    "[DEBUG][{Symbol}][{TF}] AiSelfLearningService.GetAiRiskAdjustment ERROR → AIrisk=1.00",
                     symbol, interval);
                 baseSignal.Reason += "|AIrisk=1.00";
             }

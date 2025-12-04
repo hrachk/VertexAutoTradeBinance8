@@ -6,7 +6,6 @@ namespace VertexAutoTradeBinance8.Services
     public class AiSelfLearningService
     {
         private readonly ILogger<AiSelfLearningService> _logger;
-
         private readonly object _lock = new();
 
         private static readonly string FilePath =
@@ -18,8 +17,18 @@ namespace VertexAutoTradeBinance8.Services
         private DateTime _lastSnapshot = DateTime.MinValue;
         private readonly TimeSpan SnapshotInterval = TimeSpan.FromMinutes(15);
 
+        // =====================================================================
+        // CORE STORAGE v6
+        // =====================================================================
         private readonly Dictionary<string, Dictionary<MarketRegime, RegimeStats>> _stats
             = new(StringComparer.OrdinalIgnoreCase);
+
+        // QUANT STORAGE
+        private readonly List<MarketState> _marketStates = new();
+        private readonly List<TradeHistoryEntry> _tradeHistory = new();
+
+        // TREND MODEL
+        public record AiTrendPrediction(int Direction, decimal Confidence, decimal RrBias);
 
         public AiSelfLearningService(ILogger<AiSelfLearningService> logger)
         {
@@ -28,273 +37,248 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // INTERNAL MODELS
+        // MODELS
         // =====================================================================
 
-        private class RegimeStats
+        public class MarketState
         {
+            public string Symbol { get; set; } = "";
+            public string Timeframe { get; set; } = "";
             public MarketRegime Regime { get; set; }
-            public int Trades { get; set; }
-            public int Wins { get; set; }
-            public decimal SumRr { get; set; }
-            public decimal MaxRr { get; set; } = decimal.MinValue;
-            public decimal MinRr { get; set; } = decimal.MaxValue;
-            public DateTime LastUpdateUtc { get; set; }
-
-            public decimal AvgRr => Trades > 0 ? SumRr / Trades : 0m;
-            public decimal WinRate => Trades > 0 ? (decimal)Wins / Trades : 0m;
+            public decimal TrendSlopePercent { get; set; }
+            public decimal VolatilityPercent { get; set; }
+            public decimal Atr { get; set; }
+            public decimal Confidence { get; set; }
+            public DateTime Time { get; set; }
         }
 
-        public class AiRegimeStatsDto
+        public class TradeHistoryEntry
         {
+            public string Symbol { get; set; } = "";
+            public SignalSide Side { get; set; }
+            public decimal Entry { get; set; }
+            public decimal Exit { get; set; }
+            public decimal Pnl { get; set; }
             public MarketRegime Regime { get; set; }
-            public int Trades { get; set; }
+            public DateTime Time { get; set; }
+        }
+
+        public class RegimeStats
+        {
+            public int Count { get; set; }
             public int Wins { get; set; }
-            public decimal SumRr { get; set; }
-            public decimal MaxRr { get; set; }
-            public decimal MinRr { get; set; }
-            public DateTime LastUpdateUtc { get; set; }
-        }
-
-        public class AiSymbolStatsDto
-        {
-            public string Symbol { get; set; } = string.Empty;
-            public List<AiRegimeStatsDto> Regimes { get; set; } = new();
-        }
-
-        /// <summary>
-        /// Снапшот для сохранения/загрузки (бывший AiLearningState).
-        /// Название изменено, чтобы не путаться с Models.AiLearningState.
-        /// </summary>
-        public class AiLearningSnapshot
-        {
-            public DateTime CreatedAtUtc { get; set; }
-            public List<AiSymbolStatsDto> Symbols { get; set; } = new();
+            public int Losses { get; set; }
+            public decimal AvgPnl { get; set; }
+            public decimal RiskWeight { get; set; } = 1.0m;
         }
 
         // =====================================================================
-        // LOAD / SAVE
+        // MARKET STATE
         // =====================================================================
-
-        private void Load()
+        public void RecordMarketState(
+            string symbol,
+            string timeframe,
+            MarketRegime regime,
+            decimal trendSlopePercent,
+            decimal volatilityPercent,
+            decimal atr,
+            decimal confidence)
         {
             lock (_lock)
             {
-                try
+                _marketStates.Add(new MarketState
                 {
-                    if (!File.Exists(FilePath))
-                    {
-                        _logger.LogWarning("AI-Learning: file not found → starting fresh");
-                        return;
-                    }
+                    Symbol = symbol,
+                    Timeframe = timeframe,
+                    Regime = regime,
+                    TrendSlopePercent = trendSlopePercent,
+                    VolatilityPercent = volatilityPercent,
+                    Atr = atr,
+                    Confidence = confidence,
+                    Time = DateTime.UtcNow
+                });
 
-                    string json = File.ReadAllText(FilePath);
-                    if (string.IsNullOrWhiteSpace(json))
-                        return;
-
-                    var state = JsonSerializer.Deserialize<AiLearningSnapshot>(json);
-                    if (state != null)
-                        ImportState(state);
-
-                    _logger.LogInformation("AI-Learning: memory loaded successfully ({FilePath})", FilePath);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "AI-Learning: FAILED to load memory. Restoring from backup.");
-
-                    // Восстановление из бэкапа
-                    try
-                    {
-                        if (File.Exists(BackupPath))
-                        {
-                            var json = File.ReadAllText(BackupPath);
-                            var state = JsonSerializer.Deserialize<AiLearningSnapshot>(json);
-
-                            if (state != null)
-                            {
-                                ImportState(state);
-                                _logger.LogWarning("AI-Learning: restored from backup file");
-                            }
-                        }
-                    }
-                    catch (Exception ex2)
-                    {
-                        _logger.LogError(ex2, "AI-Learning: failed to restore from backup");
-                    }
-                }
+                if (_marketStates.Count > 2000)
+                    _marketStates.RemoveRange(0, 1000);
             }
         }
 
-        private void Save()
+        // =====================================================================
+        // TRADE ENTRY (вызывается из PositionSupervisor / PositionProtector)
+        // =====================================================================
+        public void RecordTrade(
+            string symbol,
+            SignalSide side,
+            decimal entry,
+            decimal exit,
+            MarketRegime regime)
         {
+            decimal pnl = (side == SignalSide.Buy)
+                ? exit - entry
+                : entry - exit;
+
             lock (_lock)
             {
-                try
+                _tradeHistory.Add(new TradeHistoryEntry
                 {
-                    var state = ExportState();
-                    var json = JsonSerializer.Serialize(state, new JsonSerializerOptions
-                    {
-                        WriteIndented = true
-                    });
+                    Symbol = symbol,
+                    Side = side,
+                    Entry = entry,
+                    Exit = exit,
+                    Regime = regime,
+                    Pnl = pnl,
+                    Time = DateTime.UtcNow
+                });
 
-                    File.WriteAllText(FilePath, json);
-                    File.WriteAllText(BackupPath, json);
-
-                    _logger.LogDebug("AI-Learning: saved");
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "AI-Learning: FAILED to save memory");
-                }
+                if (_tradeHistory.Count > 2000)
+                    _tradeHistory.RemoveRange(0, 1000);
             }
+
+            UpdateStats(symbol, regime, pnl);
+            Save();
         }
 
-        private void AutoSnapshotIfNeeded()
+        private void UpdateStats(string symbol, MarketRegime regime, decimal pnl)
         {
-            if (DateTime.UtcNow - _lastSnapshot > SnapshotInterval)
+            if (!_stats.TryGetValue(symbol, out var regimes))
             {
-                _lastSnapshot = DateTime.UtcNow;
-                Save();
+                regimes = new Dictionary<MarketRegime, RegimeStats>();
+                _stats[symbol] = regimes;
+            }
+
+            if (!regimes.TryGetValue(regime, out var s))
+            {
+                s = new RegimeStats();
+                regimes[regime] = s;
+            }
+
+            s.Count++;
+            if (pnl >= 0) s.Wins++;
+            else s.Losses++;
+
+            s.AvgPnl = (s.AvgPnl * (s.Count - 1) + pnl) / s.Count;
+
+            if (s.Count >= 20)
+            {
+                decimal wr = s.Wins / (decimal)s.Count;
+                s.RiskWeight = Math.Clamp(wr, 0.65m, 1.35m);
             }
         }
 
         // =====================================================================
-        // REGISTER TRADE RESULT
+        // AI RISK (для StrategyEngine / AiLeverage / RiskManager)
         // =====================================================================
+        public decimal GetAiRiskAdjustment(string symbol, MarketRegime regime)
+        {
+            if (_stats.TryGetValue(symbol, out var regimes) &&
+                regimes.TryGetValue(regime, out var s))
+            {
+                return s.RiskWeight;
+            }
 
-        public void RegisterTradeResult(
+            return 1.00m;
+        }
+
+        // =====================================================================
+        // AI TREND PREDICTOR (QUANT-REALTIME MAX)
+        // =====================================================================
+        public AiTrendPrediction PredictTrend(
             string symbol,
             MarketRegime regime,
-            decimal rr,
-            bool isWin)
+            decimal slope,
+            decimal volatility)
         {
+            List<MarketState> recent;
+
             lock (_lock)
             {
-                if (!_stats.TryGetValue(symbol, out var regimes))
-                {
-                    regimes = new Dictionary<MarketRegime, RegimeStats>();
-                    _stats[symbol] = regimes;
-                }
-
-                if (!regimes.TryGetValue(regime, out var rs))
-                {
-                    rs = new RegimeStats { Regime = regime };
-                    regimes[regime] = rs;
-                }
-
-                rs.Trades++;
-                if (isWin)
-                    rs.Wins++;
-
-                rs.SumRr += rr;
-
-                if (rr > rs.MaxRr) rs.MaxRr = rr;
-                if (rr < rs.MinRr) rs.MinRr = rr;
-
-                rs.LastUpdateUtc = DateTime.UtcNow;
-
-                _logger.LogInformation(
-                    "[AI-LEARN] {Symbol} regime={Regime}, trades={Trades}, win={Wins}, rr={RR:F2}",
-                    symbol, regime, rs.Trades, rs.Wins, rr);
-
-                Save();
-                AutoSnapshotIfNeeded();
+                recent = _marketStates
+                    .Where(x => x.Symbol == symbol)
+                    .OrderByDescending(x => x.Time)
+                    .Take(60)
+                    .ToList();
             }
+
+            if (recent.Count < 10)
+                return new AiTrendPrediction(0, 0.20m, 1.00m);
+
+            decimal avgSlope = recent.Average(x => x.TrendSlopePercent);
+            decimal avgConf = recent.Average(x => x.Confidence);
+            decimal avgVol = recent.Average(x => x.VolatilityPercent);
+
+            int dir =
+                avgSlope > 0.001m ? 1 :
+                avgSlope < -0.001m ? -1 : 0;
+
+            decimal confidence =
+                Math.Clamp(Math.Abs(avgSlope) * 25m + avgConf, 0.05m, 0.85m);
+
+            if (avgVol < 0.005m)
+                confidence += 0.10m;
+
+            confidence = Math.Clamp(confidence, 0.05m, 0.85m);
+
+            decimal rrBias = dir == 0 ? 1.00m : 0.90m;
+
+            return new AiTrendPrediction(dir, confidence, rrBias);
         }
 
         // =====================================================================
-        // DYNAMIC RISK WEIGHT
+        // EXPORT STATE (для TradingWorker v6 / AiModelSnapshotService)
         // =====================================================================
-
-        public decimal GetDynamicRiskWeight(string symbol, MarketRegime regime)
-        {
-            lock (_lock)
-            {
-                if (!_stats.TryGetValue(symbol, out var regimes) ||
-                    !regimes.TryGetValue(regime, out var rs) ||
-                    rs.Trades < 5)
-                {
-                    _logger.LogDebug(
-                        "[AI-LEARN] RiskWeight {Symbol} {Regime}: no stats → 1.00",
-                        symbol, regime);
-                    return 1.0m;
-                }
-
-                decimal winRate = rs.WinRate;
-                decimal avgRr = rs.AvgRr;
-
-                decimal weight = 1.0m;
-
-                if (winRate >= 0.65m && avgRr >= 1.20m)
-                    weight = 1.35m;
-                else if (winRate >= 0.55m && avgRr >= 1.00m)
-                    weight = 1.15m;
-                else if (winRate <= 0.45m && avgRr < 1.00m)
-                    weight = 0.80m;
-                else if (winRate <= 0.35m)
-                    weight = 0.60m;
-
-                weight = Math.Clamp(weight, 0.5m, 1.5m);
-
-                _logger.LogInformation(
-                    "[AI-LEARN] RiskWeight {Symbol} {Regime}: WR={WR:P1}, avgRR={RR:F2} → weight={W:F2}",
-                    symbol, regime, winRate, avgRr, weight);
-
-                return weight;
-            }
-        }
-
-        // =====================================================================
-        // EXPORT / IMPORT
-        // =====================================================================
-
         public AiLearningSnapshot ExportState()
         {
             lock (_lock)
             {
-                var state = new AiLearningSnapshot
+                var snap = new AiLearningSnapshot
                 {
                     CreatedAtUtc = DateTime.UtcNow
                 };
 
                 foreach (var (symbol, regimes) in _stats)
                 {
-                    var symDto = new AiSymbolStatsDto { Symbol = symbol };
-
-                    foreach (var rs in regimes.Values)
+                    var symDto = new AiLearningSnapshot.AiSymbolStatsDto
                     {
-                        symDto.Regimes.Add(new AiRegimeStatsDto
+                        Symbol = symbol
+                    };
+
+                    foreach (var (regime, st) in regimes)
+                    {
+                        symDto.Regimes.Add(new AiLearningSnapshot.AiRegimeStatsDto
                         {
-                            Regime = rs.Regime,
-                            Trades = rs.Trades,
-                            Wins = rs.Wins,
-                            SumRr = rs.SumRr,
-                            MaxRr = rs.MaxRr == decimal.MinValue ? 0 : rs.MaxRr,
-                            MinRr = rs.MinRr == decimal.MaxValue ? 0 : rs.MinRr,
-                            LastUpdateUtc = rs.LastUpdateUtc
+                            Regime = regime,
+                            Trades = st.Count,
+                            Wins = st.Wins,
+                            SumRr = st.AvgPnl * st.Count,
+                            MaxRr = 0,
+                            MinRr = 0,
+                            LastUpdateUtc = DateTime.UtcNow
                         });
                     }
 
-                    state.Symbols.Add(symDto);
+                    snap.Symbols.Add(symDto);
                 }
 
-                return state;
+                return snap;
             }
         }
 
-        public void ImportState(AiLearningSnapshot? state)
+        // =====================================================================
+        // IMPORT STATE
+        // =====================================================================
+        public void ImportState(AiLearningSnapshot snap)
         {
+            if (snap == null)
+                return;
+
             lock (_lock)
             {
-                if (state == null || state.Symbols.Count == 0)
-                {
-                    _logger.LogWarning("[AI-LEARN] ImportState: empty snapshot");
-                    return;
-                }
-
                 _stats.Clear();
 
-                foreach (var sym in state.Symbols)
+                if (snap.Symbols == null)
+                    return;
+
+                foreach (var sym in snap.Symbols)
                 {
                     if (string.IsNullOrWhiteSpace(sym.Symbol))
                         continue;
@@ -306,57 +290,94 @@ namespace VertexAutoTradeBinance8.Services
                     {
                         regimes[r.Regime] = new RegimeStats
                         {
-                            Regime = r.Regime,
-                            Trades = r.Trades,
+                            Count = r.Trades,
                             Wins = r.Wins,
-                            SumRr = r.SumRr,
-                            MaxRr = r.MaxRr,
-                            MinRr = r.MinRr,
-                            LastUpdateUtc = r.LastUpdateUtc
+                            Losses = r.Trades - r.Wins,
+                            AvgPnl = r.Trades > 0 ? r.SumRr / r.Trades : 0m,
+                            RiskWeight = 1.0m
                         };
                     }
                 }
-
-                _logger.LogInformation(
-                    "[AI-LEARN] ImportState: loaded {Symbols} symbols, regimes={Regimes}",
-                    _stats.Count,
-                    _stats.Values.Sum(v => v.Count));
             }
         }
 
         // =====================================================================
-        // CONVENIENCE FOR SUPERVISOR / PROTECTORS
+        // SAVE / LOAD
         // =====================================================================
-
-        public void RecordTrade(
-            string symbol,
-            decimal entryPrice,
-            decimal exitPrice,
-            decimal liquidationPrice,
-            bool isWin,
-            MarketRegime regime,
-            TradeSignal? signal = null)
+        private void Save()
         {
-            // 1. Manual trades → не обучаем AI
-            if (signal != null && signal.IsManual)
+            try
             {
-                _logger.LogInformation(
-                    "[AI-LEARN] Manual trade detected → SKIP learning. symbol={Symbol}, regime={Regime}",
-                    symbol, regime);
-                return;
+                var json = JsonSerializer.Serialize(_stats, new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                });
+
+                File.WriteAllText(FilePath, json);
+                File.WriteAllText(BackupPath, json);
             }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[AI] SAVE ERROR");
+            }
+        }
 
-            if (entryPrice <= 0 || exitPrice <= 0)
-                return;
+        private void Load()
+        {
+            try
+            {
+                if (File.Exists(FilePath))
+                {
+                    var json = File.ReadAllText(FilePath);
+                    var data = JsonSerializer.Deserialize<
+                        Dictionary<string, Dictionary<MarketRegime, RegimeStats>>>(json);
 
-            // RR по простому (можно улучшать позже)
-            decimal rr = Math.Abs(exitPrice - entryPrice) /
-                         Math.Max(1, Math.Abs(entryPrice * 0.001m));
+                    if (data != null)
+                    {
+                        foreach (var kv in data)
+                            _stats[kv.Key] = kv.Value;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[AI] LOAD ERROR → попытка отката");
 
-            if (!isWin)
-                rr = -Math.Abs(rr);
+                try
+                {
+                    if (File.Exists(BackupPath))
+                    {
+                        var json = File.ReadAllText(BackupPath);
+                        var data = JsonSerializer.Deserialize<
+                            Dictionary<string, Dictionary<MarketRegime, RegimeStats>>>(json);
 
-            RegisterTradeResult(symbol, regime, rr, isWin);
+                        if (data != null)
+                            foreach (var kv in data)
+                                _stats[kv.Key] = kv.Value;
+                    }
+                }
+                catch
+                {
+                    // ignored
+                }
+            }
+        }
+
+        // =====================================================================
+        // PERIODIC SNAPSHOT (каждые 15 минут)
+        // =====================================================================
+        public void TrySnapshot()
+        {
+            lock (_lock)
+            {
+                if (DateTime.UtcNow - _lastSnapshot < SnapshotInterval)
+                    return;
+
+                Save();
+                _lastSnapshot = DateTime.UtcNow;
+            }
         }
     }
+
+   
 }

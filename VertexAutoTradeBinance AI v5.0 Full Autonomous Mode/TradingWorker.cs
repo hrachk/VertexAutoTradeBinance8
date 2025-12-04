@@ -1,6 +1,5 @@
 ﻿using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
-using CryptoExchange.Net.Requests;
 using Microsoft.Extensions.Options;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
@@ -13,30 +12,32 @@ namespace VertexAutoTradeBinance8
     public class TradingWorker : BackgroundService
     {
         private readonly ILogger<TradingWorker> _logger;
-        private readonly BinanceOptions _binanceOptions;
-        private readonly TradingOptions _tradingOptions;
-        private readonly MarketDataService _marketData;
+
+        private readonly BinanceOptions _binance;
+        private readonly TradingOptions _options;
+
+        private readonly MarketDataService _market;
         private readonly StrategyEngine _strategy;
         private readonly RiskManager _risk;
         private readonly OrderExecutor _executor;
         private readonly BinanceClientFactory _factory;
-        private readonly LiquidityGuardService _liquidity;
-        private readonly PositionGuardService _positionGuard;
+        private readonly LiquidityGuardService _liq;
+        private readonly PositionGuardService _guard;
         private readonly PositionProtectorService _protector;
-        private readonly OrderCleanerService _orderCleaner;
-        private readonly PredictiveEngineV4ConfirmationService _ai;
-        private readonly PositionSupervisorService _positionSupervisorService;
-        private readonly AiStopLossOptimizer _slOptimizer;
+        private readonly OrderCleanerService _cleaner;
+        private readonly PredictiveEngineV4ConfirmationService _predict;
+        private readonly PositionSupervisorService _supervisor;
+
+        private readonly AiStopLossOptimizer _slOpt;
         private readonly AiRiskScalerV2 _riskScaler;
 
-        private readonly AiSelfLearningService _aiLearning;
-        private readonly AiModelSnapshotService _aiSnapshot;
+        private readonly AiSelfLearningService _learn;
+        private readonly AiModelSnapshotService _snapshot;
 
         private readonly Dictionary<string, DateTime> _lastTfRun = new();
-        private readonly Dictionary<string, DateTime> _lastTradeTime = new();
+        private readonly Dictionary<string, DateTime> _lastTrade = new();
 
-        private static readonly KlineInterval[] _tfs = new[]
-        {
+        private static readonly KlineInterval[] TFS = {
             KlineInterval.OneMinute,
             KlineInterval.FiveMinutes,
             KlineInterval.FifteenMinutes,
@@ -44,113 +45,136 @@ namespace VertexAutoTradeBinance8
             KlineInterval.OneDay
         };
 
-        private readonly Dictionary<KlineInterval, TimeSpan> _tfMinIntervals =
-            new()
-            {
-                {KlineInterval.OneMinute, TimeSpan.FromSeconds(2)},
-                {KlineInterval.FiveMinutes, TimeSpan.FromSeconds(25)},
-                {KlineInterval.FifteenMinutes, TimeSpan.FromSeconds(60)},
-                {KlineInterval.ThirtyMinutes, TimeSpan.FromMinutes(2)},
-                {KlineInterval.OneHour, TimeSpan.FromMinutes(5)},
-                {KlineInterval.FourHour, TimeSpan.FromMinutes(240)},
-                {KlineInterval.OneDay, TimeSpan.FromMinutes(30)},
-            };
+        private readonly Dictionary<KlineInterval, TimeSpan> _min = new()
+        {
+            {KlineInterval.OneMinute, TimeSpan.FromSeconds(2)},
+            {KlineInterval.FiveMinutes, TimeSpan.FromSeconds(25)},
+            {KlineInterval.FifteenMinutes, TimeSpan.FromSeconds(60)},
+            {KlineInterval.OneHour, TimeSpan.FromMinutes(5)},
+            {KlineInterval.OneDay, TimeSpan.FromMinutes(30)}
+        };
+
+        private DateTime _lastQuantTick = DateTime.UtcNow;
 
         public TradingWorker(
             ILogger<TradingWorker> logger,
-            IOptions<BinanceOptions> binanceOptions,
-            IOptions<TradingOptions> tradingOptions,
-            MarketDataService marketData,
+            IOptions<BinanceOptions> binance,
+            IOptions<TradingOptions> options,
+            MarketDataService market,
             StrategyEngine strategy,
             RiskManager risk,
             OrderExecutor executor,
             BinanceClientFactory factory,
-            LiquidityGuardService liquidity,
-            PositionGuardService positionGuard,
+            LiquidityGuardService liq,
+            PositionGuardService guard,
             PositionProtectorService protector,
-            OrderCleanerService orderCleaner,
-            PredictiveEngineV4ConfirmationService ai,
-            AiStopLossOptimizer slOptimizer,
+            OrderCleanerService cleaner,
+            PredictiveEngineV4ConfirmationService predict,
+            AiStopLossOptimizer slOpt,
             AiRiskScalerV2 riskScaler,
-            PositionSupervisorService positionSupervisorService,
-            AiSelfLearningService aiLearning,
-            AiModelSnapshotService aiSnapshot)
+            PositionSupervisorService supervisor,
+            AiSelfLearningService learn,
+            AiModelSnapshotService snapshot)
         {
             _logger = logger;
-            _binanceOptions = binanceOptions.Value;
-            _tradingOptions = tradingOptions.Value;
-            _marketData = marketData;
+
+            _binance = binance.Value;
+            _options = options.Value;
+
+            _market = market;
             _strategy = strategy;
             _risk = risk;
             _executor = executor;
             _factory = factory;
-            _liquidity = liquidity;
-            _positionGuard = positionGuard;
+            _liq = liq;
+            _guard = guard;
             _protector = protector;
-            _orderCleaner = orderCleaner;
-            _ai = ai;
-            _slOptimizer = slOptimizer;
+            _cleaner = cleaner;
+            _predict = predict;
+            _slOpt = slOpt;
             _riskScaler = riskScaler;
-            _positionSupervisorService = positionSupervisorService;
+            _supervisor = supervisor;
 
-            _aiLearning = aiLearning;
-            _aiSnapshot = aiSnapshot;
+            _learn = learn;
+            _snapshot = snapshot;
         }
 
         // ================================================================
-        // MAIN LOOP — ENTERPRISE ROUND ROBIN
+        // MAIN LOOP v6 — QUANT REALTIME ENGINE
         // ================================================================
         protected override async Task ExecuteAsync(CancellationToken ct)
         {
-            _logger.LogInformation("TradingWorker Enterprise started. Symbols: {symbols}",
-                string.Join(",", _binanceOptions.Symbols));
+            _logger.LogWarning("TradingWorker v6 QUANT-REALTIME started");
 
             await EnableHedgeMode();
 
-            // Загружаем AI Snapshot
+            // Load AI-snapshot
             try
             {
-                var state = await _aiSnapshot.LoadLatestAsync(ct);
+                var state = await _snapshot.LoadLatestAsync(ct);
                 if (state != null)
-                    _aiLearning.ImportState(state);
+                    _learn.ImportState(state);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "AI snapshot load failed");
             }
 
-            // MAIN ENTERPRISE SCHEDULER
             while (!ct.IsCancellationRequested)
             {
-                foreach (var timeframe in _tfs)
+                await RunQuantRealtimeTick(ct);
+
+                foreach (var tf in TFS)
                 {
-                    foreach (var symbol in _binanceOptions.Symbols)
+                    foreach (var symbol in _binance.Symbols)
                     {
-                        if (!ShouldRun(symbol, timeframe))
+                        if (!ShouldRun(symbol, tf))
                             continue;
 
                         try
                         {
-                            await ProcessSymbolAsync(symbol, timeframe, ct);
+                            await ProcessSymbol(symbol, tf, ct);
                         }
                         catch (Exception ex)
                         {
-                            _logger.LogError(ex, "Error processing {symbol} {tf}", symbol, timeframe);
-                            ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "❌ ERR", "Ошибка");
+                            _logger.LogError(ex, "Error processing {symbol} {tf}", symbol, tf);
+                            ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ ERR", "Ошибка");
                         }
 
-                        await Task.Delay(35, ct); // равномерность нагрузки
+                        await Task.Delay(35, ct);
                     }
                 }
 
-                await SaveSnapshotPeriodic(ct);
-
-                await Task.Delay(80, ct); // задержка между раундами (важно!)
+                await PeriodicSnapshot(ct);
+                await Task.Delay(80, ct);
             }
         }
 
         // ================================================================
-        // ENTERPRISE SCHEDULER LOGIC
+        // QUANT REALTIME TICK — каждые 60 секунд
+        // ================================================================
+        private async Task RunQuantRealtimeTick(CancellationToken ct)
+        {
+            if ((DateTime.UtcNow - _lastQuantTick).TotalSeconds < 60)
+                return;
+
+            _lastQuantTick = DateTime.UtcNow;
+
+            try
+            {
+                _logger.LogInformation("QUANT-REALTIME update: AI-learning refresh");
+
+                var state = _learn.ExportState();
+                await _snapshot.SaveSnapshotAsync(state, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[QUANT] snapshot save failed");
+            }
+        }
+
+        // ================================================================
+        // SCHEDULER
         // ================================================================
         private bool ShouldRun(string symbol, KlineInterval tf)
         {
@@ -162,9 +186,7 @@ namespace VertexAutoTradeBinance8
                 return true;
             }
 
-            var min = _tfMinIntervals.ContainsKey(tf)
-                ? _tfMinIntervals[tf]
-                : TimeSpan.FromSeconds(30);
+            var min = _min.TryGetValue(tf, out var v) ? v : TimeSpan.FromSeconds(30);
 
             if (DateTime.UtcNow - last >= min)
             {
@@ -175,162 +197,163 @@ namespace VertexAutoTradeBinance8
             return false;
         }
 
-        private bool IsInCooldown(string symbol)
+        private bool InCooldown(string symbol)
         {
-            var cooldownMinutes = _tradingOptions.CooldownMinutes;
-            if (cooldownMinutes <= 0)
+            var cd = _options.CooldownMinutes;
+            if (cd <= 0) return false;
+
+            if (!_lastTrade.TryGetValue(symbol, out var last))
                 return false;
 
-            if (!_lastTradeTime.TryGetValue(symbol, out var last))
-                return false;
-
-            var cooldown = TimeSpan.FromMinutes(cooldownMinutes);
-            return DateTime.UtcNow - last < cooldown;
+            return DateTime.UtcNow - last < TimeSpan.FromMinutes(cd);
         }
 
-        private void MarkTrade(string symbol)
-        {
-            _lastTradeTime[symbol] = DateTime.UtcNow;
-        }
+        private void MarkTrade(string symbol) =>
+            _lastTrade[symbol] = DateTime.UtcNow;
 
         // ================================================================
-        // SYMBOL PROCESSOR
+        // MAIN PER-SYMBOL PROCESSOR v6
         // ================================================================
-        private async Task ProcessSymbolAsync(string symbol, KlineInterval timeframe, CancellationToken ct)
+        private async Task ProcessSymbol(string symbol, KlineInterval tf, CancellationToken ct)
         {
-            ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "⏳ RUN", "Получение данных...");
+            ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏳ RUN", "Получение");
 
             IReadOnlyList<BinanceFuturesUsdtKline>? klines;
             try
             {
-                klines = await _marketData.GetKlines(symbol, timeframe, 200);
+                klines = await _market.GetKlines(symbol, tf, 200);
             }
             catch
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "❌ ERR", "Ошибка GetKlines");
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ ERR", "GetKlines");
                 return;
             }
 
             if (klines == null || klines.Count < 60)
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "⏸ HOLD", "Мало свечей");
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏸ HOLD", "Мало свечей");
                 return;
             }
 
+            // ------------------ 1. STRATEGY ------------------------
             TradeSignal? signal;
             try
             {
-                signal = _strategy.GenerateSignal(symbol, timeframe, klines);
+                signal = _strategy.GenerateSignal(symbol, tf, klines);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[STRATEGY ERROR] {symbol} {tf}", symbol, timeframe);
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "❌ ERR", ex.GetType().Name);
+                _logger.LogError(ex, "[STRATEGY ERROR] {symbol} {tf}", symbol, tf);
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ ERR", ex.GetType().Name);
                 return;
             }
 
             if (signal == null)
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "🔴 NO", "Нет сигнала");
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🔴 NO", "Нет сигнала");
                 return;
             }
 
-            // Глобальный кулдаун по символу после сделки
-            if (IsInCooldown(symbol))
+            if (InCooldown(symbol))
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "🕒 CD", "Cooldown после сделки");
-                _logger.LogInformation("[CD][{symbol}] Cooldown in effect, skip new trade", symbol);
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🕒 CD", "Cooldown");
                 return;
             }
 
-            ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "🟢 SIG",
-                $"{(signal.Side == SignalSide.Buy ? "LONG" : "SHORT")} @ {signal.EntryPrice:F4}");
-
-            var aiDecision = _ai.Decide(symbol, timeframe, klines, signal);
-            if (!aiDecision.Allow)
+            // ------------------ 2. AI CONFIRM ------------------------
+            var ai = _predict.Decide(symbol, tf, klines, signal);
+            if (!ai.Allow)
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "🟡 AI-BLK", aiDecision.Reason);
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🟡 AI-BLK", ai.Reason);
                 return;
             }
 
-            decimal riskMultiplier = _riskScaler.Scale(aiDecision.Grade);
-            if (riskMultiplier <= 0)
+            decimal riskMult = _riskScaler.Scale(ai.Grade);
+            if (riskMult <= 0)
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "🟡 RISK", "AI block");
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🟡 RISK", "AI block");
                 return;
             }
 
-            var guard = _liquidity.Analyze(symbol, timeframe, klines, signal.Side, signal.IsSuperSignal);
-            if (guard.Block)
+            // ------------------ 3. Liquidity Guard -------------------
+            var liq = _liq.Analyze(symbol, tf, klines, signal.Side, signal.IsSuperSignal);
+            if (liq.Block)
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "🟡 LIQ", guard.Reason.ToString());
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🟡 LIQ", liq.Reason.ToString());
                 return;
             }
 
-            var safety = signal?.SafetyRiskMultiplier ?? 1.0m;
+            // ------------------ 4. RISK-MANAGER v6 --------------------
+            decimal safety = signal?.SafetyRiskMultiplier ?? 1.0m;
+
             var qty = await _risk.CalculateSafeQty(
-                 symbol,
-                 signal.EntryPrice,
-                 signal.StopLoss,
-                 riskMultiplier,
-                 safety,
-                 signal.Leverage ?? 1m,
-                 ct);
+                symbol,
+                signal.EntryPrice,
+                signal.StopLoss,
+                riskMult,
+                safety,
+                signal.Leverage ?? 1m,
+                ct);
 
             if (qty <= 0)
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "❌ QTY=0", "Размер позиции 0");
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ QTY=0", "SIZE ZERO");
                 return;
             }
 
-            var optimizedSl = _slOptimizer.OptimizeSl(symbol, klines, signal, aiDecision);
-            signal.StopLoss = optimizedSl;
+            // ------------------ 5. SL OPTIMIZATION -------------------
+            signal.StopLoss = _slOpt.OptimizeSl(symbol, klines, signal, ai);
 
-            await _orderCleaner.CleanupOutdatedOrdersAsync(symbol, signal, ct);
+            // ------------------ 6. CLEANUP OLD ORDERS -----------------
+            await _cleaner.CleanupOutdatedOrdersAsync(symbol, signal, ct);
 
-            var orderResult = await _executor.ExecuteAsync(signal, qty, ct);
-            if (!orderResult.Success)
+            // ------------------ 7. EXECUTE ORDER ----------------------
+            var result = await _executor.ExecuteAsync(signal, qty, ct);
+            if (!result.Success)
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "❌ ORD", "Ошибка ордера");
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ ORD", "ORDER ERROR");
                 return;
             }
 
-            // Помечаем, что по символу была сделка → включаем cooldown
+            // ------------------ 8. COOLDOWN ---------------------------
             MarkTrade(symbol);
 
-            await _positionSupervisorService.SuperviseAsync(symbol, signal, ct);
+            // ------------------ 9. SUPERVISOR -------------------------
+            await _supervisor.SuperviseAsync(symbol, signal, ct);
 
-            ConsoleSymbolTableFormatter.UpdateTf(symbol, timeframe, "🟩 OK",
-                $"Вход qty={qty:F4}");
+            // ------------------ 10. UI -------------------------------
+            ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🟩 OK", $"qty={qty:F4}");
         }
 
         // ================================================================
-        // MISC
+        // HEDGE MODE (once)
         // ================================================================
         private async Task EnableHedgeMode()
         {
             using var client = _factory.CreateRestClient();
-            var current = await client.UsdFuturesApi.Account.GetPositionModeAsync();
 
-            if (!current.Success || current.Data?.IsHedgeMode != false)
+            var current = await client.UsdFuturesApi.Account.GetPositionModeAsync();
+            if (current.Success && current.Data?.IsHedgeMode == true)
             {
                 _logger.LogInformation("Hedge Mode already active.");
                 return;
             }
 
-            var result = await client.UsdFuturesApi.Account.ModifyPositionModeAsync(true);
-            _logger.LogInformation("Hedge Mode Set: {result}", result.Success);
+            var set = await client.UsdFuturesApi.Account.ModifyPositionModeAsync(true);
+            _logger.LogInformation("HedgeMode Set: {res}", set.Success);
         }
 
-        private async Task SaveSnapshotPeriodic(CancellationToken ct)
+        // ================================================================
+        // SNAPSHOT SYNC
+        // ================================================================
+        private async Task PeriodicSnapshot(CancellationToken ct)
         {
             try
             {
-                var now = DateTime.UtcNow;
-                if (now.Second is >= 0 and < 2) // 1 раз в минуту
+                if (DateTime.UtcNow.Second < 2)
                 {
-                    var state = _aiLearning.ExportState();
-                    await _aiSnapshot.SaveSnapshotAsync(state, ct);
+                    var state = _learn.ExportState();
+                    await _snapshot.SaveSnapshotAsync(state, ct);
                 }
             }
             catch (Exception ex)

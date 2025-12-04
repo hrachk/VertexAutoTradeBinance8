@@ -17,8 +17,13 @@
         Range = 3,
 
         /// <summary>Шумная пила: высокая волатильность, но без направленного тренда.</summary>
-        VolatileChop = 4
+        VolatileChop = 4,
+        Squeeze = 5,
+        UpTrend = 6,       // ← НУЖНЫ ДЛЯ v6
+        DownTrend = 7      // ← НУЖНЫ ДЛЯ v6
     }
+
+   
 
     /// <summary>
     /// Результат детекции режима рынка.

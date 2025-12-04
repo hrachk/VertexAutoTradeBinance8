@@ -1,9 +1,19 @@
-﻿using Binance.Net.Enums;
+﻿using System;
 using System.Linq;
+using Binance.Net.Clients;
+using Binance.Net.Enums;
+using Binance.Net.Objects.Models.Futures;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
 {
+    /// <summary>
+    /// PositionProtectorService v6
+    /// - Авто-аварийный выход из позиции по "dangerPrice"
+    /// - Учитывает сторону (Long/Short) и текущее MarkPrice
+    /// - Создаёт reduceOnly лимит-ордер по тик-сетке
+    /// - Пишет сделку в AiSelfLearningService.RecordTrade(...) для QUANT-REALTIME обучения
+    /// </summary>
     public class PositionProtectorService
     {
         private readonly ILogger<PositionProtectorService> _logger;
@@ -26,79 +36,139 @@ namespace VertexAutoTradeBinance8.Services
             _tradeMonitor = tradeMonitor;
         }
 
+        /// <summary>
+        /// Авто-выход, когда цена уже ДОШЛА до опасной зоны.
+        /// Возвращает true, если ордер на выход успешно создан.
+        /// </summary>
         public async Task<bool> AutoExitIfDangerAsync(
             string symbol,
             decimal dangerPrice,
-            PositionSide side)
+            PositionSide side,
+            CancellationToken ct = default)
         {
+            if (dangerPrice <= 0)
+            {
+                _logger.LogWarning("[PROTECTOR][{symbol}] dangerPrice <= 0 → skip", symbol);
+                return false;
+            }
+
             using var client = _factory.CreateRestClient();
 
-            var pos = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol);
-            if (!pos.Success || pos.Data == null)
+            // 1) Загружаем позиции по символу
+            var posRes = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, null, ct);
+            if (!posRes.Success || posRes.Data == null)
+            {
+                _logger.LogWarning("[PROTECTOR][{symbol}] Can't load positions: {err}", symbol, posRes.Error);
                 return false;
+            }
 
-            var p = pos.Data.FirstOrDefault(x => x.PositionSide == side);
+            var p = posRes.Data.FirstOrDefault(x => x.PositionSide == side);
             if (p == null || Math.Abs(p.Quantity) <= 0)
+            {
+                _logger.LogInformation("[PROTECTOR][{symbol}] No active {side} position", symbol, side);
                 return false;
+            }
 
             var qty = Math.Abs(p.Quantity);
+            if (qty <= 0)
+            {
+                _logger.LogInformation("[PROTECTOR][{symbol}] Position qty=0", symbol);
+                return false;
+            }
 
-            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-            var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
-
-            decimal exitPrice;
+            // 2) Проверяем, дошёл ли рынок до "dangerPrice"
+            decimal mark = p.MarkPrice > 0 ? p.MarkPrice : p.EntryPrice;
 
             if (side == PositionSide.Long)
             {
-                if (p.MarkPrice > dangerPrice)
+                // Для LONG опасно, если цена УЖЕ опустилась НИЖЕ или РАВНА уровню
+                if (mark > dangerPrice)
+                {
+                    _logger.LogDebug(
+                        "[PROTECTOR][{symbol}] LONG: mark {mark:F4} > danger {danger:F4} → ещё рано",
+                        symbol, mark, dangerPrice);
                     return false;
-
-                exitPrice = Math.Round(dangerPrice / tick) * tick;
+                }
             }
-            else
+            else // SHORT
             {
-                if (p.MarkPrice < dangerPrice)
+                // Для SHORT опасно, если цена УЖЕ поднялась ВЫШЕ или РАВНА уровню
+                if (mark < dangerPrice)
+                {
+                    _logger.LogDebug(
+                        "[PROTECTOR][{symbol}] SHORT: mark {mark:F4} < danger {danger:F4} → ещё рано",
+                        symbol, mark, dangerPrice);
                     return false;
-
-                exitPrice = Math.Round(dangerPrice / tick) * tick;
+                }
             }
 
+            // 3) Подгоняем цену под тик-сетку
+            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+            var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
+
+            decimal exitPrice = Math.Round(dangerPrice / tick) * tick;
+            if (exitPrice <= 0)
+            {
+                _logger.LogWarning("[PROTECTOR][{symbol}] Computed exitPrice <= 0 → skip", symbol);
+                return false;
+            }
+
+            // 4) Формируем сторону выхода
             var exitSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
+            // 5) Создаём reduceOnly лимитный ордер
             var exitOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol,
+                symbol: symbol,
                 side: exitSide,
                 type: FuturesOrderType.Limit,
                 reduceOnly: true,
                 timeInForce: TimeInForce.GoodTillCanceled,
                 quantity: qty,
                 price: exitPrice,
-                positionSide: side);
+                positionSide: side,
+                ct: ct);
 
             if (!exitOrder.Success)
+            {
+                _logger.LogError(
+                    "[PROTECTOR][{symbol}] AUTO-EXIT order ERROR: {err}",
+                    symbol, exitOrder.Error);
                 return false;
+            }
 
+            // 6) Локальная оценка win/lose
             bool isWin = side == PositionSide.Long
                 ? exitPrice > p.EntryPrice
                 : exitPrice < p.EntryPrice;
 
+            // для логики обучения нам нужен SignalSide
+            var sigSide = side == PositionSide.Short ? SignalSide.Sell : SignalSide.Buy;
+
             // ================================
-            //      🔥 AI SELF LEARNING (B-PRO)
+            // 🔥 QUANT-REALTIME LEARNING HOOK
             // ================================
-            _aiLearning.RecordTrade(
-                symbol: symbol,
-                entryPrice: p.EntryPrice,
-                exitPrice: exitPrice,
-                liquidationPrice: p.LiquidationPrice,
-                isWin: isWin,
-                regime: MarketRegime.Range   // безопасный дефолт
-            );
+            try
+            {
+                _aiLearning.RecordTrade(
+                    symbol: symbol,
+                    side: sigSide,
+                    entry: p.EntryPrice,
+                    exit: exitPrice,
+                    regime: MarketRegime.Range // безопасный дефолт; при желании можно передавать реальный режим
+                );
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[PROTECTOR][{symbol}] AiSelfLearning.RecordTrade error (AUTO-EXIT)", symbol);
+            }
 
             _logger.LogWarning(
-               "AUTO-EXIT {Symbol}: exit={Exit} win={Win}",
-               symbol, exitPrice, isWin);
+               "[PROTECTOR][AUTO-EXIT] {Symbol} side={Side}, qty={Qty}, exit={Exit:F4}, entry={Entry:F4}, win={Win}",
+               symbol, side, qty, exitPrice, p.EntryPrice, isWin);
 
-
+            // Можно при желании задействовать _tradeMonitor, если там есть публичный API.
+            // Сейчас оставляем его на будущее.
 
             return true;
         }

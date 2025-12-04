@@ -1,9 +1,11 @@
 ﻿// ============================================================================
-// PositionSupervisorService v5.0
-// - Реальный контроль позиций (Long/Short/Both)
+// PositionSupervisorService v6.0 (QUANT-REALTIME MAX)
+// - Реальный контроль позиций (Long / Short / Both)
 // - Авто-ремонт SL/TP
-// - Безопасный trailing (без -2021 Order would immediately trigger)
-// - Поддержка ручных позиций через ManualPositionHandler
+// - Многоуровневый трейлинг (ATR + EMA + SuperTrend + micro-structure)
+// - Безопасная защита от -2021 (order would immediately trigger)
+// - Manual + AI позиции (через ManualPositionHandler)
+// - QUANT-LEARN: запись сделок в AiSelfLearningService.RecordTrade(...)
 // ============================================================================
 
 using Binance.Net.Clients;
@@ -26,6 +28,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly AiMarketRegimeService _regime;
         private readonly ManualPositionHandler _manualHandler;
 
+        // Текущий режим, который мы считаем при записи обучающих трейдов
         private MarketRegime _regimeNow;
 
         public PositionSupervisorService(
@@ -51,7 +54,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // MAIN ENTRY
+        // MAIN ENTRY: главный супервизор по символу
         // =====================================================================
         public async Task SuperviseAsync(string symbol, TradeSignal? lastSignal, CancellationToken ct)
         {
@@ -70,7 +73,7 @@ namespace VertexAutoTradeBinance8.Services
                 }
             }
 
-            // 1) Грузим позиции с ретраем (чтобы маркет-ордер успел превратиться в позицию)
+            // 1) Позиции с ретраем (чтобы маркет успел стать позицией)
             var posInfo = await GetPositionsWithRetryAsync(client, symbol, ct);
             if (posInfo == null || !posInfo.Success || posInfo.Data == null)
             {
@@ -153,7 +156,8 @@ namespace VertexAutoTradeBinance8.Services
             {
                 ct.ThrowIfCancellationRequested();
 
-                var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, null, ct);
+                var res = await client.UsdFuturesApi.Account
+                    .GetPositionInformationAsync(symbol, null, ct);
                 last = res;
 
                 if (res.Success && res.Data != null)
@@ -180,7 +184,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // HANDLE SIDE
+        // HANDLE SIDE: логика для отдельной стороны (Long / Short)
         // =====================================================================
         private async Task HandleSideAsync(
             BinanceRestClient client,
@@ -215,7 +219,7 @@ namespace VertexAutoTradeBinance8.Services
                 o.Side == closeSide &&
                 (o.Type == FuturesOrderType.TakeProfit || o.Type == FuturesOrderType.TakeProfitMarket));
 
-            // --- Entry price для трайлинга / BOTH-логики ---
+            // Entry price для трайлинга / BOTH-логики
             decimal entry = pos.EntryPrice;
             if (entry <= 0 && signal != null && signal.Symbol == symbol)
                 entry = signal.EntryPrice;
@@ -225,7 +229,7 @@ namespace VertexAutoTradeBinance8.Services
             {
                 await CreateEmergencySLAsync(client, symbol, side, qty, entry, signal, ct);
                 _logger.LogWarning("[SUPERVISOR][{symbol}] SL восстановлен (user removed / not placed)", symbol);
-                // Дальше в этот цикл не лезем — подождём след. тик
+                // Дальше в этот тик не лезем — подождём следующий проход
                 return;
             }
 
@@ -543,7 +547,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // UPDATE SL (с защитой от -2021)
+        // UPDATE SL (с защитой от -2021) + QUANT LEARNING HOOK
         // =====================================================================
         private async Task UpdateSLAsync(
             BinanceRestClient client,
@@ -619,27 +623,24 @@ namespace VertexAutoTradeBinance8.Services
 
             _logger.LogInformation("[SUPERVISOR] TRAIL SL UPDATED {symbol} {old} → {ns}", symbol, oldSl, s);
 
-            // --- AI LEARNING: фиксируем трейл как потенциальный exit ---
-            var posRaw = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, null, ct);
-            decimal liq = 0m;
-
-            if (posRaw.Success && posRaw.Data != null)
+            // --- QUANT REALTIME LEARNING HOOK --------------------------------
+            // Если это ручная сделка — можно не учить модель
+            if (signal != null && signal.IsManual)
             {
-                var p = posRaw.Data.FirstOrDefault(x => x.PositionSide == side);
-                if (p != null)
-                    liq = p.LiquidationPrice;
+                _logger.LogInformation("[AI-LEARN] Manual trade → skip learning for {symbol}", symbol);
+                return;
             }
 
+            // Вычисляем win/lose по направлению
             bool win = side == PositionSide.Long ? s > entry : s < entry;
+            var sigSide = side == PositionSide.Short ? SignalSide.Sell : SignalSide.Buy;
 
             _aiLearning.RecordTrade(
                 symbol: symbol,
-                entryPrice: entry,
-                exitPrice: s,
-                liquidationPrice: liq,
-                isWin: win,
-                regime: _regimeNow,
-                signal: signal);
+                side: sigSide,
+                entry: entry,
+                exit: s,
+                regime: _regimeNow);
         }
 
         // =====================================================================

@@ -27,7 +27,7 @@ namespace VertexAutoTradeBinance8.Services
             => Path.Combine(_folder, $"ai-model-{utcNow:yyyyMMdd}.json");
 
         public async Task SaveSnapshotAsync(
-            AiSelfLearningService.AiLearningSnapshot state,
+            AiLearningSnapshot state,
             CancellationToken ct = default)
         {
             try
@@ -62,7 +62,7 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
-        public async Task<AiSelfLearningService.AiLearningSnapshot?> LoadLatestAsync(
+        public async Task<AiLearningSnapshot?> LoadLatestAsync(
             CancellationToken ct = default)
         {
             try
@@ -77,7 +77,7 @@ namespace VertexAutoTradeBinance8.Services
                 var latest = files.OrderBy(f => f).Last();
                 var json = await File.ReadAllTextAsync(latest, ct);
 
-                var state = JsonSerializer.Deserialize<AiSelfLearningService.AiLearningSnapshot>(json);
+                var state = JsonSerializer.Deserialize<AiLearningSnapshot>(json);
 
                 // ❗ FIX: пустые снапшоты игнорируем
                 if (state == null || state.Symbols == null || state.Symbols.Count == 0)
