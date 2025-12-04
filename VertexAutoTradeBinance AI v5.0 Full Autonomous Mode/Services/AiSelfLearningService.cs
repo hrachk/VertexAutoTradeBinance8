@@ -17,6 +17,11 @@ namespace VertexAutoTradeBinance8.Services
         private DateTime _lastSnapshot = DateTime.MinValue;
         private readonly TimeSpan SnapshotInterval = TimeSpan.FromMinutes(15);
 
+
+        private DateTime _lastHybridSnapshot = DateTime.MinValue;
+        private readonly TimeSpan HybridInterval = TimeSpan.FromSeconds(60);
+
+
         // =====================================================================
         // CORE STORAGE v6
         // =====================================================================
@@ -79,6 +84,66 @@ namespace VertexAutoTradeBinance8.Services
             public decimal AvgPnl { get; set; }
             public decimal RiskWeight { get; set; } = 1.0m;
         }
+
+        // HYBRID: универсальный триггер логирования
+        public void RecordMarketStateTriggered(
+            string reason,
+            string symbol,
+            string timeframe,
+            MarketRegime regime,
+            decimal slope,
+            decimal volatility,
+            decimal atr,
+            decimal confidence)
+        {
+            lock (_lock)
+            {
+                _marketStates.Add(new MarketState
+                {
+                    Symbol = symbol,
+                    Timeframe = timeframe,
+                    Regime = regime,
+                    TrendSlopePercent = slope,
+                    VolatilityPercent = volatility,
+                    Atr = atr,
+                    Confidence = confidence,
+                    Time = DateTime.UtcNow
+                });
+
+                if (_marketStates.Count > 2000)
+                    _marketStates.RemoveRange(0, 1000);
+
+                _logger.LogDebug($"[HYBRID][{symbol}] MarketState logged ({reason}) slope={slope} vol={volatility} atr={atr} conf={confidence}");
+            }
+        }
+
+        // GLOBAL 60s periodic logger
+        public void TryHybridPeriodicSnapshot(
+            string symbol,
+            string timeframe,
+            MarketRegime regime,
+            decimal slope,
+            decimal volatility,
+            decimal atr,
+            decimal confidence)
+        {
+            if (DateTime.UtcNow - _lastHybridSnapshot < HybridInterval)
+                return;
+
+            _lastHybridSnapshot = DateTime.UtcNow;
+
+            RecordMarketStateTriggered(
+                reason: "PERIODIC_60s",
+                symbol: symbol,
+                timeframe: timeframe,
+                regime: regime,
+                slope: slope,
+                volatility: volatility,
+                atr: atr,
+                confidence: confidence
+            );
+        }
+
 
         // =====================================================================
         // MARKET STATE
@@ -430,8 +495,6 @@ namespace VertexAutoTradeBinance8.Services
                 // ignored
             }
         }
-
-
         // =====================================================================
         // PERIODIC SNAPSHOT (каждые 15 минут)
         // =====================================================================
@@ -447,6 +510,4 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
     }
-
-   
 }

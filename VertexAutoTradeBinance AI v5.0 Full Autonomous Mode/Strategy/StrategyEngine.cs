@@ -1,13 +1,18 @@
 //  -----------------------------------------------------------------------------
-//   STRATEGY ENGINE v6.0 (QUANT-REALTIME MAX)
+//   STRATEGY ENGINE v6.3 (QUANT-REALTIME MAX + HYBRID LOGGER + CONFIG TEST MODE)
 //   - Dynamic RR filter (ATR + volatility + regime + AI TrendPredict)
 //   - Soft entry + liquidity + AI risk как было
-//   - QUANT-REALTIME: RecordMarketState для AiSelfLearningService
+//   - HYBRID MarketState logging для AiSelfLearningService
+//   - TestMode / Relax режимы читаются из TradingOptions (config.json)
 //   - Имена и сигнатуры полностью совместимы с VertexAutoTradeBinance8
 //  -----------------------------------------------------------------------------
 
+using System;
+using System.Collections.Generic;
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
+using Microsoft.Extensions.Logging;
+using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 
@@ -22,6 +27,7 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly AiPatternEngineService _patternEngineService;
         private readonly AiSelfLearningService _aiLearning;
         private readonly SmartRegimeService _smartRegimeService;
+        private readonly TradingOptions _opt;
 
         public StrategyEngine(
             ILogger<StrategyEngine> logger,
@@ -30,7 +36,8 @@ namespace VertexAutoTradeBinance8.Strategy
             AiMarketRegimeService marketRegimeService,
             AiPatternEngineService patternEngineService,
             AiSelfLearningService aiLearning,
-            SmartRegimeService smartRegimeService)
+            SmartRegimeService smartRegimeService,
+            TradingOptions opt)
         {
             _logger = logger;
             _correlationService = correlationService;
@@ -39,12 +46,14 @@ namespace VertexAutoTradeBinance8.Strategy
             _patternEngineService = patternEngineService;
             _aiLearning = aiLearning;
             _smartRegimeService = smartRegimeService;
+            _opt = opt;
         }
 
         // -------------------------------------------------------------------------------------
         // ATR/TP/SL настройки по таймфрейму
         // -------------------------------------------------------------------------------------
-        private static (decimal slMult, decimal tp1Mult, decimal tp2Mult, decimal tp3Mult) GetAtrConfig(KlineInterval interval)
+        private static (decimal slMult, decimal tp1Mult, decimal tp2Mult, decimal tp3Mult)
+            GetAtrConfig(KlineInterval interval)
         {
             return interval switch
             {
@@ -63,7 +72,10 @@ namespace VertexAutoTradeBinance8.Strategy
         // -------------------------------------------------------------------------------------
         // EMA helper
         // -------------------------------------------------------------------------------------
-        private static decimal Ema(IReadOnlyList<BinanceFuturesUsdtKline> klines, int period, int index)
+        private static decimal Ema(
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            int period,
+            int index)
         {
             int start = Math.Max(0, index - period + 1);
             decimal k = 2m / (period + 1);
@@ -79,7 +91,10 @@ namespace VertexAutoTradeBinance8.Strategy
         // -------------------------------------------------------------------------------------
         // ATR helper (с защитой индексов)
         // -------------------------------------------------------------------------------------
-        private static decimal Atr(IReadOnlyList<BinanceFuturesUsdtKline> klines, int period, int lastIndex)
+        private static decimal Atr(
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            int period,
+            int lastIndex)
         {
             if (klines == null || klines.Count < period + 1)
                 return 0;
@@ -112,7 +127,9 @@ namespace VertexAutoTradeBinance8.Strategy
         // -------------------------------------------------------------------------------------
         // Фильтры по свече: импульс/до́джи
         // -------------------------------------------------------------------------------------
-        private static decimal GetTrueRange(BinanceFuturesUsdtKline current, BinanceFuturesUsdtKline prev)
+        private static decimal GetTrueRange(
+            BinanceFuturesUsdtKline current,
+            BinanceFuturesUsdtKline prev)
         {
             var tr1 = current.HighPrice - current.LowPrice;
             var tr2 = Math.Abs(current.HighPrice - prev.ClosePrice);
@@ -120,7 +137,10 @@ namespace VertexAutoTradeBinance8.Strategy
             return Math.Max(tr1, Math.Max(tr2, tr3));
         }
 
-        private static bool IsTooBigImpulseBar(BinanceFuturesUsdtKline current, BinanceFuturesUsdtKline prev, decimal atr)
+        private static bool IsTooBigImpulseBar(
+            BinanceFuturesUsdtKline current,
+            BinanceFuturesUsdtKline prev,
+            decimal atr)
         {
             if (atr <= 0)
                 return false;
@@ -129,7 +149,9 @@ namespace VertexAutoTradeBinance8.Strategy
             return tr >= atr * 2.2m;
         }
 
-        private static bool IsTooSmallBody(BinanceFuturesUsdtKline current, decimal atr)
+        private static bool IsTooSmallBody(
+            BinanceFuturesUsdtKline current,
+            decimal atr)
         {
             if (atr <= 0)
                 return true;
@@ -545,9 +567,9 @@ namespace VertexAutoTradeBinance8.Strategy
                 regime == MarketRegime.StrongDownTrend ||
                 smartType == SmartRegimeType.SmartStrongTrend;
 
-            bool strongSlope = Math.Abs(slope) >= 0.02m;   // ≥ 2% наклон на TF
-            bool highVol = vol >= 0.015m || atrPct >= 0.015m;   // > 1.5%
-            bool lowVol = vol <= 0.005m || atrPct <= 0.005m;    // < 0.5%
+            bool strongSlope = Math.Abs(slope) >= 0.02m;          // ≥ 2% наклон на TF
+            bool highVol = vol >= 0.015m || atrPct >= 0.015m;     // > 1.5%
+            bool lowVol = vol <= 0.005m || atrPct <= 0.005m;      // < 0.5%
 
             decimal minRr = 2.0m; // базовый
 
@@ -629,17 +651,40 @@ namespace VertexAutoTradeBinance8.Strategy
             KlineInterval interval,
             IReadOnlyList<BinanceFuturesUsdtKline> klines)
         {
-            _logger.LogInformation("\n[DEBUG][{Symbol}][{TF}] STRATEGY START", symbol, interval);
+            _logger.LogInformation(
+                "\n[DEBUG][{Symbol}][{TF}] STRATEGY START", symbol, interval);
 
+            // ==== CONFIG / TEST MODE FLAGS ==================================================
+            bool testMode = _opt.Enabled;
+            string level = _opt.Level ?? "off";
+
+            bool allowSoftEntryAlways = testMode && _opt.AllowSoftEntryAlways;
+            bool relaxRr = testMode && _opt.RelaxRR;
+            bool relaxPatternBlock = testMode && _opt.RelaxPatternBlock;
+            bool relaxLiquidity = testMode && _opt.RelaxLiquidity;
+            bool ignoreCorrelation = testMode && _opt.IgnoreCorrelation;
+            bool lowerRegimeThreshold = testMode && _opt.LowerRegimeThreshold;
+
+            if (testMode)
+            {
+                _logger.LogDebug(
+                    "[TESTMODE][{Symbol}][{TF}] Level={Level}, Soft={Soft}, RelaxRR={RR}, RelaxPattern={Pat}, RelaxLiq={Liq}, IgnoreCorr={Corr}, LowerRegime={LowReg}",
+                    symbol, interval, level, allowSoftEntryAlways, relaxRr, relaxPatternBlock,
+                    relaxLiquidity, ignoreCorrelation, lowerRegimeThreshold);
+            }
+
+            // 0) Базовые проверки по данным
             if (klines == null)
             {
-                _logger.LogError("[DEBUG][{Symbol}][{TF}] ERROR: klines == null → SKIP", symbol, interval);
+                _logger.LogError(
+                    "[DEBUG][{Symbol}][{TF}] ERROR: klines == null → SKIP", symbol, interval);
                 return null;
             }
 
             if (klines.Count == 0)
             {
-                _logger.LogError("[DEBUG][{Symbol}][{TF}] ERROR: klines.Count == 0 → SKIP", symbol, interval);
+                _logger.LogError(
+                    "[DEBUG][{Symbol}][{TF}] ERROR: klines.Count == 0 → SKIP", symbol, interval);
                 return null;
             }
 
@@ -651,7 +696,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 return null;
             }
 
-            // 1) Корреляция с BTC — с защитой
+            // 1) Корреляция с BTC — с защитой (можно отключить через config IgnoreCorrelation)
             if (!string.Equals(symbol, "BTCUSDT", StringComparison.OrdinalIgnoreCase))
             {
                 decimal? corr = null;
@@ -666,30 +711,77 @@ namespace VertexAutoTradeBinance8.Strategy
                         symbol, interval);
                 }
 
-                if (corr.HasValue && Math.Abs(corr.Value) < 0.10m)
+                if (!ignoreCorrelation && corr.HasValue && Math.Abs(corr.Value) < 0.10m)
                 {
                     _logger.LogInformation(
                         "[DEBUG][{Symbol}][{TF}] CorrFilter: {Corr:F2} < 0.10 → SKIP",
                         symbol, interval, corr.Value);
                     return null;
                 }
+
+                if (ignoreCorrelation && corr.HasValue)
+                {
+                    _logger.LogInformation(
+                        "[TESTMODE][{Symbol}][{TF}] CorrFilter отключен: Corr={Corr:F2} → продолжаем",
+                        symbol, interval, corr.Value);
+                }
             }
 
-            // 2) Smart Regime — с защитой
+            // 2) Smart Regime — с защитой + базовый RecordMarketState (ВСЕГДА)
             SmartRegimeInfo smart;
             try
             {
                 smart = _smartRegimeService.Evaluate(symbol, interval, klines);
+
+                try
+                {
+                    var atr14 = Atr(klines, 14, klines.Count - 1);
+                    _aiLearning.RecordMarketState(
+                        symbol: symbol,
+                        timeframe: interval.ToString(),
+                        regime: smart.BaseRegime,
+                        trendSlopePercent: smart.TrendSlopePercent,
+                        volatilityPercent: smart.VolatilityPercent,
+                        atr: atr14,
+                        confidence: smart.Confidence
+                    );
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "[{Symbol}][{TF}] BASE RecordMarketState ERROR",
+                        symbol, interval);
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex,
+                _logger.LogError(
+                    ex,
                     "[DEBUG][{Symbol}][{TF}] SmartRegimeService.Evaluate ERROR → SKIP",
                     symbol, interval);
                 return null;
             }
 
             var regime = smart.BaseRegime;
+
+            // 2.1) HYBRID periodic snapshot (каждые ~60 сек) — независим от сделок
+            try
+            {
+                var atr14 = Atr(klines, 14, klines.Count - 1);
+                _aiLearning.TryHybridPeriodicSnapshot(
+                    symbol: symbol,
+                    timeframe: interval.ToString(),
+                    regime: smart.BaseRegime,
+                    slope: smart.TrendSlopePercent,
+                    volatility: smart.VolatilityPercent,
+                    atr: atr14,
+                    confidence: smart.Confidence);
+            }
+            catch
+            {
+                // HYBRID snapshot errors не критичны
+            }
 
             _logger.LogInformation(
                 "[DEBUG][{Symbol}][{TF}] REGIME={Regime} smart={Smart} slope={Slope:P2} vol={Vol:P2} conf={Conf:P0}",
@@ -701,26 +793,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 smart.VolatilityPercent,
                 smart.Confidence);
 
-            // 2.1) QUANT-REALTIME: фиксируем MarketState для обучения
-            try
-            {
-                var atr14 = Atr(klines, 14, klines.Count - 1);
-                _aiLearning.RecordMarketState(
-                    symbol: symbol,
-                    timeframe: interval.ToString(),
-                    regime: smart.BaseRegime,
-                    trendSlopePercent: smart.TrendSlopePercent,
-                    volatilityPercent: smart.VolatilityPercent,
-                    atr: atr14,
-                    confidence: smart.Confidence);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex,
-                    "[{Symbol}][{TF}] RecordMarketState ERROR → QUANT snapshot skipped",
-                    symbol, interval);
-            }
-
+            // 2.2) Adaptive regime threshold + возможность ослабить его через config
             int adaptiveThreshold = GetAdaptiveThreshold(
                 smart.BaseRegime,
                 smart.SmartType,
@@ -729,6 +802,18 @@ namespace VertexAutoTradeBinance8.Strategy
 
             decimal adaptiveThresholdFrac = adaptiveThreshold / 100m;
             decimal safetyBuffer = 0.10m;
+
+            if (lowerRegimeThreshold)
+            {
+                // В тест-режиме даём системе больше шансов торговать
+                adaptiveThreshold = Math.Max(20, (int)(adaptiveThreshold * 0.8));
+                adaptiveThresholdFrac = adaptiveThreshold / 100m;
+                safetyBuffer = 0.20m;
+
+                _logger.LogInformation(
+                    "[TESTMODE][{Symbol}][{TF}] LowerRegimeThreshold активен → Thr={Thr}%, Buffer={Buf:P0}",
+                    symbol, interval, adaptiveThreshold, safetyBuffer);
+            }
 
             bool fastTrendOverride = IsFastTrendOverride(smart);
 
@@ -748,6 +833,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 return null;
             }
 
+            // 3) SoftModeAllowed: можно насильно разрешить через config AllowSoftEntryAlways
             bool softModeAllowed =
                 (regime == MarketRegime.StrongUpTrend ||
                  regime == MarketRegime.StrongDownTrend ||
@@ -757,6 +843,14 @@ namespace VertexAutoTradeBinance8.Strategy
                 && Math.Abs(smart.TrendSlopePercent) >= 0.0045m
                 && smart.VolatilityPercent <= 0.40m
                 && smart.TrendSlopePercent != 0;
+
+            if (allowSoftEntryAlways)
+            {
+                softModeAllowed = true;
+                _logger.LogInformation(
+                    "[TESTMODE][{Symbol}][{TF}] AllowSoftEntryAlways=TRUE → softModeAllowed принудительно включён",
+                    symbol, interval);
+            }
 
             TradeSignal? baseSignal = null;
 
@@ -770,7 +864,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 regime == MarketRegime.StrongDownTrend ||
                 smart.SmartType == SmartRegimeType.SmartStrongTrend;
 
-            // 3) Базовый сигнал по текущему режиму
+            // 4) Базовый сигнал по текущему режиму
             if (isRangeLikeRegime)
             {
                 baseSignal = TryLiquidityGrab(symbol, interval, klines)
@@ -785,26 +879,54 @@ namespace VertexAutoTradeBinance8.Strategy
                 baseSignal = TryPullbackEma21(symbol, interval, klines);
             }
 
-            // 3.1) SOFT safe mode, если нет жёсткого сигнала
+            // MICRO_SIGNAL — логируется для любого режима, если baseSignal появился
+            if (baseSignal != null)
+            {
+                _aiLearning.RecordMarketStateTriggered(
+                    reason: "MICRO_SIGNAL",
+                    symbol: symbol,
+                    timeframe: interval.ToString(),
+                    regime: smart.BaseRegime,
+                    slope: smart.TrendSlopePercent,
+                    volatility: smart.VolatilityPercent,
+                    atr: baseSignal.Atr ?? 0,
+                    confidence: smart.Confidence
+                );
+            }
+
+            // 4.1) SOFT safe mode, если нет жёсткого сигнала
             if (baseSignal == null && softModeAllowed)
             {
                 var soft = CreateSoftSafeSignal(symbol, interval, klines, smart);
                 if (soft != null)
                 {
+                    _aiLearning.RecordMarketStateTriggered(
+                        reason: "SOFT_ENTRY",
+                        symbol: symbol,
+                        timeframe: interval.ToString(),
+                        regime: smart.BaseRegime,
+                        slope: smart.TrendSlopePercent,
+                        volatility: smart.VolatilityPercent,
+                        atr: soft.Atr ?? 0,
+                        confidence: smart.Confidence
+                    );
+
                     _logger.LogInformation(
                         "[DEBUG][{Symbol}][{TF}] SOFT entry activated: side={Side} entry={Entry:F4} sl={SL:F4}",
                         symbol, interval, soft.Side, soft.EntryPrice, soft.StopLoss);
+
                     baseSignal = soft;
                 }
             }
 
             if (baseSignal == null)
             {
-                _logger.LogInformation("[DEBUG][{Symbol}][{TF}] GEN → No signal", symbol, interval);
+                _logger.LogInformation(
+                    "[DEBUG][{Symbol}][{TF}] GEN → No signal", symbol, interval);
                 return null;
             }
 
-            // 4) Pattern Filter — с защитой
+            // 5) Pattern Filter — с защитой + RelaxPatternBlock вариант
             try
             {
                 var pattern = _patternEngineService.Analyze(symbol, interval, klines);
@@ -815,12 +937,36 @@ namespace VertexAutoTradeBinance8.Strategy
                         (pattern.Direction == 1 && baseSignal.Side == SignalSide.Buy) ||
                         (pattern.Direction == -1 && baseSignal.Side == SignalSide.Sell);
 
-                    if (!sameDir && pattern.Score >= 0.60m)
+                    decimal blockScore = 0.60m;
+                    if (relaxPatternBlock)
+                    {
+                        blockScore = 0.85m; // в тест-режиме блокируем только супер-сильные контр-сигналы
+                    }
+
+                    if (!sameDir && pattern.Score >= blockScore)
+                    {
+                        _aiLearning.RecordMarketStateTriggered(
+                            reason: "AI_PATTERN_BLOCK",
+                            symbol: symbol,
+                            timeframe: interval.ToString(),
+                            regime: smart.BaseRegime,
+                            slope: smart.TrendSlopePercent,
+                            volatility: smart.VolatilityPercent,
+                            atr: baseSignal?.Atr ?? 0,
+                            confidence: smart.Confidence
+                        );
+
+                        _logger.LogInformation(
+                            "[DEBUG][{Symbol}][{TF}] Pattern block: dir={Dir} score={Score:F2} thr={Thr:F2}",
+                            symbol, interval, pattern.Direction, pattern.Score, blockScore);
+                        return null;
+                    }
+
+                    if (relaxPatternBlock && !sameDir && pattern.Score >= 0.60m && pattern.Score < blockScore)
                     {
                         _logger.LogInformation(
-                            "[DEBUG][{Symbol}][{TF}] Pattern block: dir={Dir} score={Score:F2}",
-                            symbol, interval, pattern.Direction, pattern.Score);
-                        return null;
+                            "[TESTMODE][{Symbol}][{TF}] Pattern против сигнала, но RelaxPatternBlock=TRUE → сигнал НЕ блокируем (score={Score:F2})",
+                            symbol, interval, pattern.Score);
                     }
                 }
             }
@@ -831,12 +977,36 @@ namespace VertexAutoTradeBinance8.Strategy
                     symbol, interval);
             }
 
-            // 5) Liquidity Cluster Filter — с защитой
+            // 6) Liquidity Cluster Filter — с защитой + RelaxLiquidity
             try
             {
-                baseSignal = _liquidityClusterService.FilterAndAdjust(baseSignal);
+                var beforeLiq = baseSignal;
+                baseSignal = _liquidityClusterService.FilterAndAdjust(beforeLiq);
                 if (baseSignal == null)
-                    return null;
+                {
+                    _aiLearning.RecordMarketStateTriggered(
+                        reason: "LIQUIDITY_DANGER",
+                        symbol: symbol,
+                        timeframe: interval.ToString(),
+                        regime: smart.BaseRegime,
+                        slope: smart.TrendSlopePercent,
+                        volatility: smart.VolatilityPercent,
+                        atr: beforeLiq?.Atr ?? 0,
+                        confidence: smart.Confidence
+                    );
+
+                    if (relaxLiquidity && beforeLiq != null)
+                    {
+                        _logger.LogInformation(
+                            "[TESTMODE][{Symbol}][{TF}] RelaxLiquidity=TRUE → игнорируем блок по ликвидности и используем базовый сигнал",
+                            symbol, interval);
+                        baseSignal = beforeLiq;
+                    }
+                    else
+                    {
+                        return null;
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -846,7 +1016,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 // оставляем baseSignal как есть
             }
 
-            // 6) AI Dynamic Risk Tag — с защитой
+            // 7) AI Dynamic Risk Tag — с защитой
             try
             {
                 var riskW = _aiLearning.GetAiRiskAdjustment(symbol, regime);
@@ -860,7 +1030,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 baseSignal.Reason += "|AIrisk=1.00";
             }
 
-            // 7) DYNAMIC RR FILTER
+            // 8) DYNAMIC RR FILTER + RelaxRR
             if (baseSignal.TakeProfits != null && baseSignal.TakeProfits.Count > 0)
             {
                 decimal tp1 = baseSignal.TakeProfits[0];
@@ -878,8 +1048,31 @@ namespace VertexAutoTradeBinance8.Strategy
                 decimal rr = tpDist / slDist;
                 decimal minRr = GetDynamicMinRr(symbol, interval, smart, baseSignal);
 
+                if (relaxRr)
+                {
+                    // Чуть опускаем минимальный RR в тест-режиме
+                    var original = minRr;
+                    minRr *= 0.80m;
+                    if (minRr < 1.2m) minRr = 1.2m;
+
+                    _logger.LogInformation(
+                        "[TESTMODE][{Symbol}][{TF}] RelaxRR=TRUE → minRR {Orig:F2} → {New:F2}",
+                        symbol, interval, original, minRr);
+                }
+
                 if (rr < minRr)
                 {
+                    _aiLearning.RecordMarketStateTriggered(
+                        reason: "RR_BLOCK",
+                        symbol: symbol,
+                        timeframe: interval.ToString(),
+                        regime: smart.BaseRegime,
+                        slope: smart.TrendSlopePercent,
+                        volatility: smart.VolatilityPercent,
+                        atr: baseSignal.Atr ?? 0,
+                        confidence: smart.Confidence
+                    );
+
                     _logger.LogInformation(
                         "[DEBUG][{Symbol}][{TF}] RR filter: RR {RR:F2} < minRR {MinRR:F2}: entry={Entry:F4}, sl={SL:F4}, tp1={TP1:F4} → SKIP",
                         symbol, interval, rr, minRr, baseSignal.EntryPrice, baseSignal.StopLoss, tp1);
@@ -893,6 +1086,5 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return baseSignal;
         }
-
     }
 }

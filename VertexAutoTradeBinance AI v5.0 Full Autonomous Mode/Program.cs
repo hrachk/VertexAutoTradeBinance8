@@ -23,6 +23,9 @@ public class Program
             {
                 services.Configure<Configuration.BinanceOptions>(ctx.Configuration.GetSection("Binance"));
                 services.Configure<Configuration.TradingOptions>(ctx.Configuration.GetSection("Trading"));
+                services.Configure<Configuration.TradingOptions>(ctx.Configuration.GetSection("TestMode"));
+
+
 
                 services.AddSingleton<BinanceClientFactory>();
                 services.AddSingleton<MarketDataService>();
