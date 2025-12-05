@@ -1,9 +1,11 @@
 //  -----------------------------------------------------------------------------
-//   STRATEGY ENGINE v6.3 (QUANT-REALTIME MAX + HYBRID LOGGER + CONFIG TEST MODE)
+//   STRATEGY ENGINE v6.4
+//   (QUANT-REALTIME MAX + HYBRID LOGGER + CONFIG TEST MODE + HUMAN LOG FORMAT)
 //   - Dynamic RR filter (ATR + volatility + regime + AI TrendPredict)
 //   - Soft entry + liquidity + AI risk как было
 //   - HYBRID MarketState logging для AiSelfLearningService
 //   - TestMode / Relax режимы читаются из TradingOptions (config.json)
+//   - Новый формат логов: блоки, эмодзи, человекочитаемый вывод
 //   - Имена и сигнатуры полностью совместимы с VertexAutoTradeBinance8
 //  -----------------------------------------------------------------------------
 
@@ -603,9 +605,9 @@ namespace VertexAutoTradeBinance8.Strategy
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex,
-                    "[{Symbol}][{TF}] PredictTrend ERROR → using base dynamic RR only",
-                    symbol, interval);
+                _logger.LogError(
+                    ex,
+                    $"[STRAT][{symbol}][{interval}] PredictTrend ERROR → используем базовый dynamic RR.");
             }
 
             if (trend != null && trend.Direction != 0)
@@ -628,8 +630,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 }
 
                 _logger.LogDebug(
-                    "[{Symbol}][{TF}] TrendPredict: dir={Dir}, conf={Conf:P0}, rrBias={Bias:F2} → adjMinRR={MinRR:F2}",
-                    symbol, interval, trend.Direction, trend.Confidence, trend.RrBias, minRr);
+                    $"[STRAT][{symbol}][{interval}] TrendPredict: dir={trend.Direction}, conf={trend.Confidence:P0}, rrBias={trend.RrBias:F2} → adjMinRR={minRr:F2}");
             }
 
             // safety-коридор
@@ -637,8 +638,7 @@ namespace VertexAutoTradeBinance8.Strategy
             if (minRr > 2.6m) minRr = 2.6m;
 
             _logger.LogDebug(
-                "[{Symbol}][{TF}] Dynamic RR: minRR={MinRR:F2}, regime={Regime}, smart={Smart}, slope={Slope:P2}, vol={Vol:P2}, atr%={AtrPct:P2}",
-                symbol, interval, minRr, regime, smartType, slope, vol, atrPct);
+                $"[STRAT][{symbol}][{interval}] Dynamic RR итог: minRR={minRr:F2}, regime={regime}, smart={smartType}, slope={slope:P2}, vol={vol:P2}, atr%={atrPct:P2}");
 
             return minRr;
         }
@@ -651,8 +651,11 @@ namespace VertexAutoTradeBinance8.Strategy
             KlineInterval interval,
             IReadOnlyList<BinanceFuturesUsdtKline> klines)
         {
+            // Шапка блока
             _logger.LogInformation(
-                "\n[DEBUG][{Symbol}][{TF}] STRATEGY START", symbol, interval);
+$@"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 {symbol} [{interval}] — STRATEGY ENGINE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
             // ==== CONFIG / TEST MODE FLAGS ==================================================
             bool testMode = _opt.Enabled;
@@ -667,36 +670,36 @@ namespace VertexAutoTradeBinance8.Strategy
 
             if (testMode)
             {
-                _logger.LogDebug(
-                    "[TESTMODE][{Symbol}][{TF}] Level={Level}, Soft={Soft}, RelaxRR={RR}, RelaxPattern={Pat}, RelaxLiq={Liq}, IgnoreCorr={Corr}, LowerRegime={LowReg}",
-                    symbol, interval, level, allowSoftEntryAlways, relaxRr, relaxPatternBlock,
-                    relaxLiquidity, ignoreCorrelation, lowerRegimeThreshold);
+                _logger.LogInformation(
+$@"🧪 TestMode включён (Level = {level})
+   • AllowSoftEntryAlways : {allowSoftEntryAlways}
+   • RelaxRR              : {relaxRr}
+   • RelaxPatternBlock    : {relaxPatternBlock}
+   • RelaxLiquidity       : {relaxLiquidity}
+   • IgnoreCorrelation    : {ignoreCorrelation}
+   • LowerRegimeThreshold : {lowerRegimeThreshold}");
             }
 
             // 0) Базовые проверки по данным
             if (klines == null)
             {
-                _logger.LogError(
-                    "[DEBUG][{Symbol}][{TF}] ERROR: klines == null → SKIP", symbol, interval);
+                _logger.LogError("❌ Ошибка: klines == null → пропускаем символ.");
                 return null;
             }
 
             if (klines.Count == 0)
             {
-                _logger.LogError(
-                    "[DEBUG][{Symbol}][{TF}] ERROR: klines.Count == 0 → SKIP", symbol, interval);
+                _logger.LogError("❌ Ошибка: klines.Count == 0 → пропускаем символ.");
                 return null;
             }
 
             if (klines.Count < 30)
             {
-                _logger.LogWarning(
-                    "[DEBUG][{Symbol}][{TF}] TOO FEW BARS: {Count} < 30 → SKIP",
-                    symbol, interval, klines.Count);
+                _logger.LogWarning($"⚠ Недостаточно баров: {klines.Count} < 30 → сигнал не ищем.");
                 return null;
             }
 
-            // 1) Корреляция с BTC — с защитой (можно отключить через config IgnoreCorrelation)
+            // 1) Корреляция с BTC — (можно отключить через config IgnoreCorrelation)
             if (!string.Equals(symbol, "BTCUSDT", StringComparison.OrdinalIgnoreCase))
             {
                 decimal? corr = null;
@@ -706,24 +709,23 @@ namespace VertexAutoTradeBinance8.Strategy
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex,
-                        "[DEBUG][{Symbol}][{TF}] CorrFilter ERROR → пропускаем фильтр корреляции",
-                        symbol, interval);
+                    _logger.LogError(
+                        ex,
+                        $"[STRAT][{symbol}][{interval}] Ошибка CorrFilter → фильтр корреляции временно пропускаем.");
                 }
 
                 if (!ignoreCorrelation && corr.HasValue && Math.Abs(corr.Value) < 0.10m)
                 {
                     _logger.LogInformation(
-                        "[DEBUG][{Symbol}][{TF}] CorrFilter: {Corr:F2} < 0.10 → SKIP",
-                        symbol, interval, corr.Value);
+                        $"🔒 CorrFilter: |corrBTC|={corr.Value:F2} < 0.10 → символ пропущен.");
+                    _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                     return null;
                 }
 
                 if (ignoreCorrelation && corr.HasValue)
                 {
                     _logger.LogInformation(
-                        "[TESTMODE][{Symbol}][{TF}] CorrFilter отключен: Corr={Corr:F2} → продолжаем",
-                        symbol, interval, corr.Value);
+                        $"🧪 TestMode: CorrFilter отключён (corrBTC={corr.Value:F2}) → продолжаем.");
                 }
             }
 
@@ -750,16 +752,15 @@ namespace VertexAutoTradeBinance8.Strategy
                 {
                     _logger.LogError(
                         ex,
-                        "[{Symbol}][{TF}] BASE RecordMarketState ERROR",
-                        symbol, interval);
+                        $"[STRAT][{symbol}][{interval}] BASE RecordMarketState ERROR.");
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogError(
                     ex,
-                    "[DEBUG][{Symbol}][{TF}] SmartRegimeService.Evaluate ERROR → SKIP",
-                    symbol, interval);
+                    $"❌ SmartRegimeService.Evaluate ERROR → символ пропущен.");
+                _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 return null;
             }
 
@@ -784,14 +785,12 @@ namespace VertexAutoTradeBinance8.Strategy
             }
 
             _logger.LogInformation(
-                "[DEBUG][{Symbol}][{TF}] REGIME={Regime} smart={Smart} slope={Slope:P2} vol={Vol:P2} conf={Conf:P0}",
-                symbol,
-                interval,
-                regime,
-                smart.SmartType,
-                smart.TrendSlopePercent,
-                smart.VolatilityPercent,
-                smart.Confidence);
+$@"📊 Режим рынка:
+   • Base Regime : {regime}
+   • Smart Regime: {smart.SmartType}
+   • Наклон      : {smart.TrendSlopePercent:P2}
+   • Волатильн.  : {smart.VolatilityPercent:P2}
+   • Доверие     : {smart.Confidence:P0}");
 
             // 2.2) Adaptive regime threshold + возможность ослабить его через config
             int adaptiveThreshold = GetAdaptiveThreshold(
@@ -811,25 +810,23 @@ namespace VertexAutoTradeBinance8.Strategy
                 safetyBuffer = 0.20m;
 
                 _logger.LogInformation(
-                    "[TESTMODE][{Symbol}][{TF}] LowerRegimeThreshold активен → Thr={Thr}%, Buffer={Buf:P0}",
-                    symbol, interval, adaptiveThreshold, safetyBuffer);
+                    $"🧪 TestMode: порог confidence снижен → Thr={adaptiveThreshold}%  Buffer≈{safetyBuffer:P0}");
             }
 
             bool fastTrendOverride = IsFastTrendOverride(smart);
 
             if (!fastTrendOverride && smart.Confidence < adaptiveThresholdFrac - safetyBuffer)
             {
-                _logger.LogDebug(
-                    "[{Symbol}][{TF}] AdaptiveRegime: confidence={Conf:P0} < threshold={Thr}% → SKIP",
-                    symbol, interval, smart.Confidence, adaptiveThreshold);
+                _logger.LogInformation(
+                    $"🚫 Confidence слишком низкий: {smart.Confidence:P0} < {adaptiveThreshold}% (после буфера) → сигнал не ищем.");
+                _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 return null;
             }
 
             if (smart.IsDangerChopZone)
             {
-                _logger.LogInformation(
-                    "[DEBUG][{Symbol}][{TF}] SmartRegime=ChopZone (danger) → SKIP",
-                    symbol, interval);
+                _logger.LogInformation("🚫 Зона хаоса (ChopZone/Danger) → сигнал отключён.");
+                _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 return null;
             }
 
@@ -848,8 +845,7 @@ namespace VertexAutoTradeBinance8.Strategy
             {
                 softModeAllowed = true;
                 _logger.LogInformation(
-                    "[TESTMODE][{Symbol}][{TF}] AllowSoftEntryAlways=TRUE → softModeAllowed принудительно включён",
-                    symbol, interval);
+                    "🧪 TestMode: AllowSoftEntryAlways=TRUE → мягкие входы по тренду разрешены всегда.");
             }
 
             TradeSignal? baseSignal = null;
@@ -912,8 +908,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     );
 
                     _logger.LogInformation(
-                        "[DEBUG][{Symbol}][{TF}] SOFT entry activated: side={Side} entry={Entry:F4} sl={SL:F4}",
-                        symbol, interval, soft.Side, soft.EntryPrice, soft.StopLoss);
+                        $"🟡 SOFT-вход по тренду: side={soft.Side}, entry={soft.EntryPrice:F4}, SL={soft.StopLoss:F4}");
 
                     baseSignal = soft;
                 }
@@ -921,8 +916,8 @@ namespace VertexAutoTradeBinance8.Strategy
 
             if (baseSignal == null)
             {
-                _logger.LogInformation(
-                    "[DEBUG][{Symbol}][{TF}] GEN → No signal", symbol, interval);
+                _logger.LogInformation("🔴 Итог: сигнала НЕТ (ни базового, ни soft).");
+                _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 return null;
             }
 
@@ -957,24 +952,22 @@ namespace VertexAutoTradeBinance8.Strategy
                         );
 
                         _logger.LogInformation(
-                            "[DEBUG][{Symbol}][{TF}] Pattern block: dir={Dir} score={Score:F2} thr={Thr:F2}",
-                            symbol, interval, pattern.Direction, pattern.Score, blockScore);
+                            $"🚫 Блок по AI-паттерну: dir={pattern.Direction}, score={pattern.Score:F2}, thr={blockScore:F2}.");
+                        _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                         return null;
                     }
 
                     if (relaxPatternBlock && !sameDir && pattern.Score >= 0.60m && pattern.Score < blockScore)
                     {
                         _logger.LogInformation(
-                            "[TESTMODE][{Symbol}][{TF}] Pattern против сигнала, но RelaxPatternBlock=TRUE → сигнал НЕ блокируем (score={Score:F2})",
-                            symbol, interval, pattern.Score);
+                            $"🧪 TestMode: паттерн против сигнала, но RelaxPatternBlock=TRUE → не блокируем (score={pattern.Score:F2}).");
                     }
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex,
-                    "[DEBUG][{Symbol}][{TF}] PatternEngine ERROR → игнорируем паттерны",
-                    symbol, interval);
+                    $"[STRAT][{symbol}][{interval}] PatternEngine ERROR → паттерны игнорируем.");
             }
 
             // 6) Liquidity Cluster Filter — с защитой + RelaxLiquidity
@@ -998,12 +991,14 @@ namespace VertexAutoTradeBinance8.Strategy
                     if (relaxLiquidity && beforeLiq != null)
                     {
                         _logger.LogInformation(
-                            "[TESTMODE][{Symbol}][{TF}] RelaxLiquidity=TRUE → игнорируем блок по ликвидности и используем базовый сигнал",
-                            symbol, interval);
+                            "🧪 TestMode: RelaxLiquidity=TRUE → игнорируем блок по ликвидности, берём базовый сигнал.");
                         baseSignal = beforeLiq;
                     }
                     else
                     {
+                        _logger.LogInformation(
+                            "🚫 Сигнал заблокирован по ликвидности (опасная стена/дисбаланс).");
+                        _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                         return null;
                     }
                 }
@@ -1011,8 +1006,7 @@ namespace VertexAutoTradeBinance8.Strategy
             catch (Exception ex)
             {
                 _logger.LogError(ex,
-                    "[DEBUG][{Symbol}][{TF}] LiquidityClusterService ERROR → используем базовый сигнал без корректировок",
-                    symbol, interval);
+                    $"[STRAT][{symbol}][{interval}] LiquidityClusterService ERROR → используем базовый сигнал без корректировок.");
                 // оставляем baseSignal как есть
             }
 
@@ -1025,8 +1019,7 @@ namespace VertexAutoTradeBinance8.Strategy
             catch (Exception ex)
             {
                 _logger.LogError(ex,
-                    "[DEBUG][{Symbol}][{TF}] AiSelfLearningService.GetAiRiskAdjustment ERROR → AIrisk=1.00",
-                    symbol, interval);
+                    $"[STRAT][{symbol}][{interval}] AiSelfLearningService.GetAiRiskAdjustment ERROR → AIrisk=1.00.");
                 baseSignal.Reason += "|AIrisk=1.00";
             }
 
@@ -1040,8 +1033,8 @@ namespace VertexAutoTradeBinance8.Strategy
                 if (slDist <= 0 || tpDist <= 0)
                 {
                     _logger.LogInformation(
-                        "[DEBUG][{Symbol}][{TF}] RR filter: invalid distances slDist={SlDist:F6}, tpDist={TpDist:F6} → SKIP",
-                        symbol, interval, slDist, tpDist);
+                        $"🚫 RR filter: некорректные расстояния slDist={slDist:F6}, tpDist={tpDist:F6} → сигнал отброшен.");
+                    _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                     return null;
                 }
 
@@ -1056,8 +1049,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     if (minRr < 1.2m) minRr = 1.2m;
 
                     _logger.LogInformation(
-                        "[TESTMODE][{Symbol}][{TF}] RelaxRR=TRUE → minRR {Orig:F2} → {New:F2}",
-                        symbol, interval, original, minRr);
+                        $"🧪 TestMode: RelaxRR=TRUE → minRR {original:F2} → {minRr:F2}.");
                 }
 
                 if (rr < minRr)
@@ -1074,15 +1066,39 @@ namespace VertexAutoTradeBinance8.Strategy
                     );
 
                     _logger.LogInformation(
-                        "[DEBUG][{Symbol}][{TF}] RR filter: RR {RR:F2} < minRR {MinRR:F2}: entry={Entry:F4}, sl={SL:F4}, tp1={TP1:F4} → SKIP",
-                        symbol, interval, rr, minRr, baseSignal.EntryPrice, baseSignal.StopLoss, tp1);
+                        $"🚫 RR filter: RR={rr:F2} < minRR={minRr:F2} (entry={baseSignal.EntryPrice:F4}, SL={baseSignal.StopLoss:F4}, TP1={tp1:F4}) → сигнал отброшен.");
+                    _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                     return null;
                 }
+
+                _logger.LogInformation(
+                    $"✅ RR OK: RR={rr:F2} ≥ minRR={minRr:F2}.");
             }
 
+            // Финальный красивый блок
+            decimal? tp1F = baseSignal.TakeProfits != null && baseSignal.TakeProfits.Count > 0
+                ? baseSignal.TakeProfits[0]
+                : null;
+            decimal? tp2F = baseSignal.TakeProfits != null && baseSignal.TakeProfits.Count > 1
+                ? baseSignal.TakeProfits[1]
+                : null;
+            decimal? tp3F = baseSignal.TakeProfits != null && baseSignal.TakeProfits.Count > 2
+                ? baseSignal.TakeProfits[2]
+                : null;
+
+            string dirEmoji = baseSignal.Side == SignalSide.Buy ? "🟢 LONG" : "🔴 SHORT";
+
             _logger.LogInformation(
-                "[DEBUG][{Symbol}][{TF}] FINAL SIGNAL side={Side} entry={Entry:F2} sl={SL:F2} reason={Reason}",
-                symbol, interval, baseSignal.Side, baseSignal.EntryPrice, baseSignal.StopLoss, baseSignal.Reason);
+$@"📌 Итоговый сигнал:
+   • Направление : {dirEmoji}
+   • Entry       : {baseSignal.EntryPrice:F4}
+   • Stop Loss   : {baseSignal.StopLoss:F4}
+   • TP1         : {(tp1F.HasValue ? tp1F.Value.ToString("F4") : "-")}
+   • TP2         : {(tp2F.HasValue ? tp2F.Value.ToString("F4") : "-")}
+   • TP3         : {(tp3F.HasValue ? tp3F.Value.ToString("F4") : "-")}
+   • Reason      : {baseSignal.Reason}");
+
+            _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
             return baseSignal;
         }

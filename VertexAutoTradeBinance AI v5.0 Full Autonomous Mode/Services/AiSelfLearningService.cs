@@ -17,10 +17,8 @@ namespace VertexAutoTradeBinance8.Services
         private DateTime _lastSnapshot = DateTime.MinValue;
         private readonly TimeSpan SnapshotInterval = TimeSpan.FromMinutes(15);
 
-
         private DateTime _lastHybridSnapshot = DateTime.MinValue;
         private readonly TimeSpan HybridInterval = TimeSpan.FromSeconds(60);
-
 
         // =====================================================================
         // CORE STORAGE v6
@@ -52,6 +50,19 @@ namespace VertexAutoTradeBinance8.Services
             ReadCommentHandling = JsonCommentHandling.Skip,
             DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
         };
+
+        // Единая модель файла для JSON
+        public class AiLearningFileModel
+        {
+            public DateTime SavedAt { get; set; } = DateTime.UtcNow;
+
+            public Dictionary<string, Dictionary<MarketRegime, RegimeStats>> Stats { get; set; }
+                = new(StringComparer.OrdinalIgnoreCase);
+
+            public List<MarketState> MarketStates { get; set; } = new();
+
+            public List<TradeHistoryEntry> Trades { get; set; } = new();
+        }
 
         public class MarketState
         {
@@ -85,7 +96,9 @@ namespace VertexAutoTradeBinance8.Services
             public decimal RiskWeight { get; set; } = 1.0m;
         }
 
+        // =====================================================================
         // HYBRID: универсальный триггер логирования
+        // =====================================================================
         public void RecordMarketStateTriggered(
             string reason,
             string symbol,
@@ -144,9 +157,8 @@ namespace VertexAutoTradeBinance8.Services
             );
         }
 
-
         // =====================================================================
-        // MARKET STATE
+        // MARKET STATE (legacy, если хочешь логировать без reason)
         // =====================================================================
         public void RecordMarketState(
             string symbol,
@@ -381,13 +393,31 @@ namespace VertexAutoTradeBinance8.Services
         {
             try
             {
-                var json = JsonSerializer.Serialize(_stats, new JsonSerializerOptions
+                AiLearningFileModel model;
+
+                lock (_lock)
                 {
-                    WriteIndented = true
-                });
+                    model = new AiLearningFileModel
+                    {
+                        SavedAt = DateTime.UtcNow,
+                        Stats = new Dictionary<string, Dictionary<MarketRegime, RegimeStats>>(_stats, StringComparer.OrdinalIgnoreCase),
+                        MarketStates = _marketStates.ToList(),
+                        Trades = _tradeHistory.ToList()
+                    };
+                }
+
+                var json = JsonSerializer.Serialize(model, JsonOptions);
+
+                Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
 
                 File.WriteAllText(FilePath, json);
                 File.WriteAllText(BackupPath, json);
+
+                _logger.LogInformation(
+                    "[AI] Saved learning model: states={States}, trades={Trades}, regimes={Regimes}",
+                    model.MarketStates.Count,
+                    model.Trades.Count,
+                    model.Stats.Count);
             }
             catch (Exception ex)
             {
@@ -399,102 +429,48 @@ namespace VertexAutoTradeBinance8.Services
         {
             try
             {
-                // === 1) Авто-создание файла, если он отсутствует ===
                 if (!File.Exists(FilePath))
                 {
-                    var empty = JsonSerializer.Serialize(
-                        new Dictionary<string, Dictionary<MarketRegime, RegimeStats>>(),
-                        JsonOptions);
-
-                    File.WriteAllText(FilePath, empty);
-                    File.WriteAllText(BackupPath, empty);
-
-                    _logger.LogInformation("[AI] Создан новый пустой ai_learning.json");
+                    Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+                    // создаём пустой файл по новой структуре
+                    Save();
+                    _logger.LogWarning("[AI] Created new ai_learning.json (initial)");
                     return;
                 }
-
 
                 var json = File.ReadAllText(FilePath);
+                var model = JsonSerializer.Deserialize<AiLearningFileModel>(json, JsonOptions);
 
-                // Загружаем сырые данные как Dictionary<string, JsonElement>
-                var raw = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json, JsonOptions);
-                if (raw == null)
+                if (model == null)
                     return;
 
-                // Создаём чистый контейнер
-                var cleaned = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
-
-                foreach (var kv in raw)
+                lock (_lock)
                 {
-                    // 🎯 ВАЖНО: фильтруем весь мусор
-                    if (kv.Key.Equals("CreatedAtUtc", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (kv.Key.Equals("SnapshotVersion", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (kv.Key.Equals("Meta", StringComparison.OrdinalIgnoreCase)) continue;
-
-                    cleaned[kv.Key] = kv.Value;
-                }
-
-                // Теперь сериализуем очищенный JSON
-                var purifiedJson = JsonSerializer.Serialize(cleaned, JsonOptions);
-
-                // И десериализуем в нашу структуру
-                var data = JsonSerializer.Deserialize<
-                    Dictionary<string, Dictionary<MarketRegime, RegimeStats>>
-                >(purifiedJson, JsonOptions);
-
-                if (data != null)
-                {
-                    foreach (var kv in data)
+                    _stats.Clear();
+                    foreach (var kv in model.Stats)
                         _stats[kv.Key] = kv.Value;
 
-                    return;
+                    _marketStates.Clear();
+                    if (model.MarketStates != null && model.MarketStates.Count > 0)
+                        _marketStates.AddRange(model.MarketStates);
+
+                    _tradeHistory.Clear();
+                    if (model.Trades != null && model.Trades.Count > 0)
+                        _tradeHistory.AddRange(model.Trades);
                 }
+
+                _logger.LogInformation(
+                    "[AI] Loaded model: states={States}, trades={Trades}, regimes={Regimes}",
+                    _marketStates.Count,
+                    _tradeHistory.Count,
+                    _stats.Count);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[AI] LOAD ERROR → попытка отката");
-            }
-
-            // === БЭКАП ===
-            try
-            {
-                if (!File.Exists(BackupPath))
-                    return;
-
-                var json = File.ReadAllText(BackupPath);
-
-                // Повторяем процесс загрузки бэкапа
-                var raw = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json, JsonOptions);
-                if (raw == null)
-                    return;
-
-                var cleaned = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
-                foreach (var kv in raw)
-                {
-                    if (kv.Key.Equals("CreatedAtUtc", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (kv.Key.Equals("SnapshotVersion", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (kv.Key.Equals("Meta", StringComparison.OrdinalIgnoreCase)) continue;
-
-                    cleaned[kv.Key] = kv.Value;
-                }
-
-                var purifiedJson = JsonSerializer.Serialize(cleaned, JsonOptions);
-
-                var data = JsonSerializer.Deserialize<
-                    Dictionary<string, Dictionary<MarketRegime, RegimeStats>>
-                >(purifiedJson, JsonOptions);
-
-                if (data != null)
-                {
-                    foreach (var kv in data)
-                        _stats[kv.Key] = kv.Value;
-                }
-            }
-            catch
-            {
-                // ignored
+                _logger.LogError(ex, "[AI] LOAD ERROR");
             }
         }
+
         // =====================================================================
         // PERIODIC SNAPSHOT (каждые 15 минут)
         // =====================================================================
