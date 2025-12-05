@@ -1,0 +1,112 @@
+﻿@page "/missed-trades"
+
+@using VertexAutoTradeBinance8.Web.Services
+@using VertexAutoTradeBinance8.Web.Models
+@inject MissedTradeFileService MissedService
+
+<h2 class="text-3xl font-bold mb-6">Пропущенные сделки</h2>
+
+@if (_records == null)
+{
+    <div>Загрузка...</div>
+    return;
+}
+
+@if (_records.Count == 0)
+{
+    <div>Файл пуст.</div>
+    return;
+}
+
+<!-- ==== КАРТОЧКИ ПОСЛЕДНИХ СДЕЛОК ==== -->
+<h3 class="text-2xl font-bold mb-3 mt-10">Последние пропущенные сделки</h3>
+
+<div class="missed-grid">
+    @foreach (var r in _records.OrderByDescending(x => x.Time).Take(40))
+    {
+        <div class="missed-card">
+            <div class="missed-header">
+                <div>
+                    <div class="missed-symbol">@r.Symbol</div>
+                    <div class="missed-time">@r.Time.ToLocalTime()</div>
+                </div>
+
+                <span class="missed-badge @(r.Reason == "BelowMinNotional" ? "badge-min" : "badge-balance")">
+                    @TranslateReason(r.Reason)
+                </span>
+            </div>
+
+            <div class="missed-body">
+                <div>Вход: <b>@r.Entry</b></div>
+                <div>SL: <b>@r.StopLoss</b></div>
+                <div>Баланс: <span class="value-green">@r.FreeBalance</span></div>
+                <div>Нужно: <span class="value-yellow">@r.RequiredNotional</span></div>
+                <div>MinNotional: <span class="value-red">@r.MinNotional</span></div>
+            </div>
+        </div>
+    }
+</div>
+
+
+<!-- ==== ГРУППИРОВКА ==== -->
+<h3 class="text-2xl font-bold mb-3 mt-10">По символам</h3>
+
+<div class="space-y-4">
+    @foreach (var kv in GroupedBySymbol)
+    {
+        var symbol = kv.Key;
+        var list = kv.Value;
+
+        <div class="missed-expand">
+            <button class="w-full flex justify-between items-center text-left"
+                    @onclick="@(() => Toggle(symbol))">
+                <div class="missed-symbol">@symbol</div>
+                <div class="missed-time">@list.Count пропусков</div>
+            </button>
+
+            @if (Expanded.Contains(symbol))
+            {
+                <div class="mt-4">
+                    @foreach (var r in list.OrderByDescending(x => x.Time))
+                    {
+                        <div class="missed-expand-entry">
+                            <div class="missed-time">@r.Time.ToLocalTime()</div>
+                            <div class="value-red">@TranslateReason(r.Reason)</div>
+                            <div>Entry: <b>@r.Entry</b></div>
+                            <div>Balance: <b class="value-green">@r.FreeBalance</b></div>
+                            <div>Need: <b class="value-yellow">@r.RequiredNotional</b></div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private List<MissedTradeRecord>? _records;
+    private Dictionary<string, List<MissedTradeRecord>> GroupedBySymbol;
+    private HashSet<string> Expanded = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _records = await MissedService.LoadAsync();
+        GroupedBySymbol = _records
+            .GroupBy(x => x.Symbol)
+            .ToDictionary(g => g.Key, g => g.ToList());
+    }
+
+    void Toggle(string symbol)
+    {
+        if (!Expanded.Add(symbol))
+            Expanded.Remove(symbol);
+    }
+
+    string TranslateReason(string r)
+        => r switch
+        {
+            "BelowMinNotional" => "Меньше минимальная сумма сделки",
+            "InsufficientBalance" => "Недостаточно баланса",
+            _ => r
+        };
+}

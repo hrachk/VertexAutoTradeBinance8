@@ -1,152 +1,477 @@
 ﻿@page "/ai-dashboard"
 
-@using VertexAutoTradeBinance8.Services
 @using VertexAutoTradeBinance8.Models
+@using VertexAutoTradeBinance8.Services
+@using VertexAutoTradeBinance8.Web.Services
+@inject AiLearningFileService FileLoader
 
-@inject AiSelfLearningService AiLearning
+@implements IDisposable
 
-<h2 class="text-2xl font-bold mb-4">AI Dashboard</h2>
+<div class="px-6 py-4">
 
-<!-- ===================== 1. WINRATE по режимам ===================== -->
-@if (Stats == null)
-{
-    <p>Loading stats...</p>
-}
-else
-{
-    <div class="p-4 bg-blue-900/30 rounded-lg mb-4">
-        <h3 class="font-bold mb-2">WinRate по Market Regime</h3>
+    <h2 class="text-3xl font-bold mb-6">AI Dashboard</h2>
 
-        @if (Stats.Symbols == null || Stats.Symbols.Count == 0)
-        {
-            <p class="text-sm">Пока нет данных.</p>
-        }
-        else
-        {
-            @foreach (var s in Stats.Symbols)
+    @if (Stats == null)
+    {
+        <div class="text-red-400 text-lg">⚠ JSON не загружен</div>
+    }
+    else
+    {
+        <!-- SUMMARY GRID -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+
+            @SummaryCard("Символов", Stats.Meta.Symbols.ToString())
+            @SummaryCard("MarketStates", Stats.Meta.MarketStates.ToString())
+            @SummaryCard("Trades", Stats.Meta.Trades.ToString())
+
+            @SnapshotAgeCard()
+
+        </div>
+
+    
+        <!-- WINRATE SECTION -->
+        <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700 mb-8">
+
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-bold text-xl">WinRate по Market Regime</h3>
+                <span class="text-xs text-slate-400">Symbols: @Stats.Symbols.Count</span>
+            </div>
+
+            @if (Stats.Symbols.Count == 0)
             {
-                <div class="mt-2 p-2 border-b border-gray-700">
-                    <div class="font-semibold">@s.Symbol</div>
-                    <ul class="text-sm ml-4">
-                        @foreach (var r in s.Regimes)
-                        {
-                            var wr = r.Trades > 0
-                            ? (double)r.Wins / r.Trades * 100.0
-                            : 0.0;
+                <div class="text-slate-400">Нет данных по сделкам.</div>
+            }
+            else
+            {
+                <div class="wr-grid">
+                    @foreach (var s in Stats.Symbols)
+                    {
+                        <div class="wr-card">
 
-                            <li>
-                                @r.Regime — @wr.ToString("F1")% (@r.Trades trades)
-                            </li>
-                        }
-                    </ul>
+                            <div class="font-bold text-lg mb-2">@s.Symbol</div>
+
+                            <div class="space-y-2 text-sm">
+                                @foreach (var r in s.Regimes.OrderByDescending(x => x.Trades))
+                                {
+                                    var wr = r.Trades > 0 ? (double)r.Wins / r.Trades * 100.0 : 0;
+
+                                    <div class="flex justify-between items-center">
+                                        <div class="flex flex-col leading-tight">
+                                            <span class="font-semibold">@r.Regime</span>
+                                            <span class="text-slate-400 text-xs">@r.Trades trades</span>
+                                        </div>
+
+                                        <div class="text-right font-bold @(wr >= 55 ? "text-emerald-400" : wr >= 45 ? "text-amber-400" : "text-red-400")">
+                                            @wr.ToString("F1")%
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+
+                        </div>
+                    }
                 </div>
             }
-        }
-    </div>
-}
+        </div>
 
-<!-- ===================== 2. Live Market States ===================== -->
-@if (States == null)
-{
-    <p>Loading market states...</p>
-}
-else
-{
-    <div class="mb-4">
-        <h3 class="font-bold mb-2">Live Market States</h3>
 
-        @if (States.Count == 0)
-        {
-            <p class="text-sm">Нет MarketState данных (бот ещё не успел накопить).</p>
-        }
-        else
-        {
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-                @foreach (var st in States)
+        <!-- MARKET STATES -->
+        <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700 mb-8">
+
+            <div class="flex justify-between items-center mb-3">
+                <h3 class="font-bold text-xl">Live Market States</h3>
+                <span class="text-xs text-slate-400">последние @MarketStates.Count</span>
+            </div>
+
+            <button @onclick="ToggleMarket"
+                    class="px-3 py-1 mb-3 text-xs rounded bg-slate-800 hover:bg-slate-700 border border-slate-600">
+                @(ShowMarket ? "Свернуть" : "Развернуть")
+            </button>
+
+            @if (ShowMarket)
+            {
+                <div class="market-grid">
+
+                    @foreach (var st in MarketStates)
+                    {
+                        <div class="market-card">
+
+                            <div class="flex justify-between mb-2">
+                                <div>
+                                    <b>@st.Symbol</b>
+                                    <span class="text-slate-400 text-xs">(@st.Timeframe)</span>
+                                </div>
+
+                                <span class="reason-badge">@st.Reason</span>
+                            </div>
+
+                            <div class="text-xs space-y-1">
+                                <div>Slope: <b>@st.TrendSlopePercent.ToString("F3")</b></div>
+                                <div>Vol: <b>@st.VolatilityPercent.ToString("F3")</b></div>
+                                <div>ATR: <b>@st.Atr.ToString("F2")</b></div>
+                                <div>Conf: <b>@st.Confidence.ToString("P0")</b></div>
+                            </div>
+
+                            <div class="timestamp">
+                                @st.Time.ToLocalTime()
+                            </div>
+
+                        </div>
+                    }
+
+                </div>
+            }
+        </div>
+
+ 
+        <!-- TRADES -->
+        <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700 mb-8">
+
+            <div class="flex justify-between items-center mb-3">
+                <h3 class="font-bold text-xl">Последние сделки</h3>
+                <span class="text-xs text-slate-400">всего @Trades.Count</span>
+
+                <button @onclick="ToggleTrades"
+                        class="px-3 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 border border-slate-600 ml-3">
+                    @(ShowTrades ? "Свернуть" : "Развернуть")
+                </button>
+            </div>
+
+            @if (ShowTrades)
+            {
+                @if (Trades.Count == 0)
                 {
-                    <div class="p-2 bg-purple-900/20 rounded text-sm">
-                        <div>
-                            <b>@st.Symbol</b> (@st.Timeframe) → @st.Regime
-                        </div>
-                        <div>Slope: @st.TrendSlopePercent.ToString("F4")</div>
-                        <div>Volatility: @st.VolatilityPercent.ToString("F4")</div>
-                        <div>ATR: @st.Atr</div>
-                        <div>Conf: @st.Confidence.ToString("P0")</div>
-                        <div class="text-xs text-gray-400">
-                            @st.Time.ToLocalTime()
-                        </div>
+                    <div class="text-slate-400">Сделок нет.</div>
+                }
+                else
+                {
+                    <div class="trade-grid">
+                        @foreach (var t in Trades)
+                        {
+                            var isWin = t.Pnl >= 0;
+
+                            <div class="trade-card">
+
+                                <div class="flex justify-between mb-1 items-center">
+                                    <span class="trade-symbol">@t.Symbol</span>
+                                    <span class="side-badge @(t.Side == SignalSide.Buy ? "buy-badge" : "sell-badge")">
+                                        @t.Side
+                                    </span>
+                                </div>
+
+                                <div class="text-xs space-y-1">
+                                    <div>Entry: <b>@t.Entry.ToString("F4")</b></div>
+                                    <div>Exit: <b>@t.Exit.ToString("F4")</b></div>
+                                    <div>
+                                        PnL:
+                                        <b class="@(isWin ? "text-emerald-400" : "text-red-400")">
+                                            @t.Pnl.ToString("F4")
+                                        </b>
+                                    </div>
+                                    <div>Regime: <b>@t.Regime</b></div>
+                                </div>
+
+                                <div class="trade-timestamp">@t.Time.ToLocalTime()</div>
+
+                            </div>
+                        }
                     </div>
                 }
-            </div>
-        }
-    </div>
-}
+            }
+        </div>
 
-<!-- ===================== 3. Последние сделки ===================== -->
-@if (Trades == null)
-{
-    <p>Loading trades...</p>
-}
-else
-{
-    <div class="mb-4">
-        <h3 class="font-bold mb-2">Последние сделки (AI Training)</h3>
-
-        @if (Trades.Count == 0)
-        {
-            <p class="text-sm">Сделок ещё не было.</p>
-        }
-        else
-        {
-            <table class="min-w-full text-sm">
-                <thead>
-                    <tr class="border-b border-gray-700">
-                        <th class="text-left pr-2">Time</th>
-                        <th class="text-left pr-2">Symbol</th>
-                        <th class="text-left pr-2">Side</th>
-                        <th class="text-right pr-2">Entry</th>
-                        <th class="text-right pr-2">Exit</th>
-                        <th class="text-right pr-2">PnL</th>
-                        <th class="text-left pr-2">Regime</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var t in Trades)
-                    {
-                        var isWin = t.Pnl >= 0;
-                        <tr class="border-b border-gray-800">
-                            <td>@t.Time.ToLocalTime()</td>
-                            <td>@t.Symbol</td>
-                            <td>@t.Side</td>
-                            <td class="text-right">@t.Entry.ToString("F4")</td>
-                            <td class="text-right">@t.Exit.ToString("F4")</td>
-                            <td class="text-right @(isWin ? "text-green-400" : "text-red-400")">
-                                @t.Pnl.ToString("F4")
-                            </td>
-                            <td>@t.Regime</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        }
-    </div>
-}
+    }
+</div>
 
 @code {
 
+    bool ShowMarket = true;
+
+    void ToggleMarket()
+    {
+        ShowMarket = !ShowMarket;
+    }
+
+    bool ShowTrades = true;
+
+    void ToggleTrades()
+    {
+        ShowTrades = !ShowTrades;
+    }
+
     private AiLearningSnapshot? Stats;
-    private List<AiSelfLearningService.MarketState>? States;
-    private List<AiSelfLearningService.TradeHistoryEntry>? Trades;
+    private List<AiSelfLearningService.MarketState> MarketStates = new();
+    private List<AiSelfLearningService.TradeHistoryEntry> Trades = new();
+
+
+
+    private PeriodicTimer? _timer;
+    private readonly CancellationTokenSource _cts = new();
 
     protected override async Task OnInitializedAsync()
     {
-        // 1) Снимок (winrate)
-        Stats = AiLearning.ExportState();
-
-        // 2) Market states (live monitoring)
-        States = AiLearning.GetRecentStates(150).ToList();
-
-        // 3) Сделки
-        Trades = AiLearning.GetRecentTrades(100).ToList();
+        await LoadAsync();
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        _ = AutoRefreshLoop();
     }
+
+    private async Task AutoRefreshLoop()
+    {
+        while (await _timer!.WaitForNextTickAsync(_cts.Token))
+        {
+            await LoadAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private Task LoadAsync()
+    {
+        var snap = FileLoader.LoadSnapshot();
+        if (snap == null) return Task.CompletedTask;
+
+        Stats = snap;
+        MarketStates = snap.MarketStates.OrderByDescending(x => x.Time).Take(150).ToList();
+
+        // ================================
+        // 🔥 TEST TRADES — для визуализации===================================================================================
+        // Удалим после проверки дизайна.
+        // ================================
+        if (Trades.Count == 0)
+        {
+            Trades = new List<AiSelfLearningService.TradeHistoryEntry>
+    {
+        new()
+        {
+            Symbol = "BTCUSDT",
+            Side = SignalSide.Buy,
+            Entry = 42950.22m,
+            Exit = 43110.55m,
+            Pnl = 160.33m,
+            Regime = MarketRegime.StrongUpTrend,
+            Time = DateTime.UtcNow.AddMinutes(-10)
+        },
+
+        new()
+        {
+            Symbol = "ETHUSDT",
+            Side = SignalSide.Sell,
+            Entry = 2275.50m,
+            Exit = 2251.10m,
+            Pnl = 24.40m,
+            Regime = MarketRegime.DownTrend,
+            Time = DateTime.UtcNow.AddMinutes(-20)
+        },
+
+        new()
+        {
+            Symbol = "SOLUSDT",
+            Side = SignalSide.Buy,
+            Entry = 138.90m,
+            Exit = 137.40m,
+            Pnl = -1.50m,
+            Regime = MarketRegime.Range,
+            Time = DateTime.UtcNow.AddMinutes(-35)
+        },
+
+        new()
+        {
+            Symbol = "XRPUSDT",
+            Side = SignalSide.Sell,
+            Entry = 0.6075m,
+            Exit = 0.5982m,
+            Pnl = 9.30m,
+            Regime = MarketRegime.StrongDownTrend,
+            Time = DateTime.UtcNow.AddMinutes(-50)
+        }
+    };
+        }
+        // ==========================================
+        // 🔥 TEST WINRATE DATA — только для UI
+        // удалить после проверки дизайна
+        // ==========================================
+        if (Stats != null && (Stats.Symbols == null || Stats.Symbols.Count == 0))
+        {
+            Stats.Symbols = new List<AiSymbolStatsDto>
+            {
+                new AiSymbolStatsDto
+                {
+                    Symbol = "BTCUSDT",
+                    Regimes = new List<AiRegimeStatsDto>
+                    {
+                        new AiRegimeStatsDto
+                        {
+                            Regime = MarketRegime.StrongUpTrend,
+                            Trades = 27,
+                            Wins = 18,
+                            Losses = 9,
+                            AvgPnl = 14.22m,
+                            SumRr = 8.1m,
+                            MaxRr = 3.2m,
+                            MinRr = -1.4m,
+                            LastUpdateUtc = DateTime.UtcNow.AddMinutes(-5)
+                        },
+                        new AiRegimeStatsDto
+                        {
+                            Regime = MarketRegime.Range,
+                            Trades = 18,
+                            Wins = 8,
+                            Losses = 10,
+                            AvgPnl = -2.4m,
+                            SumRr = -3.3m,
+                            MaxRr = 1.2m,
+                            MinRr = -2.9m,
+                            LastUpdateUtc = DateTime.UtcNow.AddMinutes(-8)
+                        },
+                        new AiRegimeStatsDto
+                        {
+                            Regime = MarketRegime.StrongDownTrend,
+                            Trades = 14,
+                            Wins = 6,
+                            Losses = 8,
+                            AvgPnl = -1.1m,
+                            SumRr = -1.8m,
+                            MaxRr = 2.3m,
+                            MinRr = -3.8m,
+                            LastUpdateUtc = DateTime.UtcNow.AddMinutes(-15)
+                        }
+                    }
+                },
+
+                new AiSymbolStatsDto
+                {
+                    Symbol = "ETHUSDT",
+                    Regimes = new List<AiRegimeStatsDto>
+                    {
+                        new AiRegimeStatsDto
+                        {
+                            Regime = MarketRegime.Range,
+                            Trades = 22,
+                            Wins = 13,
+                            Losses = 9,
+                            AvgPnl = 4.1m,
+                            LastUpdateUtc = DateTime.UtcNow.AddMinutes(-12)
+                        },
+                        new AiRegimeStatsDto
+                        {
+                            Regime = MarketRegime.StrongUpTrend,
+                            Trades = 9,
+                            Wins = 7,
+                            Losses = 2,
+                            AvgPnl = 18.5m,
+                            LastUpdateUtc = DateTime.UtcNow.AddMinutes(-20)
+                        }
+                    }
+                }
+            };
+
+            // фиксируем в Meta корректное количество символов
+            Stats.Meta.Symbols = Stats.Symbols.Count;
+        }
+
+
+        // ==========================================
+        // 🔥 TEST MARKET STATES — только для UI
+        // удалить после проверки дизайна
+        // ==========================================
+        if (MarketStates == null || MarketStates.Count == 0)
+        {
+            MarketStates = new List<AiSelfLearningService.MarketState>
+    {
+        new()
+        {
+            Symbol = "BTCUSDT",
+            Timeframe = "OneMinute",
+            Regime = MarketRegime.StrongUpTrend,
+            TrendSlopePercent = 0.0123m,
+            VolatilityPercent = 0.0045m,
+            Atr = 39.95m,
+            Confidence = 0.78m,
+            Time = DateTime.UtcNow.AddSeconds(-15),
+            Reason = "PERIODIC_30s"
+        },
+        new()
+        {
+            Symbol = "ETHUSDT",
+            Timeframe = "FiveMinutes",
+            Regime = MarketRegime.Range,
+            TrendSlopePercent = -0.0021m,
+            VolatilityPercent = 0.0059m,
+            Atr = 12.44m,
+            Confidence = 0.51m,
+            Time = DateTime.UtcNow.AddSeconds(-25),
+            Reason = "BASE_REGIME"
+        },
+        new()
+        {
+            Symbol = "SOLUSDT",
+            Timeframe = "OneMinute",
+            Regime = MarketRegime.StrongDownTrend,
+            TrendSlopePercent = -0.0188m,
+            VolatilityPercent = 0.0121m,
+            Atr = 3.81m,
+            Confidence = 0.62m,
+            Time = DateTime.UtcNow.AddSeconds(-40),
+            Reason = "MICRO_SIGNAL"
+        },
+        new()
+        {
+            Symbol = "BNBUSDT",
+            Timeframe = "FifteenMinutes",
+            Regime = MarketRegime.Squeeze,
+            TrendSlopePercent = 0.0081m,
+            VolatilityPercent = 0.0033m,
+            Atr = 5.13m,
+            Confidence = 0.84m,
+            Time = DateTime.UtcNow.AddSeconds(-50),
+            Reason = "SOFT_ENTRY"
+        },
+        new()
+        {
+            Symbol = "XRPUSDT",
+            Timeframe = "OneMinute",
+            Regime = MarketRegime.Range,
+            TrendSlopePercent = -0.0004m,
+            VolatilityPercent = 0.0012m,
+            Atr = 0.043m,
+            Confidence = 0.39m,
+            Time = DateTime.UtcNow.AddSeconds(-70),
+            Reason = "AI_PATTERN_BLOCK"
+        }
+    };
+        }
+
+        //===========================END TEST BLOKS
+
+
+       // Trades = snap.Trades.OrderByDescending(x => x.Time).Take(150).ToList();
+
+        return Task.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _timer?.Dispose();
+    }
+
+    RenderFragment SummaryCard(string title, string value) => __builder =>
+    {
+        <div class="p-3 rounded-xl bg-slate-900/60 border border-slate-700">
+            <div class="text-xs text-slate-400">@title</div>
+            <div class="text-2xl font-bold">@value</div>
+        </div>
+        ;
+    };
+
+    RenderFragment SnapshotAgeCard() => __builder =>
+    {
+        var age = DateTime.UtcNow - Stats!.CreatedAtUtc;
+
+        <div class="p-3 rounded-xl bg-slate-900/60 border border-slate-700">
+            <div class="text-xs text-slate-400">Возраст snapshot</div>
+            <div class="text-2xl font-bold">@((int)age.TotalMinutes) мин</div>
+            <div class="text-xs text-slate-400">v@Stats.SnapshotVersion — @Stats.Meta.Engine</div>
+        </div>
+        ;
+    };
 }

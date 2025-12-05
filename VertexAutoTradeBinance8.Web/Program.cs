@@ -32,6 +32,8 @@ builder.Services.AddSingleton<AiCorrelationService>();
 // Учебный модуль
 builder.Services.AddSingleton<AiSelfLearningService>();
 builder.Services.AddSingleton<AiLearningFileService>();
+builder.Services.AddSingleton<MissedTradeFileService>();
+
 
 // Режим рынка (AI Smart Regime)
 builder.Services.AddSingleton<AiMarketRegimeService>();
