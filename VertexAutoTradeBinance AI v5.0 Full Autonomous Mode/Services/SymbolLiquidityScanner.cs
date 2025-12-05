@@ -1,6 +1,4 @@
-﻿using Binance.Net.Clients;
-using Binance.Net.Enums;
-using Microsoft.Extensions.Logging;
+﻿using Binance.Net.Enums;
 
 namespace VertexAutoTradeBinance8.Services
 {

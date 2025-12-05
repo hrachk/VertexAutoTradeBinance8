@@ -3,14 +3,27 @@
 namespace VertexAutoTradeBinance8.Services
 {
     /// <summary>
-    /// Snapshot state for QUANT-REALTIME (v6)
+    /// Snapshot state for QUANT-REALTIME (v8)
+    /// Единый DTO:
+    ///  - Meta
+    ///  - Symbols (агрегированная статистика по режимам)
+    ///  - MarketStates (последние N состояний рынка)
+    ///  - Trades (последние N сделок)
     /// </summary>
     public class AiLearningSnapshot
     {
         public DateTime CreatedAtUtc { get; set; }
         public int SnapshotVersion { get; set; }
+
         public AiLearningMeta Meta { get; set; } = new();
+
         public List<AiSymbolStatsDto> Symbols { get; set; } = new();
+
+        // последние N состояний рынка для Dashboard / анализа
+        public List<AiSelfLearningService.MarketState> MarketStates { get; set; } = new();
+
+        // последние N сделок для Dashboard / анализа
+        public List<AiSelfLearningService.TradeHistoryEntry> Trades { get; set; } = new();
     }
 
     public class AiLearningMeta
@@ -20,7 +33,7 @@ namespace VertexAutoTradeBinance8.Services
         public int MarketStates { get; set; }
         public int Trades { get; set; }
     }
-     
+
     public class AiSymbolStatsDto
     {
         public string Symbol { get; set; } = "";
@@ -30,10 +43,11 @@ namespace VertexAutoTradeBinance8.Services
     public class AiRegimeStatsDto
     {
         public MarketRegime Regime { get; set; }
+
         public int Trades { get; set; }
         public int Wins { get; set; }
         public int Losses { get; set; }
-        public decimal AvgPnl { get; set; } 
+        public decimal AvgPnl { get; set; }
 
         public decimal SumRr { get; set; }
         public decimal MaxRr { get; set; }

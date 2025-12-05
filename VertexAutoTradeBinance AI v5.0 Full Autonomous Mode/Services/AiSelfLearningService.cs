@@ -1,6 +1,5 @@
 ﻿using System.Text.Json;
 using VertexAutoTradeBinance8.Models;
-using static VertexAutoTradeBinance8.Services.AiLearningSnapshot;
 
 namespace VertexAutoTradeBinance8.Services
 {
@@ -139,11 +138,13 @@ namespace VertexAutoTradeBinance8.Services
             public int Trades { get; set; }
             public int Wins { get; set; }
             public int Count { get; set; }
-       
+
             public int Losses { get; set; }
             public decimal AvgPnl { get; set; }
             public decimal RiskWeight { get; set; } = 1.0m;
-            public MarketRegime Regime { get; set; }
+
+            // 🔥 ВАЖНО: явное поле режима для snapshot / Dashboard
+            public MarketRegime Regime { get; set; } = MarketRegime.Unknown;
         }
 
         // =====================================================================
@@ -282,7 +283,7 @@ namespace VertexAutoTradeBinance8.Services
             UpdateStats(symbol, regime, pnl);
 
             // Для сделок — сразу пишем на диск (они редкие, это безопасно)
-            Save();
+            Save(force: true);
 
             bool win = side == SignalSide.Buy ? exit > entry : exit < entry;
 
@@ -308,8 +309,15 @@ namespace VertexAutoTradeBinance8.Services
 
             if (!regimes.TryGetValue(regime, out var s))
             {
-                s = new RegimeStats();
+                s = new RegimeStats
+                {
+                    Regime = regime
+                };
                 regimes[regime] = s;
+            }
+            else if (s.Regime == MarketRegime.Unknown)
+            {
+                s.Regime = regime;
             }
 
             s.Count++;
@@ -324,6 +332,8 @@ namespace VertexAutoTradeBinance8.Services
                 s.RiskWeight = Math.Clamp(wr, 0.65m, 1.35m);
             }
         }
+
+
 
         // =====================================================================
         // AI RISK (для StrategyEngine / AiLeverage / RiskManager)
@@ -386,42 +396,42 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         // EXPORT STATE (для TradingWorker v6 / AiModelSnapshotService)
         // =====================================================================
-       /* public AiLearningSnapshot ExportState()
-        {
-            lock (_lock)
-            {
-                var snap = new AiLearningSnapshot
-                {
-                    CreatedAtUtc = DateTime.UtcNow
-                };
+        /* public AiLearningSnapshot ExportState()
+         {
+             lock (_lock)
+             {
+                 var snap = new AiLearningSnapshot
+                 {
+                     CreatedAtUtc = DateTime.UtcNow
+                 };
 
-                foreach (var (symbol, regimes) in _stats)
-                {
-                    var symDto = new AiLearningSnapshot.AiSymbolStatsDto
-                    {
-                        Symbol = symbol
-                    };
+                 foreach (var (symbol, regimes) in _stats)
+                 {
+                     var symDto = new AiLearningSnapshot.AiSymbolStatsDto
+                     {
+                         Symbol = symbol
+                     };
 
-                    foreach (var (regime, st) in regimes)
-                    {
-                        symDto.Regimes.Add(new AiLearningSnapshot.AiRegimeStatsDto
-                        {
-                            Regime = regime,
-                            Trades = st.Count,
-                            Wins = st.Wins,
-                            SumRr = st.AvgPnl * st.Count,
-                            MaxRr = 0,
-                            MinRr = 0,
-                            LastUpdateUtc = DateTime.UtcNow
-                        });
-                    }
+                     foreach (var (regime, st) in regimes)
+                     {
+                         symDto.Regimes.Add(new AiLearningSnapshot.AiRegimeStatsDto
+                         {
+                             Regime = regime,
+                             Trades = st.Count,
+                             Wins = st.Wins,
+                             SumRr = st.AvgPnl * st.Count,
+                             MaxRr = 0,
+                             MinRr = 0,
+                             LastUpdateUtc = DateTime.UtcNow
+                         });
+                     }
 
-                    snap.Symbols.Add(symDto);
-                }
+                     snap.Symbols.Add(symDto);
+                 }
 
-                return snap;
-            }
-        }*/
+                 return snap;
+             }
+         }*/
         public AiLearningSnapshot ExportState()
         {
             lock (_lock)
@@ -456,6 +466,7 @@ namespace VertexAutoTradeBinance8.Services
                     {
                         regimes[r.Regime] = new RegimeStats
                         {
+                            Regime = r.Regime,
                             Count = r.Trades,
                             Wins = r.Wins,
                             Losses = r.Trades - r.Wins,
@@ -467,10 +478,11 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
+
         // =====================================================================
         // SAVE / LOAD (v7 – с Meta-блоком, но совместимо со старым форматом)
         // =====================================================================
-        private void Save()
+        private void Save(bool force = true)
         {
             try
             {
@@ -478,36 +490,41 @@ namespace VertexAutoTradeBinance8.Services
                 if (!string.IsNullOrWhiteSpace(dir))
                     Directory.CreateDirectory(dir);
 
-                // Корневой объект:
-                //  • ключи-символы → RegimeStats (как раньше)
-                //  • служебные поля → CreatedAtUtc / SnapshotVersion / Meta
-                var root = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+                AiLearningSnapshot snapshot;
 
-                foreach (var kv in _stats)
+                lock (_lock)
                 {
-                    root[kv.Key] = kv.Value; // Dictionary<MarketRegime, RegimeStats>
+                    // ⚠ защита от убийства данных пустым snapshot
+                    if (!force &&
+                        _stats.Count == 0 &&
+                        _marketStates.Count == 0 &&
+                        _tradeHistory.Count == 0)
+                    {
+                        // Нечего сохранять — лучше вообще не трогать существующий файл
+                        return;
+                    }
+
+                    snapshot = BuildSnapshot();
                 }
 
-                root["CreatedAtUtc"] = DateTime.UtcNow;
-                root["SnapshotVersion"] = 7;
-                root["Meta"] = new
-                {
-                    Engine = "AiSelfLearningService.v7",
-                    Symbols = _stats.Count,
-                    MarketStates = _marketStates.Count,
-                    Trades = _tradeHistory.Count
-                };
-
-                var json = JsonSerializer.Serialize(root, JsonOptions);
+                var json = JsonSerializer.Serialize(snapshot, JsonOptions);
 
                 File.WriteAllText(FilePath, json);
-                File.WriteAllText(BackupPath, json);
+                File.Copy(FilePath, BackupPath, overwrite: true);
+
+                _logger.LogInformation(
+                    "[AI] Snapshot saved v{Version}: symbols={Symbols}, trades={Trades}, states={States}",
+                    snapshot.SnapshotVersion,
+                    snapshot.Meta.Symbols,
+                    snapshot.Meta.Trades,
+                    snapshot.Meta.MarketStates);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[AI] SAVE ERROR");
             }
         }
+
 
         private void Load()
         {
@@ -517,128 +534,73 @@ namespace VertexAutoTradeBinance8.Services
                 if (!string.IsNullOrWhiteSpace(dir))
                     Directory.CreateDirectory(dir);
 
-                // === 1) Авто-создание файла, если он отсутствует ===
                 if (!File.Exists(FilePath))
                 {
-                    var emptyRoot = new Dictionary<string, object>
-                    {
-                        ["CreatedAtUtc"] = DateTime.UtcNow,
-                        ["SnapshotVersion"] = 7,
-                        ["Meta"] = new { Engine = "AiSelfLearningService.v7", Symbols = 0, MarketStates = 0, Trades = 0 }
-                    };
-
-                    var empty = JsonSerializer.Serialize(emptyRoot, JsonOptions);
-                    File.WriteAllText(FilePath, empty);
-                    File.WriteAllText(BackupPath, empty);
-
-                    _logger.LogInformation("[AI] Создан новый ai_learning.json (v7, пустая статистика)");
+                    _logger.LogInformation("[AI] ai_learning.json not found → start with empty v8 state.");
                     return;
                 }
 
+                AiLearningSnapshot? snap = null;
                 var json = File.ReadAllText(FilePath);
 
-                // Загружаем сырые данные как Dictionary<string, JsonElement>
-                var raw = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json, JsonOptions);
-                if (raw == null)
-                    return;
-
-                // Чистим служебные ключи, оставляем только символы
-                var cleaned = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
-
-                foreach (var kv in raw)
+                try
                 {
-                    if (kv.Key.Equals("CreatedAtUtc", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (kv.Key.Equals("SnapshotVersion", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (kv.Key.Equals("Meta", StringComparison.OrdinalIgnoreCase)) continue;
-
-                    cleaned[kv.Key] = kv.Value;
+                    snap = JsonSerializer.Deserialize<AiLearningSnapshot>(json, JsonOptions);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "[AI] LOAD ERROR: ai_learning.json has invalid format → trying backup.");
                 }
 
-                var purifiedJson = JsonSerializer.Serialize(cleaned, JsonOptions);
-
-                var data = JsonSerializer.Deserialize<
-                    Dictionary<string, Dictionary<MarketRegime, RegimeStats>>
-                >(purifiedJson, JsonOptions);
-
-                if (data != null)
+                if (snap == null && File.Exists(BackupPath))
                 {
-                    foreach (var kv in data)
-                        _stats[kv.Key] = kv.Value;
+                    var backupJson = File.ReadAllText(BackupPath);
+                    try
+                    {
+                        snap = JsonSerializer.Deserialize<AiLearningSnapshot>(backupJson, JsonOptions);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex,
+                            "[AI] BACKUP LOAD ERROR: ai_learning_backup.json invalid.");
+                    }
+                }
 
-                    _logger.LogInformation(
-                        "[AI] ai_learning.json загружен: symbols={Count}",
-                        _stats.Count);
-
+                if (snap == null)
+                {
+                    _logger.LogWarning("[AI] ai_learning.json not loaded → starting with empty state.");
                     return;
                 }
+
+                // Восстанавливаем _stats из snapshot
+                ImportState(snap);
+
+                lock (_lock)
+                {
+                    _marketStates.Clear();
+                    _tradeHistory.Clear();
+
+                    if (snap.MarketStates != null)
+                        _marketStates.AddRange(snap.MarketStates);
+
+                    if (snap.Trades != null)
+                        _tradeHistory.AddRange(snap.Trades);
+                }
+
+                _logger.LogInformation(
+                    "[AI] ai_learning loaded v{Version}: symbols={Symbols}, trades={Trades}, states={States}",
+                    snap.SnapshotVersion,
+                    snap.Meta?.Symbols ?? _stats.Count,
+                    snap.Meta?.Trades ?? _tradeHistory.Count,
+                    snap.Meta?.MarketStates ?? _marketStates.Count);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[AI] LOAD ERROR → попытка отката на backup");
-            }
-
-            // === БЭКАП ===
-            try
-            {
-                if (!File.Exists(BackupPath))
-                    return;
-
-                var json = File.ReadAllText(BackupPath);
-
-                var raw = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json, JsonOptions);
-                if (raw == null)
-                    return;
-
-                var cleaned = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
-                foreach (var kv in raw)
-                {
-                    if (kv.Key.Equals("CreatedAtUtc", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (kv.Key.Equals("SnapshotVersion", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (kv.Key.Equals("Meta", StringComparison.OrdinalIgnoreCase)) continue;
-
-                    cleaned[kv.Key] = kv.Value;
-                }
-
-                var purifiedJson = JsonSerializer.Serialize(cleaned, JsonOptions);
-
-                var data = JsonSerializer.Deserialize<
-                    Dictionary<string, Dictionary<MarketRegime, RegimeStats>>
-                >(purifiedJson, JsonOptions);
-
-                if (data != null)
-                {
-                    foreach (var kv in data)
-                        _stats[kv.Key] = kv.Value;
-
-                    _logger.LogInformation(
-                        "[AI] ai_learning_backup.json восстановлен: symbols={Count}",
-                        _stats.Count);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[AI] BACKUP LOAD ERROR");
+                _logger.LogError(ex, "[AI] LOAD FATAL ERROR → start empty v8 state.");
             }
         }
 
-        // =====================================================================
-        // PERIODIC SNAPSHOT (каждые 15 минут) – вызывается:
-        //  • снаружи (TradingWorker)
-        //  • из RecordMarketStateTriggered (после событий)
-        // =====================================================================
-        //public void TrySnapshot()
-        //{
-        //    lock (_lock)
-        //    {
-        //        if (DateTime.UtcNow - _lastSnapshot < SnapshotInterval)
-        //            return;
-
-        //        _lastSnapshot = DateTime.UtcNow;
-        //    }
-
-        //    // Сохранение делаем вне lock, чтобы не блокировать обработку сигналов
-        //    Save();
-        //}
         private void TrySnapshot()
         {
             if (DateTime.UtcNow - _lastSnapshot < SnapshotInterval)
@@ -646,27 +608,10 @@ namespace VertexAutoTradeBinance8.Services
 
             _lastSnapshot = DateTime.UtcNow;
 
-            try
-            {
-                var snapshot = BuildSnapshot();
-
-                var json = JsonSerializer.Serialize(
-                    snapshot,
-                    new JsonSerializerOptions
-                    {
-                        WriteIndented = true
-                    });
-
-                File.WriteAllText(FilePath, json);
-
-                // простой бэкап
-                File.Copy(FilePath, BackupPath, overwrite: true);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[AI-LEARN] Snapshot save error");
-            }
+            // Используем общий Save(), который пишет AiLearningSnapshot
+            Save(force: false);
         }
+
 
 
         private AiLearningSnapshot BuildSnapshot()
@@ -674,13 +619,14 @@ namespace VertexAutoTradeBinance8.Services
             var snap = new AiLearningSnapshot
             {
                 CreatedAtUtc = DateTime.UtcNow,
-                SnapshotVersion = 7,
+                SnapshotVersion = 8,
                 Meta = new AiLearningMeta
                 {
-                    Engine = "AiSelfLearningService.v7"
+                    Engine = "AiSelfLearningService.v8"
                 }
             };
 
+            // --- агрегированная статистика по символам/режимам ---
             foreach (var (symbol, regimes) in _stats)
             {
                 var sym = new AiSymbolStatsDto
@@ -688,30 +634,49 @@ namespace VertexAutoTradeBinance8.Services
                     Symbol = symbol
                 };
 
-                foreach (var kv in regimes)
+                foreach (var (regimeKey, rs) in regimes)
                 {
-                    var rs = kv.Value;
+                    var regime = rs.Regime != MarketRegime.Unknown ? rs.Regime : regimeKey;
 
-                    sym.Regimes.Add(new AiRegimeStatsDto
+                    var dto = new AiRegimeStatsDto
                     {
-                        Regime = rs.Regime,
+                        Regime = regime,
                         Trades = rs.Count,
                         Wins = rs.Wins,
                         Losses = rs.Losses,
-                        AvgPnl = rs.AvgPnl
-                    });
+                        AvgPnl = rs.AvgPnl,
+                        SumRr = rs.AvgPnl * rs.Count,
+                        // при желании можно потом добавить реальный min/max RR
+                        MaxRr = 0,
+                        MinRr = 0,
+                        LastUpdateUtc = DateTime.UtcNow
+                    };
 
+                    sym.Regimes.Add(dto);
                     snap.Meta.Trades += rs.Count;
                 }
 
                 snap.Symbols.Add(sym);
             }
 
+            // --- meta ---
             snap.Meta.Symbols = snap.Symbols.Count;
             snap.Meta.MarketStates = _marketStates.Count;
 
+            // --- компактные ленты состояний/сделок для Dashboard ---
+            snap.MarketStates = _marketStates
+                .OrderByDescending(s => s.Time)
+                .Take(500)
+                .ToList();
+
+            snap.Trades = _tradeHistory
+                .OrderByDescending(t => t.Time)
+                .Take(300)
+                .ToList();
+
             return snap;
         }
+
 
 
 
@@ -747,8 +712,6 @@ namespace VertexAutoTradeBinance8.Services
 
         private RegimeStats GetOrCreateRegimeStats(string symbol, MarketRegime regime)
         {
-           
-
             if (!_stats.TryGetValue(symbol, out var regimes))
             {
                 regimes = new Dictionary<MarketRegime, RegimeStats>();
@@ -757,12 +720,20 @@ namespace VertexAutoTradeBinance8.Services
 
             if (!regimes.TryGetValue(regime, out var rs))
             {
-                rs = new RegimeStats();
+                rs = new RegimeStats
+                {
+                    Regime = regime
+                };
                 regimes[regime] = rs;
+            }
+            else if (rs.Regime == MarketRegime.Unknown)
+            {
+                rs.Regime = regime;
             }
 
             return rs;
         }
+
 
 
 

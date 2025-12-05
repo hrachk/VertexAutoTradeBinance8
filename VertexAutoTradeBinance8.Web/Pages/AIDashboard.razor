@@ -1,10 +1,9 @@
 ﻿@page "/ai-dashboard"
-@using System.Net.Http.Json
+
 @using VertexAutoTradeBinance8.Services
 @using VertexAutoTradeBinance8.Models
-@* @inject HttpClient Http *@
-@inject AiSelfLearningService AiLearning
 
+@inject AiSelfLearningService AiLearning
 
 <h2 class="text-2xl font-bold mb-4">AI Dashboard</h2>
 
@@ -18,7 +17,7 @@ else
     <div class="p-4 bg-blue-900/30 rounded-lg mb-4">
         <h3 class="font-bold mb-2">WinRate по Market Regime</h3>
 
-        @if (Stats.Symbols.Count == 0)
+        @if (Stats.Symbols == null || Stats.Symbols.Count == 0)
         {
             <p class="text-sm">Пока нет данных.</p>
         }
@@ -69,8 +68,8 @@ else
                         <div>
                             <b>@st.Symbol</b> (@st.Timeframe) → @st.Regime
                         </div>
-                        <div>Slope: @st.TrendSlopePercent.ToString("F2")%</div>
-                        <div>Volatility: @st.VolatilityPercent.ToString("F2")%</div>
+                        <div>Slope: @st.TrendSlopePercent.ToString("F4")</div>
+                        <div>Volatility: @st.VolatilityPercent.ToString("F4")</div>
                         <div>ATR: @st.Atr</div>
                         <div>Conf: @st.Confidence.ToString("P0")</div>
                         <div class="text-xs text-gray-400">
@@ -83,7 +82,7 @@ else
     </div>
 }
 
-<!-- ===================== 3. Последние сделки (Trade-Based Learning) ===================== -->
+<!-- ===================== 3. Последние сделки ===================== -->
 @if (Trades == null)
 {
     <p>Loading trades...</p>
@@ -134,25 +133,20 @@ else
 }
 
 @code {
+
     private AiLearningSnapshot? Stats;
     private List<AiSelfLearningService.MarketState>? States;
     private List<AiSelfLearningService.TradeHistoryEntry>? Trades;
 
     protected override async Task OnInitializedAsync()
     {
+        // 1) Снимок (winrate)
         Stats = AiLearning.ExportState();
-        // // 1) Сводная статистика по режимам
-        // Stats = await Http.GetFromJsonAsync<AiLearningSnapshot>("api/ai/stats");
 
-        // // 2) Фоновые MarketStates
-        // States = await Http.GetFromJsonAsync<List<AiSelfLearningService.MarketState>>(
-        //     "api/ai/market-states?maxCount=150");
+        // 2) Market states (live monitoring)
+        States = AiLearning.GetRecentStates(150).ToList();
 
-        // // 3) Последние сделки
-        // Trades = await Http.GetFromJsonAsync<List<AiSelfLearningService.TradeHistoryEntry>>(
-        //     "api/ai/trades?maxCount=100");
-
-        // States ??= new List<AiSelfLearningService.MarketState>();
-        // Trades ??= new List<AiSelfLearningService.TradeHistoryEntry>();
+        // 3) Сделки
+        Trades = AiLearning.GetRecentTrades(100).ToList();
     }
 }

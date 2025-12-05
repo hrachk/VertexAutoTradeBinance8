@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Components.Web;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Web.Data;
+using VertexAutoTradeBinance8.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -30,6 +31,7 @@ builder.Services.AddSingleton<AiCorrelationService>();
 
 // Учебный модуль
 builder.Services.AddSingleton<AiSelfLearningService>();
+builder.Services.AddSingleton<AiLearningFileService>();
 
 // Режим рынка (AI Smart Regime)
 builder.Services.AddSingleton<AiMarketRegimeService>();
