@@ -888,6 +888,18 @@ $@"📊 Режим рынка:
                     atr: baseSignal.Atr ?? 0,
                     confidence: smart.Confidence
                 );
+
+                _aiLearning.RecordMarketStateTriggered(
+    reason: "MICRO_SIGNAL",
+    symbol: symbol,
+    timeframe: interval.ToString(),
+    regime: smart.BaseRegime,
+    slope: smart.TrendSlopePercent,
+    volatility: smart.VolatilityPercent,
+    atr: baseSignal?.Atr ?? 0,
+    confidence: smart.Confidence
+);
+
             }
 
             // 4.1) SOFT safe mode, если нет жёсткого сигнала
@@ -906,6 +918,8 @@ $@"📊 Режим рынка:
                         atr: soft.Atr ?? 0,
                         confidence: smart.Confidence
                     );
+
+                     
 
                     _logger.LogInformation(
                         $"🟡 SOFT-вход по тренду: side={soft.Side}, entry={soft.EntryPrice:F4}, SL={soft.StopLoss:F4}");

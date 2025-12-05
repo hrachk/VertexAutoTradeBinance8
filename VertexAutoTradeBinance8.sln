@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VertexAutoTradeBinance8", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VertexAutoTradeBinance8.API", "VertexAutoTradeBinance8.API\VertexAutoTradeBinance8.API.csproj", "{13404EBC-7428-74C8-7D0A-CEC1FE1728F8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VertexAutoTradeBinance8.Web", "VertexAutoTradeBinance8.Web\VertexAutoTradeBinance8.Web.csproj", "{6A98F2F4-557B-4786-BBC6-2A0D520F805F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +23,10 @@ Global
 		{13404EBC-7428-74C8-7D0A-CEC1FE1728F8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{13404EBC-7428-74C8-7D0A-CEC1FE1728F8}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{13404EBC-7428-74C8-7D0A-CEC1FE1728F8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6A98F2F4-557B-4786-BBC6-2A0D520F805F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6A98F2F4-557B-4786-BBC6-2A0D520F805F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6A98F2F4-557B-4786-BBC6-2A0D520F805F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6A98F2F4-557B-4786-BBC6-2A0D520F805F}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -61,10 +61,14 @@ public class Program
 
                 services.AddSingleton(sp => sp.GetRequiredService<IOptions<TradingOptions>>().Value);
 
-                services.AddHostedService<TradingWorker>();
+               
                 services.AddSingleton<PredictiveEngineV4ConfirmationService>();
                 services.AddSingleton<AiStopLossOptimizer>();
                 services.AddSingleton<AiRiskScalerV2>(); // опционально, можно создавать вручную
+
+                services.AddHostedService<BackgroundMarketScannerService>();
+                services.AddSingleton<SymbolLiquidityScanner>();
+                services.AddHostedService<TradingWorker>();
 
             })
             .Build();

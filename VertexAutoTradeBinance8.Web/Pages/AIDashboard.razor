@@ -1,0 +1,158 @@
+﻿@page "/ai-dashboard"
+@using System.Net.Http.Json
+@using VertexAutoTradeBinance8.Services
+@using VertexAutoTradeBinance8.Models
+@* @inject HttpClient Http *@
+@inject AiSelfLearningService AiLearning
+
+
+<h2 class="text-2xl font-bold mb-4">AI Dashboard</h2>
+
+<!-- ===================== 1. WINRATE по режимам ===================== -->
+@if (Stats == null)
+{
+    <p>Loading stats...</p>
+}
+else
+{
+    <div class="p-4 bg-blue-900/30 rounded-lg mb-4">
+        <h3 class="font-bold mb-2">WinRate по Market Regime</h3>
+
+        @if (Stats.Symbols.Count == 0)
+        {
+            <p class="text-sm">Пока нет данных.</p>
+        }
+        else
+        {
+            @foreach (var s in Stats.Symbols)
+            {
+                <div class="mt-2 p-2 border-b border-gray-700">
+                    <div class="font-semibold">@s.Symbol</div>
+                    <ul class="text-sm ml-4">
+                        @foreach (var r in s.Regimes)
+                        {
+                            var wr = r.Trades > 0
+                            ? (double)r.Wins / r.Trades * 100.0
+                            : 0.0;
+
+                            <li>
+                                @r.Regime — @wr.ToString("F1")% (@r.Trades trades)
+                            </li>
+                        }
+                    </ul>
+                </div>
+            }
+        }
+    </div>
+}
+
+<!-- ===================== 2. Live Market States ===================== -->
+@if (States == null)
+{
+    <p>Loading market states...</p>
+}
+else
+{
+    <div class="mb-4">
+        <h3 class="font-bold mb-2">Live Market States</h3>
+
+        @if (States.Count == 0)
+        {
+            <p class="text-sm">Нет MarketState данных (бот ещё не успел накопить).</p>
+        }
+        else
+        {
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                @foreach (var st in States)
+                {
+                    <div class="p-2 bg-purple-900/20 rounded text-sm">
+                        <div>
+                            <b>@st.Symbol</b> (@st.Timeframe) → @st.Regime
+                        </div>
+                        <div>Slope: @st.TrendSlopePercent.ToString("F2")%</div>
+                        <div>Volatility: @st.VolatilityPercent.ToString("F2")%</div>
+                        <div>ATR: @st.Atr</div>
+                        <div>Conf: @st.Confidence.ToString("P0")</div>
+                        <div class="text-xs text-gray-400">
+                            @st.Time.ToLocalTime()
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+
+<!-- ===================== 3. Последние сделки (Trade-Based Learning) ===================== -->
+@if (Trades == null)
+{
+    <p>Loading trades...</p>
+}
+else
+{
+    <div class="mb-4">
+        <h3 class="font-bold mb-2">Последние сделки (AI Training)</h3>
+
+        @if (Trades.Count == 0)
+        {
+            <p class="text-sm">Сделок ещё не было.</p>
+        }
+        else
+        {
+            <table class="min-w-full text-sm">
+                <thead>
+                    <tr class="border-b border-gray-700">
+                        <th class="text-left pr-2">Time</th>
+                        <th class="text-left pr-2">Symbol</th>
+                        <th class="text-left pr-2">Side</th>
+                        <th class="text-right pr-2">Entry</th>
+                        <th class="text-right pr-2">Exit</th>
+                        <th class="text-right pr-2">PnL</th>
+                        <th class="text-left pr-2">Regime</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var t in Trades)
+                    {
+                        var isWin = t.Pnl >= 0;
+                        <tr class="border-b border-gray-800">
+                            <td>@t.Time.ToLocalTime()</td>
+                            <td>@t.Symbol</td>
+                            <td>@t.Side</td>
+                            <td class="text-right">@t.Entry.ToString("F4")</td>
+                            <td class="text-right">@t.Exit.ToString("F4")</td>
+                            <td class="text-right @(isWin ? "text-green-400" : "text-red-400")">
+                                @t.Pnl.ToString("F4")
+                            </td>
+                            <td>@t.Regime</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+}
+
+@code {
+    private AiLearningSnapshot? Stats;
+    private List<AiSelfLearningService.MarketState>? States;
+    private List<AiSelfLearningService.TradeHistoryEntry>? Trades;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Stats = AiLearning.ExportState();
+        // // 1) Сводная статистика по режимам
+        // Stats = await Http.GetFromJsonAsync<AiLearningSnapshot>("api/ai/stats");
+
+        // // 2) Фоновые MarketStates
+        // States = await Http.GetFromJsonAsync<List<AiSelfLearningService.MarketState>>(
+        //     "api/ai/market-states?maxCount=150");
+
+        // // 3) Последние сделки
+        // Trades = await Http.GetFromJsonAsync<List<AiSelfLearningService.TradeHistoryEntry>>(
+        //     "api/ai/trades?maxCount=100");
+
+        // States ??= new List<AiSelfLearningService.MarketState>();
+        // Trades ??= new List<AiSelfLearningService.TradeHistoryEntry>();
+    }
+}

@@ -46,5 +46,6 @@
 
         public override string ToString()
             => $"{Regime} (slope={TrendSlopePercent:P2}, vol={VolatilityPercent:P2}, dev={DeviationScore:F2})";
+        public decimal Confidence { get; set; }
     }
 }

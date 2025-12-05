@@ -1,8 +1,38 @@
 ﻿using System.Text.Json;
 using VertexAutoTradeBinance8.Models;
+using static VertexAutoTradeBinance8.Services.AiLearningSnapshot;
 
 namespace VertexAutoTradeBinance8.Services
 {
+    /// <summary>
+    /// AiSelfLearningService v7.0 (QUANT-REALTIME MAX, 3-Channel Learning)
+    ///
+    /// 1) Signal-Based Learning:
+    ///    - RecordMarketStateTriggered(...)  → события сигналов/блокировок/soft-входов
+    ///    - StrategyEngine вызывает:
+    ///        • reason = "MICRO_SIGNAL"
+    ///        • reason = "SOFT_ENTRY"
+    ///        • reason = "AI_PATTERN_BLOCK"
+    ///        • reason = "LIQUIDITY_DANGER"
+    ///        • reason = "RR_BLOCK"
+    ///
+    /// 2) Trade-Based Learning:
+    ///    - RecordTrade(symbol, side, entry, exit, regime)
+    ///    - Вызывается из:
+    ///        • PositionSupervisorService.UpdateSLAsync (trail / защита)
+    ///        • TradeResultMonitorService.CheckClosedPositionAsync (факт закрытия)
+    ///    - Строит _stats → используется GetAiRiskAdjustment(...)
+    ///
+    /// 3) Background Market Learning:
+    ///    - RecordMarketState(...)         → базовые режимы из SmartRegimeService
+    ///    - TryHybridPeriodicSnapshot(...) → периодический snapshot раз ~30 сек
+    ///
+    /// ФАЙЛ ХРАНЕНИЯ:
+    ///   ai-models/ai_learning.json
+    ///     - верхний уровень: { "SYMBOL": { "Regime": {...} }, ... }
+    ///     - + служебные ключи: CreatedAtUtc, SnapshotVersion, Meta
+    ///   Load() фильтрует служебные ключи и поднимает только реальную статистику.
+    /// </summary>
     public class AiSelfLearningService
     {
         private readonly ILogger<AiSelfLearningService> _logger;
@@ -14,20 +44,36 @@ namespace VertexAutoTradeBinance8.Services
         private static readonly string BackupPath =
             Path.Combine(AppContext.BaseDirectory, "ai-models/ai_learning_backup.json");
 
+        // Снимок статистики каждые N минут (для trade-based / signal-based)
         private DateTime _lastSnapshot = DateTime.MinValue;
         private readonly TimeSpan SnapshotInterval = TimeSpan.FromMinutes(15);
 
+        // Глобальный HYBRID snapshot раз в N секунд (background learning)
         private DateTime _lastHybridSnapshot = DateTime.MinValue;
-        private readonly TimeSpan HybridInterval = TimeSpan.FromSeconds(60);
+
+        // Было 60s, делаю более «квантовым» — 30s (в твои 15–30s)
+        private readonly TimeSpan HybridInterval = TimeSpan.FromSeconds(30);
 
         // =====================================================================
-        // CORE STORAGE v6
+        // CORE STORAGE v7
         // =====================================================================
+
+        /// <summary>
+        /// Главная статистика по символу/режиму (только по сделкам).
+        /// Используется GetAiRiskAdjustment() → AiRisk в StrategyEngine.
+        /// </summary>
         private readonly Dictionary<string, Dictionary<MarketRegime, RegimeStats>> _stats
             = new(StringComparer.OrdinalIgnoreCase);
 
-        // QUANT STORAGE
+        /// <summary>
+        /// QUANT STORAGE – непрерывная лента рыночных состояний
+        /// (используется PredictTrend и для будущего Dashboard).
+        /// </summary>
         private readonly List<MarketState> _marketStates = new();
+
+        /// <summary>
+        /// История сделок (используется для анализа, Dashboard, off-line обучения).
+        /// </summary>
         private readonly List<TradeHistoryEntry> _tradeHistory = new();
 
         // TREND MODEL
@@ -36,6 +82,19 @@ namespace VertexAutoTradeBinance8.Services
         public AiSelfLearningService(ILogger<AiSelfLearningService> logger)
         {
             _logger = logger;
+
+            // Гарантируем, что каталог существует, чтобы не было проблем с сохранением
+            try
+            {
+                var dir = Path.GetDirectoryName(FilePath);
+                if (!string.IsNullOrWhiteSpace(dir))
+                    Directory.CreateDirectory(dir);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[AI] Error creating ai-models directory");
+            }
+
             Load();
         }
 
@@ -51,19 +110,6 @@ namespace VertexAutoTradeBinance8.Services
             DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
         };
 
-        // Единая модель файла для JSON
-        public class AiLearningFileModel
-        {
-            public DateTime SavedAt { get; set; } = DateTime.UtcNow;
-
-            public Dictionary<string, Dictionary<MarketRegime, RegimeStats>> Stats { get; set; }
-                = new(StringComparer.OrdinalIgnoreCase);
-
-            public List<MarketState> MarketStates { get; set; } = new();
-
-            public List<TradeHistoryEntry> Trades { get; set; } = new();
-        }
-
         public class MarketState
         {
             public string Symbol { get; set; } = "";
@@ -74,6 +120,7 @@ namespace VertexAutoTradeBinance8.Services
             public decimal Atr { get; set; }
             public decimal Confidence { get; set; }
             public DateTime Time { get; set; }
+            public string? Reason { get; set; }   // MICRO_SIGNAL / SOFT_ENTRY / PERIODIC_30s / ...
         }
 
         public class TradeHistoryEntry
@@ -89,15 +136,18 @@ namespace VertexAutoTradeBinance8.Services
 
         public class RegimeStats
         {
-            public int Count { get; set; }
+            public int Trades { get; set; }
             public int Wins { get; set; }
+            public int Count { get; set; }
+       
             public int Losses { get; set; }
             public decimal AvgPnl { get; set; }
             public decimal RiskWeight { get; set; } = 1.0m;
+            public MarketRegime Regime { get; set; }
         }
 
         // =====================================================================
-        // HYBRID: универсальный триггер логирования
+        // 1) HYBRID: универсальный триггер логирования (signals + blocks + RR)
         // =====================================================================
         public void RecordMarketStateTriggered(
             string reason,
@@ -120,17 +170,26 @@ namespace VertexAutoTradeBinance8.Services
                     VolatilityPercent = volatility,
                     Atr = atr,
                     Confidence = confidence,
-                    Time = DateTime.UtcNow
+                    Time = DateTime.UtcNow,
+                    Reason = reason
                 });
 
-                if (_marketStates.Count > 2000)
-                    _marketStates.RemoveRange(0, 1000);
+                // Ограничиваем память – скользящее окно
+                if (_marketStates.Count > 5000)
+                    _marketStates.RemoveRange(0, 2500);
 
-                _logger.LogDebug($"[HYBRID][{symbol}] MarketState logged ({reason}) slope={slope} vol={volatility} atr={atr} conf={confidence}");
+                _logger.LogDebug(
+                    "[HYBRID][{Symbol}] MarketState logged ({Reason}) slope={Slope} vol={Vol} atr={Atr} conf={Conf}",
+                    symbol, reason, slope, volatility, atr, confidence);
             }
+
+            // Периодически снимаем snapshot, даже если не было сделок
+            TrySnapshot();
         }
 
-        // GLOBAL 60s periodic logger
+        // =====================================================================
+        // 3) BACKGROUND MARKET LEARNING – глобальный 30s snapshot по режиму
+        // =====================================================================
         public void TryHybridPeriodicSnapshot(
             string symbol,
             string timeframe,
@@ -146,7 +205,7 @@ namespace VertexAutoTradeBinance8.Services
             _lastHybridSnapshot = DateTime.UtcNow;
 
             RecordMarketStateTriggered(
-                reason: "PERIODIC_60s",
+                reason: "PERIODIC_30s",
                 symbol: symbol,
                 timeframe: timeframe,
                 regime: regime,
@@ -158,7 +217,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // MARKET STATE (legacy, если хочешь логировать без reason)
+        // BASE MARKET STATE (SmartRegimeService → StrategyEngine)
         // =====================================================================
         public void RecordMarketState(
             string symbol,
@@ -180,16 +239,17 @@ namespace VertexAutoTradeBinance8.Services
                     VolatilityPercent = volatilityPercent,
                     Atr = atr,
                     Confidence = confidence,
-                    Time = DateTime.UtcNow
+                    Time = DateTime.UtcNow,
+                    Reason = "BASE_REGIME"
                 });
 
-                if (_marketStates.Count > 2000)
-                    _marketStates.RemoveRange(0, 1000);
+                if (_marketStates.Count > 5000)
+                    _marketStates.RemoveRange(0, 2500);
             }
         }
 
         // =====================================================================
-        // TRADE ENTRY (вызывается из PositionSupervisor / PositionProtector)
+        // 2) TRADE ENTRY (вызывается из PositionSupervisor / TradeResultMonitor)
         // =====================================================================
         public void RecordTrade(
             string symbol,
@@ -215,12 +275,27 @@ namespace VertexAutoTradeBinance8.Services
                     Time = DateTime.UtcNow
                 });
 
-                if (_tradeHistory.Count > 2000)
-                    _tradeHistory.RemoveRange(0, 1000);
+                if (_tradeHistory.Count > 5000)
+                    _tradeHistory.RemoveRange(0, 2500);
             }
 
             UpdateStats(symbol, regime, pnl);
+
+            // Для сделок — сразу пишем на диск (они редкие, это безопасно)
             Save();
+
+            bool win = side == SignalSide.Buy ? exit > entry : exit < entry;
+
+            lock (_lock)
+            {
+                var rs = GetOrCreateRegimeStats(symbol, regime);
+
+                rs.Trades++;
+                if (win)
+                    rs.Wins++;
+            }
+
+            TrySnapshot();
         }
 
         private void UpdateStats(string symbol, MarketRegime regime, decimal pnl)
@@ -278,9 +353,9 @@ namespace VertexAutoTradeBinance8.Services
             lock (_lock)
             {
                 recent = _marketStates
-                    .Where(x => x.Symbol == symbol)
+                    .Where(x => x.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
                     .OrderByDescending(x => x.Time)
-                    .Take(60)
+                    .Take(80) // чуть больше истории для сглаживания
                     .ToList();
             }
 
@@ -311,7 +386,7 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         // EXPORT STATE (для TradingWorker v6 / AiModelSnapshotService)
         // =====================================================================
-        public AiLearningSnapshot ExportState()
+       /* public AiLearningSnapshot ExportState()
         {
             lock (_lock)
             {
@@ -346,8 +421,14 @@ namespace VertexAutoTradeBinance8.Services
 
                 return snap;
             }
+        }*/
+        public AiLearningSnapshot ExportState()
+        {
+            lock (_lock)
+            {
+                return BuildSnapshot();
+            }
         }
-
         // =====================================================================
         // IMPORT STATE
         // =====================================================================
@@ -387,37 +468,40 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // SAVE / LOAD
+        // SAVE / LOAD (v7 – с Meta-блоком, но совместимо со старым форматом)
         // =====================================================================
         private void Save()
         {
             try
             {
-                AiLearningFileModel model;
+                var dir = Path.GetDirectoryName(FilePath);
+                if (!string.IsNullOrWhiteSpace(dir))
+                    Directory.CreateDirectory(dir);
 
-                lock (_lock)
+                // Корневой объект:
+                //  • ключи-символы → RegimeStats (как раньше)
+                //  • служебные поля → CreatedAtUtc / SnapshotVersion / Meta
+                var root = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var kv in _stats)
                 {
-                    model = new AiLearningFileModel
-                    {
-                        SavedAt = DateTime.UtcNow,
-                        Stats = new Dictionary<string, Dictionary<MarketRegime, RegimeStats>>(_stats, StringComparer.OrdinalIgnoreCase),
-                        MarketStates = _marketStates.ToList(),
-                        Trades = _tradeHistory.ToList()
-                    };
+                    root[kv.Key] = kv.Value; // Dictionary<MarketRegime, RegimeStats>
                 }
 
-                var json = JsonSerializer.Serialize(model, JsonOptions);
+                root["CreatedAtUtc"] = DateTime.UtcNow;
+                root["SnapshotVersion"] = 7;
+                root["Meta"] = new
+                {
+                    Engine = "AiSelfLearningService.v7",
+                    Symbols = _stats.Count,
+                    MarketStates = _marketStates.Count,
+                    Trades = _tradeHistory.Count
+                };
 
-                Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+                var json = JsonSerializer.Serialize(root, JsonOptions);
 
                 File.WriteAllText(FilePath, json);
                 File.WriteAllText(BackupPath, json);
-
-                _logger.LogInformation(
-                    "[AI] Saved learning model: states={States}, trades={Trades}, regimes={Regimes}",
-                    model.MarketStates.Count,
-                    model.Trades.Count,
-                    model.Stats.Count);
             }
             catch (Exception ex)
             {
@@ -429,61 +513,258 @@ namespace VertexAutoTradeBinance8.Services
         {
             try
             {
+                var dir = Path.GetDirectoryName(FilePath);
+                if (!string.IsNullOrWhiteSpace(dir))
+                    Directory.CreateDirectory(dir);
+
+                // === 1) Авто-создание файла, если он отсутствует ===
                 if (!File.Exists(FilePath))
                 {
-                    Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-                    // создаём пустой файл по новой структуре
-                    Save();
-                    _logger.LogWarning("[AI] Created new ai_learning.json (initial)");
+                    var emptyRoot = new Dictionary<string, object>
+                    {
+                        ["CreatedAtUtc"] = DateTime.UtcNow,
+                        ["SnapshotVersion"] = 7,
+                        ["Meta"] = new { Engine = "AiSelfLearningService.v7", Symbols = 0, MarketStates = 0, Trades = 0 }
+                    };
+
+                    var empty = JsonSerializer.Serialize(emptyRoot, JsonOptions);
+                    File.WriteAllText(FilePath, empty);
+                    File.WriteAllText(BackupPath, empty);
+
+                    _logger.LogInformation("[AI] Создан новый ai_learning.json (v7, пустая статистика)");
                     return;
                 }
 
                 var json = File.ReadAllText(FilePath);
-                var model = JsonSerializer.Deserialize<AiLearningFileModel>(json, JsonOptions);
 
-                if (model == null)
+                // Загружаем сырые данные как Dictionary<string, JsonElement>
+                var raw = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json, JsonOptions);
+                if (raw == null)
                     return;
 
-                lock (_lock)
+                // Чистим служебные ключи, оставляем только символы
+                var cleaned = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var kv in raw)
                 {
-                    _stats.Clear();
-                    foreach (var kv in model.Stats)
-                        _stats[kv.Key] = kv.Value;
+                    if (kv.Key.Equals("CreatedAtUtc", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (kv.Key.Equals("SnapshotVersion", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (kv.Key.Equals("Meta", StringComparison.OrdinalIgnoreCase)) continue;
 
-                    _marketStates.Clear();
-                    if (model.MarketStates != null && model.MarketStates.Count > 0)
-                        _marketStates.AddRange(model.MarketStates);
-
-                    _tradeHistory.Clear();
-                    if (model.Trades != null && model.Trades.Count > 0)
-                        _tradeHistory.AddRange(model.Trades);
+                    cleaned[kv.Key] = kv.Value;
                 }
 
-                _logger.LogInformation(
-                    "[AI] Loaded model: states={States}, trades={Trades}, regimes={Regimes}",
-                    _marketStates.Count,
-                    _tradeHistory.Count,
-                    _stats.Count);
+                var purifiedJson = JsonSerializer.Serialize(cleaned, JsonOptions);
+
+                var data = JsonSerializer.Deserialize<
+                    Dictionary<string, Dictionary<MarketRegime, RegimeStats>>
+                >(purifiedJson, JsonOptions);
+
+                if (data != null)
+                {
+                    foreach (var kv in data)
+                        _stats[kv.Key] = kv.Value;
+
+                    _logger.LogInformation(
+                        "[AI] ai_learning.json загружен: symbols={Count}",
+                        _stats.Count);
+
+                    return;
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[AI] LOAD ERROR");
+                _logger.LogError(ex, "[AI] LOAD ERROR → попытка отката на backup");
+            }
+
+            // === БЭКАП ===
+            try
+            {
+                if (!File.Exists(BackupPath))
+                    return;
+
+                var json = File.ReadAllText(BackupPath);
+
+                var raw = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json, JsonOptions);
+                if (raw == null)
+                    return;
+
+                var cleaned = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+                foreach (var kv in raw)
+                {
+                    if (kv.Key.Equals("CreatedAtUtc", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (kv.Key.Equals("SnapshotVersion", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (kv.Key.Equals("Meta", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    cleaned[kv.Key] = kv.Value;
+                }
+
+                var purifiedJson = JsonSerializer.Serialize(cleaned, JsonOptions);
+
+                var data = JsonSerializer.Deserialize<
+                    Dictionary<string, Dictionary<MarketRegime, RegimeStats>>
+                >(purifiedJson, JsonOptions);
+
+                if (data != null)
+                {
+                    foreach (var kv in data)
+                        _stats[kv.Key] = kv.Value;
+
+                    _logger.LogInformation(
+                        "[AI] ai_learning_backup.json восстановлен: symbols={Count}",
+                        _stats.Count);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[AI] BACKUP LOAD ERROR");
             }
         }
 
         // =====================================================================
-        // PERIODIC SNAPSHOT (каждые 15 минут)
+        // PERIODIC SNAPSHOT (каждые 15 минут) – вызывается:
+        //  • снаружи (TradingWorker)
+        //  • из RecordMarketStateTriggered (после событий)
         // =====================================================================
-        public void TrySnapshot()
+        //public void TrySnapshot()
+        //{
+        //    lock (_lock)
+        //    {
+        //        if (DateTime.UtcNow - _lastSnapshot < SnapshotInterval)
+        //            return;
+
+        //        _lastSnapshot = DateTime.UtcNow;
+        //    }
+
+        //    // Сохранение делаем вне lock, чтобы не блокировать обработку сигналов
+        //    Save();
+        //}
+        private void TrySnapshot()
+        {
+            if (DateTime.UtcNow - _lastSnapshot < SnapshotInterval)
+                return;
+
+            _lastSnapshot = DateTime.UtcNow;
+
+            try
+            {
+                var snapshot = BuildSnapshot();
+
+                var json = JsonSerializer.Serialize(
+                    snapshot,
+                    new JsonSerializerOptions
+                    {
+                        WriteIndented = true
+                    });
+
+                File.WriteAllText(FilePath, json);
+
+                // простой бэкап
+                File.Copy(FilePath, BackupPath, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[AI-LEARN] Snapshot save error");
+            }
+        }
+
+
+        private AiLearningSnapshot BuildSnapshot()
+        {
+            var snap = new AiLearningSnapshot
+            {
+                CreatedAtUtc = DateTime.UtcNow,
+                SnapshotVersion = 7,
+                Meta = new AiLearningMeta
+                {
+                    Engine = "AiSelfLearningService.v7"
+                }
+            };
+
+            foreach (var (symbol, regimes) in _stats)
+            {
+                var sym = new AiSymbolStatsDto
+                {
+                    Symbol = symbol
+                };
+
+                foreach (var kv in regimes)
+                {
+                    var rs = kv.Value;
+
+                    sym.Regimes.Add(new AiRegimeStatsDto
+                    {
+                        Regime = rs.Regime,
+                        Trades = rs.Count,
+                        Wins = rs.Wins,
+                        Losses = rs.Losses,
+                        AvgPnl = rs.AvgPnl
+                    });
+
+                    snap.Meta.Trades += rs.Count;
+                }
+
+                snap.Symbols.Add(sym);
+            }
+
+            snap.Meta.Symbols = snap.Symbols.Count;
+            snap.Meta.MarketStates = _marketStates.Count;
+
+            return snap;
+        }
+
+
+
+
+
+        // ---------------------------------------------------------------------
+        // DASHBOARD EXPORT: MarketStates (фоновые данные)
+        // ---------------------------------------------------------------------
+        public IReadOnlyList<MarketState> GetRecentStates(int maxCount = 150)
         {
             lock (_lock)
             {
-                if (DateTime.UtcNow - _lastSnapshot < SnapshotInterval)
-                    return;
-
-                Save();
-                _lastSnapshot = DateTime.UtcNow;
+                return _marketStates
+                    .OrderByDescending(s => s.Time)
+                    .Take(maxCount)
+                    .ToList();
             }
         }
+
+        // ---------------------------------------------------------------------
+        // DASHBOARD EXPORT: Trades (сделки для обучения)
+        // ---------------------------------------------------------------------
+        public IReadOnlyList<TradeHistoryEntry> GetRecentTrades(int maxCount = 100)
+        {
+            lock (_lock)
+            {
+                return _tradeHistory
+                    .OrderByDescending(t => t.Time)
+                    .Take(maxCount)
+                    .ToList();
+            }
+        }
+
+        private RegimeStats GetOrCreateRegimeStats(string symbol, MarketRegime regime)
+        {
+           
+
+            if (!_stats.TryGetValue(symbol, out var regimes))
+            {
+                regimes = new Dictionary<MarketRegime, RegimeStats>();
+                _stats[symbol] = regimes;
+            }
+
+            if (!regimes.TryGetValue(regime, out var rs))
+            {
+                rs = new RegimeStats();
+                regimes[regime] = rs;
+            }
+
+            return rs;
+        }
+
+
+
     }
 }
