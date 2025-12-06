@@ -6,6 +6,7 @@ using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Services.Formatting;
 using VertexAutoTradeBinance8.Strategy;
+using static VertexAutoTradeBinance8.Services.AiTimeframeSelectorService;
 
 namespace VertexAutoTradeBinance8
 {
@@ -38,6 +39,8 @@ namespace VertexAutoTradeBinance8
         private readonly Dictionary<string, DateTime> _lastTrade = new();
 
         private readonly SymbolRegistryService _symbols;
+        private readonly AiTimeframeSelectorService _tfSelector;
+
 
         private static readonly KlineInterval[] TFS = {
             KlineInterval.OneMinute,
@@ -77,7 +80,8 @@ namespace VertexAutoTradeBinance8
             PositionSupervisorService supervisor,
             AiSelfLearningService learn,
             AiModelSnapshotService snapshot,
-            SymbolRegistryService symbols)
+            SymbolRegistryService symbols,
+            AiTimeframeSelectorService tfSelector)
         {
             _logger = logger;
 
@@ -101,6 +105,7 @@ namespace VertexAutoTradeBinance8
             _learn = learn;
             _snapshot = snapshot;
             _symbols = symbols;
+            _tfSelector = tfSelector;
         }
 
         // ================================================================
@@ -131,31 +136,79 @@ namespace VertexAutoTradeBinance8
             {
                 await RunQuantRealtimeTick(ct);
 
+                /*  //_binance.Symbols 
                 foreach (var tf in TFS)
                 {
-                    foreach (var symbol in /*_binance.Symbols*/ _symbols.ActiveSymbols)
+                    foreach (var symbol in  
+                _symbols.ActiveSymbols)
                     {
-                        if (!ShouldRun(symbol, tf))
-                            continue;
+                    if (!ShouldRun(symbol, tf))
+                        continue;
 
-                        try
-                        {
-                            await ProcessSymbol(symbol, tf, ct);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, "Error processing {symbol} {tf}", symbol, tf);
-                            ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ ERR", "Ошибка");
-                        }
-
-                        await Task.Delay(35, ct);
+                    try
+                    {
+                        await ProcessSymbol(symbol, tf, ct);
                     }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error processing {symbol} {tf}", symbol, tf);
+                        ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ ERR", "Ошибка");
+                    }
+
+                    await Task.Delay(35, ct);
                 }
+            }
+            */
+                foreach (var symbol in _symbols.ActiveSymbols)
+                {
+                    // === 1. Формируем снимки рынка ===
+                    var m1 = await _market.GetMarketSnapshot(symbol, KlineInterval.OneMinute, ct);
+                    var m5 = await _market.GetMarketSnapshot(symbol, KlineInterval.FiveMinutes, ct);
+
+                    if (m1 == null || m5 == null)
+                    {
+                        ConsoleSymbolTableFormatter.UpdateTf(symbol, KlineInterval.OneMinute, "❌", "No snapshots");
+                        continue;
+                    }
+
+                    // === 2. ML-выбор таймфрейма ===
+                    var decision = _tfSelector.SelectTF(m1, m5);
+
+                    KlineInterval? finalTf = decision switch
+                    {
+                        AiTimeframeSelectorService.DominantTF.OneMinute => KlineInterval.OneMinute,
+                        AiTimeframeSelectorService.DominantTF.FiveMinutes => KlineInterval.FiveMinutes,
+                        AiTimeframeSelectorService.DominantTF.Both => KlineInterval.FiveMinutes,
+                        _ => null
+                    };
+
+                    if (finalTf == null)
+                    {
+                        ConsoleSymbolTableFormatter.UpdateTf(symbol, KlineInterval.OneMinute, "❌", "TF=None");
+                        continue;
+                    }
+
+                    // === 3. Выполняем стратегию только для выбранного TF ===
+                    try
+                    {
+                        await ProcessSymbol(symbol, finalTf.Value, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "ML-TF error for {symbol}", symbol);
+                    }
+
+                    await Task.Delay(25, ct);
+                }
+
+
 
                 await PeriodicSnapshot(ct);
                 await Task.Delay(80, ct);
             }
         }
+
+
 
         // ================================================================
         // QUANT REALTIME TICK — каждые 60 секунд
@@ -295,15 +348,15 @@ namespace VertexAutoTradeBinance8
 
            
             decimal qty = await _risk.CalculateSafeQty(
-    signal.Symbol,
-    signal.EntryPrice,
-    signal.StopLoss,
-    riskMult,
-    safety,
-    signal.Leverage ?? 1m,
-    signal.Side,
-    signal.TakeProfits,
-    ct);
+                signal.Symbol,
+                signal.EntryPrice,
+                signal.StopLoss,
+                riskMult,
+                safety,
+                signal.Leverage ?? 1m,
+                signal.Side,
+                signal.TakeProfits,
+                ct);
 
 
             if (qty <= 0)

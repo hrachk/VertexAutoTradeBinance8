@@ -24,7 +24,7 @@
 <div class="missed-grid">
     @foreach (var r in _records.OrderByDescending(x => x.Time).Take(40))
     {
-        <div class="missed-card">
+        <div class="missed-card @(NewFlash.Contains(Key(r)) ? "flash-new" : "")">
             <div class="missed-header">
                 <div>
                     <div class="missed-symbol">@r.Symbol</div>
@@ -144,9 +144,72 @@
     private Dictionary<string, List<MissedTradeRecord>> GroupedBySymbol;
     private HashSet<string> Expanded = new();
     private Dictionary<string, decimal> TickSizes = new();
+    private System.Threading.Timer? _timer;
+    private HashSet<string> _knownTradeIds = new(); // уникальные подписи
+
+    private HashSet<string> _known = new(); // ID всех известных записей
+    private HashSet<string> NewFlash = new();
+
+    string Key(MissedTradeRecord r)
+        => $"{r.Symbol}-{r.Time:yyyyMMddHHmmss.ffff}";
+
     protected override async Task OnInitializedAsync()
     {
+        await LoadData();
+
+        // === AUTO-REFRESH EVERY 5 SECONDS ===
+        _timer = new System.Threading.Timer(
+            async _ =>
+            {
+                await InvokeAsync(async () =>
+                {
+                    await Refresh();
+                    StateHasChanged();
+                });
+            },
+            null,
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromSeconds(5)
+        );
+      
+    }
+    private async Task LoadData()
+    {
         _records = await MissedService.LoadAsync();
+
+        // регистрируем все существующие записи (чтобы они не мигали как новые)
+        foreach (var r in _records)
+            _known.Add(Key(r));
+
+        GroupedBySymbol = _records
+            .GroupBy(x => x.Symbol)
+            .ToDictionary(g => g.Key, g => g.ToList());
+    }
+    private async Task Refresh()
+    {
+        var newRecords = await MissedService.LoadAsync();
+        if (newRecords == null || newRecords.Count == 0)
+            return;
+
+        // ищем новые записи
+        var newOnes = newRecords
+            .Where(r => !_known.Contains(Key(r)))
+            .ToList();
+
+        if (newOnes.Count > 0)
+        {
+            // регистрируем
+            foreach (var r in newOnes)
+                _known.Add(Key(r));
+
+            // запускаем анимацию только для новых карточек
+            NewFlash = newOnes
+                .Select(r => Key(r))
+                .ToHashSet();
+        }
+
+        _records = newRecords;
+
         GroupedBySymbol = _records
             .GroupBy(x => x.Symbol)
             .ToDictionary(g => g.Key, g => g.ToList());

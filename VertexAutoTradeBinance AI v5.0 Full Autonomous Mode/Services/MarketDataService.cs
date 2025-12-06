@@ -4,6 +4,7 @@ using Binance.Net.Enums;
 using Binance.Net.Interfaces;
 using Binance.Net.Objects.Models.Futures;
 using Microsoft.Extensions.Logging;
+using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services;
 
@@ -11,14 +12,15 @@ public class MarketDataService
 {
     private readonly ILogger<MarketDataService> _logger;
     private readonly BinanceClientFactory _factory;
-
+    private readonly SmartRegimeService _smartRegime;
     // === NEW: локальный кэш стакана ===
     private readonly Dictionary<string, OrderBookSnapshot> _depthCache = new();
 
-    public MarketDataService(ILogger<MarketDataService> logger, BinanceClientFactory factory)
+    public MarketDataService(ILogger<MarketDataService> logger, BinanceClientFactory factory, SmartRegimeService smartRegime)
     {
         _logger = logger;
         _factory = factory;
+        _smartRegime = smartRegime;
     }
 
     // ============================================================
@@ -153,6 +155,58 @@ public class MarketDataService
 
         return null;
     }
+
+    public async Task<MarketSnapshot?> GetMarketSnapshot(
+      string symbol,
+      KlineInterval tf,
+      CancellationToken ct)
+    {
+        IReadOnlyList<BinanceFuturesUsdtKline>? kl;
+        try
+        {
+            kl = await GetKlines(symbol, tf, 200);
+        }
+        catch
+        {
+            return null;
+        }
+
+        if (kl == null || kl.Count < 50)
+            return null;
+
+        // --- ATR ---
+        decimal atr = 0;
+        try
+        {
+            atr = CalculateAtr(kl, 14);   // <--- ИСПОЛЬЗУЕМ ТВОЙ СУЩЕСТВУЮЩИЙ МЕТОД
+        }
+        catch
+        {
+            atr = 0;
+        }
+
+        // --- Smart Regime ---
+        SmartRegimeInfo smart;
+        try
+        {
+            smart = _smartRegime.Evaluate(symbol, tf, kl);
+        }
+        catch
+        {
+            return null;
+        }
+
+        return new MarketSnapshot
+        {
+            TrendSlopePercent = smart.TrendSlopePercent,
+            VolatilityPercent = smart.VolatilityPercent,
+            Atr = atr,
+            Confidence = smart.Confidence
+        };
+    }
+
+
+
 }
 
 // ============================================================

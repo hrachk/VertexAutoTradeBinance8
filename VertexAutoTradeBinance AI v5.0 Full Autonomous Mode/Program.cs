@@ -71,6 +71,7 @@ public class Program
                 services.AddSingleton<SymbolLiquidityScanner>();
                 services.AddHostedService<TradingWorker>();
                 services.AddSingleton<SymbolRegistryService>();
+                services.AddSingleton<AiTimeframeSelectorService>();
 
             })
             .Build();

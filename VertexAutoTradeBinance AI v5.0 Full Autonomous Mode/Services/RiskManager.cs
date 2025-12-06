@@ -40,15 +40,15 @@ namespace VertexAutoTradeBinance8.Services
         // SAFE QTY v7.4 (QUANT-REALTIME FINAL)
         // ====================================================================
         public async Task<decimal> CalculateSafeQty(
-            string symbol,
-            decimal entryPrice,
-            decimal stopLoss,
-            decimal riskMultiplier,
-            decimal safetyRiskMultiplier,
-            decimal leverage,
-            SignalSide side,
-            List<decimal> takeProfits,
-            CancellationToken ct)
+     string symbol,
+     decimal entryPrice,
+     decimal stopLoss,
+     decimal riskMultiplier,
+     decimal safetyRiskMultiplier,
+     decimal leverage,
+     SignalSide side,
+     List<decimal> takeProfits,
+     CancellationToken ct)
         {
             if (entryPrice <= 0 || stopLoss <= 0)
                 return 0;
@@ -152,8 +152,50 @@ namespace VertexAutoTradeBinance8.Services
                 return 0;
             }
 
+            // 🔥 ДОБАВЛЕНО: ФИНАЛЬНАЯ ПРОВЕРКА МАРЖИ
+            if (leverage <= 0)
+                leverage = 1m;
+
+            decimal requiredMargin = notional / leverage;
+
+            if (requiredMargin > free)
+            {
+                // пытаемся уменьшить позицию до максимально допустимой
+                decimal maxNotional = free * leverage * 0.98m; // небольшая подушка
+
+                if (maxNotional < binanceMinNotional)
+                {
+                    LogMissedTrade(symbol, entryPrice, stopLoss,
+                        "InsufficientBalance",
+                        free, notional, binanceMinNotional, side, takeProfits);
+                    return 0;
+                }
+
+                qty = Math.Floor((maxNotional / entryPrice) / step) * step;
+                if (qty < minQty)
+                {
+                    LogMissedTrade(symbol, entryPrice, stopLoss,
+                        "InsufficientBalance",
+                        free, maxNotional, binanceMinNotional, side, takeProfits);
+                    return 0;
+                }
+
+                notional = qty * entryPrice;
+                requiredMargin = notional / leverage;
+
+                if (requiredMargin > free)
+                {
+                    LogMissedTrade(symbol, entryPrice, stopLoss,
+                        "InsufficientBalance",
+                        free, notional, binanceMinNotional, side, takeProfits);
+                    return 0;
+                }
+            }
+            // 🔥 КОНЕЦ ДОБАВКИ
+
             return qty;
         }
+
 
         // ====================================================================
         // AI LEVERAGE MULTIPLIER
