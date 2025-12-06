@@ -11,7 +11,7 @@ public class SymbolRegistryService
     private readonly ILogger<SymbolRegistryService> _logger;
 
     public IReadOnlyList<string> ActiveSymbols { get; private set; } = new List<string>();
-    private readonly TimeSpan RefreshInterval;// = TimeSpan.FromMinutes(10); // Интервал в 10 минут
+    private readonly TimeSpan RefreshInterval; // Интервал в 10 минут
 
     public SymbolRegistryService(
         IConfiguration cfg,
@@ -35,16 +35,20 @@ public class SymbolRegistryService
             return;
         }
 
-        while (!stoppingToken.IsCancellationRequested)
+        // Запускаем обновление в фоновом режиме, чтобы программа могла продолжить работу
+        _ = Task.Run(async () =>
         {
-            _logger.LogInformation("Автоматическое обновление списка символов...");
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                _logger.LogInformation("Автоматическое обновление списка символов...");
+                await LoadAuto();
+                // Ожидаем 10 минут перед следующим обновлением
+                await Task.Delay(RefreshInterval, stoppingToken);
+            }
+        });
 
-            await LoadAuto();
-            // Ожидаем 10 минут перед следующим обновлением
-            await Task.Delay(RefreshInterval, stoppingToken);
-        }
-
-      
+        // Дальше программа может продолжить выполнение других задач
+        _logger.LogInformation("Программа продолжает выполнение...");
     }
 
     private async Task LoadAuto()

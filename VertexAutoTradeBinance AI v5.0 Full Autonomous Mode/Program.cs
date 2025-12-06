@@ -58,7 +58,7 @@ public class Program
                 services.AddSingleton<PositionSupervisorService>();
                 services.AddSingleton<SmartRegimeService>();
                  services.AddSingleton<TradeStateManager>();
-                 services.AddSingleton<SymbolRegistryService>();
+               
 
                 services.AddSingleton(sp => sp.GetRequiredService<IOptions<TradingOptions>>().Value);
 
@@ -70,6 +70,7 @@ public class Program
                 services.AddHostedService<BackgroundMarketScannerService>();
                 services.AddSingleton<SymbolLiquidityScanner>();
                 services.AddHostedService<TradingWorker>();
+                services.AddSingleton<SymbolRegistryService>();
 
             })
             .Build();

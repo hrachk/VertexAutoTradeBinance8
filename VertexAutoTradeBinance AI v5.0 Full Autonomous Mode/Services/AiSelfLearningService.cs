@@ -732,10 +732,6 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             return rs;
-        }
-
-
-
-
+        } 
     }
 }
