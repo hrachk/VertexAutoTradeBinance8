@@ -37,11 +37,37 @@
             </div>
 
             <div class="missed-body">
-                <div>Вход: <b>@r.Entry</b></div>
-                <div>SL: <b>@r.StopLoss</b></div>
-                <div>Баланс: <span class="value-green">@r.FreeBalance</span></div>
-                <div>Нужно: <span class="value-yellow">@r.RequiredNotional</span></div>
-                <div>MinNotional: <span class="value-red">@r.MinNotional</span></div>
+                <div>
+                    Side:
+                    @if (r.Side == "Buy")
+                    {
+                        <b class="value-green">LONG</b>
+                    }
+                    else
+                    {
+                        <b class="value-red">SHORT</b>
+                    }
+                </div>
+
+                <div>Вход: <b>@F(r.Entry)</b></div>
+                <div>SL: <b>@F(r.StopLoss)</b></div>
+
+                <!-- TPs -->
+                <div class="mt-2">
+                    <div class="text-gray-400 text-xs">TPs:</div>
+                    <div class="flex flex-wrap gap-2 mt-1">
+                        @foreach (var tp in r.TakeProfits)
+                        {
+                            <span class="px-2 py-1 bg-gray-700 text-green-300 rounded text-xs"><b>@F(tp)</b></span>
+                        }
+                    </div>
+                </div>
+
+                <div class="mt-3">
+                    <div>Баланс: <span class="value-green">@r.FreeBalance</span></div>
+                    <div>Попытка Notional: <span class="value-yellow">@F(r.AttemptNotional)</span></div>
+                    <div>MinNotional Binance: <span class="value-red">@F(r.RequiredMinNotional)</span></div>
+                </div>
             </div>
         </div>
     }
@@ -71,10 +97,36 @@
                     {
                         <div class="missed-expand-entry">
                             <div class="missed-time">@r.Time.ToLocalTime()</div>
+
+                            <!-- SIDE -->
+                            <div>
+                                @if (r.Side == "Buy")
+                                {
+                                    <span class="value-green font-bold">LONG</span>
+                                }
+                                else
+                                {
+                                    <span class="value-red font-bold">SHORT</span>
+                                }
+                            </div>
+
+                            <!-- BASIS -->
                             <div class="value-red">@TranslateReason(r.Reason)</div>
-                            <div>Entry: <b>@r.Entry</b></div>
-                            <div>Balance: <b class="value-green">@r.FreeBalance</b></div>
-                            <div>Need: <b class="value-yellow">@r.RequiredNotional</b></div>
+
+                            <div>Entry: <b>@F(r.Entry)</b></div>
+                            <div>SL: <b>@F(r.StopLoss)</b></div>
+
+                            <!-- TPs -->
+                            <div class="mt-2 flex flex-wrap gap-2">
+                                @foreach (var tp in r.TakeProfits)
+                                {
+                                    <span class="px-2 py-1 bg-gray-700 text-green-300 rounded text-xs"><b>@F(tp)</b></span>
+                                }
+                            </div>
+
+                            <div>Balance: <b class="value-green">@F(r.FreeBalance)</b></div>
+                            <div>Attempt: <b class="value-yellow">@F(r.AttemptNotional)</b></div>
+                            <div>MinNeeded: <b class="value-red">@F(r.RequiredMinNotional)</b></div>
                         </div>
                     }
                 </div>
@@ -107,6 +159,21 @@
         {
             "BelowMinNotional" => "Меньше минимальная сумма сделки",
             "InsufficientBalance" => "Недостаточно баланса",
+            "InsufficientBalanceForMinNotional" => "Недостаточно средств для минимальной сделки",
             _ => r
         };
+
+    string F(decimal v)
+    {
+        if (v >= 1000)
+            return v.ToString("F2");      // напр. 3047.03
+
+        if (v >= 1)
+            return v.ToString("F4");      // напр. 47.1234
+
+        if (v >= 0.01m)
+            return v.ToString("F6");      // напр. 0.123456
+
+        return v.ToString("0.##########"); // мелкие значения
+    }
 }

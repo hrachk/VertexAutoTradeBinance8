@@ -8,11 +8,21 @@
         public decimal Entry { get; set; }
         public decimal StopLoss { get; set; }
 
+        // NEW: LONG / SHORT (Buy / Sell)
+        public string Side { get; set; } = "";
+
+        // NEW: TakeProfit list
+        public List<decimal> TakeProfits { get; set; } = new();
+
         public string Reason { get; set; } = "";
 
         public decimal FreeBalance { get; set; }
-        public decimal RequiredNotional { get; set; }
-        public decimal MinNotional { get; set; }
+
+        // NEW: attemptNotional — что бот пытался открыть
+        public decimal AttemptNotional { get; set; }
+
+        // NEW: Binance мин. требование для символа
+        public decimal RequiredMinNotional { get; set; }
     }
 
     public static class MissedTradeExtensions

@@ -286,14 +286,18 @@ namespace VertexAutoTradeBinance8
             // ------------------ 4. RISK-MANAGER v6 --------------------
             decimal safety = signal?.SafetyRiskMultiplier ?? 1.0m;
 
-            var qty = await _risk.CalculateSafeQty(
-                symbol,
-                signal.EntryPrice,
-                signal.StopLoss,
-                riskMult,
-                safety,
-                signal.Leverage ?? 1m,
-                ct);
+           
+            decimal qty = await _risk.CalculateSafeQty(
+    signal.Symbol,
+    signal.EntryPrice,
+    signal.StopLoss,
+    riskMult,
+    safety,
+    signal.Leverage ?? 1m,
+    signal.Side,
+    signal.TakeProfits,
+    ct);
+
 
             if (qty <= 0)
             {
