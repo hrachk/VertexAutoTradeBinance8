@@ -37,6 +37,8 @@ namespace VertexAutoTradeBinance8
         private readonly Dictionary<string, DateTime> _lastTfRun = new();
         private readonly Dictionary<string, DateTime> _lastTrade = new();
 
+        private readonly SymbolRegistryService _symbols;
+
         private static readonly KlineInterval[] TFS = {
             KlineInterval.OneMinute,
             KlineInterval.FiveMinutes,
@@ -74,7 +76,8 @@ namespace VertexAutoTradeBinance8
             AiRiskScalerV2 riskScaler,
             PositionSupervisorService supervisor,
             AiSelfLearningService learn,
-            AiModelSnapshotService snapshot)
+            AiModelSnapshotService snapshot,
+            SymbolRegistryService symbols)
         {
             _logger = logger;
 
@@ -97,6 +100,7 @@ namespace VertexAutoTradeBinance8
 
             _learn = learn;
             _snapshot = snapshot;
+            _symbols = symbols;
         }
 
         // ================================================================
@@ -104,6 +108,9 @@ namespace VertexAutoTradeBinance8
         // ================================================================
         protected override async Task ExecuteAsync(CancellationToken ct)
         {
+            await _symbols.LoadAsync();
+
+
             _logger.LogWarning("TradingWorker v6 QUANT-REALTIME started");
 
             await EnableHedgeMode();
@@ -126,7 +133,7 @@ namespace VertexAutoTradeBinance8
 
                 foreach (var tf in TFS)
                 {
-                    foreach (var symbol in _binance.Symbols)
+                    foreach (var symbol in /*_binance.Symbols*/ _symbols.ActiveSymbols)
                     {
                         if (!ShouldRun(symbol, tf))
                             continue;

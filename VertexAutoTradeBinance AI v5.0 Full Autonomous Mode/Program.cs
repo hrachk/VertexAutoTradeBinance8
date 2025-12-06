@@ -58,6 +58,7 @@ public class Program
                 services.AddSingleton<PositionSupervisorService>();
                 services.AddSingleton<SmartRegimeService>();
                  services.AddSingleton<TradeStateManager>();
+                 services.AddSingleton<SymbolRegistryService>();
 
                 services.AddSingleton(sp => sp.GetRequiredService<IOptions<TradingOptions>>().Value);
 
