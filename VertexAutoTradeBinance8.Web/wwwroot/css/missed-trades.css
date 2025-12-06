@@ -102,3 +102,75 @@
     .missed-expand-entry:last-child {
         margin-bottom: 0;
     }
+
+
+
+
+/* =================== PREMIUM TRADING COLORS =================== */
+
+.value-entry {
+    color: #f5f5f5;
+    font-weight: 600;
+}
+
+.value-sl {
+    color: #ff5c5c; /* Red - StopLoss */
+    font-weight: 600;
+}
+
+.value-tp {
+    background-color: #124a2f;
+    color: #4ade80; /* Lime-green */
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.value-balance {
+    color: #22c55e; /* Mint green */
+    font-weight: 600;
+}
+
+.value-notional-yellow {
+    color: #facc15; /* Binance yellow */
+    font-weight: 600;
+}
+
+.value-notional-orange {
+    color: #fb923c; /* Orange attempt value */
+    font-weight: 600;
+}
+
+.value-time {
+    color: #9ca3af; /* cool grey */
+}
+
+/* SIDE LABELS */
+.side-long {
+    background-color: #065f46;
+    color: #34d399;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.side-short {
+    background-color: #7f1d1d;
+    color: #f87171;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+/* Reason Badge */
+.badge-reason {
+    background-color: #b45309;
+    color: #fde68a;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+}

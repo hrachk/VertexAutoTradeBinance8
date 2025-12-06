@@ -28,11 +28,11 @@
             <div class="missed-header">
                 <div>
                     <div class="missed-symbol">@r.Symbol</div>
-                    <div class="missed-time">@r.Time.ToLocalTime()</div>
+                    <div class="value-time">@r.Time.ToLocalTime()</div>
                 </div>
 
                 <span class="missed-badge @(r.Reason == "BelowMinNotional" ? "badge-min" : "badge-balance")">
-                    @TranslateReason(r.Reason)
+                    <span class="badge-reason">@TranslateReason(r.Reason)</span>
                 </span>
             </div>
 
@@ -41,32 +41,36 @@
                     Side:
                     @if (r.Side == "Buy")
                     {
-                        <b class="value-green">LONG</b>
+                        <span class="side-long">LONG</span>
                     }
                     else
                     {
-                        <b class="value-red">SHORT</b>
+                        <span class="side-short">SHORT</span>
                     }
                 </div>
 
-                <div>Вход: <b>@F(r.Entry)</b></div>
-                <div>SL: <b>@F(r.StopLoss)</b></div>
-
+               
+                <div>Вход: <b class="value-entry">@F(r.Symbol, r.Entry)</b></div>
+                <div>SL: <b class="value-sl">@F(r.Symbol, r.StopLoss)</b></div>
                 <!-- TPs -->
                 <div class="mt-2">
                     <div class="text-gray-400 text-xs">TPs:</div>
                     <div class="flex flex-wrap gap-2 mt-1">
                         @foreach (var tp in r.TakeProfits)
                         {
-                            <span class="px-2 py-1 bg-gray-700 text-green-300 rounded text-xs"><b>@F(tp)</b></span>
+                            <span class="value-tp">@F(r.Symbol, tp)</span>
                         }
                     </div>
                 </div>
 
                 <div class="mt-3">
-                    <div>Баланс: <span class="value-green">@r.FreeBalance</span></div>
-                    <div>Попытка Notional: <span class="value-yellow">@F(r.AttemptNotional)</span></div>
-                    <div>MinNotional Binance: <span class="value-red">@F(r.RequiredMinNotional)</span></div>
+                    Баланс: <span class="value-balance">@Money(r.FreeBalance)</span>
+                    Попытка Notional:
+                    <span class="value-notional-orange">@Money(r.AttemptNotional)</span>
+                    Min Binance:
+                    <span class="value-notional-yellow">@Money(r.RequiredMinNotional)</span>
+
+
                 </div>
             </div>
         </div>
@@ -139,7 +143,7 @@
     private List<MissedTradeRecord>? _records;
     private Dictionary<string, List<MissedTradeRecord>> GroupedBySymbol;
     private HashSet<string> Expanded = new();
-
+    private Dictionary<string, decimal> TickSizes = new();
     protected override async Task OnInitializedAsync()
     {
         _records = await MissedService.LoadAsync();
@@ -176,4 +180,49 @@
 
         return v.ToString("0.##########"); // мелкие значения
     }
+    string Money(decimal v)
+    {
+        if (v >= 1)
+            return v.ToString("F2") + " USDT";
+
+        return v.ToString("0.00000000");
+    }
+
+    decimal GetTick(string symbol)
+    {
+        if (TickSizes.TryGetValue(symbol, out var tick))
+            return tick;
+
+        return 0.0001m; // fallback
+    }
+    string F(string symbol, decimal v)
+    {
+        decimal tick = GetTick(symbol);
+
+        if (tick > 0)
+        {
+            int precision =
+                tick switch
+                {
+                    >= 1m => 0,
+                    >= 0.1m => 1,
+                    >= 0.01m => 2,
+                    >= 0.001m => 3,
+                    >= 0.0001m => 4,
+                    >= 0.00001m => 5,
+                    >= 0.000001m => 6,
+                    _ => 8
+                };
+
+            return Math.Round(v, precision).ToString($"F{precision}");
+        }
+
+        // fallback
+        if (v >= 1000) return v.ToString("F2");
+        if (v >= 1) return v.ToString("F4");
+        if (v >= 0.01m) return v.ToString("F6");
+
+        return v.ToString("0.##########");
+    }
+
 }
