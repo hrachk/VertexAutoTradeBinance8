@@ -108,7 +108,7 @@ namespace VertexAutoTradeBinance8
         // ================================================================
         protected override async Task ExecuteAsync(CancellationToken ct)
         {
-            await _symbols.LoadAsync();
+            await _symbols.LoadAsync(ct);
 
 
             _logger.LogWarning("TradingWorker v6 QUANT-REALTIME started");
