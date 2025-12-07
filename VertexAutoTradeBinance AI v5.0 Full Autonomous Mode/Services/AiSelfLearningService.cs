@@ -86,12 +86,13 @@ namespace VertexAutoTradeBinance8.Services
             try
             {
                 var dir = Path.GetDirectoryName(FilePath);
-                if (!string.IsNullOrWhiteSpace(dir))
+                if (!string.IsNullOrWhiteSpace(dir) && !Directory.Exists(dir))
                     Directory.CreateDirectory(dir);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[AI] Error creating ai-models directory");
+                return;  // Ранний выход, если директорию не удалось создать
             }
 
             Load();
@@ -533,16 +534,31 @@ namespace VertexAutoTradeBinance8.Services
             {
                 var dir = Path.GetDirectoryName(FilePath);
                 if (!string.IsNullOrWhiteSpace(dir))
-                    Directory.CreateDirectory(dir);
+                {
+                    try
+                    {
+                        Directory.CreateDirectory(dir);
+                        _logger.LogInformation("[AI] Directory created: {Directory}", dir);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "[AI] Error creating directory: {Directory}", dir);
+                    }
+                }
 
                 if (!File.Exists(FilePath))
                 {
-                    _logger.LogInformation("[AI] ai_learning.json not found → start with empty v8 state.");
-                    return;
+                    _logger.LogInformation("[AI] ai_learning.json not found → creating empty state.");
+                    // Если файл не найден, создаём пустой файл
+                    var emptyState = new AiLearningSnapshot();
+                    var emptyStateJson = JsonSerializer.Serialize(emptyState, JsonOptions);
+                    File.WriteAllText(FilePath, emptyStateJson);  // Записываем пустой файл
+                    return; // Ранний выход, если файл пустой
                 }
 
                 AiLearningSnapshot? snap = null;
                 var json = File.ReadAllText(FilePath);
+                _logger.LogInformation("[AI] File read successfully: {FilePath}", FilePath);
 
                 try
                 {
@@ -550,31 +566,16 @@ namespace VertexAutoTradeBinance8.Services
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex,
-                        "[AI] LOAD ERROR: ai_learning.json has invalid format → trying backup.");
-                }
-
-                if (snap == null && File.Exists(BackupPath))
-                {
-                    var backupJson = File.ReadAllText(BackupPath);
-                    try
-                    {
-                        snap = JsonSerializer.Deserialize<AiLearningSnapshot>(backupJson, JsonOptions);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex,
-                            "[AI] BACKUP LOAD ERROR: ai_learning_backup.json invalid.");
-                    }
+                    _logger.LogError(ex, "[AI] Error deserializing ai_learning.json.");
+                    snap = new AiLearningSnapshot();  // Если не получилось, создаём пустой объект
                 }
 
                 if (snap == null)
                 {
-                    _logger.LogWarning("[AI] ai_learning.json not loaded → starting with empty state.");
+                    _logger.LogWarning("[AI] Failed to load ai_learning.json. Using empty state.");
                     return;
                 }
 
-                // Восстанавливаем _stats из snapshot
                 ImportState(snap);
 
                 lock (_lock)
@@ -590,17 +591,17 @@ namespace VertexAutoTradeBinance8.Services
                 }
 
                 _logger.LogInformation(
-                    "[AI] ai_learning loaded v{Version}: symbols={Symbols}, trades={Trades}, states={States}",
-                    snap.SnapshotVersion,
+                    "[AI] ai_learning loaded successfully: Symbols={Symbols}, Trades={Trades}, States={States}",
                     snap.Meta?.Symbols ?? _stats.Count,
                     snap.Meta?.Trades ?? _tradeHistory.Count,
                     snap.Meta?.MarketStates ?? _marketStates.Count);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[AI] LOAD FATAL ERROR → start empty v8 state.");
+                _logger.LogError(ex, "[AI] Fatal error loading ai_learning.json.");
             }
         }
+
 
         private void TrySnapshot()
         {

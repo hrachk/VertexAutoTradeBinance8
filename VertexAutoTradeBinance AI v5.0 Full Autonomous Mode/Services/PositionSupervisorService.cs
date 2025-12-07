@@ -199,7 +199,7 @@ namespace VertexAutoTradeBinance8.Services
             if (entry <= 0 && signal != null && signal.Symbol == symbol)
                 entry = signal.EntryPrice;
 
-            // 1) Missing SL
+            // 1) Missing SL - Creating Emergency SL
             if (sl == null)
             {
                 await CreateEmergencySLAsync(client, symbol, side, qty, entry, signal, ct);
@@ -207,7 +207,7 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-            // 2) Missing TP
+            // 2) Missing TP - Creating Emergency TP
             if (tp == null)
             {
                 await CreateEmergencyTPAsync(client, symbol, side, qty, entry, signal, ct);
@@ -215,54 +215,12 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-            // 3) Trailing
+            // 3) Trailing Logic
             if (klines != null && klines.Count >= 50)
             {
                 await MultiLayerTrailingAsync(
                     client, symbol, side, qty, entry,
                     signal, orders, klines, ct);
-            }
-
-            // =====================================================================
-            // FIXED CLOSE DETECTION — AI LEARNING
-            // =====================================================================
-            try
-            {
-                var posNow = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, null, ct);
-                if (posNow.Success && posNow.Data != null)
-                {
-                    var p2 = posNow.Data.FirstOrDefault(p => p.PositionSide == side);
-                    decimal newQty = p2 != null ? Math.Abs(p2.Quantity) : 0m;
-
-                    if (qty > 0 && newQty == 0)
-                    {
-                        decimal exitPrice =
-                            (p2 != null && p2.MarkPrice > 0)
-                                ? p2.MarkPrice
-                                : await GetMarkPriceSafeAsync(client, symbol, entry, ct);
-
-                        if (exitPrice > 0)
-                        {
-                            var learnedSide =
-                                side == PositionSide.Short ? SignalSide.Sell : SignalSide.Buy;
-
-                            _aiLearning.RecordTrade(
-                                symbol,
-                                learnedSide,
-                                entry,
-                                exitPrice,
-                                _regimeNow);
-
-                            _logger.LogInformation(
-                                "[AI-LEARN][{symbol}] TRADE CLOSED entry={entry}, exit={exit}, side={side}, regime={reg}",
-                                symbol, entry, exitPrice, learnedSide, _regimeNow);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[AI-LEARN] Close detection error {symbol}", symbol);
             }
         }
 
@@ -294,9 +252,12 @@ namespace VertexAutoTradeBinance8.Services
                     var atr = _marketData.CalculateAtr(kl, 14);
                     if (atr <= 0) return;
 
+                    // Динамическое расширение SL при высокой волатильности
+                    var atrMultiplier = (atr > 0.0025m) ? 1.5m : 1.2m;  // Если ATR > 0.25%, расширяем SL
+
                     rawSl = side == PositionSide.Long
-                        ? entryPrice - atr * 1.2m
-                        : entryPrice + atr * 1.2m;
+                        ? entryPrice - atr * atrMultiplier
+                        : entryPrice + atr * atrMultiplier;
                 }
                 catch (Exception ex)
                 {
@@ -370,9 +331,10 @@ namespace VertexAutoTradeBinance8.Services
                     var atr = _marketData.CalculateAtr(kl, 14);
                     if (atr <= 0) return;
 
+                    // Увеличение TP с использованием ATR
                     trigger = side == PositionSide.Long
-                        ? entryPrice + atr * 1.5m
-                        : entryPrice - atr * 1.5m;
+                        ? entryPrice + atr * 1.5m  // Увеличиваем TP для Long позиций
+                        : entryPrice - atr * 1.5m;  // Уменьшаем TP для Short позиций
                 }
                 catch (Exception ex)
                 {
