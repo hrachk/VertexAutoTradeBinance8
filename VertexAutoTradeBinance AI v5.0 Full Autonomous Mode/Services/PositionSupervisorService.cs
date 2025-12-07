@@ -255,6 +255,54 @@ namespace VertexAutoTradeBinance8.Services
                     klines,
                     ct);
             }
+
+            // =======================================================
+            // 10) DETECT CLOSE → AI LEARNING (QUANT-REALTIME)
+            // =======================================================
+            try
+            {
+                var posNow = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, null, ct);
+                if (posNow.Success && posNow.Data != null)
+                {
+                    var lp2 = posNow.Data.FirstOrDefault(p => p.PositionSide == PositionSide.Long);
+                    var sp2 = posNow.Data.FirstOrDefault(p => p.PositionSide == PositionSide.Short);
+
+                    decimal qLongNow = lp2 != null ? Math.Abs(lp2.Quantity) : 0m;
+                    decimal qShortNow = sp2 != null ? Math.Abs(sp2.Quantity) : 0m;
+
+                    // позиция БЫЛА (qty) → теперь стала 0 → сделка ЗАКРЫТА
+                    if (qty > 0 && qLongNow == 0 && qShortNow == 0)
+                    {
+                        decimal exitPrice =
+                            lp2?.MarkPrice > 0 ? lp2.MarkPrice :
+                            sp2?.MarkPrice > 0 ? sp2.MarkPrice :
+                            0m;
+
+                        if (exitPrice > 0m)
+                        {
+                            var learnedSide = side == PositionSide.Short
+                                ? SignalSide.Sell
+                                : SignalSide.Buy;
+
+                            _aiLearning.RecordTrade(
+                                symbol,
+                                learnedSide,
+                                entry,
+                                exitPrice,
+                                _regimeNow);
+
+                            _logger.LogInformation(
+                                "[AI-LEARN][{symbol}] TRADE CLOSED → entry={entry}, exit={exit}, side={side}, regime={reg}",
+                                symbol, entry, exitPrice, learnedSide, _regimeNow);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[AI-LEARN] Close detection error for {symbol}", symbol);
+            }
+
         }
 
         // =====================================================================

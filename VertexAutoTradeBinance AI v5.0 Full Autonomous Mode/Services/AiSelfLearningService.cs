@@ -495,13 +495,14 @@ namespace VertexAutoTradeBinance8.Services
                 lock (_lock)
                 {
                     // ⚠ защита от убийства данных пустым snapshot
-                    if (!force &&
-                        _stats.Count == 0 &&
-                        _marketStates.Count == 0 &&
-                        _tradeHistory.Count == 0)
+                    if (!force)
                     {
-                        // Нечего сохранять — лучше вообще не трогать существующий файл
-                        return;
+                        // Никогда не сохраняем пустой снапшот поверх существующего файла
+                        if (_stats.Count == 0 && _tradeHistory.Count == 0)
+                        {
+                            _logger.LogWarning("[AI] Snapshot skipped: empty data (protection)");
+                            return;
+                        }
                     }
 
                     snapshot = BuildSnapshot();

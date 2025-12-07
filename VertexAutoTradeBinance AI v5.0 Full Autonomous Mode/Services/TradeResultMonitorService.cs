@@ -59,10 +59,18 @@ namespace VertexAutoTradeBinance8.Services
             // ===========================
             // 2) Цена выхода
             // ===========================
-            decimal exitPrice = longPos?.MarkPrice ?? shortPos?.MarkPrice ?? 0m;
+            decimal exitPrice = 0;
+
+            try
+            {
+                var last = await client.UsdFuturesApi.ExchangeData.GetMarkPriceAsync(symbol, ct: ct);
+                if (last.Success && last.Data != null)
+                    exitPrice = last.Data.MarkPrice;
+            }
+            catch { }
 
             if (exitPrice <= 0)
-                return;
+                exitPrice = signal.EntryPrice; // fallback
 
             decimal entry = signal.EntryPrice;
             decimal sl = signal.StopLoss;
