@@ -106,6 +106,7 @@ namespace VertexAutoTradeBinance8
             _snapshot = snapshot;
             _symbols = symbols;
             _tfSelector = tfSelector;
+            learn.ForceSnapshot();
         }
 
         // ================================================================

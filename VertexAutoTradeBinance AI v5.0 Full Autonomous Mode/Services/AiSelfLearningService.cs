@@ -45,7 +45,7 @@ namespace VertexAutoTradeBinance8.Services
 
         // Снимок статистики каждые N минут (для trade-based / signal-based)
         private DateTime _lastSnapshot = DateTime.MinValue;
-        private readonly TimeSpan SnapshotInterval = TimeSpan.FromMinutes(15);
+        private readonly TimeSpan SnapshotInterval = TimeSpan.FromMinutes(5);
 
         // Глобальный HYBRID snapshot раз в N секунд (background learning)
         private DateTime _lastHybridSnapshot = DateTime.MinValue;
@@ -101,6 +101,8 @@ namespace VertexAutoTradeBinance8.Services
 
             Load();
         }
+
+
 
         // =====================================================================
         // MODELS
@@ -469,7 +471,7 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         // SAVE / LOAD (v7 – с Meta-блоком, но совместимо со старым форматом)
         // =====================================================================
-        private void Save(bool force = true)
+        private void Save(bool force)
         {
             try
             {
@@ -481,43 +483,36 @@ namespace VertexAutoTradeBinance8.Services
 
                 lock (_lock)
                 {
-                    // Защита от пустого snapshot
+                    // НЕ пропускаем при force=true
                     if (!force)
                     {
-                        if (_stats.Count == 0 && _tradeHistory.Count == 0)
+                        if (_stats.Count == 0 && _tradeHistory.Count == 0 && _marketStates.Count == 0)
                         {
-                            _logger.LogWarning("[AI] Snapshot skipped: empty data (protection)");
+                            _logger.LogWarning("[AI] Snapshot skipped: empty state");
                             return;
                         }
                     }
 
                     snapshot = BuildSnapshot();
-
-                    // Логируем перед записью
-                    _logger.LogInformation("[AI] Snapshot to be saved: {Snapshot}", JsonSerializer.Serialize(snapshot, JsonOptions));
                 }
 
-                // Преобразуем данные в JSON
                 var json = JsonSerializer.Serialize(snapshot, JsonOptions);
 
-                // Записываем в файл
                 File.WriteAllText(FilePath, json);
-                _logger.LogInformation("[AI] File written successfully: {FilePath}", FilePath);
                 File.Copy(FilePath, BackupPath, overwrite: true);
-                _logger.LogInformation("[AI] Backup file copied to: {BackupPath}", BackupPath);
 
                 _logger.LogInformation(
-                    "[AI] Snapshot saved v{Version}: symbols={Symbols}, trades={Trades}, states={States}",
-                    snapshot.SnapshotVersion,
+                    "[AI] Snapshot saved OK → symbols={Symbols}, states={States}, trades={Trades}",
                     snapshot.Meta.Symbols,
-                    snapshot.Meta.Trades,
-                    snapshot.Meta.MarketStates);
+                    snapshot.Meta.MarketStates,
+                    snapshot.Meta.Trades);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[AI] SAVE ERROR");
             }
         }
+
 
 
 
@@ -596,17 +591,35 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
+        public void ForceSnapshot()
+        {
+            lock (_lock)
+            {
+                Save(force: true);
+                _lastSnapshot = DateTime.UtcNow;
+
+                _logger.LogInformation("[AI][SNAPSHOT] Force save triggered");
+            }
+        }
 
         private void TrySnapshot()
         {
-            if (DateTime.UtcNow - _lastSnapshot < SnapshotInterval)
-                return;
+            lock (_lock)
+            {
+                var now = DateTime.UtcNow;
 
-            _lastSnapshot = DateTime.UtcNow;
+                if (now - _lastSnapshot < SnapshotInterval)
+                    return;
 
-            Save(force: false);  // Сохранение снимка с флагом "force" = false
+                Save(force: false);
+
+                _lastSnapshot = now;
+
+                _logger.LogInformation("[AI][SNAPSHOT] Saved (interval={Min} min)", SnapshotInterval.TotalMinutes);
+            }
         }
-         
+
+
 
         private AiLearningSnapshot BuildSnapshot()
         {

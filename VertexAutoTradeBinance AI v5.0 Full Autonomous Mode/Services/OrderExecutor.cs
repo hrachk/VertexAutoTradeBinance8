@@ -1,10 +1,11 @@
 // ============================================================================
-// ORDER EXECUTOR v5.2 — Smart UI + Safe Filters
-// - УДАЛЁН reduceOnly ИЗ ENTRY (как в v5.1)
+// ORDER EXECUTOR v6.5 — Smart ENTRY + Correct SL/TP
+// - ENTRY: Limit (или Market, если нужно будет добавить режим)
+// - SL: STOP-LIMIT, reduceOnly, безопасная дистанция от mark
+// - TP: LIMIT reduceOnly (классический профит-ордер)
 // - Binance.Net 11.11.0 совместимость
-// - Smart LIMIT/MARKET Entry
-// - PositionSide Long/Short корректный
-// - Красивый консольный UI через ConsoleReportFormatter
+// - PositionSide Long/Short корректный (Hedge-ready)
+// - Работает с готовыми SL/TP из TradeSignal (StrategyEngine + AiStopLossOptimizer)
 // ============================================================================
 
 using Binance.Net.Clients;
@@ -35,9 +36,9 @@ namespace VertexAutoTradeBinance8.Services
         // MAIN ENTRY METHOD
         // =====================================================================
         public async Task<OrderResult> ExecuteAsync(
-     TradeSignal signal,
-     decimal quantity,
-     CancellationToken ct = default)
+            TradeSignal signal,
+            decimal quantity,
+            CancellationToken ct = default)
         {
             using var client = _factory.CreateRestClient();
 
@@ -46,67 +47,195 @@ namespace VertexAutoTradeBinance8.Services
                 ? PositionSide.Long
                 : PositionSide.Short;
 
-            // Размещение ордера
-            var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+            // --- 0) Фильтры и tickSize ---
+            var filters = await _symbolInfo.GetFuturesFiltersAsync(signal.Symbol);
+            var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
+
+            // =================================================================
+            // 1) ОСНОВНОЙ LIMIT ENTRY
+            // =================================================================
+            var entryOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: signal.Symbol,
                 side: side,
                 type: FuturesOrderType.Limit,
                 quantity: quantity,
-                price: signal.EntryPrice,
+                price: RoundPrice(signal.EntryPrice, tick),
                 positionSide: posSide,
                 workingType: WorkingType.Mark,
                 timeInForce: TimeInForce.GoodTillCanceled,
                 ct: ct);
 
-            if (!res.Success || res.Data == null)
+            if (!entryOrder.Success || entryOrder.Data == null)
             {
-                _logger.LogError("[ORDER][{symbol}] LIMIT ERROR: {err}", signal.Symbol, res.Error);
-                return OrderResult.Fail(res.Error?.Message ?? "LIMIT_ERROR");
+                _logger.LogError("[ORDER][{symbol}] ENTRY LIMIT ERROR: {err}", signal.Symbol, entryOrder.Error);
+                return OrderResult.Fail(entryOrder.Error?.Message ?? "LIMIT_ERROR");
             }
 
-            var placed = res.Data;
+            var placed = entryOrder.Data;
             decimal entryPrice = placed.AveragePrice > 0 ? placed.AveragePrice : signal.EntryPrice;
+            entryPrice = RoundPrice(entryPrice, tick);
 
-            // 1. Рассчитываем TP и SL на основе EntryPrice
-            decimal tp = (decimal)(entryPrice + (signal.Atr * 2)); // TP на 2x ATR от Entry
-            decimal sl = (decimal)(entryPrice - (signal.Atr * 1.5m)); // SL на 1.5x ATR от Entry
+            // Получаем mark для защиты от мгновенного триггера
+            var mark = await GetMarkPriceSafeAsync(client, signal.Symbol, entryPrice, ct);
 
-            // Логируем
-            _logger.LogInformation("Order executed: {Symbol}, EntryPrice={EntryPrice}, TP={Tp}, SL={Sl}", signal.Symbol, entryPrice, tp, sl);
+            // =================================================================
+            // 2) ИСХОДНЫЕ SL / TP ИЗ SIGNAL (после AiStopLossOptimizer)
+            // =================================================================
+            decimal slPrice = signal.StopLoss;
+            decimal tpPrice = 0m;
 
-            // 2. Отправляем TP и SL на биржу
-            var tpOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol: signal.Symbol,
-                side: side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy, // TP будет противоположным side
-                type: FuturesOrderType.StopMarket,
-                quantity: quantity,
-                stopPrice: tp,
-                positionSide: posSide,
-                timeInForce: TimeInForce.GoodTillCanceled,
-                ct: ct);
+            if (signal.TakeProfits != null && signal.TakeProfits.Count > 0)
+                tpPrice = signal.TakeProfits[0];
+            else if (signal.TakeProfit.HasValue && signal.TakeProfit.Value > 0)
+                tpPrice = signal.TakeProfit.Value;
 
+            // --- fallback, если сломался сигнал ---
+            if (slPrice <= 0 && signal.Atr.HasValue && signal.Atr.Value > 0)
+            {
+                var atr = signal.Atr.Value;
+                slPrice = signal.Side == SignalSide.Buy
+                    ? entryPrice - atr * 1.5m
+                    : entryPrice + atr * 1.5m;
+            }
+
+            if (tpPrice <= 0 && signal.Atr.HasValue && signal.Atr.Value > 0)
+            {
+                var atr = signal.Atr.Value;
+                tpPrice = signal.Side == SignalSide.Buy
+                    ? entryPrice + atr * 2.0m
+                    : entryPrice - atr * 2.0m;
+            }
+
+            // --- защита: SL/TP должны быть по разные стороны от entry ---
+            if (signal.Side == SignalSide.Buy)
+            {
+                if (slPrice >= entryPrice)
+                    slPrice = entryPrice - Math.Abs(entryPrice * 0.003m); // минимум ~0.3% ниже
+
+                if (tpPrice <= entryPrice)
+                    tpPrice = entryPrice + Math.Abs(entryPrice * 0.006m); // минимум ~0.6% выше
+            }
+            else
+            {
+                if (slPrice <= entryPrice)
+                    slPrice = entryPrice + Math.Abs(entryPrice * 0.003m);
+
+                if (tpPrice >= entryPrice)
+                    tpPrice = entryPrice - Math.Abs(entryPrice * 0.006m);
+            }
+
+            // --- округляем по tickSize ---
+            slPrice = RoundPrice(slPrice, tick);
+            tpPrice = RoundPrice(tpPrice, tick);
+
+            // --- доп. защита от мгновенного триггера относительно mark ---
+            if (mark > 0)
+            {
+                if (signal.Side == SignalSide.Buy)
+                {
+                    if (slPrice >= mark)
+                        slPrice = RoundPrice(mark - 3 * tick, tick);
+
+                    if (tpPrice <= mark)
+                        tpPrice = RoundPrice(mark + 5 * tick, tick);
+                }
+                else
+                {
+                    if (slPrice <= mark)
+                        slPrice = RoundPrice(mark + 3 * tick, tick);
+
+                    if (tpPrice >= mark)
+                        tpPrice = RoundPrice(mark - 5 * tick, tick);
+                }
+            }
+
+            // limit-цена для STOP-LIMIT SL
+            decimal slLimitPrice = signal.Side == SignalSide.Buy
+                ? RoundPrice(slPrice - tick, tick)
+                : RoundPrice(slPrice + tick, tick);
+
+            var closeSide = side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy;
+
+            _logger.LogInformation(
+                "[ORDER][{symbol}] ENTRY OK: entry={Entry}, SL={Sl}, SL_limit={SlLimit}, TP={Tp}, qty={Qty}",
+                signal.Symbol, entryPrice, slPrice, slLimitPrice, tpPrice, quantity);
+
+            // =================================================================
+            // 3) SL: STOP-LIMIT reduceOnly
+            // =================================================================
             var slOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: signal.Symbol,
-                side: side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy, // SL будет противоположным side
-                type: FuturesOrderType.StopMarket,
+                side: closeSide,
+                type: FuturesOrderType.Stop,
                 quantity: quantity,
-                stopPrice: sl,
+                price: slLimitPrice,
+                stopPrice: slPrice,
                 positionSide: posSide,
+                reduceOnly: true,
+                workingType: WorkingType.Mark,
                 timeInForce: TimeInForce.GoodTillCanceled,
                 ct: ct);
 
-            if (!tpOrder.Success || !slOrder.Success)
+            if (!slOrder.Success || slOrder.Data == null)
             {
-                _logger.LogError("[ORDER][{symbol}] TP/SL Error: {err}", signal.Symbol, tpOrder.Error?.Message ?? "ERROR");
-                return OrderResult.Fail("TP/SL Error");
+                _logger.LogError("[ORDER][{symbol}] SL CREATE ERROR: {err}", signal.Symbol, slOrder.Error);
+                return OrderResult.Fail(slOrder.Error?.Message ?? "SL_ERROR");
             }
 
-            // 3. Логируем успешное размещение TP и SL
-            _logger.LogInformation("TP and SL successfully set for {Symbol}: TP={Tp}, SL={Sl}", signal.Symbol, tp, sl);
+            // =================================================================
+            // 4) TP: LIMIT reduceOnly
+            // =================================================================
+            var tpOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: signal.Symbol,
+                side: closeSide,
+                type: FuturesOrderType.Limit,
+                quantity: quantity,
+                price: tpPrice,
+                positionSide: posSide,
+                reduceOnly: true,
+                workingType: WorkingType.Mark,
+                timeInForce: TimeInForce.GoodTillCanceled,
+                ct: ct);
 
-            // 4. Возвращаем успешный результат с ордером
+            if (!tpOrder.Success || tpOrder.Data == null)
+            {
+                _logger.LogError("[ORDER][{symbol}] TP CREATE ERROR: {err}", signal.Symbol, tpOrder.Error);
+                return OrderResult.Fail(tpOrder.Error?.Message ?? "TP_ERROR");
+            }
+
+            _logger.LogInformation(
+                "[ORDER][{symbol}] TP/SL SET: SL={Sl}, TP={Tp}, qty={Qty}",
+                signal.Symbol, slPrice, tpPrice, quantity);
+
             return OrderResult.Successs(entryPrice, quantity, placed.Id);
         }
 
+        // =====================================================================
+        // HELPERS
+        // =====================================================================
+        private static decimal RoundPrice(decimal price, decimal tick)
+        {
+            if (tick <= 0) return price;
+            return Math.Round(price / tick) * tick;
+        }
+
+        private static async Task<decimal> GetMarkPriceSafeAsync(
+            BinanceRestClient client,
+            string symbol,
+            decimal fallback,
+            CancellationToken ct)
+        {
+            try
+            {
+                var r = await client.UsdFuturesApi.ExchangeData.GetPriceAsync(symbol, ct: ct);
+                if (r.Success && r.Data != null && r.Data.Price > 0)
+                    return r.Data.Price;
+            }
+            catch
+            {
+            }
+
+            return fallback > 0 ? fallback : 0m;
+        }
     }
 }

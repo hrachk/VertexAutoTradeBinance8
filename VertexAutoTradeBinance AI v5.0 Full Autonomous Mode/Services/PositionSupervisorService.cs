@@ -1,11 +1,12 @@
 ﻿// ============================================================================
-// PositionSupervisorService v6.1 (QUANT-REALTIME MAX, FIXED)
-// - Реальный контроль позиций (Long / Short / Both)
+// PositionSupervisorService v6.5 (QUANT-REALTIME MAX, SAFE TP/SL)
+// - Контроль Long / Short / Both
 // - Авто-ремонт SL/TP
 // - Многоуровневый трейлинг (ATR + EMA + SuperTrend + micro-structure)
 // - Безопасная защита от -2021 (order would immediately trigger)
 // - Manual + AI позиции (через ManualPositionHandler)
-// - QUANT-LEARN: исправлено определение закрытия позиции
+// - QUANT-LEARN: фикс закрытий
+// - v6.5: TP = LIMIT reduceOnly, Supervisor видит TP-LIMIT
 // ============================================================================
 
 using Binance.Net.Clients;
@@ -191,9 +192,14 @@ namespace VertexAutoTradeBinance8.Services
                 o.Side == closeSide &&
                 (o.Type == FuturesOrderType.Stop || o.Type == FuturesOrderType.StopMarket));
 
+            // v6.5: TP может быть TakeProfit / TakeProfitMarket / Limit reduceOnly
             var tp = orders.FirstOrDefault(o =>
                 o.Side == closeSide &&
-                (o.Type == FuturesOrderType.TakeProfit || o.Type == FuturesOrderType.TakeProfitMarket));
+                (
+                    o.Type == FuturesOrderType.TakeProfit ||
+                    o.Type == FuturesOrderType.TakeProfitMarket ||
+                    (o.Type == FuturesOrderType.Limit && o.ReduceOnly == true)
+                ));
 
             decimal entry = pos.EntryPrice;
             if (entry <= 0 && signal != null && signal.Symbol == symbol)
@@ -252,8 +258,7 @@ namespace VertexAutoTradeBinance8.Services
                     var atr = _marketData.CalculateAtr(kl, 14);
                     if (atr <= 0) return;
 
-                    // Динамическое расширение SL при высокой волатильности
-                    var atrMultiplier = (atr > 0.0025m) ? 1.5m : 1.2m;  // Если ATR > 0.25%, расширяем SL
+                    var atrMultiplier = (atr > 0.0025m) ? 1.5m : 1.2m;
 
                     rawSl = side == PositionSide.Long
                         ? entryPrice - atr * atrMultiplier
@@ -304,7 +309,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // EMERGENCY TP
+        // EMERGENCY TP (v6.5: LIMIT reduceOnly + tickSize)
         // =====================================================================
         private async Task CreateEmergencyTPAsync(
             BinanceRestClient client,
@@ -331,10 +336,9 @@ namespace VertexAutoTradeBinance8.Services
                     var atr = _marketData.CalculateAtr(kl, 14);
                     if (atr <= 0) return;
 
-                    // Увеличение TP с использованием ATR
                     trigger = side == PositionSide.Long
-                        ? entryPrice + atr * 1.5m  // Увеличиваем TP для Long позиций
-                        : entryPrice - atr * 1.5m;  // Уменьшаем TP для Short позиций
+                        ? entryPrice + atr * 1.5m
+                        : entryPrice - atr * 1.5m;
                 }
                 catch (Exception ex)
                 {
@@ -343,14 +347,20 @@ namespace VertexAutoTradeBinance8.Services
                 }
             }
 
+            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+            var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
+
+            trigger = Math.Round(trigger / tick) * tick;
+
             var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol,
                 side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
-                FuturesOrderType.TakeProfitMarket,
+                FuturesOrderType.Limit,
                 qty,
-                stopPrice: trigger,
+                price: trigger,
                 positionSide: side,
                 reduceOnly: true,
+                timeInForce: TimeInForce.GoodTillCanceled,
                 ct: ct);
 
             if (!res.Success)
@@ -363,7 +373,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // MULTI-LAYER TRAILING
+        // MULTI-LAYER TRAILING (как у тебя, без изменений логики)
         // =====================================================================
         private async Task MultiLayerTrailingAsync(
             BinanceRestClient client,
@@ -482,7 +492,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // UPDATE SL + LEARNING HOOK
+        // UPDATE SL + LEARNING HOOK (без изменений)
         // =====================================================================
         private async Task UpdateSLAsync(
             BinanceRestClient client,
