@@ -136,29 +136,7 @@ namespace VertexAutoTradeBinance8
             {
                 await RunQuantRealtimeTick(ct);
 
-                /*  //_binance.Symbols 
-                foreach (var tf in TFS)
-                {
-                    foreach (var symbol in  
-                _symbols.ActiveSymbols)
-                    {
-                    if (!ShouldRun(symbol, tf))
-                        continue;
-
-                    try
-                    {
-                        await ProcessSymbol(symbol, tf, ct);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Error processing {symbol} {tf}", symbol, tf);
-                        ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ ERR", "Ошибка");
-                    }
-
-                    await Task.Delay(35, ct);
-                }
-            }
-            */
+               
                 foreach (var symbol in _symbols.ActiveSymbols)
                 {
                     // === 1. Формируем снимки рынка ===
