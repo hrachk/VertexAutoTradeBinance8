@@ -38,7 +38,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly object _lock = new();
 
         private static readonly string FilePath =
-            Path.Combine(AppContext.BaseDirectory, "ai-models/ai_learning.json");
+      Path.Combine(AppContext.BaseDirectory, "ai-models/ai_learning.json");
 
         private static readonly string BackupPath =
             Path.Combine(AppContext.BaseDirectory, "ai-models/ai_learning_backup.json");
@@ -85,14 +85,18 @@ namespace VertexAutoTradeBinance8.Services
             // Гарантируем, что каталог существует, чтобы не было проблем с сохранением
             try
             {
-                var dir = Path.GetDirectoryName(FilePath);
-                if (!string.IsNullOrWhiteSpace(dir) && !Directory.Exists(dir))
-                    Directory.CreateDirectory(dir);
+                var fileDir = Path.GetDirectoryName(FilePath);
+                if (!string.IsNullOrWhiteSpace(fileDir) && !Directory.Exists(fileDir))
+                    Directory.CreateDirectory(fileDir);
+
+                var backupDir = Path.GetDirectoryName(BackupPath);
+                if (!string.IsNullOrWhiteSpace(backupDir) && !Directory.Exists(backupDir))
+                    Directory.CreateDirectory(backupDir);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[AI] Error creating ai-models directory");
-                return;  // Ранний выход, если директорию не удалось создать
+                _logger.LogError(ex, "[AI] Error creating ai-models directory or backup directory.");
+                return;  // Ранний выход, если не удалось создать директорию
             }
 
             Load();
@@ -477,10 +481,9 @@ namespace VertexAutoTradeBinance8.Services
 
                 lock (_lock)
                 {
-                    // ⚠ защита от убийства данных пустым snapshot
+                    // Защита от пустого snapshot
                     if (!force)
                     {
-                        // Никогда не сохраняем пустой снапшот поверх существующего файла
                         if (_stats.Count == 0 && _tradeHistory.Count == 0)
                         {
                             _logger.LogWarning("[AI] Snapshot skipped: empty data (protection)");
@@ -489,9 +492,9 @@ namespace VertexAutoTradeBinance8.Services
                     }
 
                     snapshot = BuildSnapshot();
-                    // Логирование текущих данных перед сохранением для диагностики
-                    _logger.LogInformation("[AI] Saving snapshot with {StatsCount} stats and {TradeHistoryCount} trades",
-                        _stats.Count, _tradeHistory.Count);
+
+                    // Логируем перед записью
+                    _logger.LogInformation("[AI] Snapshot to be saved: {Snapshot}", JsonSerializer.Serialize(snapshot, JsonOptions));
                 }
 
                 // Преобразуем данные в JSON
@@ -499,7 +502,9 @@ namespace VertexAutoTradeBinance8.Services
 
                 // Записываем в файл
                 File.WriteAllText(FilePath, json);
+                _logger.LogInformation("[AI] File written successfully: {FilePath}", FilePath);
                 File.Copy(FilePath, BackupPath, overwrite: true);
+                _logger.LogInformation("[AI] Backup file copied to: {BackupPath}", BackupPath);
 
                 _logger.LogInformation(
                     "[AI] Snapshot saved v{Version}: symbols={Symbols}, trades={Trades}, states={States}",
@@ -513,6 +518,7 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogError(ex, "[AI] SAVE ERROR");
             }
         }
+
 
 
 
@@ -613,6 +619,8 @@ namespace VertexAutoTradeBinance8.Services
                     Engine = "AiSelfLearningService.v8"
                 }
             };
+            // Логируем состояние _stats перед добавлением в snapshot
+            _logger.LogInformation("[AI] Building snapshot: {StatsCount} symbols found.", _stats.Count);
 
             // --- агрегированная статистика по символам/режимам ---
             foreach (var (symbol, regimes) in _stats)
@@ -646,6 +654,11 @@ namespace VertexAutoTradeBinance8.Services
 
                 snap.Symbols.Add(sym);
             }
+
+            // Логируем перед завершением BuildSnapshot
+            _logger.LogInformation("[AI] Snapshot built with {SymbolsCount} symbols, {MarketStatesCount} market states, and {TradeHistoryCount} trades.",
+                snap.Meta.Symbols, snap.Meta.MarketStates, snap.Meta.Trades);
+
 
             // --- meta ---
             snap.Meta.Symbols = snap.Symbols.Count;
