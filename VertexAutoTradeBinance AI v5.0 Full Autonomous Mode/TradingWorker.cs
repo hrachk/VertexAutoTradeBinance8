@@ -340,7 +340,7 @@ namespace VertexAutoTradeBinance8
             }
 
             // ------------------ 5. SL OPTIMIZATION -------------------
-            signal.StopLoss = _slOpt.OptimizeSl(symbol, klines, signal, ai);
+            signal.StopLoss = _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
 
             // ------------------ 6. CLEANUP OLD ORDERS -----------------
             await _cleaner.CleanupOutdatedOrdersAsync(symbol, signal, ct);

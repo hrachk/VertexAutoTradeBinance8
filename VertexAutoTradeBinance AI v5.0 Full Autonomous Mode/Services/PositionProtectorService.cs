@@ -7,13 +7,6 @@ using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
 {
-    /// <summary>
-    /// PositionProtectorService v6
-    /// - Авто-аварийный выход из позиции по "dangerPrice"
-    /// - Учитывает сторону (Long/Short) и текущее MarkPrice
-    /// - Создаёт reduceOnly лимит-ордер по тик-сетке
-    /// - Пишет сделку в AiSelfLearningService.RecordTrade(...) для QUANT-REALTIME обучения
-    /// </summary>
     public class PositionProtectorService
     {
         private readonly ILogger<PositionProtectorService> _logger;
@@ -36,10 +29,6 @@ namespace VertexAutoTradeBinance8.Services
             _tradeMonitor = tradeMonitor;
         }
 
-        /// <summary>
-        /// Авто-выход, когда цена уже ДОШЛА до опасной зоны.
-        /// Возвращает true, если ордер на выход успешно создан.
-        /// </summary>
         public async Task<bool> AutoExitIfDangerAsync(
             string symbol,
             decimal dangerPrice,
@@ -54,7 +43,6 @@ namespace VertexAutoTradeBinance8.Services
 
             using var client = _factory.CreateRestClient();
 
-            // 1) Загружаем позиции по символу
             var posRes = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, null, ct);
             if (!posRes.Success || posRes.Data == null)
             {
@@ -76,12 +64,10 @@ namespace VertexAutoTradeBinance8.Services
                 return false;
             }
 
-            // 2) Проверяем, дошёл ли рынок до "dangerPrice"
             decimal mark = p.MarkPrice > 0 ? p.MarkPrice : p.EntryPrice;
 
             if (side == PositionSide.Long)
             {
-                // Для LONG опасно, если цена УЖЕ опустилась НИЖЕ или РАВНА уровню
                 if (mark > dangerPrice)
                 {
                     _logger.LogDebug(
@@ -90,9 +76,8 @@ namespace VertexAutoTradeBinance8.Services
                     return false;
                 }
             }
-            else // SHORT
+            else
             {
-                // Для SHORT опасно, если цена УЖЕ поднялась ВЫШЕ или РАВНА уровню
                 if (mark < dangerPrice)
                 {
                     _logger.LogDebug(
@@ -102,7 +87,6 @@ namespace VertexAutoTradeBinance8.Services
                 }
             }
 
-            // 3) Подгоняем цену под тик-сетку
             var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
             var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
 
@@ -113,10 +97,8 @@ namespace VertexAutoTradeBinance8.Services
                 return false;
             }
 
-            // 4) Формируем сторону выхода
             var exitSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
-            // 5) Создаём reduceOnly лимитный ордер
             var exitOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: symbol,
                 side: exitSide,
@@ -136,17 +118,12 @@ namespace VertexAutoTradeBinance8.Services
                 return false;
             }
 
-            // 6) Локальная оценка win/lose
             bool isWin = side == PositionSide.Long
                 ? exitPrice > p.EntryPrice
                 : exitPrice < p.EntryPrice;
 
-            // для логики обучения нам нужен SignalSide
             var sigSide = side == PositionSide.Short ? SignalSide.Sell : SignalSide.Buy;
 
-            // ================================
-            // 🔥 QUANT-REALTIME LEARNING HOOK
-            // ================================
             try
             {
                 _aiLearning.RecordTrade(
@@ -154,7 +131,7 @@ namespace VertexAutoTradeBinance8.Services
                     side: sigSide,
                     entry: p.EntryPrice,
                     exit: exitPrice,
-                    regime: MarketRegime.Range // безопасный дефолт; при желании можно передавать реальный режим
+                    regime: MarketRegime.Range
                 );
             }
             catch (Exception ex)
@@ -166,9 +143,6 @@ namespace VertexAutoTradeBinance8.Services
             _logger.LogWarning(
                "[PROTECTOR][AUTO-EXIT] {Symbol} side={Side}, qty={Qty}, exit={Exit:F4}, entry={Entry:F4}, win={Win}",
                symbol, side, qty, exitPrice, p.EntryPrice, isWin);
-
-            // Можно при желании задействовать _tradeMonitor, если там есть публичный API.
-            // Сейчас оставляем его на будущее.
 
             return true;
         }

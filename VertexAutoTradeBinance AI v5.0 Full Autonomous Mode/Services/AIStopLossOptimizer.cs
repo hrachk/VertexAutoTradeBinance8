@@ -74,14 +74,11 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
-        /// <summary>
-        /// Полная версия – используется там, где есть и klines, и AiDecision.
-        /// </summary>
-        public decimal OptimizeSl(
-            string symbol,
-            IReadOnlyList<BinanceFuturesUsdtKline> klines,
-            TradeSignal signal,
-            AiDecision decision)
+        public decimal OptimizeSlAndTp(
+    string symbol,
+    IReadOnlyList<BinanceFuturesUsdtKline> klines,
+    TradeSignal signal,
+    AiDecision decision)
         {
             if (klines == null || klines.Count < 10)
                 return signal.StopLoss;
@@ -95,6 +92,7 @@ namespace VertexAutoTradeBinance8.Services
 
             decimal oldSl = signal.StopLoss;
             decimal newSl = oldSl;
+
 
             decimal dist = Math.Abs(signal.EntryPrice - oldSl);
 
@@ -129,92 +127,39 @@ namespace VertexAutoTradeBinance8.Services
                 if (candidate > newSl) newSl = candidate;
             }
 
-            // ==========================
-            // 3) ДИНАМИЧЕСКИЙ SL по ATR (минимальная дистанция)
-            // ==========================
+
+
+            // =======================
+            // Динамическая настройка SL
+            // =======================
             decimal dynMult = GetDynamicSlAtrMult(decision.Trend, decision.AtrPct);
             decimal minDist = atr14 * dynMult;
-
             decimal currentDist = Math.Abs(signal.EntryPrice - newSl);
             if (currentDist < minDist)
             {
-                // расширяем SL до нужной глубины
+                // Расширяем SL до нужной глубины
                 if (signal.Side == SignalSide.Buy)
                     newSl = signal.EntryPrice - minDist;
                 else
                     newSl = signal.EntryPrice + minDist;
             }
 
-            if (newSl != oldSl)
+            // =======================
+            // Динамическая настройка TP
+            // =======================
+            decimal tp = signal.EntryPrice + (atr14 * 2); // TP на 2x ATR от Entry
+            if (signal.Side == SignalSide.Sell)
             {
-                _logger.LogInformation(
-                    "AI-SL OPTIMIZER {Symbol}: oldSL={Old:F4}, newSL={New:F4}, trend={Trend}, atr%={AtrPct:P2}, dynMult={Mult:F2}",
-                    symbol, oldSl, newSl, decision.Trend, decision.AtrPct, dynMult);
+                tp = signal.EntryPrice - (atr14 * 2); // Для продажи TP будет ниже
             }
+
+            // Логируем изменения SL и TP
+            _logger.LogInformation(
+                "AI-SL/TP Updated: Symbol={Symbol}, oldSL={Old:F4}, newSL={New:F4}, TP={Tp:F4}, atr={Atr:F4}, trend={Trend}, dynMult={Mult:F2}",
+                symbol, oldSl, newSl, tp, atr14, decision.Trend, dynMult);
 
             return newSl;
         }
 
-        /// <summary>
-        /// Упрощённый overload для PositionSupervisor:
-        /// работает только по klines + entry/sl/side, без AiDecision.
-        /// </summary>
-        public decimal OptimizeSl(
-            string symbol,
-            IReadOnlyList<BinanceFuturesUsdtKline>? klines,
-            decimal entryPrice,
-            decimal stopLoss,
-            SignalSide side)
-        {
-            if (klines == null || klines.Count < 10)
-                return stopLoss;
-
-            int lastIndex = klines.Count - 1;
-            var last = klines[lastIndex];
-
-            decimal atr14 = Atr(klines, 14, lastIndex);
-            if (atr14 <= 0m)
-                return stopLoss;
-
-            decimal oldSl = stopLoss;
-            decimal newSl = oldSl;
-
-            // Анти-манипуляция: двигаем SL за хвост, если явно выбивали
-            decimal upperWick = last.HighPrice - Math.Max(last.OpenPrice, last.ClosePrice);
-            decimal lowerWick = Math.Min(last.OpenPrice, last.ClosePrice) - last.LowPrice;
-
-            if (side == SignalSide.Buy && lowerWick > atr14 * 1.2m)
-            {
-                var candidate = last.LowPrice - atr14 * 0.2m;
-                if (candidate < newSl) newSl = candidate;
-            }
-            else if (side == SignalSide.Sell && upperWick > atr14 * 1.2m)
-            {
-                var candidate = last.HighPrice + atr14 * 0.2m;
-                if (candidate > newSl) newSl = candidate;
-            }
-
-            // Без AiDecision — просто гарантируем минимальную глубину 1.2–1.6 ATR
-            decimal minMult = 1.4m;
-            decimal minDist = atr14 * minMult;
-            decimal currentDist = Math.Abs(entryPrice - newSl);
-
-            if (currentDist < minDist)
-            {
-                if (side == SignalSide.Buy)
-                    newSl = entryPrice - minDist;
-                else
-                    newSl = entryPrice + minDist;
-            }
-
-            if (newSl != oldSl)
-            {
-                _logger.LogInformation(
-                    "AI-SL SIMPLE {Symbol}: oldSL={Old:F4}, newSL={New:F4}, atr={Atr:F4}",
-                    symbol, oldSl, newSl, atr14);
-            }
-
-            return newSl;
-        }
     }
 }

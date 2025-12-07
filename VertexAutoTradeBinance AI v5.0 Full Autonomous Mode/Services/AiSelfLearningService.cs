@@ -149,16 +149,15 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // 1) HYBRID: универсальный триггер логирования (signals + blocks + RR)
-        // 1) HYBRID: универсальный триггер логирования (signals + blocks + RR)
         public void RecordMarketStateTriggered(
-            string reason,
-            string symbol,
-            string timeframe,
-            MarketRegime regime,
-            decimal slope,
-            decimal volatility,
-            decimal atr,
-            decimal confidence)
+      string reason,
+      string symbol,
+      string timeframe,
+      MarketRegime regime,
+      decimal slope,
+      decimal volatility,
+      decimal atr,
+      decimal confidence)
         {
             lock (_lock)
             {
@@ -172,29 +171,29 @@ namespace VertexAutoTradeBinance8.Services
                     Atr = atr,
                     Confidence = confidence,
                     Time = DateTime.UtcNow,
-                    Reason = reason
+                    Reason = reason  // Добавление причины для записываемых состояний
                 });
 
                 if (_marketStates.Count > 5000)
-                    _marketStates.RemoveRange(0, 2500);
+                    _marketStates.RemoveRange(0, 2500);  // Ограничение количества данных
 
-                _logger.LogDebug(
-                    "[HYBRID][{Symbol}] MarketState logged ({Reason}) slope={Slope} vol={Vol} atr={Atr} conf={Conf}",
+                _logger.LogDebug("[HYBRID][{Symbol}] MarketState logged ({Reason}) slope={Slope} vol={Vol} atr={Atr} conf={Conf}",
                     symbol, reason, slope, volatility, atr, confidence);
             }
 
-            TrySnapshot();
+            TrySnapshot();  // Сохранение снимка данных после каждой записи
         }
+
 
         // 3) BACKGROUND MARKET LEARNING – глобальный 30s snapshot по режиму
         public void TryHybridPeriodicSnapshot(
-            string symbol,
-            string timeframe,
-            MarketRegime regime,
-            decimal slope,
-            decimal volatility,
-            decimal atr,
-            decimal confidence)
+    string symbol,
+    string timeframe,
+    MarketRegime regime,
+    decimal slope,
+    decimal volatility,
+    decimal atr,
+    decimal confidence)
         {
             if (DateTime.UtcNow - _lastHybridSnapshot < HybridInterval)
                 return;
@@ -249,16 +248,9 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         // 2) TRADE ENTRY (вызывается из PositionSupervisor / TradeResultMonitor)
         // =====================================================================
-        public void RecordTrade(
-            string symbol,
-            SignalSide side,
-            decimal entry,
-            decimal exit,
-            MarketRegime regime)
+        public void RecordTrade(string symbol, SignalSide side, decimal entry, decimal exit, MarketRegime regime)
         {
-            decimal pnl = (side == SignalSide.Buy)
-                ? exit - entry
-                : entry - exit;
+            decimal pnl = (side == SignalSide.Buy) ? exit - entry : entry - exit;
 
             lock (_lock)
             {
@@ -277,23 +269,20 @@ namespace VertexAutoTradeBinance8.Services
                     _tradeHistory.RemoveRange(0, 2500);
             }
 
-            UpdateStats(symbol, regime, pnl);
+            UpdateStats(symbol, regime, pnl);  // Обновление статистики по сделке
 
-            // Для сделок — сразу пишем на диск (они редкие, это безопасно)
-            Save(force: true);
+            Save(force: true);  // Принудительное сохранение после каждой сделки
 
             bool win = side == SignalSide.Buy ? exit > entry : exit < entry;
-
             lock (_lock)
             {
                 var rs = GetOrCreateRegimeStats(symbol, regime);
-
                 rs.Trades++;
                 if (win)
-                    rs.Wins++;
+                    rs.Wins++;  // Учитывается выигрышная сделка
             }
 
-            TrySnapshot();
+            TrySnapshot();  // Сохранение снимка данных
         }
 
         private void UpdateStats(string symbol, MarketRegime regime, decimal pnl)
@@ -350,10 +339,10 @@ namespace VertexAutoTradeBinance8.Services
         // AI TREND PREDICTOR (QUANT-REALTIME MAX)
         // =====================================================================
         public AiTrendPrediction PredictTrend(
-            string symbol,
-            MarketRegime regime,
-            decimal slope,
-            decimal volatility)
+      string symbol,
+      MarketRegime regime,
+      decimal slope,
+      decimal volatility)
         {
             List<MarketState> recent;
 
@@ -362,7 +351,7 @@ namespace VertexAutoTradeBinance8.Services
                 recent = _marketStates
                     .Where(x => x.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
                     .OrderByDescending(x => x.Time)
-                    .Take(80) // чуть больше истории для сглаживания
+                    .Take(80)  // Чуть больше истории для сглаживания
                     .ToList();
             }
 
@@ -373,12 +362,8 @@ namespace VertexAutoTradeBinance8.Services
             decimal avgConf = recent.Average(x => x.Confidence);
             decimal avgVol = recent.Average(x => x.VolatilityPercent);
 
-            int dir =
-                avgSlope > 0.001m ? 1 :
-                avgSlope < -0.001m ? -1 : 0;
-
-            decimal confidence =
-                Math.Clamp(Math.Abs(avgSlope) * 25m + avgConf, 0.05m, 0.85m);
+            int dir = avgSlope > 0.001m ? 1 : avgSlope < -0.001m ? -1 : 0;
+            decimal confidence = Math.Clamp(Math.Abs(avgSlope) * 25m + avgConf, 0.05m, 0.85m);
 
             if (avgVol < 0.005m)
                 confidence += 0.10m;
@@ -389,6 +374,7 @@ namespace VertexAutoTradeBinance8.Services
 
             return new AiTrendPrediction(dir, confidence, rrBias);
         }
+
 
         // =====================================================================
         // EXPORT STATE (для TradingWorker v6 / AiModelSnapshotService)
@@ -503,10 +489,15 @@ namespace VertexAutoTradeBinance8.Services
                     }
 
                     snapshot = BuildSnapshot();
+                    // Логирование текущих данных перед сохранением для диагностики
+                    _logger.LogInformation("[AI] Saving snapshot with {StatsCount} stats and {TradeHistoryCount} trades",
+                        _stats.Count, _tradeHistory.Count);
                 }
 
+                // Преобразуем данные в JSON
                 var json = JsonSerializer.Serialize(snapshot, JsonOptions);
 
+                // Записываем в файл
                 File.WriteAllText(FilePath, json);
                 File.Copy(FilePath, BackupPath, overwrite: true);
 
@@ -522,6 +513,7 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogError(ex, "[AI] SAVE ERROR");
             }
         }
+
 
 
         private void Load()
@@ -606,11 +598,9 @@ namespace VertexAutoTradeBinance8.Services
 
             _lastSnapshot = DateTime.UtcNow;
 
-            // Используем общий Save(), который пишет AiLearningSnapshot
-            Save(force: false);
+            Save(force: false);  // Сохранение снимка с флагом "force" = false
         }
-
-
+         
 
         private AiLearningSnapshot BuildSnapshot()
         {
@@ -673,12 +663,7 @@ namespace VertexAutoTradeBinance8.Services
                 .ToList();
 
             return snap;
-        }
-
-
-
-
-
+        } 
 
         // ---------------------------------------------------------------------
         // DASHBOARD EXPORT: MarketStates (фоновые данные)

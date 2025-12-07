@@ -35,9 +35,9 @@ namespace VertexAutoTradeBinance8.Services
         // MAIN ENTRY METHOD
         // =====================================================================
         public async Task<OrderResult> ExecuteAsync(
-            TradeSignal signal,
-            decimal quantity,
-            CancellationToken ct = default)
+     TradeSignal signal,
+     decimal quantity,
+     CancellationToken ct = default)
         {
             using var client = _factory.CreateRestClient();
 
@@ -46,160 +46,67 @@ namespace VertexAutoTradeBinance8.Services
                 ? PositionSide.Long
                 : PositionSide.Short;
 
-            // -----------------------------------------------------------------
-            // 1) EXCHANGE FILTERS
-            // -----------------------------------------------------------------
-            var filters = await _symbolInfo.GetFuturesFiltersAsync(signal.Symbol);
+            // Размещение ордера
+            var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: signal.Symbol,
+                side: side,
+                type: FuturesOrderType.Limit,
+                quantity: quantity,
+                price: signal.EntryPrice,
+                positionSide: posSide,
+                workingType: WorkingType.Mark,
+                timeInForce: TimeInForce.GoodTillCanceled,
+                ct: ct);
 
-            decimal step = filters.step <= 0 ? 0.001m : filters.step;
-            decimal tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
-
-            quantity = Math.Floor(quantity / step) * step;
-            if (quantity < filters.minQty)
+            if (!res.Success || res.Data == null)
             {
-                _logger.LogError("[ORDER] Qty {qty} < minQty {min}", quantity, filters.minQty);
-                ConsoleReportFormatter.EntryFailedHard(_logger, signal.Symbol,
-                    $"QTY {quantity} < minQty {filters.minQty}");
-                return OrderResult.Fail("QTY_TOO_SMALL");
+                _logger.LogError("[ORDER][{symbol}] LIMIT ERROR: {err}", signal.Symbol, res.Error);
+                return OrderResult.Fail(res.Error?.Message ?? "LIMIT_ERROR");
             }
 
-            // -----------------------------------------------------------------
-            // 2) MARK PRICE / SLIPPAGE
-            // -----------------------------------------------------------------
-            var markRes = await client.UsdFuturesApi.ExchangeData.GetMarkPriceAsync(signal.Symbol, ct: ct);
-            decimal mark = (markRes.Success && markRes.Data != null)
-                ? markRes.Data.MarkPrice
-                : signal.EntryPrice;
+            var placed = res.Data;
+            decimal entryPrice = placed.AveragePrice > 0 ? placed.AveragePrice : signal.EntryPrice;
 
-            if (mark <= 0)
-                mark = signal.EntryPrice;
+            // 1. Рассчитываем TP и SL на основе EntryPrice
+            decimal tp = (decimal)(entryPrice + (signal.Atr * 2)); // TP на 2x ATR от Entry
+            decimal sl = (decimal)(entryPrice - (signal.Atr * 1.5m)); // SL на 1.5x ATR от Entry
 
-            decimal slipPct = mark > 0
-                ? Math.Abs(mark - signal.EntryPrice) / mark * 100m
-                : 0m;
+            // Логируем
+            _logger.LogInformation("Order executed: {Symbol}, EntryPrice={EntryPrice}, TP={Tp}, SL={Sl}", signal.Symbol, entryPrice, tp, sl);
 
-            bool useLimit = slipPct <= 0.25m; // как в v5.1 — LIMIT, если не сильно уехали
+            // 2. Отправляем TP и SL на биржу
+            var tpOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: signal.Symbol,
+                side: side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy, // TP будет противоположным side
+                type: FuturesOrderType.StopMarket,
+                quantity: quantity,
+                stopPrice: tp,
+                positionSide: posSide,
+                timeInForce: TimeInForce.GoodTillCanceled,
+                ct: ct);
 
-            _logger.LogInformation(
-                "[ORDER][{symbol}] ENTRY: use {type} (slip={slip:F4} %)",
-                signal.Symbol,
-                useLimit ? "LIMIT" : "MARKET",
-                slipPct);
+            var slOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: signal.Symbol,
+                side: side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy, // SL будет противоположным side
+                type: FuturesOrderType.StopMarket,
+                quantity: quantity,
+                stopPrice: sl,
+                positionSide: posSide,
+                timeInForce: TimeInForce.GoodTillCanceled,
+                ct: ct);
 
-            // -----------------------------------------------------------------
-            // 3) LIMIT PRICE
-            // -----------------------------------------------------------------
-            decimal limitPrice = signal.EntryPrice;
-
-            if (useLimit)
+            if (!tpOrder.Success || !slOrder.Success)
             {
-                // Чуть лучше поджимаем к текущему mark, не заходя за рынок
-                if (side == OrderSide.Buy)
-                {
-                    var raw = mark - tick * 2;
-                    limitPrice = Math.Round(raw / tick) * tick;
-                    if (limitPrice <= 0)
-                        limitPrice = signal.EntryPrice; // fallback
-                }
-                else
-                {
-                    var raw = mark + tick * 2;
-                    limitPrice = Math.Round(raw / tick) * tick;
-                    if (limitPrice <= 0)
-                        limitPrice = signal.EntryPrice;
-                }
+                _logger.LogError("[ORDER][{symbol}] TP/SL Error: {err}", signal.Symbol, tpOrder.Error?.Message ?? "ERROR");
+                return OrderResult.Fail("TP/SL Error");
             }
 
-            // Красивый отчёт по подготовке входа (SL сейчас только из сигнала)
-            ConsoleReportFormatter.EntryPrep(
-                _logger,
-                signal.Symbol,
-                side == OrderSide.Buy ? "LONG" : "SHORT",
-                signal.EntryPrice,
-                signal.StopLoss,
-                signal.StopLoss,
-                quantity,
-                step,
-                tick);
+            // 3. Логируем успешное размещение TP и SL
+            _logger.LogInformation("TP and SL successfully set for {Symbol}: TP={Tp}, SL={Sl}", signal.Symbol, tp, sl);
 
-            BinanceUsdFuturesOrder? placed = null;
-
-            try
-            {
-                // =================================================================
-                // 4) SEND ENTRY (без reduceOnly)
-                // =================================================================
-                if (useLimit)
-                {
-                    var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                        symbol: signal.Symbol,
-                        side: side,
-                        type: FuturesOrderType.Limit,
-                        quantity: quantity,
-                        price: limitPrice,
-                        positionSide: posSide,
-                        workingType: WorkingType.Mark,
-                        timeInForce: TimeInForce.GoodTillCanceled,
-                        ct: ct);
-
-                    if (!res.Success || res.Data == null)
-                    {
-                        _logger.LogError("[ORDER][{symbol}] LIMIT ERROR: {err}", signal.Symbol, res.Error);
-                        ConsoleReportFormatter.EntryFailedHard(
-                            _logger,
-                            signal.Symbol,
-                            res.Error?.Message ?? "LIMIT_ERROR");
-                        return OrderResult.Fail(res.Error?.Message ?? "LIMIT_ERROR");
-                    }
-
-                    placed = res.Data;
-                }
-                else
-                {
-                    var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                        symbol: signal.Symbol,
-                        side: side,
-                        type: FuturesOrderType.Market,
-                        quantity: quantity,
-                        positionSide: posSide,
-                        workingType: WorkingType.Mark,
-                        ct: ct);
-
-                    if (!res.Success || res.Data == null)
-                    {
-                        _logger.LogError("[ORDER][{symbol}] MARKET ERROR: {err}", signal.Symbol, res.Error);
-                        ConsoleReportFormatter.EntryFailedHard(
-                            _logger,
-                            signal.Symbol,
-                            res.Error?.Message ?? "MARKET_ERROR");
-                        return OrderResult.Fail(res.Error?.Message ?? "MARKET_ERROR");
-                    }
-
-                    placed = res.Data;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[ORDER][{symbol}] EXCEPTION on entry", signal.Symbol);
-                ConsoleReportFormatter.EntryFailedHard(_logger, signal.Symbol, ex.Message);
-                return OrderResult.Fail(ex.Message);
-            }
-
-            // -----------------------------------------------------------------
-            // 5) RESULT
-            // -----------------------------------------------------------------
-            decimal entry = placed!.AveragePrice > 0
-                ? placed.AveragePrice
-                : limitPrice;
-
-            ConsoleReportFormatter.EntrySuccess(
-                _logger,
-                signal.Symbol,
-                quantity,
-                entry,
-                attempt: 1);
-
-            return OrderResult.Successs(entry, quantity, placed.Id);
+            // 4. Возвращаем успешный результат с ордером
+            return OrderResult.Successs(entryPrice, quantity, placed.Id);
         }
+
     }
 }
