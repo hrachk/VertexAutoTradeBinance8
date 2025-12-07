@@ -148,9 +148,8 @@ namespace VertexAutoTradeBinance8.Services
             public MarketRegime Regime { get; set; } = MarketRegime.Unknown;
         }
 
-        // =====================================================================
         // 1) HYBRID: универсальный триггер логирования (signals + blocks + RR)
-        // =====================================================================
+        // 1) HYBRID: универсальный триггер логирования (signals + blocks + RR)
         public void RecordMarketStateTriggered(
             string reason,
             string symbol,
@@ -176,7 +175,6 @@ namespace VertexAutoTradeBinance8.Services
                     Reason = reason
                 });
 
-                // Ограничиваем память – скользящее окно
                 if (_marketStates.Count > 5000)
                     _marketStates.RemoveRange(0, 2500);
 
@@ -185,13 +183,10 @@ namespace VertexAutoTradeBinance8.Services
                     symbol, reason, slope, volatility, atr, confidence);
             }
 
-            // Периодически снимаем snapshot, даже если не было сделок
             TrySnapshot();
         }
 
-        // =====================================================================
         // 3) BACKGROUND MARKET LEARNING – глобальный 30s snapshot по режиму
-        // =====================================================================
         public void TryHybridPeriodicSnapshot(
             string symbol,
             string timeframe,
@@ -217,6 +212,7 @@ namespace VertexAutoTradeBinance8.Services
                 confidence: confidence
             );
         }
+
 
         // =====================================================================
         // BASE MARKET STATE (SmartRegimeService → StrategyEngine)

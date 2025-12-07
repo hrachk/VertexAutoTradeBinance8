@@ -111,16 +111,18 @@ namespace VertexAutoTradeBinance8
         // ================================================================
         // MAIN LOOP v6 — QUANT REALTIME ENGINE
         // ================================================================
+        // ================================================================
+        // MAIN LOOP v6 — QUANT REALTIME ENGINE
+        // ================================================================
         protected override async Task ExecuteAsync(CancellationToken ct)
         {
             await _symbols.LoadAsync(ct);
-
 
             _logger.LogWarning("TradingWorker v6 QUANT-REALTIME started");
 
             await EnableHedgeMode();
 
-            // Load AI-snapshot
+            // Загрузка AI-снапшота
             try
             {
                 var state = await _snapshot.LoadLatestAsync(ct);
@@ -136,10 +138,8 @@ namespace VertexAutoTradeBinance8
             {
                 await RunQuantRealtimeTick(ct);
 
-               
                 foreach (var symbol in _symbols.ActiveSymbols)
                 {
-                    // === 1. Формируем снимки рынка ===
                     var m1 = await _market.GetMarketSnapshot(symbol, KlineInterval.OneMinute, ct);
                     var m5 = await _market.GetMarketSnapshot(symbol, KlineInterval.FiveMinutes, ct);
 
@@ -149,7 +149,6 @@ namespace VertexAutoTradeBinance8
                         continue;
                     }
 
-                    // === 2. ML-выбор таймфрейма ===
                     var decision = _tfSelector.SelectTF(m1, m5);
 
                     KlineInterval? finalTf = decision switch
@@ -166,7 +165,6 @@ namespace VertexAutoTradeBinance8
                         continue;
                     }
 
-                    // === 3. Выполняем стратегию только для выбранного TF ===
                     try
                     {
                         await ProcessSymbol(symbol, finalTf.Value, ct);
@@ -179,16 +177,12 @@ namespace VertexAutoTradeBinance8
                     await Task.Delay(25, ct);
                 }
 
-
-
                 await PeriodicSnapshot(ct);
                 await Task.Delay(80, ct);
             }
         }
 
 
-
-        // ================================================================
         // QUANT REALTIME TICK — каждые 60 секунд
         // ================================================================
         private async Task RunQuantRealtimeTick(CancellationToken ct)
@@ -211,6 +205,8 @@ namespace VertexAutoTradeBinance8
             }
         }
 
+
+ 
         // ================================================================
         // SCHEDULER
         // ================================================================
@@ -324,7 +320,7 @@ namespace VertexAutoTradeBinance8
             // ------------------ 4. RISK-MANAGER v6 --------------------
             decimal safety = signal?.SafetyRiskMultiplier ?? 1.0m;
 
-           
+
             decimal qty = await _risk.CalculateSafeQty(
                 signal.Symbol,
                 signal.EntryPrice,
