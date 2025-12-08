@@ -81,8 +81,13 @@
                         (isCompact ? "missed-card-compact " : "") +
                         (NewFlash.Contains(Key(r)) ? "flash-new" : "");
 
-                        
-                            <div class="@cardClasses ai-hint" title="@AiHint(r.Score)">
+                        <div class="@cardClasses">
+                            <div class="tooltip-container">
+                                <div class="tooltip-trigger">ℹ</div>
+                                <div class="tooltip-box">
+                                    @AiHint(r.Score)
+                                </div>
+                            </div> 
 
                             <div class="missed-header">
                                 <div>
@@ -98,14 +103,23 @@
                             <!-- SCORE BADGE -->
                             <div class="score-block @ScoreColor(r.Score)">
                                 Opportunity Score: <b>@r.Score</b>/100
+
+                                <span class="info-icon"
+                                      title="@ScoreHint(r)">
+                                    ℹ
+                                </span>
                             </div>
 
                             <!-- LIQUIDITY RISK BLOCK (большая полоса) -->
-                            <div class="liquidity-block @LiquidityColor(r)" title="Наведи мышку для подробностей о риске ликвидности">
+                            <div class="liquidity-block @LiquidityColor(r)">
                                 <div class="liq-title">
                                     ⚠ Liquidity Danger (@LiquiditySeverity(r))
+                                    <span class="info-icon"
+                                          title="@LiquidityHint(r)">
+                                        ℹ
+                                    </span>
                                 </div>
-
+ 
                                 <div class="liq-bar">
                                     @for (var i = 0; i < LiquidityBars(r); i++)
                                     {
@@ -116,17 +130,8 @@
                                         <span class="liq-bar-empty"></span>
                                     }
                                 </div>
-
-                                <div class="liq-tip">
-                                    (Наведи мышку, чтобы увидеть детали)
-                                </div>
                             </div>
-
-                            <div class="score-block @ScoreColor(r.Score)" title="Opportunity Score рассчитывается на основе тренда и рисков">
-                                Opportunity Score: <b>@r.Score</b>/100
-                            </div>
-
-
+                            
                             <div class="missed-body">
 
                                 <!-- SIDE -->
@@ -188,8 +193,13 @@
                                     </span>
 
                                     <!-- Smart regime tag -->
+
                                     <span class="@SmartClass(r.Regime)">
                                         @r.Regime
+                                        <span class="info-icon"
+                                              title="@SmartHint(r)">
+                                            ℹ
+                                        </span>
                                     </span>
                                 </div>
 
@@ -288,6 +298,51 @@
             "MEDIUM" => "liq-med",
             _ => "liq-low"
         };
+    }
+
+
+    string ScoreHint(MissedTradeRecord r)
+    {
+        if (r.Score >= 80)
+            return "AI: Очень сильный сигнал. Тренд мощный, волатильность низкая. Такой вход был бы безопасным.";
+
+        if (r.Score >= 65)
+            return "AI: Хороший сигнал. Достаточно стабильный рынок, можно рассматривать вход.";
+
+        if (r.Score >= 50)
+            return "AI: Средний сигнал. Рынок неоднозначный — лучше подождать.";
+
+        if (r.Score >= 35)
+            return "AI: Слабый сигнал. Условия плохие для входа.";
+
+        return "AI: Очень высокий риск. Такой вход лучше избегать.";
+    }
+    string LiquidityHint(MissedTradeRecord r)
+    {
+        return
+            $"ATR: {r.ATR:F2}\n" +
+            $"Volatility: {r.Vol:P2}\n\n" +
+            (r.ATR > 200
+                ? "⚠ Слишком высокая турбулентность. Возможны сквизы и сбор стопов."
+                : r.ATR > 100
+                    ? "⚠ Умеренная ликвидность, возможны резкие движения."
+                    : "✔ Ликвидность стабильная, проскальзывание минимально.");
+    }
+    string SmartHint(MissedTradeRecord r)
+    {
+        if (r.Regime.Contains("StrongTrend"))
+            return "StrongTrend: Рынок находится в мощном тренде. Такие режимы часто дают хорошие входы.";
+
+        if (r.Regime.Contains("Squeeze"))
+            return "Squeeze: Цена сжата. Возможно резкое движение (breakout).";
+
+        if (r.Regime.Contains("Chop"))
+            return "Chop: Хаос. Рынок пилит. Входы опасны.";
+
+        if (r.Regime.Contains("Range"))
+            return "Range: Флэт. Трендов нет, движения слабые.";
+
+        return "AI: режим рынка неопределён.";
     }
 
   

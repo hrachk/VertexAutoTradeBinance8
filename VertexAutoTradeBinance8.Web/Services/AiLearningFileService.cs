@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 
 namespace VertexAutoTradeBinance8.Web.Services
@@ -6,7 +7,9 @@ namespace VertexAutoTradeBinance8.Web.Services
     public class AiLearningFileService
     {
         private readonly string FilePath;
-
+        private readonly ILogger<AiLearningFileService> _logger;
+        private readonly IWebHostEnvironment _env;
+        
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
             PropertyNameCaseInsensitive = true,
@@ -14,11 +17,15 @@ namespace VertexAutoTradeBinance8.Web.Services
             AllowTrailingCommas = true
         };
 
-        public AiLearningFileService(IWebHostEnvironment env)
+        public AiLearningFileService(IWebHostEnvironment env, ILogger<AiLearningFileService> logger)
         {
             // путь к файлу ai-models/ai_learning.json
-           //FilePath =  @"C:\Users\karap\source\repos\VertexAutoTradeBinance8\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\ai-models\ai_learning.json";
-               FilePath = @"F:\VERTEX TRADING SYSTEM\TradingAI\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\ai-models\ai_learning.json";
+            FilePath =  @"C:\Users\karap\source\repos\VertexAutoTradeBinance8\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\ai-models\ai_learning.json";
+            //   FilePath = @"F:\VERTEX TRADING SYSTEM\TradingAI\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\ai-models\ai_learning.json";
+
+            _env = env;
+            _logger = logger;
+          //  FilePath = Path.Combine(AppContext.BaseDirectory, "ai-models\\ai_learning.json");
         }
 
         public AiLearningSnapshot? LoadSnapshot()
@@ -29,5 +36,31 @@ namespace VertexAutoTradeBinance8.Web.Services
             var json = File.ReadAllText(FilePath);
             return JsonSerializer.Deserialize<AiLearningSnapshot>(json, JsonOptions);
         }
+
+        public async Task<AiLearningSnapshot?> GetAllAsync()
+        {
+            try
+            {
+                if (!File.Exists(FilePath))
+                    return null;
+
+                using var stream = File.OpenRead(FilePath);
+
+                var snapshot = await JsonSerializer.DeserializeAsync<AiLearningSnapshot>(
+                    stream,
+                    new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+
+                return snapshot;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[AI-LEARN-WEB] Failed to read ai_learning.json");
+                return null;
+            }
+        }
+
     }
 }

@@ -1,21 +1,16 @@
-﻿<div class="top-row ps-3 navbar navbar-dark">
-    <div class="container-fluid">
-        <a class="navbar-brand" href="">Vertex AITrade</a>
-        <button title="Navigation menu" class="navbar-toggler" @onclick="ToggleNavMenu">
-            <span class="navbar-toggler-icon"></span>
-        </button>
-    </div>
-</div>
-
+﻿@*  
+<img src="images/vertexailogo.png" class="vertex-logo" alt="logo" style="width: auto;
+    height: 234px;" />
+ *@
  
 <div class="@NavMenuCssClass nav-scrollable" @onclick="ToggleNavMenu">
     <nav class="flex-column">
-        <div class="nav-item px-3">
+        @* <div class="nav-item px-3">
             <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
                 <span class="oi oi-home" aria-hidden="true"></span> Home
             </NavLink>
-        </div>
-        <div class="nav-item px-3">
+        </div> *@
+       @*  <div class="nav-item px-3">
             <NavLink class="nav-link" href="counter">
                 <span class="oi oi-plus" aria-hidden="true"></span> Counter
             </NavLink>
@@ -24,28 +19,38 @@
             <NavLink class="nav-link" href="fetchdata">
                 <span class="oi oi-list-rich" aria-hidden="true"></span> Fetch data
             </NavLink>
-        </div>
+        </div> *@
 
         <div class="nav-item px-3">
-            <li class="nav-item px-3">
+            
                 <NavLink class="nav-link" href="ai-dashboard" Match="NavLinkMatch.All">
                     <span class="oi oi-graph" aria-hidden="true"></span> AI Dashboard
                 </NavLink>
-            </li>
+           
+           
         </div>
+
         <div class="nav-item px-3">
+           
+                <NavLink class="nav-link" href="ai-learning" Match="NavLinkMatch.All">
+                    <span class="oi oi-home" aria-hidden="true"></span> AI LEARNING
+                </NavLink>
+            
+       </div>
+
+        @* <div class="nav-item px-3">
             <li class="nav-item px-3">
                 <NavLink class="nav-link" href="ai-marketheatmap" Match="NavLinkMatch.All">
                     <span class="oi oi-graph" aria-hidden="true"></span> AI Market
                 </NavLink>
             </li>
-        </div>
+        </div> *@
         <div class="nav-item px-3">
-            <li class="nav-item px-3">
+           
                 <NavLink class="nav-link" href="missed-trades" Match="NavLinkMatch.All">
                     <span class="oi oi-graph" aria-hidden="true"></span> Signals
                 </NavLink>
-            </li>
+            
         </div>
 
     </nav>

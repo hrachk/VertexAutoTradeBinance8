@@ -1,0 +1,30 @@
+﻿@using VertexAutoTradeBinance8.Services
+@inherits ComponentBase
+
+@if (States == null || States.Count == 0)
+{
+    <div class="ai-empty">Нет данных для визуализации.</div>
+}
+else
+{
+    <canvas id="@_canvasId" width="1200" height="350"></canvas>
+}
+
+@code {
+    [Parameter] public List<AiSelfLearningService.MarketState> States { get; set; } = new();
+
+    private string _canvasId = "chart-" + Guid.NewGuid().ToString("N");
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && States.Any())
+        {
+            var labels = States.Select(s => s.Time.ToLocalTime().ToString("HH:mm:ss")).ToArray();
+            var confidence = States.Select(s => (double)s.Confidence).ToArray();
+
+            await JS.InvokeVoidAsync("learningChartRender", _canvasId, labels, confidence);
+        }
+    }
+
+    [Inject] IJSRuntime JS { get; set; }
+}

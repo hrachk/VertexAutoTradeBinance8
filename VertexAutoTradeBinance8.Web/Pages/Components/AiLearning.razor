@@ -1,0 +1,362 @@
+﻿@page "/ai-learning"
+
+@using VertexAutoTradeBinance8.Services
+@using VertexAutoTradeBinance8.Web.Services
+@using VertexAutoTradeBinance8.Models
+@inject AiLearningFileService AiLearnService
+
+<div class="ai-learn-container">
+    @if (_snapshot != null)
+    {
+        <div class="ai-learn-meta">
+            <div>Engine: @_snapshot.Meta.Engine</div>
+            <div>MarketStates: @_snapshot.Meta.MarketStates</div>
+            <div>Trades: @_snapshot.Meta.Trades</div>
+        </div>
+
+        <!-- В будущем тут появится график -->
+        <LearningChart States="_snapshot.MarketStates" />
+
+        <!-- И таблица сделок -->
+        <TradeTable Trades="_snapshot.Trades" />
+    }
+
+
+    <!-- KPI блоки -->
+    <div class="ai-learn-kpi-row">
+        <div class="ai-kpi-card">
+            <div class="ai-kpi-label">Всего записей</div>
+            <div class="ai-kpi-value">@_filtered.Count</div>
+        </div>
+
+        <div class="ai-kpi-card">
+            <div class="ai-kpi-label">Уникальных символов</div>
+            <div class="ai-kpi-value">@_uniqueSymbols</div>
+        </div>
+
+        <div class="ai-kpi-card">
+            <div class="ai-kpi-label">Последнее событие</div>
+            <div class="ai-kpi-value">
+                @(_filtered.Count == 0
+                                ? "-"
+                                : _filtered.Max(x => x.Time).ToLocalTime().ToString("dd.MM.yyyy HH:mm"))
+            </div>
+        </div>
+
+        <div class="ai-kpi-card">
+            <div class="ai-kpi-label">Средний Score</div>
+            <div class="ai-kpi-value">
+                @(_filtered.Count == 0 ? "-" : _filtered.Average(x => x.Score).ToString("0.0"))
+            </div>
+        </div>
+    </div>
+
+
+    <!-- === AI Learning CHART & TRADES === -->
+    @if (_snapshot != null)
+    {
+        <div class="ai-section">
+            <div class="ai-section-title">График обучения</div>
+            <LearningChart States="_snapshot.MarketStates" />
+        </div>
+
+        <div class="ai-section">
+            <div class="ai-section-title">Последние симулированные сделки</div>
+            <TradeTable Trades="_snapshot.Trades" />
+        </div>
+    }
+
+
+    <!-- Фильтры -->
+    <div class="ai-learn-filters">
+        <div class="ai-filter-group">
+            <span class="ai-filter-label">Период:</span>
+
+            <button class="@ChipClass(TimeFilter.Last24h)" @onclick="@(() => SetTimeFilter(TimeFilter.Last24h))">
+                24 часа
+            </button>
+
+            <button class="@ChipClass(TimeFilter.Last7d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last7d))">
+                7 дней
+            </button>
+
+            <button class="@ChipClass(TimeFilter.Last30d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last30d))">
+                30 дней
+            </button>
+
+            <button class="@ChipClass(TimeFilter.All)" @onclick="@(() => SetTimeFilter(TimeFilter.All))">
+                Всё время
+            </button>
+        </div>
+
+        <div class="ai-filter-group">
+            <span class="ai-filter-label">Мин. Score:</span>
+            <input type="range"
+                   min="0" max="100" step="5"
+                   @bind="_minScore"
+                   @bind:event="oninput" />
+            <span class="ai-filter-badge">@_minScore</span>
+        </div>
+    </div>
+
+    <!-- ТОП причин (Reason) -->
+    <div class="ai-section">
+        <div class="ai-section-title">Топ причин обучающих событий</div>
+
+        @if (_reasonStats.Count == 0)
+        {
+            <div class="ai-empty">Нет данных под текущие фильтры.</div>
+        }
+        else
+        {
+            <div class="ai-reason-list">
+                @foreach (var r in _reasonStats)
+                {
+                    <div class="ai-reason-row">
+                        <div class="ai-reason-main">
+                            <div class="ai-reason-name">@r.Reason</div>
+                            <div class="ai-reason-meta">
+                                @r.Count событий • сред. Score @r.AvgScore.ToString("0.0") • Conf @r.AvgConf.ToString("0.0")%
+                            </div>
+                        </div>
+                        <div class="ai-reason-bar-wrap">
+                            <div class="ai-reason-bar-bg">
+                                <div class="ai-reason-bar-fill" style="width:@r.PercentOfMax%"></div>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+
+    <!-- ТОП символов -->
+    <div class="ai-section">
+        <div class="ai-section-title">Символы с наибольшим количеством обучающих эпизодов</div>
+
+        @if (_symbolStats.Count == 0)
+        {
+            <div class="ai-empty">Нет данных под текущие фильтры.</div>
+        }
+        else
+        {
+            <table class="ai-table">
+                <thead>
+                    <tr>
+                        <th>Символ</th>
+                        <th>Эпизодов</th>
+                        <th>Средний Score</th>
+                        <th>Средний Conf%</th>
+                        <th>Частый режим</th>
+                        <th>Частый SmartType</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var s in _symbolStats)
+                    {
+                        <tr>
+                            <td>@s.Symbol</td>
+                            <td>@s.Count</td>
+                            <td>@s.AvgScore.ToString("0.0")</td>
+                            <td>@s.AvgConf.ToString("0.0")</td>
+                            <td>@s.TopRegime</td>
+                            <td>@s.TopSmartType</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+
+</div>
+
+@code {
+    private enum TimeFilter
+    {
+        Last24h,
+        Last7d,
+        Last30d,
+        All
+    }
+
+
+    private List<AiLearningRecord> _all = new();
+    private AiLearningSnapshot? _snapshot;
+    private List<AiLearningRecord> _filtered = new();
+
+    private int _uniqueSymbols;
+    private TimeFilter _timeFilter = TimeFilter.Last7d;
+    private int _minScore = 50;
+
+    private List<ReasonStat> _reasonStats = new();
+    private List<SymbolStat> _symbolStats = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _snapshot = await AiLearnService.GetAllAsync();
+
+        if (_snapshot != null)
+        {
+            _all = _snapshot.MarketStates
+    .Select(ms => new AiLearningRecord
+        {
+            Symbol = ms.Symbol,
+            Time = ms.Time,
+
+            Reason = ms.Reason ?? "-",
+            SmartType = ms.Reason ?? "-",
+
+            Regime = ms.Regime.ToString(),
+
+        // Confidence из JSON = 0.0–1.0 → делаем 0–100
+            Confidence = (int)(ms.Confidence * 100m),
+            Score = (int)(ms.Confidence * 100m),
+
+        // Параметры рынка
+            VolatilityPercent = ms.VolatilityPercent * 100m,
+            TrendSlopePercent = ms.TrendSlopePercent * 100m,
+            Atr = ms.Atr
+        })
+    .OrderByDescending(x => x.Time)
+    .ToList();
+
+        }
+
+        ApplyFilters();
+
+    }
+
+    private void SetTimeFilter(TimeFilter filter)
+    {
+        _timeFilter = filter;
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        var query = _all.AsEnumerable();
+
+        // 1) Фильтр по времени
+        if (_timeFilter != TimeFilter.All && _all.Count > 0)
+        {
+            var now = DateTime.UtcNow;
+            DateTime from = _timeFilter switch
+            {
+                TimeFilter.Last24h => now.AddDays(-1),
+                TimeFilter.Last7d => now.AddDays(-7),
+                TimeFilter.Last30d => now.AddDays(-30),
+                _ => now.AddYears(-10)
+            };
+
+            query = query.Where(x => x.Time >= from);
+        }
+
+        // 2) Фильтр по минимальному Score
+        query = query.Where(x => x.Score >= _minScore);
+
+        _filtered = query
+            .OrderByDescending(x => x.Time)
+            .ToList();
+
+        _uniqueSymbols = _filtered
+            .Select(x => x.Symbol)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+
+        BuildReasonStats();
+        BuildSymbolStats();
+
+        StateHasChanged();
+    }
+
+    private void BuildReasonStats()
+    {
+        _reasonStats.Clear();
+        if (_filtered.Count == 0) return;
+
+        var groups = _filtered
+            .GroupBy(x => x.Reason ?? "Unknown")
+            .ToList();
+
+        var maxCount = groups.Max(g => g.Count());
+
+        foreach (var g in groups.OrderByDescending(g => g.Count()).Take(10))
+        {
+            var avgScore = g.Average(x => x.Score);
+            var avgConf = g.Average(x => (double)x.Confidence);
+
+            _reasonStats.Add(new ReasonStat
+            {
+                Reason = g.Key,
+                Count = g.Count(),
+                AvgScore = (decimal)avgScore,
+                AvgConf = (decimal)avgConf,
+                PercentOfMax = maxCount == 0 ? 0 : (int)(g.Count() * 100.0 / maxCount)
+            });
+        }
+    }
+
+    private void BuildSymbolStats()
+    {
+        _symbolStats.Clear();
+        if (_filtered.Count == 0) return;
+
+        var groups = _filtered
+            .GroupBy(x => x.Symbol)
+            .ToList();
+
+        foreach (var g in groups
+                     .OrderByDescending(g => g.Count())
+                     .Take(20))
+        {
+            var avgScore = g.Average(x => x.Score);
+            var avgConf = g.Average(x => (double)x.Confidence);
+
+            var topRegime = g.Where(x => !string.IsNullOrEmpty(x.Regime))
+                             .GroupBy(x => x.Regime)
+                             .OrderByDescending(gg => gg.Count())
+                             .Select(gg => gg.Key)
+                             .FirstOrDefault() ?? "-";
+
+            var topSmart = g.Where(x => !string.IsNullOrEmpty(x.SmartType))
+                            .GroupBy(x => x.SmartType)
+                            .OrderByDescending(gg => gg.Count())
+                            .Select(gg => gg.Key)
+                            .FirstOrDefault() ?? "-";
+
+            _symbolStats.Add(new SymbolStat
+            {
+                Symbol = g.Key,
+                Count = g.Count(),
+                AvgScore = (decimal)avgScore,
+                AvgConf = (decimal)avgConf,
+                TopRegime = topRegime,
+                TopSmartType = topSmart
+            });
+        }
+    }
+
+    private string ChipClass(TimeFilter f)
+    {
+        return _timeFilter == f ? "ai-chip ai-chip-active" : "ai-chip";
+    }
+
+    private class ReasonStat
+    {
+        public string Reason { get; set; } = string.Empty;
+        public int Count { get; set; }
+        public decimal AvgScore { get; set; }
+        public decimal AvgConf { get; set; }
+        public int PercentOfMax { get; set; }
+    }
+
+    private class SymbolStat
+    {
+        public string Symbol { get; set; } = string.Empty;
+        public int Count { get; set; }
+        public decimal AvgScore { get; set; }
+        public decimal AvgConf { get; set; }
+        public string TopRegime { get; set; } = string.Empty;
+        public string TopSmartType { get; set; } = string.Empty;
+    }
+}

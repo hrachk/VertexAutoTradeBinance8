@@ -84,7 +84,7 @@ namespace VertexAutoTradeBinance8.Services
 
         public AiSelfLearningService(ILogger<AiSelfLearningService> logger )
         {
-            _logger = logger;
+            /*_logger = logger;
 
             // Гарантируем, что каталог существует, чтобы не было проблем с сохранением
             try
@@ -102,11 +102,129 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogError(ex, "[AI] Error creating ai-models directory or backup directory.");
                 return;  // Ранний выход, если не удалось создать директорию
             }
-           
 
+            // 1) Загрузка пропущенных сделок
+            var missed = LoadMissedTradesFromFile();
+            missed = missed
+                .GroupBy(x => $"{x.Symbol}-{x.Time:O}-{x.Reason}")
+                .Select(g => g.First())
+                .ToList();
+             // 2) Обучение на каждой
+            foreach (var m in missed)
+                LearnFromMissedTrade(m);
+
+            _logger.LogInformation($"[AI] Loaded and trained on {missed.Count} missed trades.");
+            Load();*/
+            _logger = logger;
+
+            // 0) Гарантируем каталоги
+            try
+            {
+                var fileDir = Path.GetDirectoryName(FilePath);
+                if (!string.IsNullOrWhiteSpace(fileDir) && !Directory.Exists(fileDir))
+                    Directory.CreateDirectory(fileDir);
+
+                var backupDir = Path.GetDirectoryName(BackupPath);
+                if (!string.IsNullOrWhiteSpace(backupDir) && !Directory.Exists(backupDir))
+                    Directory.CreateDirectory(backupDir);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[AI] Error creating ai-models directory or backup directory.");
+                return;
+            }
+
+            // 1) СНАЧАЛА ГРУЗИМ СТАРОЕ СОСТОЯНИЕ
             Load();
+
+            // 2) Потом подгружаем missed_trades.json и учимся на них БЕЗ снапшотов
+            var missed = LoadMissedTradesFromFile();
+
+            missed = missed
+                .GroupBy(x => $"{x.Symbol}-{x.Time:O}-{x.Reason}")
+                .Select(g => g.First())
+                .ToList();
+
+            foreach (var m in missed)
+                LearnFromMissedTrade(m);   // внутри будет skipSnapshot = true
+
+            _logger.LogInformation("[AI] Loaded and trained on {Count} missed trades.", missed.Count);
+
+            // 3) Один финальный снапшот (обновляем файл с учётом старых + новых данных)
+            ForceSnapshot();
         }
 
+        private List<MissedTradeRecord> LoadMissedTradesFromFile()
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
+
+            if (!File.Exists(path))
+                return new List<MissedTradeRecord>();
+
+            try
+            {
+                var json = File.ReadAllText(path);
+                var list = JsonSerializer.Deserialize<List<MissedTradeRecord>>(json);
+
+                return list ?? new List<MissedTradeRecord>();
+            }
+            catch
+            {
+                _logger.LogError("Failed to load missed_trades.json");
+                return new List<MissedTradeRecord>();
+            }
+        }
+        /* private void LearnFromMissedTrade(MissedTradeRecord r)
+         {
+             try
+             {
+                 RecordMarketStateTriggered(
+                     reason: r.Reason,
+                     symbol: r.Symbol,
+                     timeframe: "MissedTrade",
+                     regime: ParseMarketRegime(r.Regime),
+                     slope: r.Slope,
+                     volatility: r.Vol,
+                     atr: r.Atr,
+                     confidence: r.Confidence
+                 );
+             }
+             catch (Exception ex)
+             {
+                 _logger.LogError(ex, "[AI] Failed to learn from missed trade.");
+             }
+         }
+         */
+
+        private void LearnFromMissedTrade(MissedTradeRecord r)
+        {
+            try
+            {
+                RecordMarketStateTriggered(
+                    reason: r.Reason,
+                    symbol: r.Symbol,
+                    timeframe: "MissedTrade",
+                    regime: ParseMarketRegime(r.Regime),
+                    slope: r.Slope,
+                    volatility: r.Vol,
+                    atr: r.Atr,
+                    confidence: r.Confidence,
+                    skipSnapshot: true   // 🔥 НЕ СНАПШОТИМ В КОНСТРУКТОРЕ
+                );
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[AI] Failed to learn from missed trade.");
+            }
+        }
+
+        private MarketRegime ParseMarketRegime(string regime)
+        {
+            if (Enum.TryParse<MarketRegime>(regime, out var parsed))
+                return parsed;
+
+            return MarketRegime.Unknown;  // запасной вариант
+        }
 
 
         // =====================================================================
@@ -160,15 +278,51 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // 1) HYBRID: универсальный триггер логирования (signals + blocks + RR)
+        /*     public void RecordMarketStateTriggered(
+           string reason,
+           string symbol,
+           string timeframe,
+           MarketRegime regime,
+           decimal slope,
+           decimal volatility,
+           decimal atr,
+           decimal confidence)
+             {
+                 lock (_lock)
+                 {
+                     _marketStates.Add(new MarketState
+                     {
+                         Symbol = symbol,
+                         Timeframe = timeframe,
+                         Regime = regime,
+                         TrendSlopePercent = slope,
+                         VolatilityPercent = volatility,
+                         Atr = atr,
+                         Confidence = confidence,
+                         Time = DateTime.UtcNow,
+                         Reason = reason  // Добавление причины для записываемых состояний
+                     });
+
+                     if (_marketStates.Count > 5000)
+                         _marketStates.RemoveRange(0, 2500);  // Ограничение количества данных
+
+                     _logger.LogDebug("[HYBRID][{Symbol}] MarketState logged ({Reason}) slope={Slope} vol={Vol} atr={Atr} conf={Conf}",
+                         symbol, reason, slope, volatility, atr, confidence);
+                 }
+
+                 TrySnapshot();  // Сохранение снимка данных после каждой записи
+             }
+             */
         public void RecordMarketStateTriggered(
-      string reason,
-      string symbol,
-      string timeframe,
-      MarketRegime regime,
-      decimal slope,
-      decimal volatility,
-      decimal atr,
-      decimal confidence)
+         string reason,
+         string symbol,
+         string timeframe,
+         MarketRegime regime,
+         decimal slope,
+         decimal volatility,
+         decimal atr,
+         decimal confidence,
+         bool skipSnapshot = false)   // 🔥 новый флаг
         {
             lock (_lock)
             {
@@ -182,19 +336,21 @@ namespace VertexAutoTradeBinance8.Services
                     Atr = atr,
                     Confidence = confidence,
                     Time = DateTime.UtcNow,
-                    Reason = reason  // Добавление причины для записываемых состояний
+                    Reason = reason
                 });
 
                 if (_marketStates.Count > 5000)
-                    _marketStates.RemoveRange(0, 2500);  // Ограничение количества данных
+                    _marketStates.RemoveRange(0, 2500);
 
-                _logger.LogDebug("[HYBRID][{Symbol}] MarketState logged ({Reason}) slope={Slope} vol={Vol} atr={Atr} conf={Conf}",
+                _logger.LogDebug(
+                    "[HYBRID][{Symbol}] MarketState logged ({Reason}) slope={Slope} vol={Vol} atr={Atr} conf={Conf}",
                     symbol, reason, slope, volatility, atr, confidence);
             }
 
-            TrySnapshot();  // Сохранение снимка данных после каждой записи
+            // ❗ По умолчанию как раньше, но можно отключить
+            if (!skipSnapshot)
+                TrySnapshot();
         }
-
 
         // 3) BACKGROUND MARKET LEARNING – глобальный 30s snapshot по режиму
         public void TryHybridPeriodicSnapshot(
@@ -540,7 +696,7 @@ namespace VertexAutoTradeBinance8.Services
                     }
                 }
 
-                if (!File.Exists(FilePath))
+               /* if (!File.Exists(FilePath))
                 {
                     _logger.LogInformation("[AI] ai_learning.json not found → creating empty state.");
                     // Если файл не найден, создаём пустой файл
@@ -548,6 +704,14 @@ namespace VertexAutoTradeBinance8.Services
                     var emptyStateJson = JsonSerializer.Serialize(emptyState, JsonOptions);
                     File.WriteAllText(FilePath, emptyStateJson);  // Записываем пустой файл
                     return; // Ранний выход, если файл пустой
+                }
+                */
+                if (!File.Exists(FilePath))
+                {
+                    _logger.LogInformation("[AI] ai_learning.json not found → starting with empty in-memory state.");
+                    // НИЧЕГО НЕ СОХРАНЯЕМ ЗДЕСЬ.
+                    // Первый нормальный Save() сам создаст файл с реальными данными.
+                    return;
                 }
 
                 AiLearningSnapshot? snap = null;

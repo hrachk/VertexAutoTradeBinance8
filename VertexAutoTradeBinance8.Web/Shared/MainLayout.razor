@@ -1,20 +1,59 @@
 ﻿@inherits LayoutComponentBase
+@* @inject BalanceService BalanceService
+@inject EngineStatusService EngineStatusService
+@inject TradingModeService TradingModeService *@
 
-<PageTitle>VertexAutoTradeBinance8.Web</PageTitle>
+<PageTitle>VERTEX AUTOTRADE AI</PageTitle>
+
+<header class="vertex-header">
+    <div class="vertex-left">
+        <img src="images/vertexailogo.png" class="vertex-logo" alt="logo" />
+        <span class="vertex-title">VERTEX AUTOTRADE AI</span>
+        <span class="vertex-subtitle">Quant Engine v8</span>
+    </div>
+
+    <div class="vertex-right">
+
+        <!-- ENGINE STATUS -->
+        <span class="vertex-status-dot @(EngineStatus == "Running" ? "ok" : "bad")"></span>
+        <span class="vertex-status-text">@EngineStatus</span>
+
+        <!-- BALANCE -->
+        <span class="vertex-balance">
+            Balance: @Balance USDT
+        </span>
+
+        <!-- TRADING MODE -->
+        <span class="vertex-mode">
+            Mode: @TradingMode
+        </span>
+    </div>
+</header>
+
 
 <div class="page">
     <div class="sidebar">
         <NavMenu />
-
     </div>
 
     <main>
-        <div class="top-row px-4">
-            <a href="https://docs.microsoft.com/aspnet/" target="_blank">About</a>
-        </div>
-
         <article class="content px-4">
             @Body
         </article>
     </main>
 </div>
+
+@code {
+    public decimal Balance { get; set; }
+    public string EngineStatus { get; set; } = "Loading...";
+    public string TradingMode { get; set; } = "Detecting...";
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Balance = await BalanceService.GetBalanceAsync();
+        // EngineStatus = await EngineStatusService.GetStatusAsync();
+        // TradingMode = await TradingModeService.GetModeAsync();
+    }
+
+
+}
