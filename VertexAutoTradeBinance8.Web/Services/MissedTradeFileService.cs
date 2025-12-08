@@ -41,6 +41,7 @@ namespace VertexAutoTradeBinance8.Web.Services
 
             try
             {
+
                 return JsonSerializer.Deserialize<List<MissedTradeRecord>>(json, JsonOptions)
                        ?? new();
             }

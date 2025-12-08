@@ -4,288 +4,495 @@
 @using VertexAutoTradeBinance8.Web.Models
 @inject MissedTradeFileService MissedService
 
-<h2 class="text-3xl font-bold mb-6">Пропущенные сделки</h2>
+<div class="missed-container">
 
-@if (_records == null)
-{
-    <div>Загрузка...</div>
-    return;
-}
+    <div class="missed-title">Пропущенные сделки</div>
+    <div class="missed-sub">Последние пропущенные попытки входа</div>
 
-@if (_records.Count == 0)
-{
-    <div>Файл пуст.</div>
-    return;
-}
+    <!-- === FILTER PANEL === -->
+    <div class="filter-chips">
 
-<!-- ==== КАРТОЧКИ ПОСЛЕДНИХ СДЕЛОК ==== -->
-<h3 class="text-2xl font-bold mb-3 mt-10">Последние пропущенные сделки</h3>
-
-<div class="missed-grid">
-    @foreach (var r in _records.OrderByDescending(x => x.Time).Take(40))
-    {
-        <div class="missed-card @(NewFlash.Contains(Key(r)) ? "flash-new" : "")">
-            <div class="missed-header">
-                <div>
-                    <div class="missed-symbol">@r.Symbol</div>
-                    <div class="value-time">@r.Time.ToLocalTime()</div>
-                </div>
-
-                <span class="missed-badge @(r.Reason == "BelowMinNotional" ? "badge-min" : "badge-balance")">
-                    <span class="badge-reason">@TranslateReason(r.Reason)</span>
-                </span>
-            </div>
-
-            <div class="missed-body">
-                <div>
-                    Side:
-                    @if (r.Side == "Buy")
-                    {
-                        <span class="side-long">LONG</span>
-                    }
-                    else
-                    {
-                        <span class="side-short">SHORT</span>
-                    }
-                </div>
-
-               
-                <div>Вход: <b class="value-entry">@F(r.Symbol, r.Entry)</b></div>
-                <div>SL: <b class="value-sl">@F(r.Symbol, r.StopLoss)</b></div>
-                <!-- TPs -->
-                <div class="mt-2">
-                    <div class="text-gray-400 text-xs">TPs:</div>
-                    <div class="flex flex-wrap gap-2 mt-1">
-                        @foreach (var tp in r.TakeProfits)
-                        {
-                            <span class="value-tp">@F(r.Symbol, tp)</span>
-                        }
-                    </div>
-                </div>
-
-                <div class="mt-3">
-                    Баланс: <span class="value-balance">@Money(r.FreeBalance)</span>
-                    Попытка Notional:
-                    <span class="value-notional-orange">@Money(r.AttemptNotional)</span>
-                    Min Binance:
-                    <span class="value-notional-yellow">@Money(r.RequiredMinNotional)</span>
-
-
-                </div>
-            </div>
+        <div class="@ChipClass("ALL")"
+             @onclick="@(() => SetFilter("ALL"))">
+            Все
         </div>
-    }
-</div>
+
+        <div class="@ChipClass("BAL")"
+             @onclick="@(() => SetFilter("BAL"))">
+            Недостаточно баланса
+        </div>
+
+        <div class="@ChipClass("MIN")"
+             @onclick="@(() => SetFilter("MIN"))">
+            MinNotional
+        </div>
+
+        <div class="@ChipClass("LONG")"
+             @onclick="@(() => SetFilter("LONG"))">
+            LONG
+        </div>
+
+        <div class="@ChipClass("SHORT")"
+             @onclick="@(() => SetFilter("SHORT"))">
+            SHORT
+        </div>
+
+        <div class="@ChipClass("HIGH")"
+             @onclick="@(() => SetFilter("HIGH"))">
+            Score > 70
+        </div>
+
+    </div>
 
 
-<!-- ==== ГРУППИРОВКА ==== -->
-<h3 class="text-2xl font-bold mb-3 mt-10">По символам</h3>
 
-<div class="space-y-4">
-    @foreach (var kv in GroupedBySymbol)
+
+    @if (_records == null)
     {
-        var symbol = kv.Key;
-        var list = kv.Value;
+        <div>Загрузка...</div>
+    }
+    else if (_records.Count == 0)
+    {
+        <div>Файл пуст.</div>
+    }
+    else
+    {
+        <div class="layout-grid">
 
-        <div class="missed-expand">
-            <button class="w-full flex justify-between items-center text-left"
-                    @onclick="@(() => Toggle(symbol))">
-                <div class="missed-symbol">@symbol</div>
-                <div class="missed-time">@list.Count пропусков</div>
-            </button>
+            <!-- === LEFT SIDE — CARDS === -->
+            <div class="left-cards">
 
-            @if (Expanded.Contains(symbol))
-            {
-                <div class="mt-4">
-                    @foreach (var r in list.OrderByDescending(x => x.Time))
+                @{
+                    // счётчики по символам для компакт-режима
+                    var perSymbolIndex = new Dictionary<string, int>();
+                }
+
+                <div class="missed-grid">
+                    @foreach (var r in FilteredRecords
+                                    .OrderByDescending(x => x.Time)   // всегда самые свежие
+                                    .Take(15))                         // показываем только 10 (можешь поменять)
                     {
-                        <div class="missed-expand-entry">
-                            <div class="missed-time">@r.Time.ToLocalTime()</div>
+                        var score = CalcScore(r);
 
-                            <!-- SIDE -->
-                            <div>
-                                @if (r.Side == "Buy")
-                                {
-                                    <span class="value-green font-bold">LONG</span>
-                                }
-                                else
-                                {
-                                    <span class="value-red font-bold">SHORT</span>
-                                }
+                        // номер записи для данного символа
+                        var idx = perSymbolIndex.TryGetValue(r.Symbol, out var val) ? val : 0;
+                        perSymbolIndex[r.Symbol] = idx + 1;
+
+                        var totalForSymbol = SymbolCounts.TryGetValue(r.Symbol, out var total) ? total : 0;
+                        var isCompact = totalForSymbol > 3 && idx >= 3;
+
+                        var cardClasses =
+                        "missed-card " +
+                        (isCompact ? "missed-card-compact " : "") +
+                        (NewFlash.Contains(Key(r)) ? "flash-new" : "");
+
+                        
+                            <div class="@cardClasses ai-hint" title="@AiHint(r.Score)">
+
+                            <div class="missed-header">
+                                <div>
+                                    <div class="missed-symbol">@r.Symbol</div>
+                                    <div class="missed-date">@r.Time.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss")</div>
+                                </div>
+
+                                <span class="badge @(r.Reason == "BelowMinNotional" ? "badge-yellow" : "badge-red")">
+                                    @TranslateReason(r.Reason)
+                                </span>
                             </div>
 
-                            <!-- BASIS -->
-                            <div class="value-red">@TranslateReason(r.Reason)</div>
-
-                            <div>Entry: <b>@F(r.Entry)</b></div>
-                            <div>SL: <b>@F(r.StopLoss)</b></div>
-
-                            <!-- TPs -->
-                            <div class="mt-2 flex flex-wrap gap-2">
-                                @foreach (var tp in r.TakeProfits)
-                                {
-                                    <span class="px-2 py-1 bg-gray-700 text-green-300 rounded text-xs"><b>@F(tp)</b></span>
-                                }
+                            <!-- SCORE BADGE -->
+                            <div class="score-block @ScoreColor(r.Score)">
+                                Opportunity Score: <b>@r.Score</b>/100
                             </div>
 
-                            <div>Balance: <b class="value-green">@F(r.FreeBalance)</b></div>
-                            <div>Attempt: <b class="value-yellow">@F(r.AttemptNotional)</b></div>
-                            <div>MinNeeded: <b class="value-red">@F(r.RequiredMinNotional)</b></div>
+                            <!-- LIQUIDITY RISK BLOCK (большая полоса) -->
+                            <div class="liquidity-block @LiquidityColor(r)">
+                                <div class="liq-title">
+                                    ⚠ Liquidity Danger (@LiquiditySeverity(r))
+                                </div>
+
+                                <div class="liq-bar">
+                                    @for (var i = 0; i < LiquidityBars(r); i++)
+                                    {
+                                        <span class="liq-bar-fill"></span>
+                                    }
+                                    @for (var i = LiquidityBars(r); i < 10; i++)
+                                    {
+                                        <span class="liq-bar-empty"></span>
+                                    }
+                                </div>
+
+                                <div class="liq-tip">
+                                    (Наведи мышку, чтобы увидеть детали)
+                                </div>
+                            </div>
+
+                            <div class="missed-body">
+
+                                <!-- SIDE -->
+                                <div class="value-block">
+                                    <span class="v-label">Side:</span>
+                                    @if (r.Side == "Buy")
+                                    {
+                                        <span class="tag-long">LONG</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="tag-short">SHORT</span>
+                                    }
+                                </div>
+
+                                <!-- Entry / SL -->
+                                <div class="value-block">
+                                    <span class="v-label">Вход:</span>
+                                    <span class="v-val">@F(r.Symbol, r.Entry)</span>
+                                </div>
+
+                                <div class="value-block">
+                                    <span class="v-label">SL:</span>
+                                    <span class="v-sl">@F(r.Symbol, r.StopLoss)</span>
+                                </div>
+                                <!-- ATR / Vol -->
+                                <div class="value-block mt-1">
+                                    <span class="v-label">ATR:</span>
+                                    <span class="v-atr">@r.ATR.ToString("F2")</span>
+                                </div>
+
+                                <div class="value-block">
+                                    <span class="v-label">Vol:</span>
+                                    <span class="v-vol">@($"{r.Vol:P2}")</span>   <!-- 1.23% -->
+                                </div>
+
+                                <!-- TPs -->
+                                <div class="value-block mt-2">
+                                    <div class="v-label">TPs:</div>
+                                    <div class="tp-list">
+                                        @foreach (var tp in r.TakeProfits)
+                                        {
+                                            <span>@F(r.Symbol, tp)</span>
+                                        }
+                                    </div>
+                                </div>
+
+                                <!-- === LIQUIDITY + SMART REGIME + CONFIDENCE TAGS === -->
+                                <div class="flex gap-2 mt-3">
+
+                                    @{
+                                        var sev = LiquiditySeverity(r);         // HIGH / MEDIUM / LOW
+                                        var liqClass = LiquidityClass(sev);    // CSS класс для цвета
+                                    }
+
+                                    <!-- Ликвидность tag -->
+                                    <span class="@liqClass">
+                                        Liquidity: @sev
+                                    </span>
+
+                                    <!-- Smart regime tag -->
+                                    <span class="@SmartClass(r.Regime)">
+                                        @r.Regime
+                                    </span>
+                                </div>
+
+                                <!-- CONFIDENCE BAR -->
+                                <div class="conf-bar mt-2">
+                                    <div class="conf-fill" style="width:@r.Confidence%"></div>
+                                </div>
+
+                                <!-- INTENSITY / SPARKLINE -->
+                                <div class="value-block mt-2">
+                                    <div class="v-label">Интенсивность попытки:</div>
+                                    <div class="sparkline">
+                                        @{
+                                            var ratio = r.RequiredMinNotional > 0
+                                            ? (double)(r.AttemptNotional / r.RequiredMinNotional)
+                                            : 0.0;
+                                            var bars = Math.Clamp((int)Math.Round(ratio * 3), 1, 5);
+                                        }
+                                        @for (var i = 0; i < bars; i++)
+                                        {
+                                            <span class="spark-bar"></span>
+                                        }
+                                    </div>
+                                </div>
+
+                                <!-- BALANCE -->
+                                <div class="balance-info mt-3">
+                                    Баланс: <b>@Money(r.FreeBalance)</b><br />
+                                    Попытка Notional: <b class="notional">@Money(r.AttemptNotional)</b><br />
+                                    Min Binance: <b class="min-notional">@Money(r.RequiredMinNotional)</b>
+                                </div>
+
+                            </div>
                         </div>
                     }
                 </div>
-            }
+            </div>
+
+            <!-- === RIGHT SIDE — AI SUMMARY === -->
+            <div class="ai-summary">
+                <div class="summary-title">AI Summary (24h)</div>
+
+                <div class="summary-item">
+                    Всего пропусков: <b>@_records.Count</b>
+                </div>
+
+                <div class="summary-item">
+                    High-Score (&gt;70): <b>@_records.Count(x => CalcScore(x) > 70)</b>
+                </div>
+
+                <div class="summary-item">
+                    Лучшая упущенная сделка:
+                    <b>@BestSymbol</b> (Score @BestScore)
+                </div>
+
+                <div class="summary-item">
+                    Наиболее частый символ:
+                    <b>@TopSymbol</b>
+                </div>
+
+                <div class="summary-item">
+                    Основная причина:
+                    <b>@TranslateReason(TopReason)</b>
+                </div>
+            </div>
+
         </div>
     }
 </div>
 
+
 @code {
     private List<MissedTradeRecord>? _records;
-    private Dictionary<string, List<MissedTradeRecord>> GroupedBySymbol;
-    private HashSet<string> Expanded = new();
-    private Dictionary<string, decimal> TickSizes = new();
-    private System.Threading.Timer? _timer;
-    private HashSet<string> _knownTradeIds = new(); // уникальные подписи
+    private List<MissedTradeRecord> FilteredRecords = new();
+    private Dictionary<string, int> SymbolCounts = new();
 
-    private HashSet<string> _known = new(); // ID всех известных записей
+    private HashSet<string> _known = new();
     private HashSet<string> NewFlash = new();
+    private System.Threading.Timer? _timer;
 
-    string Key(MissedTradeRecord r)
-        => $"{r.Symbol}-{r.Time:yyyyMMddHHmmss.ffff}";
+    private string CurrentFilter = "ALL";
+
+    string Key(MissedTradeRecord r) => $"{r.Symbol}-{r.Time:yyyyMMddHHmmss.ffff}";
+    string LiquiditySeverity(MissedTradeRecord r)
+    {
+        if (r.ATR > 200 && r.Vol < 0.01m) return "HIGH";   // опасно
+        if (r.ATR > 100 && r.Vol < 0.02m) return "MEDIUM";
+        return "LOW";
+    }
+
+    string LiquidityClass(string sev)
+    {
+        return sev switch
+        {
+            "HIGH" => "liq-high",
+            "MEDIUM" => "liq-med",
+            _ => "liq-low"
+        };
+    }
+
+  
+    string AiHint(int score)
+    {
+        if (score >= 80)
+            return "AI: Отличный сигнал. Сильный тренд и низкие риски. Такой вход обоснован.";
+
+        if (score >= 65)
+            return "AI: В целом хороший сигнал. Можно рассматривать вход с аккуратным стопом.";
+
+        if (score >= 50)
+            return "AI: Сигнал среднего качества. Лучше дождаться более чёткого подтверждения.";
+
+        if (score >= 35)
+            return "AI: Сигнал слабый. Условия неидеальные. Вход не рекомендуется.";
+
+        return "AI: Высокие риски. Лучше избегать этот вход.";
+    }
+
+
+    string LiquidityColor(MissedTradeRecord r)
+    {
+        var sev = LiquiditySeverity(r);
+        return sev switch
+        {
+            "HIGH" => "liq-high",
+            "MEDIUM" => "liq-med",
+            _ => "liq-low",
+        };
+    }
+
+    string SmartClass(string t)
+    {
+        if (t.Contains("StrongTrend")) return "smart-strong";
+        if (t.Contains("Squeeze")) return "smart-squeeze";
+        if (t.Contains("Chop")) return "smart-chop";
+        return "smart-strong";
+    }
+
+    int LiquidityBars(MissedTradeRecord r)
+    {
+        // Нормализуем уровень ликвидности от 1 до 10
+        double LQ = (double)(r.ATR / (r.Vol + 0.0001m));
+
+        if (LQ > 300) return 10;
+        if (LQ > 200) return 8;
+        if (LQ > 150) return 6;
+        if (LQ > 100) return 4;
+        if (LQ > 50) return 2;
+        return 1;
+    }
 
     protected override async Task OnInitializedAsync()
     {
+
         await LoadData();
 
-        // === AUTO-REFRESH EVERY 5 SECONDS ===
         _timer = new System.Threading.Timer(
             async _ =>
             {
                 await InvokeAsync(async () =>
                 {
                     await Refresh();
+                    ApplyFilter();
                     StateHasChanged();
                 });
             },
             null,
             TimeSpan.FromSeconds(5),
-            TimeSpan.FromSeconds(5)
-        );
-      
+            TimeSpan.FromSeconds(5));
     }
+
     private async Task LoadData()
     {
-        _records = await MissedService.LoadAsync();
+        _records = await MissedService.LoadAsync() ?? new List<MissedTradeRecord>();
 
-        // регистрируем все существующие записи (чтобы они не мигали как новые)
         foreach (var r in _records)
             _known.Add(Key(r));
 
-        GroupedBySymbol = _records
-            .GroupBy(x => x.Symbol)
-            .ToDictionary(g => g.Key, g => g.ToList());
+        RebuildSymbolCounts();
+        ApplyFilter();
     }
+
     private async Task Refresh()
     {
         var newRecords = await MissedService.LoadAsync();
-        if (newRecords == null || newRecords.Count == 0)
-            return;
+        if (newRecords == null) return;
 
-        // ищем новые записи
-        var newOnes = newRecords
-            .Where(r => !_known.Contains(Key(r)))
-            .ToList();
+        var newOnes = newRecords.Where(r => !_known.Contains(Key(r))).ToList();
 
         if (newOnes.Count > 0)
         {
-            // регистрируем
             foreach (var r in newOnes)
                 _known.Add(Key(r));
 
-            // запускаем анимацию только для новых карточек
-            NewFlash = newOnes
-                .Select(r => Key(r))
-                .ToHashSet();
+            NewFlash = newOnes.Select(r => Key(r)).ToHashSet();
         }
 
         _records = newRecords;
-
-        GroupedBySymbol = _records
-            .GroupBy(x => x.Symbol)
-            .ToDictionary(g => g.Key, g => g.ToList());
+        RebuildSymbolCounts();
+        ApplyFilter();
     }
 
-    void Toggle(string symbol)
+    private void RebuildSymbolCounts()
     {
-        if (!Expanded.Add(symbol))
-            Expanded.Remove(symbol);
+        if (_records == null)
+        {
+            SymbolCounts = new();
+            return;
+        }
+
+        SymbolCounts = _records
+            .GroupBy(x => x.Symbol)
+            .ToDictionary(g => g.Key, g => g.Count());
     }
 
-    string TranslateReason(string r)
-        => r switch
+    private void ApplyFilter()
+    {
+        if (_records == null)
         {
-            "BelowMinNotional" => "Меньше минимальная сумма сделки",
-            "InsufficientBalance" => "Недостаточно баланса",
-            "InsufficientBalanceForMinNotional" => "Недостаточно средств для минимальной сделки",
-            _ => r
+            FilteredRecords = new();
+            return;
+        }
+
+        FilteredRecords = CurrentFilter switch
+        {
+            "BAL" => _records.Where(x => x.Reason.Contains("InsufficientBalance")).ToList(),
+            "MIN" => _records.Where(x => x.Reason.Contains("MinNotional")).ToList(),
+            "LONG" => _records.Where(x => x.Side == "Buy").ToList(),
+            "SHORT" => _records.Where(x => x.Side == "Sell").ToList(),
+            "HIGH" => _records.Where(x => x.Score > 70).ToList(),
+            _ => _records
         };
+
+
+
+    }
+    int CalcScore(MissedTradeRecord r)
+    {
+        int score = 0;
+
+        if (r.TakeProfits.Count >= 2) score += 20;
+        if (r.AttemptNotional > r.RequiredMinNotional * 3) score += 20;
+        if (r.Side == "Buy") score += 10;
+        if (r.Reason.Contains("InsufficientBalance")) score += 20;
+        if (r.AttemptNotional > 10) score += 30;
+
+        return Math.Clamp(score, 0, 100);
+    }
+    void SetFilter(string f)
+    {
+        CurrentFilter = f;
+        ApplyFilter();
+    }
+    string ChipClass(string f)
+    {
+        bool active = CurrentFilter == f;
+
+        return "chip " + (active ? "chip-active" : "");
+    }
+    string GetFilterClass(string key)
+    {
+        return CurrentFilter == key ? "active" : "";
+    }
+
+
+    
+ 
+
+    string ScoreColor(int score)
+    {
+        if (score >= 80) return "score-green";
+        if (score >= 60) return "score-blue";
+        if (score >= 40) return "score-yellow";
+        return "score-red";
+    }
+
+    string BestSymbol => _records?.OrderByDescending(x => CalcScore(x)).FirstOrDefault()?.Symbol ?? "-";
+    int BestScore => _records?.Max(x => CalcScore(x)) ?? 0;
+    string TopSymbol => _records?.GroupBy(x => x.Symbol).OrderByDescending(g => g.Count()).FirstOrDefault()?.Key ?? "-";
+    string TopReason => _records?.GroupBy(x => x.Reason).OrderByDescending(g => g.Count()).FirstOrDefault()?.Key ?? "-";
+
+    string TranslateReason(string r) => r switch
+    {
+        "BelowMinNotional" => "Сумма ниже MinNotional",
+        "InsufficientBalance" => "Недостаточно баланса",
+        "InsufficientBalanceForMinNotional" => "Недостаточно для MinNotional",
+        _ => r
+    };
 
     string F(decimal v)
     {
-        if (v >= 1000)
-            return v.ToString("F2");      // напр. 3047.03
-
-        if (v >= 1)
-            return v.ToString("F4");      // напр. 47.1234
-
-        if (v >= 0.01m)
-            return v.ToString("F6");      // напр. 0.123456
-
-        return v.ToString("0.##########"); // мелкие значения
-    }
-    string Money(decimal v)
-    {
-        if (v >= 1)
-            return v.ToString("F2") + " USDT";
-
+        if (v >= 1) return v.ToString("F4");
         return v.ToString("0.00000000");
     }
 
-    decimal GetTick(string symbol)
+    string Money(decimal v)
     {
-        if (TickSizes.TryGetValue(symbol, out var tick))
-            return tick;
-
-        return 0.0001m; // fallback
+        if (v >= 1) return v.ToString("F2") + " USDT";
+        return v.ToString("0.00000000");
     }
-    string F(string symbol, decimal v)
-    {
-        decimal tick = GetTick(symbol);
 
-        if (tick > 0)
-        {
-            int precision =
-                tick switch
-                {
-                    >= 1m => 0,
-                    >= 0.1m => 1,
-                    >= 0.01m => 2,
-                    >= 0.001m => 3,
-                    >= 0.0001m => 4,
-                    >= 0.00001m => 5,
-                    >= 0.000001m => 6,
-                    _ => 8
-                };
+    string F(string symbol, decimal v) => F(v);
 
-            return Math.Round(v, precision).ToString($"F{precision}");
-        }
-
-        // fallback
-        if (v >= 1000) return v.ToString("F2");
-        if (v >= 1) return v.ToString("F4");
-        if (v >= 0.01m) return v.ToString("F6");
-
-        return v.ToString("0.##########");
-    }
+  
 
 }

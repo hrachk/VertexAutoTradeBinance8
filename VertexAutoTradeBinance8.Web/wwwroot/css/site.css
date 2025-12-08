@@ -245,6 +245,112 @@ tr {
     font-size: 14px;
 }
 
+.badge {
+    max-width: 160px;
+    white-space: normal;
+    line-height: 1.1;
+    text-align: right;
+}
+
+
+.score-block {
+    margin-top: 8px;
+    margin-bottom: 8px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.score-high {
+    background: rgba(0,255,120,0.15);
+    color: #00ff9d;
+}
+
+.score-mid {
+    background: rgba(255,200,0,0.15);
+    color: #ffd24b;
+}
+
+.score-low {
+    background: rgba(255,255,255,0.07);
+    color: #aaa;
+}
+compact-card {
+    opacity: 0.8;
+    transform: scale(0.97);
+}
+
+    compact-card:hover {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+
+
+/* Liquidity block */
+.liquidity-block {
+    margin-top: 6px;
+    padding: 8px;
+    border-radius: 8px;
+    font-size: 13px;
+}
+
+/* severity colors */
+.liq-high {
+    background: rgba(255, 0, 0, 0.18);
+    border-left: 4px solid #ff4a4a;
+    color: #ff8a8a;
+}
+
+.liq-med {
+    background: rgba(255, 165, 0, 0.15);
+    border-left: 4px solid #ffb84d;
+    color: #ffc764;
+}
+
+.liq-low {
+    background: rgba(255, 255, 0, 0.10);
+    border-left: 4px solid #e6e659;
+    color: #f4f49b;
+}
+
+.liq-title {
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+/* bar */
+.liq-bar {
+    display: flex;
+    gap: 2px;
+    margin-bottom: 4px;
+}
+
+.liq-bar-fill {
+    width: 6px;
+    height: 8px;
+    background: #ff5c5c;
+    border-radius: 2px;
+}
+
+.liq-bar-empty {
+    width: 6px;
+    height: 8px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 2px;
+}
+
+/* tooltip hint */
+.liq-tip {
+    font-size: 11px;
+    opacity: 0.6;
+}
+
+
+
+
+
 /* BUY/SELL badges */
 .buy-badge {
     background: rgba(16, 185, 129, 0.25);
@@ -358,4 +464,408 @@ tr {
     100% {
         background-color: #1a1d22;
     }
+}
+
+.missed-container {
+    max-width: 1500px;
+    margin: 0 auto;
+    padding: 20px;
+    color: white;
+}
+
+.missed-title {
+    font-size: 34px;
+    font-weight: 900;
+    margin-bottom: 5px;
+}
+
+.missed-sub {
+    font-size: 20px;
+    opacity: 0.8;
+    margin-bottom: 25px;
+}
+
+.missed-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 20px;
+}
+
+.missed-card {
+    background: #11141f;
+    padding: 20px;
+    border-radius: 14px;
+    border: 1px solid #222835;
+    box-shadow: 0 0 20px rgba(0,0,0,0.35);
+    transition: 0.25s;
+}
+
+    .missed-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 0 35px rgba(0, 140, 255, 0.25);
+    }
+
+.missed-symbol {
+    font-size: 22px;
+    font-weight: 800;
+    color: #4fd3ff;
+}
+
+.missed-date {
+    font-size: 14px;
+    opacity: 0.7;
+    margin-bottom: 10px;
+}
+
+.tag-reason {
+    display: inline-block;
+    padding: 5px 10px;
+    font-size: 13px;
+    border-radius: 8px;
+    background: #ad6800;
+    color: #fff;
+    margin-bottom: 12px;
+}
+
+.tag-long {
+    color: #00ff95;
+    font-weight: 700;
+}
+
+.tag-short {
+    color: #ff4f4f;
+    font-weight: 700;
+}
+
+.value-block {
+    margin: 6px 0;
+}
+
+.v-label {
+    font-size: 13px;
+    opacity: 0.7;
+}
+
+.v-val {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.tp-list span {
+    display: inline-block;
+    padding: 3px 8px;
+    margin-right: 5px;
+    background: #1f2431;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #52ffa8;
+}
+
+.balance-info {
+    margin-top: 12px;
+    font-size: 14px;
+}
+
+    .balance-info b {
+        color: #ffd166;
+    }
+
+
+
+/* =================== PREMIUM TRADING COLORS =================== */
+
+.value-entry {
+    color: #f5f5f5;
+    font-weight: 600;
+}
+
+.value-sl {
+    color: #ff5c5c; /* Red - StopLoss */
+    font-weight: 600;
+}
+
+.value-tp {
+    background-color: #124a2f;
+    color: #4ade80; /* Lime-green */
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.value-balance {
+    color: #22c55e; /* Mint green */
+    font-weight: 600;
+}
+
+.value-notional-yellow {
+    color: #facc15; /* Binance yellow */
+    font-weight: 600;
+}
+
+.value-notional-orange {
+    color: #fb923c; /* Orange attempt value */
+    font-weight: 600;
+}
+
+.value-time {
+    color: #9ca3af; /* cool grey */
+}
+
+/* SIDE LABELS */
+.side-long {
+    background-color: #065f46;
+    color: #34d399;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.side-short {
+    background-color: #7f1d1d;
+    color: #f87171;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+/* Reason Badge */
+.badge-reason {
+    background-color: #b45309;
+    color: #fde68a;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+
+/* === LIQUIDITY TAGS === */
+.liq-high {
+    background: #e74c3c;
+    color: white;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.75rem;
+}
+
+.liq-med {
+    background: #f1c40f;
+    color: #222;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.75rem;
+}
+
+.liq-low {
+    background: #2ecc71;
+    color: white;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.75rem;
+}
+
+/* SMART TYPE BADGES */
+.smart-strong {
+    background: #3498db;
+    color: white;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.75rem;
+}
+
+.smart-squeeze {
+    background: #9b59b6;
+    color: white;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.75rem;
+}
+
+.smart-chop {
+    background: #e67e22;
+    color: white;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.75rem;
+}
+
+/* CONFIDENCE BAR */
+.conf-bar {
+    height: 6px;
+    background: #333;
+    border-radius: 5px;
+    overflow: hidden;
+    margin-top: 5px;
+}
+
+.conf-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #2ecc71, #f1c40f, #e74c3c);
+}
+.score-green {
+    background: #00c85333;
+    border-left: 4px solid #00c853;
+}
+
+.score-blue {
+    background: #2962ff33;
+    border-left: 4px solid #2962ff;
+}
+
+.score-yellow {
+    background: #ffd60033;
+    border-left: 4px solid #ffd600;
+}
+
+.score-red {
+    background: #d5000033;
+    border-left: 4px solid #d50000;
+}
+
+
+.filter-panel {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+
+    .filter-panel button {
+        padding: 6px 16px;
+        border-radius: 6px;
+        background: #1c1f26;
+        color: #cfd4da;
+        border: 1px solid #2d323b;
+        cursor: pointer;
+        font-size: 13px;
+        transition: 0.25s ease;
+        letter-spacing: 0.3px;
+    }
+
+        .filter-panel button:hover {
+            background: #2c313b;
+            border-color: #3e4653;
+            transform: translateY(-1px);
+        }
+
+        .filter-panel button.active {
+            background: #4c6ef5;
+            color: white;
+            border-color: #4c6ef5;
+            box-shadow: 0 0 6px rgba(76, 110, 245, 0.6);
+            transform: translateY(-1px);
+        }
+
+        .filter-panel button:active {
+            transform: translateY(0px);
+            opacity: 0.85;
+        }
+
+
+
+
+/* Контейнер фильтров */
+.filter-chips {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+
+/* Основной чип */
+.chip {
+    padding: 6px 14px;
+    border-radius: 14px;
+    background: #1c1f26;
+    color: #d0d4dc;
+    font-size: 14px;
+    cursor: pointer;
+    border: 1px solid #2a2f36;
+    transition: all 0.18s ease-in-out;
+    user-select: none;
+}
+
+    /* Hover эффект — как Binance */
+    .chip:hover {
+        background: #262a33;
+        border-color: #596bff;
+    }
+
+/* Активный чип — Binance selected state */
+.chip-active {
+    background: linear-gradient(90deg, #597bff, #4258ff);
+    border-color: #6e8aff;
+    color: white;
+    font-weight: 600;
+    transform: scale(1.05);
+    box-shadow: 0 0 8px rgba(89, 123, 255, 0.4);
+}
+
+/* Лёгкая анимация при изменении */
+.chip-active,
+.chip {
+    transition: all 0.18s ease;
+}
+
+
+
+/* === SIDEBAR NEW PRO STYLE === */
+.sidebar {
+    width: 230px;
+    height: 100vh;
+    background: linear-gradient(180deg, #1a1f3c 0%, #0d0f1d 100%);
+    padding-top: 25px;
+    padding-left: 10px;
+    padding-right: 10px;
+    box-shadow: 4px 0 20px rgba(0,0,0,0.4);
+    border-right: 1px solid rgba(255,255,255,0.05);
+}
+
+    .sidebar .menu-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 16px;
+        margin-bottom: 10px;
+        border-radius: 10px;
+        font-size: 15px;
+        color: #d0d5ff;
+        cursor: pointer;
+        transition: 0.25s ease;
+    }
+
+        .sidebar .menu-item:hover {
+            background: rgba(115, 138, 255, 0.2);
+            transform: translateX(3px);
+        }
+
+        .sidebar .menu-item.active {
+            background: rgba(120, 82, 255, 0.35);
+            border: 1px solid rgba(160, 130, 255, 0.45);
+            box-shadow: 0 0 8px rgba(150, 120, 255, 0.4);
+            color: white;
+        }
+
+        .sidebar .menu-item svg {
+            width: 20px;
+            opacity: 0.9;
+        }
+
+.sidebar-title {
+    color: #fff;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    opacity: 0.55;
+    margin-left: 10px;
+    margin-bottom: 20px;
 }

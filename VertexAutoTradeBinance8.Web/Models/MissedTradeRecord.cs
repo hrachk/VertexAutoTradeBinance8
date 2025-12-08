@@ -23,6 +23,18 @@
 
         // NEW: Binance мин. требование для символа
         public decimal RequiredMinNotional { get; set; }
+
+        // === NEW: MARKET REGIME METRICS ===
+        public decimal ATR { get; set; }
+        public decimal Vol { get; set; }
+        public decimal Slope { get; set; }
+        public int Confidence { get; set; }
+        public string Regime { get; set; } = "";
+        public string SmartType { get; set; } = "";
+
+        public decimal Deviation { get; set; }
+        public int Score { get; set; }
+
     }
 
     public static class MissedTradeExtensions
