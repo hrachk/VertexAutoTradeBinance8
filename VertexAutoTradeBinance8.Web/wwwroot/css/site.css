@@ -869,3 +869,87 @@ compact-card {
     margin-left: 10px;
     margin-bottom: 20px;
 }
+
+
+
+
+.tooltip {
+    visibility: hidden;
+    background-color: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    text-align: center;
+    border-radius: 5px;
+    padding: 5px;
+    position: absolute;
+    z-index: 1;
+    bottom: 125%; /* Расположение подсказки относительно элемента */
+    left: 50%;
+    margin-left: -60px;
+}
+
+    .tooltip .tooltiptext {
+        visibility: visible;
+    }
+    .tooltip:hover .tooltiptext {
+        visibility: visible;
+        opacity: 1;
+        transition: opacity 0.3s ease;
+    }
+
+
+/* Появление подсказки */
+.liq-tip {
+    visibility: hidden;
+    position: absolute;
+    bottom: 25px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: #444;
+    color: white;
+    border-radius: 5px;
+    padding: 8px;
+    font-size: 14px;
+    text-align: center;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.liq-bar:hover .liq-tip {
+    visibility: visible;
+    opacity: 1;
+}
+.filter-chips {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    margin-top: 15px;
+}
+
+/* Чипы, когда они активированы */
+.chip-active {
+    background: #597bff;
+    color: white;
+    border-color: #4258ff;
+    transform: scale(1.05);
+    box-shadow: 0 0 8px rgba(150, 120, 255, 0.5);
+}
+
+.chip {
+    padding: 8px 14px;
+    background: #333;
+    color: #d0d5ff;
+    border-radius: 20px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: 0.3s;
+    box-shadow: 0 0 6px rgba(0, 0, 0, 0.3);
+}
+
+    .chip:hover {
+        background: #3e4b61;
+    }
+
+    .chip:active {
+        transform: scale(0.98);
+    }

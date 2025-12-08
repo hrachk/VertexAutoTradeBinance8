@@ -12,15 +12,9 @@
     <!-- === FILTER PANEL === -->
     <div class="filter-chips">
 
-        <div class="@ChipClass("ALL")"
-             @onclick="@(() => SetFilter("ALL"))">
-            Все
-        </div>
+        <div class="chip @(CurrentFilter == "ALL" ? "chip-active" : "")" @onclick="@(() => SetFilter("ALL"))">Все</div>
 
-        <div class="@ChipClass("BAL")"
-             @onclick="@(() => SetFilter("BAL"))">
-            Недостаточно баланса
-        </div>
+        <div class="@ChipClass("BAL")" @onclick="@(() => SetFilter("BAL"))">Недостаточно баланса </div>
 
         <div class="@ChipClass("MIN")"
              @onclick="@(() => SetFilter("MIN"))">
@@ -45,6 +39,7 @@
     </div>
 
 
+   
 
 
     @if (_records == null)
@@ -106,7 +101,7 @@
                             </div>
 
                             <!-- LIQUIDITY RISK BLOCK (большая полоса) -->
-                            <div class="liquidity-block @LiquidityColor(r)">
+                            <div class="liquidity-block @LiquidityColor(r)" title="Наведи мышку для подробностей о риске ликвидности">
                                 <div class="liq-title">
                                     ⚠ Liquidity Danger (@LiquiditySeverity(r))
                                 </div>
@@ -126,6 +121,11 @@
                                     (Наведи мышку, чтобы увидеть детали)
                                 </div>
                             </div>
+
+                            <div class="score-block @ScoreColor(r.Score)" title="Opportunity Score рассчитывается на основе тренда и рисков">
+                                Opportunity Score: <b>@r.Score</b>/100
+                            </div>
+
 
                             <div class="missed-body">
 
