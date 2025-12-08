@@ -18,6 +18,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly AiLeverageService _aiLeverage;
         private readonly AiMarketRegimeService _marketRegimeService;
         private readonly SmartRegimeService _smartRegime;
+        private readonly SimulatedTradeService _simulator;
 
         private static readonly string MissedTradesPath =
             Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
@@ -28,7 +29,7 @@ namespace VertexAutoTradeBinance8.Services
             TradingOptions options,
             BinanceClientFactory factory,
             MarketDataService marketData,
-            AiLeverageService aiLeverage, AiMarketRegimeService marketRegimeService , SmartRegimeService  smartRegime)
+            AiLeverageService aiLeverage, AiMarketRegimeService marketRegimeService , SmartRegimeService  smartRegime, SimulatedTradeService simulator)
         {
             _logger = logger;
             _symbolInfo = symbolInfo;
@@ -38,12 +39,13 @@ namespace VertexAutoTradeBinance8.Services
             _aiLeverage = aiLeverage;
             _marketRegimeService = marketRegimeService;
             _smartRegime = smartRegime;
+            _simulator = simulator;
         }
 
         // ====================================================================
         // SAFE QTY v7.4 (QUANT-REALTIME FINAL)
         // ====================================================================
-        public async Task<decimal> CalculateSafeQty(
+        public async Task<decimal> CalculateSafeQty(TradeSignal signal,  // добавь параметр signal
      string symbol,
      decimal entryPrice,
      decimal stopLoss,
@@ -178,6 +180,7 @@ namespace VertexAutoTradeBinance8.Services
 
                 return 0;
             }
+            
 
             // BASE RISK
             decimal baseRiskPercent = _options.BaseRiskPercent > 0
@@ -380,6 +383,57 @@ namespace VertexAutoTradeBinance8.Services
             }
             // 🔥 КОНЕЦ ДОБАВКИ
 
+
+
+            // Для слабых сигналов
+            if (weak)
+            {
+                await _simulator.SimulateMissedTradeAsync(signal, "WeakSignalRejected");
+
+                LogMissedTrade(
+                    symbol,
+                    entryPrice,
+                    stopLoss,
+                    "WeakSignalRejected",
+                    free,
+                    0,
+                    binanceMinNotional,
+                    side,
+                    takeProfits,
+                    baseReg,
+                    smart,
+                    atr,
+                    scoreUi
+                );
+
+                return 0;
+            }
+
+
+
+            // Для недостаточного баланса
+            if (notional < binanceMinNotional)
+            {
+                await _simulator.SimulateMissedTradeAsync(signal, "InsufficientBalanceForMinNotional");
+
+                LogMissedTrade(
+                    symbol,
+                    entryPrice,
+                    stopLoss,
+                    "InsufficientBalanceForMinNotional",
+                    free,
+                    0,
+                    binanceMinNotional,
+                    side,
+                    takeProfits,
+                    baseReg,
+                    smart,
+                    atr,
+                    scoreUi
+                );
+
+                return 0;
+            }
             return qty;
         }
 

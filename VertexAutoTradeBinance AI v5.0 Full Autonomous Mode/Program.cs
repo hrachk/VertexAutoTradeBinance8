@@ -36,7 +36,13 @@ public class Program
                 services.AddSingleton<AiMarketRegimeService>();
                 services.AddSingleton<AiPatternEngineService>();
                 services.AddSingleton<AdaptiveStrategyService>();
-                services.AddSingleton<AiSelfLearningService>();
+ 
+                services.AddSingleton<AiSelfLearningService>();  // Ensure that all dependencies are resolved correctly
+
+
+                services.AddSingleton<SimulatedTradeService>();
+
+
                 services.AddSingleton<AiModelSnapshotService>();
                 services.AddSingleton<TradeResultMonitorService>();
                 services.AddSingleton<CheckAfterFillService>();
@@ -58,6 +64,7 @@ public class Program
                 services.AddSingleton<PositionSupervisorService>();
                 services.AddSingleton<SmartRegimeService>();
                  services.AddSingleton<TradeStateManager>();
+ 
                
 
                 services.AddSingleton(sp => sp.GetRequiredService<IOptions<TradingOptions>>().Value);

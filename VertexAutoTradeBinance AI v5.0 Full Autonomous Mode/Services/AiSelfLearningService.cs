@@ -78,7 +78,11 @@ namespace VertexAutoTradeBinance8.Services
         // TREND MODEL
         public record AiTrendPrediction(int Direction, decimal Confidence, decimal RrBias);
 
-        public AiSelfLearningService(ILogger<AiSelfLearningService> logger)
+        private Dictionary<string, List<LearningEvent>> _learnBuffer = new Dictionary<string, List<LearningEvent>>();
+
+      
+
+        public AiSelfLearningService(ILogger<AiSelfLearningService> logger )
         {
             _logger = logger;
 
@@ -98,6 +102,7 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogError(ex, "[AI] Error creating ai-models directory or backup directory.");
                 return;  // Ранний выход, если не удалось создать директорию
             }
+           
 
             Load();
         }
@@ -741,6 +746,40 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             return rs;
-        } 
+        }
+
+        public void RecordSimulatedTrade(
+    string symbol,
+    string side,
+    decimal entry,
+    decimal sl,
+    decimal tp,
+    decimal outcome,
+    string reason)
+        {
+            lock (_lock)
+            {
+                _logger.LogInformation(
+                    "[AI-LEARN][SIM][{symbol}] side={side} entry={entry} sl={sl} tp={tp} result={outcome} reason={reason}",
+                    symbol, side, entry, sl, tp, outcome, reason);
+
+                // сохраняем как отдельный канал обучения
+                if (!_learnBuffer.ContainsKey(symbol))
+                    _learnBuffer[symbol] = new();
+
+                _learnBuffer[symbol].Add(new LearningEvent
+                {
+                    Type = "SIMULATED_TRADE",
+                    Side = side,
+                    Entry = entry,
+                    StopLoss = sl,
+                    TakeProfit = tp,
+                    Result = outcome,
+                    Reason = reason,
+                    Time = DateTime.UtcNow
+                });
+            }
+        }
+
     }
 }

@@ -56,7 +56,7 @@ public class OrdersController : ControllerBase
 
         // риск как в TradingWorker, но без AI-grade – используем переданный multiplier
    
-        var qty = await _riskManager.CalculateSafeQty(
+        var qty = await _riskManager.CalculateSafeQty(signal,
    
 signal.Symbol,
 signal.EntryPrice,

@@ -22,15 +22,17 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ILogger<OrderExecutor> _logger;
         private readonly BinanceClientFactory _factory;
         private readonly SymbolInfoService _symbolInfo;
-
+        private readonly SimulatedTradeService _simulator;
         public OrderExecutor(
             ILogger<OrderExecutor> logger,
             BinanceClientFactory factory,
-            SymbolInfoService symbolInfo)
+            SymbolInfoService symbolInfo,
+            SimulatedTradeService simulator)
         {
             _logger = logger;
             _factory = factory;
             _symbolInfo = symbolInfo;
+            _simulator = simulator;
         }
 
         // =====================================================================
@@ -50,7 +52,12 @@ namespace VertexAutoTradeBinance8.Services
             // Округление количества
             quantity = Math.Floor(quantity / step) * step;
             if (quantity <= 0)
+            {
+                // Пропущенная сделка, вызываем симуляцию
+                await _simulator.SimulateMissedTradeAsync(signal, "QuantityTooSmall");
                 return OrderResult.Fail("Quantity too small");
+            }
+              
 
             var side = signal.Side == SignalSide.Buy ? OrderSide.Buy : OrderSide.Sell;
             var posSide = signal.Side == SignalSide.Buy ? PositionSide.Long : PositionSide.Short;
@@ -73,6 +80,9 @@ namespace VertexAutoTradeBinance8.Services
 
             if (!entryRes.Success || entryRes.Data == null)
             {
+                // В случае ошибки ордера, вызываем симуляцию
+                await _simulator.SimulateMissedTradeAsync(signal, "EntryError");
+
                 _logger.LogError("[ORDER][{symbol}] ENTRY ERROR: {err}",
                     signal.Symbol, entryRes.Error);
                 return OrderResult.Fail(entryRes.Error?.Message ?? "ENTRY_ERROR");
@@ -88,7 +98,10 @@ namespace VertexAutoTradeBinance8.Services
             decimal filledEntry = await WaitForFillAsync(client, signal.Symbol, entryOrderId, entryPrice, ct);
 
             if (filledEntry <= 0)
-            {
+            { 
+                // В случае неисполнения, вызываем симуляцию
+                await _simulator.SimulateMissedTradeAsync(signal, "EntryNotFilled");
+
                 _logger.LogError("[ORDER][{symbol}] ENTRY NOT FILLED — CANCELING", signal.Symbol);
                 await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, entryOrderId, ct: ct);
                 return OrderResult.Fail("ENTRY_NOT_FILLED");

@@ -322,7 +322,7 @@ namespace VertexAutoTradeBinance8
             decimal safety = signal?.SafetyRiskMultiplier ?? 1.0m;
 
 
-            decimal qty = await _risk.CalculateSafeQty(
+            decimal qty = await _risk.CalculateSafeQty(signal,
                 signal.Symbol,
                 signal.EntryPrice,
                 signal.StopLoss,
