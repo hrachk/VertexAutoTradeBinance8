@@ -28,6 +28,7 @@
         public decimal TrendSlopePercent { get; set; }
 
         // ATR сигнала
-        public decimal Atr { get; set; }
+        public decimal Atr { get; set; } 
+
     }
 }

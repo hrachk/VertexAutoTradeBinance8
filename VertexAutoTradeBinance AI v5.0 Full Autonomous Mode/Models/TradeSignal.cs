@@ -52,7 +52,7 @@ public class TradeSignal
         public decimal? AiQuality { get; set; }
    
     public decimal? Leverage { get; set; }
-
+    public AiLearningTradeMeta? Meta { get; set; }
 
     public decimal GetTpPart(int index)
     {

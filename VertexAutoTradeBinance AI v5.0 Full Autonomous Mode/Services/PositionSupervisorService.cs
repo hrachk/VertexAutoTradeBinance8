@@ -553,6 +553,18 @@ namespace VertexAutoTradeBinance8.Services
                 timeInForce: TimeInForce.GoodTillCanceled,
                 ct: ct);
 
+            if (signal.Meta == null)
+                signal.Meta = new AiLearningTradeMeta();
+
+            signal.Meta.Tp2Extensions.Add(tpExt);
+
+            // exhaustion & sweep states
+            signal.Meta.ExhaustionDetected = exhaustion != ExhaustionLevel.None;
+            signal.Meta.ExhaustionLevel = exhaustion.ToString();
+
+            signal.Meta.SweepInFavor = sweepInFavor;
+            signal.Meta.SweepAgainst = sweepAgainst;
+
             if (!res.Success)
             {
                 _logger.LogError("[RUNNER-EXT][{symbol}] ERROR updating TP2: {err}", symbol, res.Error);
@@ -624,6 +636,13 @@ namespace VertexAutoTradeBinance8.Services
                 reduceOnly: true,
                 timeInForce: TimeInForce.GoodTillCanceled,
                 ct: ct);
+
+            signal.Meta = new AiLearningTradeMeta
+            {
+                RunnerQty = qtyRunner,
+                Tp1Price = tp1Price,
+                Tp2Start = tp1Price // первая точка
+            };
 
             if (!resTp1.Success)
             {
@@ -1019,6 +1038,13 @@ namespace VertexAutoTradeBinance8.Services
 
             bool win = side == PositionSide.Long ? s > entry : s < entry;
             var sigSide = side == PositionSide.Short ? SignalSide.Sell : SignalSide.Buy;
+
+
+            if (signal.Meta != null)
+            {
+                signal.Meta.FinalExitPrice = s;
+                signal.Meta.ExitReason = "TRAIL_SL";
+            }
 
             _aiLearning.RecordTrade(symbol, sigSide, entry, s, _regimeNow);
         }
