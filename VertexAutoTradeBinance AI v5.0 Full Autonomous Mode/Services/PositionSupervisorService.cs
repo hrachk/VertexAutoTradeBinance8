@@ -1,8 +1,9 @@
 ﻿// ============================================================================
-// PositionSupervisorService v6.5 (QUANT-REALTIME MAX, SAFE TP/SL)
+// PositionSupervisorService v6.6 (QUANT-REALTIME MAX, SAFE TP/SL + Dynamic Trend Hold)
 // - Контроль Long / Short / Both
 // - Авто-ремонт SL/TP
 // - Многоуровневый трейлинг (ATR + EMA + SuperTrend + micro-structure)
+// - Динамический "HOLD" при сильном тренде (не затягиваем SL слишком рано)
 // - Безопасная защита от -2021 (order would immediately trigger)
 // - Manual + AI позиции (через ManualPositionHandler)
 // - QUANT-LEARN: фикс закрытий
@@ -30,6 +31,16 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ManualPositionHandler _manualHandler;
 
         private MarketRegime _regimeNow;
+
+        // --------------------------------------------------------------------
+        // Внутренний уровень вероятности продолжения тренда
+        // --------------------------------------------------------------------
+        private enum TrendContinuationLevel
+        {
+            Low,
+            Medium,
+            High
+        }
 
         public PositionSupervisorService(
             ILogger<PositionSupervisorService> logger,
@@ -373,7 +384,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // MULTI-LAYER TRAILING (как у тебя, без изменений логики)
+        // MULTI-LAYER TRAILING + Dynamic Trend Hold
         // =====================================================================
         private async Task MultiLayerTrailingAsync(
             BinanceRestClient client,
@@ -411,6 +422,19 @@ namespace VertexAutoTradeBinance8.Services
             decimal atr = CalculateAtr(klines);
             if (atr <= 0) return;
 
+            // ---- NEW: оценка вероятности продолжения тренда ----
+            var contLevel = EvaluateTrendContinuation(realSide, entryPrice, atr, klines);
+
+            if (contLevel == TrendContinuationLevel.High)
+            {
+                // Сильный тренд, цена уже далеко от входа → не трогаем SL,
+                // даём сделке "жить" и не затягиваем стоп слишком рано.
+                _logger.LogInformation(
+                    "[SUPERVISOR] {symbol} {side}: trend continuation HIGH → trailing HOLD (keep SL as is)",
+                    symbol, realSide);
+                return;
+            }
+
             decimal ema21 = CalculateEma(klines, 21);
             decimal st = SuperTrend(klines, atr);
 
@@ -444,6 +468,54 @@ namespace VertexAutoTradeBinance8.Services
                 client, symbol, realSide, qty,
                 slOrder, entryPrice, targetSl,
                 signal, ct);
+        }
+
+        // ---- Оценка вероятности продолжения тренда (очень лёгкий, безопасный фильтр) ----
+        private TrendContinuationLevel EvaluateTrendContinuation(
+            PositionSide side,
+            decimal entryPrice,
+            decimal atr,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines)
+        {
+            // Если мало данных — обычный трейлинг
+            if (klines.Count < 30 || atr <= 0)
+                return TrendContinuationLevel.Medium;
+
+            var last = klines[^1];
+
+            // Берём цену N свечей назад для оценки импульса
+            int lookback = Math.Min(20, klines.Count - 1);
+            var past = klines[^lookback];
+
+            if (past.ClosePrice <= 0)
+                return TrendContinuationLevel.Medium;
+
+            var movePct = (last.ClosePrice - past.ClosePrice) / past.ClosePrice;
+            var rr = Math.Abs(last.ClosePrice - entryPrice) / atr; // сколько ATR цена прошла от входа
+
+            // Базовые пороги:
+            // rr >= 1.5  → цена прошла уже достаточно далеко от входа
+            // movePct ≥ 1–1.5 % за последние ~20 минут → сильный импульс
+            if (side == PositionSide.Long)
+            {
+                if (rr >= 1.5m && movePct >= 0.015m)
+                    return TrendContinuationLevel.High;
+
+                if (rr >= 0.8m && movePct >= 0.0075m)
+                    return TrendContinuationLevel.Medium;
+
+                return TrendContinuationLevel.Low;
+            }
+            else // Short
+            {
+                if (rr >= 1.5m && movePct <= -0.015m)
+                    return TrendContinuationLevel.High;
+
+                if (rr >= 0.8m && movePct <= -0.0075m)
+                    return TrendContinuationLevel.Medium;
+
+                return TrendContinuationLevel.Low;
+            }
         }
 
         private decimal CalculateAtr(IReadOnlyList<BinanceFuturesUsdtKline> kl)
