@@ -42,6 +42,17 @@ namespace VertexAutoTradeBinance8.Services
             High
         }
 
+        // --------------------------------------------------------------------
+        // Уровень "усталости" тренда (для TP exhaustion detector)
+        // --------------------------------------------------------------------
+        private enum ExhaustionLevel
+        {
+            None = 0,
+            Mild = 1,
+            Strong = 2
+        }
+
+
         public PositionSupervisorService(
             ILogger<PositionSupervisorService> logger,
             BinanceClientFactory factory,
@@ -238,7 +249,7 @@ namespace VertexAutoTradeBinance8.Services
             // 3) Trailing Logic
             if (klines != null && klines.Count >= 50)
             {
-                // NEW: dynamic TP runner mode
+                // NEW: dynamic TP runner-mode split
                 await ManageRunnerTpAsync(
                     client, symbol, side, qty, entry,
                     orders, signal, klines, ct);
@@ -247,7 +258,6 @@ namespace VertexAutoTradeBinance8.Services
                 await ManageRunnerTpExtensionAsync(
                     client, symbol, side, qty, entry,
                     signal, orders, klines, ct);
-
 
                 // original trailing SL
                 await MultiLayerTrailingAsync(
@@ -403,6 +413,9 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         // RUNNER MODE — TP EXTENSION (Dynamic TP2 for runner 30%)
         // =====================================================================
+        // =====================================================================
+        // RUNNER MODE — TP EXTENSION (Dynamic TP2 for runner 30%)
+        // =====================================================================
         private async Task ManageRunnerTpExtensionAsync(
             BinanceRestClient client,
             string symbol,
@@ -419,44 +432,114 @@ namespace VertexAutoTradeBinance8.Services
 
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
-            // Находим runner TP (он qtyRunner = 30%)
+            // Находим runner TP (он qtyRunner = 30% — меньше половины)
             var runnerTp = orders.FirstOrDefault(o =>
                 o.Side == closeSide &&
                 o.Type == FuturesOrderType.Limit &&
                 o.ReduceOnly == true &&
-                o.Quantity < qty * 0.50m); // runner всегда меньше 50%
+                o.Quantity < qty * 0.50m);
 
             if (runnerTp == null)
                 return;
 
             decimal qtyRunner = runnerTp.Quantity;
 
-            decimal last = klines[^1].ClosePrice;
+            var last = klines[^1];
+            decimal lastPrice = last.ClosePrice;
             decimal atr = CalculateAtr(klines);
             if (atr <= 0)
                 return;
 
-            // ---- 1) Определение силы тренда ----
+            // ---- 1) EXHAUSTION DETECTOR ----
+            var exhaustion = DetectExhaustionLevel(side, entryPrice, atr, klines);
+
+            if (exhaustion == ExhaustionLevel.Strong)
+            {
+                // Сильно перегретый тренд → больше НЕ расширяем TP2,
+                // даём трейлинг-SL дотянуть позицию.
+                _logger.LogInformation(
+                    "[RUNNER-EXT][{symbol}] Exhaustion STRONG → stop extending TP2 (runner stays, SL manages)",
+                    symbol);
+                return;
+            }
+
+            // ---- 2) LIQUIDITY SWEEP DETECTOR ----
+            bool sweepInFavor = IsLiquiditySweepInFavor(side, klines);
+            bool sweepAgainst = IsLiquiditySweepAgainst(side, klines);
+
+            if (sweepAgainst)
+            {
+                // Был сбор ликвидности ПРОТИВ нас: рынок может развернуться.
+                // Не наращиваем жадность, не двигаем TP2 выше.
+                _logger.LogInformation(
+                    "[RUNNER-EXT][{symbol}] Liquidity sweep AGAINST position → skip TP2 extension",
+                    symbol);
+                return;
+            }
+
+            // ---- 3) Базовая сила тренда через EMA21/EMA55 ----
             var ema21 = CalculateEma(klines, 21);
             var ema55 = CalculateEma(klines, 55);
+            if (ema21 <= 0 || ema55 <= 0)
+                return;
 
             bool emaUp = ema21 > ema55;
             decimal emaSlope = ema21 - ema55;
 
-            // Swing high — максимум последних N свечей
-            decimal swingHigh = klines.Skip(klines.Count - 25).Max(k => k.HighPrice);
+            var recent = klines.Skip(klines.Count - 25).ToList();
+            decimal swingHigh = recent.Max(k => k.HighPrice);
+            decimal swingLow = recent.Min(k => k.LowPrice);
 
-            // ---- 2) Вычисление целевого dynamic-TP2 ----
-            decimal tpExt =
-                swingHigh + atr * 1.2m + (emaSlope > 0 ? emaSlope * 0.5m : 0);
+            // ---- 4) Вычисляем базовый tpExt ----
+            decimal baseTpExt;
 
-            // Runner TP никогда не уменьшается — только вверх
+            if (side == PositionSide.Long)
+            {
+                baseTpExt = swingHigh + atr * 1.0m;
+            }
+            else
+            {
+                baseTpExt = swingLow - atr * 1.0m;
+            }
+
+            // Добавляем влияние наклона EMA (только в сторону позиции)
+            if (side == PositionSide.Long && emaUp && emaSlope > 0)
+                baseTpExt += emaSlope * 0.5m;
+            else if (side == PositionSide.Short && !emaUp && emaSlope < 0)
+                baseTpExt += emaSlope * 0.5m; // emaSlope < 0, тут минус усилит TP ниже
+
+            // ---- 5) Корректируем TP по exhaustion / sweep in favor ----
+            decimal tpExt = baseTpExt;
+
+            if (exhaustion == ExhaustionLevel.Mild)
+            {
+                // Лёгкая усталость: не слишком агрессивно
+                tpExt = side == PositionSide.Long
+                    ? Math.Min(tpExt, lastPrice + atr * 1.2m)
+                    : Math.Max(tpExt, lastPrice - atr * 1.2m);
+            }
+
+            if (sweepInFavor && exhaustion == ExhaustionLevel.None)
+            {
+                // Была охота за ликвидностью в НАШУ сторону и тренд не устал:
+                // можно чуть более жадно вытянуть TP2
+                if (side == PositionSide.Long)
+                    tpExt += atr * 0.7m;
+                else
+                    tpExt -= atr * 0.7m;
+            }
+
+            // Runner TP никогда не уменьшается — только вверх (для лонга)
             decimal currTp = runnerTp?.Price ?? runnerTp?.StopPrice ?? 0m;
-
-            if (tpExt <= currTp)
+            if (currTp <= 0)
                 return;
 
-            // ---- 3) Обновление TP LIMIT ----
+            if (side == PositionSide.Long && tpExt <= currTp)
+                return;
+            if (side == PositionSide.Short && tpExt >= currTp)
+                return;
+
+            // ---- 6) Обновляем TP LIMIT ----
             await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, runnerTp?.Id, ct: ct);
 
             var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
@@ -476,9 +559,11 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-            _logger.LogInformation("[RUNNER-EXT][{symbol}] Runner TP EXTENDED {old} → {tpExt}",
-                symbol, currTp, tpExt);
+            _logger.LogInformation(
+                "[RUNNER-EXT][{symbol}] Runner TP EXTENDED {old} → {tpExt} (exh={exh}, sweepFavor={sf})",
+                symbol, currTp, tpExt, exhaustion, sweepInFavor);
         }
+
 
 
         // =====================================================================
@@ -689,6 +774,127 @@ namespace VertexAutoTradeBinance8.Services
                 return TrendContinuationLevel.Low;
             }
         }
+
+
+        // =====================================================================
+        // EXHAUSTION DETECTOR — оценивает, не перегрет ли тренд
+        // =====================================================================
+        private ExhaustionLevel DetectExhaustionLevel(
+            PositionSide side,
+            decimal entryPrice,
+            decimal atr,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines)
+        {
+            if (klines.Count < 40 || atr <= 0)
+                return ExhaustionLevel.None;
+
+            var last = klines[^1];
+            var prev = klines[^2];
+
+            // Цена относительно EMA21 — если слишком далеко, рынок "натянут"
+            var ema21 = CalculateEma(klines, 21);
+            if (ema21 <= 0)
+                return ExhaustionLevel.None;
+
+            var distanceFromEma = Math.Abs(last.ClosePrice - ema21) / atr;
+
+            // Движение от входа в ATR
+            var rr = Math.Abs(last.ClosePrice - entryPrice) / atr;
+
+            // Свеча с длинным хвостом против позиции
+            var body = Math.Abs(last.ClosePrice - last.OpenPrice);
+            var upperWick = last.HighPrice - Math.Max(last.ClosePrice, last.OpenPrice);
+            var lowerWick = Math.Min(last.ClosePrice, last.OpenPrice) - last.LowPrice;
+
+            bool longCase = side == PositionSide.Long;
+            bool bigWickAgainst =
+                longCase
+                    ? upperWick > body * 2m && upperWick > atr * 0.7m
+                    : lowerWick > body * 2m && lowerWick > atr * 0.7m;
+
+            // Базовая логика:
+            // - Strong: мощный RR, далеко от EMA, плюс свеча с хвостом против
+            // - Mild: просто далеко от EMA + большой RR
+            if (rr >= 3.0m && distanceFromEma >= 2.5m && bigWickAgainst)
+                return ExhaustionLevel.Strong;
+
+            if (rr >= 2.0m && distanceFromEma >= 1.8m)
+                return ExhaustionLevel.Mild;
+
+            return ExhaustionLevel.None;
+        }
+
+        // =====================================================================
+        // LIQUIDITY SWEEP DETECTION
+        // =====================================================================
+
+        // sweep в НАШУ сторону: вынос экстремума и закрытие в нашу сторону
+        private bool IsLiquiditySweepInFavor(
+            PositionSide side,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines)
+        {
+            if (klines.Count < 25)
+                return false;
+
+            var last = klines[^1];
+            var range = klines.Skip(klines.Count - 25).Take(24).ToList();
+
+            decimal prevHigh = range.Max(k => k.HighPrice);
+            decimal prevLow = range.Min(k => k.LowPrice);
+
+            var body = Math.Abs(last.ClosePrice - last.OpenPrice);
+            var upperWick = last.HighPrice - Math.Max(last.ClosePrice, last.OpenPrice);
+            var lowerWick = Math.Min(last.ClosePrice, last.OpenPrice) - last.LowPrice;
+
+            if (side == PositionSide.Long)
+            {
+                // проколили предыдущий хай, но закрылись ниже — классический sweep вверх
+                bool tookHigh = last.HighPrice > prevHigh * 1.0005m;
+                bool closeBelowHigh = last.ClosePrice < prevHigh;
+                return tookHigh && closeBelowHigh && upperWick > body * 1.5m;
+            }
+            else // Short
+            {
+                bool tookLow = last.LowPrice < prevLow * 0.9995m;
+                bool closeAboveLow = last.ClosePrice > prevLow;
+                return tookLow && closeAboveLow && lowerWick > body * 1.5m;
+            }
+        }
+
+        // sweep ПРОТИВ нас: вынос экстремума в противоположную сторону
+        private bool IsLiquiditySweepAgainst(
+            PositionSide side,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines)
+        {
+            if (klines.Count < 25)
+                return false;
+
+            var last = klines[^1];
+            var range = klines.Skip(klines.Count - 25).Take(24).ToList();
+
+            decimal prevHigh = range.Max(k => k.HighPrice);
+            decimal prevLow = range.Min(k => k.LowPrice);
+
+            var body = Math.Abs(last.ClosePrice - last.OpenPrice);
+            var upperWick = last.HighPrice - Math.Max(last.ClosePrice, last.OpenPrice);
+            var lowerWick = Math.Min(last.ClosePrice, last.OpenPrice) - last.LowPrice;
+
+            if (side == PositionSide.Long)
+            {
+                // sweep вниз против лонга
+                bool tookLow = last.LowPrice < prevLow * 0.9995m;
+                bool closeAboveLow = last.ClosePrice > prevLow;
+                return tookLow && closeAboveLow && lowerWick > body * 1.5m;
+            }
+            else // Short
+            {
+                // sweep вверх против шорта
+                bool tookHigh = last.HighPrice > prevHigh * 1.0005m;
+                bool closeBelowHigh = last.ClosePrice < prevHigh;
+                return tookHigh && closeBelowHigh && upperWick > body * 1.5m;
+            }
+        }
+
 
         private decimal CalculateAtr(IReadOnlyList<BinanceFuturesUsdtKline> kl)
         {
