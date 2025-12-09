@@ -232,13 +232,23 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
+
+
+
             // 3) Trailing Logic
             if (klines != null && klines.Count >= 50)
             {
+                // NEW: dynamic TP runner mode
+                await ManageRunnerTpAsync(
+                    client, symbol, side, qty, entry,
+                    orders, signal, klines, ct);
+
+                // original trailing SL
                 await MultiLayerTrailingAsync(
                     client, symbol, side, qty, entry,
                     signal, orders, klines, ct);
             }
+
         }
 
         // =====================================================================
@@ -382,6 +392,81 @@ namespace VertexAutoTradeBinance8.Services
 
             _logger.LogInformation("[SUPERVISOR] TP CREATED {symbol} tp={tp}", symbol, trigger);
         }
+
+
+        // =====================================================================
+        // RUNNER MODE — TP1 (70%) FIX + RUNNER 30% (TRAIL UNTIL EXIT)
+        // =====================================================================
+        private async Task ManageRunnerTpAsync(
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            decimal entryPrice,
+            List<BinanceUsdFuturesOrder> orders,
+            TradeSignal? signal,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            CancellationToken ct)
+        {
+            if (signal == null || qty <= 0 || klines == null || klines.Count < 50)
+                return;
+
+            var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+            // Ищем существующий TP (старый одинарный или LIMIT reduceOnly)
+            var tpOrder = orders.FirstOrDefault(o =>
+                o.Side == closeSide &&
+                (o.Type == FuturesOrderType.TakeProfit ||
+                 o.Type == FuturesOrderType.TakeProfitMarket ||
+                 (o.Type == FuturesOrderType.Limit && o.ReduceOnly == true)));
+
+            if (tpOrder == null)
+                return;
+
+            // Если TP уже разделён — ничего не делаем
+            if (tpOrder.Quantity < qty * 0.99m)
+                return;
+
+            decimal qtyTp1 = Math.Round(qty * 0.70m, 8);
+            decimal qtyRunner = qty - qtyTp1;
+
+            if (qtyTp1 <= 0 || qtyRunner <= 0)
+                return;
+
+            // ЦЕНА TP1 — берём старый TP
+            decimal tp1Price = tpOrder?.Price ?? tpOrder?.StopPrice ?? 0m;
+            if (tp1Price <= 0)
+                return;
+
+            // Отменяем старый TP
+            await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, tpOrder?.Id, ct: ct);
+
+            // 1) СОЗДАЕМ TP1 (70%) — фиксируем прибыль
+            var resTp1 = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol,
+                closeSide,
+                FuturesOrderType.Limit,
+                quantity: qtyTp1,
+                price: tp1Price,
+                positionSide: side,
+                reduceOnly: true,
+                timeInForce: TimeInForce.GoodTillCanceled,
+                ct: ct);
+
+            if (!resTp1.Success)
+            {
+                _logger.LogError("[RUNNER][{symbol}] ERROR creating TP1: {err}", symbol, resTp1.Error);
+                return;
+            }
+
+            _logger.LogInformation("[RUNNER][{symbol}] TP1 CREATED qty={q} price={p}", symbol, qtyTp1, tp1Price);
+
+            // 2) RUNNER (30%) — убираем TP, работаем только трейлинг-SL
+            // Реализовано автоматически: runner не имеет TP, и выйдет по trailing SL
+            _logger.LogInformation("[RUNNER][{symbol}] Runner ACTIVE qty={q} — managed by trailing SL", symbol, qtyRunner);
+        }
+
+
 
         // =====================================================================
         // MULTI-LAYER TRAILING + Dynamic Trend Hold
