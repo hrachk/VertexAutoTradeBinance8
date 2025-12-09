@@ -243,6 +243,12 @@ namespace VertexAutoTradeBinance8.Services
                     client, symbol, side, qty, entry,
                     orders, signal, klines, ct);
 
+                // NEW: dynamic extension of Runner TP (TP2++)
+                await ManageRunnerTpExtensionAsync(
+                    client, symbol, side, qty, entry,
+                    signal, orders, klines, ct);
+
+
                 // original trailing SL
                 await MultiLayerTrailingAsync(
                     client, symbol, side, qty, entry,
@@ -391,6 +397,87 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             _logger.LogInformation("[SUPERVISOR] TP CREATED {symbol} tp={tp}", symbol, trigger);
+        }
+
+
+        // =====================================================================
+        // RUNNER MODE — TP EXTENSION (Dynamic TP2 for runner 30%)
+        // =====================================================================
+        private async Task ManageRunnerTpExtensionAsync(
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            decimal entryPrice,
+            TradeSignal? signal,
+            List<BinanceUsdFuturesOrder> orders,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            CancellationToken ct)
+        {
+            if (signal == null || qty <= 0 || klines == null || klines.Count < 60)
+                return;
+
+            var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+            // Находим runner TP (он qtyRunner = 30%)
+            var runnerTp = orders.FirstOrDefault(o =>
+                o.Side == closeSide &&
+                o.Type == FuturesOrderType.Limit &&
+                o.ReduceOnly == true &&
+                o.Quantity < qty * 0.50m); // runner всегда меньше 50%
+
+            if (runnerTp == null)
+                return;
+
+            decimal qtyRunner = runnerTp.Quantity;
+
+            decimal last = klines[^1].ClosePrice;
+            decimal atr = CalculateAtr(klines);
+            if (atr <= 0)
+                return;
+
+            // ---- 1) Определение силы тренда ----
+            var ema21 = CalculateEma(klines, 21);
+            var ema55 = CalculateEma(klines, 55);
+
+            bool emaUp = ema21 > ema55;
+            decimal emaSlope = ema21 - ema55;
+
+            // Swing high — максимум последних N свечей
+            decimal swingHigh = klines.Skip(klines.Count - 25).Max(k => k.HighPrice);
+
+            // ---- 2) Вычисление целевого dynamic-TP2 ----
+            decimal tpExt =
+                swingHigh + atr * 1.2m + (emaSlope > 0 ? emaSlope * 0.5m : 0);
+
+            // Runner TP никогда не уменьшается — только вверх
+            decimal currTp = runnerTp?.Price ?? runnerTp?.StopPrice ?? 0m;
+
+            if (tpExt <= currTp)
+                return;
+
+            // ---- 3) Обновление TP LIMIT ----
+            await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, runnerTp?.Id, ct: ct);
+
+            var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol,
+                closeSide,
+                FuturesOrderType.Limit,
+                qtyRunner,
+                price: tpExt,
+                positionSide: side,
+                reduceOnly: true,
+                timeInForce: TimeInForce.GoodTillCanceled,
+                ct: ct);
+
+            if (!res.Success)
+            {
+                _logger.LogError("[RUNNER-EXT][{symbol}] ERROR updating TP2: {err}", symbol, res.Error);
+                return;
+            }
+
+            _logger.LogInformation("[RUNNER-EXT][{symbol}] Runner TP EXTENDED {old} → {tpExt}",
+                symbol, currTp, tpExt);
         }
 
 
