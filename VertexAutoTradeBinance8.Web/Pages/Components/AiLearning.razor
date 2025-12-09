@@ -6,6 +6,7 @@
 @using VertexAutoTradeBinance8.Web.Models
 @inject AiLearningFileService AiLearnService
 @inject IJSRuntime JS
+@implements IAsyncDisposable
 
 <div class="ai-learn-container">
 
@@ -40,7 +41,59 @@
 
     <!-- === График обучения === -->
     <div class="ai-section">
-        <div class="ai-section-title">График обучения</div>
+        <div class="ai-section-title flex-between">
+            График обучения
+            <button class="help-btn" @onclick="() => _showHelp = true">ℹ</button>
+        </div>
+
+        @if (_showHelp)
+        {
+            <div class="help-overlay" @onclick="() => _showHelp = false"></div>
+
+            <div class="help-modal">
+                <div class="help-header">
+                    <span>Пояснение графика AI Learning</span>
+                    <button class="help-close" @onclick="() => _showHelp = false">✕</button>
+                </div>
+
+                <div class="help-body ai-help-scroll">
+
+                    <h4>🟦 Score</h4>
+                    <p>Уровень уверенности AI в общем рыночном состоянии. 0–100. Стабильность Score означает чистое состояние рынка.</p>
+
+                    <h4>🟩 Confidence %</h4>
+                    <p>Уверенность SmartRegime-модуля. Чем стабильнее линия — тем меньше манипуляций и резких смен режимов.</p>
+
+                    <h4>🟪 Slope ×8000</h4>
+                    <p>Показывает силу тренда и импульсы. Высокие пики — ускорения тренда. Падения — выход из импульса.</p>
+
+                    <h4>🟦 Volatility %</h4>
+                    <p>Оценивает колебания размера свечей. Стабильность показывает отсутствие хаоса на рынке.</p>
+
+                    <h4>🟥 Liquidity Danger</h4>
+                    <p>Флаг манипуляций: охота за стопами, резкие шпильки, выбросы объёма. Если линия равна 0 — рынок чистый.</p>
+
+                    <h4>📊 Топ причин обучающих событий</h4>
+                    <p>
+                        <b>BASE_REGIME</b> — базовое состояние рынка.<br />
+                        <b>SOFT_ENTRY</b> — потенциальный вход, недостаточно подтверждений.<br />
+                        <b>RR_BLOCK</b> — отказ из-за плохого соотношения риск/прибыль.<br />
+                        <b>MICRO_SIGNAL</b> — слабые микро-сигналы AI.<br />
+                        <b>AI_PATTERN_BLOCK</b> — найден паттерн, но не подтверждён.<br />
+                        <b>LIQUIDITY_DANGER</b> — события опасной ликвидности.
+                    </p>
+
+                    <h4>📈 Как читать график</h4>
+                    <p>
+                        • Ровные Score + Confidence = рынок предсказуем.<br />
+                        • Высокие Slope = сильные тренды.<br />
+                        • Нулевая Liquidity Danger = чистый рынок.<br />
+                        • Сильные всплески Slope без волатильности = структурные импульсы (идеально для торговли).
+                    </p>
+
+                </div>
+            </div>
+        }
 
         <!-- Фильтры для графика (и для статистики одновременно) -->
         <div class="ai-learn-filters">
@@ -69,17 +122,41 @@
                        @bind:event="oninput" />
                 <span class="ai-filter-badge">@_minScore</span>
             </div>
+
+            <!-- 🔥 Новый фильтр по символу -->
+            <div class="ai-filter-group">
+                <span class="ai-filter-label">Символ:</span>
+                <select value="@_selectedSymbol" @onchange="OnSymbolChanged">
+                    <option value="">Все</option>
+                    @foreach (var s in _allSymbols)
+                    {
+                        <option value="@s">@s</option>
+                    }
+                </select>
+            </div>
         </div>
 
         <div class="chart-wrapper" style="height:400px; margin-top:15px;">
-            @if (_chartPoints.Count == 0)
-            {
-                <div class="ai-empty">Нет данных по фильтрам.</div>
-            }
-            else
-            {
+            <div style="position:relative; height:400px;">
                 <canvas id="learningChart"></canvas>
-            }
+
+                @if (_chartPoints.Count == 0)
+                {
+                    <div class="ai-empty"
+                         style="
+                    position:absolute;
+                    top:0; left:0; right:0; bottom:0;
+                    display:flex;
+                    align-items:center;
+                    justify-content:center;
+                    background:rgba(0,0,0,0.4);
+                    backdrop-filter:blur(4px);
+                    font-size:18px;">
+                        Нет данных по фильтрам
+                    </div>
+                }
+            </div>
+
         </div>
     </div>
 
@@ -163,7 +240,9 @@
 
 </div>
 
+
 @code {
+
     private enum TimeFilter
     {
         Last24h,
@@ -171,6 +250,14 @@
         Last30d,
         All
     }
+
+    private bool _showHelp = false;
+
+    // 🔥 выбранный символ
+    private string? _selectedSymbol = null;
+
+    // 🔥 список всех символов для дропа
+    private List<string> _allSymbols = new();
 
     // Сырые записи (для таблиц/статистики)
     private List<AiLearningRecord> _all = new();
@@ -189,33 +276,23 @@
 
     private bool _needsChartUpdate;
 
+    // 🔁 автообновление каждые 3 сек
+    private PeriodicTimer? _timer;
+    private CancellationTokenSource? _cts;
+    private Task? _refreshTask;
+
     protected override async Task OnInitializedAsync()
     {
-        _snapshot = await AiLearnService.GetAllAsync();
+        var snap = await AiLearnService.GetAllAsync();
 
-        if (_snapshot != null)
+        if (snap != null)
         {
-            // 1) Преобразуем MarketStates в AiLearningRecord для статистики
-            _all = _snapshot.MarketStates
-                .Select(ms => new AiLearningRecord
-                {
-                    Symbol = ms.Symbol,
-                    Time = ms.Time,
-                    Reason = ms.Reason ?? "-",
-                    SmartType = ms.Reason ?? "-",
-                    Regime = ms.Regime.ToString(),
-                    Confidence = (int)(ms.Confidence * 100m),
-                    Score = (int)(ms.Confidence * 100m),
-                    VolatilityPercent = ms.VolatilityPercent * 100m,
-                    TrendSlopePercent = ms.TrendSlopePercent * 100m,
-                    Atr = ms.Atr
-                    // Если в MarketState есть LiquidityDanger — сюда можно добавить свойство в AiLearningRecord
-                })
-                .OrderByDescending(x => x.Time)
-                .ToList();
+            _snapshot = snap;
+            BuildFromSnapshot(snap);
         }
 
         ApplyFilters();
+        StartAutoRefresh();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -226,10 +303,64 @@
 
             if (_chartPoints.Count > 0)
             {
-                // Отдаём в JS только точки графика (упрощённая модель)
                 await JS.InvokeVoidAsync("VertexLearningChart.renderData", _chartPoints);
             }
         }
+    }
+
+    private void StartAutoRefresh()
+    {
+        _cts = new CancellationTokenSource();
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(3));
+        _refreshTask = RefreshLoopAsync(_cts.Token);
+    }
+
+    private async Task RefreshLoopAsync(CancellationToken token)
+    {
+        try
+        {
+            while (_timer != null && await _timer.WaitForNextTickAsync(token))
+            {
+                var snap = await AiLearnService.GetAllAsync();
+                if (snap == null) continue;
+
+                await InvokeAsync(() =>
+                {
+                    _snapshot = snap;
+                    BuildFromSnapshot(snap);
+                    ApplyFilters();
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void BuildFromSnapshot(AiLearningSnapshot snap)
+    {
+        _all = snap.MarketStates
+            .Select(ms => new AiLearningRecord
+            {
+                Symbol = ms.Symbol,
+                Time = ms.Time,
+                Reason = ms.Reason ?? "-",
+                SmartType = ms.Reason ?? "-",
+                Regime = ms.Regime.ToString(),
+                Confidence = (int)(ms.Confidence * 100m),
+                Score = (int)(ms.Confidence * 100m),
+                VolatilityPercent = ms.VolatilityPercent * 100m,
+                TrendSlopePercent = ms.TrendSlopePercent * 100m,
+                Atr = ms.Atr
+            })
+            .OrderByDescending(x => x.Time)
+            .ToList();
+
+        _allSymbols = _all
+            .Select(x => x.Symbol)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x)
+            .ToList();
     }
 
     private void SetTimeFilter(TimeFilter filter)
@@ -238,9 +369,23 @@
         ApplyFilters();
     }
 
+    // 🔥 смена символа из select
+    private void OnSymbolChanged(ChangeEventArgs e)
+    {
+        _selectedSymbol = e.Value?.ToString();
+        ApplyFilters();
+    }
+
     private void ApplyFilters()
     {
         var query = _all.AsEnumerable();
+
+        // 0) Фильтр по символу
+        if (!string.IsNullOrWhiteSpace(_selectedSymbol))
+        {
+            query = query.Where(x =>
+                x.Symbol.Equals(_selectedSymbol, StringComparison.OrdinalIgnoreCase));
+        }
 
         // 1) Фильтр по времени
         if (_timeFilter != TimeFilter.All && _all.Count > 0)
@@ -281,9 +426,9 @@
                 Time = x.Time,
                 Symbol = x.Symbol,
                 Score = x.Score,                    // 0–100
-                Slope = x.TrendSlopePercent / 100m, // вернём в 0.x, JS сам умножит
+                Slope = x.TrendSlopePercent / 100m, // 0.x, JS сам умножит
                 Volatility = x.VolatilityPercent / 100m,
-                LiquidityDanger = false,            // если добавишь в AiLearningRecord — подставь сюда
+                LiquidityDanger = false,
                 Confidence = x.Confidence / 100m    // 0–1
             })
             .ToList();
@@ -379,5 +524,19 @@
         public decimal AvgConf { get; set; }
         public string TopRegime { get; set; } = string.Empty;
         public string TopSmartType { get; set; } = string.Empty;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_timer != null)
+        {
+            _cts?.Cancel();
+            _timer.Dispose();
+        }
+
+        if (_refreshTask != null)
+        {
+            try { await _refreshTask; } catch { }
+        }
     }
 }

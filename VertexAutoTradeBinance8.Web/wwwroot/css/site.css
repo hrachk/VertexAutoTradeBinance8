@@ -1370,3 +1370,215 @@ compact-card {
     opacity: 0.4;
     padding: 20px;
 }
+
+
+
+
+.ai-select {
+    background: #10131a;
+    color: #e0e0e0;
+    border: 1px solid #303540;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+    .ai-select:focus {
+        outline: none;
+        border-color: #4db8ff;
+    }
+
+
+/* Кнопка ℹ */
+.help-btn {
+    background: #1f1f1f;
+    border: 1px solid #4a4a4a;
+    color: #b0d9ff;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: 0.2s;
+}
+
+    .help-btn:hover {
+        background: #2a2a2a;
+        color: white;
+    }
+
+/* Задний тёмный фон */
+.help-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(4px);
+    z-index: 900;
+}
+
+/* Модальное окно */
+.help-modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 520px;
+    max-height: 80vh;
+    overflow-y: auto;
+    background: #111;
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 20px;
+    color: #ddd;
+    z-index: 999;
+    animation: fadeIn 0.25s ease-out;
+}
+
+/* Хедер окна */
+.help-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 10px;
+}
+
+/* Кнопка закрытия */
+.help-close {
+    background: transparent;
+    border: none;
+    font-size: 20px;
+    color: #aaa;
+    cursor: pointer;
+}
+
+    .help-close:hover {
+        color: white;
+    }
+
+/* Контент */
+.help-body p {
+    font-size: 14px;
+    line-height: 1.45rem;
+    margin-bottom: 12px;
+    color: #cfcfcf;
+}
+
+.help-body h4 {
+    margin-top: 16px;
+    color: #6ab8ff;
+}
+
+/* Анимация */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translate(-50%, -48%);
+    }
+
+    to {
+        opacity: 1;
+        transform: translate(-50%, -50%);
+    }
+}
+
+
+
+/*Scrool*/
+
+/* ======== CUSTOM AI HELP WINDOW SCROLL ======== */
+.ai-help-scroll {
+    max-height: 70vh; /* ограничение высоты */
+    overflow-y: auto; /* включаем скролл */
+    padding-right: 8px; /* чтобы текст не прилипал */
+}
+
+    /* Chrome / Edge */
+    .ai-help-scroll::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    .ai-help-scroll::-webkit-scrollbar-track {
+        background: rgba(255,255,255,0.05);
+        border-radius: 10px;
+    }
+
+    .ai-help-scroll::-webkit-scrollbar-thumb {
+        background: linear-gradient(180deg, #6bbcff, #8b7bff);
+        border-radius: 10px;
+    }
+
+        .ai-help-scroll::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, #91cdff, #a191ff);
+        }
+
+/* Firefox */
+.ai-help-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: #7db2ff rgba(255,255,255,0.05);
+}
+
+
+
+
+#chartjs-tooltip::-webkit-scrollbar {
+    width: 6px;
+}
+
+#chartjs-tooltip::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+#chartjs-tooltip::-webkit-scrollbar-thumb {
+    background: #666;
+    border-radius: 4px;
+}
+
+#chartjs-tooltip {
+    scrollbar-width: thin;
+    scrollbar-color: #666 transparent;
+}
+
+
+
+/* ============================  
+   VERTEX AI TOOLTIP — FIX  
+   ============================ */
+
+#vertex-ai-tooltip {
+    position: absolute;
+    z-index: 999999 !important;
+    pointer-events: auto !important;
+    max-width: 260px;
+    max-height: 220px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    /* красивый scroll */
+    scrollbar-width: thin;
+    scrollbar-color: #666 rgba(255,255,255,0.1);
+}
+
+    /* Chrome scroll */
+    #vertex-ai-tooltip::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    #vertex-ai-tooltip::-webkit-scrollbar-track {
+        background: rgba(255,255,255,0.08);
+        border-radius: 6px;
+    }
+
+    #vertex-ai-tooltip::-webkit-scrollbar-thumb {
+        background: linear-gradient(180deg, #6bbcff, #8b7bff);
+        border-radius: 6px;
+    }
+
+        #vertex-ai-tooltip::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, #91cdff, #a191ff);
+        }
+
+/* Чтобы tooltip НЕ перекрывался help-модалом */
+.help-overlay,
+.help-modal {
+    z-index: 900 !important;
+}
+
