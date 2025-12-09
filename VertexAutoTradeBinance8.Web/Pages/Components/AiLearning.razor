@@ -3,24 +3,11 @@
 @using VertexAutoTradeBinance8.Services
 @using VertexAutoTradeBinance8.Web.Services
 @using VertexAutoTradeBinance8.Models
+@using VertexAutoTradeBinance8.Web.Models
 @inject AiLearningFileService AiLearnService
+@inject IJSRuntime JS
 
 <div class="ai-learn-container">
-    @if (_snapshot != null)
-    {
-        <div class="ai-learn-meta">
-            <div>Engine: @_snapshot.Meta.Engine</div>
-            <div>MarketStates: @_snapshot.Meta.MarketStates</div>
-            <div>Trades: @_snapshot.Meta.Trades</div>
-        </div>
-
-        <!-- В будущем тут появится график -->
-        <LearningChart States="_snapshot.MarketStates" />
-
-        <!-- И таблица сделок -->
-        <TradeTable Trades="_snapshot.Trades" />
-    }
-
 
     <!-- KPI блоки -->
     <div class="ai-learn-kpi-row">
@@ -51,53 +38,59 @@
         </div>
     </div>
 
+    <!-- === График обучения === -->
+    <div class="ai-section">
+        <div class="ai-section-title">График обучения</div>
 
-    <!-- === AI Learning CHART & TRADES === -->
-    @if (_snapshot != null)
-    {
-        <div class="ai-section">
-            <div class="ai-section-title">График обучения</div>
-            <LearningChart States="_snapshot.MarketStates" />
+        <!-- Фильтры для графика (и для статистики одновременно) -->
+        <div class="ai-learn-filters">
+            <div class="ai-filter-group">
+                <span class="ai-filter-label">Период:</span>
+
+                <button class="@ChipClass(TimeFilter.Last24h)" @onclick="@(() => SetTimeFilter(TimeFilter.Last24h))">
+                    24 часа
+                </button>
+                <button class="@ChipClass(TimeFilter.Last7d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last7d))">
+                    7 дней
+                </button>
+                <button class="@ChipClass(TimeFilter.Last30d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last30d))">
+                    30 дней
+                </button>
+                <button class="@ChipClass(TimeFilter.All)" @onclick="@(() => SetTimeFilter(TimeFilter.All))">
+                    Всё время
+                </button>
+            </div>
+
+            <div class="ai-filter-group">
+                <span class="ai-filter-label">Мин. Score:</span>
+                <input type="range"
+                       min="0" max="100" step="5"
+                       @bind="_minScore"
+                       @bind:event="oninput" />
+                <span class="ai-filter-badge">@_minScore</span>
+            </div>
         </div>
 
+        <div class="chart-wrapper" style="height:400px; margin-top:15px;">
+            @if (_chartPoints.Count == 0)
+            {
+                <div class="ai-empty">Нет данных по фильтрам.</div>
+            }
+            else
+            {
+                <canvas id="learningChart"></canvas>
+            }
+        </div>
+    </div>
+
+    <!-- Последние симулированные сделки -->
+    @if (_snapshot != null)
+    {
         <div class="ai-section">
             <div class="ai-section-title">Последние симулированные сделки</div>
             <TradeTable Trades="_snapshot.Trades" />
         </div>
     }
-
-
-    <!-- Фильтры -->
-    <div class="ai-learn-filters">
-        <div class="ai-filter-group">
-            <span class="ai-filter-label">Период:</span>
-
-            <button class="@ChipClass(TimeFilter.Last24h)" @onclick="@(() => SetTimeFilter(TimeFilter.Last24h))">
-                24 часа
-            </button>
-
-            <button class="@ChipClass(TimeFilter.Last7d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last7d))">
-                7 дней
-            </button>
-
-            <button class="@ChipClass(TimeFilter.Last30d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last30d))">
-                30 дней
-            </button>
-
-            <button class="@ChipClass(TimeFilter.All)" @onclick="@(() => SetTimeFilter(TimeFilter.All))">
-                Всё время
-            </button>
-        </div>
-
-        <div class="ai-filter-group">
-            <span class="ai-filter-label">Мин. Score:</span>
-            <input type="range"
-                   min="0" max="100" step="5"
-                   @bind="_minScore"
-                   @bind:event="oninput" />
-            <span class="ai-filter-badge">@_minScore</span>
-        </div>
-    </div>
 
     <!-- ТОП причин (Reason) -->
     <div class="ai-section">
@@ -179,10 +172,13 @@
         All
     }
 
-
+    // Сырые записи (для таблиц/статистики)
     private List<AiLearningRecord> _all = new();
     private AiLearningSnapshot? _snapshot;
     private List<AiLearningRecord> _filtered = new();
+
+    // Точки для графика
+    private List<AiLearningPointModel> _chartPoints = new();
 
     private int _uniqueSymbols;
     private TimeFilter _timeFilter = TimeFilter.Last7d;
@@ -191,39 +187,49 @@
     private List<ReasonStat> _reasonStats = new();
     private List<SymbolStat> _symbolStats = new();
 
+    private bool _needsChartUpdate;
+
     protected override async Task OnInitializedAsync()
     {
         _snapshot = await AiLearnService.GetAllAsync();
 
         if (_snapshot != null)
         {
+            // 1) Преобразуем MarketStates в AiLearningRecord для статистики
             _all = _snapshot.MarketStates
-    .Select(ms => new AiLearningRecord
-        {
-            Symbol = ms.Symbol,
-            Time = ms.Time,
-
-            Reason = ms.Reason ?? "-",
-            SmartType = ms.Reason ?? "-",
-
-            Regime = ms.Regime.ToString(),
-
-        // Confidence из JSON = 0.0–1.0 → делаем 0–100
-            Confidence = (int)(ms.Confidence * 100m),
-            Score = (int)(ms.Confidence * 100m),
-
-        // Параметры рынка
-            VolatilityPercent = ms.VolatilityPercent * 100m,
-            TrendSlopePercent = ms.TrendSlopePercent * 100m,
-            Atr = ms.Atr
-        })
-    .OrderByDescending(x => x.Time)
-    .ToList();
-
+                .Select(ms => new AiLearningRecord
+                {
+                    Symbol = ms.Symbol,
+                    Time = ms.Time,
+                    Reason = ms.Reason ?? "-",
+                    SmartType = ms.Reason ?? "-",
+                    Regime = ms.Regime.ToString(),
+                    Confidence = (int)(ms.Confidence * 100m),
+                    Score = (int)(ms.Confidence * 100m),
+                    VolatilityPercent = ms.VolatilityPercent * 100m,
+                    TrendSlopePercent = ms.TrendSlopePercent * 100m,
+                    Atr = ms.Atr
+                    // Если в MarketState есть LiquidityDanger — сюда можно добавить свойство в AiLearningRecord
+                })
+                .OrderByDescending(x => x.Time)
+                .ToList();
         }
 
         ApplyFilters();
+    }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender || _needsChartUpdate)
+        {
+            _needsChartUpdate = false;
+
+            if (_chartPoints.Count > 0)
+            {
+                // Отдаём в JS только точки графика (упрощённая модель)
+                await JS.InvokeVoidAsync("VertexLearningChart.renderData", _chartPoints);
+            }
+        }
     }
 
     private void SetTimeFilter(TimeFilter filter)
@@ -263,9 +269,26 @@
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Count();
 
+        // === Статистика причин/символов ===
         BuildReasonStats();
         BuildSymbolStats();
 
+        // === Точки для графика ===
+        _chartPoints = _filtered
+            .OrderBy(x => x.Time)
+            .Select(x => new AiLearningPointModel
+            {
+                Time = x.Time,
+                Symbol = x.Symbol,
+                Score = x.Score,                    // 0–100
+                Slope = x.TrendSlopePercent / 100m, // вернём в 0.x, JS сам умножит
+                Volatility = x.VolatilityPercent / 100m,
+                LiquidityDanger = false,            // если добавишь в AiLearningRecord — подставь сюда
+                Confidence = x.Confidence / 100m    // 0–1
+            })
+            .ToList();
+
+        _needsChartUpdate = true;
         StateHasChanged();
     }
 
@@ -337,9 +360,7 @@
     }
 
     private string ChipClass(TimeFilter f)
-    {
-        return _timeFilter == f ? "ai-chip ai-chip-active" : "ai-chip";
-    }
+        => _timeFilter == f ? "ai-chip ai-chip-active" : "ai-chip";
 
     private class ReasonStat
     {

@@ -1324,4 +1324,49 @@ compact-card {
     font-size: 14px;
     opacity: 0.85;
 }
+/*ENGINE DASHBOARD*/
+.engine-container {
+    padding: 20px;
+    color: #e0e0e0;
+}
 
+.engine-title {
+    font-size: 26px;
+    margin-bottom: 20px;
+}
+
+.engine-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 15px;
+}
+
+.block {
+    padding: 12px;
+    border-radius: 8px;
+    background: #1f1f1f;
+    border: 1px solid #333;
+}
+
+.label {
+    font-size: 12px;
+    opacity: 0.6;
+}
+
+.value {
+    font-size: 18px;
+}
+
+.danger {
+    background: rgba(255, 0, 0, 0.12);
+    border: 1px solid rgba(255, 50, 50, 0.4);
+}
+
+.reason {
+    grid-column: span 2;
+}
+
+.empty {
+    opacity: 0.4;
+    padding: 20px;
+}

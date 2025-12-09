@@ -1,8 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
-using Binance.Net.Enums;
+﻿using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
-using Microsoft.Extensions.Logging;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -13,6 +10,22 @@ namespace VertexAutoTradeBinance8.Services
     /// </summary>
     public class SmartRegimeService
     {
+
+        public MarketRegime LastBaseRegime { get; private set; } = MarketRegime.Range;
+        public SmartRegimeType LastSmartRegime { get; private set; } = SmartRegimeType.Unknown;
+
+        public decimal LastSlope { get; private set; }
+        public decimal LastVolatility { get; private set; }
+        public decimal LastConfidence { get; private set; }
+
+        public decimal LastCorrelationToBtc { get; private set; }
+        public bool LastDangerChop { get; private set; }
+        public bool LastAllowAggressive { get; private set; }
+        public bool LastAllowCounter { get; private set; }
+
+
+
+
         private readonly ILogger<SmartRegimeService> _logger;
         private readonly AiMarketRegimeService _marketRegimeService;
         private readonly AiCorrelationService _correlationService;
@@ -141,6 +154,25 @@ namespace VertexAutoTradeBinance8.Services
                 info.VolatilityPercent,
                 info.CorrelationToBtc,
                 info.Confidence);
+
+
+
+
+            ////////FOR UI
+
+            LastBaseRegime = info.BaseRegime;
+            LastSmartRegime = info.SmartType;
+
+            LastSlope = info.TrendSlopePercent;
+            LastVolatility = info.VolatilityPercent;
+            LastConfidence = info.Confidence;
+
+            LastCorrelationToBtc = info.CorrelationToBtc;
+            LastDangerChop = info.IsDangerChopZone;
+            LastAllowAggressive = info.AllowAggressiveTrendEntries;
+            LastAllowCounter = info.AllowCounterTrendEntries;
+
+
 
             return info;
         }

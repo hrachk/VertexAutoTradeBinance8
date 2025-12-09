@@ -1,7 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using Binance.Net.Enums;
+﻿using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using VertexAutoTradeBinance8.Models;
 
@@ -19,6 +16,7 @@ public record LiquidityGuardResult(bool Block, LiquidityGuardReason Reason, stri
 
 public class LiquidityGuardService
 {
+    public LiquidityGuardResult? LastDanger { get; private set; }
     private readonly ILogger<LiquidityGuardService> _logger;
 
     public LiquidityGuardService(ILogger<LiquidityGuardService> logger)
@@ -87,6 +85,8 @@ public class LiquidityGuardService
                 interval.ToString(),
                 last.Volume,
                 avgVolume);
+            var result = new LiquidityGuardResult(true, LiquidityGuardReason.LowVolume, msg);
+            LastDanger = result;
             return new LiquidityGuardResult(true, LiquidityGuardReason.LowVolume, msg);
         }
 
@@ -95,7 +95,12 @@ public class LiquidityGuardService
         {
             var msg = $"STOP-HUNT DOWN {symbol} {interval}";
             _logger.LogWarning("[LiquidityGuard] BLOCKED SHORT: {Msg}", msg);
-            return new LiquidityGuardResult(true, LiquidityGuardReason.StopHuntDown, msg);
+
+            var result = new LiquidityGuardResult(true, LiquidityGuardReason.StopHuntDown, msg);
+            LastDanger = result;
+
+
+            return result;
         }
 
         // 5. Stop-hunt вверх → блокируем лонг
@@ -103,9 +108,17 @@ public class LiquidityGuardService
         {
             var msg = $"STOP-HUNT UP {symbol} {interval}";
             _logger.LogWarning("[LiquidityGuard] BLOCKED LONG: {Msg}", msg);
-            return new LiquidityGuardResult(true, LiquidityGuardReason.StopHuntUp, msg);
-        }
 
-        return new LiquidityGuardResult(false, LiquidityGuardReason.None);
+            var result = new LiquidityGuardResult(true, LiquidityGuardReason.StopHuntUp, msg);
+            LastDanger = result;
+
+
+            return result;
+        }
+        var ok = new LiquidityGuardResult(false, LiquidityGuardReason.None);
+        LastDanger = ok;
+        return ok;
+
+        
     }
 }

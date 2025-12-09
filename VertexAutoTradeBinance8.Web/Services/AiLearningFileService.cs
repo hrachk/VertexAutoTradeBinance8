@@ -1,6 +1,7 @@
 ﻿using System.Text.Json;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
+using VertexAutoTradeBinance8.Web.Models;
 
 namespace VertexAutoTradeBinance8.Web.Services
 {
@@ -59,6 +60,41 @@ namespace VertexAutoTradeBinance8.Web.Services
             {
                 _logger.LogError(ex, "[AI-LEARN-WEB] Failed to read ai_learning.json");
                 return null;
+            }
+        }
+
+        public async Task<IReadOnlyList<AiLearningPointModel>> LoadAsync(
+        DateTime? fromUtc = null,
+        int minScore = 0)
+        {
+            try
+            {
+                if (!File.Exists(FilePath))
+                    return Array.Empty<AiLearningPointModel>();
+
+                var json = await File.ReadAllTextAsync(FilePath);
+                // здесь подгони под свою структуру ai_learning.json
+                // ниже — пример, если там лежит массив событий
+                var events = JsonSerializer.Deserialize<List<AiLearningPointModel>>(json,
+                    new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    }) ?? new();
+
+                if (fromUtc.HasValue)
+                    events = events.Where(e => e.Time >= fromUtc.Value).ToList();
+
+                if (minScore > 0)
+                    events = events.Where(e => e.Score >= minScore).ToList();
+
+                return events
+                    .OrderBy(e => e.Time)
+                    .ToList();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "AiLearningFileService.LoadAsync ERROR");
+                return Array.Empty<AiLearningPointModel>();
             }
         }
 

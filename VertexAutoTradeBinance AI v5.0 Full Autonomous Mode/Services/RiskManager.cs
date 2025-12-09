@@ -1,7 +1,4 @@
-﻿using Binance.Net.Clients;
-using Binance.Net.Enums;
-using Microsoft.Extensions.Logging;
-using System.Linq;
+﻿using Binance.Net.Enums;
 using System.Text.Json;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
@@ -23,13 +20,16 @@ namespace VertexAutoTradeBinance8.Services
         private static readonly string MissedTradesPath =
             Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
 
+
+        public decimal LastBalanceUsdt { get; private set; }
+
         public RiskManager(
             ILogger<RiskManager> logger,
             SymbolInfoService symbolInfo,
             TradingOptions options,
             BinanceClientFactory factory,
             MarketDataService marketData,
-            AiLeverageService aiLeverage, AiMarketRegimeService marketRegimeService , SmartRegimeService  smartRegime, SimulatedTradeService simulator)
+            AiLeverageService aiLeverage, AiMarketRegimeService marketRegimeService, SmartRegimeService smartRegime, SimulatedTradeService simulator)
         {
             _logger = logger;
             _symbolInfo = symbolInfo;
@@ -79,6 +79,13 @@ namespace VertexAutoTradeBinance8.Services
             using var client = _factory.CreateRestClient();
             var acc = await client.UsdFuturesApi.Account.GetBalancesAsync(null, ct);
             decimal free = acc?.Data?.FirstOrDefault(x => x.Asset == "USDT")?.AvailableBalance ?? 0;
+
+
+            //for UI
+            LastBalanceUsdt = free;
+
+
+
 
             var klines = await _marketData.GetKlines(symbol, KlineInterval.FiveMinutes, 200);
             var baseReg = _marketRegimeService.DetectRegime(symbol, KlineInterval.FiveMinutes, klines);
@@ -160,7 +167,7 @@ namespace VertexAutoTradeBinance8.Services
 
             if (free <= 0)
             {
-               
+
                 LogMissedTrade(
                symbol,
                entryPrice,
@@ -180,7 +187,7 @@ namespace VertexAutoTradeBinance8.Services
 
                 return 0;
             }
-            
+
 
             // BASE RISK
             decimal baseRiskPercent = _options.BaseRiskPercent > 0
@@ -210,7 +217,7 @@ namespace VertexAutoTradeBinance8.Services
             // SIGNAL STRENGTH LOGIC
             // =====================
 
-        
+
 
 
 
@@ -220,7 +227,7 @@ namespace VertexAutoTradeBinance8.Services
 
             if (weak)
             {
-              
+
 
                 LogMissedTrade(
                 symbol,
@@ -234,7 +241,7 @@ namespace VertexAutoTradeBinance8.Services
                 takeProfits,
                 baseReg,                    // <- добавили
                 smart,                      // <- добавили
-                atr  ,
+                atr,
                 scoreUi
             );
 
@@ -254,7 +261,7 @@ namespace VertexAutoTradeBinance8.Services
 
                 if (targetNotional < binanceMinNotional)
                 {
-                  
+
                     LogMissedTrade(
                     symbol,
                     entryPrice,
@@ -282,7 +289,7 @@ namespace VertexAutoTradeBinance8.Services
 
             if (qty <= 0 || notional <= 0)
             {
-                 
+
                 LogMissedTrade(
                   symbol,
                   entryPrice,
@@ -314,7 +321,7 @@ namespace VertexAutoTradeBinance8.Services
 
                 if (maxNotional < binanceMinNotional)
                 {
-                    
+
                     LogMissedTrade(
                  symbol,
                  entryPrice,
@@ -336,7 +343,7 @@ namespace VertexAutoTradeBinance8.Services
                 qty = Math.Floor((maxNotional / entryPrice) / step) * step;
                 if (qty < minQty)
                 {
-                   
+
                     LogMissedTrade(
                  symbol,
                  entryPrice,
@@ -360,7 +367,7 @@ namespace VertexAutoTradeBinance8.Services
 
                 if (requiredMargin > free)
                 {
-                   
+
                     LogMissedTrade(
                  symbol,
                  entryPrice,
@@ -476,7 +483,7 @@ namespace VertexAutoTradeBinance8.Services
     SmartRegimeInfo smart,
     decimal atr, int scoreUi)
 
- 
+
         {
             try
             {
@@ -504,7 +511,7 @@ namespace VertexAutoTradeBinance8.Services
 
                     // === Smart regime ===
                     confidence = (int)(smart.Confidence * 100),
-                    smartType = smart.SmartType.ToString(), 
+                    smartType = smart.SmartType.ToString(),
                     // === NEW ===
                     score = scoreUi
                 };

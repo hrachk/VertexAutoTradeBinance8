@@ -9,11 +9,8 @@
 //   - Имена и сигнатуры полностью совместимы с VertexAutoTradeBinance8
 //  -----------------------------------------------------------------------------
 
-using System;
-using System.Collections.Generic;
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
-using Microsoft.Extensions.Logging;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
@@ -30,6 +27,15 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly AiSelfLearningService _aiLearning;
         private readonly SmartRegimeService _smartRegimeService;
         private readonly TradingOptions _opt;
+
+
+        //fot UI
+        public string CurrentMode { get; private set; } = "Detecting";
+        public bool LastSoftEntry { get; private set; }
+        public bool LastBlockedByLiquidity { get; private set; }
+
+
+
 
         public StrategyEngine(
             ILogger<StrategyEngine> logger,
@@ -908,11 +914,13 @@ $@"📊 Режим рынка:
                         confidence: smart.Confidence
                     );
 
-                     
+
 
                     _logger.LogInformation(
                         $"🟡 SOFT-вход по тренду: side={soft.Side}, entry={soft.EntryPrice:F4}, SL={soft.StopLoss:F4}");
-
+                    LastSoftEntry = true;
+                    LastBlockedByLiquidity = false;
+                    CurrentMode = "SoftTrend";
                     baseSignal = soft;
                 }
             }
@@ -921,6 +929,12 @@ $@"📊 Режим рынка:
             {
                 _logger.LogInformation("🔴 Итог: сигнала НЕТ (ни базового, ни soft).");
                 _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+                LastSoftEntry = false;
+                LastBlockedByLiquidity = false;
+                CurrentMode = "Detecting";
+
+
                 return null;
             }
 
@@ -1002,6 +1016,10 @@ $@"📊 Режим рынка:
                         _logger.LogInformation(
                             "🚫 Сигнал заблокирован по ликвидности (опасная стена/дисбаланс).");
                         _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                        LastSoftEntry = false;
+                        LastBlockedByLiquidity = true;
+                        CurrentMode = "LiquidityBlocked";
+
                         return null;
                     }
                 }

@@ -1,7 +1,10 @@
 ﻿using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
+using Microsoft.JSInterop;
 using VertexAutoTradeBinance8.Configuration;
+using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
+using VertexAutoTradeBinance8.Web;
 using VertexAutoTradeBinance8.Web.Data;
 using VertexAutoTradeBinance8.Web.Services;
 
@@ -33,7 +36,9 @@ builder.Services.AddSingleton<AiCorrelationService>();
 builder.Services.AddSingleton<AiSelfLearningService>();
 builder.Services.AddSingleton<AiLearningFileService>();
 builder.Services.AddSingleton<MissedTradeFileService>();
+builder.Services.AddSingleton<EngineStateService>();
  
+
 
 // Режим рынка (AI Smart Regime)
 builder.Services.AddSingleton<AiMarketRegimeService>();
@@ -66,9 +71,10 @@ app.UseHttpsRedirection();
 
 app.UseStaticFiles();
 
+ 
 app.UseRouting();
 app.MapControllers();   // API маршруты
 app.MapBlazorHub();
-app.MapFallbackToPage("/_Host");
+app.MapFallbackToPage("/_Host"); 
 
 app.Run();

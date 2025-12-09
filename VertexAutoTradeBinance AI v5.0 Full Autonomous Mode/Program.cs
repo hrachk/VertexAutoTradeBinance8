@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Options;
 using VertexAutoTradeBinance8.Configuration;
+using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Strategy;
 
@@ -64,8 +65,12 @@ public class Program
                 services.AddSingleton<PositionSupervisorService>();
                 services.AddSingleton<SmartRegimeService>();
                  services.AddSingleton<TradeStateManager>();
- 
+
+                services.AddSingleton<EngineStateBuilder>();
                
+
+                services.Configure<EngineStateSettings>(ctx.Configuration.GetSection("EngineState"));
+                services.AddSingleton<EngineStateSnapshotService>();
 
                 services.AddSingleton(sp => sp.GetRequiredService<IOptions<TradingOptions>>().Value);
 

@@ -40,6 +40,8 @@ namespace VertexAutoTradeBinance8
 
         private readonly SymbolRegistryService _symbols;
         private readonly AiTimeframeSelectorService _tfSelector;
+        private readonly EngineStateBuilder  _engineState;
+        private readonly EngineStateSnapshotService  _engineStateSnapshot;
 
 
         private static readonly KlineInterval[] TFS = {
@@ -81,7 +83,7 @@ namespace VertexAutoTradeBinance8
             AiSelfLearningService learn,
             AiModelSnapshotService snapshot,
             SymbolRegistryService symbols,
-            AiTimeframeSelectorService tfSelector)
+            AiTimeframeSelectorService tfSelector, EngineStateBuilder engineState, EngineStateSnapshotService engineStateSnapshot)
         {
             _logger = logger;
 
@@ -106,6 +108,8 @@ namespace VertexAutoTradeBinance8
             _snapshot = snapshot;
             _symbols = symbols;
             _tfSelector = tfSelector;
+            _engineState = engineState;
+            _engineStateSnapshot = engineStateSnapshot;
             learn.ForceSnapshot();
         }
 
@@ -138,6 +142,9 @@ namespace VertexAutoTradeBinance8
             while (!ct.IsCancellationRequested)
             {
                 await RunQuantRealtimeTick(ct);
+
+
+
 
                 foreach (var symbol in _symbols.ActiveSymbols)
                 {
@@ -174,8 +181,31 @@ namespace VertexAutoTradeBinance8
                     {
                         _logger.LogError(ex, "ML-TF error for {symbol}", symbol);
                     }
+                    try
+                    {
+                        await ProcessSymbol(symbol, finalTf.Value, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "ML-TF error for {symbol}", symbol);
+                    }
 
-                    await Task.Delay(25, ct);
+                    // === ENGINE STATE SNAPSHOT ДЛЯ UI ===
+                    try
+                    {
+                        // Builder сам берёт все последние значения из Risk / Strategy / Liquidity / Regime
+                        var engineState = _engineState.Build(
+                            symbol: symbol,
+                            timeframe: finalTf.Value.ToString());
+
+                        _engineStateSnapshot.Save(engineState);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "[ENGINE_STATE] snapshot build/save failed for {symbol}", symbol);
+                    }
+
+                    await Task.Delay(25, ct); 
                 }
 
                 await PeriodicSnapshot(ct);
@@ -205,32 +235,7 @@ namespace VertexAutoTradeBinance8
                 _logger.LogError(ex, "[QUANT] snapshot save failed");
             }
         }
-
-
- 
-        // ================================================================
-        // SCHEDULER
-        // ================================================================
-        private bool ShouldRun(string symbol, KlineInterval tf)
-        {
-            string key = symbol + "_" + tf;
-
-            if (!_lastTfRun.TryGetValue(key, out var last))
-            {
-                _lastTfRun[key] = DateTime.UtcNow;
-                return true;
-            }
-
-            var min = _min.TryGetValue(tf, out var v) ? v : TimeSpan.FromSeconds(30);
-
-            if (DateTime.UtcNow - last >= min)
-            {
-                _lastTfRun[key] = DateTime.UtcNow;
-                return true;
-            }
-
-            return false;
-        }
+         
 
         private bool InCooldown(string symbol)
         {
@@ -362,8 +367,9 @@ namespace VertexAutoTradeBinance8
 
             // ------------------ 10. UI -------------------------------
             ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🟩 OK", $"qty={qty:F4}");
+ 
         }
-
+       
         // ================================================================
         // HEDGE MODE (once)
         // ================================================================

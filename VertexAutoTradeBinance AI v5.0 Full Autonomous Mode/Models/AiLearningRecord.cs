@@ -1,21 +1,7 @@
 ﻿namespace VertexAutoTradeBinance8.Models
 {
     public class AiLearningRecord
-    {
-        //public DateTime Time { get; set; }
-        //public string Symbol { get; set; } = string.Empty;
-
-        //public string Reason { get; set; } = string.Empty;
-        //public decimal Score { get; set; }
-        //public decimal Confidence { get; set; }
-
-        //public string Regime { get; set; } = string.Empty;
-        //public string SmartType { get; set; } = string.Empty;
-
-        //public decimal Atr { get; set; }
-        //public decimal Slope { get; set; }
-        //public decimal Volatility { get; set; }
-        //public decimal Deviation { get; set; }
+    { 
 
         public string Symbol { get; set; } = "";
         public DateTime Time { get; set; }
