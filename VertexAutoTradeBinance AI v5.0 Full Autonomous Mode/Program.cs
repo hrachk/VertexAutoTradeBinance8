@@ -85,6 +85,9 @@ public class Program
                 services.AddSingleton<SymbolRegistryService>();
                 services.AddSingleton<AiTimeframeSelectorService>();
 
+                services.AddSingleton<ExecutedSignalService>();
+
+
             })
             .Build();
 

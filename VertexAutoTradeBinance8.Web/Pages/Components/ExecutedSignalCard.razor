@@ -1,0 +1,128 @@
+﻿@using VertexAutoTradeBinance8.Models
+@inherits ComponentBase
+
+<div class="missed-card executed-card">
+    <div class="card-header-row">
+        <div class="symbol">@Record.Symbol</div>
+        <div class="time">@Record.Time.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss")</div>
+    </div>
+
+    <div class="status-row">
+        <span class="status-pill @StatusCss()">@StatusText()</span>
+        <span class="side-pill @(Record.Side == SignalSide.Buy ? "side-long" : "side-short")">
+            @(Record.Side == SignalSide.Buy ? "LONG" : "SHORT")
+        </span>
+    </div>
+
+    <div class="score-row">
+        <span class="score-label">Opportunity Score:</span>
+        <span class="score-value">@Record.OpportunityScore/100</span>
+    </div>
+
+    <div class="prices-row">
+        <div class="price-item">
+            <span class="label">Вход</span>
+            <span class="value">@Record.Entry</span>
+        </div>
+        <div class="price-item">
+            <span class="label">SL</span>
+            <span class="value">@Record.StopLoss</span>
+        </div>
+        @if (Record.TakeProfits != null && Record.TakeProfits.Count > 0)
+        {
+            <div class="price-item">
+                <span class="label">TP1</span>
+                <span class="value">@Record.TakeProfits[0]</span>
+            </div>
+        }
+    </div>
+
+    <div class="risk-row">
+        <div class="risk-item">
+            <span class="label">Qty</span>
+            <span class="value">@Record.Qty</span>
+        </div>
+        <div class="risk-item">
+            <span class="label">Notional</span>
+            <span class="value">@Record.Notional.ToString("F2") USDT</span>
+        </div>
+    </div>
+
+    <div class="regime-row">
+        <div class="risk-item">
+            <span class="label">ATR</span>
+            <span class="value">@Record.Atr.ToString("F2")</span>
+        </div>
+        <div class="risk-item">
+            <span class="label">Vol</span>
+            <span class="value">@Record.Volatility:P2</span>
+        </div>
+        <div class="risk-item">
+            <span class="label">Slope</span>
+            <span class="value">@Record.Slope:P2</span>
+        </div>
+    </div>
+
+    @if (Record.Status == TradeExecutionStatus.PositionClosedTp ||
+        Record.Status == TradeExecutionStatus.PositionClosedSl ||
+        Record.Status == TradeExecutionStatus.PositionClosedManual)
+    {
+        <div class="pnl-row">
+            <div class="risk-item">
+                <span class="label">Exit</span>
+                <span class="value">@Record.ExitPrice</span>
+            </div>
+            <div class="risk-item">
+                <span class="label">PnL</span>
+                <span class="value">@Record.PnL</span>
+            </div>
+            <div class="risk-item">
+                <span class="label">ROI</span>
+                <span class="value">@Record.RoiPercent?.ToString("F2") %</span>
+            </div>
+        </div>
+    }
+
+    <div class="tags-row">
+        <span class="reason-label">Reason:</span>
+        <span class="reason-text">@Record.Reason</span>
+    </div>
+</div>
+
+@code {
+    [Parameter] public ExecutedSignalRecord Record { get; set; } = default!;
+
+    private string StatusText()
+    {
+        return Record.Status switch
+        {
+            TradeExecutionStatus.SignalCreated => "Signal",
+            TradeExecutionStatus.OrderCreated => "Order Created",
+            TradeExecutionStatus.OrderPartiallyFilled => "Partial Fill",
+            TradeExecutionStatus.PositionOpened => "Position Opened",
+            TradeExecutionStatus.PositionClosedTp => "Closed (TP)",
+            TradeExecutionStatus.PositionClosedSl => "Closed (SL)",
+            TradeExecutionStatus.PositionClosedManual => "Closed (Manual)",
+            TradeExecutionStatus.PositionError => "Error",
+            TradeExecutionStatus.Cancelled => "Cancelled",
+            _ => Record.Status.ToString()
+        };
+    }
+
+    private string StatusCss()
+    {
+        return Record.Status switch
+        {
+            TradeExecutionStatus.SignalCreated => "st-signal",
+            TradeExecutionStatus.OrderCreated => "st-pending",
+            TradeExecutionStatus.OrderPartiallyFilled => "st-pending",
+            TradeExecutionStatus.PositionOpened => "st-open",
+            TradeExecutionStatus.PositionClosedTp => "st-tp",
+            TradeExecutionStatus.PositionClosedSl => "st-sl",
+            TradeExecutionStatus.PositionClosedManual => "st-closed",
+            TradeExecutionStatus.PositionError => "st-error",
+            TradeExecutionStatus.Cancelled => "st-cancel",
+            _ => "st-signal"
+        };
+    }
+}

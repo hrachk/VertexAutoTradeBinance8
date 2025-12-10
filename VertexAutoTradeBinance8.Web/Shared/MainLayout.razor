@@ -1,9 +1,9 @@
 ﻿@inherits LayoutComponentBase
-@* @inject BalanceService BalanceService
-@inject EngineStatusService EngineStatusService
-@inject TradingModeService TradingModeService *@
 
 <PageTitle>VERTEX AUTOTRADE AI</PageTitle>
+
+<!-- === MOBILE MENU BUTTON === -->
+<button class="menu-toggle" @onclick="ToggleMenu">☰</button>
 
 <header class="vertex-header">
     <div class="vertex-left">
@@ -13,28 +13,23 @@
     </div>
 
     <div class="vertex-right">
-
-        <!-- ENGINE STATUS -->
         <span class="vertex-status-dot @(EngineStatus == "Running" ? "ok" : "bad")"></span>
         <span class="vertex-status-text">@EngineStatus</span>
-
-        <!-- BALANCE -->
-        <span class="vertex-balance">
-            Balance: @Balance USDT
-        </span>
-
-        <!-- TRADING MODE -->
-        <span class="vertex-mode">
-            Mode: @TradingMode
-        </span>
+        <span class="vertex-balance">Balance: @Balance USDT</span>
+        <span class="vertex-mode">Mode: @TradingMode</span>
     </div>
 </header>
 
-
 <div class="page">
-    <div class="sidebar">
+    <div class="sidebar @(ShowSidebar ? "sidebar-open" : "")">
         <NavMenu />
     </div>
+
+    <!-- BACKDROP when menu open on mobile -->
+    @if (ShowSidebar)
+    {
+        <div class="sidebar-backdrop" @onclick="ToggleMenu"></div>
+    }
 
     <main>
         <article class="content px-4">
@@ -48,12 +43,7 @@
     public string EngineStatus { get; set; } = "Loading...";
     public string TradingMode { get; set; } = "Detecting...";
 
-    protected override async Task OnInitializedAsync()
-    {
-        // Balance = await BalanceService.GetBalanceAsync();
-        // EngineStatus = await EngineStatusService.GetStatusAsync();
-        // TradingMode = await TradingModeService.GetModeAsync();
-    }
+    private bool ShowSidebar = false;
 
-
+    void ToggleMenu() => ShowSidebar = !ShowSidebar;
 }

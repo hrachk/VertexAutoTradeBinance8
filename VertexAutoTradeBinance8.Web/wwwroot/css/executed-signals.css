@@ -1,0 +1,112 @@
+﻿.executed-card .status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.4rem;
+}
+
+.status-pill {
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.side-pill {
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.side-long {
+    background: rgba(46, 204, 113, 0.1);
+    color: #2ecc71;
+}
+
+.side-short {
+    background: rgba(231, 76, 60, 0.1);
+    color: #e74c3c;
+}
+
+.st-signal {
+    background: rgba(52, 152, 219, 0.1);
+    color: #3498db;
+}
+
+.st-pending {
+    background: rgba(241, 196, 15, 0.12);
+    color: #f1c40f;
+}
+
+.st-open {
+    background: rgba(39, 174, 96, 0.12);
+    color: #27ae60;
+}
+
+.st-tp {
+    background: rgba(46, 204, 113, 0.15);
+    color: #2ecc71;
+}
+
+.st-sl {
+    background: rgba(231, 76, 60, 0.15);
+    color: #e74c3c;
+}
+
+.st-closed {
+    background: rgba(149, 165, 166, 0.12);
+    color: #bdc3c7;
+}
+
+.st-error {
+    background: rgba(231, 76, 60, 0.18);
+    color: #e74c3c;
+}
+
+.st-cancel {
+    background: rgba(127, 140, 141, 0.12);
+    color: #95a5a6;
+}
+
+.prices-row,
+.risk-row,
+.regime-row,
+.pnl-row {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 0.25rem;
+}
+
+.price-item,
+.risk-item {
+    display: flex;
+    flex-direction: column;
+    font-size: 0.78rem;
+}
+
+    .price-item .label,
+    .risk-item .label {
+        opacity: 0.7;
+    }
+
+    .price-item .value,
+    .risk-item .value {
+        font-weight: 600;
+    }
+
+.tags-row {
+    margin-top: 0.4rem;
+    font-size: 0.78rem;
+    opacity: 0.9;
+}
+
+.reason-label {
+    opacity: 0.7;
+    margin-right: 0.25rem;
+}
+
+.empty-state {
+    margin-top: 1rem;
+    opacity: 0.7;
+}

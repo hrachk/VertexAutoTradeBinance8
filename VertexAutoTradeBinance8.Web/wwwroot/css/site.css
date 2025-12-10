@@ -1582,3 +1582,55 @@ compact-card {
     z-index: 900 !important;
 }
 
+/* -----------------------------
+   DESKTOP (обычный режим)
+------------------------------*/
+.sidebar {
+    width: 240px;
+    min-height: 100vh;
+    background: linear-gradient(180deg, #0a1a50, #2b0050);
+    padding-top: 20px;
+    transition: transform 0.3s ease-in-out;
+}
+
+.menu-toggle {
+    display: none;
+    background: none;
+    border: none;
+    color: white;
+    font-size: 28px;
+    cursor: pointer;
+}
+
+/* -----------------------------
+   MOBILE / TABLET режим
+------------------------------*/
+@media (max-width: 1024px) {
+
+    /* скрываем боковую панель по умолчанию */
+    .sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        transform: translateX(-260px);
+        z-index: 2000;
+        width: 240px;
+        height: 100%;
+        background: linear-gradient(180deg, #0a1a50, #2b0050);
+        box-shadow: 4px 0 12px rgba(0,0,0,0.4);
+    }
+
+    /* когда открыта */
+    .sidebar-open {
+        transform: translateX(0);
+    }
+
+    /* кнопка бургер-панели */
+    .menu-toggle {
+        display: block;
+        position: fixed;
+        top: 15px;
+        left: 15px;
+        z-index: 3000;
+    }
+}
