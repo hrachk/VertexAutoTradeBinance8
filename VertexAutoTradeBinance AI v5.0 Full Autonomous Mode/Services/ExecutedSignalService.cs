@@ -14,6 +14,7 @@ namespace VertexAutoTradeBinance8.Services
     {
         private readonly ILogger<ExecutedSignalService> _logger;
         private readonly object _lock = new();
+        public static event Action? ExecutedSignalsChanged;
 
         private static readonly string FilePath =
             Path.Combine(AppContext.BaseDirectory, "executed_signals.json");
@@ -142,6 +143,9 @@ namespace VertexAutoTradeBinance8.Services
                 var list = LoadInternal();
                 list.Add(record);
                 SaveInternal(list);
+                ExecutedSignalsChanged?.Invoke();
+
+
             }
 
             _logger.LogInformation("[EXEC][{symbol}] SignalCreated saved (qty={qty}, ntn={ntn:F2})",
@@ -185,6 +189,7 @@ namespace VertexAutoTradeBinance8.Services
                 if (roi.HasValue) rec.RoiPercent = roi.Value;
 
                 SaveInternal(list);
+                ExecutedSignalsChanged?.Invoke();
 
                 _logger.LogInformation("[EXEC][{symbol}] Status updated → {status}", symbol, status);
             }

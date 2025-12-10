@@ -7,6 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.22" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\VertexAutoTradeBinance8.csproj" />
   </ItemGroup>
 

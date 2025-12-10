@@ -11,8 +11,6 @@
 
 using Binance.Net.Clients;
 using Binance.Net.Enums;
-using Binance.Net.Objects.Models.Futures;
-using Microsoft.Extensions.Logging;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -23,16 +21,26 @@ namespace VertexAutoTradeBinance8.Services
         private readonly BinanceClientFactory _factory;
         private readonly SymbolInfoService _symbolInfo;
         private readonly SimulatedTradeService _simulator;
+        private readonly ExecutedSignalService _executedSignalService;
+        private readonly MarketDataService _marketData;
+        private readonly AiMarketRegimeService _marketRegimeService;
+        private readonly SmartRegimeService _smartRegime;
         public OrderExecutor(
             ILogger<OrderExecutor> logger,
             BinanceClientFactory factory,
             SymbolInfoService symbolInfo,
-            SimulatedTradeService simulator)
+            SimulatedTradeService simulator,
+            ExecutedSignalService executedSignalService, MarketDataService marketData, AiMarketRegimeService marketRegimeService,
+            SmartRegimeService smartRegime)
         {
             _logger = logger;
             _factory = factory;
             _symbolInfo = symbolInfo;
             _simulator = simulator;
+            _executedSignalService = executedSignalService;
+            _marketData = marketData;
+            _marketRegimeService = marketRegimeService;
+            _smartRegime = smartRegime;
         }
 
         // =====================================================================
@@ -57,12 +65,49 @@ namespace VertexAutoTradeBinance8.Services
                 await _simulator.SimulateMissedTradeAsync(signal, "QuantityTooSmall");
                 return OrderResult.Fail("Quantity too small");
             }
-              
+            // ===================================================================
+            // 0) LOG: SignalCreated → UI "Executed Trades"
+            // ===================================================================
 
             var side = signal.Side == SignalSide.Buy ? OrderSide.Buy : OrderSide.Sell;
             var posSide = signal.Side == SignalSide.Buy ? PositionSide.Long : PositionSide.Short;
 
             decimal entryPrice = Round(signal.EntryPrice, tick);
+
+
+            // =============================================================
+            // 0) Get Market Regime + Smart Regime for UI / analytics
+            // =============================================================
+            var klines = await _marketData.GetKlines(signal.Symbol, KlineInterval.FiveMinutes, 200);
+            var baseReg = _marketRegimeService.DetectRegime(signal.Symbol, KlineInterval.FiveMinutes, klines);
+            var smart = _smartRegime.Evaluate(signal.Symbol, KlineInterval.FiveMinutes, klines);
+
+            var volatility = baseReg.VolatilityPercent;
+            var slope = baseReg.TrendSlopePercent;
+            int opportunityScore = (int)(smart.Confidence * 100);
+
+            decimal aiRisk =
+                signal.SafetyRiskMultiplier *
+                (signal.AiQuality ?? 1m) *
+                (volatility < 0.01m ? 0.8m : 1.2m);
+
+            // =============================================================
+            // 1) LOG: AddSignalCreated()
+            // =============================================================
+        
+            decimal notional = quantity * signal.EntryPrice;
+
+            var execRecord = _executedSignalService.AddSignalCreated(
+                signal,
+                opportunityScore,
+                signal.Atr ?? 0,
+                volatility,
+                slope,
+                quantity,
+                notional,
+                $"AiRisk={aiRisk:F2}"
+            );
+
 
             // =====================================================================
             // 1) ENTRY (LIMIT) — НИКАКИХ reduceOnly
@@ -92,13 +137,22 @@ namespace VertexAutoTradeBinance8.Services
             _logger.LogInformation("[ORDER][{symbol}] ENTRY OK: id={id}, price={price}, qty={qty}",
                 signal.Symbol, entryOrderId, entryPrice, quantity);
 
+
+            _executedSignalService.UpdateStatus(
+    symbol: signal.Symbol, DateTime.UtcNow,
+    status: TradeExecutionStatus.OrderCreated,
+    qty: quantity,
+    notional: quantity * entryPrice
+);
+
+
             // =====================================================================
             // 2) WAIT-FILL — ждем, пока позиция реально откроется
             // =====================================================================
             decimal filledEntry = await WaitForFillAsync(client, signal.Symbol, entryOrderId, entryPrice, ct);
 
             if (filledEntry <= 0)
-            { 
+            {
                 // В случае неисполнения, вызываем симуляцию
                 await _simulator.SimulateMissedTradeAsync(signal, "EntryNotFilled");
 
@@ -109,6 +163,15 @@ namespace VertexAutoTradeBinance8.Services
 
             entryPrice = filledEntry;
             _logger.LogInformation("[ORDER][{symbol}] ENTRY FILLED AT {price}", signal.Symbol, entryPrice);
+
+            _executedSignalService.UpdateStatus(
+    signal.Symbol,
+    DateTime.UtcNow,
+    TradeExecutionStatus.PositionOpened,
+    qty: quantity,
+    notional: quantity * entryPrice,
+       entryPrice
+);
 
             // =====================================================================
             // 3) COMPUTE DYNAMIC SL/TP (ATR, trend, volatility)

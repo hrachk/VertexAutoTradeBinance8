@@ -1,6 +1,8 @@
-﻿using VertexAutoTradeBinance8.Configuration;
+﻿using Microsoft.AspNetCore.SignalR;
+using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Web.Data;
+using VertexAutoTradeBinance8.Web.Hubs;
 using VertexAutoTradeBinance8.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -50,7 +52,8 @@ builder.Services.AddSingleton<MissedTradeFileService>();
 builder.Services.AddSingleton<EngineStateService>();
 
 builder.Services.AddSingleton<ExecutedSignalUiService>();
-
+builder.Services.AddSingleton<ExecutedSignalsPushService>();
+builder.Services.AddSingleton<ExecutedSignalService>();
 
 // Режим рынка (AI Smart Regime)
 builder.Services.AddSingleton<AiMarketRegimeService>();
@@ -67,6 +70,7 @@ builder.Services.AddControllers();
 // Blazor Server
 
 builder.Services.AddHttpClient();
+builder.Services.AddSignalR();
 
 
 var app = builder.Build();
@@ -88,5 +92,12 @@ app.UseRouting();
 app.MapControllers();   // API маршруты
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
+app.MapHub<ExecutedSignalsHub>("/hubs/executedSignals");
+ 
+ExecutedSignalService.ExecutedSignalsChanged += async () =>
+{
+    var hub = app.Services.GetRequiredService<IHubContext<ExecutedSignalsHub>>();
+    await hub.Clients.All.SendAsync("ExecutedSignalsUpdated");
+};
 
 app.Run();

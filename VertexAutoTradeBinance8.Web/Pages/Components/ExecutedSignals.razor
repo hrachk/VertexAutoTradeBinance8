@@ -2,7 +2,9 @@
 
 @using VertexAutoTradeBinance8.Web.Services
 @using VertexAutoTradeBinance8.Models
+@using Microsoft.AspNetCore.SignalR.Client
 @inject ExecutedSignalUiService ExecService
+@inject NavigationManager Nav
 
 <div class="missed-container">
 
@@ -13,12 +15,12 @@
 
     <!-- === FILTER PANEL === -->
     <div class="filter-chips">
-        <div class="@ChipClass("ALL")" @onclick="@(()=>SetFilter("ALL"))">Все</div>
-        <div class="@ChipClass("OPEN")" @onclick="@(()=>SetFilter("OPEN"))">Открытые</div>
-        <div class="@ChipClass("CLOSED")" @onclick="@(()=>SetFilter("CLOSED"))">Закрытые</div>
-        <div class="@ChipClass("TP")" @onclick="@(()=>SetFilter("TP"))">TP</div>
-        <div class="@ChipClass("SL")" @onclick="@(()=>SetFilter("SL"))">SL</div>
-        <div class="@ChipClass("ERR")" @onclick="@(()=>SetFilter("ERR"))">Ошибки</div>
+        <div class="@ChipClass("ALL")" @onclick="@(() => SetFilter("ALL"))">Все</div>
+        <div class="@ChipClass("OPEN")" @onclick="@(() => SetFilter("OPEN"))">Открытые</div>
+        <div class="@ChipClass("CLOSED")" @onclick="@(() => SetFilter("CLOSED"))">Закрытые</div>
+        <div class="@ChipClass("TP")" @onclick="@(() => SetFilter("TP"))">TP</div>
+        <div class="@ChipClass("SL")" @onclick="@(() => SetFilter("SL"))">SL</div>
+        <div class="@ChipClass("ERR")" @onclick="@(() => SetFilter("ERR"))">Ошибки</div>
     </div>
 
     <div class="missed-cards-grid">
@@ -43,10 +45,34 @@
     private List<ExecutedSignalRecord> filtered = new();
     private string currentFilter = "ALL";
 
-    protected override void OnInitialized()
+    private HubConnection? hubConnection;
+
+    protected override async Task OnInitializedAsync()
     {
         all = ExecService.GetAll();
         ApplyFilter();
+
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl(Nav.ToAbsoluteUri("/hubs/executedSignals"))
+            .WithAutomaticReconnect()
+            .Build();
+
+        hubConnection.On("ExecutedSignalsUpdated", () =>
+        {
+            all = ExecService.GetAll();
+            ApplyFilter();
+            InvokeAsync(StateHasChanged);
+        });
+
+        await hubConnection.StartAsync();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (hubConnection != null)
+        {
+            await hubConnection.DisposeAsync();
+        }
     }
 
     private void SetFilter(string key)
