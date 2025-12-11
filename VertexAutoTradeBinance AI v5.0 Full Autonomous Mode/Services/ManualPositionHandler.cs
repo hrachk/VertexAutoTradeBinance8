@@ -13,6 +13,44 @@ namespace VertexAutoTradeBinance8.Services
     {
         private readonly TradeSignalMemoryService _memory;
 
+        // =======================================================================
+        //   STORAGE FOR PREVIOUS POSITION STATE (qty, entry)
+        //   Needed for detecting position close in PositionSupervisor
+        // =======================================================================
+
+        private readonly Dictionary<string, (decimal Qty, decimal Entry)> _prevState
+            = new Dictionary<string, (decimal Qty, decimal Entry)>();
+
+        /// <summary>
+        /// Получить предыдущее количество (для close detector)
+        /// </summary>
+        public decimal GetPrevQty(string key)
+        {
+            if (_prevState.TryGetValue(key, out var st))
+                return st.Qty;
+
+            return 0;
+        }
+
+        /// <summary>
+        /// Получить предыдущий entry price
+        /// </summary>
+        public decimal GetPrevEntry(string key)
+        {
+            if (_prevState.TryGetValue(key, out var st))
+                return st.Entry;
+
+            return 0;
+        }
+
+        /// <summary>
+        /// Сохранить новое состояние позиции
+        /// </summary>
+        public void SetPrevState(string key, decimal qty, decimal entry)
+        {
+            _prevState[key] = (qty, entry);
+        }
+
         public ManualPositionHandler(TradeSignalMemoryService memory)
         {
             _memory = memory;

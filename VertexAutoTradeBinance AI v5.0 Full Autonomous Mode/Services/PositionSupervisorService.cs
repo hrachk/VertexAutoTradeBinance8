@@ -75,6 +75,79 @@ namespace VertexAutoTradeBinance8.Services
             _regimeNow = MarketRegime.Range;
         }
 
+
+        private async Task<bool> EnsureStopLossExists(
+      BinanceRestClient client,
+      string symbol,
+      BinancePositionDetailsUsdt pos,
+      decimal tick)
+        {
+            var orders = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol);
+            bool hasSL = orders.Success && orders.Data.Any(o => o.Type == FuturesOrderType.Stop);
+
+            if (!hasSL)
+            {
+                decimal sl = pos.PositionSide == PositionSide.Long
+                    ? pos.EntryPrice * 0.985m
+                    : pos.EntryPrice * 1.015m;
+
+                sl = Math.Round(sl / tick) * tick;
+
+                await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol: symbol,
+                    side: pos.PositionSide == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
+                    type: FuturesOrderType.Stop,
+                    quantity: Math.Abs(pos.Quantity),
+                    stopPrice: sl,
+                    reduceOnly: true,
+                    positionSide: pos.PositionSide,
+                    timeInForce: TimeInForce.GoodTillCanceled
+                );
+
+                return false; // SL был восстановлён
+            }
+
+            return true;
+        }
+
+
+        private async Task<bool> EnsureTakeProfitExists(
+     BinanceRestClient client,
+     string symbol,
+     BinancePositionDetailsUsdt pos,
+     decimal tick)
+        {
+            var orders = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol);
+            bool hasTP = orders.Success && orders.Data.Any(o => o.Type == FuturesOrderType.TakeProfit);
+
+            if (!hasTP)
+            {
+                decimal tp = pos.PositionSide == PositionSide.Long
+                    ? pos.EntryPrice * 1.02m
+                    : pos.EntryPrice * 0.98m;
+
+                tp = Math.Round(tp / tick) * tick;
+
+                await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol: symbol,
+                    side: pos.PositionSide == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
+                    type: FuturesOrderType.TakeProfit,
+                    quantity: Math.Abs(pos.Quantity),
+                    price: tp,
+                    reduceOnly: true,
+                    positionSide: pos.PositionSide,
+                    timeInForce: TimeInForce.GoodTillCanceled
+                );
+
+                return false;
+            }
+
+            return true;
+        }
+
+
+
+
         // =====================================================================
         // MAIN ENTRY
         // =====================================================================
@@ -92,7 +165,7 @@ namespace VertexAutoTradeBinance8.Services
                     _logger.LogWarning("[MANUAL][{symbol}] Virtual signal injected", symbol);
                 }
             }
-
+ 
             // 1) Load positions with retry
             var posInfo = await GetPositionsWithRetryAsync(client, symbol, ct);
             if (posInfo == null || !posInfo.Success || posInfo.Data == null)
@@ -100,6 +173,26 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogWarning("[SUPERVISOR] No positions {symbol}", symbol);
                 return;
             }
+
+            // ============================================
+            // PATCH v1 — DETECT MANUAL POSITIONS
+            // ============================================
+ 
+ 
+            var posResult = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol);
+            var pos = posResult.Data?.FirstOrDefault();
+
+            if (pos != null && pos.Quantity != 0)
+            {
+                _logger.LogInformation("[PATCH] Existing/manual position detected for {symbol}. Checking SL/TP…");
+
+                var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+                var tick = filters.tickSize;
+
+                await EnsureStopLossExists(client, symbol, pos, tick);
+                await EnsureTakeProfitExists(client, symbol, pos, tick);
+            }
+
 
             var longPos = posInfo.Data.FirstOrDefault(p => p.PositionSide == PositionSide.Long);
             var shortPos = posInfo.Data.FirstOrDefault(p => p.PositionSide == PositionSide.Short);
@@ -191,21 +284,67 @@ namespace VertexAutoTradeBinance8.Services
         // HANDLE SIDE
         // =====================================================================
         private async Task HandleSideAsync(
-            BinanceRestClient client,
-            string symbol,
-            PositionSide side,
-            BinancePositionDetailsUsdt pos,
-            List<BinanceUsdFuturesOrder> allOrders,
-            TradeSignal? signal,
-            IReadOnlyList<BinanceFuturesUsdtKline>? klines,
-            CancellationToken ct)
+    BinanceRestClient client,
+    string symbol,
+    PositionSide side,
+    BinancePositionDetailsUsdt pos,
+    List<BinanceUsdFuturesOrder> allOrders,
+    TradeSignal? signal,
+    IReadOnlyList<BinanceFuturesUsdtKline>? klines,
+    CancellationToken ct)
         {
             decimal qty = Math.Abs(pos.Quantity);
+
+
+            // ======================================================================
+            //  CLOSE DETECTOR v7.0  (WORKS WITH ManualPositionHandler)
+            // ======================================================================
+
+            // key = уникальный идентификатор позиции (symbol + side)
+            var key = $"{symbol}_{side}";
+
+            // берем прошлое состояние
+            var prevQty = _manualHandler.GetPrevQty(key);
+            var prevEntry = _manualHandler.GetPrevEntry(key);
+
+            // сохраняем новое состояние (чтобы в следующем цикле были данные)
+            _manualHandler.SetPrevState(key, pos.Quantity, pos.EntryPrice);
+
+            // ЕСЛИ ПОЗИЦИЯ БЫЛА → СТАЛА = 0  → ЭТО ЗАКРЫТИЕ
+            if (prevQty != 0 && pos.Quantity == 0)
+            {
+                decimal exitPrice = pos.MarkPrice;
+
+                var sigSide = side == PositionSide.Long
+                    ? SignalSide.Buy
+                    : SignalSide.Sell;
+
+                // фиксируем trade
+                _aiLearning.RecordTrade(
+                    symbol,
+                    sigSide,
+                    entry: prevEntry,
+                    exit: exitPrice,
+                    regime: _regimeNow
+                );
+
+                _logger.LogWarning(
+                    "[AI][{symbol}] POSITION CLOSED → saved to ai_learning.json | entry={entry} exit={exit}",
+                    symbol, prevEntry, exitPrice
+                );
+
+                return; // позиция закрыта — дальше нечего делать
+            }
+
+
+
+
             if (qty <= 0)
             {
                 _logger.LogInformation("[SUPERVISOR] {symbol} {side}: no qty", symbol, side);
                 return;
             }
+
 
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
             var orders = allOrders.Where(o => o.PositionSide == side || o.PositionSide == PositionSide.Both).ToList();
