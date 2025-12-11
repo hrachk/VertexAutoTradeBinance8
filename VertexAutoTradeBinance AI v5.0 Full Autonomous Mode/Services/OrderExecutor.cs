@@ -1,12 +1,19 @@
 // ============================================================================
-// ORDER EXECUTOR v6.7 — SAFE ENTRY PROTECTOR
-// - ENTRY: Limit
-// - WAIT: короткое ожидание ОТКРЫТОЙ ПОЗИЦИИ (через GetPositionInformationAsync)
-// - Если позиции нет → отменяем ордер, считаем пропущенной
-// - Если позиция ЕСТЬ (даже частично) → сразу ставим SL/TP
-// - НИКАКИХ открытых позиций без SL/TP
+// ORDER EXECUTOR v6.8 — SAFE ENTRY PROTECTOR (DUAL: ORDER + POSITION)
+// - ENTRY: Limit (без reduceOnly)
+// - Ждём ОТКРЫТУЮ ПОЗИЦИЮ, но параллельно отслеживаем ОРДЕР
+// - Если:
+//      • ордер не заполняется и цена улетела → отменяем, считаем пропущенной
+//      • ордер частично заполнен → НЕ трогаем, ждём появление позиции
+//      • ордер Filled / PartialFilled, позиция появилась → сразу ставим SL/TP
+// - НИКАКИХ позиций без SL/TP
+// - НИКАКОГО тупого догоняния монеты
 // ============================================================================
 
+using System;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Binance.Net.Clients;
 using Binance.Net.Enums;
 using VertexAutoTradeBinance8.Models;
@@ -136,36 +143,39 @@ namespace VertexAutoTradeBinance8.Services
             );
 
             // =====================================================================
-            // 2) WAIT-POSITION — ждём ФАКТ ОТКРЫТОЙ ПОЗИЦИИ (max ~8 сек)
+            // 2) WAIT-POSITION/ORDER — dual-track (ORDER + POSITION)
             // =====================================================================
-            var positionResult = await WaitForPositionOpenAsync(
+            var wait = await WaitForPositionOrOrderAsync(
                 client,
-                signal.Symbol,
+                signal,
                 posSide,
                 entryOrderId,
                 entryPrice,
+                quantity,
                 ct);
 
-            if (!positionResult.HasPosition)
+            if (!wait.HasPosition)
             {
-                // Позиции реально НЕТ → отменяем ордер и считаем пропущенной
-                _logger.LogError("[ORDER][{symbol}] ENTRY NOT FILLED — CANCELING (no position detected)", signal.Symbol);
+                // Позиция реально НЕТ → считаем пропущенной
+                _logger.LogError(
+                    "[ORDER][{symbol}] ENTRY FAIL — {reason}",
+                    signal.Symbol, wait.Reason);
 
-                await _simulator.SimulateMissedTradeAsync(signal, "EntryNotFilled");
+                await _simulator.SimulateMissedTradeAsync(signal, wait.Reason ?? "EntryNotFilled");
 
-                // На всякий случай: отмена ордера
+                // На всякий случай: отмена ордера (если ещё жив)
                 try
                 {
                     await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, entryOrderId, ct: ct);
                 }
                 catch { }
 
-                return OrderResult.Fail("ENTRY_NOT_FILLED");
+                return OrderResult.Fail(wait.Reason ?? "ENTRY_NOT_FILLED");
             }
 
             // Если мы здесь — позиция реально открыта
-            entryPrice = positionResult.EntryPrice;
-            quantity = positionResult.Qty;
+            entryPrice = wait.EntryPrice;
+            quantity = wait.Qty;
 
             _logger.LogInformation("[ORDER][{symbol}] POSITION OPENED at {price}, qty={qty}",
                 signal.Symbol, entryPrice, quantity);
@@ -176,7 +186,7 @@ namespace VertexAutoTradeBinance8.Services
                 status: TradeExecutionStatus.PositionOpened,
                 qty: quantity,
                 notional: quantity * entryPrice,
-                  entryPrice
+                entryPrice
             );
 
             // =====================================================================
@@ -260,18 +270,22 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // WAIT FOR POSITION OPEN (по позиции, не по ордеру)
+        // WAIT FOR POSITION or ORDER FILL (dual-track)
         // =====================================================================
-        private async Task<(bool HasPosition, decimal EntryPrice, decimal Qty)> WaitForPositionOpenAsync(
+        private async Task<(bool HasPosition, decimal EntryPrice, decimal Qty, string Reason)> WaitForPositionOrOrderAsync(
             BinanceRestClient client,
-            string symbol,
+            TradeSignal signal,
             PositionSide posSide,
             long entryOrderId,
             decimal fallbackEntry,
+            decimal requestedQty,
             CancellationToken ct)
         {
-            const int maxLoops = 20;          // ~ 20 * 400ms = 8 секунд
-            const int delayMs = 400;
+            const int maxLoops = 60;           // 60 * 500ms ~ 30s
+            const int delayMs = 500;
+            const decimal maxSlipPct = 0.004m; // 0.4% допуск до "улетела цена"
+
+            decimal lastExecuted = 0m;
 
             for (int i = 0; i < maxLoops; i++)
             {
@@ -279,93 +293,199 @@ namespace VertexAutoTradeBinance8.Services
 
                 try
                 {
-                    var posRes = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, null, ct);
+                    // ---- 1) Читаем ордер ----
+                    var ordRes = await client.UsdFuturesApi.Trading.GetOrderAsync(signal.Symbol, entryOrderId, ct: ct);
+                    OrderStatus? status = null;
+                    decimal executedQty = 0m;
+                    decimal avgPrice = fallbackEntry;
+
+                    if (ordRes.Success && ordRes.Data != null)
+                    {
+                        status = ordRes.Data.Status;
+                        executedQty = ordRes.Data.QuantityFilled;
+
+                        avgPrice = ordRes.Data.AveragePrice > 0
+                            ? ordRes.Data.AveragePrice
+                            : fallbackEntry;
+
+                        if (executedQty > 0 && executedQty != lastExecuted)
+                        {
+                            lastExecuted = executedQty;
+                            _logger.LogInformation(
+                                "[ORDER][{symbol}] Partial fill: {exec}/{total}",
+                                signal.Symbol, executedQty, ordRes.Data.Quantity);
+                        }
+
+                        if (status == OrderStatus.Canceled ||
+                            status == OrderStatus.Rejected ||
+                            status == OrderStatus.Expired)
+                        {
+                            _logger.LogWarning(
+                                "[ORDER][{symbol}] Order cancelled/rejected/expired with exec={exec}",
+                                signal.Symbol, executedQty);
+
+                            // Если вообще ничего не залили → считаем пропущенной
+                            if (executedQty <= 0)
+                                return (false, 0m, 0m, "OrderCanceled");
+
+                            // Если была частичная заливка → переходим к позиции
+                        }
+                    }
+
+                    // ---- 2) Читаем позицию ----
+                    var posRes = await client.UsdFuturesApi.Account.GetPositionInformationAsync(signal.Symbol, null, ct);
                     if (posRes.Success && posRes.Data != null)
                     {
-                        // В hedge mode будут Long / Short; в OneWay — PositionSide.Both
                         var pos = posRes.Data
                             .FirstOrDefault(p =>
-                                p.Symbol == symbol &&
+                                p.Symbol == signal.Symbol &&
                                 p.PositionSide == posSide &&
                                 p.Quantity != 0m);
 
                         if (pos != null)
                         {
                             var qty = Math.Abs(pos.Quantity);
-                            var entry = pos.EntryPrice > 0 ? pos.EntryPrice : fallbackEntry;
+                            var entry = pos.EntryPrice > 0 ? pos.EntryPrice : avgPrice;
 
                             _logger.LogInformation(
                                 "[ORDER][{symbol}] Position detected: side={side}, qty={qty}, entry={entry}",
-                                symbol, posSide, qty, entry);
+                                signal.Symbol, posSide, qty, entry);
 
-                            return (true, entry, qty);
+                            return (true, entry, qty, "PositionOpened");
                         }
                     }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "[ORDER][{symbol}] Error polling position info", symbol);
-                }
 
-                await Task.Delay(delayMs, ct);
-            }
-
-            // После ожидания позиции всё ещё нет → проверим сам ордер
-            try
-            {
-                var ordRes = await client.UsdFuturesApi.Trading.GetOrderAsync(symbol, entryOrderId, ct: ct);
-                if (ordRes.Success && ordRes.Data != null)
-                {
-                    var st = ordRes.Data.Status;
-                    _logger.LogWarning("[ORDER][{symbol}] Order status after wait: {st}", symbol, st);
-
-                    if (st == OrderStatus.Filled || st == OrderStatus.PartiallyFilled)
+                    // ---- 3) Проверка "цена улетела" (только если вообще не fill'ился) ----
+                    if (lastExecuted <= 0)
                     {
-                        // safety: ещё раз пробуем найти позицию
                         try
                         {
-                            var posRes2 = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, null, ct);
-                            if (posRes2.Success && posRes2.Data != null)
+                            var priceRes = await client.UsdFuturesApi.ExchangeData.GetPriceAsync(signal.Symbol, ct: ct);
+                            if (priceRes.Success && priceRes.Data != null && priceRes.Data.Price > 0)
                             {
-                                var pos2 = posRes2.Data
-                                    .FirstOrDefault(p =>
-                                        p.Symbol == symbol &&
-                                        p.PositionSide == posSide &&
-                                        p.Quantity != 0m);
+                                var mark = priceRes.Data.Price;
+                                decimal diffPct = 0m;
 
-                                if (pos2 != null)
+                                if (posSide == PositionSide.Long)
                                 {
-                                    var qty2 = Math.Abs(pos2.Quantity);
-                                    var entry2 = pos2.EntryPrice > 0 ? pos2.EntryPrice : fallbackEntry;
+                                    diffPct = (mark - fallbackEntry) / fallbackEntry;
+                                    if (diffPct >= maxSlipPct)
+                                    {
+                                        _logger.LogWarning(
+                                            "[ORDER][{symbol}] PRICE RUN AWAY (LONG): entry={e}, mark={m}, diff={d:P2}",
+                                            signal.Symbol, fallbackEntry, mark, diffPct);
 
-                                    _logger.LogInformation(
-                                        "[ORDER][{symbol}] Position detected AFTER wait: side={side}, qty={qty}, entry={entry}",
-                                        symbol, posSide, qty2, entry2);
+                                        try
+                                        {
+                                            await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, entryOrderId, ct: ct);
+                                        }
+                                        catch { }
 
-                                    return (true, entry2, qty2);
+                                        return (false, 0m, 0m, "PriceRunAway");
+                                    }
+                                }
+                                else // Short
+                                {
+                                    diffPct = (fallbackEntry - mark) / fallbackEntry;
+                                    if (diffPct >= maxSlipPct)
+                                    {
+                                        _logger.LogWarning(
+                                            "[ORDER][{symbol}] PRICE RUN AWAY (SHORT): entry={e}, mark={m}, diff={d:P2}",
+                                            signal.Symbol, fallbackEntry, mark, diffPct);
+
+                                        try
+                                        {
+                                            await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, entryOrderId, ct: ct);
+                                        }
+                                        catch { }
+
+                                        return (false, 0m, 0m, "PriceRunAway");
+                                    }
                                 }
                             }
                         }
-                        catch (Exception ex2)
+                        catch (Exception exPrice)
                         {
-                            _logger.LogWarning(ex2, "[ORDER][{symbol}] Error polling position after order filled", symbol);
+                            _logger.LogWarning(exPrice, "[ORDER][{symbol}] Error reading mark price", signal.Symbol);
                         }
                     }
+
+                    await Task.Delay(delayMs, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[ORDER][{symbol}] Error in WaitForPositionOrOrder loop", signal.Symbol);
+                    await Task.Delay(delayMs, ct);
                 }
             }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[ORDER][{symbol}] Error reading order after wait", symbol);
-            }
 
-            // Позиции нет → отменяем ордер и считаем, что вход НЕ состоялся
+            // ---- 4) После цикла ещё раз проверяем ордер + позицию ----
             try
             {
-                await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, entryOrderId, ct: ct);
-            }
-            catch { }
+                var ordRes = await client.UsdFuturesApi.Trading.GetOrderAsync(signal.Symbol, entryOrderId, ct: ct);
+                OrderStatus? status = null;
+                decimal executedQty = 0m;
+                decimal avgPrice = fallbackEntry;
 
-            return (false, 0m, 0m);
+                if (ordRes.Success && ordRes.Data != null)
+                {
+                    status = ordRes.Data.Status;
+                    executedQty = ordRes.Data.QuantityFilled;
+
+                    avgPrice = ordRes.Data.AveragePrice > 0
+                        ? ordRes.Data.AveragePrice 
+                        : fallbackEntry;
+
+                    _logger.LogWarning(
+                        "[ORDER][{symbol}] After wait: status={st}, exec={exec}",
+                        signal.Symbol, status, executedQty);
+                }
+
+                var posRes = await client.UsdFuturesApi.Account.GetPositionInformationAsync(signal.Symbol, null, ct);
+                if (posRes.Success && posRes.Data != null)
+                {
+                    var pos = posRes.Data
+                        .FirstOrDefault(p =>
+                            p.Symbol == signal.Symbol &&
+                            p.PositionSide == posSide &&
+                            p.Quantity != 0m);
+
+                    if (pos != null)
+                    {
+                        var qty = Math.Abs(pos.Quantity);
+                        var entry = pos.EntryPrice > 0 ? pos.EntryPrice : avgPrice;
+
+                        _logger.LogInformation(
+                            "[ORDER][{symbol}] Position detected AFTER wait: side={side}, qty={qty}, entry={entry}",
+                            signal.Symbol, posSide, qty, entry);
+
+                        return (true, entry, qty, "PositionOpenedAfterWait");
+                    }
+                }
+
+                // Если сюда дошли → позиции нет
+                try
+                {
+                    await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, entryOrderId, ct: ct);
+                }
+                catch { }
+
+                if (executedQty > 0)
+                {
+                    // Теоретически позиция может появиться позже, но мы сделали всё возможное.
+                    _logger.LogError(
+                        "[ORDER][{symbol}] EXECUTED QTY > 0, но позиция не обнаружена. entry={e}, exec={exec}",
+                        signal.Symbol, avgPrice, executedQty);
+                    return (false, 0m, 0m, "OrderExecutedButNoPosition");
+                }
+
+                return (false, 0m, 0m, "TimeoutNoFill");
+            }
+            catch (Exception exFinal)
+            {
+                _logger.LogError(exFinal, "[ORDER][{symbol}] Fatal in WaitForPositionOrOrderAsync", signal.Symbol);
+                return (false, 0m, 0m, "WaitFatalError");
+            }
         }
 
         // =====================================================================
@@ -375,8 +495,5 @@ namespace VertexAutoTradeBinance8.Services
         {
             return Math.Round(value / tick) * tick;
         }
-
-
-
     }
 }
