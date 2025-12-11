@@ -143,19 +143,13 @@ namespace VertexAutoTradeBinance8
             {
                 await RunQuantRealtimeTick(ct);
 
-
-
-
                 foreach (var symbol in _symbols.ActiveSymbols)
                 {
                     var m1 = await _market.GetMarketSnapshot(symbol, KlineInterval.OneMinute, ct);
                     var m5 = await _market.GetMarketSnapshot(symbol, KlineInterval.FiveMinutes, ct);
 
                     if (m1 == null || m5 == null)
-                    {
-                        ConsoleSymbolTableFormatter.UpdateTf(symbol, KlineInterval.OneMinute, "❌", "No snapshots");
                         continue;
-                    }
 
                     var decision = _tfSelector.SelectTF(m1, m5);
 
@@ -168,45 +162,21 @@ namespace VertexAutoTradeBinance8
                     };
 
                     if (finalTf == null)
-                    {
-                        ConsoleSymbolTableFormatter.UpdateTf(symbol, KlineInterval.OneMinute, "❌", "TF=None");
                         continue;
-                    }
 
-                    try
-                    {
-                        await ProcessSymbol(symbol, finalTf.Value, ct);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "ML-TF error for {symbol}", symbol);
-                    }
-                    try
-                    {
-                        await ProcessSymbol(symbol, finalTf.Value, ct);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "ML-TF error for {symbol}", symbol);
-                    }
+                    // --- 1) Обработка сигнала
+                    await ProcessSymbol(symbol, finalTf.Value, ct);
 
-                    // === ENGINE STATE SNAPSHOT ДЛЯ UI ===
-                    try
-                    {
-                        // Builder сам берёт все последние значения из Risk / Strategy / Liquidity / Regime
-                        var engineState = _engineState.Build(
-                            symbol: symbol,
-                            timeframe: finalTf.Value.ToString());
+                    // --- 2) SUPERVISOR (ставит SL/TP на ВСЕ открытые позиции)
+                    await _supervisor.SuperviseAsync(symbol, null, ct);
 
-                        _engineStateSnapshot.Save(engineState);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "[ENGINE_STATE] snapshot build/save failed for {symbol}", symbol);
-                    }
+                    // --- 3) Engine state (UI)
+                    var engineState = _engineState.Build(symbol, finalTf.Value.ToString());
+                    _engineStateSnapshot.Save(engineState);
 
-                    await Task.Delay(25, ct); 
+                    await Task.Delay(25, ct);
                 }
+
 
                 await PeriodicSnapshot(ct);
                 await Task.Delay(80, ct);
