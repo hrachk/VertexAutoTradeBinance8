@@ -1,9 +1,9 @@
 // ============================================================================
-// ORDER EXECUTOR v6.6 — QUANT-GRADE ENTRY MODULE
+// ORDER EXECUTOR v6.6 — QUANT-GRADE ENTRY MODULE (Variant B Fix)
 // - ENTRY: Limit / Market
 // - WAIT-FILL: до открытия позиции
-// - SL: STOP-LIMIT  (reduceOnly=true)
-// - TP: LIMIT        (reduceOnly=true)
+// - SL: STOP (workingType = Mark, БЕЗ reduceOnly → чтобы не ловить -1106)
+// - TP: TAKE-PROFIT (workingType = Mark, БЕЗ reduceOnly, создаём только если tp > 0)
 // - Корректные tickSize / stepSize округления
 // - Интеграция с AiStopLossOptimizer dynamic RR
 // - Абсолютная совместимость с Supervisor v6.1
@@ -25,12 +25,15 @@ namespace VertexAutoTradeBinance8.Services
         private readonly MarketDataService _marketData;
         private readonly AiMarketRegimeService _marketRegimeService;
         private readonly SmartRegimeService _smartRegime;
+
         public OrderExecutor(
             ILogger<OrderExecutor> logger,
             BinanceClientFactory factory,
             SymbolInfoService symbolInfo,
             SimulatedTradeService simulator,
-            ExecutedSignalService executedSignalService, MarketDataService marketData, AiMarketRegimeService marketRegimeService,
+            ExecutedSignalService executedSignalService,
+            MarketDataService marketData,
+            AiMarketRegimeService marketRegimeService,
             SmartRegimeService smartRegime)
         {
             _logger = logger;
@@ -65,15 +68,11 @@ namespace VertexAutoTradeBinance8.Services
                 await _simulator.SimulateMissedTradeAsync(signal, "QuantityTooSmall");
                 return OrderResult.Fail("Quantity too small");
             }
-            // ===================================================================
-            // 0) LOG: SignalCreated → UI "Executed Trades"
-            // ===================================================================
 
             var side = signal.Side == SignalSide.Buy ? OrderSide.Buy : OrderSide.Sell;
             var posSide = signal.Side == SignalSide.Buy ? PositionSide.Long : PositionSide.Short;
 
             decimal entryPrice = Round(signal.EntryPrice, tick);
-
 
             // =============================================================
             // 0) Get Market Regime + Smart Regime for UI / analytics
@@ -94,7 +93,6 @@ namespace VertexAutoTradeBinance8.Services
             // =============================================================
             // 1) LOG: AddSignalCreated()
             // =============================================================
-        
             decimal notional = quantity * signal.EntryPrice;
 
             var execRecord = _executedSignalService.AddSignalCreated(
@@ -107,7 +105,6 @@ namespace VertexAutoTradeBinance8.Services
                 notional,
                 $"AiRisk={aiRisk:F2}"
             );
-
 
             // =====================================================================
             // 1) ENTRY (LIMIT) — НИКАКИХ reduceOnly
@@ -137,14 +134,13 @@ namespace VertexAutoTradeBinance8.Services
             _logger.LogInformation("[ORDER][{symbol}] ENTRY OK: id={id}, price={price}, qty={qty}",
                 signal.Symbol, entryOrderId, entryPrice, quantity);
 
-
             _executedSignalService.UpdateStatus(
-    symbol: signal.Symbol, DateTime.UtcNow,
-    status: TradeExecutionStatus.OrderCreated,
-    qty: quantity,
-    notional: quantity * entryPrice
-);
-
+                symbol: signal.Symbol,
+                time: DateTime.UtcNow,
+                status: TradeExecutionStatus.OrderCreated,
+                qty: quantity,
+                notional: quantity * entryPrice
+            );
 
             // =====================================================================
             // 2) WAIT-FILL — ждем, пока позиция реально откроется
@@ -165,13 +161,13 @@ namespace VertexAutoTradeBinance8.Services
             _logger.LogInformation("[ORDER][{symbol}] ENTRY FILLED AT {price}", signal.Symbol, entryPrice);
 
             _executedSignalService.UpdateStatus(
-    signal.Symbol,
-    DateTime.UtcNow,
-    TradeExecutionStatus.PositionOpened,
-    qty: quantity,
-    notional: quantity * entryPrice,
-       entryPrice
-);
+                signal.Symbol,
+                DateTime.UtcNow,
+                TradeExecutionStatus.PositionOpened,
+                qty: quantity,
+                notional: quantity * entryPrice,
+                entryPrice
+            );
 
             // =====================================================================
             // 3) COMPUTE DYNAMIC SL/TP (ATR, trend, volatility)
@@ -182,10 +178,9 @@ namespace VertexAutoTradeBinance8.Services
 
             if (atr > 0)
             {
-                // Dynamic SL from trade signal (AiStopLossOptimizer already updated)
+                // Dynamic SL/TP from trade signal (AiStopLossOptimizer уже всё посчитал)
                 sl = Round(sl, tick);
 
-                // Dynamic TP (RR based)
                 if (tp > 0)
                     tp = Round(tp, tick);
             }
@@ -195,7 +190,7 @@ namespace VertexAutoTradeBinance8.Services
                 signal.Symbol, sl, tp, quantity);
 
             // =====================================================================
-            // 4) CREATE SL (STOP-LIMIT)
+            // 4) CREATE SL (STOP) — БЕЗ reduceOnly, но с workingType = Mark
             // =====================================================================
             var slLimit = posSide == PositionSide.Long ? sl - tick : sl + tick;
             slLimit = Round(slLimit, tick);
@@ -207,14 +202,16 @@ namespace VertexAutoTradeBinance8.Services
                 quantity: quantity,
                 price: slLimit,
                 stopPrice: sl,
-                reduceOnly: true,
                 positionSide: posSide,
+                workingType: WorkingType.Mark,
                 timeInForce: TimeInForce.GoodTillCanceled,
                 ct: ct);
 
             if (!slOrder.Success)
             {
                 _logger.LogError("[ORDER][{symbol}] SL CREATE ERROR: {err}", signal.Symbol, slOrder.Error);
+                // Здесь можно дополнительно триггерить emergency-логикy Supervisor,
+                // но для Variant B достаточно, что не ломаем дальше.
                 return OrderResult.Fail("SL_CREATE_ERROR");
             }
 
@@ -222,27 +219,37 @@ namespace VertexAutoTradeBinance8.Services
                 signal.Symbol, sl, slLimit);
 
             // =====================================================================
-            // 5) CREATE TP (LIMIT)
+            // 5) CREATE TP (TAKE-PROFIT) — только если tp > 0
             // =====================================================================
-            var tpOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol: signal.Symbol,
-                side: side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy,
-                type: FuturesOrderType.TakeProfit,
-                quantity: quantity,
-                price: tp,
-                stopPrice: null,
-                reduceOnly: true,
-                positionSide: posSide,
-                timeInForce: TimeInForce.GoodTillCanceled,
-                ct: ct);
-
-            if (!tpOrder.Success)
+            if (tp <= 0)
             {
-                _logger.LogError("[ORDER][{symbol}] TP CREATE ERROR: {err}", signal.Symbol, tpOrder.Error);
-                return OrderResult.Fail("TP_CREATE_ERROR");
+                _logger.LogWarning(
+                    "[ORDER][{symbol}] TP is not set (tp <= 0) → работаем только со SL.",
+                    signal.Symbol);
             }
+            else
+            {
+                var tpOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol: signal.Symbol,
+                    side: side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy,
+                    type: FuturesOrderType.TakeProfit,
+                    quantity: quantity,
+                    price: tp,
+                    stopPrice: tp,
+                    positionSide: posSide,
+                    workingType: WorkingType.Mark,
+                    timeInForce: TimeInForce.GoodTillCanceled,
+                    ct: ct);
 
-            _logger.LogInformation("[ORDER][{symbol}] TP OK: price={tp}", signal.Symbol, tp);
+                if (!tpOrder.Success)
+                {
+                    _logger.LogError("[ORDER][{symbol}] TP CREATE ERROR: {err}", signal.Symbol, tpOrder.Error);
+                    // Позиция хотя бы со SL, поэтому не паника, но фиксируем ошибку.
+                    return OrderResult.Fail("TP_CREATE_ERROR");
+                }
+
+                _logger.LogInformation("[ORDER][{symbol}] TP OK: price={tp}", signal.Symbol, tp);
+            }
 
             return OrderResult.Successs(entryPrice, quantity, entryOrderId);
         }
@@ -257,7 +264,7 @@ namespace VertexAutoTradeBinance8.Services
             decimal fallbackPrice,
             CancellationToken ct)
         {
-            for (int i = 0; i < 60; i++) // 15 секунд максимум
+            for (int i = 0; i < 60; i++) // ~15 секунд максимум
             {
                 ct.ThrowIfCancellationRequested();
 
