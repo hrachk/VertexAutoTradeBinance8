@@ -10,12 +10,13 @@
 // - НИКАКОГО тупого догоняния монеты
 // ============================================================================
 
+using Binance.Net.Clients;
+using Binance.Net.Enums;
+using Binance.Net.Objects.Models.Futures;
 using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Binance.Net.Clients;
-using Binance.Net.Enums;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -30,6 +31,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly MarketDataService _marketData;
         private readonly AiMarketRegimeService _marketRegimeService;
         private readonly SmartRegimeService _smartRegime;
+        private readonly LiquidityGuardService _liquidityGuard;
 
         public OrderExecutor(
             ILogger<OrderExecutor> logger,
@@ -39,7 +41,8 @@ namespace VertexAutoTradeBinance8.Services
             ExecutedSignalService executedSignalService,
             MarketDataService marketData,
             AiMarketRegimeService marketRegimeService,
-            SmartRegimeService smartRegime)
+            SmartRegimeService smartRegime,
+            LiquidityGuardService liquidityGuard)
         {
             _logger = logger;
             _factory = factory;
@@ -49,15 +52,16 @@ namespace VertexAutoTradeBinance8.Services
             _marketData = marketData;
             _marketRegimeService = marketRegimeService;
             _smartRegime = smartRegime;
+            _liquidityGuard = liquidityGuard;
         }
 
         // =====================================================================
         // MAIN ENTRY
         // =====================================================================
         public async Task<OrderResult> ExecuteAsync(
-            TradeSignal signal,
-            decimal quantity,
-            CancellationToken ct = default)
+     TradeSignal signal,
+     decimal quantity,
+     CancellationToken ct = default)
         {
             using var client = _factory.CreateRestClient();
 
@@ -84,6 +88,81 @@ namespace VertexAutoTradeBinance8.Services
             var klines = await _marketData.GetKlines(signal.Symbol, KlineInterval.FiveMinutes, 200);
             var baseReg = _marketRegimeService.DetectRegime(signal.Symbol, KlineInterval.FiveMinutes, klines);
             var smart = _smartRegime.Evaluate(signal.Symbol, KlineInterval.FiveMinutes, klines);
+
+            // =====================================================================
+            // MARKET ENTRY HARD FILTER (FINAL)  (ONLY ADD / FIX, NO LOGIC BREAK)
+            // =====================================================================
+
+            // 1) SmartStrongTrend
+            bool isSmartStrongTrend =
+                smart.BaseRegime == MarketRegime.StrongUpTrend ||
+                smart.BaseRegime == MarketRegime.StrongDownTrend;
+
+            // 2) Impulse
+            bool hasImpulse = IsImpulse(klines, signal.Atr ?? 0m);
+
+            // 3) RR CHECK
+            decimal rr = 0m;
+            if (signal.StopLoss > 0 && signal.TakeProfit.HasValue)
+            {
+                var risk = Math.Abs(signal.EntryPrice - signal.StopLoss);
+                var reward = Math.Abs(signal.TakeProfit.Value - signal.EntryPrice);
+                if (risk > 0)
+                    rr = reward / risk;
+            }
+
+            const decimal MIN_MARKET_RR = 1.8m;
+            bool rrOk = rr >= MIN_MARKET_RR;
+
+            // 4) LiquidityGuard (REAL API)  ✅
+            //    Никаких IsDanger/IsSymbolBlocked — у тебя есть только Analyze(...)
+            LiquidityGuardResult liquidityResult;
+            try
+            {
+                liquidityResult = _liquidityGuard.Analyze(
+                    signal.Symbol,
+                    KlineInterval.FiveMinutes,
+                    klines,
+                    signal.Side,
+                    superSignal: false
+                );
+            }
+            catch (Exception ex)
+            {
+                // fail-safe: если LiquidityGuard упал — не блокируем market-only по ошибке сервиса
+                _logger.LogWarning(ex, "[LiquidityGuard] Analyze failed → fail-safe allow");
+                liquidityResult = new LiquidityGuardResult(false, LiquidityGuardReason.None, "AnalyzeFailed");
+            }
+
+            bool liquiditySafe = !liquidityResult.Block;
+
+            // === FINAL DECISION ===
+            bool allowMarketEntry =
+                isSmartStrongTrend &&
+                smart.AllowAggressiveTrendEntries &&
+                hasImpulse &&
+                rrOk &&
+                liquiditySafe;
+
+            if (allowMarketEntry)
+            {
+                _logger.LogWarning(
+                    "[ORDER][{symbol}] MARKET ENTRY ENABLED | SmartStrongTrend + Impulse | RR={rr:F2} | Liquidity=OK",
+                    signal.Symbol, rr
+                );
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "[ORDER][{symbol}] MARKET ENTRY BLOCKED | trend={trend} impulse={imp} rr={rr:F2} liquidityBlock={block} reason={reason}",
+                    signal.Symbol,
+                    smart.BaseRegime,
+                    hasImpulse,
+                    rr,
+                    liquidityResult.Block,
+                    liquidityResult.Reason
+                );
+            }
 
             var volatility = baseReg.VolatilityPercent;
             var slope = baseReg.TrendSlopePercent;
@@ -113,12 +192,12 @@ namespace VertexAutoTradeBinance8.Services
             var entryRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: signal.Symbol,
                 side: side,
-                type: FuturesOrderType.Limit,
+                type: allowMarketEntry ? FuturesOrderType.Market : FuturesOrderType.Limit,
                 quantity: quantity,
-                price: entryPrice,
+                price: allowMarketEntry ? null : entryPrice,
                 positionSide: posSide,
                 workingType: WorkingType.Mark,
-                timeInForce: TimeInForce.GoodTillCanceled,
+                timeInForce: allowMarketEntry ? null : TimeInForce.GoodTillCanceled,
                 ct: ct);
 
             if (!entryRes.Success || entryRes.Data == null)
@@ -194,7 +273,14 @@ namespace VertexAutoTradeBinance8.Services
             // =====================================================================
             decimal atr = signal.Atr ?? 0;
             decimal sl = signal.StopLoss;
+
+            // --- TP FIX ---
+            // 1) основной TP
             decimal tp = signal.TakeProfit ?? 0;
+
+            // 2) fallback из TakeProfits[]
+            if (tp <= 0 && signal.TakeProfits != null && signal.TakeProfits.Count > 0)
+                tp = signal.TakeProfits[0];
 
             if (atr > 0)
             {
@@ -220,7 +306,7 @@ namespace VertexAutoTradeBinance8.Services
                 quantity: quantity,
                 price: slLimit,
                 stopPrice: sl,
-                reduceOnly: true,
+               // reduceOnly: true,
                 positionSide: posSide,
                 timeInForce: TimeInForce.GoodTillCanceled,
                 ct: ct);
@@ -236,19 +322,27 @@ namespace VertexAutoTradeBinance8.Services
                 signal.Symbol, sl, slLimit);
 
             // =====================================================================
-            // 5) CREATE TP (LIMIT, reduceOnly=true)
+            // 5) CREATE TP (TAKE_PROFIT_MARKET) — STABLE BINANCE FUTURES
             // =====================================================================
             if (tp > 0)
             {
+                // защита от instant-trigger
+                if (posSide == PositionSide.Long && tp <= entryPrice)
+                    tp = entryPrice + tick * 3;
+
+                if (posSide == PositionSide.Short && tp >= entryPrice)
+                    tp = entryPrice - tick * 3;
+
+                tp = Round(tp, tick);
+
                 var tpOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: signal.Symbol,
                     side: side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy,
-                    type: FuturesOrderType.TakeProfit,
+                    type: FuturesOrderType.TakeProfitMarket,
                     quantity: quantity,
-                    price: tp,
-                    stopPrice: null,
-                    reduceOnly: true,
+                    stopPrice: tp,                  // ← ВАЖНО
                     positionSide: posSide,
+                    workingType: WorkingType.Mark,
                     timeInForce: TimeInForce.GoodTillCanceled,
                     ct: ct);
 
@@ -259,15 +353,22 @@ namespace VertexAutoTradeBinance8.Services
                     return OrderResult.Fail("TP_CREATE_ERROR");
                 }
 
-                _logger.LogInformation("[ORDER][{symbol}] TP OK: price={tp}", signal.Symbol, tp);
+                _logger.LogInformation(
+                    "[ORDER][{symbol}] TP OK (MARKET): trigger={tp}",
+                    signal.Symbol, tp);
             }
             else
             {
-                _logger.LogWarning("[ORDER][{symbol}] TP not set (tp=0) — защищаем только SL", signal.Symbol);
+                _logger.LogWarning(
+                    "[ORDER][{symbol}] TP not set (tp=0) — SL only, Supervisor will handle",
+                    signal.Symbol);
             }
+
+
 
             return OrderResult.Successs(entryPrice, quantity, entryOrderId);
         }
+
 
         // =====================================================================
         // WAIT FOR POSITION or ORDER FILL (dual-track)
@@ -281,11 +382,16 @@ namespace VertexAutoTradeBinance8.Services
             decimal requestedQty,
             CancellationToken ct)
         {
+            
             const int maxLoops = 60;           // 60 * 500ms ~ 30s
             const int delayMs = 500;
             const decimal maxSlipPct = 0.004m; // 0.4% допуск до "улетела цена"
 
             decimal lastExecuted = 0m;
+            bool runawayLogged = false; // чтобы не спамить в логах
+
+
+
 
             for (int i = 0; i < maxLoops; i++)
             {
@@ -356,6 +462,7 @@ namespace VertexAutoTradeBinance8.Services
                     }
 
                     // ---- 3) Проверка "цена улетела" (только если вообще не fill'ился) ----
+                    // ---- 3) Проверка "цена улетела" — НЕ ФАТАЛ, НЕ CANCEL ----
                     if (lastExecuted <= 0)
                     {
                         try
@@ -364,42 +471,33 @@ namespace VertexAutoTradeBinance8.Services
                             if (priceRes.Success && priceRes.Data != null && priceRes.Data.Price > 0)
                             {
                                 var mark = priceRes.Data.Price;
-                                decimal diffPct = 0m;
+                                decimal diffPct;
 
                                 if (posSide == PositionSide.Long)
                                 {
                                     diffPct = (mark - fallbackEntry) / fallbackEntry;
-                                    if (diffPct >= maxSlipPct)
+                                    if (diffPct >= maxSlipPct && !runawayLogged)
                                     {
+                                        runawayLogged = true;
                                         _logger.LogWarning(
-                                            "[ORDER][{symbol}] PRICE RUN AWAY (LONG): entry={e}, mark={m}, diff={d:P2}",
+                                            "[ORDER][{symbol}] PRICE RUN AWAY (LONG) → keep LIMIT alive: entry={e}, mark={m}, diff={d:P2}",
                                             signal.Symbol, fallbackEntry, mark, diffPct);
 
-                                        try
-                                        {
-                                            await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, entryOrderId, ct: ct);
-                                        }
-                                        catch { }
-
-                                        return (false, 0m, 0m, "PriceRunAway");
+                                        // ВАЖНО:
+                                        // ❌ НЕ отменяем ордер
+                                        // ❌ НЕ возвращаем FAIL
+                                        // ✔ просто ждём дальше
                                     }
                                 }
                                 else // Short
                                 {
                                     diffPct = (fallbackEntry - mark) / fallbackEntry;
-                                    if (diffPct >= maxSlipPct)
+                                    if (diffPct >= maxSlipPct && !runawayLogged)
                                     {
+                                        runawayLogged = true;
                                         _logger.LogWarning(
-                                            "[ORDER][{symbol}] PRICE RUN AWAY (SHORT): entry={e}, mark={m}, diff={d:P2}",
+                                            "[ORDER][{symbol}] PRICE RUN AWAY (SHORT) → keep LIMIT alive: entry={e}, mark={m}, diff={d:P2}",
                                             signal.Symbol, fallbackEntry, mark, diffPct);
-
-                                        try
-                                        {
-                                            await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, entryOrderId, ct: ct);
-                                        }
-                                        catch { }
-
-                                        return (false, 0m, 0m, "PriceRunAway");
                                     }
                                 }
                             }
@@ -409,6 +507,7 @@ namespace VertexAutoTradeBinance8.Services
                             _logger.LogWarning(exPrice, "[ORDER][{symbol}] Error reading mark price", signal.Symbol);
                         }
                     }
+
 
                     await Task.Delay(delayMs, ct);
                 }
@@ -494,6 +593,21 @@ namespace VertexAutoTradeBinance8.Services
         private static decimal Round(decimal value, decimal tick)
         {
             return Math.Round(value / tick) * tick;
+        }
+
+        private static bool IsImpulse(
+    IReadOnlyList<BinanceFuturesUsdtKline> klines,
+    decimal atr,
+    decimal minBodyAtr = 0.8m) // можно тюнить
+        {
+            if (klines == null || klines.Count < 2 || atr <= 0)
+                return false;
+
+            var last = klines[^1];
+
+            var body = Math.Abs(last.ClosePrice - last.OpenPrice);
+
+            return body >= atr * minBodyAtr;
         }
     }
 }

@@ -10,11 +10,22 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
+        Environment.SetEnvironmentVariable(
+        "ASPNETCORE_ENVIRONMENT",
+        "Development"
+    );
+
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         Console.InputEncoding = System.Text.Encoding.UTF8;
-
+       
+   
 
         using IHost host = Host.CreateDefaultBuilder(args)
+             .ConfigureAppConfiguration((ctx, config) =>
+             {
+                 config.AddUserSecrets<Program>(optional: true);
+             })
+
             .ConfigureLogging(logging =>
             {
                 logging.ClearProviders();
@@ -27,6 +38,8 @@ public class Program
                 services.Configure<Configuration.TradingOptions>(ctx.Configuration.GetSection("TestMode"));
 
 
+                // 🔥 ОБЯЗАТЕЛЬНО
+                services.AddHttpClient();
 
                 services.AddSingleton<BinanceClientFactory>();
                 services.AddSingleton<MarketDataService>();
