@@ -1,15 +1,8 @@
-﻿// ============================================================================
-// PositionSupervisorService v6.6 (QUANT-REALTIME MAX, SAFE TP/SL + Dynamic Trend Hold)
-// - Контроль Long / Short / Both
-// - Авто-ремонт SL/TP
-// - Многоуровневый трейлинг (ATR + EMA + SuperTrend + micro-structure)
-// - Динамический "HOLD" при сильном тренде (не затягиваем SL слишком рано)
-// - Безопасная защита от -2021 (order would immediately trigger)
-// - Manual + AI позиции (через ManualPositionHandler)
-// - QUANT-LEARN: фикс закрытий
-// - v6.5: TP = LIMIT reduceOnly, Supervisor видит TP-LIMIT
-// ============================================================================
-
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Binance.Net.Clients;
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
@@ -19,6 +12,19 @@ using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
 {
+    /// <summary>
+    /// PositionSupervisorService v7.3 (ALGO FULL MODE, QUANT-REALTIME MAX)
+    ///
+    /// - Контроль Long / Short / Both
+    /// - Авто-ремонт SL/TP (в т.ч. для МАНУАЛЬНЫХ поз)
+    /// - Многоуровневый трейлинг (ATR + EMA + SuperTrend + micro-structure)
+    /// - Динамический "HOLD" при сильном тренде (не тянем SL слишком рано)
+    /// - Безопасная защита от -2021 (order would immediately trigger)
+    /// - Manual + AI позиции (через ManualPositionHandler)
+    /// - QUANT-LEARN: фикс закрытий
+    /// - ВАЖНО: все SL/TP через STOP_MARKET / TAKE_PROFIT_MARKET
+    ///          (никаких STOP/TAKE_PROFIT, чтобы не ловить -4120 "use Algo API")
+    /// </summary>
     public class PositionSupervisorService
     {
         private readonly ILogger<PositionSupervisorService> _logger;
@@ -32,9 +38,7 @@ namespace VertexAutoTradeBinance8.Services
 
         private MarketRegime _regimeNow;
 
-        // --------------------------------------------------------------------
         // Внутренний уровень вероятности продолжения тренда
-        // --------------------------------------------------------------------
         private enum TrendContinuationLevel
         {
             Low,
@@ -42,16 +46,13 @@ namespace VertexAutoTradeBinance8.Services
             High
         }
 
-        // --------------------------------------------------------------------
         // Уровень "усталости" тренда (для TP exhaustion detector)
-        // --------------------------------------------------------------------
         private enum ExhaustionLevel
         {
             None = 0,
             Mild = 1,
             Strong = 2
         }
-
 
         public PositionSupervisorService(
             ILogger<PositionSupervisorService> logger,
@@ -75,78 +76,114 @@ namespace VertexAutoTradeBinance8.Services
             _regimeNow = MarketRegime.Range;
         }
 
-
+        // --------------------------------------------------------------------
+        // PATCH BLOCK: ручная проверка SL/TP для уже открытых позиций
+        // --------------------------------------------------------------------
         private async Task<bool> EnsureStopLossExists(
-      BinanceRestClient client,
-      string symbol,
-      BinancePositionDetailsUsdt pos,
-      decimal tick)
+            BinanceRestClient client,
+            string symbol,
+            BinancePositionDetailsUsdt pos,
+            decimal tick)
         {
+            var sideClose = pos.PositionSide == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
             var orders = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol);
-            bool hasSL = orders.Success && orders.Data.Any(o => o.Type == FuturesOrderType.Stop);
+            bool hasSL = orders.Success && orders.Data.Any(o =>
+                o.Side == sideClose &&
+                (o.Type == FuturesOrderType.StopMarket || o.Type == FuturesOrderType.Stop));
 
-            if (!hasSL)
+            if (hasSL)
+                return true;
+
+            decimal sl = pos.PositionSide == PositionSide.Long
+                ? pos.EntryPrice * 0.985m
+                : pos.EntryPrice * 1.015m;
+
+            sl = Math.Round(sl / tick) * tick;
+
+            try
             {
-                decimal sl = pos.PositionSide == PositionSide.Long
-                    ? pos.EntryPrice * 0.985m
-                    : pos.EntryPrice * 1.015m;
-
-                sl = Math.Round(sl / tick) * tick;
-
-                await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                // ВАЖНО: STOP_MARKET, БЕЗ reduceOnly, БЕЗ price (чистый stopPrice)
+                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: symbol,
-                    side: pos.PositionSide == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
-                    type: FuturesOrderType.Stop,
+                    side: sideClose,
+                    type: FuturesOrderType.StopMarket,
                     quantity: Math.Abs(pos.Quantity),
                     stopPrice: sl,
-                    reduceOnly: true,
                     positionSide: pos.PositionSide,
-                    timeInForce: TimeInForce.GoodTillCanceled
-                );
+                    workingType: WorkingType.Mark,
+                    timeInForce: TimeInForce.GoodTillCanceled);
 
-                return false; // SL был восстановлён
+                if (!res.Success)
+                {
+                    _logger.LogError(
+                        "[SUPERVISOR] ERROR Ensure SL create {symbol}: {err}",
+                        symbol, res.Error);
+                    return false;
+                }
+
+                _logger.LogWarning("[SUPERVISOR][{symbol}] MANUAL SL created @ {sl}", symbol, sl);
+                return false; // SL только что восстановили
             }
-
-            return true;
-        }
-
-
-        private async Task<bool> EnsureTakeProfitExists(
-     BinanceRestClient client,
-     string symbol,
-     BinancePositionDetailsUsdt pos,
-     decimal tick)
-        {
-            var orders = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol);
-            bool hasTP = orders.Success && orders.Data.Any(o => o.Type == FuturesOrderType.TakeProfit);
-
-            if (!hasTP)
+            catch (Exception ex)
             {
-                decimal tp = pos.PositionSide == PositionSide.Long
-                    ? pos.EntryPrice * 1.02m
-                    : pos.EntryPrice * 0.98m;
-
-                tp = Math.Round(tp / tick) * tick;
-
-                await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol: symbol,
-                    side: pos.PositionSide == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
-                    type: FuturesOrderType.TakeProfit,
-                    quantity: Math.Abs(pos.Quantity),
-                    price: tp,
-                    reduceOnly: true,
-                    positionSide: pos.PositionSide,
-                    timeInForce: TimeInForce.GoodTillCanceled
-                );
-
+                _logger.LogError(ex, "[SUPERVISOR] EX Ensure SL create {symbol}", symbol);
                 return false;
             }
-
-            return true;
         }
 
+        private async Task<bool> EnsureTakeProfitExists(
+            BinanceRestClient client,
+            string symbol,
+            BinancePositionDetailsUsdt pos,
+            decimal tick)
+        {
+            var sideClose = pos.PositionSide == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
+            var orders = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol);
+            bool hasTP = orders.Success && orders.Data.Any(o =>
+                o.Side == sideClose &&
+                (o.Type == FuturesOrderType.TakeProfitMarket || o.Type == FuturesOrderType.TakeProfit));
 
+            if (hasTP)
+                return true;
+
+            decimal tp = pos.PositionSide == PositionSide.Long
+                ? pos.EntryPrice * 1.02m
+                : pos.EntryPrice * 0.98m;
+
+            tp = Math.Round(tp / tick) * tick;
+
+            try
+            {
+                // ВАЖНО: TAKE_PROFIT_MARKET, без reduceOnly / price
+                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol: symbol,
+                    side: sideClose,
+                    type: FuturesOrderType.TakeProfitMarket,
+                    quantity: Math.Abs(pos.Quantity),
+                    stopPrice: tp,
+                    positionSide: pos.PositionSide,
+                    workingType: WorkingType.Mark,
+                    timeInForce: TimeInForce.GoodTillCanceled);
+
+                if (!res.Success)
+                {
+                    _logger.LogError(
+                        "[SUPERVISOR] ERROR Ensure TP create {symbol}: {err}",
+                        symbol, res.Error);
+                    return false;
+                }
+
+                _logger.LogWarning("[SUPERVISOR][{symbol}] MANUAL TP created @ {tp}", symbol, tp);
+                return false; // TP только что восстановили
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SUPERVISOR] EX Ensure TP create {symbol}", symbol);
+                return false;
+            }
+        }
 
         // =====================================================================
         // MAIN ENTRY
@@ -165,7 +202,7 @@ namespace VertexAutoTradeBinance8.Services
                     _logger.LogWarning("[MANUAL][{symbol}] Virtual signal injected", symbol);
                 }
             }
- 
+
             // 1) Load positions with retry
             var posInfo = await GetPositionsWithRetryAsync(client, symbol, ct);
             if (posInfo == null || !posInfo.Success || posInfo.Data == null)
@@ -174,25 +211,20 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-            // ============================================
-            // PATCH v1 — DETECT MANUAL POSITIONS
-            // ============================================
- 
- 
+            // PATCH: manual positions SL/TP ensure
             var posResult = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol);
-            var pos = posResult.Data?.FirstOrDefault();
+            var posForPatch = posResult.Data?.FirstOrDefault();
 
-            if (pos != null && pos.Quantity != 0)
+            if (posForPatch != null && posForPatch.Quantity != 0)
             {
-                _logger.LogInformation("[PATCH] Existing/manual position detected for {symbol}. Checking SL/TP…");
+                _logger.LogInformation("[PATCH] Existing/manual position detected for {symbol}. Checking SL/TP…", symbol);
 
                 var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-                var tick = filters.tickSize;
+                var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
 
-                await EnsureStopLossExists(client, symbol, pos, tick);
-                await EnsureTakeProfitExists(client, symbol, pos, tick);
+                await EnsureStopLossExists(client, symbol, posForPatch, tick);
+                await EnsureTakeProfitExists(client, symbol, posForPatch, tick);
             }
-
 
             var longPos = posInfo.Data.FirstOrDefault(p => p.PositionSide == PositionSide.Long);
             var shortPos = posInfo.Data.FirstOrDefault(p => p.PositionSide == PositionSide.Short);
@@ -284,33 +316,25 @@ namespace VertexAutoTradeBinance8.Services
         // HANDLE SIDE
         // =====================================================================
         private async Task HandleSideAsync(
-    BinanceRestClient client,
-    string symbol,
-    PositionSide side,
-    BinancePositionDetailsUsdt pos,
-    List<BinanceUsdFuturesOrder> allOrders,
-    TradeSignal? signal,
-    IReadOnlyList<BinanceFuturesUsdtKline>? klines,
-    CancellationToken ct)
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            BinancePositionDetailsUsdt pos,
+            List<BinanceUsdFuturesOrder> allOrders,
+            TradeSignal? signal,
+            IReadOnlyList<BinanceFuturesUsdtKline>? klines,
+            CancellationToken ct)
         {
             decimal qty = Math.Abs(pos.Quantity);
 
-
-            // ======================================================================
-            //  CLOSE DETECTOR v7.0  (WORKS WITH ManualPositionHandler)
-            // ======================================================================
-
-            // key = уникальный идентификатор позиции (symbol + side)
+            // ---------- CLOSE DETECTOR v7.1 ----------
             var key = $"{symbol}_{side}";
 
-            // берем прошлое состояние
             var prevQty = _manualHandler.GetPrevQty(key);
             var prevEntry = _manualHandler.GetPrevEntry(key);
 
-            // сохраняем новое состояние (чтобы в следующем цикле были данные)
             _manualHandler.SetPrevState(key, pos.Quantity, pos.EntryPrice);
 
-            // ЕСЛИ ПОЗИЦИЯ БЫЛА → СТАЛА = 0  → ЭТО ЗАКРЫТИЕ
             if (prevQty != 0 && pos.Quantity == 0)
             {
                 decimal exitPrice = pos.MarkPrice;
@@ -319,7 +343,6 @@ namespace VertexAutoTradeBinance8.Services
                     ? SignalSide.Buy
                     : SignalSide.Sell;
 
-                // фиксируем trade
                 _aiLearning.RecordTrade(
                     symbol,
                     sigSide,
@@ -333,11 +356,8 @@ namespace VertexAutoTradeBinance8.Services
                     symbol, prevEntry, exitPrice
                 );
 
-                return; // позиция закрыта — дальше нечего делать
+                return;
             }
-
-
-
 
             if (qty <= 0)
             {
@@ -345,20 +365,20 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-            var orders = allOrders.Where(o => o.PositionSide == side || o.PositionSide == PositionSide.Both).ToList();
+            var orders = allOrders
+                .Where(o => o.PositionSide == side || o.PositionSide == PositionSide.Both)
+                .ToList();
 
             var sl = orders.FirstOrDefault(o =>
                 o.Side == closeSide &&
-                (o.Type == FuturesOrderType.Stop || o.Type == FuturesOrderType.StopMarket));
+                (o.Type == FuturesOrderType.StopMarket || o.Type == FuturesOrderType.Stop));
 
-            // v6.5: TP может быть TakeProfit / TakeProfitMarket / Limit reduceOnly
             var tp = orders.FirstOrDefault(o =>
                 o.Side == closeSide &&
                 (
-                    o.Type == FuturesOrderType.TakeProfit ||
                     o.Type == FuturesOrderType.TakeProfitMarket ||
+                    o.Type == FuturesOrderType.TakeProfit ||
                     (o.Type == FuturesOrderType.Limit && o.ReduceOnly == true)
                 ));
 
@@ -366,7 +386,7 @@ namespace VertexAutoTradeBinance8.Services
             if (entry <= 0 && signal != null && signal.Symbol == symbol)
                 entry = signal.EntryPrice;
 
-            // 1) Missing SL - Creating Emergency SL
+            // 1) Missing SL
             if (sl == null)
             {
                 await CreateEmergencySLAsync(client, symbol, side, qty, entry, signal, ct);
@@ -374,7 +394,7 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-            // 2) Missing TP - Creating Emergency TP
+            // 2) Missing TP
             if (tp == null)
             {
                 await CreateEmergencyTPAsync(client, symbol, side, qty, entry, signal, ct);
@@ -382,32 +402,25 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-
-
-
-            // 3) Trailing Logic
+            // 3) Trailing + Runner
             if (klines != null && klines.Count >= 50)
             {
-                // NEW: dynamic TP runner-mode split
                 await ManageRunnerTpAsync(
                     client, symbol, side, qty, entry,
                     orders, signal, klines, ct);
 
-                // NEW: dynamic extension of Runner TP (TP2++)
                 await ManageRunnerTpExtensionAsync(
                     client, symbol, side, qty, entry,
                     signal, orders, klines, ct);
 
-                // original trailing SL
                 await MultiLayerTrailingAsync(
                     client, symbol, side, qty, entry,
                     signal, orders, klines, ct);
             }
-
         }
 
         // =====================================================================
-        // EMERGENCY SL
+        // EMERGENCY SL  (STOP_MARKET)
         // =====================================================================
         private async Task CreateEmergencySLAsync(
             BinanceRestClient client,
@@ -462,30 +475,35 @@ namespace VertexAutoTradeBinance8.Services
                     sl = mark + tick;
             }
 
-            decimal limit = side == PositionSide.Long ? sl - tick : sl + tick;
-
-            var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol,
-                side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
-                FuturesOrderType.Stop,
-                qty,
-                price: limit,
-                stopPrice: sl,
-                positionSide: side,
-                timeInForce: TimeInForce.GoodTillCanceled,
-                ct: ct);
-
-            if (!res.Success)
+            try
             {
-                _logger.LogError("[SUPERVISOR] ERROR SL create {symbol}: {err}", symbol, res.Error);
-                return;
-            }
+                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol,
+                    side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
+                    FuturesOrderType.StopMarket,
+                    qty,
+                    stopPrice: sl,
+                    positionSide: side,
+                    workingType: WorkingType.Mark,
+                    timeInForce: TimeInForce.GoodTillCanceled,
+                    ct: ct);
 
-            _logger.LogInformation("[SUPERVISOR] SL CREATED {symbol} sl={sl}", symbol, sl);
+                if (!res.Success)
+                {
+                    _logger.LogError("[SUPERVISOR] ERROR SL create {symbol}: {err}", symbol, res.Error);
+                    return;
+                }
+
+                _logger.LogInformation("[SUPERVISOR] SL CREATED {symbol} sl={sl}", symbol, sl);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SUPERVISOR] EX SL create {symbol}", symbol);
+            }
         }
 
         // =====================================================================
-        // EMERGENCY TP (v6.5: LIMIT reduceOnly + tickSize)
+        // EMERGENCY TP (TAKE_PROFIT_MARKET)
         // =====================================================================
         private async Task CreateEmergencyTPAsync(
             BinanceRestClient client,
@@ -528,30 +546,45 @@ namespace VertexAutoTradeBinance8.Services
 
             trigger = Math.Round(trigger / tick) * tick;
 
-            var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol,
-                side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
-                FuturesOrderType.Limit,
-                qty,
-                price: trigger,
-                positionSide: side,
-                reduceOnly: true,
-                timeInForce: TimeInForce.GoodTillCanceled,
-                ct: ct);
-
-            if (!res.Success)
+            // --- VALIDATE TP AGAINST ENTRY ---
+            if (side == PositionSide.Long)
             {
-                _logger.LogError("[SUPERVISOR] ERROR create TP {symbol}: {err}", symbol, res.Error);
-                return;
+                if (trigger <= entryPrice)
+                    trigger = entryPrice + tick * 3;
+            }
+            else
+            {
+                if (trigger >= entryPrice)
+                    trigger = entryPrice - tick * 3;
             }
 
-            _logger.LogInformation("[SUPERVISOR] TP CREATED {symbol} tp={tp}", symbol, trigger);
+            try
+            {
+                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol,
+                    side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
+                    FuturesOrderType.TakeProfitMarket,
+                    qty,
+                    stopPrice: trigger,
+                    positionSide: side,
+                    workingType: WorkingType.Mark,
+                    timeInForce: TimeInForce.GoodTillCanceled,
+                    ct: ct);
+
+                if (!res.Success)
+                {
+                    _logger.LogError("[SUPERVISOR] ERROR create TP {symbol}: {err}", symbol, res.Error);
+                    return;
+                }
+
+                _logger.LogInformation("[SUPERVISOR] TP CREATED {symbol} tp={tp}", symbol, trigger);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SUPERVISOR] EX create TP {symbol}", symbol);
+            }
         }
 
-
-        // =====================================================================
-        // RUNNER MODE — TP EXTENSION (Dynamic TP2 for runner 30%)
-        // =====================================================================
         // =====================================================================
         // RUNNER MODE — TP EXTENSION (Dynamic TP2 for runner 30%)
         // =====================================================================
@@ -571,7 +604,6 @@ namespace VertexAutoTradeBinance8.Services
 
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
-            // Находим runner TP (он qtyRunner = 30% — меньше половины)
             var runnerTp = orders.FirstOrDefault(o =>
                 o.Side == closeSide &&
                 o.Type == FuturesOrderType.Limit &&
@@ -589,34 +621,27 @@ namespace VertexAutoTradeBinance8.Services
             if (atr <= 0)
                 return;
 
-            // ---- 1) EXHAUSTION DETECTOR ----
             var exhaustion = DetectExhaustionLevel(side, entryPrice, atr, klines);
 
             if (exhaustion == ExhaustionLevel.Strong)
             {
-                // Сильно перегретый тренд → больше НЕ расширяем TP2,
-                // даём трейлинг-SL дотянуть позицию.
                 _logger.LogInformation(
                     "[RUNNER-EXT][{symbol}] Exhaustion STRONG → stop extending TP2 (runner stays, SL manages)",
                     symbol);
                 return;
             }
 
-            // ---- 2) LIQUIDITY SWEEP DETECTOR ----
             bool sweepInFavor = IsLiquiditySweepInFavor(side, klines);
             bool sweepAgainst = IsLiquiditySweepAgainst(side, klines);
 
             if (sweepAgainst)
             {
-                // Был сбор ликвидности ПРОТИВ нас: рынок может развернуться.
-                // Не наращиваем жадность, не двигаем TP2 выше.
                 _logger.LogInformation(
                     "[RUNNER-EXT][{symbol}] Liquidity sweep AGAINST position → skip TP2 extension",
                     symbol);
                 return;
             }
 
-            // ---- 3) Базовая сила тренда через EMA21/EMA55 ----
             var ema21 = CalculateEma(klines, 21);
             var ema55 = CalculateEma(klines, 55);
             if (ema21 <= 0 || ema55 <= 0)
@@ -629,7 +654,6 @@ namespace VertexAutoTradeBinance8.Services
             decimal swingHigh = recent.Max(k => k.HighPrice);
             decimal swingLow = recent.Min(k => k.LowPrice);
 
-            // ---- 4) Вычисляем базовый tpExt ----
             decimal baseTpExt;
 
             if (side == PositionSide.Long)
@@ -641,18 +665,15 @@ namespace VertexAutoTradeBinance8.Services
                 baseTpExt = swingLow - atr * 1.0m;
             }
 
-            // Добавляем влияние наклона EMA (только в сторону позиции)
             if (side == PositionSide.Long && emaUp && emaSlope > 0)
                 baseTpExt += emaSlope * 0.5m;
             else if (side == PositionSide.Short && !emaUp && emaSlope < 0)
-                baseTpExt += emaSlope * 0.5m; // emaSlope < 0, тут минус усилит TP ниже
+                baseTpExt += emaSlope * 0.5m;
 
-            // ---- 5) Корректируем TP по exhaustion / sweep in favor ----
             decimal tpExt = baseTpExt;
 
             if (exhaustion == ExhaustionLevel.Mild)
             {
-                // Лёгкая усталость: не слишком агрессивно
                 tpExt = side == PositionSide.Long
                     ? Math.Min(tpExt, lastPrice + atr * 1.2m)
                     : Math.Max(tpExt, lastPrice - atr * 1.2m);
@@ -660,16 +681,13 @@ namespace VertexAutoTradeBinance8.Services
 
             if (sweepInFavor && exhaustion == ExhaustionLevel.None)
             {
-                // Была охота за ликвидностью в НАШУ сторону и тренд не устал:
-                // можно чуть более жадно вытянуть TP2
                 if (side == PositionSide.Long)
                     tpExt += atr * 0.7m;
                 else
                     tpExt -= atr * 0.7m;
             }
 
-            // Runner TP никогда не уменьшается — только вверх (для лонга)
-            decimal currTp = runnerTp?.Price ?? runnerTp?.StopPrice ?? 0m;
+            decimal currTp = runnerTp.Price;
             if (currTp <= 0)
                 return;
 
@@ -678,8 +696,7 @@ namespace VertexAutoTradeBinance8.Services
             if (side == PositionSide.Short && tpExt >= currTp)
                 return;
 
-            // ---- 6) Обновляем TP LIMIT ----
-            await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, runnerTp?.Id, ct: ct);
+            await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, runnerTp.Id, ct: ct);
 
             var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol,
@@ -696,11 +713,8 @@ namespace VertexAutoTradeBinance8.Services
                 signal.Meta = new AiLearningTradeMeta();
 
             signal.Meta.Tp2Extensions.Add(tpExt);
-
-            // exhaustion & sweep states
             signal.Meta.ExhaustionDetected = exhaustion != ExhaustionLevel.None;
             signal.Meta.ExhaustionLevel = exhaustion.ToString();
-
             signal.Meta.SweepInFavor = sweepInFavor;
             signal.Meta.SweepAgainst = sweepAgainst;
 
@@ -715,10 +729,8 @@ namespace VertexAutoTradeBinance8.Services
                 symbol, currTp, tpExt, exhaustion, sweepInFavor);
         }
 
-
-
         // =====================================================================
-        // RUNNER MODE — TP1 (70%) FIX + RUNNER 30% (TRAIL UNTIL EXIT)
+        // RUNNER MODE — TP1 (70%) FIX + RUNNER 30%
         // =====================================================================
         private async Task ManageRunnerTpAsync(
             BinanceRestClient client,
@@ -736,17 +748,15 @@ namespace VertexAutoTradeBinance8.Services
 
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
-            // Ищем существующий TP (старый одинарный или LIMIT reduceOnly)
             var tpOrder = orders.FirstOrDefault(o =>
                 o.Side == closeSide &&
-                (o.Type == FuturesOrderType.TakeProfit ||
-                 o.Type == FuturesOrderType.TakeProfitMarket ||
+                (o.Type == FuturesOrderType.TakeProfitMarket ||
+                 o.Type == FuturesOrderType.TakeProfit ||
                  (o.Type == FuturesOrderType.Limit && o.ReduceOnly == true)));
 
             if (tpOrder == null)
                 return;
 
-            // Если TP уже разделён — ничего не делаем
             if (tpOrder.Quantity < qty * 0.99m)
                 return;
 
@@ -756,15 +766,12 @@ namespace VertexAutoTradeBinance8.Services
             if (qtyTp1 <= 0 || qtyRunner <= 0)
                 return;
 
-            // ЦЕНА TP1 — берём старый TP
-            decimal tp1Price = tpOrder?.Price ?? tpOrder?.StopPrice ?? 0m;
+            decimal tp1Price = tpOrder.Price > 0 ? tpOrder.Price : (tpOrder.StopPrice ?? 0m);
             if (tp1Price <= 0)
                 return;
 
-            // Отменяем старый TP
-            await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, tpOrder?.Id, ct: ct);
+            await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, tpOrder.Id, ct: ct);
 
-            // 1) СОЗДАЕМ TP1 (70%) — фиксируем прибыль
             var resTp1 = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol,
                 closeSide,
@@ -776,11 +783,11 @@ namespace VertexAutoTradeBinance8.Services
                 timeInForce: TimeInForce.GoodTillCanceled,
                 ct: ct);
 
-            signal.Meta = new AiLearningTradeMeta
+            signal.Meta ??= new AiLearningTradeMeta
             {
                 RunnerQty = qtyRunner,
                 Tp1Price = tp1Price,
-                Tp2Start = tp1Price // первая точка
+                Tp2Start = tp1Price
             };
 
             if (!resTp1.Success)
@@ -790,13 +797,8 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             _logger.LogInformation("[RUNNER][{symbol}] TP1 CREATED qty={q} price={p}", symbol, qtyTp1, tp1Price);
-
-            // 2) RUNNER (30%) — убираем TP, работаем только трейлинг-SL
-            // Реализовано автоматически: runner не имеет TP, и выйдет по trailing SL
             _logger.LogInformation("[RUNNER][{symbol}] Runner ACTIVE qty={q} — managed by trailing SL", symbol, qtyRunner);
         }
-
-
 
         // =====================================================================
         // MULTI-LAYER TRAILING + Dynamic Trend Hold
@@ -819,7 +821,7 @@ namespace VertexAutoTradeBinance8.Services
 
             var slOrder = orders.FirstOrDefault(o =>
                 o.Side == closeSide &&
-                (o.Type == FuturesOrderType.Stop || o.Type == FuturesOrderType.StopMarket));
+                (o.Type == FuturesOrderType.StopMarket || o.Type == FuturesOrderType.Stop));
 
             if (slOrder == null)
             {
@@ -837,13 +839,10 @@ namespace VertexAutoTradeBinance8.Services
             decimal atr = CalculateAtr(klines);
             if (atr <= 0) return;
 
-            // ---- NEW: оценка вероятности продолжения тренда ----
             var contLevel = EvaluateTrendContinuation(realSide, entryPrice, atr, klines);
 
             if (contLevel == TrendContinuationLevel.High)
             {
-                // Сильный тренд, цена уже далеко от входа → не трогаем SL,
-                // даём сделке "жить" и не затягиваем стоп слишком рано.
                 _logger.LogInformation(
                     "[SUPERVISOR] {symbol} {side}: trend continuation HIGH → trailing HOLD (keep SL as is)",
                     symbol, realSide);
@@ -885,20 +884,17 @@ namespace VertexAutoTradeBinance8.Services
                 signal, ct);
         }
 
-        // ---- Оценка вероятности продолжения тренда (очень лёгкий, безопасный фильтр) ----
         private TrendContinuationLevel EvaluateTrendContinuation(
             PositionSide side,
             decimal entryPrice,
             decimal atr,
             IReadOnlyList<BinanceFuturesUsdtKline> klines)
         {
-            // Если мало данных — обычный трейлинг
             if (klines.Count < 30 || atr <= 0)
                 return TrendContinuationLevel.Medium;
 
             var last = klines[^1];
 
-            // Берём цену N свечей назад для оценки импульса
             int lookback = Math.Min(20, klines.Count - 1);
             var past = klines[^lookback];
 
@@ -906,11 +902,8 @@ namespace VertexAutoTradeBinance8.Services
                 return TrendContinuationLevel.Medium;
 
             var movePct = (last.ClosePrice - past.ClosePrice) / past.ClosePrice;
-            var rr = Math.Abs(last.ClosePrice - entryPrice) / atr; // сколько ATR цена прошла от входа
+            var rr = Math.Abs(last.ClosePrice - entryPrice) / atr;
 
-            // Базовые пороги:
-            // rr >= 1.5  → цена прошла уже достаточно далеко от входа
-            // movePct ≥ 1–1.5 % за последние ~20 минут → сильный импульс
             if (side == PositionSide.Long)
             {
                 if (rr >= 1.5m && movePct >= 0.015m)
@@ -921,7 +914,7 @@ namespace VertexAutoTradeBinance8.Services
 
                 return TrendContinuationLevel.Low;
             }
-            else // Short
+            else
             {
                 if (rr >= 1.5m && movePct <= -0.015m)
                     return TrendContinuationLevel.High;
@@ -933,9 +926,8 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
-
         // =====================================================================
-        // EXHAUSTION DETECTOR — оценивает, не перегрет ли тренд
+        // EXHAUSTION DETECTOR
         // =====================================================================
         private ExhaustionLevel DetectExhaustionLevel(
             PositionSide side,
@@ -947,19 +939,15 @@ namespace VertexAutoTradeBinance8.Services
                 return ExhaustionLevel.None;
 
             var last = klines[^1];
-            var prev = klines[^2];
 
-            // Цена относительно EMA21 — если слишком далеко, рынок "натянут"
             var ema21 = CalculateEma(klines, 21);
             if (ema21 <= 0)
                 return ExhaustionLevel.None;
 
             var distanceFromEma = Math.Abs(last.ClosePrice - ema21) / atr;
 
-            // Движение от входа в ATR
             var rr = Math.Abs(last.ClosePrice - entryPrice) / atr;
 
-            // Свеча с длинным хвостом против позиции
             var body = Math.Abs(last.ClosePrice - last.OpenPrice);
             var upperWick = last.HighPrice - Math.Max(last.ClosePrice, last.OpenPrice);
             var lowerWick = Math.Min(last.ClosePrice, last.OpenPrice) - last.LowPrice;
@@ -970,9 +958,6 @@ namespace VertexAutoTradeBinance8.Services
                     ? upperWick > body * 2m && upperWick > atr * 0.7m
                     : lowerWick > body * 2m && lowerWick > atr * 0.7m;
 
-            // Базовая логика:
-            // - Strong: мощный RR, далеко от EMA, плюс свеча с хвостом против
-            // - Mild: просто далеко от EMA + большой RR
             if (rr >= 3.0m && distanceFromEma >= 2.5m && bigWickAgainst)
                 return ExhaustionLevel.Strong;
 
@@ -985,8 +970,6 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         // LIQUIDITY SWEEP DETECTION
         // =====================================================================
-
-        // sweep в НАШУ сторону: вынос экстремума и закрытие в нашу сторону
         private bool IsLiquiditySweepInFavor(
             PositionSide side,
             IReadOnlyList<BinanceFuturesUsdtKline> klines)
@@ -1006,12 +989,11 @@ namespace VertexAutoTradeBinance8.Services
 
             if (side == PositionSide.Long)
             {
-                // проколили предыдущий хай, но закрылись ниже — классический sweep вверх
                 bool tookHigh = last.HighPrice > prevHigh * 1.0005m;
                 bool closeBelowHigh = last.ClosePrice < prevHigh;
                 return tookHigh && closeBelowHigh && upperWick > body * 1.5m;
             }
-            else // Short
+            else
             {
                 bool tookLow = last.LowPrice < prevLow * 0.9995m;
                 bool closeAboveLow = last.ClosePrice > prevLow;
@@ -1019,7 +1001,6 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
-        // sweep ПРОТИВ нас: вынос экстремума в противоположную сторону
         private bool IsLiquiditySweepAgainst(
             PositionSide side,
             IReadOnlyList<BinanceFuturesUsdtKline> klines)
@@ -1039,20 +1020,17 @@ namespace VertexAutoTradeBinance8.Services
 
             if (side == PositionSide.Long)
             {
-                // sweep вниз против лонга
                 bool tookLow = last.LowPrice < prevLow * 0.9995m;
                 bool closeAboveLow = last.ClosePrice > prevLow;
                 return tookLow && closeAboveLow && lowerWick > body * 1.5m;
             }
-            else // Short
+            else
             {
-                // sweep вверх против шорта
                 bool tookHigh = last.HighPrice > prevHigh * 1.0005m;
                 bool closeBelowHigh = last.ClosePrice < prevHigh;
                 return tookHigh && closeBelowHigh && upperWick > body * 1.5m;
             }
         }
-
 
         private decimal CalculateAtr(IReadOnlyList<BinanceFuturesUsdtKline> kl)
         {
@@ -1100,7 +1078,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // UPDATE SL + LEARNING HOOK (без изменений)
+        // UPDATE SL + LEARNING HOOK (STOP_MARKET)
         // =====================================================================
         private async Task UpdateSLAsync(
             BinanceRestClient client,
@@ -1115,7 +1093,7 @@ namespace VertexAutoTradeBinance8.Services
         {
             if (qty <= 0 || newSl <= 0) return;
 
-            decimal oldSl = slOrder.StopPrice ?? slOrder?.Price ?? 0m;
+            decimal oldSl = slOrder.StopPrice ?? slOrder.Price;
             if (oldSl <= 0) return;
 
             if (side == PositionSide.Long && newSl <= oldSl) return;
@@ -1148,18 +1126,16 @@ namespace VertexAutoTradeBinance8.Services
                 }
             }
 
-            decimal limit = side == PositionSide.Long ? s - tick : s + tick;
-
             await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, slOrder.Id, ct: ct);
 
             var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol,
                 side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
-                FuturesOrderType.Stop,
+                FuturesOrderType.StopMarket,
                 qty,
-                price: limit,
                 stopPrice: s,
                 positionSide: side,
+                workingType: WorkingType.Mark,
                 timeInForce: TimeInForce.GoodTillCanceled,
                 ct: ct);
 
@@ -1171,19 +1147,22 @@ namespace VertexAutoTradeBinance8.Services
 
             _logger.LogInformation("[SUPERVISOR] TRAIL SL UPDATED {symbol} {old} → {ns}", symbol, oldSl, s);
 
-            // -------- LEARNING HOOK ----------
             if (signal != null && signal.IsManual)
                 return;
 
-            bool win = side == PositionSide.Long ? s > entry : s < entry;
             var sigSide = side == PositionSide.Short ? SignalSide.Sell : SignalSide.Buy;
 
-
-            if (signal.Meta != null)
+            signal ??= new TradeSignal
             {
-                signal.Meta.FinalExitPrice = s;
-                signal.Meta.ExitReason = "TRAIL_SL";
-            }
+                Symbol = symbol,
+                Side = sigSide,
+                EntryPrice = entry,
+                Time = DateTime.UtcNow
+            };
+
+            signal.Meta ??= new AiLearningTradeMeta();
+            signal.Meta.FinalExitPrice = s;
+            signal.Meta.ExitReason = "TRAIL_SL";
 
             _aiLearning.RecordTrade(symbol, sigSide, entry, s, _regimeNow);
         }
@@ -1203,7 +1182,10 @@ namespace VertexAutoTradeBinance8.Services
                 if (r.Success && r.Data != null && r.Data.Price > 0)
                     return r.Data.Price;
             }
-            catch { }
+            catch
+            {
+                // ignore
+            }
 
             return fallback > 0 ? fallback : 0m;
         }
