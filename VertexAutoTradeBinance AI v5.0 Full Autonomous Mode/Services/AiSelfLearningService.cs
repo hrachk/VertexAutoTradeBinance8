@@ -18,7 +18,7 @@ namespace VertexAutoTradeBinance8.Services
     /// 2) Trade-Based Learning:
     ///    - RecordTrade(symbol, side, entry, exit, regime)
     ///    - Вызывается из:
-    ///        • PositionSupervisorService.UpdateSLAsync (trail / защита)
+    ///       
     ///        • TradeResultMonitorService.CheckClosedPositionAsync (факт закрытия)
     ///    - Строит _stats → используется GetAiRiskAdjustment(...)
     ///
