@@ -1,22 +1,13 @@
 // ============================================================================
-// ORDER EXECUTOR v6.8 — SAFE ENTRY PROTECTOR (DUAL: ORDER + POSITION)
-// - ENTRY: Limit (без reduceOnly)
-// - Ждём ОТКРЫТУЮ ПОЗИЦИЮ, но параллельно отслеживаем ОРДЕР
-// - Если:
-//      • ордер не заполняется и цена улетела → отменяем, считаем пропущенной
-//      • ордер частично заполнен → НЕ трогаем, ждём появление позиции
-//      • ордер Filled / PartialFilled, позиция появилась → сразу ставим SL/TP
-// - НИКАКИХ позиций без SL/TP
-// - НИКАКОГО тупого догоняния монеты
+// - Если ордер Filled/позиция появилась → возвращаем SUCCESS,
+//   а SL/TP СТАВИТ PositionSupervisorService v8.1 (NORMAL → ALGO RAW)
+// - OrderExecutor НЕ ставит SL/TP вообще.
+
 // ============================================================================
 
 using Binance.Net.Clients;
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
-using System;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -59,9 +50,9 @@ namespace VertexAutoTradeBinance8.Services
         // MAIN ENTRY
         // =====================================================================
         public async Task<OrderResult> ExecuteAsync(
-     TradeSignal signal,
-     decimal quantity,
-     CancellationToken ct = default)
+                                                     TradeSignal signal,
+                                                     decimal quantity,
+                                                     CancellationToken ct = default)
         {
             using var client = _factory.CreateRestClient();
 
@@ -196,7 +187,7 @@ namespace VertexAutoTradeBinance8.Services
                 quantity: quantity,
                 price: allowMarketEntry ? null : entryPrice,
                 positionSide: posSide,
-                workingType: WorkingType.Mark,
+              //  workingType: WorkingType.Mark,
                 timeInForce: allowMarketEntry ? null : TimeInForce.GoodTillCanceled,
                 ct: ct);
 
@@ -269,16 +260,15 @@ namespace VertexAutoTradeBinance8.Services
             );
 
             // =====================================================================
-            // 3) COMPUTE DYNAMIC SL/TP (ATR, trend, volatility)
+            // 3) COMPUTE SL / TP (NO PLACEMENT HERE)
+            // Responsibility: PositionSupervisorService v8.1 (NORMAL → ALGO RAW)
             // =====================================================================
-            decimal atr = signal.Atr ?? 0;
+
+            decimal atr = signal.Atr ?? 0m;
             decimal sl = signal.StopLoss;
 
-            // --- TP FIX ---
-            // 1) основной TP
+            // TP FIX
             decimal tp = signal.TakeProfit ?? 0;
-
-            // 2) fallback из TakeProfits[]
             if (tp <= 0 && signal.TakeProfits != null && signal.TakeProfits.Count > 0)
                 tp = signal.TakeProfits[0];
 
@@ -289,86 +279,14 @@ namespace VertexAutoTradeBinance8.Services
                     tp = Round(tp, tick);
             }
 
-            _logger.LogInformation(
-                "[ORDER][{symbol}] PROTECTION → SL={sl}, TP={tp}, qty={qty}",
-                signal.Symbol, sl, tp, quantity);
+            _logger.LogWarning(
+                "[ORDER][{symbol}] PROTECTION COMPUTED ONLY → SL={sl}, TP={tp}. Supervisor will place orders (NORMAL/ALGO).",
+                signal.Symbol, sl, tp
+            );
 
-            // =====================================================================
-            // 4) CREATE SL (STOP-LIMIT, reduceOnly=true)
-            // =====================================================================
-            var slLimit = posSide == PositionSide.Long ? sl - tick : sl + tick;
-            slLimit = Round(slLimit, tick);
-
-            var slOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol: signal.Symbol,
-                side: side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy,
-                type: FuturesOrderType.Stop,
-                quantity: quantity,
-                price: slLimit,
-                stopPrice: sl,
-               // reduceOnly: true,
-                positionSide: posSide,
-                timeInForce: TimeInForce.GoodTillCanceled,
-                ct: ct);
-
-            if (!slOrder.Success)
-            {
-                _logger.LogError("[ORDER][{symbol}] SL CREATE ERROR: {err}",
-                    signal.Symbol, slOrder.Error);
-                return OrderResult.Fail("SL_CREATE_ERROR");
-            }
-
-            _logger.LogInformation("[ORDER][{symbol}] SL OK: stop={sl}, limit={limit}",
-                signal.Symbol, sl, slLimit);
-
-            // =====================================================================
-            // 5) CREATE TP (TAKE_PROFIT_MARKET) — STABLE BINANCE FUTURES
-            // =====================================================================
-            if (tp > 0)
-            {
-                // защита от instant-trigger
-                if (posSide == PositionSide.Long && tp <= entryPrice)
-                    tp = entryPrice + tick * 3;
-
-                if (posSide == PositionSide.Short && tp >= entryPrice)
-                    tp = entryPrice - tick * 3;
-
-                tp = Round(tp, tick);
-
-                var tpOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol: signal.Symbol,
-                    side: side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy,
-                    type: FuturesOrderType.TakeProfitMarket,
-                    quantity: quantity,
-                    stopPrice: tp,                  // ← ВАЖНО
-                    positionSide: posSide,
-                    workingType: WorkingType.Mark,
-                    timeInForce: TimeInForce.GoodTillCanceled,
-                    ct: ct);
-
-                if (!tpOrder.Success)
-                {
-                    _logger.LogError("[ORDER][{symbol}] TP CREATE ERROR: {err}",
-                        signal.Symbol, tpOrder.Error);
-                    return OrderResult.Fail("TP_CREATE_ERROR");
-                }
-
-                _logger.LogInformation(
-                    "[ORDER][{symbol}] TP OK (MARKET): trigger={tp}",
-                    signal.Symbol, tp);
-            }
-            else
-            {
-                _logger.LogWarning(
-                    "[ORDER][{symbol}] TP not set (tp=0) — SL only, Supervisor will handle",
-                    signal.Symbol);
-            }
-
-
-
+            // ❗ НИЧЕГО НЕ СТАВИМ ЗДЕСЬ
             return OrderResult.Successs(entryPrice, quantity, entryOrderId);
         }
-
 
         // =====================================================================
         // WAIT FOR POSITION or ORDER FILL (dual-track)
@@ -382,16 +300,13 @@ namespace VertexAutoTradeBinance8.Services
             decimal requestedQty,
             CancellationToken ct)
         {
-            
+
             const int maxLoops = 60;           // 60 * 500ms ~ 30s
             const int delayMs = 500;
             const decimal maxSlipPct = 0.004m; // 0.4% допуск до "улетела цена"
 
             decimal lastExecuted = 0m;
             bool runawayLogged = false; // чтобы не спамить в логах
-
-
-
 
             for (int i = 0; i < maxLoops; i++)
             {
@@ -532,7 +447,7 @@ namespace VertexAutoTradeBinance8.Services
                     executedQty = ordRes.Data.QuantityFilled;
 
                     avgPrice = ordRes.Data.AveragePrice > 0
-                        ? ordRes.Data.AveragePrice 
+                        ? ordRes.Data.AveragePrice
                         : fallbackEntry;
 
                     _logger.LogWarning(
@@ -596,9 +511,9 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         private static bool IsImpulse(
-    IReadOnlyList<BinanceFuturesUsdtKline> klines,
-    decimal atr,
-    decimal minBodyAtr = 0.8m) // можно тюнить
+        IReadOnlyList<BinanceFuturesUsdtKline> klines,
+        decimal atr,
+        decimal minBodyAtr = 0.8m) // можно тюнить
         {
             if (klines == null || klines.Count < 2 || atr <= 0)
                 return false;

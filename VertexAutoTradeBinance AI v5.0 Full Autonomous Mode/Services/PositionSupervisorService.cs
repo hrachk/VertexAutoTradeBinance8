@@ -232,7 +232,19 @@ namespace VertexAutoTradeBinance8.Services
             if (sl == null && !hasMultipleSL)
             {
                 await CreateEmergencySLAsync(client, symbol, side, qty, entry, signal, ct);
-                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] SL restored", symbol, side);
+                // READ-BACK: подтверждаем, что SL реально появился
+                var verify = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
+                var myOrders = verify.Success && verify.Data != null
+                    ? verify.Data.Where(o => o.PositionSide == side).ToList()
+                    : new List<BinanceUsdFuturesOrder>();
+
+                bool slNow = myOrders.Any(o =>
+                    o.Side == closeSide &&
+                    o.Type == FuturesOrderType.StopMarket);
+
+                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] SL verify: {ok} (orders={cnt})",
+                    symbol, side, slNow, myOrders.Count);
+
                 return;
             }
 
@@ -240,8 +252,22 @@ namespace VertexAutoTradeBinance8.Services
             if (tp == null && !hasMultipleTP)
             {
                 await CreateEmergencyTPAsync(client, symbol, side, qty, entry, signal, ct);
-                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] TP restored", symbol, side);
+
+                // READ-BACK: подтверждаем, что SL реально появился
+                var verify = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
+                var myOrders = verify.Success && verify.Data != null
+                    ? verify.Data.Where(o => o.PositionSide == side).ToList()
+                    : new List<BinanceUsdFuturesOrder>();
+
+                bool slNow = myOrders.Any(o =>
+                    o.Side == closeSide &&
+                    o.Type == FuturesOrderType.StopMarket);
+
+                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] TP verify: {ok} (orders={cnt})",
+                    symbol, side, slNow, myOrders.Count);
+
                 return;
+ 
             }
 
             // 3) Трейлинг + раннер
@@ -374,7 +400,7 @@ namespace VertexAutoTradeBinance8.Services
                         return;
                     }
                     _logger.LogWarning(
-                        "[SUPERVISOR] SL skipped: market context does not allow safe SL placement {symbol} {side}");
+                        "[SUPERVISOR] SL skipped: market context does not allow safe SL placement {symbol} {side}", symbol, side);
                     return;
                 }
 
@@ -641,7 +667,7 @@ namespace VertexAutoTradeBinance8.Services
                 FuturesOrderType.StopMarket,
                 qty,
                 stopPrice: s,
-                reduceOnly: true,
+               // reduceOnly: true,
                 positionSide: side,
                 workingType: WorkingType.Mark,
                 ct: ct);

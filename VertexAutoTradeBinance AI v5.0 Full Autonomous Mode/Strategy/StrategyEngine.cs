@@ -446,7 +446,15 @@ namespace VertexAutoTradeBinance8.Strategy
             if (!upTrend && !downTrend)
                 return null;
 
-            var side = upTrend ? SignalSide.Buy : SignalSide.Sell;
+            //var side = upTrend ? SignalSide.Buy : SignalSide.Sell;
+            SignalSide side;
+
+            if (upTrend && !downTrend)
+                side = SignalSide.Buy;
+            else if (downTrend && !upTrend)
+                side = SignalSide.Sell;
+            else
+                return null; // конфликт → NO SOFT SIGNAL
 
             decimal entry = c.ClosePrice;
             decimal sl = upTrend
@@ -645,6 +653,16 @@ namespace VertexAutoTradeBinance8.Strategy
 
             _logger.LogDebug(
                 $"[STRAT][{symbol}][{interval}] Dynamic RR итог: minRR={minRr:F2}, regime={regime}, smart={smartType}, slope={slope:P2}, vol={vol:P2}, atr%={atrPct:P2}");
+
+
+
+            if (signal.Side == SignalSide.Sell)
+            {
+                minRr *= 0.9m; // −10% требование к RR для SHORT
+            }
+            _logger.LogWarning(
+    "[DEBUG][SIDE-STATS] {symbol} side={side} regime={regime} slope={slope:P2}",
+    symbol, signal.Side, smart.BaseRegime, smart.TrendSlopePercent);
 
             return minRr;
         }

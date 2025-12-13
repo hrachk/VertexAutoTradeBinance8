@@ -464,7 +464,8 @@ namespace VertexAutoTradeBinance8.Services
             {
                 s = new RegimeStats
                 {
-                    Regime = regime
+                    Regime = regime,
+                    RiskWeight = 1.0m
                 };
                 regimes[regime] = s;
             }
@@ -473,6 +474,7 @@ namespace VertexAutoTradeBinance8.Services
                 s.Regime = regime;
             }
 
+            // ===== БАЗОВАЯ СТАТИСТИКА (НЕ ТРОГАЕМ) =====
             s.Count++;
             if (pnl >= 0) s.Wins++;
             else s.Losses++;
@@ -484,7 +486,35 @@ namespace VertexAutoTradeBinance8.Services
                 decimal wr = s.Wins / (decimal)s.Count;
                 s.RiskWeight = Math.Clamp(wr, 0.65m, 1.35m);
             }
+
+            // ====================================================
+            // 🔥 PnL-WEIGHTED LEARNING (ADD-ON, НЕ ЛОМАЕТ СТАРОЕ)
+            // ====================================================
+
+            decimal absPnl = Math.Abs(pnl);
+            if (absPnl <= 0)
+                return;
+
+            const decimal K = 25m;
+            const decimal minWeight = 0.3m;
+            const decimal maxWeight = 1.3m;
+            const decimal lossMultiplier = 1.6m;
+
+            decimal weight = absPnl * K;
+            weight = Math.Clamp(weight, minWeight, maxWeight);
+
+            if (pnl < 0)
+                weight *= lossMultiplier;
+
+            // корректируем уже рассчитанный RiskWeight
+            s.RiskWeight *= pnl >= 0
+                ? weight
+                : 1m / weight;
+
+            // финальный защитный clamp
+            s.RiskWeight = Math.Clamp(s.RiskWeight, 0.65m, 1.35m);
         }
+
 
 
 
