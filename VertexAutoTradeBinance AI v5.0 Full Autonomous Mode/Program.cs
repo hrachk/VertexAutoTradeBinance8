@@ -99,6 +99,7 @@ public class Program
                 services.AddSingleton<AiTimeframeSelectorService>();
 
                 services.AddSingleton<ExecutedSignalService>();
+                services.AddSingleton<IOrderDispatcher, OrderDispatcher>();
 
 
             })

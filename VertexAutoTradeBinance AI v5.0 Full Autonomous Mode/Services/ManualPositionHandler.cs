@@ -21,6 +21,21 @@ namespace VertexAutoTradeBinance8.Services
         private readonly Dictionary<string, (decimal Qty, decimal Entry)> _prevState
             = new Dictionary<string, (decimal Qty, decimal Entry)>();
 
+        private readonly Dictionary<string, DateTime> _lastStop = new();
+
+        public void RegisterStop(string symbol)
+        {
+            _lastStop[symbol] = DateTime.UtcNow;
+        }
+
+        public DateTime? GetLastStop(string symbol)
+        {
+            return _lastStop.TryGetValue(symbol, out var t) ? t : null;
+        }
+
+
+
+
         /// <summary>
         /// Получить предыдущее количество (для close detector)
         /// </summary>

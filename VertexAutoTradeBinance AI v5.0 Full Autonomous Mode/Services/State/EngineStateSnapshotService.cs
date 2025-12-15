@@ -16,7 +16,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ILogger<EngineStateSnapshotService> _logger;
         private readonly string _path;
         private readonly string _backupPath;
-
+        public EngineState State { get; } = new EngineState();
         private readonly JsonSerializerOptions _jsonOptions = new()
         {
             WriteIndented = true,

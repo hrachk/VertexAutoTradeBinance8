@@ -2,6 +2,7 @@
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using CryptoExchange.Net.Objects;
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -10,14 +11,14 @@ using VertexAutoTradeBinance8.Models;
 namespace VertexAutoTradeBinance8.Services
 {
     /// <summary>
-    /// PositionSupervisorService v8.1 FINAL (NON-ALGO + ALGO-FALLBACK, QUANT-REALTIME MAX)
+    /// PositionSupervisorService v8.2 PRO (Production)
     ///
-    /// FIX v8.1:
-    /// 1) Правильный поиск SL/TP по PositionSide (Hedge) + анти-дубли
-    /// 2) Если Binance возвращает -4120 (SL/TP только через Algo Order API) —
-    ///    автоматически ставим SL/TP через RAW POST /fapi/v1/algoOrder (algoType=CONDITIONAL).
-    /// 3) Никаких reduceOnly/workingType в обычных ордерах (как ты хотел),
-    ///    но в RAW Algo можно (по умолчанию reduceOnly не шлём в Hedge).
+    /// v8.2 FIXES (раз и навсегда):
+    /// 0) EARLY TP (Partial close) 35% на +0.9 ATR → чтобы прибыль фиксировалась ДО откатов
+    /// 1) SL -> BE (безубыток + буфер) на +1.2 ATR → чтобы после ранней прибыли не ловить минус
+    /// 2) Анти-спам: partial/BE выполняются один раз на "позицию" (entry+qty+side)
+    /// 3) UpdateSL: без reduceOnly (и без зависания на -1106), WorkingType.Mark используем осторожно
+    /// 4) Если Binance вернёт -4120 → ставим/обновляем через RAW /fapi/v1/algoOrder (CONDITIONAL)
     /// </summary>
     public class PositionSupervisorService
     {
@@ -31,11 +32,20 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ManualPositionHandler _manualHandler;
         private readonly BinanceAlgoOrderRaw _algoRaw;
         private readonly LiquidityGuardService _liquidityGuard;
-
+        private readonly IOrderDispatcher _dispatcher;
         private MarketRegime _regimeNow;
 
-        private enum TrendContinuationLevel { Low, Medium, High }
-        private enum ExhaustionLevel { None = 0, Mild = 1, Strong = 2 }
+        // === Anti-spam guards for EarlyTP / BE-move ===
+        private readonly ConcurrentDictionary<string, long> _earlyTpDone = new();   // key -> unixMs
+        private readonly ConcurrentDictionary<string, long> _beMoved = new();      // key -> unixMs
+        private readonly ConcurrentDictionary<string, decimal> _restoredEntries = new();
+        // === Harvest block after partial close ===
+        private readonly ConcurrentDictionary<string, long> _recentPartialClose = new();
+
+        private readonly EngineStateSnapshotService _stateSvc;
+     
+
+
 
         public PositionSupervisorService(
             ILogger<PositionSupervisorService> logger,
@@ -48,7 +58,8 @@ namespace VertexAutoTradeBinance8.Services
             ManualPositionHandler manualHandler,
             IConfiguration cfg,
             IHttpClientFactory httpFactory,
-            LiquidityGuardService liquidityGuard)
+            LiquidityGuardService liquidityGuard,
+            IOrderDispatcher dispatcher, EngineStateSnapshotService stateSvc)
         {
             _logger = logger;
             _factory = factory;
@@ -61,11 +72,13 @@ namespace VertexAutoTradeBinance8.Services
 
             _regimeNow = MarketRegime.Range;
 
-            // RAW ALGO sender (Binance:ApiKey / Binance:ApiSecret)
             _algoRaw = new BinanceAlgoOrderRaw(cfg, httpFactory, _logger);
             _liquidityGuard = liquidityGuard;
-        }
+            _dispatcher = dispatcher;
+            _stateSvc = stateSvc;
 
+        }
+        private EngineState _engineState => _stateSvc.State;
         // =====================================================================
         // MAIN ENTRY
         // =====================================================================
@@ -92,8 +105,13 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-            var longPos = posInfo.Data.FirstOrDefault(p => p.PositionSide == PositionSide.Long);
-            var shortPos = posInfo.Data.FirstOrDefault(p => p.PositionSide == PositionSide.Short);
+            var positions = posInfo.Data
+    .Where(p => p.Symbol == symbol && p.Quantity != 0m)
+    .ToList();
+
+            var longPos = positions.FirstOrDefault(p => p.PositionSide == PositionSide.Long);
+            var shortPos = positions.FirstOrDefault(p => p.PositionSide == PositionSide.Short);
+ 
 
             var hasLong = longPos != null && longPos.Quantity != 0m;
             var hasShort = shortPos != null && shortPos.Quantity != 0m;
@@ -132,26 +150,36 @@ namespace VertexAutoTradeBinance8.Services
         // RETRY POSITIONS
         // =====================================================================
         private async Task<WebCallResult<BinancePositionDetailsUsdt[]>> GetPositionsWithRetryAsync(
-            BinanceRestClient client, string symbol, CancellationToken ct)
+        BinanceRestClient client,
+        string symbol,
+        CancellationToken ct)
         {
-            const int maxAttempts = 10;
-            var delay = TimeSpan.FromMilliseconds(200);
-
+            const int maxAttempts = 5;
             WebCallResult<BinancePositionDetailsUsdt[]> last = null!;
+
             for (int i = 0; i < maxAttempts; i++)
             {
                 ct.ThrowIfCancellationRequested();
 
-                var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, null, ct);
+                // 🔥 БЕЗ symbol-фильтра — Binance bug-safe
+                var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
                 last = res;
 
-                if (res.Success && res.Data != null && res.Data.Any(x => x.Quantity != 0m))
-                    return res;
+                if (res.Success && res.Data != null)
+                {
+                    // ⏳ ждём, пока позиция реально появится
+                    if (res.Data.Any(p => p.Symbol == symbol && p.Quantity != 0m))
+                        return res;
+                }
 
-                await Task.Delay(delay, ct);
+                await Task.Delay(300, ct);
             }
+
             return last;
         }
+
+
+
 
         private async Task<List<BinanceUsdFuturesOrder>> LoadOrdersAsync(BinanceRestClient client, string symbol)
         {
@@ -160,7 +188,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // HANDLE SIDE  (FIXED)
+        // HANDLE SIDE  (v8.2 PRO)
         // =====================================================================
         private async Task HandleSideAsync(
             BinanceRestClient client,
@@ -172,7 +200,7 @@ namespace VertexAutoTradeBinance8.Services
             IReadOnlyList<BinanceFuturesUsdtKline>? klines,
             CancellationToken ct)
         {
-            decimal qty = Math.Abs(pos.Quantity);
+            decimal qtyAbs = Math.Abs(pos.Quantity);
 
             // ---------- CLOSE DETECTOR ----------
             var key = $"{symbol}_{side}";
@@ -182,7 +210,9 @@ namespace VertexAutoTradeBinance8.Services
 
             if (prevQty != 0 && pos.Quantity == 0)
             {
-                decimal exitPrice = pos.MarkPrice;
+                decimal exitPrice = pos.MarkPrice > 0
+     ? pos.MarkPrice
+     : pos.EntryPrice; // fallback safety
                 var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
 
                 _aiLearning.RecordTrade(symbol, sigSide, entry: prevEntry, exit: exitPrice, regime: _regimeNow);
@@ -190,24 +220,64 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogWarning(
                     "[AI][{symbol}] POSITION CLOSED → saved to ai_learning.json | entry={entry} exit={exit}",
                     symbol, prevEntry, exitPrice);
+
+                // cleanup guards
+                _earlyTpDone.TryRemove(BuildPosGuardKey(symbol, side, prevEntry, prevQty), out _);
+                _beMoved.TryRemove(BuildPosGuardKey(symbol, side, prevEntry, prevQty), out _);
+
                 return;
             }
 
-            if (qty <= 0)
+            if (qtyAbs <= 0)
             {
                 _logger.LogInformation("[SUPERVISOR] {symbol} {side}: no qty", symbol, side);
                 return;
             }
 
+            // === entry price detect (use position entry first) ===
+            //decimal entry = pos.EntryPrice;
+            //if (entry <= 0 && signal != null && signal.Symbol == symbol)
+            //    entry = signal.EntryPrice;
+
+            decimal entry = pos.EntryPrice;
+
+            if (entry <= 0)
+            {
+                  key = $"{symbol}_{side}";
+
+                if (!_restoredEntries.TryGetValue(key, out entry))
+                {
+                    var restored = await ResolveEntryFromExchangeAsync(client, symbol, side, ct);
+                    if (!restored.HasValue)
+                    {
+                        _logger.LogError("[SUPERVISOR][{symbol}] Entry unresolved → skip SL/TP", symbol);
+                        return;
+                    }
+
+                    entry = restored.Value;
+                    _restoredEntries[key] = entry;
+
+                    _logger.LogWarning(
+                        "[SUPERVISOR][{symbol}] Entry restored from exchange = {entry}",
+                        symbol, entry);
+                }
+            }
+
+
+
+            // In case signal missing ATR in supervisor context, try compute
+            decimal atr14 = 0m;
+            if (signal?.Atr != null && signal.Atr.Value > 0)
+                atr14 = signal.Atr.Value;
+            else if (klines != null && klines.Count >= 30)
+                atr14 = _marketData.CalculateAtr(klines, 14);
+
+            // === Side-specific orders (Hedge) ===
+            var orders = allOrders.Where(o => o.PositionSide == side).ToList();
+
+            // === Find SL/TP ===
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
-            // В Hedge мы обязаны обслуживать именно "свой" PositionSide
-            // (и НЕ мешать ордерам другой стороны)
-            var orders = allOrders
-                .Where(o => o.PositionSide == side)
-                .ToList();
-
-            // Детектор дублей (FIX)
             bool hasMultipleSL = orders.Count(o => o.Type == FuturesOrderType.StopMarket) > 1;
             bool hasMultipleTP = orders.Count(o => o.Type == FuturesOrderType.TakeProfitMarket) > 1;
 
@@ -217,70 +287,229 @@ namespace VertexAutoTradeBinance8.Services
             if (hasMultipleTP)
                 _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] Multiple TP detected → skip TP create", symbol, side);
 
-            // Ищем существующие SL/TP
-            var sl = orders.FirstOrDefault(o =>
-                o.Side == closeSide && o.Type == FuturesOrderType.StopMarket);
+            var sl = orders.FirstOrDefault(o => o.Side == closeSide && o.Type == FuturesOrderType.StopMarket);
+            var tp = orders.FirstOrDefault(o => o.Side == closeSide && o.Type == FuturesOrderType.TakeProfitMarket);
 
-            var tp = orders.FirstOrDefault(o =>
-                o.Side == closeSide && o.Type == FuturesOrderType.TakeProfitMarket);
+            // =================================================================
+            // v8.2: EARLY PROFIT + BE MOVE (До restore TP/SL)
+            // =================================================================
+            if (klines != null && klines.Count >= 50 && atr14 > 0 && entry > 0)
+            {
+                // 1) EARLY TP (partial 35% at +0.9 ATR)
+                await TryEarlyPartialTakeAsync(client, symbol, side, qtyAbs, entry, atr14, signal, klines, ct);
 
-            decimal entry = pos.EntryPrice;
-            if (entry <= 0 && signal != null && signal.Symbol == symbol)
-                entry = signal.EntryPrice;
+                // 2) SL -> BE when +1.2 ATR (only if SL exists)
+                if (sl != null)
+                    await TryMoveSlToBeAsync(client, symbol, side, qtyAbs, entry, atr14, sl, signal, klines, ct);
+            }
+
+
+                        /// =================================================================
+            // PROFIT HARVEST (ПОСЛЕ early/BE, ДО restore SL/TP)
+            // =================================================================
+            if (klines != null && klines.Count >= 50)
+            {
+                decimal aiEdgeScore =
+                    _regimeNow is MarketRegime.StrongUpTrend or MarketRegime.StrongDownTrend
+                        ? 0.82m
+                        : 0.62m;
+
+                await TryHarvestProfitAsync(
+                    client,
+                    _engineState,
+                    symbol,
+                    side,
+                    pos,
+                    klines,
+                    aiEdgeScore,
+                    minUsd: 6m,
+                    ct);
+            }
+
+
 
             // 1) SL отсутствует → аварийный SL (если нет дублей)
             if (sl == null && !hasMultipleSL)
             {
-                await CreateEmergencySLAsync(client, symbol, side, qty, entry, signal, ct);
-                // READ-BACK: подтверждаем, что SL реально появился
-                var verify = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
-                var myOrders = verify.Success && verify.Data != null
-                    ? verify.Data.Where(o => o.PositionSide == side).ToList()
-                    : new List<BinanceUsdFuturesOrder>();
-
-                bool slNow = myOrders.Any(o =>
-                    o.Side == closeSide &&
-                    o.Type == FuturesOrderType.StopMarket);
-
-                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] SL verify: {ok} (orders={cnt})",
-                    symbol, side, slNow, myOrders.Count);
-
-                return;
+                await CreateEmergencySLAsync(client, symbol, side, qtyAbs, entry, signal, ct);
+                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] SL restored", symbol, side);
+                //return;
             }
 
             // 2) TP отсутствует → аварийный TP (если нет дублей)
             if (tp == null && !hasMultipleTP)
             {
-                await CreateEmergencyTPAsync(client, symbol, side, qty, entry, signal, ct);
-
-                // READ-BACK: подтверждаем, что SL реально появился
-                var verify = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
-                var myOrders = verify.Success && verify.Data != null
-                    ? verify.Data.Where(o => o.PositionSide == side).ToList()
-                    : new List<BinanceUsdFuturesOrder>();
-
-                bool slNow = myOrders.Any(o =>
-                    o.Side == closeSide &&
-                    o.Type == FuturesOrderType.StopMarket);
-
-                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] TP verify: {ok} (orders={cnt})",
-                    symbol, side, slNow, myOrders.Count);
-
-                return;
- 
+                await CreateEmergencyTPAsync(client, symbol, side, qtyAbs, entry, signal, ct);
+                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] TP restored", symbol, side);
+               // return;
             }
 
             // 3) Трейлинг + раннер
             if (klines != null && klines.Count >= 50)
             {
-                // Если у тебя эти методы реально есть в проекте — оставляем вызовы.
-                // Если нет — просто закомментируй блок.
-                await ManageRunnerTpAsync(client, symbol, side, qty, entry, orders, signal, klines, ct);
-                await ManageRunnerTpExtensionAsync(client, symbol, side, qty, entry, signal, orders, klines, ct);
-                await MultiLayerTrailingAsync(client, symbol, side, qty, entry, signal, orders, klines, ct);
+                await ManageRunnerTpAsync(client, symbol, side, qtyAbs, entry, orders, signal, klines, ct);
+                await ManageRunnerTpExtensionAsync(client, symbol, side, qtyAbs, entry, signal, orders, klines, ct);
+                await MultiLayerTrailingAsync(client, symbol, side, qtyAbs, entry, signal, orders, klines, ct);
             }
         }
 
+
+        private async Task<decimal?> ResolveEntryFromExchangeAsync(
+    BinanceRestClient client,
+    string symbol,
+    PositionSide side,
+    CancellationToken ct)
+        {
+            var trades = await client.UsdFuturesApi.Trading.GetUserTradesAsync(
+                symbol: symbol,
+                limit: 50,
+                ct: ct);
+
+            if (!trades.Success || trades.Data == null)
+                return null;
+
+            var lastOpen = trades.Data
+                .Where(t => t.PositionSide == side)
+                .OrderByDescending(t => t.Timestamp)
+                .FirstOrDefault();
+
+            return lastOpen?.Price;
+        }
+
+
+        // =====================================================================
+        // EARLY TP (Partial close) — ключевой фикс v8.2
+        // =====================================================================
+        private async Task TryEarlyPartialTakeAsync(
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            decimal entry,
+            decimal atr,
+            TradeSignal? signal,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            CancellationToken ct)
+        {
+            // Блокируем, если LiquidityGuard сигналит опасность (не лезем в рынок лишний раз)
+            if (_liquidityGuard.LastDanger?.Block == true)
+                return;
+
+            var last = klines[^1].ClosePrice;
+
+            bool reached =
+                side == PositionSide.Long
+                    ? last >= entry + atr * 0.90m
+                    : last <= entry - atr * 0.90m;
+
+            if (!reached) return;
+
+            var guardKey = BuildPosGuardKey(symbol, side, entry, qty);
+            if (_earlyTpDone.ContainsKey(guardKey)) return;
+
+            var closeQty = Math.Round(qty * 0.35m, 8);
+            if (closeQty <= 0) return;
+
+            var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+            _dispatcher.Enqueue(async ct =>
+            {
+                using var c = _factory.CreateRestClient();
+                var res = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol: symbol,
+                    side: closeSide,
+                    type: FuturesOrderType.Market,
+                    quantity: closeQty,
+                    positionSide: side,
+                    ct: ct);
+
+
+                if (!res.Success)
+                {
+                    _logger.LogWarning("[EARLY-TP][{symbol}][{side}] Market partial close failed: {err}", symbol, side, res.Error);
+                    return;
+                }
+            });
+
+            _earlyTpDone[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            _earlyTpDone[guardKey] = now;
+
+            // 🔒 BLOCK HARVEST for 8 seconds after EARLY-TP
+            _recentPartialClose[$"{symbol}|{side}"] = now;
+
+            _logger.LogWarning(
+                "[EARLY-TP][{symbol}][{side}] Partial profit fixed {closed}/{total} @price={price} (+0.9ATR)",
+                symbol, side, closeQty, qty, last);
+
+            // Optional learning hook
+            try
+            {
+                if (signal != null && !signal.IsManual)
+                {
+                    var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
+                    _aiLearning.RecordTrade(symbol, sigSide, entry, last, _regimeNow);
+                }
+            }
+            catch { }
+        }
+
+        // =====================================================================
+        // SL -> BE (безубыток + буфер) — ключевой фикс v8.2
+        // =====================================================================
+        private async Task TryMoveSlToBeAsync(
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            decimal entry,
+            decimal atr,
+            BinanceUsdFuturesOrder slOrder,
+            TradeSignal? signal,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            CancellationToken ct)
+        {
+            var last = klines[^1].ClosePrice;
+
+            bool reached =
+                side == PositionSide.Long
+                    ? last >= entry + atr * 1.20m
+                    : last <= entry - atr * 1.20m;
+
+            if (!reached) return;
+
+            var guardKey = BuildPosGuardKey(symbol, side, entry, qty);
+            if (_beMoved.ContainsKey(guardKey)) return;
+
+            decimal buffer = atr * 0.15m; // небольшой плюс к BE
+            decimal newSl =
+                side == PositionSide.Long
+                    ? entry + buffer
+                    : entry - buffer;
+
+            // только если реально улучшает SL
+            decimal oldSl = slOrder.StopPrice ?? slOrder.Price;
+            if (oldSl <= 0) return;
+
+            if (side == PositionSide.Long && newSl <= oldSl) return;
+            if (side == PositionSide.Short && newSl >= oldSl) return;
+
+            var ok = await UpdateSL_ProAsync(client, symbol, side, qty, slOrder, entry, newSl, signal, ct);
+            if (ok)
+            {
+                _beMoved[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                _logger.LogWarning("[BE][{symbol}][{side}] SL moved to BE+buffer newSL={sl}", symbol, side, newSl);
+            }
+        }
+
+        private static string BuildPosGuardKey(string symbol, PositionSide side, decimal entry, decimal qty)
+        {
+            // грубый, но рабочий ключ: символ+side+entry+qty (округлим)
+            string E(decimal v) => v.ToString("0.########", CultureInfo.InvariantCulture);
+            return $"{symbol}|{side}|e={E(entry)}|q={E(qty)}";
+        }
         // =====================================================================
         // EMERGENCY SL  (TRY NORMAL → FALLBACK ALGO RAW on -4120)
         // =====================================================================
@@ -293,118 +522,150 @@ namespace VertexAutoTradeBinance8.Services
             TradeSignal? signal,
             CancellationToken ct)
         {
-            if (qty <= 0) return;
+            try
+            {
+                // ==========================================================
+                // 1) ЖЁСТКАЯ ПРОВЕРКА ФАКТИЧЕСКОЙ ПОЗИЦИИ
+                // ==========================================================
+                var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: ct);
+                if (!posInfo.Success || posInfo.Data == null)
+                    return;
 
-            decimal rawSl;
-            if (signal != null && signal.StopLoss > 0)
-            {
-                rawSl = signal.StopLoss;
-            }
-            else
-            {
-                try
+                var pos = posInfo.Data.FirstOrDefault(p =>
+                    p.PositionSide == side &&
+                    Math.Abs(p.Quantity) > 0);
+
+                if (pos == null)
+                {
+                    _logger.LogWarning(
+                        "[SUPERVISOR][{symbol}][{side}] SKIP SL → no open position",
+                        symbol, side);
+                    return;
+                }
+
+                // ==========================================================
+                // 2) КОЛИЧЕСТВО ЗАКРЫТИЯ
+                // ==========================================================
+                var closeQty = Math.Min(Math.Abs(pos.Quantity), qty);
+                if (closeQty <= 0)
+                    return;
+
+                // ==========================================================
+                // 3) РАСЧЁТ SL
+                // ==========================================================
+                decimal rawSl;
+
+                if (signal?.StopLoss > 0)
+                {
+                    rawSl = signal.StopLoss;
+                }
+                else
                 {
                     var kl = await _marketData.GetKlines(symbol, KlineInterval.OneMinute, 100);
                     if (kl.Count < 30) return;
 
                     var atr = _marketData.CalculateAtr(kl, 14);
+                    if (atr <= 0) return;
 
-                    // динамический множитель
                     var atrMult = _regimeNow switch
                     {
                         MarketRegime.Range => 1.2m,
                         MarketRegime.Squeeze => 1.5m,
-                        MarketRegime.UpTrend or MarketRegime.DownTrend => 1.8m,   // ← WeakTrend
+                        MarketRegime.UpTrend or MarketRegime.DownTrend => 1.8m,
                         MarketRegime.VolatileChop => 2.0m,
-                        _ => 2.2m // StrongUpTrend / StrongDownTrend
+                        _ => 2.2m
                     };
 
                     rawSl = side == PositionSide.Long
                         ? entryPrice - atr * atrMult
                         : entryPrice + atr * atrMult;
-
-
-                    if (atr <= 0) return;
-
-                    var atrMultiplier = (atr > 0.0025m) ? 1.5m : 1.2m;
-                    rawSl = side == PositionSide.Long ? entryPrice - atr * atrMultiplier : entryPrice + atr * atrMultiplier;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "[SUPERVISOR] SL ATR calc failed {symbol}", symbol);
-                    return;
-                }
-            }
-
-            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-            var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
-
-            decimal sl = Math.Round(rawSl / tick) * tick;
-            decimal mark = await GetMarkPriceSafeAsync(client, symbol, entryPrice, ct);
-
-            if (mark > 0)
-            {
-                if (side == PositionSide.Long && sl >= mark) sl = mark - tick;
-                if (side == PositionSide.Short && sl <= mark) sl = mark + tick;
-            }
-
-            // === SMART SL BLOCK ===
-            if (_regimeNow is MarketRegime.StrongUpTrend or MarketRegime.StrongDownTrend)
-            {
-                _logger.LogInformation(
-                    "[SUPERVISOR] Skip SL: strong trend detected ({regime}) {symbol}",
-                    _regimeNow, symbol);
-                return;
-            }
-
-
-            var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-
-            // 1) NORMAL endpoint
-            try
-            {
-                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol,
-                    orderSide,
-                    FuturesOrderType.StopMarket,
-                    qty,
-                    positionSide: side,
-                    stopPrice: sl,
-                    ct: ct);
-
-                if (res.Success)
-                {
-                    _logger.LogInformation("[SUPERVISOR] SL CREATED (NORMAL) {symbol} {side} sl={sl}", symbol, side, sl);
-                    return;
                 }
 
-                // 2) FALLBACK ALGO on -4120
-                if (IsAlgoRequired(res.Error))
-                {
-                    _logger.LogWarning("[SUPERVISOR] SL requires ALGO endpoint (-4120) → RAW ALGO {symbol} {side}", symbol, side);
+                // ==========================================================
+                // 4) TICK + MARK PRICE SAFETY
+                // ==========================================================
+                var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+                var tick = filters.tickSize > 0 ? filters.tickSize : 0.0001m;
 
-                    var ok = await _algoRaw.PlaceConditionalAsync(
+                decimal sl = Math.Round(rawSl / tick) * tick;
+                decimal mark = await GetMarkPriceSafeAsync(client, symbol, entryPrice, ct);
+
+                if (mark > 0)
+                {
+                    if (side == PositionSide.Long && sl >= mark)
+                        sl = mark - tick;
+
+                    if (side == PositionSide.Short && sl <= mark)
+                        sl = mark + tick;
+                }
+
+                var orderSide = side == PositionSide.Long
+                    ? OrderSide.Sell
+                    : OrderSide.Buy;
+
+                // ==========================================================
+                // 5) ОТПРАВКА (NORMAL → ALGO RAW)
+                // ==========================================================
+                _dispatcher.Enqueue(async ct =>
+                {
+                    using var c = _factory.CreateRestClient();
+
+                    var res = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
                         symbol: symbol,
                         side: orderSide,
+                        type: FuturesOrderType.StopMarket,
+                        quantity: closeQty,
                         positionSide: side,
-                        type: "STOP_MARKET",
-                        quantity: qty,
-                        triggerPrice: sl,
-                        workingType: "CONTRACT_PRICE",
-                        reduceOnly: null, // в Hedge reduceOnly нельзя
+                        stopPrice: sl,
+                        reduceOnly: true,
                         ct: ct);
 
-                    if (ok)
+                    if (res.Success)
                     {
-                        _logger.LogInformation("[SUPERVISOR] SL CREATED (ALGO-RAW) {symbol} {side} sl={sl}", symbol, side, sl);
+                        _logger.LogInformation(
+                            "[SUPERVISOR] SL CREATED (NORMAL) {symbol} {side} sl={sl}",
+                            symbol, side, sl);
                         return;
                     }
-                    _logger.LogWarning(
-                        "[SUPERVISOR] SL skipped: market context does not allow safe SL placement {symbol} {side}", symbol, side);
-                    return;
-                }
 
-                _logger.LogError("[SUPERVISOR] ERROR SL create (NORMAL) {symbol}: {err}", symbol, res.Error);
+                    // ======================================================
+                    // 6) FALLBACK → ALGO RAW (-4120)
+                    // ======================================================
+                    if (IsAlgoRequired(res.Error))
+                    {
+                        _logger.LogWarning(
+                            "[SUPERVISOR] SL requires ALGO endpoint (-4120) → RAW ALGO {symbol} {side}",
+                            symbol, side);
+
+                        var ok = await _algoRaw.PlaceConditionalAsync(
+                            symbol: symbol,
+                            side: orderSide,
+                            positionSide: side,
+                            type: "STOP_MARKET",
+                            quantity: closeQty,
+                            triggerPrice: sl,
+                            workingType: "CONTRACT_PRICE",
+                            reduceOnly: true,
+                            ct: ct);
+
+                        if (ok)
+                        {
+                            _logger.LogInformation(
+                                "[SUPERVISOR] SL CREATED (ALGO-RAW) {symbol} {side} sl={sl}",
+                                symbol, side, sl);
+                            return;
+                        }
+
+                        _logger.LogWarning(
+                            "[SUPERVISOR] SL skipped: ALGO-RAW failed {symbol} {side}",
+                            symbol, side);
+                        return;
+                    }
+
+                    _logger.LogError(
+                        "[SUPERVISOR] ERROR SL create (NORMAL) {symbol}: {err}",
+                        symbol, res.Error);
+                });
             }
             catch (Exception ex)
             {
@@ -424,17 +685,44 @@ namespace VertexAutoTradeBinance8.Services
             TradeSignal? signal,
             CancellationToken ct)
         {
-            if (qty <= 0) return;
-
-            decimal trigger;
-
-            if (signal != null && signal.TakeProfits != null && signal.TakeProfits.Count > 0)
+            try
             {
-                trigger = signal.TakeProfits[0];
-            }
-            else
-            {
-                try
+                // ==========================================================
+                // 1) ЖЁСТКАЯ ПРОВЕРКА ФАКТИЧЕСКОЙ ПОЗИЦИИ (ОБЯЗАТЕЛЬНО)
+                // ==========================================================
+                var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: ct);
+                if (!posInfo.Success || posInfo.Data == null)
+                    return;
+
+                var pos = posInfo.Data.FirstOrDefault(p =>
+                    p.PositionSide == side &&
+                    Math.Abs(p.Quantity) > 0);
+
+                if (pos == null)
+                {
+                    _logger.LogWarning(
+                        "[SUPERVISOR][{symbol}][{side}] SKIP TP → no open position",
+                        symbol, side);
+                    return;
+                }
+
+                // ==========================================================
+                // 2) КОЛИЧЕСТВО ЗАКРЫТИЯ (НЕ БОЛЬШЕ ЧЕМ ФАКТИЧЕСКАЯ ПОЗИЦИЯ)
+                // ==========================================================
+                var closeQty = Math.Min(Math.Abs(pos.Quantity), qty);
+                if (closeQty <= 0)
+                    return;
+
+                // ==========================================================
+                // 3) РАСЧЁТ TP
+                // ==========================================================
+                decimal trigger;
+
+                if (signal?.TakeProfits != null && signal.TakeProfits.Count > 0)
+                {
+                    trigger = signal.TakeProfits[0];
+                }
+                else
                 {
                     var kl = await _marketData.GetKlines(symbol, KlineInterval.OneMinute, 100);
                     if (kl.Count < 30) return;
@@ -442,71 +730,96 @@ namespace VertexAutoTradeBinance8.Services
                     var atr = _marketData.CalculateAtr(kl, 14);
                     if (atr <= 0) return;
 
-                    trigger = side == PositionSide.Long ? entryPrice + atr * 1.5m : entryPrice - atr * 1.5m;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "[SUPERVISOR] TP ATR calc failed {symbol}", symbol);
-                    return;
-                }
-            }
-
-            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-            var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
-
-            trigger = Math.Round(trigger / tick) * tick;
-
-            // validate vs entry
-            if (side == PositionSide.Long && trigger <= entryPrice) trigger = entryPrice + tick * 3;
-            if (side == PositionSide.Short && trigger >= entryPrice) trigger = entryPrice - tick * 3;
-
-            var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-
-            // 1) NORMAL endpoint
-            try
-            {
-                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol,
-                    orderSide,
-                    FuturesOrderType.TakeProfitMarket,
-                    qty,
-                    positionSide: side,
-                    stopPrice: trigger,
-                    ct: ct);
-
-                if (res.Success)
-                {
-                    _logger.LogInformation("[SUPERVISOR] TP CREATED (NORMAL) {symbol} {side} tp={tp}", symbol, side, trigger);
-                    return;
+                    trigger = side == PositionSide.Long
+                        ? entryPrice + atr * 1.25m
+                        : entryPrice - atr * 1.25m;
                 }
 
-                // 2) FALLBACK ALGO on -4120
-                if (IsAlgoRequired(res.Error))
-                {
-                    _logger.LogWarning("[SUPERVISOR] TP requires ALGO endpoint (-4120) → RAW ALGO {symbol} {side}", symbol, side);
+                // ==========================================================
+                // 4) ПРИВЯЗКА К TICK SIZE
+                // ==========================================================
+                var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+                var tick = filters.tickSize > 0 ? filters.tickSize : 0.0001m;
 
-                    var ok = await _algoRaw.PlaceConditionalAsync(
+                trigger = Math.Round(trigger / tick) * tick;
+
+                if (side == PositionSide.Long && trigger <= entryPrice)
+                    trigger = entryPrice + tick * 3;
+
+                if (side == PositionSide.Short && trigger >= entryPrice)
+                    trigger = entryPrice - tick * 3;
+
+                var orderSide = side == PositionSide.Long
+                    ? OrderSide.Sell
+                    : OrderSide.Buy;
+
+                // ==========================================================
+                // 5) ОТПРАВКА ЧЕРЕЗ ДИСПЕТЧЕР (NORMAL → ALGO RAW)
+                // ==========================================================
+                _dispatcher.Enqueue(async ct =>
+                {
+                    using var c = _factory.CreateRestClient();
+
+                    var res = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
                         symbol: symbol,
                         side: orderSide,
+                        type: FuturesOrderType.TakeProfitMarket,
+                        quantity: closeQty,
                         positionSide: side,
-                        type: "TAKE_PROFIT_MARKET",
-                        quantity: qty,
-                        triggerPrice: trigger,
-                        workingType: "CONTRACT_PRICE",
-                        reduceOnly: null, // в Hedge reduceOnly нельзя
+                        stopPrice: trigger,
+                        reduceOnly: true,
                         ct: ct);
 
-                    if (ok)
+                    if (res.Success)
                     {
-                        _logger.LogInformation("[SUPERVISOR] TP CREATED (ALGO-RAW) {symbol} {side} tp={tp}", symbol, side, trigger);
+                        _logger.LogInformation(
+                            "[SUPERVISOR] TP CREATED (NORMAL) {symbol} {side} tp={tp}",
+                            symbol, side, trigger);
                         return;
                     }
 
-                    _logger.LogError("[SUPERVISOR] TP ALGO-RAW FAILED {symbol} {side}", symbol, side);
-                    return;
-                }
+                    // ======================================================
+                    // 6) FALLBACK → ALGO RAW (-4120)
+                    // ======================================================
+                    if (IsAlgoRequired(res.Error))
+                    {
+                        _logger.LogWarning(
+                            "[SUPERVISOR] TP requires ALGO endpoint (-4120) → RAW ALGO {symbol} {side}",
+                            symbol, side);
 
-                _logger.LogError("[SUPERVISOR] ERROR create TP (NORMAL) {symbol}: {err}", symbol, res.Error);
+                        _dispatcher.Enqueue(async ct =>
+                        {
+                            var ok = await _algoRaw.PlaceConditionalAsync(
+                                symbol: symbol,
+                                side: orderSide,
+                                positionSide: side,
+                                type: "TAKE_PROFIT_MARKET",
+                                quantity: closeQty,
+                                triggerPrice: trigger,
+                                workingType: "CONTRACT_PRICE",
+                                reduceOnly: true,
+                                ct: ct);
+
+                            if (ok)
+                            {
+                                _logger.LogInformation(
+                                    "[SUPERVISOR] TP CREATED (ALGO-RAW) {symbol} {side} tp={tp}",
+                                    symbol, side, trigger);
+                                return;
+                            }
+
+                            _logger.LogError(
+                                "[SUPERVISOR] TP ALGO-RAW FAILED {symbol} {side}",
+                                symbol, side);
+                        });
+
+                        return;
+                    }
+
+                    _logger.LogError(
+                        "[SUPERVISOR] ERROR create TP (NORMAL) {symbol}: {err}",
+                        symbol, res.Error);
+                });
             }
             catch (Exception ex)
             {
@@ -514,11 +827,11 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
+
         private static bool IsAlgoRequired(CryptoExchange.Net.Objects.Error? err)
         {
             if (err == null) return false;
 
-            // -4120: Order type not supported for this endpoint. Please use the Algo Order API endpoints instead.
             if (err.Code == -4120) return true;
 
             var msg = (err.Message ?? string.Empty).ToLowerInvariant();
@@ -526,169 +839,8 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // === PLACEHOLDERS: keep your existing methods below (как в твоём v8.0) ===
+        // PLACEHOLDERS: keep your existing methods below
         // =====================================================================
-
-        private async Task ManageRunnerTpAsync(
-      BinanceRestClient client,
-      string symbol,
-      PositionSide side,
-      decimal qty,
-      decimal entryPrice,
-      List<BinanceUsdFuturesOrder> orders,
-      TradeSignal? signal,
-      IReadOnlyList<BinanceFuturesUsdtKline> klines,
-      CancellationToken ct)
-        {
-            if (signal?.TakeProfit is null || signal.TakeProfit <= 0)
-                return;
-
-            // ---- текущая цена ----
-            var priceRes = await client.UsdFuturesApi.ExchangeData.GetPriceAsync(symbol, ct: ct);
-            if (!priceRes.Success || priceRes.Data == null)
-                return;
-
-            var price = priceRes.Data.Price;
-
-            bool tpHit =
-                side == PositionSide.Long
-                    ? price >= signal.TakeProfit
-                    : price <= signal.TakeProfit;
-
-            if (!tpHit)
-                return;
-
-            // ---- режим ----
-            bool trendOk =
-                side == PositionSide.Long
-                    ? _regimeNow is MarketRegime.StrongUpTrend or MarketRegime.UpTrend
-                    : _regimeNow is MarketRegime.StrongDownTrend or MarketRegime.DownTrend;
-
-            if (!trendOk)
-                return;
-
-            // ---- импульс ----
-            var atr = signal.Atr ?? 0m;
-            if (atr <= 0 || klines.Count < 2)
-                return;
-
-            var last = klines[^1];
-            var body = Math.Abs(last.ClosePrice - last.OpenPrice);
-
-            if (body < atr * 0.7m)
-                return;
-
-            // ---- LiquidityGuard ----
-            if (_liquidityGuard.LastDanger?.Block == true)
-                return;
-
-            // ============================================================
-            // === TP EXTENSION ACTION ===
-            // ============================================================
-
-            // 1️⃣ частичное закрытие (70%)
-            var closeQty = Math.Round(qty * 0.7m, 8);
-            var runnerQty = qty - closeQty;
-
-            if (closeQty <= 0 || runnerQty <= 0)
-                return;
-
-            var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-
-            await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol: symbol,
-                side: closeSide,
-                type: FuturesOrderType.Market,
-                quantity: closeQty,
-                positionSide: side,
-                ct: ct);
-
-            _logger.LogInformation(
-                "[TP-EXT][{symbol}] Partial TP executed {closed}/{total}, runner={runner}",
-                symbol, closeQty, qty, runnerQty);
-
-            // 2️⃣ перенос SL → BE + 0.25 ATR
-            decimal newSl =
-                side == PositionSide.Long
-                    ? entryPrice + atr * 0.25m
-                    : entryPrice - atr * 0.25m;
-
-            var slOrder = orders.FirstOrDefault(o =>
-                o.Type == FuturesOrderType.StopMarket &&
-                o.PositionSide == side);
-
-            if (slOrder != null)
-            {
-                await UpdateSLAsync(
-                    client,
-                    symbol,
-                    side,
-                    runnerQty,
-                    slOrder,
-                    entryPrice,
-                    newSl,
-                    signal,
-                    ct);
-            }
-
-            _logger.LogWarning(
-                "[TP-EXT][{symbol}] Runner activated | new SL={sl}",
-                symbol, newSl);
-        }
-        public async Task UpdateSLAsync(
-    BinanceRestClient client,
-    string symbol,
-    PositionSide side,
-    decimal qty,
-    BinanceUsdFuturesOrder slOrder,
-    decimal entry,
-    decimal newSl,
-    TradeSignal? signal,
-    CancellationToken ct)
-        {
-            if (qty <= 0 || newSl <= 0) return;
-
-            decimal oldSl = slOrder.StopPrice ?? slOrder.Price;
-            if (oldSl <= 0) return;
-
-            if (side == PositionSide.Long && newSl <= oldSl) return;
-            if (side == PositionSide.Short && newSl >= oldSl) return;
-
-            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-            var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
-
-            var s = Math.Round(newSl / tick) * tick;
-
-            await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, slOrder.Id, ct: ct);
-
-            var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol,
-                side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
-                FuturesOrderType.StopMarket,
-                qty,
-                stopPrice: s,
-               // reduceOnly: true,
-                positionSide: side,
-                workingType: WorkingType.Mark,
-                ct: ct);
-
-            if (!res.Success)
-            {
-                _logger.LogError("[SUPERVISOR] SL update failed {symbol}: {err}", symbol, res.Error);
-                return;
-            }
-
-            _logger.LogInformation("[SUPERVISOR] SL UPDATED {symbol}: {old} → {new}", symbol, oldSl, s);
-
-            // 🔥 AI learning hook — ВОТ ЗДЕСЬ ЕМУ МЕСТО
-            if (signal != null && !signal.IsManual)
-            {
-                var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
-                _aiLearning.RecordTrade(symbol, sigSide, entry, s, _regimeNow);
-            }
-        }
-
-
         private async Task ManageRunnerTpExtensionAsync(
             BinanceRestClient client,
             string symbol,
@@ -700,10 +852,197 @@ namespace VertexAutoTradeBinance8.Services
             IReadOnlyList<BinanceFuturesUsdtKline> klines,
             CancellationToken ct)
         {
-            // ТВОЯ ТЕКУЩАЯ РЕАЛИЗАЦИЯ (как у тебя в v8.0)
             await Task.CompletedTask;
         }
+        // =====================================================================
+        // RUNNER (твоя логика) + SL update (v8.2 PRO)
+        // =====================================================================
+        private async Task ManageRunnerTpAsync(
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            decimal entryPrice,
+            List<BinanceUsdFuturesOrder> orders,
+            TradeSignal? signal,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            CancellationToken ct)
+        {
+            // ===== STRONG TREND RUNNER FIX =====
+            bool strongTrend =
+                _regimeNow == MarketRegime.StrongUpTrend ||
+                _regimeNow == MarketRegime.StrongDownTrend;
 
+            if (!strongTrend)
+                return;
+
+
+            if (signal?.TakeProfit is null || signal.TakeProfit <= 0)
+                return;
+
+            var priceRes = await client.UsdFuturesApi.ExchangeData.GetPriceAsync(symbol, ct: ct);
+            if (!priceRes.Success || priceRes.Data == null)
+                return;
+
+            var price = priceRes.Data.Price;
+
+            bool tpHit =
+                side == PositionSide.Long ? price >= signal.TakeProfit : price <= signal.TakeProfit;
+
+            if (!tpHit) return;
+
+            bool trendOk =
+                side == PositionSide.Long
+                    ? _regimeNow is MarketRegime.StrongUpTrend or MarketRegime.UpTrend
+                    : _regimeNow is MarketRegime.StrongDownTrend or MarketRegime.DownTrend;
+
+            if (!trendOk) return;
+
+            var atr = signal.Atr ?? 0m;
+            if (atr <= 0 || klines.Count < 2) return;
+
+            var last = klines[^1];
+            var body = Math.Abs(last.ClosePrice - last.OpenPrice);
+            if (body < atr * 0.7m) return;
+
+            if (_liquidityGuard.LastDanger?.Block == true) return;
+
+            // 1) частичное закрытие (70%)
+            var closeQty = Math.Round(qty * 0.7m, 8);
+            var runnerQty = qty - closeQty;
+            if (closeQty <= 0 || runnerQty <= 0) return;
+
+            var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+            _dispatcher.Enqueue(async ct =>
+            {
+                await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: symbol,
+                side: closeSide,
+                type: FuturesOrderType.Market,
+                quantity: closeQty,
+                positionSide: side,
+                ct: ct);
+
+            _logger.LogInformation("[TP-EXT][{symbol}] Partial TP executed {closed}/{total}, runner={runner}",
+                symbol, closeQty, qty, runnerQty);
+
+            // 2) перенос SL → BE + 0.25 ATR
+            decimal newSl =
+                side == PositionSide.Long ? entryPrice + atr * 0.25m : entryPrice - atr * 0.25m;
+
+            var slOrder = orders.FirstOrDefault(o =>
+                o.Type == FuturesOrderType.StopMarket &&
+                o.PositionSide == side);
+
+            if (slOrder != null)
+            {
+                await UpdateSL_ProAsync(client, symbol, side, runnerQty, slOrder, entryPrice, newSl, signal, ct);
+            }
+
+            _logger.LogWarning("[TP-EXT][{symbol}] Runner activated | new SL={sl}", symbol, newSl);
+            });
+        }
+
+        /// <summary>
+        /// v8.2 PRO SL update:
+        /// - Cancel old SL
+        /// - Place new SL via NORMAL endpoint
+        /// - If -4120 -> ALGO-RAW
+        /// - NO reduceOnly (важно для Hedge/ошибок -1106)
+        /// - WorkingType.Mark используем осторожно: сначала пробуем, если Binance ругается — повтор без него
+        /// </summary>
+        private Task<bool> UpdateSL_ProAsync(
+         BinanceRestClient client,
+         string symbol,
+         PositionSide side,
+         decimal qty,
+         BinanceUsdFuturesOrder slOrder,
+         decimal entry,
+         decimal newSl,
+         TradeSignal? signal,
+         CancellationToken ct)
+        {
+            if (qty <= 0 || newSl <= 0) return Task.FromResult(false);
+
+            decimal oldSl = slOrder.StopPrice ?? slOrder.Price;
+            if (oldSl <= 0) return Task.FromResult(false);
+
+            if (side == PositionSide.Long && newSl <= oldSl) return Task.FromResult(false);
+            if (side == PositionSide.Short && newSl >= oldSl) return Task.FromResult(false);
+
+            _dispatcher.Enqueue(async token =>
+            {
+                using var c = _factory.CreateRestClient();
+
+                var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+                var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
+                var s = Math.Round(newSl / tick) * tick;
+
+                try
+                {
+                    try
+                    {
+                        await c.UsdFuturesApi.Trading.CancelOrderAsync(symbol, slOrder.Id, ct: token);
+                    }
+                    catch { }
+
+                    var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+                    var r1 = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol: symbol,
+                        side: orderSide,
+                        type: FuturesOrderType.StopMarket,
+                        quantity: qty,
+                        stopPrice: s,
+                        positionSide: side,
+                        workingType: WorkingType.Mark,
+                        ct: token);
+
+                    if (!r1.Success && IsAlgoRequired(r1.Error))
+                    {
+                        await _algoRaw.PlaceConditionalAsync(
+                            symbol: symbol,
+                            side: orderSide,
+                            positionSide: side,
+                            type: "STOP_MARKET",
+                            quantity: qty,
+                            triggerPrice: s,
+                            workingType: "CONTRACT_PRICE",
+                            reduceOnly: null,
+                            ct: token);
+                    }
+                    else if (!r1.Success)
+                    {
+                        await c.UsdFuturesApi.Trading.PlaceOrderAsync(
+                            symbol: symbol,
+                            side: orderSide,
+                            type: FuturesOrderType.StopMarket,
+                            quantity: qty,
+                            stopPrice: s,
+                            positionSide: side,
+                            ct: token);
+                    } 
+                    HookAiLearningOnSlMove(signal, symbol, side, entry, s);
+                }
+                catch { }
+            });
+
+            return Task.FromResult(true);
+        } 
+        private void HookAiLearningOnSlMove(TradeSignal? signal, string symbol, PositionSide side, decimal entry, decimal newSl)
+        {
+            try
+            {
+                if (signal != null && !signal.IsManual)
+                {
+                    var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
+
+                    _manualHandler.RegisterStop(symbol);
+                    _aiLearning.RecordTrade(symbol, sigSide, entry, newSl, _regimeNow);
+                }
+            }
+            catch { }
+        } 
         private async Task MultiLayerTrailingAsync(
             BinanceRestClient client,
             string symbol,
@@ -715,10 +1054,8 @@ namespace VertexAutoTradeBinance8.Services
             IReadOnlyList<BinanceFuturesUsdtKline> klines,
             CancellationToken ct)
         {
-            // ТВОЯ ТЕКУЩАЯ РЕАЛИЗАЦИЯ (как у тебя в v8.0)
             await Task.CompletedTask;
         }
-
         // =====================================================================
         // MARK PRICE SAFE
         // =====================================================================
@@ -734,14 +1071,10 @@ namespace VertexAutoTradeBinance8.Services
                 if (r.Success && r.Data != null && r.Data.Price > 0)
                     return r.Data.Price;
             }
-            catch
-            {
-                // ignore
-            }
+            catch { }
 
             return fallback > 0 ? fallback : 0m;
         }
-
         // =====================================================================
         // RAW BINANCE ALGO ORDER (POST /fapi/v1/algoOrder)
         // =====================================================================
@@ -752,7 +1085,6 @@ namespace VertexAutoTradeBinance8.Services
             private readonly string _apiKey;
             private readonly string _apiSecret;
             private readonly string _baseUrl;
-
             public BinanceAlgoOrderRaw(IConfiguration cfg, IHttpClientFactory httpFactory, ILogger logger)
             {
                 _logger = logger;
@@ -764,15 +1096,14 @@ namespace VertexAutoTradeBinance8.Services
                 _http = httpFactory.CreateClient("BinanceAlgoRaw");
                 _http.Timeout = TimeSpan.FromSeconds(8);
             }
-
             public async Task<bool> PlaceConditionalAsync(
                 string symbol,
                 OrderSide side,
                 PositionSide positionSide,
-                string type,                 // STOP_MARKET / TAKE_PROFIT_MARKET / ...
+                string type,
                 decimal quantity,
                 decimal triggerPrice,
-                string workingType,          // CONTRACT_PRICE / MARK_PRICE
+                string workingType,
                 bool? reduceOnly,
                 CancellationToken ct)
             {
@@ -783,12 +1114,8 @@ namespace VertexAutoTradeBinance8.Services
                 }
 
                 var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-                // Binance требует точку как decimal separator
                 string D(decimal v) => v.ToString("0.########", CultureInfo.InvariantCulture);
 
-                // /fapi/v1/algoOrder  (TRADE)
-                // algoType=CONDITIONAL обязательно. :contentReference[oaicite:1]{index=1}
                 var q = new List<KeyValuePair<string, string>>
                 {
                     new("algoType", "CONDITIONAL"),
@@ -797,16 +1124,12 @@ namespace VertexAutoTradeBinance8.Services
                     new("type", type),
                     new("timestamp", ts.ToString(CultureInfo.InvariantCulture)),
                     new("workingType", workingType),
-                    new("triggerPrice", D(triggerPrice))
+                    new("triggerPrice", D(triggerPrice)),
+                    new("positionSide", positionSide.ToString().ToUpperInvariant()),
+                    new("quantity", D(quantity))
                 };
 
-                // Hedge Mode: positionSide обязателен (если у тебя Hedge). :contentReference[oaicite:2]{index=2}
-                q.Add(new("positionSide", positionSide.ToString().ToUpperInvariant()));
-
-                // quantity нельзя с closePosition=true. Мы ставим quantity явно.
-                q.Add(new("quantity", D(quantity)));
-
-                // reduceOnly нельзя в Hedge Mode. :contentReference[oaicite:3]{index=3}
+                // reduceOnly — только если positionSide == BOTH (в Hedge не шлём)
                 if (reduceOnly.HasValue && positionSide == PositionSide.Both)
                     q.Add(new("reduceOnly", reduceOnly.Value ? "true" : "false"));
 
@@ -829,7 +1152,6 @@ namespace VertexAutoTradeBinance8.Services
                         return false;
                     }
 
-                    // На успехе приходит JSON с algoId/clientAlgoId и т.д. :contentReference[oaicite:4]{index=4}
                     _logger.LogInformation("[ALGO-RAW] OK {symbol} {type} posSide={ps} trig={tp} body={body}",
                         symbol, type, positionSide, triggerPrice, body);
 
@@ -844,7 +1166,6 @@ namespace VertexAutoTradeBinance8.Services
 
             private static string BuildQuery(IEnumerable<KeyValuePair<string, string>> q)
             {
-                // Binance: query string, url-encode
                 var sb = new StringBuilder();
                 foreach (var kv in q)
                 {
@@ -866,6 +1187,151 @@ namespace VertexAutoTradeBinance8.Services
             }
 
 
+
         }
+
+
+
+
+
+        private async Task TryHarvestProfitAsync(
+            BinanceRestClient client,
+            EngineState state,
+            string symbol,
+            PositionSide side,
+            BinancePositionDetailsUsdt pos,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            decimal aiEdgeScore,
+            decimal minUsd,
+            CancellationToken ct)
+        {
+
+            // ==========================================================
+            // 🔒 BLOCK HARVEST right after EARLY-TP (Binance sync lag)
+            // ==========================================================
+            var harvestKey = $"{symbol}|{side}";
+
+            if (_recentPartialClose.TryGetValue(harvestKey, out var ts))
+            {
+                var ageMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - ts;
+                if (ageMs < 8000) // 8 seconds hard block
+                {
+                    _logger.LogInformation(
+                        "[HARVEST][{symbol}][{side}] SKIP → recent EARLY-TP ({ms}ms)",
+                        symbol, side, ageMs);
+                    return;
+                }
+
+                _recentPartialClose.TryRemove(harvestKey, out _);
+            }
+
+
+
+
+            var sKey = EngineState.Key(symbol);
+            var st = state.Symbols.GetOrAdd(sKey, _ => new SymbolState());
+
+            // throttle
+            if ((DateTime.UtcNow - st.LastHarvestUtc) < TimeSpan.FromMinutes(6))
+                return;
+
+            // ==========================================================
+            // 🔒 ЖЁСТКАЯ ПРОВЕРКА ФАКТИЧЕСКОЙ ПОЗИЦИИ
+            // ==========================================================
+            var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+            if (!posInfo.Success || posInfo.Data == null)
+                return;
+
+            var realPos = posInfo.Data.FirstOrDefault(p =>
+                p.Symbol == symbol &&
+                p.PositionSide == side &&
+                Math.Abs(p.Quantity) > 0);
+
+            if (realPos == null)
+            {
+                _logger.LogWarning("[HARVEST][{symbol}][{side}] SKIP → no open position", symbol, side);
+                return;
+            }
+
+            decimal qty = Math.Abs(realPos.Quantity);
+            if (qty <= 0) return;
+
+            // ==========================================================
+            // uPnL
+            // ==========================================================
+            decimal uPnl;
+            try { uPnl = realPos.UnrealizedPnl; }
+            catch { return; }
+
+            if (uPnl <= 0m || uPnl < minUsd)
+                return;
+
+            decimal atr = _marketData.CalculateAtr(klines);
+            if (atr <= 0) atr = 0.00000001m;
+
+            decimal rr = Math.Abs(realPos.MarkPrice - realPos.EntryPrice) / atr;
+
+            decimal harvestPct =
+                aiEdgeScore >= 0.80m && rr >= 1.4m ? 0.18m :
+                aiEdgeScore >= 0.70m ? 0.28m :
+                0.45m;
+
+          //  decimal closeQty = Math.Round(qty * harvestPct, 8);
+           // if (closeQty <= 0) return;
+
+            // ==========================================================
+            // 🔥 FULL vs PARTIAL CLOSE LOGIC (КЛЮЧЕВО)
+            // ==========================================================
+
+            decimal closeQty = qty * harvestPct;
+
+            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+            var step = filters.step > 0 ? filters.step : 1m;
+
+            // ❗ КЛЮЧЕВО: всегда вниз
+            closeQty = Math.Floor(closeQty / step) * step;
+
+            if (closeQty < filters.minQty)
+            {
+                _logger.LogInformation(
+                    "[HARVEST][{symbol}][{side}] SKIP → rounded closeQty {q} < minQty {min}",
+                    symbol, side, closeQty, filters.minQty);
+                return;
+            }
+
+
+            bool isFullClose = closeQty >= qty;
+
+            var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+            var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+     symbol: symbol,
+     side: closeSide,
+     type: FuturesOrderType.Market,
+     quantity: closeQty,
+     positionSide: side,
+     ct: ct);
+
+
+            if (!res.Success)
+            {
+                _logger.LogWarning("[HARVEST][{symbol}][{side}] FAIL: {err}", symbol, side, res.Error);
+                return;
+            }
+
+            decimal addToBucket = uPnl * harvestPct;
+            st.RealizedPnlBucketUsd += Math.Max(0m, addToBucket);
+            st.LastHarvestUtc = DateTime.UtcNow;
+            st.HarvestsToday++;
+
+            _logger.LogInformation(
+                "[HARVEST][{symbol}][{side}] OK closeQty={q} uPnl={pnl:F2} addBucket={b:F2} edge={e:F2} rr={rr:F2}",
+                symbol, side, closeQty, uPnl, addToBucket, aiEdgeScore, rr);
+
+            _recentPartialClose[$"{symbol}|{side}"] =
+    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        }
+
     }
 }

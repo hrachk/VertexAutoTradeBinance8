@@ -2,7 +2,7 @@
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Web.Data;
-using VertexAutoTradeBinance8.Web.Hubs;
+ 
 using VertexAutoTradeBinance8.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -33,6 +33,10 @@ builder.Services.AddSingleton<WeatherForecastService>();
 builder.Services.Configure<TradingOptions>(
     builder.Configuration.GetSection("TradingOptions"));
 
+builder.Services.Configure<BinanceOptions>(
+    builder.Configuration.GetSection("Binance"));
+
+
 builder.Services.AddSingleton<AiStopLossOptimizer>();
 
 
@@ -54,6 +58,15 @@ builder.Services.AddSingleton<EngineStateService>();
 builder.Services.AddSingleton<ExecutedSignalUiService>();
 builder.Services.AddSingleton<ExecutedSignalsPushService>();
 builder.Services.AddSingleton<ExecutedSignalService>();
+
+builder.Services.AddScoped<LivePnlService>();
+
+
+builder.Services.AddHttpClient<LivePnlService>(c =>
+{
+    c.BaseAddress = new Uri(builder.Configuration["ApiBaseUrl"] ?? "http://localhost:5253");
+});
+
 
 // Режим рынка (AI Smart Regime)
 builder.Services.AddSingleton<AiMarketRegimeService>();

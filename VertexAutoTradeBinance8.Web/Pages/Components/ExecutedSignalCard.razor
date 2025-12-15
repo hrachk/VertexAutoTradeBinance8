@@ -1,128 +1,138 @@
 ﻿@using VertexAutoTradeBinance8.Models
+@using VertexAutoTradeBinance8.Web.Services
 @inherits ComponentBase
+@inject LivePnlService LivePnl
+@inject ExecutedSignalUiService  signalUiService
 
-<div class="missed-card executed-card">
-    <div class="card-header-row">
-        <div class="symbol">@Record.Symbol</div>
-        <div class="time">@Record.Time.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss")</div>
-    </div>
+<div class="bn-card">
 
-    <div class="status-row">
-        <span class="status-pill @StatusCss()">@StatusText()</span>
-        <span class="side-pill @(Record.Side == SignalSide.Buy ? "side-long" : "side-short")">
-            @(Record.Side == SignalSide.Buy ? "LONG" : "SHORT")
-        </span>
-    </div>
-
-    <div class="score-row">
-        <span class="score-label">Opportunity Score:</span>
-        <span class="score-value">@Record.OpportunityScore/100</span>
-    </div>
-
-    <div class="prices-row">
-        <div class="price-item">
-            <span class="label">Вход</span>
-            <span class="value">@Record.Entry</span>
-        </div>
-        <div class="price-item">
-            <span class="label">SL</span>
-            <span class="value">@Record.StopLoss</span>
-        </div>
-        @if (Record.TakeProfits != null && Record.TakeProfits.Count > 0)
-        {
-            <div class="price-item">
-                <span class="label">TP1</span>
-                <span class="value">@Record.TakeProfits[0]</span>
+    <!-- TOP -->
+    <div class="bn-top">
+        <div class="bn-left">
+            <div class="bn-symbol">
+                <span class="bn-badge @(Record.Side == SignalSide.Buy ? "bn-long" : "bn-short")">
+                    @(Record.Side == SignalSide.Buy ? "L" : "S")
+                </span>
+                <span class="bn-ticker">@Record.Symbol</span>
+                <span class="bn-mini">PERP</span>
+                <span class="bn-mini">@Fmt0(LivePos?.Leverage)</span>
             </div>
-        }
-    </div>
 
-    <div class="risk-row">
-        <div class="risk-item">
-            <span class="label">Qty</span>
-            <span class="value">@Record.Qty</span>
-        </div>
-        <div class="risk-item">
-            <span class="label">Notional</span>
-            <span class="value">@Record.Notional.ToString("F2") USDT</span>
-        </div>
-    </div>
-
-    <div class="regime-row">
-        <div class="risk-item">
-            <span class="label">ATR</span>
-            <span class="value">@Record.Atr.ToString("F2")</span>
-        </div>
-        <div class="risk-item">
-            <span class="label">Vol</span>
-            <span class="value">@Record.Volatility:P2</span>
-        </div>
-        <div class="risk-item">
-            <span class="label">Slope</span>
-            <span class="value">@Record.Slope:P2</span>
-        </div>
-    </div>
-
-    @if (Record.Status == TradeExecutionStatus.PositionClosedTp ||
-        Record.Status == TradeExecutionStatus.PositionClosedSl ||
-        Record.Status == TradeExecutionStatus.PositionClosedManual)
-    {
-        <div class="pnl-row">
-            <div class="risk-item">
-                <span class="label">Exit</span>
-                <span class="value">@Record.ExitPrice</span>
-            </div>
-            <div class="risk-item">
-                <span class="label">PnL</span>
-                <span class="value">@Record.PnL</span>
-            </div>
-            <div class="risk-item">
-                <span class="label">ROI</span>
-                <span class="value">@Record.RoiPercent?.ToString("F2") %</span>
+            <div class="bn-sub">
+                @Record.Time.ToLocalTime():dd.MM.yyyy HH:mm:ss
+                <span class="bn-dot">•</span>
+                <span class="bn-status @StatusCss()">@StatusText()</span>
             </div>
         </div>
-    }
 
-    <div class="tags-row">
-        <span class="reason-label">Reason:</span>
-        <span class="reason-text">@Record.Reason</span>
+        <div class="bn-right">
+            <div class="bn-roi @(LiveRoi >= 0 ? "bn-plus" : "bn-minus")">
+                @FmtSignedPct(LiveRoi)
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN -->
+    <div class="bn-main">
+        <div class="bn-pnl">
+            <div class="bn-pnl-label">PnL (USDT)</div>
+            <div class="bn-pnl-val @(LiveUnrealizedPnl >= 0 ? "bn-plus" : "bn-minus")">
+                @FmtSigned(LiveUnrealizedPnl)
+            </div>
+        </div>
+
+        <div class="bn-grid">
+            <div class="bn-item">
+                <div class="k">Size (USDT)</div>
+                <div class="v">@Fmt2(LiveNotional)</div>
+            </div>
+
+            <div class="bn-item">
+                <div class="k">Margin</div>
+                <div class="v">@Fmt2(LivePos?.IsolatedMargin)</div>
+            </div>
+
+            <div class="bn-item">
+                <div class="k">Entry</div>
+                <div class="v">@Fmt(Record.Entry)</div>
+            </div>
+
+            <div class="bn-item">
+                <div class="k">Mark</div>
+                <div class="v">@Fmt(LivePos?.MarkPrice)</div>
+            </div>
+
+            <div class="bn-item">
+                <div class="k">Liq. Price</div>
+                <div class="v">@Fmt(LivePos?.LiquidationPrice)</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- FOOT -->
+    <div class="bn-foot">
+        <span class="muted">Reason:</span> @Record.Reason
     </div>
 </div>
 
 @code {
     [Parameter] public ExecutedSignalRecord Record { get; set; } = default!;
 
-    private string StatusText()
-    {
-        return Record.Status switch
-        {
-            TradeExecutionStatus.SignalCreated => "Signal",
-            TradeExecutionStatus.OrderCreated => "Order Created",
-            TradeExecutionStatus.OrderPartiallyFilled => "Partial Fill",
-            TradeExecutionStatus.PositionOpened => "Position Opened",
-            TradeExecutionStatus.PositionClosedTp => "Closed (TP)",
-            TradeExecutionStatus.PositionClosedSl => "Closed (SL)",
-            TradeExecutionStatus.PositionClosedManual => "Closed (Manual)",
-            TradeExecutionStatus.PositionError => "Error",
-            TradeExecutionStatus.Cancelled => "Cancelled",
-            _ => Record.Status.ToString()
-        };
-    }
+    string PosSide => Record.Side == SignalSide.Buy ? "LONG" : "SHORT";
 
-    private string StatusCss()
+    LivePnlService.LivePos? LivePos =>
+        Record.IsOpen ? LivePnl.Get(Record.Symbol, PosSide) : null;
+
+    decimal LiveUnrealizedPnl =>
+       LivePos != null
+           ? LivePos.UnrealizedPnl
+           : (Record.Side == SignalSide.Buy
+               ? (MarkPrice - Record.Entry) * Record.Qty
+               : (Record.Entry - MarkPrice) * Record.Qty);
+
+    decimal LiveNotional =>
+        LivePos != null
+            ? Math.Abs(LivePos.PositionAmt) * LivePos.MarkPrice
+        : Record.Notional;
+ 
+
+            decimal MarkPrice =>
+    LivePos?.MarkPrice
+?? signalUiService.GetPrice(Record.Symbol);
+
+
+
+decimal LiveRoi =>
+    LivePos?.IsolatedMargin > 0
+        ? (LiveUnrealizedPnl / LivePos.IsolatedMargin.Value) * 100m
+        : (Record.Notional > 0
+            ? (LiveUnrealizedPnl / Record.Notional) * 100m
+            : 0m);
+
+
+
+    static string Fmt(decimal? v)
+        => v.HasValue && v.Value != 0 ? v.Value.ToString("0.########") : "—";
+
+    static string Fmt2(decimal? v)
+        => v.HasValue && v.Value != 0 ? v.Value.ToString("0.00") : "—";
+
+    static string Fmt0(int? v) => v.HasValue && v > 0 ? v.ToString() : "--";
+
+    static string FmtSigned(decimal v)
+        => v > 0 ? $"+{v:0.00}" : v.ToString("0.00");
+
+    static string FmtSignedPct(decimal v)
+        => v > 0 ? $"+{v:0.00}%" : $"{v:0.00}%";
+
+    string StatusText() => Record.Status.ToString();
+    string StatusCss() => Record.Status switch
     {
-        return Record.Status switch
-        {
-            TradeExecutionStatus.SignalCreated => "st-signal",
-            TradeExecutionStatus.OrderCreated => "st-pending",
-            TradeExecutionStatus.OrderPartiallyFilled => "st-pending",
-            TradeExecutionStatus.PositionOpened => "st-open",
-            TradeExecutionStatus.PositionClosedTp => "st-tp",
-            TradeExecutionStatus.PositionClosedSl => "st-sl",
-            TradeExecutionStatus.PositionClosedManual => "st-closed",
-            TradeExecutionStatus.PositionError => "st-error",
-            TradeExecutionStatus.Cancelled => "st-cancel",
-            _ => "st-signal"
-        };
-    }
+        TradeExecutionStatus.PositionOpened => "st-open",
+        TradeExecutionStatus.PositionClosedTp => "st-tp",
+        TradeExecutionStatus.PositionClosedSl => "st-sl",
+        TradeExecutionStatus.PositionClosedManual => "st-closed",
+        TradeExecutionStatus.PositionError => "st-error",
+        _ => "st-signal"
+    };
 }

@@ -1,5 +1,5 @@
 ﻿using Microsoft.AspNetCore.SignalR;
-using VertexAutoTradeBinance8.Web.Hubs;
+ 
 
 public class ExecutedSignalsPushService
 {

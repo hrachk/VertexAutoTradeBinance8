@@ -3,6 +3,7 @@ using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
 {
+    /// это память и AI,
     /// <summary>
     /// AiSelfLearningService v7.0 (QUANT-REALTIME MAX, 3-Channel Learning)
     ///

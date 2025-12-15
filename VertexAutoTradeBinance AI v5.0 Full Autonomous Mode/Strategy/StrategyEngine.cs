@@ -27,8 +27,8 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly AiSelfLearningService _aiLearning;
         private readonly SmartRegimeService _smartRegimeService;
         private readonly TradingOptions _opt;
-
-
+        private static readonly Dictionary<string, DateTime> _lastStopTime = new();
+        private readonly EngineStateSnapshotService _stateSvc;
         //fot UI
         public string CurrentMode { get; private set; } = "Detecting";
         public bool LastSoftEntry { get; private set; }
@@ -45,7 +45,8 @@ namespace VertexAutoTradeBinance8.Strategy
             AiPatternEngineService patternEngineService,
             AiSelfLearningService aiLearning,
             SmartRegimeService smartRegimeService,
-            TradingOptions opt)
+            TradingOptions opt,
+            EngineStateSnapshotService stateSvc)
         {
             _logger = logger;
             _correlationService = correlationService;
@@ -55,8 +56,9 @@ namespace VertexAutoTradeBinance8.Strategy
             _aiLearning = aiLearning;
             _smartRegimeService = smartRegimeService;
             _opt = opt;
+            _stateSvc = stateSvc;
         }
-
+        private EngineState _engineState => _stateSvc.State;
         // -------------------------------------------------------------------------------------
         // ATR/TP/SL настройки по таймфрейму
         // -------------------------------------------------------------------------------------
@@ -854,6 +856,24 @@ $@"📊 Режим рынка:
                 return null;
             }
 
+
+            // =====================================================
+            // ⏳ COOLDOWN AFTER STOP (PER SYMBOL)
+            // =====================================================
+            if (_lastStopTime.TryGetValue(symbol, out var lastStop))
+            {
+                var diff = DateTime.UtcNow - lastStop;
+                if (diff < TimeSpan.FromMinutes(10))
+                {
+                    _logger.LogInformation(
+                        $"⏳ COOLDOWN: {symbol} blocked after stop ({diff.TotalMinutes:F1}m)");
+                    _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    return null;
+                }
+            }
+
+
+
             // 3) SoftModeAllowed: можно насильно разрешить через config AllowSoftEntryAlways
             bool softModeAllowed =
                 (regime == MarketRegime.StrongUpTrend ||
@@ -1063,56 +1083,78 @@ $@"📊 Режим рынка:
             }
 
             // 8) DYNAMIC RR FILTER + RelaxRR
+            #region  НЕ ставим обычный TP -this is OLD version
+            /*  if (baseSignal.TakeProfits != null && baseSignal.TakeProfits.Count > 0)
+              {
+                  decimal tp1 = baseSignal.TakeProfits[0];
+                  decimal slDist = Math.Abs(baseSignal.EntryPrice - baseSignal.StopLoss);
+                  decimal tpDist = Math.Abs(tp1 - baseSignal.EntryPrice);
+
+                  if (slDist <= 0 || tpDist <= 0)
+                  {
+                      _logger.LogInformation(
+                          $"🚫 RR filter: некорректные расстояния slDist={slDist:F6}, tpDist={tpDist:F6} → сигнал отброшен.");
+                      _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                      return null;
+                  }
+
+                  decimal rr = tpDist / slDist;
+                  decimal minRr = GetDynamicMinRr(symbol, interval, smart, baseSignal);
+
+                  if (relaxRr)
+                  {
+                      // Чуть опускаем минимальный RR в тест-режиме
+                      var original = minRr;
+                      minRr *= 0.80m;
+                      if (minRr < 1.2m) minRr = 1.2m;
+
+                      _logger.LogInformation(
+                          $"🧪 TestMode: RelaxRR=TRUE → minRR {original:F2} → {minRr:F2}.");
+                  }
+
+                  if (rr < minRr)
+                  {
+                      _aiLearning.RecordMarketStateTriggered(
+                          reason: "RR_BLOCK",
+                          symbol: symbol,
+                          timeframe: interval.ToString(),
+                          regime: smart.BaseRegime,
+                          slope: smart.TrendSlopePercent,
+                          volatility: smart.VolatilityPercent,
+                          atr: baseSignal.Atr ?? 0,
+                          confidence: smart.Confidence
+                      );
+
+                      _logger.LogInformation(
+                          $"🚫 RR filter: RR={rr:F2} < minRR={minRr:F2} (entry={baseSignal.EntryPrice:F4}, SL={baseSignal.StopLoss:F4}, TP1={tp1:F4}) → сигнал отброшен.");
+                      _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                      return null;
+                  }
+
+                  _logger.LogInformation(
+                      $"✅ RR OK: RR={rr:F2} ≥ minRR={minRr:F2}.");
+              }*/
+            #endregion
+            // 8) DYNAMIC RR FILTER (StrongUpTrend FIX)
             if (baseSignal.TakeProfits != null && baseSignal.TakeProfits.Count > 0)
             {
-                decimal tp1 = baseSignal.TakeProfits[0];
-                decimal slDist = Math.Abs(baseSignal.EntryPrice - baseSignal.StopLoss);
-                decimal tpDist = Math.Abs(tp1 - baseSignal.EntryPrice);
+                bool isStrongTrend =
+                    smart.BaseRegime == MarketRegime.StrongUpTrend ||
+                    smart.BaseRegime == MarketRegime.StrongDownTrend;
 
-                if (slDist <= 0 || tpDist <= 0)
+                if (isStrongTrend)
                 {
-                    _logger.LogInformation(
-                        $"🚫 RR filter: некорректные расстояния slDist={slDist:F6}, tpDist={tpDist:F6} → сигнал отброшен.");
-                    _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    return null;
+                    // ❗ В сильном тренде НЕ фиксируем TP
+                    // Только первый TP как trigger для runner
+                    baseSignal.TakeProfits = new List<decimal>
+        {
+            baseSignal.TakeProfits[0]
+        };
+
+                    baseSignal.Reason += "|STRONG_TREND_RUNNER";
                 }
-
-                decimal rr = tpDist / slDist;
-                decimal minRr = GetDynamicMinRr(symbol, interval, smart, baseSignal);
-
-                if (relaxRr)
-                {
-                    // Чуть опускаем минимальный RR в тест-режиме
-                    var original = minRr;
-                    minRr *= 0.80m;
-                    if (minRr < 1.2m) minRr = 1.2m;
-
-                    _logger.LogInformation(
-                        $"🧪 TestMode: RelaxRR=TRUE → minRR {original:F2} → {minRr:F2}.");
-                }
-
-                if (rr < minRr)
-                {
-                    _aiLearning.RecordMarketStateTriggered(
-                        reason: "RR_BLOCK",
-                        symbol: symbol,
-                        timeframe: interval.ToString(),
-                        regime: smart.BaseRegime,
-                        slope: smart.TrendSlopePercent,
-                        volatility: smart.VolatilityPercent,
-                        atr: baseSignal.Atr ?? 0,
-                        confidence: smart.Confidence
-                    );
-
-                    _logger.LogInformation(
-                        $"🚫 RR filter: RR={rr:F2} < minRR={minRr:F2} (entry={baseSignal.EntryPrice:F4}, SL={baseSignal.StopLoss:F4}, TP1={tp1:F4}) → сигнал отброшен.");
-                    _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    return null;
-                }
-
-                _logger.LogInformation(
-                    $"✅ RR OK: RR={rr:F2} ≥ minRR={minRr:F2}.");
             }
+
 
             // Финальный красивый блок
             decimal? tp1F = baseSignal.TakeProfits != null && baseSignal.TakeProfits.Count > 0
@@ -1128,18 +1170,210 @@ $@"📊 Режим рынка:
             string dirEmoji = baseSignal.Side == SignalSide.Buy ? "🟢 LONG" : "🔴 SHORT";
 
             _logger.LogInformation(
-$@"📌 Итоговый сигнал:
-   • Направление : {dirEmoji}
-   • Entry       : {baseSignal.EntryPrice:F4}
-   • Stop Loss   : {baseSignal.StopLoss:F4}
-   • TP1         : {(tp1F.HasValue ? tp1F.Value.ToString("F4") : "-")}
-   • TP2         : {(tp2F.HasValue ? tp2F.Value.ToString("F4") : "-")}
-   • TP3         : {(tp3F.HasValue ? tp3F.Value.ToString("F4") : "-")}
-   • Reason      : {baseSignal.Reason}");
+            $@"📌 Итоговый сигнал:
+               • Направление : {dirEmoji}
+               • Entry       : {baseSignal.EntryPrice:F4}
+               • Stop Loss   : {baseSignal.StopLoss:F4}
+               • TP1         : {(tp1F.HasValue ? tp1F.Value.ToString("F4") : "-")}
+               • TP2         : {(tp2F.HasValue ? tp2F.Value.ToString("F4") : "-")}
+               • TP3         : {(tp3F.HasValue ? tp3F.Value.ToString("F4") : "-")}
+               • Reason      : {baseSignal.Reason}");
 
-            _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                        _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+            // =====================================================
+            // 🔐 EXPOSURE CONTROL (FINAL GATE BEFORE RETURN)
+            // =====================================================
+            try
+            {
+                var exposure = CanIncreaseExposure(
+                   state: _engineState,              // существующий EngineState
+    symbol: symbol,
+    symbolNotionalUsd: 0m,             // ❗ StrategyEngine не знает — ставим 0
+    equityUsd: 0m,                     // ❗ НЕ используется тут
+    usedMarginUsd: 0m,                 // ❗ НЕ используется тут
+    aiEdgeScore: smart.Confidence,     // ✔ корректный proxy
+    isSpecialSetup:
+        baseSignal.IsSuperSignal ||
+        baseSignal.Reason.Contains("LIQUIDITY_GRAB") ||
+        baseSignal.Reason.Contains("PULLBACK_EMA21"),
+    isHighVolatility:
+        smart.VolatilityPercent >= 0.015m,
+    isLowEquityMode: false             // ❗ решается НИЖЕ по стеку
+                );
+
+                if (!exposure.AllowAdd)
+                {
+                    _aiLearning.RecordMarketStateTriggered(
+                        reason: "EXPOSURE_BLOCK",
+                        symbol: symbol,
+                        timeframe: interval.ToString(),
+                        regime: smart.BaseRegime,
+                        slope: smart.TrendSlopePercent,
+                        volatility: smart.VolatilityPercent,
+                        atr: baseSignal.Atr ?? 0,
+                        confidence: smart.Confidence
+                    );
+
+                    _logger.LogWarning(
+                        $"⛔ EXPOSURE BLOCK: {exposure.Reason}");
+
+                    _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    return null;
+                }
+
+                
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[STRAT][EXPOSURE] Fatal error → signal blocked for safety");
+                return null;
+            }
+
 
             return baseSignal;
         }
+
+
+        private ExposureDecision CanIncreaseExposure(
+    EngineState state,
+    string symbol,
+    decimal symbolNotionalUsd,   // текущий notional по символу (сумма long+short или чистая — как решишь)
+    decimal equityUsd,
+    decimal usedMarginUsd,
+    decimal aiEdgeScore,         // 0..1
+    bool isSpecialSetup,         // твой MomentumTradingPro: liquidity grab + retest + confirm
+    bool isHighVolatility,       // по ATR/vol
+    bool isLowEquityMode         // equity ниже порога -> “крутимся”
+)
+        {
+            var sKey = EngineState.Key(symbol);
+            var st = state.Symbols.GetOrAdd(sKey, _ => new SymbolState());
+
+            // === daily bucket reset ===
+            if (st.BucketDayUtc != DateTime.UtcNow.Date)
+            {
+                st.BucketDayUtc = DateTime.UtcNow.Date;
+                st.RealizedPnlBucketUsd = 0m;
+                st.HarvestsToday = 0;
+                st.AddsToday = 0;
+            }
+
+            // === dynamic symbol cap ===
+            // База: чем меньше капитал — тем шире разрешаем (крутиться), но не безумно.
+            // Чем выше vol — тем меньше cap (риск).
+            decimal baseCap = st.DefaultSymbolCapPct;
+
+            if (isLowEquityMode)
+                baseCap = Math.Min(0.35m, baseCap + 0.10m); // +10% cap для малого капитала, максимум 35%
+
+            if (isHighVolatility)
+                baseCap = Math.Max(0.10m, baseCap - 0.06m); // режем cap на высоком вол
+
+            // временный буст от AI (если ты где-то выставишь st.CurrentSymbolCapPct и CapBoostUntilUtc)
+            decimal cap = baseCap;
+            if (st.CapBoostUntilUtc > DateTime.UtcNow)
+                cap = Math.Max(cap, st.CurrentSymbolCapPct);
+
+            // === global utilization cap (динамический) ===
+            // тоже не жёстко: при малом капитале можно чуть выше, но не бесконечно.
+            decimal maxUsedMarginPct = isLowEquityMode ? 0.70m : 0.55m;
+            if (isHighVolatility) maxUsedMarginPct -= 0.08m;
+
+            decimal usedPct = equityUsd <= 0 ? 1m : usedMarginUsd / equityUsd;
+            if (usedPct >= maxUsedMarginPct)
+            {
+                return new ExposureDecision
+                {
+                    AllowAdd = false,
+                    UseProfitBucket = false,
+                    AllowedAddUsd = 0m,
+                    Reason = $"BLOCK: usedMarginPct={usedPct:P0} >= {maxUsedMarginPct:P0}",
+                    SymbolCapPct = cap
+                };
+            }
+
+            // === symbol cap check ===
+            decimal symbolPct = equityUsd <= 0 ? 1m : symbolNotionalUsd / equityUsd;
+            bool capHit = symbolPct >= cap;
+
+            // === "важно усреднить без профита" ===
+            // Разрешаем ТОЛЬКО если special-setup И aiEdgeScore высокий.
+            bool allowNoProfitAveraging = isSpecialSetup && aiEdgeScore >= 0.78m;
+
+            // === profit bucket route ===
+            // если cap не пробит — можно добавлять из bucket (и чуть-чуть без bucket только по special)
+            decimal bucket = st.RealizedPnlBucketUsd;
+            decimal reinvestRate = 0.55m; // 55% прибыли можно реинвестировать
+            decimal fromBucketUsd = Math.Max(0m, bucket * reinvestRate);
+
+            // === amount sizing (консервативно) ===
+            // при capHit: добавлять можно только если allowNoProfitAveraging и то ограниченно
+            decimal maxAddUsd;
+            if (capHit)
+            {
+                if (!allowNoProfitAveraging)
+                {
+                    return new ExposureDecision
+                    {
+                        AllowAdd = false,
+                        UseProfitBucket = false,
+                        AllowedAddUsd = 0m,
+                        Reason = $"BLOCK: symbolCapHit {symbolPct:P0} >= {cap:P0}",
+                        SymbolCapPct = cap
+                    };
+                }
+
+                // special add разрешаем маленьким шотом, чтобы “дожать” вход, а не залить депозит
+                maxAddUsd = isHighVolatility ? equityUsd * 0.015m : equityUsd * 0.025m; // 1.5–2.5% equity
+                return new ExposureDecision
+                {
+                    AllowAdd = true,
+                    UseProfitBucket = false,
+                    AllowedAddUsd = Math.Max(0m, maxAddUsd),
+                    Reason = $"ALLOW: special-setup no-profit add (capHit) edge={aiEdgeScore:F2}",
+                    SymbolCapPct = cap
+                };
+            }
+
+            // cap не пробит
+            // 1) если есть bucket — добавляем из bucket
+            if (fromBucketUsd >= 5m)
+            {
+                maxAddUsd = Math.Min(fromBucketUsd, equityUsd * (isHighVolatility ? 0.02m : 0.04m));
+                return new ExposureDecision
+                {
+                    AllowAdd = true,
+                    UseProfitBucket = true,
+                    AllowedAddUsd = Math.Max(0m, maxAddUsd),
+                    Reason = $"ALLOW: add from profit bucket={bucket:F2} edge={aiEdgeScore:F2}",
+                    SymbolCapPct = cap
+                };
+            }
+
+            // 2) bucket нет — только special-setup
+            if (allowNoProfitAveraging)
+            {
+                maxAddUsd = equityUsd * (isHighVolatility ? 0.015m : 0.03m);
+                return new ExposureDecision
+                {
+                    AllowAdd = true,
+                    UseProfitBucket = false,
+                    AllowedAddUsd = Math.Max(0m, maxAddUsd),
+                    Reason = $"ALLOW: special-setup no-profit add edge={aiEdgeScore:F2}",
+                    SymbolCapPct = cap
+                };
+            }
+
+            return new ExposureDecision
+            {
+                AllowAdd = false,
+                UseProfitBucket = false,
+                AllowedAddUsd = 0m,
+                Reason = "BLOCK: no bucket and not special-setup",
+                SymbolCapPct = cap
+            };
+        }
+
     }
 }

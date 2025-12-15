@@ -37,7 +37,6 @@
 
   <ItemGroup>
     <Folder Include="Models\AI\" />
-    <Folder Include="Services\Interfaces\" />
   </ItemGroup>
 
 </Project>

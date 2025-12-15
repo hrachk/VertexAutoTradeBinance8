@@ -5,6 +5,7 @@
 @using Microsoft.AspNetCore.SignalR.Client
 @inject ExecutedSignalUiService ExecService
 @inject NavigationManager Nav
+@inject LivePnlService LivePnl
 
 <div class="missed-container">
 
@@ -46,11 +47,29 @@
     private string currentFilter = "ALL";
 
     private HubConnection? hubConnection;
-
+    private PeriodicTimer? _timer;
     protected override async Task OnInitializedAsync()
     {
-        all = ExecService.GetAll();
+     
+
+        var symbols = string.Join(",", all.Select(x => x.Symbol).Distinct());
+        LivePnl.Updated += OnLiveUpdated;
+        LivePnl.Start(symbols, 900);
+         
         ApplyFilter();
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+
+        _ = Task.Run(async () =>
+        {
+            while (await _timer.WaitForNextTickAsync())
+            {
+                await ExecService.UpdatePricesAsync(all.Select(x => x.Symbol));
+                await ExecService.UpdatePositionsAsync();
+                await InvokeAsync(StateHasChanged);
+            }
+        });
+
+
 
         hubConnection = new HubConnectionBuilder()
             .WithUrl(Nav.ToAbsoluteUri("/hubs/executedSignals"))
@@ -67,14 +86,21 @@
         await hubConnection.StartAsync();
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        if (hubConnection != null)
-        {
-            await hubConnection.DisposeAsync();
-        }
-    }
 
+    private void OnLiveUpdated()
+{
+    InvokeAsync(StateHasChanged);
+}
+
+public async ValueTask DisposeAsync()
+{
+    if (hubConnection != null)
+        await hubConnection.DisposeAsync();
+
+    LivePnl.Updated -= OnLiveUpdated;
+    await LivePnl.DisposeAsync();
+}
+ 
     private void SetFilter(string key)
     {
         currentFilter = key;

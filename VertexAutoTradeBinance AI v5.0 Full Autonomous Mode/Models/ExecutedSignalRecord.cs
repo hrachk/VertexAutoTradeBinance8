@@ -15,6 +15,7 @@ namespace VertexAutoTradeBinance8.Models
         Cancelled,              // отменено
     }
 
+
     public class ExecutedSignalRecord
     {
         public string Symbol { get; set; } = string.Empty;
@@ -46,5 +47,10 @@ namespace VertexAutoTradeBinance8.Models
 
         // Доп. инфа (например, AIrisk, regime и т.п.)
         public string Tags { get; set; } = string.Empty;
+
+        public bool IsOpen =>
+    Status == TradeExecutionStatus.OrderCreated ||
+    Status == TradeExecutionStatus.OrderPartiallyFilled ||
+    Status == TradeExecutionStatus.PositionOpened;
     }
 }

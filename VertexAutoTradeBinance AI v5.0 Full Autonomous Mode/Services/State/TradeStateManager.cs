@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
 {
@@ -55,13 +56,5 @@ namespace VertexAutoTradeBinance8.Services
             var s = Get(symbol);
             return s.LastHtfOpenTimeUtc == htfOpen && s.HadStopInsideHtf;
         }
-    }
-
-    public class SymbolState
-    {
-        public DateTime? LastStopTimeUtc { get; set; }
-        public int LosingStreak { get; set; }
-        public DateTime? LastHtfOpenTimeUtc { get; set; }
-        public bool HadStopInsideHtf { get; set; }
-    }
+    } 
 }

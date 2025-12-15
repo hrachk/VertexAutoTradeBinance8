@@ -1,4 +1,5 @@
-﻿using Binance.Net.Enums;
+﻿
+using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using Microsoft.Extensions.Options;
 using VertexAutoTradeBinance8.Configuration;
@@ -43,23 +44,7 @@ namespace VertexAutoTradeBinance8
         private readonly EngineStateBuilder  _engineState;
         private readonly EngineStateSnapshotService  _engineStateSnapshot;
 
-
-        private static readonly KlineInterval[] TFS = {
-            KlineInterval.OneMinute,
-            KlineInterval.FiveMinutes,
-            KlineInterval.FifteenMinutes,
-            KlineInterval.OneHour,
-            KlineInterval.OneDay
-        };
-
-        private readonly Dictionary<KlineInterval, TimeSpan> _min = new()
-        {
-            {KlineInterval.OneMinute, TimeSpan.FromSeconds(2)},
-            {KlineInterval.FiveMinutes, TimeSpan.FromSeconds(25)},
-            {KlineInterval.FifteenMinutes, TimeSpan.FromSeconds(60)},
-            {KlineInterval.OneHour, TimeSpan.FromMinutes(5)},
-            {KlineInterval.OneDay, TimeSpan.FromMinutes(30)}
-        };
+ 
 
         private DateTime _lastQuantTick = DateTime.UtcNow;
 
@@ -162,7 +147,7 @@ namespace VertexAutoTradeBinance8
                     };
 
                     if (finalTf == null)
-                        continue;
+                        continue; 
 
                     // --- 1) Обработка сигнала
                     await ProcessSymbol(symbol, finalTf.Value, ct);
