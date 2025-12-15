@@ -11,6 +11,8 @@
 
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
+using System;
+using System.Collections.Generic;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
@@ -27,14 +29,17 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly AiSelfLearningService _aiLearning;
         private readonly SmartRegimeService _smartRegimeService;
         private readonly TradingOptions _opt;
-        private static readonly Dictionary<string, DateTime> _lastStopTime = new();
+        private static readonly Dictionary<(string symbol, SignalSide side), DateTime> _lastStopTime; 
         private readonly EngineStateSnapshotService _stateSvc;
         //fot UI
         public string CurrentMode { get; private set; } = "Detecting";
         public bool LastSoftEntry { get; private set; }
         public bool LastBlockedByLiquidity { get; private set; }
 
+        public decimal RiskScale { get; set; } = 1.0m;
+        // 1.0 = обычный риск, 0.07 = micro-probe
 
+        private readonly ReverseProbeEngine _reverseProbe = new();
 
 
         public StrategyEngine(
@@ -858,19 +863,21 @@ $@"📊 Режим рынка:
 
 
             // =====================================================
-            // ⏳ COOLDOWN AFTER STOP (PER SYMBOL)
+            // ⏳ SIDE-AWARE COOLDOWN (PRO)
             // =====================================================
-            if (_lastStopTime.TryGetValue(symbol, out var lastStop))
+            if (_lastStopTime.TryGetValue((symbol, baseSignal.Side), out var lastStop))
             {
                 var diff = DateTime.UtcNow - lastStop;
+
+                // ⛔ Блокируем ТОЛЬКО тот же side
                 if (diff < TimeSpan.FromMinutes(10))
                 {
                     _logger.LogInformation(
-                        $"⏳ COOLDOWN: {symbol} blocked after stop ({diff.TotalMinutes:F1}m)");
-                    _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                        $"⏳ COOLDOWN SAME-SIDE: {symbol} {baseSignal.Side} blocked ({diff.TotalMinutes:F1}m)");
                     return null;
                 }
             }
+
 
 
 
@@ -974,6 +981,38 @@ $@"📊 Режим рынка:
 
 
                 return null;
+            }
+
+
+            // =====================================================
+            // 🔁 REVERSE PROBE (PRO MODE)
+            // =====================================================
+            bool positionIsProtected =
+                _engineState.Symbols.TryGetValue(
+                    EngineState.Key(symbol),
+                    out var st) &&
+                st.LastProtectionUtc > DateTime.UtcNow.AddMinutes(-15);
+            // ↑ Supervisor ставит protection при BE / early TP
+
+            var atrNow = baseSignal.Atr ?? 0m;
+
+            if (atrNow > 0)
+            {
+                var probe = _reverseProbe.TryCreateProbe(
+                    symbol,
+                    baseSignal,
+                    smart,
+                    positionIsProtected,
+                    atrNow);
+
+                if (probe != null)
+                {
+                    _logger.LogWarning(
+                        "[REVERSE-PROBE][{symbol}] side={side} riskScale={risk}",
+                        symbol, probe.Side, probe.RiskScale);
+
+                    return probe; // ⛔ НИКАКОГО ДАЛЬНЕЙШЕГО ФИЛЬТРА
+                }
             }
 
             // 5) Pattern Filter — с защитой + RelaxPatternBlock вариант
@@ -1080,61 +1119,8 @@ $@"📊 Режим рынка:
                 _logger.LogError(ex,
                     $"[STRAT][{symbol}][{interval}] AiSelfLearningService.GetAiRiskAdjustment ERROR → AIrisk=1.00.");
                 baseSignal.Reason += "|AIrisk=1.00";
-            }
+            } 
 
-            // 8) DYNAMIC RR FILTER + RelaxRR
-            #region  НЕ ставим обычный TP -this is OLD version
-            /*  if (baseSignal.TakeProfits != null && baseSignal.TakeProfits.Count > 0)
-              {
-                  decimal tp1 = baseSignal.TakeProfits[0];
-                  decimal slDist = Math.Abs(baseSignal.EntryPrice - baseSignal.StopLoss);
-                  decimal tpDist = Math.Abs(tp1 - baseSignal.EntryPrice);
-
-                  if (slDist <= 0 || tpDist <= 0)
-                  {
-                      _logger.LogInformation(
-                          $"🚫 RR filter: некорректные расстояния slDist={slDist:F6}, tpDist={tpDist:F6} → сигнал отброшен.");
-                      _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                      return null;
-                  }
-
-                  decimal rr = tpDist / slDist;
-                  decimal minRr = GetDynamicMinRr(symbol, interval, smart, baseSignal);
-
-                  if (relaxRr)
-                  {
-                      // Чуть опускаем минимальный RR в тест-режиме
-                      var original = minRr;
-                      minRr *= 0.80m;
-                      if (minRr < 1.2m) minRr = 1.2m;
-
-                      _logger.LogInformation(
-                          $"🧪 TestMode: RelaxRR=TRUE → minRR {original:F2} → {minRr:F2}.");
-                  }
-
-                  if (rr < minRr)
-                  {
-                      _aiLearning.RecordMarketStateTriggered(
-                          reason: "RR_BLOCK",
-                          symbol: symbol,
-                          timeframe: interval.ToString(),
-                          regime: smart.BaseRegime,
-                          slope: smart.TrendSlopePercent,
-                          volatility: smart.VolatilityPercent,
-                          atr: baseSignal.Atr ?? 0,
-                          confidence: smart.Confidence
-                      );
-
-                      _logger.LogInformation(
-                          $"🚫 RR filter: RR={rr:F2} < minRR={minRr:F2} (entry={baseSignal.EntryPrice:F4}, SL={baseSignal.StopLoss:F4}, TP1={tp1:F4}) → сигнал отброшен.");
-                      _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                      return null;
-                  }
-
-                  _logger.LogInformation(
-                      $"✅ RR OK: RR={rr:F2} ≥ minRR={minRr:F2}.");
-              }*/
-            #endregion
             // 8) DYNAMIC RR FILTER (StrongUpTrend FIX)
             if (baseSignal.TakeProfits != null && baseSignal.TakeProfits.Count > 0)
             {
