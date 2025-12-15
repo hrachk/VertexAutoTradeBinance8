@@ -97,10 +97,7 @@ namespace VertexAutoTradeBinance8
             _engineStateSnapshot = engineStateSnapshot;
             learn.ForceSnapshot();
         }
-
-        // ================================================================
-        // MAIN LOOP v6 — QUANT REALTIME ENGINE
-        // ================================================================
+ 
         // ================================================================
         // MAIN LOOP v6 — QUANT REALTIME ENGINE
         // ================================================================

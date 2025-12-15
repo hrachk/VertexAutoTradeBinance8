@@ -100,7 +100,8 @@ public class Program
 
                 services.AddSingleton<ExecutedSignalService>();
                 services.AddSingleton<IOrderDispatcher, OrderDispatcher>();
-
+                services.AddMemoryCache();
+                services.AddSingleton<IMarketDataFacade, MarketDataFacade>();
 
             })
             .Build();
