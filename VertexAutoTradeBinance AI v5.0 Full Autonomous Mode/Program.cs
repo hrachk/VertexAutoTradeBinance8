@@ -97,6 +97,7 @@ public class Program
                 services.AddHostedService<TradingWorker>();
                 services.AddSingleton<SymbolRegistryService>();
                 services.AddSingleton<AiTimeframeSelectorService>();
+                services.AddSingleton<ReverseProbeEngine>();
 
                 services.AddSingleton<ExecutedSignalService>();
                 services.AddSingleton<IOrderDispatcher, OrderDispatcher>();
