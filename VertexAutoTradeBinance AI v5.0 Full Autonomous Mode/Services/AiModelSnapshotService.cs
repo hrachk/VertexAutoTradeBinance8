@@ -34,9 +34,11 @@ public class AiModelSnapshotService
     {
         try
         {
-            if (state.Symbols == null || state.Symbols.Count == 0)
+            if ((state.Symbols == null || state.Symbols.Count == 0)
+    && (state.MarketStates == null || state.MarketStates.Count == 0)
+    && (state.Trades == null || state.Trades.Count == 0))
             {
-                _logger.LogWarning("🤖 AI-МОДЕЛЬ: снапшот не сохранён → нет символов");
+                _logger.LogWarning("🤖 AI-МОДЕЛЬ: снапшот пуст → skip");
                 return;
             }
 
@@ -48,14 +50,16 @@ public class AiModelSnapshotService
 
             await File.WriteAllTextAsync(path, json, ct);
 
-            _logger.LogInformation(
-                "\n🤖 AI-МОДЕЛЬ: снапшот сохранён\n" +
-                "• Файл:      {Path}\n" +
-                "• Время UTC: {Time}\n" +
-                "• Символов:  {Count}\n",
-                path,
-                state.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm:ss"),
-                state.Symbols.Count);
+                    _logger.LogInformation(
+             "\n🤖 AI-МОДЕЛЬ: снапшот сохранён\n" +
+             "• Файл:      {Path}\n" +
+             "• Symbols:   {Symbols}\n" +
+             "• States:    {States}\n" +
+             "• Trades:    {Trades}\n",
+             path,
+             state.Symbols?.Count ?? 0,
+             state.MarketStates?.Count ?? 0,
+             state.Trades?.Count ?? 0);
         }
         catch (Exception ex)
         {

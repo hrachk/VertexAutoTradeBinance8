@@ -868,10 +868,7 @@ namespace VertexAutoTradeBinance8.Services
                 snap.Symbols.Add(sym);
             }
 
-            // Логируем перед завершением BuildSnapshot
-            _logger.LogInformation("[AI] Snapshot built with {SymbolsCount} symbols, {MarketStatesCount} market states, and {TradeHistoryCount} trades.",
-                snap.Meta.Symbols, snap.Meta.MarketStates, snap.Meta.Trades);
-
+           
 
             // --- meta ---
             snap.Meta.Symbols = snap.Symbols.Count;
@@ -888,6 +885,13 @@ namespace VertexAutoTradeBinance8.Services
                 .Take(300)
                 .ToList();
 
+            // ✅ КОРРЕКТНЫЙ ЛОГ (ПОСЛЕ ФОРМИРОВАНИЯ)
+            _logger.LogInformation(
+                "[AI] Snapshot built OK → symbols={Symbols}, states={States}, trades={Trades}",
+                snap.Meta.Symbols,
+                snap.Meta.MarketStates,
+                snap.Meta.Trades
+                );
             return snap;
         } 
 

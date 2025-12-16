@@ -1,0 +1,129 @@
+﻿using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
+using Binance.Net.Enums;
+using Binance.Net.Objects.Models.Futures;
+
+namespace VertexAutoTradeBinance8.MarketData
+{
+    /// <summary>
+    /// Canonical in-memory kline buffer.
+    /// Source-agnostic: WS + REST are both normalized to BinanceFuturesUsdtKline.
+    /// Thread-safe. Bounded. PROD-ready.
+    /// </summary>
+    public sealed class MarketDataKlineBuffer
+    {
+        private const int DefaultMaxBars = 600;
+
+        private readonly ConcurrentDictionary<string, LinkedList<BinanceFuturesUsdtKline>> _buffers
+            = new();
+
+        private readonly int _maxBars;
+
+        public MarketDataKlineBuffer(int maxBars = DefaultMaxBars)
+        {
+            if (maxBars < 100)
+                maxBars = 100;
+
+            _maxBars = maxBars;
+        }
+
+        private static string MakeKey(string symbol, KlineInterval tf)
+            => $"{symbol}:{tf}";
+
+        /// <summary>
+        /// Insert or replace last kline by OpenTime.
+        /// Safe for WS (updates same candle) and REST (historical batch).
+        /// </summary>
+        public void Upsert(
+            string symbol,
+            KlineInterval tf,
+            BinanceFuturesUsdtKline kline)
+        {
+            if (kline == null)
+                return;
+
+            var key = MakeKey(symbol, tf);
+            var list = _buffers.GetOrAdd(key, _ => new LinkedList<BinanceFuturesUsdtKline>());
+
+            lock (list)
+            {
+                // Replace last candle if same OpenTime (WS update)
+                if (list.Last != null && list.Last.Value.OpenTime == kline.OpenTime)
+                {
+                    list.RemoveLast();
+                }
+
+                list.AddLast(kline);
+
+                // Bound memory
+                while (list.Count > _maxBars)
+                    list.RemoveFirst();
+            }
+        }
+
+        /// <summary>
+        /// Snapshot (copy) of current buffer.
+        /// </summary>
+        public IReadOnlyList<BinanceFuturesUsdtKline> Snapshot(
+            string symbol,
+            KlineInterval tf)
+        {
+            var key = MakeKey(symbol, tf);
+            if (!_buffers.TryGetValue(key, out var list))
+                return Array.Empty<BinanceFuturesUsdtKline>();
+
+            lock (list)
+            {
+                return list.ToList();
+            }
+        }
+
+        /// <summary>
+        /// Get last N klines (safe slice).
+        /// </summary>
+        public IReadOnlyList<BinanceFuturesUsdtKline> GetLast(
+            string symbol,
+            KlineInterval tf,
+            int count)
+        {
+            if (count <= 0)
+                return Array.Empty<BinanceFuturesUsdtKline>();
+
+            var all = Snapshot(symbol, tf);
+            if (all.Count <= count)
+                return all;
+
+            return all.Skip(all.Count - count).ToList();
+        }
+
+        /// <summary>
+        /// Current bar count in buffer.
+        /// </summary>
+        public int Count(string symbol, KlineInterval tf)
+        {
+            var key = MakeKey(symbol, tf);
+            return _buffers.TryGetValue(key, out var list)
+                ? list.Count
+                : 0;
+        }
+
+        /// <summary>
+        /// Clear buffer for symbol/timeframe (maintenance / reconnect).
+        /// </summary>
+        public void Clear(string symbol, KlineInterval tf)
+        {
+            var key = MakeKey(symbol, tf);
+            _buffers.TryRemove(key, out _);
+        }
+
+        /// <summary>
+        /// Clear everything (shutdown / full reset).
+        /// </summary>
+        public void ClearAll()
+        {
+            _buffers.Clear();
+        }
+    }
+}

@@ -56,6 +56,15 @@ public class LiquidityGuardService
         bool volumeSpike = last.Volume > avgVolume * 2.0m;
         bool tinyVolume = last.Volume < avgVolume * 0.25m;
 
+
+        // делаем градацию
+        decimal volRatio = avgVolume <= 0 ? 1m : last.Volume / avgVolume;
+        bool extremeLowVolume = volRatio < 0.18m;   // HARD BLOCK
+        bool softLowVolume = volRatio < 0.35m;   // SOFT DANGER
+
+
+
+
         bool hugeLowerWick = lowerWick > avgBody * 2.0m && volumeSpike;
         bool hugeUpperWick = upperWick > avgBody * 2.0m && volumeSpike;
 
@@ -76,18 +85,22 @@ public class LiquidityGuardService
         }
 
         // 3. Low Volume
-        if (tinyVolume)
+        if (softLowVolume)
         {
-            var msg = $"LOW VOLUME {symbol} {interval} | vol={last.Volume:F2}, avg={avgVolume:F2}";
-            ConsoleReportFormatter.LiquidityBlocked(
-                _logger,
-                symbol,
-                interval.ToString(),
-                last.Volume,
-                avgVolume);
-            var result = new LiquidityGuardResult(true, LiquidityGuardReason.LowVolume, msg);
-            LastDanger = result;
-            return new LiquidityGuardResult(true, LiquidityGuardReason.LowVolume, msg);
+            var msg = $"LOW VOLUME {symbol} {interval} | ratio={volRatio:F2}";
+
+            // экстремум — блок
+            if (extremeLowVolume && !isMajor)
+            {
+                var result = new LiquidityGuardResult(true, LiquidityGuardReason.LowVolume, msg);
+                LastDanger = result;
+                return result;
+            }
+
+            // иначе — НЕ блокируем, только сигнал опасности
+            _logger.LogWarning("[LiquidityGuard] SOFT LOW-VOLUME {Symbol} ratio={Ratio:F2}", symbol, volRatio);
+            LastDanger = new LiquidityGuardResult(false, LiquidityGuardReason.LowVolume, msg);
+            return LastDanger;
         }
 
         // 4. Stop-hunt вниз → блокируем шорт

@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Options;
 using VertexAutoTradeBinance8.Configuration;
+using VertexAutoTradeBinance8.MarketData;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Strategy;
@@ -102,7 +103,9 @@ public class Program
                 services.AddSingleton<ExecutedSignalService>();
                 services.AddSingleton<IOrderDispatcher, OrderDispatcher>();
 
-
+                services.AddSingleton<MarketDataKlineBuffer>();
+                services.AddSingleton<WsKlineSubscriber>();
+                services.AddSingleton<MarketDataFacade>();
             })
             .Build();
 

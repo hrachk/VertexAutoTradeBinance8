@@ -392,6 +392,25 @@ namespace VertexAutoTradeBinance8.Services
                 // НЕ return!!!
                 // Просто позволяем торговать минимально допустимой позицией.
             }
+            // ===== FINAL HARD SAFETY =====
+            if (qty <= 0)
+            {
+                qty = minQty;
+                notional = qty * entryPrice;
+            }
+
+            // если даже minQty не проходит — честно выходим
+            if (notional < binanceMinNotional && free < (binanceMinNotional / Math.Max(leverage, 1)))
+            {
+                LogMissedTrade(
+                    symbol, entryPrice, stopLoss, "FinalSafetyQtyZero",
+                    free, notional, binanceMinNotional,
+                    side, takeProfits, baseReg, smart, atr, scoreUi
+                );
+
+                await _simulator.SimulateMissedTradeAsync(signal, "FinalSafetyQtyZero");
+                return 0;
+            }
 
             return qty;
         }
