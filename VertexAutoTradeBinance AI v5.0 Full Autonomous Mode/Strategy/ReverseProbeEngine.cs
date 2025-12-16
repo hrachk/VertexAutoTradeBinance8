@@ -70,8 +70,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 Time = DateTime.UtcNow,
                 Timeframe = baseSignal.Timeframe,
                 Reason = "REVERSE_PROBE",
-                IsSuperSignal = false,
-                RiskScale = riskScale // 👈 НОВОЕ ПОЛЕ
+                IsSuperSignal = false 
             };
 
             _lastProbeUtc[symbol] = DateTime.UtcNow;

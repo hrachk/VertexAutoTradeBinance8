@@ -67,6 +67,10 @@ namespace VertexAutoTradeBinance8.Strategy
             _reverseProbe = reverseProbe;
         }
         private EngineState _engineState => _stateSvc.State;
+ 
+
+
+
         // -------------------------------------------------------------------------------------
         // ATR/TP/SL настройки по таймфрейму
         // -------------------------------------------------------------------------------------
@@ -982,23 +986,50 @@ $@"📊 Режим рынка:
                         $"⏳ COOLDOWN SAME-SIDE: {symbol} {baseSignal.Side} blocked ({diff.TotalMinutes:F1}m)");
                     return null;
                 }
-            } 
+            }
+
+
+            if (!relaxRr && baseSignal.TakeProfits != null && baseSignal.TakeProfits.Count > 0)
+            {
+                var slDist = Math.Abs(baseSignal.EntryPrice - baseSignal.StopLoss);
+                var tpDist = Math.Abs(baseSignal.TakeProfits[0] - baseSignal.EntryPrice);
+
+                if (slDist > 0)
+                {
+                    var rr = tpDist / slDist;
+                    var minRr = GetDynamicMinRr(symbol, interval, smart, baseSignal);
+
+                    if (rr < minRr)
+                    {
+                        _aiLearning.RecordMarketStateTriggered(
+                            reason: "RR_BLOCK",
+                            symbol: symbol,
+                            timeframe: interval.ToString(),
+                            regime: smart.BaseRegime,
+                            slope: smart.TrendSlopePercent,
+                            volatility: smart.VolatilityPercent,
+                            atr: baseSignal.Atr ?? 0,
+                            confidence: smart.Confidence
+                        );
+
+                        _logger.LogInformation(
+                            $"🚫 RR_BLOCK: rr={rr:F2} < minRR={minRr:F2}");
+
+                        return null;
+                    }
+                }
+            }
 
             // =====================================================
             // 🔁 REVERSE PROBE (PRO MODE)
             // =====================================================
-            /* bool positionIsProtected =
-                 _engineState.Symbols.TryGetValue(
-                     EngineState.Key(symbol),
-                     out var st) && 
-                st.LastProtectionUtc > DateTime.UtcNow.AddMinutes(-15);
-             // ↑ Supervisor ставит protection при BE / early TP
-             */
-            bool positionIsProtected = false;  //TODO: VREMENNOE RESHENIE
-
-
+            bool positionIsProtected =
+   _engineState.Symbols.TryGetValue(
+       EngineState.Key(symbol),
+       out var st) &&
+   st.LastProtectionUtc > DateTime.UtcNow.AddMinutes(-15);
+            // ↑ Supervisor ставит protection при BE / early TP
             var atrNow = baseSignal.Atr ?? 0m;
-
             if (atrNow > 0)
             {
                 var probe = _reverseProbe.TryCreateProbe(
@@ -1009,6 +1040,22 @@ $@"📊 Режим рынка:
                     atrNow);
 
                 if (probe != null)
+                    return probe;
+            }
+
+
+            /*
+            bool positionIsProtected = false;  
+            var atrNow = baseSignal.Atr ?? 0m;
+            if (atrNow > 0)
+            {
+                var probe = _reverseProbe.TryCreateProbe(
+                    symbol,
+                    baseSignal,
+                    smart,
+                    positionIsProtected,
+                    atrNow);
+                if (probe != null)
                 {
                     _logger.LogWarning(
                      "[REVERSE-PROBE][{symbol}] side={side}",
@@ -1017,6 +1064,8 @@ $@"📊 Режим рынка:
                     return probe; // ⛔ НИКАКОГО ДАЛЬНЕЙШЕГО ФИЛЬТРА
                 }
             }
+            */
+
 
             // 5) Pattern Filter — с защитой + RelaxPatternBlock вариант
             try
@@ -1236,6 +1285,19 @@ $@"📊 Режим рынка:
     bool isLowEquityMode         // equity ниже порога -> “крутимся”
 )
         {
+            if (equityUsd <= 0m)
+            {
+                return new ExposureDecision
+                {
+                    AllowAdd = true,
+                    UseProfitBucket = false,
+                    AllowedAddUsd = 0m,
+                    Reason = "ALLOW: exposure-skip (equity handled downstream)",
+                    SymbolCapPct = 0m
+                };
+            }
+
+
             var sKey = EngineState.Key(symbol);
             var st = state.Symbols.GetOrAdd(sKey, _ => new SymbolState());
 

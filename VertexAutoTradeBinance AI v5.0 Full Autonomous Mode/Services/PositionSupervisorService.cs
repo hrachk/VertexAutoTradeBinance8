@@ -19,6 +19,8 @@ namespace VertexAutoTradeBinance8.Services
     /// 2) Анти-спам: partial/BE выполняются один раз на "позицию" (entry+qty+side)
     /// 3) UpdateSL: без reduceOnly (и без зависания на -1106), WorkingType.Mark используем осторожно
     /// 4) Если Binance вернёт -4120 → ставим/обновляем через RAW /fapi/v1/algoOrder (CONDITIONAL)
+    /// 5) NEW 15-15-12-2025 -КОНЦЕПЦИЯ: PROTECT → PROBE → CONFIRM → SCALE PROBE — умный тест обратного движения(ключ)
+
     /// </summary>
     public class PositionSupervisorService
     {
@@ -211,9 +213,9 @@ namespace VertexAutoTradeBinance8.Services
             if (prevQty != 0 && pos.Quantity == 0)
             {
                 decimal exitPrice = pos.MarkPrice > 0
-     ? pos.MarkPrice
-     : pos.EntryPrice; // fallback safety
-                var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
+             ? pos.MarkPrice
+             : pos.EntryPrice; // fallback safety
+             var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
 
                 _aiLearning.RecordTrade(symbol, sigSide, entry: prevEntry, exit: exitPrice, regime: _regimeNow);
 
@@ -221,9 +223,31 @@ namespace VertexAutoTradeBinance8.Services
                     "[AI][{symbol}] POSITION CLOSED → saved to ai_learning.json | entry={entry} exit={exit}",
                     symbol, prevEntry, exitPrice);
 
+
+                // =======================================
+                // STOP LOSS DETECT → STRATEGY COOLDOWN
+                // =======================================
+                bool isStopLoss =
+     side == PositionSide.Long
+         ? exitPrice < prevEntry
+         : exitPrice > prevEntry;
+
+                if (isStopLoss)
+                {
+                    _manualHandler.RegisterStop(symbol);
+
+                    _logger.LogWarning(
+                        "[STOP][{symbol}] StopLoss detected → cooldown registered",
+                        symbol);
+                }
+
+
+
+
                 // cleanup guards
                 _earlyTpDone.TryRemove(BuildPosGuardKey(symbol, side, prevEntry, prevQty), out _);
                 _beMoved.TryRemove(BuildPosGuardKey(symbol, side, prevEntry, prevQty), out _);
+
 
                 return;
             }
@@ -376,6 +400,16 @@ namespace VertexAutoTradeBinance8.Services
             return lastOpen?.Price;
         }
 
+        private void MarkProtection(string symbol)
+        {
+            var key = EngineState.Key(symbol);
+            var st = _engineState.Symbols.GetOrAdd(key, _ => new SymbolState());
+            st.LastProtectionUtc = DateTime.UtcNow;
+
+            _logger.LogInformation(
+                "[PROTECTION][{symbol}] protection marked @ {time}",
+                symbol, st.LastProtectionUtc);
+        }
 
         // =====================================================================
         // EARLY TP (Partial close) — ключевой фикс v8.2
@@ -429,7 +463,12 @@ namespace VertexAutoTradeBinance8.Services
                     _logger.LogWarning("[EARLY-TP][{symbol}][{side}] Market partial close failed: {err}", symbol, side, res.Error);
                     return;
                 }
+
+
+                MarkProtection(symbol);
+
             });
+
 
             _earlyTpDone[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
@@ -501,7 +540,9 @@ namespace VertexAutoTradeBinance8.Services
             {
                 _beMoved[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 _logger.LogWarning("[BE][{symbol}][{side}] SL moved to BE+buffer newSL={sl}", symbol, side, newSl);
+               
             }
+            MarkProtection(symbol);
         }
 
         private static string BuildPosGuardKey(string symbol, PositionSide side, decimal entry, decimal qty)
