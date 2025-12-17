@@ -12,6 +12,7 @@
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
@@ -37,12 +38,17 @@ namespace VertexAutoTradeBinance8.Strategy
         public bool LastSoftEntry { get; private set; }
         public bool LastBlockedByLiquidity { get; private set; }
 
-       // public decimal RiskScale { get; set; } = 1.0m;
-        // 1.0 = обычный риск, 0.07 = micro-probe
+      
+        private MarketDataFacade? _marketData;
+        // какие TF реагируют мгновенно
+        private static readonly KlineInterval[] ReactiveTf =
+        {
+            KlineInterval.OneMinute,
+            KlineInterval.FiveMinutes
+        };
 
-        private readonly ReverseProbeEngine _reverseProbe;
-
-
+        // анти-дубль: symbol|tf -> last close
+        private readonly ConcurrentDictionary<string, DateTime> _lastReactiveRun = new();
 
         public StrategyEngine(
             ILogger<StrategyEngine> logger,
@@ -53,7 +59,7 @@ namespace VertexAutoTradeBinance8.Strategy
             AiSelfLearningService aiLearning,
             SmartRegimeService smartRegimeService,
             TradingOptions opt,
-            EngineStateSnapshotService stateSvc, ReverseProbeEngine reverseProbe)
+            EngineStateSnapshotService stateSvc )
         {
             _logger = logger;
             _correlationService = correlationService;
@@ -64,11 +70,77 @@ namespace VertexAutoTradeBinance8.Strategy
             _smartRegimeService = smartRegimeService;
             _opt = opt;
             _stateSvc = stateSvc;
-            _reverseProbe = reverseProbe;
+            
         }
         private EngineState _engineState => _stateSvc.State;
- 
 
+        public void BindReactive(MarketDataFacade marketData)
+        {
+            _marketData = marketData;
+
+            // WS warm-up trigger
+            marketData.OnWarm += (symbol, tf) =>
+            {
+                if (ReactiveTf.Contains(tf))
+                    RunReactive(symbol, tf, "WARMUP");
+            };
+
+            // Closed candle trigger
+            marketData.WsClosedKline += (symbol, tf, candle) =>
+            {
+                if (ReactiveTf.Contains(tf))
+                    RunReactive(symbol, tf, "CLOSE");
+            };
+
+            _logger.LogInformation("[STRAT][PUSH] Reactive entry-point bound");
+        }
+
+        private void RunReactive(string symbol, KlineInterval interval, string reason)
+        {
+            if (_marketData == null)
+                return;
+
+            var key = $"{symbol}:{interval}";
+            var now = DateTime.UtcNow;
+
+            // анти-спам: не чаще 300 мс
+            if (_lastReactiveRun.TryGetValue(key, out var last) &&
+                (now - last).TotalMilliseconds < 300)
+                return;
+
+            _lastReactiveRun[key] = now;
+
+            try
+            {
+                var klines = _marketData
+                    .GetKlinesAsync(symbol, interval, need: 120)
+                    .GetAwaiter()
+                    .GetResult();
+
+                if (klines == null || klines.Count < 30)
+                    return;
+
+                _logger.LogDebug(
+                    "[STRAT][PUSH][{symbol}][{tf}] run reason={reason} bars={bars}",
+                    symbol, interval, reason, klines.Count);
+
+                var signal = GenerateSignal(symbol, interval, klines);
+
+                if (signal != null)
+                {
+                    _logger.LogInformation(
+                        "[STRAT][PUSH][{symbol}][{tf}] SIGNAL GENERATED",
+                        symbol, interval);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "[STRAT][PUSH][{symbol}][{tf}] reactive error",
+                    symbol, interval);
+            }
+        }
 
 
         // -------------------------------------------------------------------------------------
@@ -1019,53 +1091,7 @@ $@"📊 Режим рынка:
                     }
                 }
             }
-
-            // =====================================================
-            // 🔁 REVERSE PROBE (PRO MODE)
-            // =====================================================
-            bool positionIsProtected =
-   _engineState.Symbols.TryGetValue(
-       EngineState.Key(symbol),
-       out var st) &&
-   st.LastProtectionUtc > DateTime.UtcNow.AddMinutes(-15);
-            // ↑ Supervisor ставит protection при BE / early TP
-            var atrNow = baseSignal.Atr ?? 0m;
-            if (atrNow > 0)
-            {
-                var probe = _reverseProbe.TryCreateProbe(
-                    symbol,
-                    baseSignal,
-                    smart,
-                    positionIsProtected,
-                    atrNow);
-
-                if (probe != null)
-                    return probe;
-            }
-
-
-            /*
-            bool positionIsProtected = false;  
-            var atrNow = baseSignal.Atr ?? 0m;
-            if (atrNow > 0)
-            {
-                var probe = _reverseProbe.TryCreateProbe(
-                    symbol,
-                    baseSignal,
-                    smart,
-                    positionIsProtected,
-                    atrNow);
-                if (probe != null)
-                {
-                    _logger.LogWarning(
-                     "[REVERSE-PROBE][{symbol}] side={side}",
-                     symbol, probe.Side);
-
-                    return probe; // ⛔ НИКАКОГО ДАЛЬНЕЙШЕГО ФИЛЬТРА
-                }
-            }
-            */
-
+ 
 
             // 5) Pattern Filter — с защитой + RelaxPatternBlock вариант
             try

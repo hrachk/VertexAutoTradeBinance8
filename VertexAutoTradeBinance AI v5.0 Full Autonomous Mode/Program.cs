@@ -1,4 +1,6 @@
-﻿using Microsoft.Extensions.Options;
+﻿using Binance.Net.Clients;
+using CryptoExchange.Net.Authentication;
+using Microsoft.Extensions.Options;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.MarketData;
 using VertexAutoTradeBinance8.Models;
@@ -43,7 +45,31 @@ public class Program
                 services.AddHttpClient();
 
                 services.AddSingleton<BinanceClientFactory>();
+                services.AddSingleton<MarketDataKlineBuffer>();
+
+                services.AddSingleton<BinanceSocketClient>(sp =>
+                {
+                    var cfg = sp.GetRequiredService<IOptions<BinanceOptions>>().Value;
+
+                    return new BinanceSocketClient(options =>
+                    {
+                        options.ApiCredentials = new ApiCredentials(
+                            cfg.ApiKey,
+                            cfg.SecretKey
+                        );
+                        options.ReconnectPolicy = CryptoExchange.Net.Objects.ReconnectPolicy.ExponentialBackoff;
+
+                    });
+                });
+
+                services.AddSingleton<WsKlineSubscriber>();
+                services.AddSingleton<MarketDataFacade>();
                 services.AddSingleton<MarketDataService>();
+
+
+
+
+
                 services.AddSingleton<RiskManager>();
                 services.AddSingleton<OrderExecutor>();
 
@@ -103,9 +129,7 @@ public class Program
                 services.AddSingleton<ExecutedSignalService>();
                 services.AddSingleton<IOrderDispatcher, OrderDispatcher>();
 
-                services.AddSingleton<MarketDataKlineBuffer>();
-                services.AddSingleton<WsKlineSubscriber>();
-                services.AddSingleton<MarketDataFacade>();
+             
             })
             .Build();
 

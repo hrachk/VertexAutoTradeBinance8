@@ -30,7 +30,7 @@ namespace VertexAutoTradeBinance8.Services
     {
         private readonly MarketDataKlineBuffer _buf;
         private readonly WsKlineSubscriber _ws;
-        private readonly BinanceRestClient _rest;
+        private readonly BinanceClientFactory _factory; 
         private readonly ILogger<MarketDataFacade> _logger;
 
         // warm-up gate: symbol:tf -> first WS timestamp
@@ -39,21 +39,47 @@ namespace VertexAutoTradeBinance8.Services
         // REST fallback limiter
         private readonly ConcurrentDictionary<string, DateTime> _lastRestFetchUtc = new();
 
-        private static readonly TimeSpan WsWarmupTimeout = TimeSpan.FromSeconds(6);
-        private static readonly TimeSpan RestCooldown = TimeSpan.FromMinutes(2);
+        private static readonly TimeSpan WsWarmupTimeout = TimeSpan.FromSeconds(1);
+        private static readonly TimeSpan RestCooldown = TimeSpan.FromMinutes(1);
+
+        private readonly ConcurrentDictionary<string, int> _wsBars = new();
+        // PUSH events
+        public event Action<string, KlineInterval>? OnWarm;
+        public event Action<string, KlineInterval, BinanceFuturesUsdtKline>? WsClosedKline;
+
+
 
         public MarketDataFacade(
             MarketDataKlineBuffer buffer,
             WsKlineSubscriber ws,
-            BinanceRestClient rest,
+            BinanceClientFactory factory,
             ILogger<MarketDataFacade> logger)
         {
             _buf = buffer;
             _ws = ws;
-            _rest = rest;
+            _factory = factory;
             _logger = logger;
-        }
 
+            _ws.OnClosedKline += (symbol, tf, kline) =>
+            {
+                var key = Key(symbol, tf);
+                var count = _wsBars.AddOrUpdate(key, 1, (_, v) => v + 1);
+
+                // 🔥 считаем warm по количеству баров, а не по времени
+                if (count == 20)
+                {
+                    _logger.LogInformation("[MD][WS] warm READY {symbol} {tf}", symbol, tf);
+                    OnWarm?.Invoke(symbol, tf);
+                }
+            };
+
+            // forward WS closed candles
+            _ws.OnClosedKline += (symbol, tf, candle) =>
+            {
+                WsClosedKline?.Invoke(symbol, tf, candle);
+            };
+        }
+       
         private static string Key(string symbol, KlineInterval tf)
             => $"{symbol}:{tf}";
 
@@ -102,12 +128,14 @@ namespace VertexAutoTradeBinance8.Services
                 "[MD][REST-BACKFILL] {symbol} {tf} need={need} have={have}",
                 symbol, tf, ws.Count);
 
-            var rest = await _rest.UsdFuturesApi.ExchangeData.GetKlinesAsync(
-    symbol: symbol,
-    interval: tf,
-    limit: need,
-    ct: ct
-);
+            using var client = _factory.CreateRestClient();
+
+            var rest = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
+                symbol: symbol,
+                interval: tf,
+                limit: need,
+                ct: ct
+            );
 
             if (!rest.Success || rest.Data == null)
             {
@@ -163,6 +191,9 @@ namespace VertexAutoTradeBinance8.Services
             _logger.LogInformation(
                 "[MD][WS] warm-up started {symbol} {tf}",
                 symbol, tf);
+
+            OnWarm?.Invoke(symbol, tf);
+
         }
 
         private bool IsInWarmup(string key)

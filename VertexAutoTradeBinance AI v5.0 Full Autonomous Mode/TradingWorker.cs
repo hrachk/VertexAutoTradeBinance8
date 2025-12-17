@@ -44,7 +44,7 @@ namespace VertexAutoTradeBinance8
         private readonly EngineStateBuilder  _engineState;
         private readonly EngineStateSnapshotService  _engineStateSnapshot;
 
- 
+        private readonly MarketDataFacade _marketDataFacade;
 
         private DateTime _lastQuantTick = DateTime.UtcNow;
 
@@ -53,6 +53,7 @@ namespace VertexAutoTradeBinance8
             IOptions<BinanceOptions> binance,
             IOptions<TradingOptions> options,
             MarketDataService market,
+            MarketDataFacade marketDataFacade,
             StrategyEngine strategy,
             RiskManager risk,
             OrderExecutor executor,
@@ -76,6 +77,7 @@ namespace VertexAutoTradeBinance8
             _options = options.Value;
 
             _market = market;
+            _marketDataFacade = marketDataFacade;
             _strategy = strategy;
             _risk = risk;
             _executor = executor;
@@ -98,15 +100,15 @@ namespace VertexAutoTradeBinance8
             learn.ForceSnapshot();
         }
 
-        // ================================================================
-        // MAIN LOOP v6 — QUANT REALTIME ENGINE
-        // ================================================================
-        // ================================================================
+         // ================================================================
         // MAIN LOOP v6 — QUANT REALTIME ENGINE
         // ================================================================
         protected override async Task ExecuteAsync(CancellationToken ct)
         {
             await _symbols.LoadAsync(ct);
+
+            // 🔥 BOOTSTRAP PUSH → StrategyEngine
+            _strategy.BindReactive(_marketDataFacade);
 
             _logger.LogWarning("TradingWorker v6 QUANT-REALTIME started");
 

@@ -25,6 +25,7 @@ namespace VertexAutoTradeBinance8.Services
 
         // symbol:tf → subscription
         private readonly ConcurrentDictionary<string, UpdateSubscription> _subs = new();
+        public event Action<string, KlineInterval, BinanceFuturesUsdtKline>? OnClosedKline;
 
         public WsKlineSubscriber(
             BinanceSocketClient socket,
@@ -85,6 +86,9 @@ namespace VertexAutoTradeBinance8.Services
                            };
 
                            _buffer.Upsert(symbol, interval, candle);
+
+                           // 🔥 РЕАКТИВНЫЙ PUSH
+                           OnClosedKline?.Invoke(symbol, interval, candle);
                        }
                        catch (Exception ex)
                        {

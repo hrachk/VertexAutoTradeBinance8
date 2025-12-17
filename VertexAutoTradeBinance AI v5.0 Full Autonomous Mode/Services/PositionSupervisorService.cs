@@ -7,6 +7,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using VertexAutoTradeBinance8.Models;
+using VertexAutoTradeBinance8.Strategy;
 
 namespace VertexAutoTradeBinance8.Services
 {
@@ -45,7 +46,9 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ConcurrentDictionary<string, long> _recentPartialClose = new();
 
         private readonly EngineStateSnapshotService _stateSvc;
-     
+
+        private readonly SmartRegimeService _smartRegime;
+        private readonly ReverseProbeEngine _reverseProbe;
 
 
 
@@ -61,7 +64,9 @@ namespace VertexAutoTradeBinance8.Services
             IConfiguration cfg,
             IHttpClientFactory httpFactory,
             LiquidityGuardService liquidityGuard,
-            IOrderDispatcher dispatcher, EngineStateSnapshotService stateSvc)
+            IOrderDispatcher dispatcher, EngineStateSnapshotService stateSvc, 
+            SmartRegimeService smartRegime,
+            ReverseProbeEngine reverseProbe)
         {
             _logger = logger;
             _factory = factory;
@@ -78,6 +83,9 @@ namespace VertexAutoTradeBinance8.Services
             _liquidityGuard = liquidityGuard;
             _dispatcher = dispatcher;
             _stateSvc = stateSvc;
+            _smartRegime = smartRegime;
+            _reverseProbe = reverseProbe;
+
 
         }
         private EngineState _engineState => _stateSvc.State;
@@ -140,6 +148,30 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogWarning(ex, "[SUPERVISOR] Klines load error {symbol}", symbol);
             }
 
+            SmartRegimeInfo? smart1m = null;
+            decimal atr14_1m = 0m;
+
+            try
+            {
+                if (klines1m != null && klines1m.Count >= 50)
+                {
+                    smart1m = _smartRegime.Evaluate(symbol, KlineInterval.OneMinute, klines1m);
+                    atr14_1m = _marketData.CalculateAtr(klines1m, 14);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[SUPERVISOR] SmartRegime/Evaluate failed {symbol}", symbol);
+            }
+
+            // 🔁 PROBE должен быть ОДИН раз на тик supervise, до HandleSideAsync
+            if (smart1m != null && atr14_1m > 0)
+            {
+                await TryReverseProbeAsync(client, symbol, longPos, shortPos, smart1m, atr14_1m, ct);
+            }
+
+
+
             // 4) Обработка сторон
             if (hasLong)
                 await HandleSideAsync(client, symbol, PositionSide.Long, longPos!, openOrders, lastSignal, klines1m, ct);
@@ -147,6 +179,7 @@ namespace VertexAutoTradeBinance8.Services
             if (hasShort)
                 await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, openOrders, lastSignal, klines1m, ct);
         }
+
 
         // =====================================================================
         // RETRY POSITIONS
@@ -181,6 +214,130 @@ namespace VertexAutoTradeBinance8.Services
         }
 
 
+        private async Task TryReverseProbeAsync(
+    BinanceRestClient client,
+    string symbol,
+    BinancePositionDetailsUsdt? longPos,
+    BinancePositionDetailsUsdt? shortPos,
+    SmartRegimeInfo smart,
+    decimal atr,
+    CancellationToken ct)
+        {
+            // 0) protection must exist (PROTECT stage already done by EarlyTP/BE)
+            var sKey = EngineState.Key(symbol);
+            if (!_engineState.Symbols.TryGetValue(sKey, out var st))
+                return;
+
+            bool protectedRecently = st.LastProtectionUtc > DateTime.UtcNow.AddMinutes(-15);
+            if (!protectedRecently)
+                return;
+
+            // 1) do not probe if both sides already exist (already hedged)
+            bool hasLong = longPos != null && longPos.Quantity != 0m;
+            bool hasShort = shortPos != null && shortPos.Quantity != 0m;
+            if (hasLong && hasShort)
+                return;
+
+            // 2) base side = existing position side
+            PositionSide baseSide =
+                hasLong ? PositionSide.Long :
+                hasShort ? PositionSide.Short :
+                PositionSide.Both;
+
+            if (baseSide == PositionSide.Both)
+                return;
+
+            // 3) flip condition (strict)
+            bool flipToShort =
+                baseSide == PositionSide.Long &&
+                smart.BaseRegime == MarketRegime.StrongDownTrend &&
+                smart.TrendSlopePercent < -0.01m;
+
+            bool flipToLong =
+                baseSide == PositionSide.Short &&
+                smart.BaseRegime == MarketRegime.StrongUpTrend &&
+                smart.TrendSlopePercent > 0.01m;
+
+            if (!flipToShort && !flipToLong)
+                return;
+
+            var probeSide = flipToShort ? PositionSide.Short : PositionSide.Long;
+
+            // 4) anti-spam (single probe per 5 minutes per symbol)
+            if (!_reverseProbe.CanProbeNow(symbol))
+                return;
+
+            // 5) size = 7% of existing position qty (micro-hedge, no RiskManager needed)
+            decimal baseQtyAbs = Math.Abs((baseSide == PositionSide.Long ? longPos!.Quantity : shortPos!.Quantity));
+            if (baseQtyAbs <= 0m)
+                return;
+
+            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+            var step = filters.step > 0 ? filters.step : 1m;
+
+            decimal probeQty = baseQtyAbs * 0.07m;
+            probeQty = Math.Floor(probeQty / step) * step;
+
+            if (probeQty < filters.minQty)
+                return;
+
+            // 6) place MARKET entry (Hedge side-aware)
+            var orderSide = probeSide == PositionSide.Long ? OrderSide.Buy : OrderSide.Sell;
+
+            _logger.LogWarning(
+                "[PROBE][{symbol}] START micro-hedge: base={baseSide} -> probe={probeSide} qty={qty} smart={reg} slope={slope:P2}",
+                symbol, baseSide, probeSide, probeQty, smart.BaseRegime, smart.TrendSlopePercent);
+
+            _dispatcher.Enqueue(async token =>
+            {
+                using var c = _factory.CreateRestClient();
+
+                var entryRes = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol: symbol,
+                    side: orderSide,
+                    type: FuturesOrderType.Market,
+                    quantity: probeQty,
+                    positionSide: probeSide,
+                    ct: token);
+
+                if (!entryRes.Success)
+                {
+                    _logger.LogWarning("[PROBE][{symbol}] Entry failed: {err}", symbol, entryRes.Error);
+                    return;
+                }
+
+                // small sync lag
+                await Task.Delay(350, token);
+
+                // resolve entry from actual position
+                var posInfo = await c.UsdFuturesApi.Account.GetPositionInformationAsync(ct: token);
+                if (!posInfo.Success || posInfo.Data == null)
+                    return;
+
+                var p = posInfo.Data.FirstOrDefault(x =>
+                    x.Symbol == symbol &&
+                    x.PositionSide == probeSide &&
+                    Math.Abs(x.Quantity) > 0);
+
+                if (p == null || p.EntryPrice <= 0)
+                {
+                    _logger.LogWarning("[PROBE][{symbol}] Entry resolve failed after open", symbol);
+                    return;
+                }
+
+                var entry = p.EntryPrice;
+
+                // set emergency SL/TP for probe immediately
+                await CreateEmergencySLAsync(c, symbol, probeSide, probeQty, entry, signal: null, token);
+                await CreateEmergencyTPAsync(c, symbol, probeSide, probeQty, entry, signal: null, token);
+
+                _logger.LogWarning(
+                    "[PROBE][{symbol}] OPENED {side} qty={qty} entry={entry} -> SL/TP restored",
+                    symbol, probeSide, probeQty, entry);
+            });
+
+            _reverseProbe.MarkProbe(symbol);
+        }
 
 
         private async Task<List<BinanceUsdFuturesOrder>> LoadOrdersAsync(BinanceRestClient client, string symbol)
