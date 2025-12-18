@@ -1,20 +1,17 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿using VertexAutoTradeBinance8.Services.Ws;
 
-namespace VertexAutoTradeBinance8.Services.Ws
+public sealed class BinanceUserDataHostedService : IHostedService
 {
-    public sealed class BinanceUserDataHostedService : IHostedService
+    private readonly BinanceUserDataSubscriber _sub;
+
+    public BinanceUserDataHostedService(BinanceUserDataSubscriber sub)
     {
-        private readonly BinanceUserDataSubscriber _subscriber;
-
-        public BinanceUserDataHostedService(BinanceUserDataSubscriber subscriber)
-        {
-            _subscriber = subscriber;
-        }
-
-        public Task StartAsync(CancellationToken cancellationToken)
-            => _subscriber.StartAsync(cancellationToken);
-
-        public async Task StopAsync(CancellationToken cancellationToken)
-            => await _subscriber.DisposeAsync();
+        _sub = sub;
     }
+
+    public Task StartAsync(CancellationToken ct)
+        => _sub.StartAsync(ct);
+
+    public Task StopAsync(CancellationToken ct)
+        => _sub.DisposeAsync().AsTask();
 }

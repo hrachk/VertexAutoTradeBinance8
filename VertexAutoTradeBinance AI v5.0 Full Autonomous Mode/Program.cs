@@ -133,9 +133,10 @@ public class Program
                 services.AddSingleton<ExecutedSignalService>();
                 services.AddSingleton<IOrderDispatcher, OrderDispatcher>();
 
-                services.AddSingleton<IAccountStateService, AccountStateService>();
                 services.AddSingleton<BinanceUserDataSubscriber>();
                 services.AddHostedService<BinanceUserDataHostedService>();
+
+                services.AddSingleton<IAccountStateService, AccountStateService>();
 
 
             })

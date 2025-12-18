@@ -62,6 +62,12 @@ namespace VertexAutoTradeBinance8.Services.State
             p.LastUpdateUtc = DateTime.UtcNow;
 
             _pos[LivePositionState.Key(p.Symbol, p.Side)] = p;
+
+            _logger.LogWarning(
+            "[STATE] UPSERT {sym} {side} qty={qty}",
+            p.Symbol, p.Side, p.Qty);
+
+
             Updated?.Invoke();
         }
 

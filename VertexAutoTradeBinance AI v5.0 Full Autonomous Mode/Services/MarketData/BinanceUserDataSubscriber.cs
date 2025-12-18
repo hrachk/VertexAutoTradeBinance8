@@ -33,7 +33,7 @@ namespace VertexAutoTradeBinance8.Services.Ws
             _market = market; 
         }
 
-      
+
         // =============================================================
         // START
         // =============================================================
@@ -46,7 +46,18 @@ namespace VertexAutoTradeBinance8.Services.Ws
                 return;
             }
 
-            var lk = await rest.UsdFuturesApi.Account.StartUserStreamAsync(ct);
+            _logger.LogWarning(
+    "[USERDATA] REST test ping starting..."
+);
+
+            var ping = await rest.UsdFuturesApi.Account.GetAccountInfoV3Async(ct:ct);
+            _logger.LogWarning(
+                "[USERDATA] REST test result: {ok}",
+                ping.Success
+            );
+
+            // 1️⃣ Получаем listenKey
+            var lk = await rest.UsdFuturesApi.Account.StartUserStreamAsync(ct: ct);
             if (!lk.Success)
             {
                 _logger.LogError("[USERDATA] listenKey error {err}", lk.Error);
@@ -54,6 +65,37 @@ namespace VertexAutoTradeBinance8.Services.Ws
             }
 
             _listenKey = lk.Data;
+
+            // =====================================================
+            // 🔥 BOOTSTRAP POSITIONS (INITIAL SNAPSHOT) — ОБЯЗАТЕЛЬНО
+            // =====================================================
+            var pos = await rest.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+            if (pos.Success && pos.Data != null)
+            {
+                foreach (var p in pos.Data)
+                {
+                    if (p.PositionSide == PositionSide.Both) continue;
+                    if (p.Quantity == 0) continue;
+
+                    var state = new LivePositionState
+                    {
+                        Symbol = p.Symbol,
+                        Side = p.PositionSide,
+                        Qty = p.Quantity,
+                        EntryPrice = p.EntryPrice,
+                        MarkPrice = p.MarkPrice,
+                        UnrealizedPnl = p.UnrealizedPnl,
+                        Notional = Math.Abs(p.Quantity) * p.MarkPrice,
+                        LiquidationPrice = p.LiquidationPrice,
+                        IsolatedMargin = p.IsolatedMargin,
+                        Leverage = p.Leverage
+                    };
+
+                    _state.UpsertPosition(state);
+                }
+            }
+
+            // 2️⃣ Подписка на WS (дельты)
             _socket = new BinanceSocketClient();
 
             var res = await _socket.UsdFuturesApi.Account.SubscribeToUserDataUpdatesAsync(
@@ -62,7 +104,7 @@ namespace VertexAutoTradeBinance8.Services.Ws
                 ev => { }, // Margin update — позже
                 HandleAccountUpdate,
                 HandleOrderUpdate,
-                ct:ct
+                ct: ct
             );
 
             if (!res.Success)
@@ -73,8 +115,8 @@ namespace VertexAutoTradeBinance8.Services.Ws
 
             _sub = res.Data;
             _logger.LogInformation("[USERDATA] WS subscribed");
-            
         }
+
 
         // =============================================================
         // ACCOUNT UPDATE
@@ -112,33 +154,30 @@ namespace VertexAutoTradeBinance8.Services.Ws
 
                 if (side == PositionSide.Both)
                 {
-                    if (p.Quantity > 0)
-                        side = PositionSide.Long;
-                    else if (p.Quantity < 0)
-                        side = PositionSide.Short;
-                    else
-                        continue;
+                    if (p.Quantity > 0)    side = PositionSide.Long;
+                    else if (p.Quantity < 0)   side = PositionSide.Short;
+                    else  continue;
                 }
 
 
                 if (p.Quantity == 0)
                 {
-                    _state.RemovePosition(p.Symbol, p.PositionSide);
+                    _state.RemovePosition(p.Symbol, side);
                     continue;
                 }
 
-                // MarkPrice берём из MarketData
-               // var mark = _market.GetLastMarkPrice(p.Symbol) ?? p.EntryPrice;
+                var qty = Math.Abs(p.Quantity);
+                var mark = p.EntryPrice; // временно, но корректно
 
                 var pos = new LivePositionState
                 {
                     Symbol = p.Symbol,
                     Side = side,
-                    Qty = p.Quantity,
+                    Qty = qty,
                     EntryPrice = p.EntryPrice,
                     UnrealizedPnl = p.UnrealizedPnl,
-                    MarkPrice = 0m,
-                    Notional = 0m
+                    MarkPrice = mark,
+                    Notional = qty * mark
                 };
 
                 _state.UpsertPosition(pos);

@@ -23,16 +23,19 @@ public class BinanceClientFactory
     {
         if (string.IsNullOrWhiteSpace(_options.ApiKey) ||
             string.IsNullOrWhiteSpace(_options.SecretKey))
-        {
-            throw new InvalidOperationException(
-                "Binance API credentials are missing (CreateRestClient)");
-        }
+            throw new InvalidOperationException("Binance API credentials missing");
 
-        var client = new BinanceRestClient();
-        client.SetApiCredentials(
-            new ApiCredentials(_options.ApiKey, _options.SecretKey));
-        return client;
+        return new BinanceRestClient(opt =>
+        {
+            opt.ApiCredentials = new ApiCredentials(
+                _options.ApiKey,
+                _options.SecretKey);
+
+            opt.UsdFuturesOptions.AutoTimestamp = true;
+            
+        });
     }
+
 
     // ✅ НОВЫЙ МЕТОД — ДЛЯ WEB / UI / LIVE-PNL
     public BinanceRestClient? TryCreateRestClient()
@@ -40,14 +43,17 @@ public class BinanceClientFactory
         if (string.IsNullOrWhiteSpace(_options.ApiKey) ||
             string.IsNullOrWhiteSpace(_options.SecretKey))
         {
-            _logger.LogWarning(
-                "[BINANCE] API credentials missing → private endpoints disabled");
+            _logger.LogWarning("[BINANCE] API credentials missing → private endpoints disabled");
             return null;
         }
 
-        var client = new BinanceRestClient();
-        client.SetApiCredentials(
-            new ApiCredentials(_options.ApiKey, _options.SecretKey));
-        return client;
+        return new BinanceRestClient(opt =>
+        {
+            opt.ApiCredentials = new ApiCredentials(
+                _options.ApiKey,
+                _options.SecretKey);
+
+            opt.UsdFuturesOptions.AutoTimestamp = true; 
+        });
     }
 }
