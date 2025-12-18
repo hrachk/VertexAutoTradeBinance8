@@ -20,10 +20,14 @@ namespace VertexAutoTradeBinance8.Services.State
 
         public event Action? Updated;
 
-        public AccountStateService(ILogger<AccountStateService> logger)
+        
+            public AccountStateService(ILogger<AccountStateService> logger)
         {
             _logger = logger;
+            _logger.LogCritical("[STATE] AccountStateService instance created: " + GetHashCode());
         }
+
+         
 
         public AccountBalanceState GetBalance() => _bal;
 
