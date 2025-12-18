@@ -1,5 +1,4 @@
 ﻿using Binance.Net.Clients;
-using Binance.Net.Enums;
 using Microsoft.Extensions.Configuration;
 
 namespace VertexAutoTradeBinance8.Services;
@@ -11,7 +10,7 @@ public class SymbolRegistryService
     private readonly ILogger<SymbolRegistryService> _logger;
 
     public IReadOnlyList<string> ActiveSymbols { get; private set; } = new List<string>();
-    private readonly TimeSpan RefreshInterval; // Интервал в 10 минут
+    private readonly TimeSpan _refreshInterval;
 
     public SymbolRegistryService(
         IConfiguration cfg,
@@ -21,37 +20,38 @@ public class SymbolRegistryService
         _cfg = cfg;
         _factory = factory;
         _logger = logger;
-        RefreshInterval = TimeSpan.FromMinutes(_cfg.GetValue<int>("SymbolSelection:Auto:RefreshInterval")); // читаем интервал из конфигурации
+
+        _refreshInterval = TimeSpan.FromMinutes(
+            _cfg.GetValue<int>("SymbolSelection:Auto:RefreshInterval"));
     }
 
-    public async Task LoadAsync(CancellationToken stoppingToken)
+    public async Task LoadAsync(CancellationToken ct)
     {
-        string mode = _cfg["SymbolSelection:Mode"] ?? "Manual";
+        var mode = _cfg["SymbolSelection:Mode"] ?? "Manual";
 
         if (mode == "Manual")
         {
-            ActiveSymbols = _cfg.GetSection("SymbolSelection:Manual").Get<string[]>()!;
-            _logger.LogInformation($"[SYMBOLS] Manual mode → {string.Join(", ", ActiveSymbols)}");
+            ActiveSymbols = GetPinnedSymbols();
+            _logger.LogInformation("[SYMBOLS] Manual → {list}", string.Join(", ", ActiveSymbols));
             return;
         }
 
-        // Запускаем обновление в фоновом режиме, чтобы программа могла продолжить работу
+        // 🔁 Auto refresh loop
         _ = Task.Run(async () =>
         {
-            while (!stoppingToken.IsCancellationRequested)
+            while (!ct.IsCancellationRequested)
             {
-                _logger.LogInformation("Автоматическое обновление списка символов...");
-                await LoadAuto();
-                // Ожидаем 10 минут перед следующим обновлением
-                await Task.Delay(RefreshInterval, stoppingToken);
+                await LoadAutoAsync();
+                await Task.Delay(_refreshInterval, ct);
             }
-        });
+        }, ct);
 
-        // Дальше программа может продолжить выполнение других задач
-        _logger.LogInformation("Программа продолжает выполнение...");
+        _logger.LogInformation("[SYMBOLS] Auto mode started (non-blocking)");
     }
 
-    private async Task LoadAuto()
+    // ------------------------------------------------------------------
+
+    private async Task LoadAutoAsync()
     {
         var minVolume = _cfg.GetValue<decimal>("SymbolSelection:Auto:Min24hVolume");
         var minPrice = _cfg.GetValue<decimal>("SymbolSelection:Auto:MinPrice");
@@ -62,28 +62,49 @@ public class SymbolRegistryService
         try
         {
             var tickers = await client.UsdFuturesApi.ExchangeData.GetTickersAsync();
-
             if (!tickers.Success || tickers.Data == null)
             {
-                _logger.LogError("Failed to load futures tickers");
+                _logger.LogError("[SYMBOLS] Failed to load futures tickers");
                 return;
             }
 
-            ActiveSymbols = tickers.Data
+            var auto = tickers.Data
                 .Where(t => t.LastPrice >= minPrice)
                 .Where(t => t.QuoteVolume >= minVolume)
                 .OrderByDescending(t => t.QuoteVolume)
                 .Take(take)
                 .Select(t => t.Symbol)
-                .Where(s => s != "AIAUSDT")         // твой вечный бан
+                .Where(s => s != "AIAUSDT") // 🚫 навсегда
+                .ToList();
+
+            var pinned = GetPinnedSymbols();
+
+            ActiveSymbols = auto
+                .Union(pinned)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
             _logger.LogInformation(
-                $"[SYMBOLS] Auto mode → {ActiveSymbols.Count} монет: {string.Join(", ", ActiveSymbols)}");
+                "[SYMBOLS] Auto={autoCnt}, Pinned={pinCnt}, Total={total} → {list}",
+                auto.Count,
+                pinned.Count,
+                ActiveSymbols.Count,
+                string.Join(", ", ActiveSymbols));
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Ошибка при загрузке тикеров с Binance.");
+            _logger.LogError(ex, "[SYMBOLS] Auto load error");
         }
+    }
+
+    private List<string> GetPinnedSymbols()
+    {
+        return _cfg
+            .GetSection("SymbolSelection:Pinned")
+            .Get<string[]>()?
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.ToUpperInvariant())
+            .ToList()
+            ?? new();
     }
 }

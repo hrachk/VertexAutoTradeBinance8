@@ -1,0 +1,59 @@
+﻿@using VertexAutoTradeBinance8.Models
+@inject HttpClient Http
+
+<div class="balance-header">
+
+    <div class="item">
+        <div class="k">Equity</div>
+        <div class="v">@Fmt(Balance?.EquityUsd)</div>
+    </div>
+
+    <div class="item">
+        <div class="k">Wallet</div>
+        <div class="v">@Fmt(Balance?.WalletBalanceUsd)</div>
+    </div>
+
+    <div class="item">
+        <div class="k">uPnL</div>
+        <div class="v @(Balance?.UnrealizedPnlUsd >= 0 ? "plus" : "minus")">
+            @FmtSigned(Balance?.UnrealizedPnlUsd)
+        </div>
+    </div>
+
+    <div class="item">
+        <div class="k">Used Margin</div>
+        <div class="v">@Fmt(Balance?.UsedMarginUsd)</div>
+    </div>
+
+    <div class="item">
+        <div class="k">Margin %</div>
+        <div class="v @MarginCss">
+            @FmtPct(Balance?.MarginRatio)
+        </div>
+    </div>
+
+</div>
+
+
+@code {
+    [Parameter] public AccountBalanceState? Balance { get; set; }
+
+    string MarginCss =>
+        Balance == null ? "m-safe" :
+        Balance.MarginRatio >= 80 ? "m-critical" :
+        Balance.MarginRatio >= 60 ? "m-danger" :
+        Balance.MarginRatio >= 30 ? "m-warn" :
+        "m-safe";
+
+    static string Fmt(decimal? v)
+        => v.HasValue ? v.Value.ToString("0.00") : "—";
+
+    static string FmtSigned(decimal? v)
+        => v.HasValue
+            ? (v.Value >= 0 ? $"+{v.Value:0.00}" : $"{v.Value:0.00}")
+            : "—";
+
+    static string FmtPct(decimal? v)
+        => v.HasValue ? $"{v.Value:0.0}%" : "—";
+}
+

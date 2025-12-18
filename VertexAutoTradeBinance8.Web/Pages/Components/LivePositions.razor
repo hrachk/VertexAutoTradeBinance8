@@ -1,0 +1,63 @@
+﻿@page "/live-positions"
+
+@using VertexAutoTradeBinance8.Web.Models
+@using VertexAutoTradeBinance8.Web.Services
+@inject LivePnlService LivePnl
+
+<h2 class="page-title">Live Positions</h2>
+
+@if (Positions.Count == 0)
+{
+    <div class="empty">No open positions</div>
+}
+else
+{
+    <table class="bn-table">
+        <thead>
+            <tr>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Size</th>
+                <th>Entry</th>
+                <th>Mark</th>
+                <th>Liq</th>
+                <th>uPnL</th>
+                <th>ROI</th>
+                <th>Margin</th>
+                <th>Risk</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var p in Positions)
+            {
+                <LivePositionRow Pos="p" />
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private IReadOnlyList<LivePositionModel> Positions = Array.Empty<LivePositionModel>();
+
+    protected override void OnInitialized()
+    {
+        LivePnl.Updated += Refresh;
+
+        // ✅ Канон: UI не знает про symbols вообще.
+        // Если symbols пустой → API вернёт все позиции из AccountStateService.
+        LivePnl.Start("", 900);
+
+        Refresh();
+    }
+
+    private void Refresh()
+    {
+        Positions = LivePnl.GetPositions();
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        LivePnl.Updated -= Refresh;
+    }
+}

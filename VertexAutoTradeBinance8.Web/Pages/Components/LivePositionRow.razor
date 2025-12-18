@@ -1,0 +1,75 @@
+﻿@using VertexAutoTradeBinance8.Web.Models
+
+ 
+
+<tr class="pos-row @(Pos.UnrealizedPnl >= 0 ? "pnl-plus" : "pnl-minus")">
+    <td class="sym-cell">
+        <span class="sym">@Pos.Symbol</span>
+        <span class="side @(IsLong ? "long" : "short")">
+            @Pos.PositionSide
+        </span>
+    </td>
+
+    <td class="lev">@Fmt0(Pos.Leverage)x</td>
+
+    <td>@Fmt(Pos.PositionAmt)</td>
+    <td>@Fmt(Pos.EntryPrice)</td>
+    <td>@Fmt(Pos.MarkPrice)</td>
+
+    <td class="pnl">
+        @FmtSigned(Pos.UnrealizedPnl)
+        <div class="roi">@FmtSignedPct(Roi)</div>
+    </td>
+
+    <td>@Fmt(Notional)</td>
+
+    <td class="liq @RiskCss">
+        @Fmt(Pos.LiquidationPrice)
+    </td>
+</tr>
+
+@code {
+    [Parameter] public LivePositionModel Pos { get; set; } = default!;
+
+    bool IsLong => Pos.PositionSide == "LONG";
+
+    decimal Notional =>
+        Math.Abs(Pos.PositionAmt) * Pos.MarkPrice;
+
+    decimal Roi =>
+        Pos.IsolatedMargin.HasValue && Pos.IsolatedMargin > 0
+            ? (Pos.UnrealizedPnl / Pos.IsolatedMargin.Value) * 100m
+            : 0m;
+
+    /// <summary>
+    /// Насколько близко к ликвидации (0–100%)
+    /// </summary>
+    decimal RiskPct =>
+        Pos.LiquidationPrice == null || Pos.EntryPrice == 0
+            ? 0
+            : Math.Min(
+                100m,
+                Math.Abs(Pos.MarkPrice - Pos.EntryPrice) /
+                Math.Abs(Pos.EntryPrice - Pos.LiquidationPrice.Value) * 100m
+            );
+
+    string RiskCss =>
+        RiskPct < 40 ? "safe" :
+        RiskPct < 70 ? "warn" :
+        "danger";
+
+    static string Fmt(decimal? v) =>
+        v.HasValue && v.Value != 0 ? v.Value.ToString("0.########") : "—";
+
+    static string Fmt(decimal v) =>
+        v != 0 ? v.ToString("0.########") : "—";
+
+    static string Fmt0(int? v) =>
+        v.HasValue && v.Value > 0 ? v.Value.ToString() : "—";
+
+    static string FmtSigned(decimal v) =>
+        v >= 0 ? $"+{v:0.00}" : $"{v:0.00}";
+
+    static string FmtSignedPct(decimal v) =>
+        v >= 0 ? $"+{v:0.0}%" : $"{v:0.0}%";
+}

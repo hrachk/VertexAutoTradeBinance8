@@ -110,3 +110,154 @@
     margin-top: 1rem;
     opacity: 0.7;
 }
+
+
+
+
+
+
+
+
+
+.balance-header {
+    display: flex;
+    gap: 24px;
+    padding: 14px 18px;
+    background: #0b0e11;
+    border-bottom: 1px solid #1e2329;
+    font-family: Inter, system-ui, sans-serif;
+}
+
+    .balance-header .item {
+        min-width: 110px;
+    }
+
+    .balance-header .k {
+        font-size: 11px;
+        color: #848e9c;
+        margin-bottom: 2px;
+    }
+
+    .balance-header .v {
+        font-size: 15px;
+        font-weight: 600;
+        color: #eaecef;
+    }
+
+    /* PnL */
+    .balance-header .plus {
+        color: #0ecb81;
+    }
+
+    .balance-header .minus {
+        color: #f6465d;
+    }
+
+/* Margin danger levels */
+.m-safe {
+    color: #0ecb81;
+}
+
+.m-warn {
+    color: #f0b90b;
+}
+
+.m-danger {
+    color: #f6465d;
+}
+
+.m-critical {
+    color: #ff4d4f;
+    animation: blink 1s infinite;
+}
+
+@keyframes blink {
+    0% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.4;
+    }
+
+    100% {
+        opacity: 1;
+    }
+}
+
+
+
+
+.bn-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+    .bn-table th {
+        color: #848e9c;
+        font-weight: 500;
+        text-align: left;
+        padding: 8px;
+        border-bottom: 1px solid #1e2329;
+    }
+
+    .bn-table td {
+        padding: 8px;
+        border-bottom: 1px solid #1e2329;
+        color: #eaecef;
+    }
+
+.sym {
+    font-weight: 600;
+}
+
+.badge {
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+    .badge.long {
+        background: rgba(14,203,129,.15);
+        color: #0ecb81;
+    }
+
+    .badge.short {
+        background: rgba(246,70,93,.15);
+        color: #f6465d;
+    }
+
+.plus {
+    color: #0ecb81;
+}
+
+.minus {
+    color: #f6465d;
+}
+
+/* Risk bar */
+.risk-bar {
+    width: 80px;
+    height: 6px;
+    background: #1e2329;
+    border-radius: 3px;
+}
+
+    .risk-bar .fill {
+        height: 100%;
+        border-radius: 3px;
+    }
+
+.fill.safe {
+    background: #0ecb81;
+}
+
+.fill.warn {
+    background: #f0b90b;
+}
+
+.fill.danger {
+    background: #f6465d;
+}
