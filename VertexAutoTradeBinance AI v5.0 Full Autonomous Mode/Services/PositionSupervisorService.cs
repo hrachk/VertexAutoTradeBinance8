@@ -223,6 +223,8 @@ namespace VertexAutoTradeBinance8.Services
     decimal atr,
     CancellationToken ct)
         {
+            
+
             // 0) protection must exist (PROTECT stage already done by EarlyTP/BE)
             var sKey = EngineState.Key(symbol);
             if (!_engineState.Symbols.TryGetValue(sKey, out var st))
@@ -246,6 +248,20 @@ namespace VertexAutoTradeBinance8.Services
 
             if (baseSide == PositionSide.Both)
                 return;
+
+
+
+            // 🚫 no probe right after liquidity event
+            if (_liquidityGuard.IsDangerRecent(TimeSpan.FromMinutes(5)))
+            {
+                _logger.LogInformation(
+                    "[PROBE][{symbol}] SKIP → recent liquidity danger {reason}",
+                    symbol, _liquidityGuard.LastDanger?.Reason);
+                return;
+            }
+            if (_liquidityGuard.LastDanger?.Reason == LiquidityGuardReason.LowVolume)
+                return;
+
 
             // 3) flip condition (strict)
             bool flipToShort =
@@ -573,7 +589,23 @@ namespace VertexAutoTradeBinance8.Services
             if (_liquidityGuard.LastDanger?.Block == true)
                 return;
 
+            // ⚠️ skip early TP if liquidity was recent (soft protection)
+            if (_liquidityGuard.IsDangerRecent(TimeSpan.FromMinutes(5)))
+                return;
+
             var last = klines[^1].ClosePrice;
+
+            var lastCandle = klines[^1];
+            var body = Math.Abs(lastCandle.ClosePrice - lastCandle.OpenPrice);
+            var wickAgainst =
+                side == PositionSide.Long
+                    ? lastCandle.HighPrice - lastCandle.ClosePrice
+                    : lastCandle.ClosePrice - lastCandle.LowPrice;
+
+            // если свеча с хвостом против — это не импульс
+            if (wickAgainst > body * 0.8m)
+                return;
+
 
             bool reached =
                 side == PositionSide.Long
@@ -666,11 +698,28 @@ namespace VertexAutoTradeBinance8.Services
             var guardKey = BuildPosGuardKey(symbol, side, entry, qty);
             if (_beMoved.ContainsKey(guardKey)) return;
 
-            decimal buffer = atr * 0.15m; // небольшой плюс к BE
-            decimal newSl =
+            decimal buffer = atr * 0.15m;
+
+            // если была ликвидность недавно — НЕ ставим SL близко
+            if (_liquidityGuard.IsDangerRecent(TimeSpan.FromMinutes(6)))
+                buffer *= 0.5m;
+
+            // structural swing (последние 5 свечей)
+            decimal structural =
+                side == PositionSide.Long
+                    ? klines.TakeLast(5).Min(k => k.LowPrice)
+                    : klines.TakeLast(5).Max(k => k.HighPrice);
+
+            decimal beBase =
                 side == PositionSide.Long
                     ? entry + buffer
                     : entry - buffer;
+
+            // берём более «дальний» уровень
+            decimal newSl =
+                side == PositionSide.Long
+                    ? Math.Max(beBase, structural)
+                    : Math.Min(beBase, structural);
 
             // только если реально улучшает SL
             decimal oldSl = slOrder.StopPrice ?? slOrder.Price;
@@ -1453,6 +1502,24 @@ namespace VertexAutoTradeBinance8.Services
 
             decimal atr = _marketData.CalculateAtr(klines);
             if (atr <= 0) atr = 0.00000001m;
+
+            var last = klines[^1];
+            var body = Math.Abs(last.ClosePrice - last.OpenPrice);
+
+            // сильный импульс → не режем
+            if (
+                (_regimeNow == MarketRegime.StrongUpTrend ||
+                 _regimeNow == MarketRegime.StrongDownTrend)
+                && body > atr * 1.1m
+            )
+            {
+                _logger.LogInformation(
+                    "[HARVEST][{symbol}] SKIP → trend expansion",
+                    symbol);
+                return;
+            }
+
+
 
             decimal rr = Math.Abs(realPos.MarkPrice - realPos.EntryPrice) / atr;
 

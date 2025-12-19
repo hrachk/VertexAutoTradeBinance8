@@ -12,7 +12,7 @@ public enum LiquidityGuardReason
     LowVolume
 }
 
-public record LiquidityGuardResult(bool Block, LiquidityGuardReason Reason, string? Details = null);
+public record LiquidityGuardResult(bool Block, LiquidityGuardReason Reason, string? Details = null,DateTime UtcTime = default);
 
 public class LiquidityGuardService
 {
@@ -122,7 +122,8 @@ public class LiquidityGuardService
             var msg = $"STOP-HUNT UP {symbol} {interval}";
             _logger.LogWarning("[LiquidityGuard] BLOCKED LONG: {Msg}", msg);
 
-            var result = new LiquidityGuardResult(true, LiquidityGuardReason.StopHuntUp, msg);
+            var result = new LiquidityGuardResult(true, LiquidityGuardReason.StopHuntUp, msg,
+    DateTime.UtcNow);
             LastDanger = result;
 
 
@@ -133,5 +134,11 @@ public class LiquidityGuardService
         return ok;
 
         
+    }
+    public bool IsDangerRecent(TimeSpan ttl)
+    {
+        return LastDanger != null &&
+               LastDanger.UtcTime != default &&
+               (DateTime.UtcNow - LastDanger.UtcTime) <= ttl;
     }
 }
