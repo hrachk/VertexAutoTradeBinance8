@@ -396,16 +396,11 @@ namespace VertexAutoTradeBinance8.Services
                     _logger.LogWarning(
                         "[STOP][{symbol}] StopLoss detected → cooldown registered",
                         symbol);
-                }
-
-
-
-
+                } 
                 // cleanup guards
                 _earlyTpDone.TryRemove(BuildPosGuardKey(symbol, side, prevEntry, prevQty), out _);
                 _beMoved.TryRemove(BuildPosGuardKey(symbol, side, prevEntry, prevQty), out _);
-
-
+                
                 return;
             }
 
@@ -414,12 +409,7 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogInformation("[SUPERVISOR] {symbol} {side}: no qty", symbol, side);
                 return;
             }
-
-            // === entry price detect (use position entry first) ===
-            //decimal entry = pos.EntryPrice;
-            //if (entry <= 0 && signal != null && signal.Symbol == symbol)
-            //    entry = signal.EntryPrice;
-
+ 
             decimal entry = pos.EntryPrice;
 
             if (entry <= 0)
@@ -443,9 +433,7 @@ namespace VertexAutoTradeBinance8.Services
                         symbol, entry);
                 }
             }
-
-
-
+             
             // In case signal missing ATR in supervisor context, try compute
             decimal atr14 = 0m;
             if (signal?.Atr != null && signal.Atr.Value > 0)
@@ -484,8 +472,7 @@ namespace VertexAutoTradeBinance8.Services
                     await TryMoveSlToBeAsync(client, symbol, side, qtyAbs, entry, atr14, sl, signal, klines, ct);
             }
 
-
-                        /// =================================================================
+ 
             // PROFIT HARVEST (ПОСЛЕ early/BE, ДО restore SL/TP)
             // =================================================================
             if (klines != null && klines.Count >= 50)
@@ -506,7 +493,7 @@ namespace VertexAutoTradeBinance8.Services
                     minUsd: 6m,
                     ct);
             }
-
+ 
 
 
             // 1) SL отсутствует → аварийный SL (если нет дублей)

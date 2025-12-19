@@ -69,11 +69,7 @@ builder.Services.AddHttpClient<LivePnlService>(c =>
     c.BaseAddress = new Uri(builder.Configuration["ApiBaseUrl"] ?? "http://localhost:5253");
 });
 
-
-builder.Services.AddSingleton<IAccountStateService, AccountStateService>();
-
-
-// Режим рынка (AI Smart Regime)
+ // Режим рынка (AI Smart Regime)
 builder.Services.AddSingleton<AiMarketRegimeService>();
 
 builder.Services.AddHttpClient("api", client =>

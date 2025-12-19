@@ -1,0 +1,86 @@
+﻿@using VertexAutoTradeBinance8.Web.Models
+
+<div class="position-card">
+
+    <!-- TOP LINE -->
+    <div class="pos-top">
+        <div class="pos-symbol">
+            <span class="symbol">@Symbol</span>
+            <span class="tag @SideClass">@Side</span>
+            <span class="tag">Cross @Leverage</span>
+            <span class="ai-dot"></span>
+        </div>
+
+        <div class="pos-roi @(Roi >= 0 ? "positive" : "negative")">
+            @($"{Roi:+0.00;-0.00}%")
+        </div>
+    </div>
+
+    <!-- PNL -->
+    <div class="pos-pnl @(Pnl >= 0 ? "positive" : "negative")">
+        @($"{Pnl:+0.00;-0.00} USDT")
+    </div>
+
+    <!-- GRID -->
+    <div class="pos-grid">
+        <PosItem Label="Size (USDT)" Value="@Size.ToString()" />
+        <PosItem Label="Margin" Value="@Margin.ToString()" />
+        <PosItem Label="Entry" Value="@Entry.ToString()" />
+        <PosItem Label="Mark" Value="@Mark.ToString()" />
+        <PosItem Label="Liq. Price" Value="@LiqPrice.ToString()" Danger="true" />
+        <PosItem Label="Margin Ratio" Value="@($"{MarginRatio}%")" />
+    </div>
+
+    <!-- AI -->
+    <div class="ai-block">
+
+        <div class="ai-score">
+            AI Score: <b>@AiScore</b>/100
+        </div>
+
+        <div class="ai-tags">
+            <span class="chip green">Liquidity: LOW</span>
+            <span class="chip blue">@Regime</span>
+        </div>
+
+        <div class="risk-bar">
+            <div class="risk-fill" style="width:@MarginRatio%"></div>
+        </div>
+
+        <div class="ai-tooltip">
+            <b>AI Recommendation</b><br />
+            @AiHint
+        </div>
+
+    </div>
+
+    <!-- ACTIONS -->
+    <div class="pos-actions">
+        <button class="btn-secondary">TP / SL</button>
+        <button class="btn-danger">Close</button>
+        <button class="btn-secondary">Expand</button>
+    </div>
+
+</div>
+
+@code {
+    [Parameter] public string Symbol { get; set; } = "";
+    [Parameter] public string Side { get; set; } = "LONG";
+    [Parameter] public int Leverage { get; set; } = 5;
+
+    [Parameter] public decimal Pnl { get; set; }
+    [Parameter] public decimal Roi { get; set; }
+
+    [Parameter] public decimal Size { get; set; }
+    [Parameter] public decimal Margin { get; set; }
+    [Parameter] public decimal Entry { get; set; }
+    [Parameter] public decimal Mark { get; set; }
+    [Parameter] public decimal LiqPrice { get; set; }
+    [Parameter] public decimal MarginRatio { get; set; }
+
+    [Parameter] public int AiScore { get; set; }
+    [Parameter] public string Regime { get; set; } = "StrongTrend";
+    [Parameter] public string AiHint { get; set; } = "";
+
+    string SideClass => Side == "LONG" ? "long" : "short";
+}

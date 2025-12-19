@@ -1,0 +1,63 @@
+﻿@page "/positions"
+
+<div class="positions-container">
+
+    <!-- === HEADER / TABS === -->
+    <div class="positions-header">
+        <div class="tabs">
+            <div class="@TabClass("positions")" @onclick="@(() => SetTab("positions"))">
+                Positions (6)
+            </div>
+
+            <div class="@TabClass("orders")" @onclick="@(() => SetTab("orders"))">
+                Open Orders (0)
+            </div>
+
+            <div class="@TabClass("bots")" @onclick="@(() => SetTab("bots"))">
+                Bots
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn-secondary">Close all</button>
+        </div>
+    </div>
+  
+    @if (ActiveTab == "positions")
+    {
+        <PositionCard Symbol="BTCUSDT"
+                         Side="LONG"
+                         Leverage="5"
+                         Pnl="12.31m"
+                         Roi="17.09m"
+                         Size="23.52m"
+                         Margin="5.88m"
+                         Entry="0.3716m"
+                         Mark="0.4524m"
+                         LiqPrice="0.8233m"
+                         MarginRatio="6.8m"
+                         AiScore="82"
+                         Regime="StrongTrend"
+                         AiHint="Сильный тренд, низкий риск ликвидности. Удержание позиции оправдано." />
+        <!-- === POSITION CARD === -->
+     
+        
+    }
+   
+
+</div>
+@code {
+    string ActiveTab = "positions";
+
+    void SetTab(string tab)
+    {
+        ActiveTab = tab;
+    }
+
+    string TabClass(string tab)
+    {
+        return "tab " + (ActiveTab == tab ? "active" : "");
+    }
+
+
+}
