@@ -1,10 +1,15 @@
-﻿<div>
+﻿<div class="pos-item @CssClass">
     <div class="label">@Label</div>
-    <div class="value @(Danger ? "danger" : "")">@Value</div>
+    <div class="value @(Danger ? "danger" : "")">
+        @Value
+    </div>
 </div>
+
 
 @code {
     [Parameter] public string Label { get; set; } = "";
     [Parameter] public string Value { get; set; } = "";
     [Parameter] public bool Danger { get; set; } = false;
+    [Parameter] public string? CssClass { get; set; }
+
 }

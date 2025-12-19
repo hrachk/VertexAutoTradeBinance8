@@ -1,25 +1,38 @@
-﻿namespace VertexAutoTradeBinance8.Web.Models;
+﻿using static VertexAutoTradeBinance8.Web.Services.PositionsLiveService;
 
-public record PositionVm
-(
-    string Symbol,
-    string Side,          // LONG / SHORT
-    int Leverage,
-    string MarginMode,    // Cross / Isolated
+namespace VertexAutoTradeBinance8.Web.Models;
 
-    decimal PnlUsdt,
-    decimal RoiPct,
+public class PositionVm
+{
+    public string Symbol { get; set; } = "";
+    public string Side { get; set; } = ""; // LONG / SHORT
 
-    decimal SizeUsdt,
-    decimal MarginUsdt,
+    public int Leverage { get; set; }
 
-    decimal EntryPrice,
-    decimal MarkPrice,
-    decimal LiquidationPrice,
-    decimal MarginRatioPct,
+    public decimal SizeUsdt { get; set; }
+    public decimal Margin { get; set; }
 
-    int AiScore,
-    string Liquidity,     // LOW / MEDIUM / HIGH
-    string Regime,        // StrongTrend / Chop / Squeeze
-    int RiskPct           // 0..100 (визуальный бар)
-);
+    public decimal Entry { get; set; }
+    public decimal Mark { get; set; }
+    public decimal LiqPrice { get; set; }
+
+    public decimal Pnl { get; set; }
+    public decimal Roi { get; set; }
+    public decimal MarginRatio { get; set; }
+
+    // AI
+    public int AiScore { get; set; }
+    public string Regime { get; set; } = "";
+    public string AiHint { get; set; } = "";
+
+    // Expand
+    public decimal StopLoss { get; set; }
+    public decimal TakeProfit { get; set; }
+
+    // 🔑 Ключ
+    public string Key => $"{Symbol}:{Side}";
+
+    // 🔥 NEW
+    public PositionChange ChangeMask { get; set; }
+    public DateTime LastUpdate { get; set; }
+}

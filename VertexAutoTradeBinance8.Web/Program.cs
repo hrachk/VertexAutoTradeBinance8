@@ -60,6 +60,9 @@ builder.Services.AddSingleton<EngineStateService>();
 builder.Services.AddSingleton<ExecutedSignalUiService>();
 builder.Services.AddSingleton<ExecutedSignalsPushService>();
 builder.Services.AddSingleton<ExecutedSignalService>();
+builder.Services.AddSingleton<BinancePositionsWsService>();
+
+builder.Services.AddSingleton<IAccountStateService, AccountStateService>();
 
 builder.Services.AddScoped<LivePnlService>();
 
@@ -77,6 +80,7 @@ builder.Services.AddHttpClient("api", client =>
     client.BaseAddress = new Uri("https://localhost:7185/"); // твой Web API адрес
 });
 
+builder.Services.AddSingleton<PositionsLiveService>();
 
 // REST API для получения данных
 builder.Services.AddControllers();
@@ -88,6 +92,8 @@ builder.Services.AddSignalR();
 
 
 var app = builder.Build();
+var ws = app.Services.GetRequiredService<BinancePositionsWsService>();
+_ = ws.StartAsync(); // fire & forget
 
 // Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())

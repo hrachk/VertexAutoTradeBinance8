@@ -307,3 +307,125 @@
     color: #777;
     margin-top: 40px;
 }
+
+
+
+.pos-expand {
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: max-height 0.35s ease, opacity 0.25s ease;
+}
+
+    .pos-expand.open {
+        max-height: 240px;
+        opacity: 1;
+    }
+
+.expand-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.expand-item .label {
+    font-size: 12px;
+    color: #9aa0a6;
+}
+
+.expand-item .value {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.expand-ai-note {
+    margin-top: 10px;
+    padding: 10px;
+    border-left: 3px solid #4caf50;
+    background: rgba(76, 175, 80, 0.08);
+    font-size: 13px;
+}
+
+/* === FLASH === */
+@keyframes flash-green {
+    0% {
+        background: rgba(0,255,128,.35);
+    }
+
+    100% {
+        background: transparent;
+    }
+}
+
+@keyframes flash-red {
+    0% {
+        background: rgba(255,64,64,.35);
+    }
+
+    100% {
+        background: transparent;
+    }
+}
+
+.flash-pnl.pos {
+    animation: flash-green .6s ease-out;
+}
+
+.flash-pnl.neg {
+    animation: flash-red .6s ease-out;
+}
+
+/* === MARK TICK === */
+@keyframes mark-tick {
+    0% {
+        color: #ffd54f;
+    }
+
+    100% {
+        color: inherit;
+    }
+}
+
+.mark-tick {
+    animation: mark-tick .4s ease-out;
+}
+
+/* === ROI TWEEN === */
+.roi {
+    transition: color .25s ease, transform .25s ease;
+}
+
+    .roi.up {
+        color: #00e676;
+        transform: translateY(-1px);
+    }
+
+    .roi.down {
+        color: #ff5252;
+        transform: translateY(1px);
+    }
+
+/* === RISK PULSE === */
+@keyframes risk-pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(255,82,82,.6);
+    }
+
+    70% {
+        box-shadow: 0 0 0 8px rgba(255,82,82,0);
+    }
+
+    100% {
+        box-shadow: 0 0 0 0 rgba(255,82,82,0);
+    }
+}
+
+.risk-pulse {
+    animation: risk-pulse 1.2s ease-out;
+}
+
+/* === SMOOTH BAR === */
+.risk-fill {
+    transition: width .4s ease;
+}
