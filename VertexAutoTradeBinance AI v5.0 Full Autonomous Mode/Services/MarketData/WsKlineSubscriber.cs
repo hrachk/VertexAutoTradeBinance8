@@ -1,21 +1,15 @@
-﻿using System;
-using System.Collections.Concurrent;
-using System.Threading;
-using System.Threading.Tasks;
-using Binance.Net.Clients;
+﻿using Binance.Net.Clients;
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using CryptoExchange.Net.Objects.Sockets;
-using CryptoExchange.Net.Sockets;
-using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 using VertexAutoTradeBinance8.MarketData;
 
 namespace VertexAutoTradeBinance8.Services
 {
     /// <summary>
     /// WebSocket subscriber for Binance Futures USD-M klines.
-    /// Normalizes WS data → BinanceFuturesUsdtKline
-    /// Pushes into MarketDataKlineBuffer.
+    /// WS lifecycle owned here. Socket created via BinanceClientFactory.
     /// </summary>
     public sealed class WsKlineSubscriber
     {
@@ -25,28 +19,33 @@ namespace VertexAutoTradeBinance8.Services
 
         // symbol:tf → subscription
         private readonly ConcurrentDictionary<string, UpdateSubscription> _subs = new();
+        private readonly ConcurrentDictionary<string, Task> _subTasks = new();
+
         public event Action<string, KlineInterval, BinanceFuturesUsdtKline>? OnClosedKline;
 
         public WsKlineSubscriber(
-            BinanceSocketClient socket,
+            BinanceClientFactory factory,
             MarketDataKlineBuffer buffer,
             ILogger<WsKlineSubscriber> logger)
         {
-            _socket = socket;
             _buffer = buffer;
             _logger = logger;
+
+            // 🔥 ВАЖНО: один socket на весь subscriber
+            _socket = factory.CreateSocketClient();
+
+            _logger.LogInformation("[WS][KLINES] Socket client created");
         }
 
         private static string Key(string symbol, KlineInterval tf)
             => $"{symbol}:{tf}";
 
-        /// <summary>
-        /// Subscribe to klines stream (idempotent).
-        /// </summary>
-        public async Task SubscribeAsync(
+        // ---------------------------------------------------------------------
+
+        private async Task SubscribeCore(
             string symbol,
             KlineInterval interval,
-            CancellationToken ct = default)
+            CancellationToken ct)
         {
             var key = Key(symbol, interval);
             if (_subs.ContainsKey(key))
@@ -60,45 +59,45 @@ namespace VertexAutoTradeBinance8.Services
                 .SubscribeToKlineUpdatesAsync(
                     symbol,
                     interval,
-                   data =>
-                   {
-                       try
-                       {
-                           var k = data.Data;
+                    data =>
+                    {
+                        try
+                        {
+                            var k = data.Data;
 
-                           // ⛔ ONLY CLOSED CANDLES
-                           if (!k.Data.Final)
-                               return;
+                            // ⛔ only CLOSED candles
+                            if (!k.Data.Final)
+                                return;
 
-                           var candle = new BinanceFuturesUsdtKline
-                           {
-                               OpenTime = k.Data.OpenTime,
-                               CloseTime = k.Data.CloseTime,
-                               OpenPrice = k.Data.OpenPrice,
-                               HighPrice = k.Data.HighPrice,
-                               LowPrice = k.Data.LowPrice,
-                               ClosePrice = k.Data.ClosePrice,
-                               Volume = k.Data.Volume,
-                               QuoteVolume = k.Data.QuoteVolume,
-                               TradeCount = k.Data.TradeCount,
-                               TakerBuyBaseVolume = k.Data.TakerBuyBaseVolume,
-                               TakerBuyQuoteVolume = k.Data.TakerBuyQuoteVolume
-                           };
+                            var candle = new BinanceFuturesUsdtKline
+                            {
+                                OpenTime = k.Data.OpenTime,
+                                CloseTime = k.Data.CloseTime,
+                                OpenPrice = k.Data.OpenPrice,
+                                HighPrice = k.Data.HighPrice,
+                                LowPrice = k.Data.LowPrice,
+                                ClosePrice = k.Data.ClosePrice,
+                                Volume = k.Data.Volume,
+                                QuoteVolume = k.Data.QuoteVolume,
+                                TradeCount = k.Data.TradeCount,
+                                TakerBuyBaseVolume = k.Data.TakerBuyBaseVolume,
+                                TakerBuyQuoteVolume = k.Data.TakerBuyQuoteVolume
+                            };
 
-                           _buffer.Upsert(symbol, interval, candle);
+                            _buffer.Upsert(symbol, interval, candle);
 
-                           // 🔥 РЕАКТИВНЫЙ PUSH
-                           OnClosedKline?.Invoke(symbol, interval, candle);
-                       }
-                       catch (Exception ex)
-                       {
-                           _logger.LogError(
-                               ex,
-                               "[WS][KLINES][{symbol}][{tf}] handler error",
-                               symbol, interval);
-                       }
-                   },
-                    ct:ct);
+                            // 🔥 reactive push
+                            OnClosedKline?.Invoke(symbol, interval, candle);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(
+                                ex,
+                                "[WS][KLINES][{symbol}][{tf}] handler error",
+                                symbol, interval);
+                        }
+                    },
+                    ct: ct);
 
             if (!sub.Success)
             {
@@ -114,9 +113,21 @@ namespace VertexAutoTradeBinance8.Services
             _subs[key] = sub.Data;
         }
 
-        /// <summary>
-        /// Unsubscribe from klines stream.
-        /// </summary>
+        // ---------------------------------------------------------------------
+
+        public Task SubscribeAsync(
+            string symbol,
+            KlineInterval interval,
+            CancellationToken ct = default)
+        {
+            var key = Key(symbol, interval);
+            return _subTasks.GetOrAdd(
+                key,
+                _ => SubscribeCore(symbol, interval, ct));
+        }
+
+        // ---------------------------------------------------------------------
+
         public async Task UnsubscribeAsync(
             string symbol,
             KlineInterval interval)
@@ -141,9 +152,8 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
-        /// <summary>
-        /// Shutdown all WS subscriptions.
-        /// </summary>
+        // ---------------------------------------------------------------------
+
         public async Task StopAllAsync()
         {
             foreach (var kv in _subs)
@@ -152,10 +162,7 @@ namespace VertexAutoTradeBinance8.Services
                 {
                     await _socket.UnsubscribeAsync(kv.Value);
                 }
-                catch
-                {
-                    // ignore
-                }
+                catch { }
             }
 
             _subs.Clear();

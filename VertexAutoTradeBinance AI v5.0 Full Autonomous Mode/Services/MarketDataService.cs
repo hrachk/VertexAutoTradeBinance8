@@ -1,9 +1,6 @@
-﻿/* MarketDataService v4.0 — LiquidityCluster Ready */
-
-using Binance.Net.Enums;
+﻿using Binance.Net.Enums;
 using Binance.Net.Interfaces;
 using Binance.Net.Objects.Models.Futures;
-using Microsoft.Extensions.Logging;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services;
@@ -15,14 +12,15 @@ public class MarketDataService
     private readonly SmartRegimeService _smartRegime;
     // === NEW: локальный кэш стакана ===
     private readonly Dictionary<string, OrderBookSnapshot> _depthCache = new();
+    private readonly MarketDataFacade _md;
 
-    public MarketDataService(ILogger<MarketDataService> logger, BinanceClientFactory factory, SmartRegimeService smartRegime)
+    public MarketDataService(ILogger<MarketDataService> logger, BinanceClientFactory factory, SmartRegimeService smartRegime, MarketDataFacade md   )
     {
         _logger = logger;
         _factory = factory;
         _smartRegime = smartRegime;
+        _md = md;
     }
-
     // ============================================================
     // 1) Futures Klines (IBinanceKline) — без изменений
     // ============================================================
@@ -38,16 +36,13 @@ public class MarketDataService
             interval,
             limit: limit
         );
-
         if (!result.Success || result.Data == null)
         {
             _logger.LogError("Error fetching futures klines for {symbol}: {error}", symbol, result.Error);
             throw new Exception($"Error fetching futures klines: {result.Error}");
         }
-
         return result.Data;
     }
-
     // ============================================================
     // 2) Klines (BinanceFuturesUsdtKline) — без изменений
     // ============================================================
@@ -74,7 +69,6 @@ public class MarketDataService
             .Cast<BinanceFuturesUsdtKline>()
             .ToList();
     }
-
     // ============================================================
     // 3) EMA (центр)
     // ============================================================
@@ -93,7 +87,6 @@ public class MarketDataService
 
         return ema;
     }
-
     // ============================================================
     // 4) ATR (центр)
     // ============================================================
@@ -114,10 +107,8 @@ public class MarketDataService
 
             sum += Math.Max(tr1, Math.Max(tr2, tr3));
         }
-
         return sum / period;
     }
-
     // ============================================================
     // 5) NEW — Получение стакана FUTURES
     // ============================================================
@@ -144,7 +135,6 @@ public class MarketDataService
         _depthCache[symbol] = snapshot;
         return snapshot;
     }
-
     // ============================================================
     // 6) NEW — Получить последний кэш стакана
     // ============================================================
@@ -155,7 +145,6 @@ public class MarketDataService
 
         return null;
     }
-
     public async Task<MarketSnapshot?> GetMarketSnapshot(
       string symbol,
       KlineInterval tf,
@@ -164,7 +153,8 @@ public class MarketDataService
         IReadOnlyList<BinanceFuturesUsdtKline>? kl;
         try
         {
-            kl = await GetKlines(symbol, tf, 200);
+              kl = await _md.GetKlinesAsync(symbol, tf, 200, ct);
+
         }
         catch
         {
@@ -204,11 +194,7 @@ public class MarketDataService
             Confidence = smart.Confidence
         };
     }
-
-
-
 }
-
 // ============================================================
 // МОДЕЛЬ СНИМКОВ СТАКАНА (NEW)
 // ============================================================

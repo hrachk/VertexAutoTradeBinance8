@@ -81,8 +81,9 @@ namespace VertexAutoTradeBinance8.Strategy
             // WS warm-up trigger
             marketData.OnWarm += (symbol, tf) =>
             {
-                if (ReactiveTf.Contains(tf))
-                    RunReactive(symbol, tf, "WARMUP");
+                _logger.LogInformation(
+                    "[STRAT][WARM] market warm confirmed {symbol} {tf}",
+                    symbol, tf);
             };
 
             // Closed candle trigger
@@ -103,11 +104,27 @@ namespace VertexAutoTradeBinance8.Strategy
             var key = $"{symbol}:{interval}";
             var now = DateTime.UtcNow;
 
-            // анти-спам: не чаще 300 мс
-            if (_lastReactiveRun.TryGetValue(key, out var last) &&
-                (now - last).TotalMilliseconds < 300)
+            // ⛔ HARD WARM GATE — САМЫЙ ПЕРВЫЙ
+            if (_marketData.IsInWarmup(symbol, interval))
+            {
+                _logger.LogDebug(
+                    "[STRAT][PUSH][{symbol}][{tf}] skip — market warmup",
+                    symbol, interval);
                 return;
+            }
 
+            // ⏱ АНТИ-СПАМ:
+            // CLOSE — всегда разрешаем
+            if (reason != "CLOSE")
+            {
+                if (_lastReactiveRun.TryGetValue(key, out var last) &&
+                    (now - last).TotalMilliseconds < 300)
+                {
+                    return;
+                }
+            }
+
+            // фиксируем время запуска (и для CLOSE тоже)
             _lastReactiveRun[key] = now;
 
             try
@@ -141,6 +158,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     symbol, interval);
             }
         }
+
 
 
         // -------------------------------------------------------------------------------------

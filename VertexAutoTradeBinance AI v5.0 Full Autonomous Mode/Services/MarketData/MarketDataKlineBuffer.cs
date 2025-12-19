@@ -84,19 +84,39 @@ namespace VertexAutoTradeBinance8.MarketData
         /// Get last N klines (safe slice).
         /// </summary>
         public IReadOnlyList<BinanceFuturesUsdtKline> GetLast(
-            string symbol,
-            KlineInterval tf,
-            int count)
+       string symbol,
+       KlineInterval tf,
+       int count)
         {
             if (count <= 0)
                 return Array.Empty<BinanceFuturesUsdtKline>();
 
-            var all = Snapshot(symbol, tf);
-            if (all.Count <= count)
-                return all;
+            var key = MakeKey(symbol, tf);
+            if (!_buffers.TryGetValue(key, out var list))
+                return Array.Empty<BinanceFuturesUsdtKline>();
 
-            return all.Skip(all.Count - count).ToList();
+            lock (list)
+            {
+                if (list.Count == 0)
+                    return Array.Empty<BinanceFuturesUsdtKline>();
+
+                if (list.Count <= count)
+                    return list.ToList(); // редкий случай, ок
+
+                // ✅ копируем ТОЛЬКО последние count
+                var result = new BinanceFuturesUsdtKline[count];
+                var node = list.Last;
+
+                for (int i = count - 1; i >= 0 && node != null; i--)
+                {
+                    result[i] = node.Value;
+                    node = node.Previous;
+                }
+
+                return result;
+            }
         }
+
 
         /// <summary>
         /// Current bar count in buffer.
@@ -104,10 +124,13 @@ namespace VertexAutoTradeBinance8.MarketData
         public int Count(string symbol, KlineInterval tf)
         {
             var key = MakeKey(symbol, tf);
-            return _buffers.TryGetValue(key, out var list)
-                ? list.Count
-                : 0;
+            if (!_buffers.TryGetValue(key, out var list))
+                return 0;
+
+            lock (list)
+                return list.Count;
         }
+
 
         /// <summary>
         /// Clear buffer for symbol/timeframe (maintenance / reconnect).

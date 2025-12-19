@@ -35,7 +35,18 @@ public class BinanceClientFactory
             
         });
     }
-
+    // =========================
+    // 🔥 WS CLIENT (ДОБАВИТЬ)
+    // =========================
+    public BinanceSocketClient CreateSocketClient()
+    {
+        return new BinanceSocketClient(options =>
+        {
+            options.ApiCredentials = new ApiCredentials(
+               _options.ApiKey,
+               _options.SecretKey);
+        });
+    }
 
     // ✅ НОВЫЙ МЕТОД — ДЛЯ WEB / UI / LIVE-PNL
     public BinanceRestClient? TryCreateRestClient()

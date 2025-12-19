@@ -50,44 +50,32 @@ public class Program
 
                 services.AddSingleton<BinanceClientFactory>();
                 services.AddSingleton<MarketDataKlineBuffer>();
+                //services.AddSingleton<BinanceSocketClient>(sp =>
+                //{
+                //    var cfg = sp.GetRequiredService<IOptions<BinanceOptions>>().Value;
 
-                services.AddSingleton<BinanceSocketClient>(sp =>
-                {
-                    var cfg = sp.GetRequiredService<IOptions<BinanceOptions>>().Value;
+                //    return new BinanceSocketClient(options =>
+                //    {
+                //        options.ApiCredentials = new ApiCredentials(
+                //            cfg.ApiKey,
+                //            cfg.SecretKey
+                //        );
+                //        options.ReconnectPolicy = CryptoExchange.Net.Objects.ReconnectPolicy.ExponentialBackoff;
 
-                    return new BinanceSocketClient(options =>
-                    {
-                        options.ApiCredentials = new ApiCredentials(
-                            cfg.ApiKey,
-                            cfg.SecretKey
-                        );
-                        options.ReconnectPolicy = CryptoExchange.Net.Objects.ReconnectPolicy.ExponentialBackoff;
-
-                    });
-                });
+                //    });
+                //});
 
                 services.AddSingleton<WsKlineSubscriber>();
                 services.AddSingleton<MarketDataFacade>();
                 services.AddSingleton<MarketDataService>();
-
-
-
-
-
                 services.AddSingleton<RiskManager>();
                 services.AddSingleton<OrderExecutor>();
-
                 services.AddSingleton<AiCorrelationService>();
                 services.AddSingleton<AiMarketRegimeService>();
                 services.AddSingleton<AiPatternEngineService>();
                 services.AddSingleton<AdaptiveStrategyService>();
- 
                 services.AddSingleton<AiSelfLearningService>();  // Ensure that all dependencies are resolved correctly
-
-
                 services.AddSingleton<SimulatedTradeService>();
-
-
                 services.AddSingleton<AiModelSnapshotService>();
                 services.AddSingleton<TradeResultMonitorService>();
                 services.AddSingleton<CheckAfterFillService>();
@@ -97,7 +85,6 @@ public class Program
                 services.AddSingleton<TradeSignalMemoryService>();
                 services.AddSingleton<ManualPositionHandler>();
                 services.AddSingleton<AiLeverageService>();
-
                 services.AddSingleton<AiLiquidityClusterService>();
                 services.AddSingleton<StrategyEngine>();
                 services.AddSingleton<SymbolInfoService>();
@@ -108,37 +95,25 @@ public class Program
                 services.AddSingleton<OrderCleanerService>();
                 services.AddSingleton<PositionSupervisorService>();
                 services.AddSingleton<SmartRegimeService>();
-                 services.AddSingleton<TradeStateManager>();
-
+                services.AddSingleton<TradeStateManager>();
                 services.AddSingleton<EngineStateBuilder>();
-               
-
                 services.Configure<EngineStateSettings>(ctx.Configuration.GetSection("EngineState"));
                 services.AddSingleton<EngineStateSnapshotService>();
-
                 services.AddSingleton(sp => sp.GetRequiredService<IOptions<TradingOptions>>().Value);
-
-               
                 services.AddSingleton<PredictiveEngineV4ConfirmationService>();
                 services.AddSingleton<AiStopLossOptimizer>();
                 services.AddSingleton<AiRiskScalerV2>(); // опционально, можно создавать вручную
-
                 services.AddHostedService<BackgroundMarketScannerService>();
                 services.AddSingleton<SymbolLiquidityScanner>();
                 services.AddHostedService<TradingWorker>();
                 services.AddSingleton<SymbolRegistryService>();
                 services.AddSingleton<AiTimeframeSelectorService>();
                 services.AddSingleton<ReverseProbeEngine>();
-
                 services.AddSingleton<ExecutedSignalService>();
                 services.AddSingleton<IOrderDispatcher, OrderDispatcher>();
-
                 services.AddSingleton<BinanceUserDataSubscriber>();
                 services.AddHostedService<BinanceUserDataHostedService>();
-
                 services.AddSingleton<IAccountStateService, AccountStateService>();
-
-
             })
             .Build();
  

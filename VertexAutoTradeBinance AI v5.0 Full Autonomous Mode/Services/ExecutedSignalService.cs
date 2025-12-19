@@ -20,8 +20,8 @@ namespace VertexAutoTradeBinance8.Services
         //    Path.Combine(AppContext.BaseDirectory, "executed_signals.json");
 
 
-       //private static readonly string FilePath = @"C:\Users\karap\source\repos\VertexAutoTradeBinance8\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\executed_signals.json";
-       private static readonly string FilePath = @"F:\VERTEX TRADING SYSTEM\TradingAI\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\executed_signals.json";
+       private static readonly string FilePath = @"C:\Users\karap\source\repos\VertexAutoTradeBinance8\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\executed_signals.json";
+       //private static readonly string FilePath = @"F:\VERTEX TRADING SYSTEM\TradingAI\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\executed_signals.json";
         
         private readonly JsonSerializerOptions _jsonOptions = new()
         {

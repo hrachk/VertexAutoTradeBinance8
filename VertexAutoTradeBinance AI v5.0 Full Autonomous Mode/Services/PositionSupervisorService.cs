@@ -249,16 +249,19 @@ namespace VertexAutoTradeBinance8.Services
             if (baseSide == PositionSide.Both)
                 return;
 
-
-
+            // if liquidity recent → wait a bit, but allow early TP later           
             // 🚫 no probe right after liquidity event
             if (_liquidityGuard.IsDangerRecent(TimeSpan.FromMinutes(5)))
             {
-                _logger.LogInformation(
-                    "[PROBE][{symbol}] SKIP → recent liquidity danger {reason}",
-                    symbol, _liquidityGuard.LastDanger?.Reason);
-                return;
+                if (DateTime.UtcNow - _liquidityGuard.LastDanger!.UtcTime < TimeSpan.FromMinutes(2))
+                {
+                    _logger.LogInformation(
+                        "[PROBE][{symbol}] SKIP → recent liquidity danger {reason}",
+                        symbol, _liquidityGuard.LastDanger?.Reason);
+                    return;
+                }
             }
+
             if (_liquidityGuard.LastDanger?.Reason == LiquidityGuardReason.LowVolume)
                 return;
 
@@ -590,8 +593,12 @@ namespace VertexAutoTradeBinance8.Services
                 return;
 
             // ⚠️ skip early TP if liquidity was recent (soft protection)
+            // if liquidity recent → wait a bit, but allow early TP later
             if (_liquidityGuard.IsDangerRecent(TimeSpan.FromMinutes(5)))
-                return;
+            {
+                if (DateTime.UtcNow - _liquidityGuard.LastDanger!.UtcTime < TimeSpan.FromMinutes(2))
+                    return;
+            }
 
             var last = klines[^1].ClosePrice;
 

@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.SignalR;
 using VertexAutoTradeBinance8.Configuration;
+using VertexAutoTradeBinance8.MarketData;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Services.Interface;
 using VertexAutoTradeBinance8.Services.State;
@@ -46,7 +47,11 @@ builder.Services.AddSingleton<AiStopLossOptimizer>();
 //  CORE SERVICES (общие для анализа и Dashboard)
 // ========================================================================
 builder.Services.AddSingleton<BinanceClientFactory>();
+builder.Services.AddSingleton<MarketDataKlineBuffer>();
+builder.Services.AddSingleton<WsKlineSubscriber>();
+builder.Services.AddSingleton<MarketDataFacade>();
 builder.Services.AddSingleton<MarketDataService>();
+
 builder.Services.AddSingleton<SmartRegimeService>();
 builder.Services.AddSingleton<SymbolInfoService>();
 builder.Services.AddSingleton<AiCorrelationService>();
@@ -81,6 +86,7 @@ builder.Services.AddHttpClient("api", client =>
 });
 
 builder.Services.AddSingleton<PositionsLiveService>();
+ 
 
 // REST API для получения данных
 builder.Services.AddControllers();
