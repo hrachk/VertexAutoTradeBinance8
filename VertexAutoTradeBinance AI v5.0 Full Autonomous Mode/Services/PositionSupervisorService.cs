@@ -50,6 +50,8 @@ namespace VertexAutoTradeBinance8.Services
         private readonly SmartRegimeService _smartRegime;
         private readonly ReverseProbeEngine _reverseProbe;
 
+        // === Attach idempotency (existing position attach) ===
+        private readonly ConcurrentDictionary<string, bool> _attached = new();
 
 
         public PositionSupervisorService(
@@ -212,6 +214,147 @@ namespace VertexAutoTradeBinance8.Services
 
             return last;
         }
+
+
+        public async Task AttachExistingPositionAsync(
+         string symbol,
+         PositionSide side,
+         decimal qty,
+         decimal entryPrice,
+         CancellationToken ct)
+        {
+            qty = Math.Abs(qty);
+
+            if (qty <= 0 || entryPrice <= 0) return;
+
+            var key = $"{symbol}:{side}:{entryPrice:F8}:{qty:F8}";
+
+            if (_attached.TryAdd(key, true) == false)
+            {
+                _logger.LogInformation("[SUPERVISOR][ATTACH] already attached {key}", key);
+                return;
+            }
+
+            _logger.LogWarning(
+                "[SUPERVISOR][ATTACH] attaching existing position {symbol} {side} qty={qty} entry={entry}",
+                symbol, side, qty, entryPrice);
+
+            await EnsureEmergencyProtectionAsync(symbol, side, qty, entryPrice, ct);
+        }
+
+
+        private async Task EnsureEmergencyProtectionAsync(
+        string symbol,
+        PositionSide side,
+        decimal qty,
+        decimal entryPrice,
+        CancellationToken ct)
+        {
+            if (qty <= 0 || entryPrice <= 0)
+                return;
+
+            // Важно: qty у позиции в Binance может быть со знаком
+            qty = Math.Abs(qty);
+
+            using var client = _factory.CreateRestClient();
+
+            // 1) Проверяем существующие ордера
+            var openOrders = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(
+                symbol: symbol,
+                ct: ct);
+
+            if (!openOrders.Success || openOrders.Data == null)
+            {
+                _logger.LogWarning(
+                    "[SUPERVISOR][EMERGENCY] cannot fetch open orders {symbol}: {err}",
+                    symbol, openOrders.Error?.Message);
+                return;
+            }
+
+            bool hasSL = openOrders.Data.Any(o =>
+                o.Type == FuturesOrderType.StopMarket &&
+                o.PositionSide == side);
+
+            if (hasSL)
+            {
+                _logger.LogInformation(
+                    "[SUPERVISOR][EMERGENCY] SL already exists {symbol} {side}",
+                    symbol, side);
+                return;
+            }
+
+            // 2) Emergency SL без klines (bootstrap-safe)
+            // Консервативно: 1.2% от entry (под твой v8.2 смысл "быстро защитить")
+            const decimal emergencyPct = 0.012m;
+
+            decimal slPrice = side == PositionSide.Long
+                ? entryPrice * (1m - emergencyPct)
+                : entryPrice * (1m + emergencyPct);
+
+            _logger.LogWarning(
+                "[SUPERVISOR][EMERGENCY] placing SL {symbol} {side} qty={qty} sl={sl}",
+                symbol, side, qty, slPrice);
+
+            // 3) Пробуем обычный endpoint (без reduceOnly параметра -> меньше риска -1106)
+            var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+            var sl = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: symbol,
+                side: orderSide,
+                type: FuturesOrderType.StopMarket,
+                quantity: qty,
+                stopPrice: slPrice,
+                positionSide: side,
+                workingType: WorkingType.Mark,
+                reduceOnly: null,
+                ct: ct);
+
+            if (sl.Success)
+            {
+                _logger.LogInformation(
+                    "[SUPERVISOR][EMERGENCY] SL placed OK (NORMAL) {symbol} {side} sl={sl}",
+                    symbol, side, slPrice);
+                return;
+            }
+
+            // 4) Fallback: ALGO RAW CONDITIONAL (если -4120)
+            if (IsAlgoRequired(sl.Error))
+            {
+                _logger.LogWarning(
+                    "[SUPERVISOR][EMERGENCY] requires ALGO (-4120) -> RAW /fapi/v1/algoOrder {symbol} {side}",
+                    symbol, side);
+
+                // workingType: "MARK_PRICE" чтобы совпасть с WorkingType.Mark
+                var ok = await _algoRaw.PlaceConditionalAsync(
+                    symbol: symbol,
+                    side: orderSide,
+                    positionSide: side,
+                    type: "STOP_MARKET",
+                    quantity: qty,
+                    triggerPrice: slPrice,
+                    workingType: "MARK_PRICE",
+                    reduceOnly: null,
+                    ct: ct);
+
+                if (ok)
+                {
+                    _logger.LogWarning(
+                        "[SUPERVISOR][EMERGENCY] SL placed OK (ALGO-RAW) {symbol} {side} sl={sl}",
+                        symbol, side, slPrice);
+                    return;
+                }
+
+                _logger.LogCritical(
+                    "[SUPERVISOR][EMERGENCY] ALGO-RAW FAILED {symbol} {side}",
+                    symbol, side);
+                return;
+            }
+
+            _logger.LogError(
+                "[SUPERVISOR][EMERGENCY] SL FAILED (NORMAL) {symbol}: {err}",
+                symbol, sl.Error?.Message);
+        }
+
 
 
         private async Task TryReverseProbeAsync(

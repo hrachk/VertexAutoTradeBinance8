@@ -5,8 +5,10 @@ using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.MarketData;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
+using VertexAutoTradeBinance8.Services.Bootstrap;
 using VertexAutoTradeBinance8.Services.Interface;
 using VertexAutoTradeBinance8.Services.MarketData;
+using VertexAutoTradeBinance8.Services.Recovery;
 using VertexAutoTradeBinance8.Services.State;
 using VertexAutoTradeBinance8.Services.Ws;
 using VertexAutoTradeBinance8.Strategy;
@@ -64,6 +66,13 @@ public class Program
 
                 //    });
                 //});
+
+                services.AddSingleton<IBootGate, BootGate>();
+
+                services.AddSingleton<IPositionRecoveryService, PositionRecoveryService>();
+
+                // ВАЖНО: bootstrap hosted service должен быть зарегистрирован ДО TradingWorker
+                services.AddHostedService<SupervisorBootstrapHostedService>();
 
                 services.AddSingleton<WsKlineSubscriber>();
                 services.AddSingleton<MarketDataFacade>();

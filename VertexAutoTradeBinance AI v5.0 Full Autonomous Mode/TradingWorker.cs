@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
+using VertexAutoTradeBinance8.Services.Bootstrap;
 using VertexAutoTradeBinance8.Services.Formatting;
 using VertexAutoTradeBinance8.Strategy;
 using static VertexAutoTradeBinance8.Services.AiTimeframeSelectorService;
@@ -47,7 +48,7 @@ namespace VertexAutoTradeBinance8
         private readonly MarketDataFacade _marketDataFacade;
 
         private DateTime _lastQuantTick = DateTime.UtcNow;
-
+        private readonly IBootGate _bootGate;
         public TradingWorker(
             ILogger<TradingWorker> logger,
             IOptions<BinanceOptions> binance,
@@ -69,7 +70,8 @@ namespace VertexAutoTradeBinance8
             AiSelfLearningService learn,
             AiModelSnapshotService snapshot,
             SymbolRegistryService symbols,
-            AiTimeframeSelectorService tfSelector, EngineStateBuilder engineState, EngineStateSnapshotService engineStateSnapshot)
+            AiTimeframeSelectorService tfSelector, EngineStateBuilder engineState, EngineStateSnapshotService engineStateSnapshot,
+            IBootGate bootGate)
         {
             _logger = logger;
 
@@ -97,6 +99,7 @@ namespace VertexAutoTradeBinance8
             _tfSelector = tfSelector;
             _engineState = engineState;
             _engineStateSnapshot = engineStateSnapshot;
+            _bootGate = bootGate;
             learn.ForceSnapshot();
         }
 
@@ -105,6 +108,10 @@ namespace VertexAutoTradeBinance8
         // ================================================================
         protected override async Task ExecuteAsync(CancellationToken ct)
         {
+            _logger.LogWarning("[WORKER] Waiting BootGate (recovery/supervisor) ...");
+            await _bootGate.WaitReadyAsync(ct);
+            _logger.LogWarning("[WORKER] BootGate READY → starting TradingWorker loop.");
+
             await _symbols.LoadAsync(ct);
 
             // 🔥 BOOTSTRAP PUSH → StrategyEngine
