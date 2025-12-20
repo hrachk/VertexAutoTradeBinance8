@@ -24,6 +24,17 @@ namespace VertexAutoTradeBinance8.Services
 
         // последние N сделок для Dashboard / анализа
         public List<AiSelfLearningService.TradeHistoryEntry> Trades { get; set; } = new();
+
+        public List<DecisionGateSnapshot>? DecisionGates { get; set; }
+    }
+
+    public class DecisionGateSnapshot
+    {
+        public string Symbol { get; set; } = "";
+        public MarketRegime Regime { get; set; }
+        public string Gate { get; set; } = "";
+        public int Hits { get; set; }
+        public int Blocks { get; set; }
     }
 
     public class AiLearningMeta

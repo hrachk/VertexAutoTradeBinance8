@@ -6,6 +6,7 @@ using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Services.Bootstrap;
+using VertexAutoTradeBinance8.Services.Engine;
 using VertexAutoTradeBinance8.Services.Formatting;
 using VertexAutoTradeBinance8.Strategy;
 using static VertexAutoTradeBinance8.Services.AiTimeframeSelectorService;
@@ -49,6 +50,9 @@ namespace VertexAutoTradeBinance8
 
         private DateTime _lastQuantTick = DateTime.UtcNow;
         private readonly IBootGate _bootGate;
+        private readonly IStrategyPreFilter _pre;
+
+
         public TradingWorker(
             ILogger<TradingWorker> logger,
             IOptions<BinanceOptions> binance,
@@ -71,7 +75,7 @@ namespace VertexAutoTradeBinance8
             AiModelSnapshotService snapshot,
             SymbolRegistryService symbols,
             AiTimeframeSelectorService tfSelector, EngineStateBuilder engineState, EngineStateSnapshotService engineStateSnapshot,
-            IBootGate bootGate)
+            IBootGate bootGate, IStrategyPreFilter pre)
         {
             _logger = logger;
 
@@ -100,6 +104,7 @@ namespace VertexAutoTradeBinance8
             _engineState = engineState;
             _engineStateSnapshot = engineStateSnapshot;
             _bootGate = bootGate;
+            _pre = pre;
             learn.ForceSnapshot();
         }
 
@@ -220,7 +225,17 @@ namespace VertexAutoTradeBinance8
         // ================================================================
         private async Task ProcessSymbol(string symbol, KlineInterval tf, CancellationToken ct)
         {
-            ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏳ RUN", "Получение");
+           // ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏳ RUN", "Получение");
+
+            var pre = await _pre.EvaluateAsync(symbol, tf, ct);
+            if (!pre.Allow)
+            {
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏸ HOLD", $"{pre.Code}:{pre.Reason}");
+                if (pre.SleepMs.HasValue)
+                    await Task.Delay(pre.SleepMs.Value, ct);
+                return;
+            }
+
 
             IReadOnlyList<BinanceFuturesUsdtKline>? klines;
             try

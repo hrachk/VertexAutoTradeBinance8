@@ -6,6 +6,8 @@ using VertexAutoTradeBinance8.MarketData;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Services.Bootstrap;
+using VertexAutoTradeBinance8.Services.DecisionTrace;
+using VertexAutoTradeBinance8.Services.Engine;
 using VertexAutoTradeBinance8.Services.Interface;
 using VertexAutoTradeBinance8.Services.MarketData;
 using VertexAutoTradeBinance8.Services.Recovery;
@@ -70,6 +72,7 @@ public class Program
                 services.AddSingleton<IBootGate, BootGate>();
 
                 services.AddSingleton<IPositionRecoveryService, PositionRecoveryService>();
+                services.AddSingleton<IStrategyPreFilter, StrategyPreFilterService>();
 
                 // ВАЖНО: bootstrap hosted service должен быть зарегистрирован ДО TradingWorker
                 services.AddHostedService<SupervisorBootstrapHostedService>();
@@ -123,6 +126,8 @@ public class Program
                 services.AddSingleton<BinanceUserDataSubscriber>();
                 services.AddHostedService<BinanceUserDataHostedService>();
                 services.AddSingleton<IAccountStateService, AccountStateService>();
+                services.AddSingleton<IDecisionTraceService, DecisionTraceFileService>();
+
             })
             .Build();
  

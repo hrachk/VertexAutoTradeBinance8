@@ -1,13 +1,6 @@
-﻿using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using Binance.Net.Clients;
-using Binance.Net.Enums;
+﻿using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
-using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 using VertexAutoTradeBinance8.MarketData;
 
 namespace VertexAutoTradeBinance8.Services
@@ -30,7 +23,7 @@ namespace VertexAutoTradeBinance8.Services
     {
         private readonly MarketDataKlineBuffer _buf;
         private readonly WsKlineSubscriber _ws;
-        private readonly BinanceClientFactory _factory; 
+        private readonly BinanceClientFactory _factory;
         private readonly ILogger<MarketDataFacade> _logger;
 
         // warm-up gate: symbol:tf -> first WS timestamp
@@ -60,14 +53,14 @@ namespace VertexAutoTradeBinance8.Services
             _factory = factory;
             _logger = logger;
 
-
-            _ws.OnClosedKline += (symbol, tf, kline) =>
+            _ws.OnClosedKline += OnWsClosedKline;
+           /* _ws.OnClosedKline += (symbol, tf, kline) =>
             {
                 var key = Key(symbol, tf);
                 var count = _wsBars.AddOrUpdate(key, 1, (_, v) => v + 1);
 
                 // 🔥 считаем warm по количеству баров, а не по времени
-            
+
 
                 // OnWarm
                 if (count == WarmBars)
@@ -81,9 +74,34 @@ namespace VertexAutoTradeBinance8.Services
             _ws.OnClosedKline += (symbol, tf, candle) =>
             {
                 WsClosedKline?.Invoke(symbol, tf, candle);
-            };
+            };*/
         }
-       
+
+
+        private void OnWsClosedKline(
+    string symbol,
+    KlineInterval tf,
+    BinanceFuturesUsdtKline candle)
+        {
+            var key = Key(symbol, tf);
+
+            var count = _wsBars.AddOrUpdate(key, 1, (_, v) => v + 1);
+
+            // 1) warm gate
+            if (count == WarmBars)
+            {
+                _logger.LogInformation(
+                    "[MD][WS] warm READY {symbol} {tf}",
+                    symbol, tf);
+
+                OnWarm?.Invoke(symbol, tf);
+            }
+
+            // 2) forward CLOSED candle (реактивный вход)
+            WsClosedKline?.Invoke(symbol, tf, candle);
+        }
+
+
         private static string Key(string symbol, KlineInterval tf)
             => $"{symbol}:{tf}";
 

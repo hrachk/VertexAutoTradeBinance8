@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using VertexAutoTradeBinance8.Models;
+using VertexAutoTradeBinance8.Strategy;
 
 namespace VertexAutoTradeBinance8.Services
 {
@@ -33,6 +34,8 @@ namespace VertexAutoTradeBinance8.Services
     ///     - + служебные ключи: CreatedAtUtc, SnapshotVersion, Meta
     ///   Load() фильтрует служебные ключи и поднимает только реальную статистику.
     /// </summary>
+    /// 
+
     public class AiSelfLearningService
     {
         private readonly ILogger<AiSelfLearningService> _logger;
@@ -81,41 +84,14 @@ namespace VertexAutoTradeBinance8.Services
 
         private Dictionary<string, List<LearningEvent>> _learnBuffer = new Dictionary<string, List<LearningEvent>>();
 
-      
+        // Decision intelligence layer (NEW)
+        private readonly Dictionary<string, DecisionTraceAggregate> _decisionGates
+            = new(StringComparer.OrdinalIgnoreCase);
+
 
         public AiSelfLearningService(ILogger<AiSelfLearningService> logger )
         {
-            /*_logger = logger;
-
-            // Гарантируем, что каталог существует, чтобы не было проблем с сохранением
-            try
-            {
-                var fileDir = Path.GetDirectoryName(FilePath);
-                if (!string.IsNullOrWhiteSpace(fileDir) && !Directory.Exists(fileDir))
-                    Directory.CreateDirectory(fileDir);
-
-                var backupDir = Path.GetDirectoryName(BackupPath);
-                if (!string.IsNullOrWhiteSpace(backupDir) && !Directory.Exists(backupDir))
-                    Directory.CreateDirectory(backupDir);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[AI] Error creating ai-models directory or backup directory.");
-                return;  // Ранний выход, если не удалось создать директорию
-            }
-
-            // 1) Загрузка пропущенных сделок
-            var missed = LoadMissedTradesFromFile();
-            missed = missed
-                .GroupBy(x => $"{x.Symbol}-{x.Time:O}-{x.Reason}")
-                .Select(g => g.First())
-                .ToList();
-             // 2) Обучение на каждой
-            foreach (var m in missed)
-                LearnFromMissedTrade(m);
-
-            _logger.LogInformation($"[AI] Loaded and trained on {missed.Count} missed trades.");
-            Load();*/
+            
             _logger = logger;
 
             // 0) Гарантируем каталоги
@@ -278,42 +254,43 @@ namespace VertexAutoTradeBinance8.Services
             public MarketRegime Regime { get; set; } = MarketRegime.Unknown;
         }
 
-        // 1) HYBRID: универсальный триггер логирования (signals + blocks + RR)
-        /*     public void RecordMarketStateTriggered(
-           string reason,
-           string symbol,
-           string timeframe,
-           MarketRegime regime,
-           decimal slope,
-           decimal volatility,
-           decimal atr,
-           decimal confidence)
-             {
-                 lock (_lock)
-                 {
-                     _marketStates.Add(new MarketState
-                     {
-                         Symbol = symbol,
-                         Timeframe = timeframe,
-                         Regime = regime,
-                         TrendSlopePercent = slope,
-                         VolatilityPercent = volatility,
-                         Atr = atr,
-                         Confidence = confidence,
-                         Time = DateTime.UtcNow,
-                         Reason = reason  // Добавление причины для записываемых состояний
-                     });
+        // =====================================================================
+        // DECISION TRACE LEARNING (NEW LAYER)
+        // =====================================================================
+        public void RecordDecisionTrace(
+      string symbol,
+      MarketRegime regime,
+      IReadOnlyList<FastFailResult> gates)
+        {
+            lock (_lock)
+            {
+                if (!_decisionGates.TryGetValue(symbol, out var agg))
+                {
+                    agg = new DecisionTraceAggregate { Symbol = symbol };
+                    _decisionGates[symbol] = agg;
+                }
 
-                     if (_marketStates.Count > 5000)
-                         _marketStates.RemoveRange(0, 2500);  // Ограничение количества данных
+                if (!agg.ByRegime.TryGetValue(regime, out var reg))
+                {
+                    reg = new DecisionGateRegimeStats { Regime = regime };
+                    agg.ByRegime[regime] = reg;
+                }
 
-                     _logger.LogDebug("[HYBRID][{Symbol}] MarketState logged ({Reason}) slope={Slope} vol={Vol} atr={Atr} conf={Conf}",
-                         symbol, reason, slope, volatility, atr, confidence);
-                 }
+                foreach (var g in gates)
+                {
+                    if (!reg.Gates.TryGetValue(g.Gate, out var st))
+                    {
+                        st = new DecisionGateStats { Gate = g.Gate };
+                        reg.Gates[g.Gate] = st;
+                    }
 
-                 TrySnapshot();  // Сохранение снимка данных после каждой записи
-             }
-             */
+                    st.Hits++;
+                    if (!g.Allow)
+                        st.Blocks++;
+                }
+            }
+        }
+
         public void RecordMarketStateTriggered(
          string reason,
          string symbol,
@@ -517,6 +494,28 @@ namespace VertexAutoTradeBinance8.Services
         }
 
 
+        public decimal GetGateStrictness(
+            string symbol,
+            MarketRegime regime,
+            string gate)
+        {
+            if (!_decisionGates.TryGetValue(symbol, out var agg))
+                return 1.0m;
+
+            if (!agg.ByRegime.TryGetValue(regime, out var reg))
+                return 1.0m;
+
+            if (!reg.Gates.TryGetValue(gate, out var st))
+                return 1.0m;
+
+            if (st.BlockRate > 0.70m)
+                return 0.85m;   // gate слишком строгий → ослабляем
+
+            if (st.BlockRate < 0.15m)
+                return 1.10m;   // gate почти не работает → усиливаем
+
+            return 1.0m;
+        }
 
 
         // =====================================================================
@@ -703,11 +702,7 @@ namespace VertexAutoTradeBinance8.Services
             {
                 _logger.LogError(ex, "[AI] SAVE ERROR");
             }
-        }
-
-
-
-
+        } 
 
         private void Load()
         {
@@ -726,17 +721,7 @@ namespace VertexAutoTradeBinance8.Services
                         _logger.LogError(ex, "[AI] Error creating directory: {Directory}", dir);
                     }
                 }
-
-               /* if (!File.Exists(FilePath))
-                {
-                    _logger.LogInformation("[AI] ai_learning.json not found → creating empty state.");
-                    // Если файл не найден, создаём пустой файл
-                    var emptyState = new AiLearningSnapshot();
-                    var emptyStateJson = JsonSerializer.Serialize(emptyState, JsonOptions);
-                    File.WriteAllText(FilePath, emptyStateJson);  // Записываем пустой файл
-                    return; // Ранний выход, если файл пустой
-                }
-                */
+ 
                 if (!File.Exists(FilePath))
                 {
                     _logger.LogInformation("[AI] ai_learning.json not found → starting with empty in-memory state.");
@@ -778,6 +763,41 @@ namespace VertexAutoTradeBinance8.Services
                     if (snap.Trades != null)
                         _tradeHistory.AddRange(snap.Trades);
                 }
+
+                // =====================================================
+                // RESTORE DECISION GATES (AFTER IMPORT STATE)
+                // =====================================================
+                if (snap.DecisionGates != null)
+                {
+                    _decisionGates.Clear();
+
+                    foreach (var d in snap.DecisionGates)
+                    {
+                        if (!_decisionGates.TryGetValue(d.Symbol, out var agg))
+                        {
+                            agg = new DecisionTraceAggregate { Symbol = d.Symbol };
+                            _decisionGates[d.Symbol] = agg;
+                        }
+
+                        if (!agg.ByRegime.TryGetValue(d.Regime, out var reg))
+                        {
+                            reg = new DecisionGateRegimeStats { Regime = d.Regime };
+                            agg.ByRegime[d.Regime] = reg;
+                        }
+
+                        reg.Gates[d.Gate] = new DecisionGateStats
+                        {
+                            Gate = d.Gate,
+                            Hits = d.Hits,
+                            Blocks = d.Blocks
+                        };
+                    }
+
+                    _logger.LogInformation(
+                        "[AI] DecisionGates restored: symbols={Count}",
+                        _decisionGates.Count);
+                }
+
 
                 _logger.LogInformation(
                     "[AI] ai_learning loaded successfully: Symbols={Symbols}, Trades={Trades}, States={States}",
@@ -868,7 +888,29 @@ namespace VertexAutoTradeBinance8.Services
                 snap.Symbols.Add(sym);
             }
 
-           
+            // =====================================================
+            // DECISION GATES SNAPSHOT (NEW, NON-DESTRUCTIVE)
+            // =====================================================
+            snap.DecisionGates = new List<DecisionGateSnapshot>();
+
+            foreach (var (symbol, agg) in _decisionGates)
+            {
+                foreach (var (regime, reg) in agg.ByRegime)
+                {
+                    foreach (var (gate, st) in reg.Gates)
+                    {
+                        snap.DecisionGates.Add(new DecisionGateSnapshot
+                        {
+                            Symbol = symbol,
+                            Regime = regime,
+                            Gate = gate,
+                            Hits = st.Hits,
+                            Blocks = st.Blocks
+                        });
+                    }
+                }
+            }
+
 
             // --- meta ---
             snap.Meta.Symbols = snap.Symbols.Count;

@@ -17,9 +17,21 @@ using System.Collections.Generic;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
+using VertexAutoTradeBinance8.Services.DecisionTrace;
 
 namespace VertexAutoTradeBinance8.Strategy
 {
+   public sealed record FastFailResult(
+    bool Allow,
+    string Gate,
+    string Reason)
+    {
+        public static FastFailResult Ok() =>
+            new(true, "OK", "OK");
+
+        public static FastFailResult Fail(string gate, string reason) =>
+            new(false, gate, reason);
+    }
     public class StrategyEngine
     {
         private readonly ILogger<StrategyEngine> _logger;
@@ -40,6 +52,9 @@ namespace VertexAutoTradeBinance8.Strategy
 
       
         private MarketDataFacade? _marketData;
+        private readonly IDecisionTraceService _decisionTrace;
+
+
         // какие TF реагируют мгновенно
         private static readonly KlineInterval[] ReactiveTf =
         {
@@ -59,7 +74,7 @@ namespace VertexAutoTradeBinance8.Strategy
             AiSelfLearningService aiLearning,
             SmartRegimeService smartRegimeService,
             TradingOptions opt,
-            EngineStateSnapshotService stateSvc )
+            EngineStateSnapshotService stateSvc, IDecisionTraceService decisionTrace)
         {
             _logger = logger;
             _correlationService = correlationService;
@@ -70,6 +85,7 @@ namespace VertexAutoTradeBinance8.Strategy
             _smartRegimeService = smartRegimeService;
             _opt = opt;
             _stateSvc = stateSvc;
+            _decisionTrace = decisionTrace;
             
         }
         private EngineState _engineState => _stateSvc.State;
@@ -141,7 +157,34 @@ namespace VertexAutoTradeBinance8.Strategy
                     "[STRAT][PUSH][{symbol}][{tf}] run reason={reason} bars={bars}",
                     symbol, interval, reason, klines.Count);
 
-                var signal = GenerateSignal(symbol, interval, klines);
+
+                // 🔎 FAST-FAIL + TRACE DECISION (NEW LAYER)
+                var decision = EvaluateSignal(symbol, interval, klines);
+                // 🔥 TRACE — ВСЕГДА
+                _decisionTrace.Record(new DecisionTraceSnapshot
+                {
+                    Symbol = symbol,
+                    Timeframe = interval.ToString(),
+                    Allow = decision.Allow,
+                    FailedGate = decision.FailedGate?.Gate,
+                    Reason = decision.FailedGate?.Reason,                    
+                    Time = DateTime.UtcNow
+                });
+
+               
+                if (!decision.Allow)
+                {
+                    var fail = decision.FailedGate;
+                    if (fail != null)
+                    {
+                        _logger.LogInformation(
+                            "[DECISION][{symbol}][{tf}] BLOCK gate={gate} reason={reason}",
+                            symbol, interval, fail.Gate, fail.Reason);
+                    }
+                    return;
+                }
+
+                var signal = decision.Signal;
 
                 if (signal != null)
                 {
@@ -149,6 +192,15 @@ namespace VertexAutoTradeBinance8.Strategy
                         "[STRAT][PUSH][{symbol}][{tf}] SIGNAL GENERATED",
                         symbol, interval);
                 }
+
+                //var signal = GenerateSignal(symbol, interval, klines);
+
+                //if (signal != null)
+                //{
+                //    _logger.LogInformation(
+                //        "[STRAT][PUSH][{symbol}][{tf}] SIGNAL GENERATED",
+                //        symbol, interval);
+                //}
             }
             catch (Exception ex)
             {
@@ -781,9 +833,9 @@ namespace VertexAutoTradeBinance8.Strategy
         {
             // Шапка блока
             _logger.LogInformation(
-$@"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📌 {symbol} [{interval}] — STRATEGY ENGINE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            $@"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            📌 {symbol} [{interval}] — STRATEGY ENGINE
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
             // ==== CONFIG / TEST MODE FLAGS ==================================================
             bool testMode = _opt.Enabled;
@@ -799,14 +851,15 @@ $@"━━━━━━━━━━━━━━━━━━━━━━━━━�
             if (testMode)
             {
                 _logger.LogInformation(
-$@"🧪 TestMode включён (Level = {level})
-   • AllowSoftEntryAlways : {allowSoftEntryAlways}
-   • RelaxRR              : {relaxRr}
-   • RelaxPatternBlock    : {relaxPatternBlock}
-   • RelaxLiquidity       : {relaxLiquidity}
-   • IgnoreCorrelation    : {ignoreCorrelation}
-   • LowerRegimeThreshold : {lowerRegimeThreshold}");
+            $@"🧪 TestMode включён (Level = {level})
+               • AllowSoftEntryAlways : {allowSoftEntryAlways}
+               • RelaxRR              : {relaxRr}
+               • RelaxPatternBlock    : {relaxPatternBlock}
+               • RelaxLiquidity       : {relaxLiquidity}
+               • IgnoreCorrelation    : {ignoreCorrelation}
+               • LowerRegimeThreshold : {lowerRegimeThreshold}");
             }
+
 
             // 0) Базовые проверки по данным
             if (klines == null)
@@ -1470,5 +1523,278 @@ $@"📊 Режим рынка:
             };
         }
 
+        private FastFailResult Gate0_Data(
+        string symbol,
+        KlineInterval tf,
+        IReadOnlyList<BinanceFuturesUsdtKline> klines)
+            {
+                if (klines == null)
+                    return FastFailResult.Fail("DATA", "klines=null");
+
+                if (klines.Count < 30)
+                    return FastFailResult.Fail("DATA", $"bars={klines.Count}<30");
+
+                return FastFailResult.Ok();
+            }
+
+        private FastFailResult Gate1_SmartRegime(
+        string symbol,
+        KlineInterval tf,
+        IReadOnlyList<BinanceFuturesUsdtKline> klines,
+        out SmartRegimeInfo smart)
+        {
+            smart = null!;
+
+            try
+            {
+                smart = _smartRegimeService.Evaluate(symbol, tf, klines);
+                return FastFailResult.Ok();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[FAST][SMART] Evaluate failed");
+                return FastFailResult.Fail("SMART", "Evaluate error");
+            }
+        }
+
+        private FastFailResult Gate2_Confidence(
+        SmartRegimeInfo smart,
+        bool lowerRegimeThreshold)
+            {
+                if (smart.IsDangerChopZone)
+                    return FastFailResult.Fail("CONF", "DangerChopZone");
+
+                int thr = GetAdaptiveThreshold(
+                    smart.BaseRegime,
+                    smart.SmartType,
+                    smart.VolatilityPercent,
+                    smart.TrendSlopePercent);
+
+                if (lowerRegimeThreshold)
+                    thr = Math.Max(20, (int)(thr * 0.8));
+
+                if (smart.Confidence < thr / 100m)
+                    return FastFailResult.Fail(
+                        "CONF",
+                        $"confidence={smart.Confidence:P0}<thr={thr}%");
+
+                return FastFailResult.Ok();
+            }
+
+        private FastFailResult Gate3_BaseSignal(
+        string symbol,
+        KlineInterval tf,
+        IReadOnlyList<BinanceFuturesUsdtKline> klines,
+        SmartRegimeInfo smart,
+        out TradeSignal? baseSignal)
+            {
+                baseSignal = null;
+
+                bool rangeLike =
+                    smart.BaseRegime == MarketRegime.Range ||
+                    smart.SmartType == SmartRegimeType.SmartRange ||
+                    smart.SmartType == SmartRegimeType.SmartSqueeze;
+
+                if (rangeLike)
+                    baseSignal = TryLiquidityGrab(symbol, tf, klines)
+                              ?? TryPullbackEma21(symbol, tf, klines);
+                else
+                    baseSignal = TryPullbackEma21(symbol, tf, klines);
+
+                if (baseSignal == null)
+                    return FastFailResult.Fail("BASE", "no base pattern");
+
+                return FastFailResult.Ok();
+            }
+
+        private FastFailResult Gate4_RR(
+        string symbol,
+        KlineInterval tf,
+        TradeSignal signal,
+        SmartRegimeInfo smart,
+        bool relaxRr)
+        {
+            if (relaxRr)
+                return FastFailResult.Ok();
+
+            if (signal.TakeProfits == null || signal.TakeProfits.Count == 0)
+                return FastFailResult.Ok();
+
+            var slDist = Math.Abs(signal.EntryPrice - signal.StopLoss);
+            var tpDist = Math.Abs(signal.TakeProfits[0] - signal.EntryPrice);
+
+            if (slDist <= 0)
+                return FastFailResult.Fail("RR", "slDist<=0");
+
+            var rr = tpDist / slDist;
+            var minRr = GetDynamicMinRr(symbol, tf, smart, signal);
+
+            // 🔥 AI Gate Weight (DecisionTrace)
+            var rrGateWeight =
+                _aiLearning.GetGateStrictness(symbol, smart.BaseRegime, "RR");
+
+            // weight < 1 → gate слишком строгий → ослабляем
+            // weight > 1 → gate слабый → усиливаем
+            minRr *= rrGateWeight;
+
+            if (rr < minRr)
+                return FastFailResult.Fail(
+                    "RR",
+                    $"rr={rr:F2}<min={minRr:F2} (w={rrGateWeight:F2})");
+
+            return FastFailResult.Ok();
+        }
+
+        private FastFailResult Gate5_Pattern(
+        string symbol,
+        KlineInterval tf,
+        IReadOnlyList<BinanceFuturesUsdtKline> klines,
+        TradeSignal signal,
+        bool relaxPatternBlock)
+        {
+            try
+            {
+                var pattern = _patternEngineService.Analyze(symbol, tf, klines);
+                if (pattern == null) return FastFailResult.Ok();
+
+                bool sameDir =
+                    (pattern.Direction == 1 && signal.Side == SignalSide.Buy) ||
+                    (pattern.Direction == -1 && signal.Side == SignalSide.Sell);
+
+                decimal thr = relaxPatternBlock ? 0.85m : 0.60m;
+
+                if (!sameDir && pattern.Score >= thr)
+                    return FastFailResult.Fail(
+                        "PATTERN",
+                        $"dir={pattern.Direction} score={pattern.Score:F2}");
+
+                return FastFailResult.Ok();
+            }
+            catch
+            {
+                return FastFailResult.Ok(); // паттерны не критичны
+            }
+        }
+
+        private FastFailResult Gate6_Liquidity(
+        TradeSignal signal,
+        SmartRegimeInfo smart,
+        bool relaxLiquidity)
+        {
+            var liqWeight =
+             _aiLearning.GetGateStrictness(
+                signal.Symbol,
+                smart.BaseRegime,
+                "LIQ");
+
+            var after = _liquidityClusterService.FilterAndAdjust(signal);
+
+            if (after == null)
+            {
+                if (relaxLiquidity)
+                    return FastFailResult.Ok();
+
+                // 🔥 если gate слишком строгий — даём шанс
+                if (liqWeight < 1.0m)
+                {
+                    var passProb = 1.0m - liqWeight; // 0.15…0.25
+                    if (Random.Shared.NextDouble() < (double)passProb)
+                        return FastFailResult.Ok();
+                }
+
+                return FastFailResult.Fail("LIQ", "Liquidity block");
+            }
+
+            return FastFailResult.Ok();
+
+        }
+
+        private FastFailResult Gate7_Exposure(
+        string symbol,
+        KlineInterval tf,
+        TradeSignal signal,
+        SmartRegimeInfo smart)
+        {
+            var res = CanIncreaseExposure(
+                state: _engineState,
+                symbol: symbol,
+                symbolNotionalUsd: 0,
+                equityUsd: 0,
+                usedMarginUsd: 0,
+                aiEdgeScore: smart.Confidence,
+                isSpecialSetup: signal.IsSuperSignal,
+                isHighVolatility: smart.VolatilityPercent >= 0.015m,
+                isLowEquityMode: false);
+
+            if (!res.AllowAdd)
+                return FastFailResult.Fail("EXPO", res.Reason);
+
+            return FastFailResult.Ok();
+        }
+
+        internal sealed class SignalDecisionTrace
+        {
+            public bool Allow { get; set; }
+            public TradeSignal? Signal { get; set; }
+
+            public List<FastFailResult> Gates { get; } = new();
+
+            public FastFailResult? FailedGate =>
+                Gates.FirstOrDefault(g => !g.Allow);
+        }
+
+        internal SignalDecisionTrace EvaluateSignal(
+    string symbol,
+    KlineInterval interval,
+    IReadOnlyList<BinanceFuturesUsdtKline> klines)
+        {
+            var trace = new SignalDecisionTrace();
+
+            // === CONFIG FLAGS (те же самые!)
+            bool testMode = _opt.Enabled;
+            bool relaxRr = testMode && _opt.RelaxRR;
+            bool relaxPatternBlock = testMode && _opt.RelaxPatternBlock;
+            bool relaxLiquidity = testMode && _opt.RelaxLiquidity;
+            bool lowerRegimeThreshold = testMode && _opt.LowerRegimeThreshold;
+
+            // --- Gate 0: Data
+            var r0 = Gate0_Data(symbol, interval, klines);
+            trace.Gates.Add(r0);
+
+            // SmartRegime считается ВСЕГДА (как и сейчас)
+            SmartRegimeInfo smart;
+            var r1 = Gate1_SmartRegime(symbol, interval, klines, out smart);
+            trace.Gates.Add(r1);
+
+            // Confidence
+            var r2 = Gate2_Confidence(smart, lowerRegimeThreshold);
+            trace.Gates.Add(r2);
+
+            // Base signal
+            TradeSignal? baseSignal;
+            var r3 = Gate3_BaseSignal(symbol, interval, klines, smart, out baseSignal);
+            trace.Gates.Add(r3);
+
+            if (baseSignal != null)
+            {
+                trace.Gates.Add(Gate4_RR(symbol, interval, baseSignal, smart, relaxRr));
+                trace.Gates.Add(Gate5_Pattern(symbol, interval, klines, baseSignal, relaxPatternBlock));
+                trace.Gates.Add(Gate6_Liquidity(baseSignal, smart, relaxLiquidity));
+                trace.Gates.Add(Gate7_Exposure(symbol, interval, baseSignal, smart));
+            }
+            _aiLearning.RecordDecisionTrace(
+    symbol,
+    smart.BaseRegime,
+    trace.Gates);
+            // === ФАКТИЧЕСКОЕ РЕШЕНИЕ — ЧЕРЕЗ КАНОНИЧЕСКИЙ GenerateSignal
+            var finalSignal = GenerateSignal(symbol, interval, klines);
+
+            trace.Signal = finalSignal;
+            trace.Allow = finalSignal != null;
+
+            return trace;
+        }
+
     }
+
 }
