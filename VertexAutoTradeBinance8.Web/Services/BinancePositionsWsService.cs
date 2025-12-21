@@ -1,4 +1,5 @@
 ﻿using Binance.Net.Clients;
+using Binance.Net.Enums;
 using Binance.Net.Objects.Models;
 using Binance.Net.Objects.Models.Futures.Socket;
 using CryptoExchange.Net.Objects.Sockets;
@@ -77,9 +78,14 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
 
         // === 5. MARK PRICE WS (PUBLIC STREAM) ===
         var markRes = await _socket.UsdFuturesApi.ExchangeData
-            .SubscribeToMarkPriceUpdatesAsync(_listenKey,
-                 null,
-                data => _live.UpdateMark(data.Data.Symbol, data.Data.MarkPrice));
+     .SubscribeToMarkPriceUpdatesAsync(
+         symbols: null,
+         updateInterval: 1000,
+         data =>
+         {
+             _live.UpdateMark(data.Data.Symbol, data.Data.MarkPrice);
+         });
+
 
         if (!markRes.Success)
             throw new Exception("MarkPrice WS subscribe failed");
@@ -145,7 +151,6 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
                 continue; // ❗ нет позиции — не показываем
 
             var side = p.Quantity > 0 ? "LONG" : "SHORT";
-
             var vm = new PositionVm
             {
                 Symbol = p.Symbol,
@@ -154,15 +159,16 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
                 Entry = p.EntryPrice,
                 Pnl = p.UnrealizedPnl,
 
-                // ✅ тут InitialMargin ЕСТЬ
-                Margin = p.IsolatedMargin,
+                Margin = p.MarginType == FuturesMarginType.Isolated
+    ? p.IsolatedMargin
+    : Math.Abs(p.Quantity * p.EntryPrice) / Math.Max(p.Leverage, 1),
 
+                LiqPrice = p.LiquidationPrice,
                 SizeUsdt = Math.Abs(p.Quantity * p.EntryPrice),
 
-                Roi = p.IsolatedMargin > 0
-                    ? p.UnrealizedPnl / p.IsolatedMargin * 100m
-                    : 0
+                Roi = 0 // пересчитается после Mark
             };
+
 
             _live.Upsert(vm);
         }
