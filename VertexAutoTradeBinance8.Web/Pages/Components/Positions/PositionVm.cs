@@ -35,4 +35,10 @@ public class PositionVm
     // 🔥 NEW
     public PositionChange ChangeMask { get; set; }
     public DateTime LastUpdate { get; set; }
+     
+    // === UI ONLY ===
+    public decimal PrevPnl { get; set; }
+    public decimal PrevRoi { get; set; }
+
+    public DateTime LastUpdateUtc { get; set; } = DateTime.UtcNow;
 }

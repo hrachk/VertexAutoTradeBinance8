@@ -148,10 +148,15 @@
         return Changed(PositionChange.Risk) ? "risk-pulse" : "";
     }
 
-    protected override void OnAfterRender(bool firstRender)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        ChangeMask = PositionChange.None;
+        if (ChangeMask != PositionChange.None)
+        {
+            await Task.Delay(20); // дать CSS отработать
+            ChangeMask = PositionChange.None;
+        }
     }
+
 
 
 }
