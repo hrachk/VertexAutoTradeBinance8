@@ -17,7 +17,6 @@ namespace VertexAutoTradeBinance8
     {
         private readonly ILogger<TradingWorker> _logger;
 
-        private readonly BinanceOptions _binance;
         private readonly TradingOptions _options;
 
         private readonly MarketDataService _market;
@@ -26,28 +25,19 @@ namespace VertexAutoTradeBinance8
         private readonly OrderExecutor _executor;
         private readonly BinanceClientFactory _factory;
         private readonly LiquidityGuardService _liq;
-        private readonly PositionGuardService _guard;
-        private readonly PositionProtectorService _protector;
         private readonly OrderCleanerService _cleaner;
         private readonly PredictiveEngineV4ConfirmationService _predict;
         private readonly PositionSupervisorService _supervisor;
-
         private readonly AiStopLossOptimizer _slOpt;
         private readonly AiRiskScalerV2 _riskScaler;
-
         private readonly AiSelfLearningService _learn;
         private readonly AiModelSnapshotService _snapshot;
-
-        private readonly Dictionary<string, DateTime> _lastTfRun = new();
         private readonly Dictionary<string, DateTime> _lastTrade = new();
-
         private readonly SymbolRegistryService _symbols;
         private readonly AiTimeframeSelectorService _tfSelector;
         private readonly EngineStateBuilder  _engineState;
         private readonly EngineStateSnapshotService  _engineStateSnapshot;
-
         private readonly MarketDataFacade _marketDataFacade;
-
         private DateTime _lastQuantTick = DateTime.UtcNow;
         private readonly IBootGate _bootGate;
         private readonly IStrategyPreFilter _pre;
@@ -55,7 +45,7 @@ namespace VertexAutoTradeBinance8
 
         public TradingWorker(
             ILogger<TradingWorker> logger,
-            IOptions<BinanceOptions> binance,
+             
             IOptions<TradingOptions> options,
             MarketDataService market,
             MarketDataFacade marketDataFacade,
@@ -64,8 +54,7 @@ namespace VertexAutoTradeBinance8
             OrderExecutor executor,
             BinanceClientFactory factory,
             LiquidityGuardService liq,
-            PositionGuardService guard,
-            PositionProtectorService protector,
+           
             OrderCleanerService cleaner,
             PredictiveEngineV4ConfirmationService predict,
             AiStopLossOptimizer slOpt,
@@ -79,7 +68,7 @@ namespace VertexAutoTradeBinance8
         {
             _logger = logger;
 
-            _binance = binance.Value;
+            
             _options = options.Value;
 
             _market = market;
@@ -89,8 +78,7 @@ namespace VertexAutoTradeBinance8
             _executor = executor;
             _factory = factory;
             _liq = liq;
-            _guard = guard;
-            _protector = protector;
+         
             _cleaner = cleaner;
             _predict = predict;
             _slOpt = slOpt;

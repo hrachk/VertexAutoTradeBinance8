@@ -820,6 +820,9 @@ namespace VertexAutoTradeBinance8.Strategy
     "[DEBUG][SIDE-STATS] {symbol} side={side} regime={regime} slope={slope:P2}",
     symbol, signal.Side, smart.BaseRegime, smart.TrendSlopePercent);
 
+            var w = _aiLearning.GetGateWeight(smart.BaseRegime, "RR");
+            minRr *= w;
+
             return minRr;
         }
 
@@ -1175,7 +1178,8 @@ $@"📊 Режим рынка:
                         (pattern.Direction == 1 && baseSignal.Side == SignalSide.Buy) ||
                         (pattern.Direction == -1 && baseSignal.Side == SignalSide.Sell);
 
-                    decimal blockScore = 0.60m;
+                    var w = _aiLearning.GetGateMultiplier(symbol, smart.BaseRegime, "PATTERN");
+                    decimal blockScore = (relaxPatternBlock ? 0.85m : 0.60m) * w;
                     if (relaxPatternBlock)
                     {
                         blockScore = 0.85m; // в тест-режиме блокируем только супер-сильные контр-сигналы
@@ -1218,7 +1222,9 @@ $@"📊 Режим рынка:
             {
                 var beforeLiq = baseSignal;
                 baseSignal = _liquidityClusterService.FilterAndAdjust(beforeLiq);
-                if (baseSignal == null)
+                var w = _aiLearning.GetGateWeight(smart.BaseRegime, "LIQ");
+
+                if (!relaxLiquidity && baseSignal == null && w >= 1.0m)
                 {
                     _aiLearning.RecordMarketStateTriggered(
                         reason: "LIQUIDITY_DANGER",
@@ -1630,17 +1636,17 @@ $@"📊 Режим рынка:
             var minRr = GetDynamicMinRr(symbol, tf, smart, signal);
 
             // 🔥 AI Gate Weight (DecisionTrace)
-            var rrGateWeight =
-                _aiLearning.GetGateStrictness(symbol, smart.BaseRegime, "RR");
+            var w = _aiLearning.GetGateMultiplier(symbol, smart.BaseRegime, "RR");
+            minRr *= w;
 
             // weight < 1 → gate слишком строгий → ослабляем
             // weight > 1 → gate слабый → усиливаем
-            minRr *= rrGateWeight;
+          //  minRr *= rrGateWeight;
 
             if (rr < minRr)
                 return FastFailResult.Fail(
                     "RR",
-                    $"rr={rr:F2}<min={minRr:F2} (w={rrGateWeight:F2})");
+                    $"rr={rr:F2}<min={minRr:F2} (w={w:F2})");
 
             return FastFailResult.Ok();
         }
@@ -1681,12 +1687,34 @@ $@"📊 Режим рынка:
         SmartRegimeInfo smart,
         bool relaxLiquidity)
         {
-            var liqWeight =
-             _aiLearning.GetGateStrictness(
-                signal.Symbol,
-                smart.BaseRegime,
-                "LIQ");
+            var w = _aiLearning.GetGateMultiplier(
+    signal.Symbol,
+    smart.BaseRegime,
+    "LIQ");
 
+            //var after = _liquidityClusterService.FilterAndAdjust(signal);
+
+            //if (after == null)
+            //{
+            //    if (relaxLiquidity)
+            //        return FastFailResult.Ok();
+
+            //    // 🔥 если gate слишком строгий — даём шанс
+            //    //if (liqWeight < 1.0m)
+            //    //{
+            //    //    var passProb = 1.0m - liqWeight; // 0.15…0.25
+            //    //    if (Random.Shared.NextDouble() < (double)passProb)
+            //    //        return FastFailResult.Ok();
+            //    //}
+            //    if (after == null)
+            //    {
+            //        if (relaxLiquidity) return FastFailResult.Ok();
+            //        return FastFailResult.Fail("LIQ", "Liquidity block");
+            //    }
+
+
+            //    return FastFailResult.Fail("LIQ", "Liquidity block");
+            //}
             var after = _liquidityClusterService.FilterAndAdjust(signal);
 
             if (after == null)
@@ -1694,34 +1722,38 @@ $@"📊 Режим рынка:
                 if (relaxLiquidity)
                     return FastFailResult.Ok();
 
-                // 🔥 если gate слишком строгий — даём шанс
-                if (liqWeight < 1.0m)
-                {
-                    var passProb = 1.0m - liqWeight; // 0.15…0.25
-                    if (Random.Shared.NextDouble() < (double)passProb)
-                        return FastFailResult.Ok();
-                }
+                // gate-weight влияет ТОЛЬКО на пороги, не на случайность
+                if (w >= 1.0m)
+                    return FastFailResult.Fail("LIQ", "Liquidity block");
 
-                return FastFailResult.Fail("LIQ", "Liquidity block");
+                return FastFailResult.Ok(); // ослабленный режим
             }
-
             return FastFailResult.Ok();
 
         }
 
         private FastFailResult Gate7_Exposure(
-        string symbol,
-        KlineInterval tf,
-        TradeSignal signal,
-        SmartRegimeInfo smart)
+      string symbol,
+      KlineInterval tf,
+      TradeSignal signal,
+      SmartRegimeInfo smart)
         {
+            // 🔥 Gate-aware multiplier по режиму
+            var w = _aiLearning.GetGateMultiplier(
+                symbol,
+                smart.BaseRegime,
+                "EXPO");
+
             var res = CanIncreaseExposure(
                 state: _engineState,
                 symbol: symbol,
                 symbolNotionalUsd: 0,
                 equityUsd: 0,
                 usedMarginUsd: 0,
-                aiEdgeScore: smart.Confidence,
+
+                // 🔑 ВАЖНО: multiplier применяется ТОЛЬКО ЗДЕСЬ
+                aiEdgeScore: smart.Confidence * w,
+
                 isSpecialSetup: signal.IsSuperSignal,
                 isHighVolatility: smart.VolatilityPercent >= 0.015m,
                 isLowEquityMode: false);
@@ -1731,6 +1763,7 @@ $@"📊 Режим рынка:
 
             return FastFailResult.Ok();
         }
+
 
         internal sealed class SignalDecisionTrace
         {
@@ -1787,14 +1820,20 @@ $@"📊 Режим рынка:
     smart.BaseRegime,
     trace.Gates);
             // === ФАКТИЧЕСКОЕ РЕШЕНИЕ — ЧЕРЕЗ КАНОНИЧЕСКИЙ GenerateSignal
-            var finalSignal = GenerateSignal(symbol, interval, klines);
+            //  var finalSignal = GenerateSignal(symbol, interval, klines);
 
-            trace.Signal = finalSignal;
-            trace.Allow = finalSignal != null;
-
+            // trace.Signal = finalSignal;
+            // trace.Allow = finalSignal != null;
+            trace.Signal = baseSignal;
+            trace.Allow = baseSignal != null;
             return trace;
+        }
+        public static void RegisterStop(string symbol, SignalSide side)
+        {
+            _lastStopTime[(symbol, side)] = DateTime.UtcNow;
         }
 
     }
+
 
 }

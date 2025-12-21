@@ -36,8 +36,68 @@ namespace VertexAutoTradeBinance8.Services
     /// </summary>
     /// 
 
+    internal sealed class RegimeGateProfile
+    {
+        public MarketRegime Regime { get; init; }
+
+        // базовые веса (ручной дизайн)
+        public Dictionary<string, decimal> BaseWeights { get; } = new();
+
+        // авто-коррекция от AI (накопленная)
+        public Dictionary<string, decimal> AdaptiveBias { get; } = new();
+
+        public decimal GetWeight(string gate)
+        {
+            BaseWeights.TryGetValue(gate, out var baseW);
+            AdaptiveBias.TryGetValue(gate, out var bias);
+
+            var w = (baseW == 0 ? 1.0m : baseW) * (bias == 0 ? 1.0m : bias);
+            return Math.Clamp(w, 0.70m, 1.30m);
+        }
+    }
     public class AiSelfLearningService
     {
+
+        public decimal GetGateMultiplier(string symbol, MarketRegime regime, string gate)
+        {
+            // v1: symbol сейчас не участвует (оставляем в сигнатуре на будущее)
+            return GetGateWeight(regime, gate);
+        }
+         
+        // symbol-agnostic, режим — главный ключ
+        private readonly Dictionary<MarketRegime, RegimeGateProfile> _gateProfiles
+            = new();
+
+        private void EnsureGateProfiles()
+        {
+            void add(MarketRegime r, Action<Dictionary<string, decimal>> cfg)
+            {
+                if (_gateProfiles.ContainsKey(r)) return;
+                var p = new RegimeGateProfile { Regime = r };
+                cfg(p.BaseWeights);
+                _gateProfiles[r] = p;
+            }
+
+            add(MarketRegime.StrongUpTrend, w =>
+            {
+                w["RR"] = 0.90m;
+                w["PATTERN"] = 0.95m;
+                w["LIQ"] = 1.05m;
+                w["EXPO"] = 1.00m;
+            });
+
+            add(MarketRegime.Range, w =>
+            {
+                w["RR"] = 1.15m;
+                w["PATTERN"] = 1.10m;
+                w["LIQ"] = 0.95m;
+                w["EXPO"] = 1.00m;
+            });
+
+            add(MarketRegime.Unknown, w => { });
+        }
+
+
         private readonly ILogger<AiSelfLearningService> _logger;
         private readonly object _lock = new();
 
@@ -113,6 +173,8 @@ namespace VertexAutoTradeBinance8.Services
 
             // 1) СНАЧАЛА ГРУЗИМ СТАРОЕ СОСТОЯНИЕ
             Load();
+           
+
 
             // 2) Потом подгружаем missed_trades.json и учимся на них БЕЗ снапшотов
             var missed = LoadMissedTradesFromFile();
@@ -130,6 +192,7 @@ namespace VertexAutoTradeBinance8.Services
             // 3) Один финальный снапшот (обновляем файл с учётом старых + новых данных)
             ForceSnapshot();
         }
+
 
         private List<MissedTradeRecord> LoadMissedTradesFromFile()
         {
@@ -254,6 +317,15 @@ namespace VertexAutoTradeBinance8.Services
             public MarketRegime Regime { get; set; } = MarketRegime.Unknown;
         }
 
+        public decimal GetGateWeight(MarketRegime regime, string gate)
+        {
+            EnsureGateProfiles();
+            return _gateProfiles.TryGetValue(regime, out var p)
+                ? p.GetWeight(gate)
+                : 1.0m;
+        }
+
+
         // =====================================================================
         // DECISION TRACE LEARNING (NEW LAYER)
         // =====================================================================
@@ -262,6 +334,22 @@ namespace VertexAutoTradeBinance8.Services
       MarketRegime regime,
       IReadOnlyList<FastFailResult> gates)
         {
+            EnsureGateProfiles();
+
+            var profile = _gateProfiles[regime];
+
+            foreach (var g in gates)
+            {
+                // считаем строгость как раньше
+                var strict = GetGateStrictness(symbol, regime, g.Gate);
+
+                // EMA-подстройка bias
+                profile.AdaptiveBias.TryGetValue(g.Gate, out var cur);
+                var target = strict;                 // 0.85 / 1.10 / 1.00
+                var updated = cur == 0 ? target : (cur * 0.9m + target * 0.1m);
+
+                profile.AdaptiveBias[g.Gate] = Math.Clamp(updated, 0.85m, 1.15m);
+            }
             lock (_lock)
             {
                 if (!_decisionGates.TryGetValue(symbol, out var agg))
