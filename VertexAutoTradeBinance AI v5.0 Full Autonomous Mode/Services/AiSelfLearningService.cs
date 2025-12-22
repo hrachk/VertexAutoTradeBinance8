@@ -94,6 +94,14 @@ namespace VertexAutoTradeBinance8.Services
                 w["EXPO"] = 1.00m;
             });
 
+            add(MarketRegime.StrongDownTrend, w =>
+            {
+                w["RR"] = 0.90m;
+                w["PATTERN"] = 0.95m;
+                w["LIQ"] = 1.05m;
+                w["EXPO"] = 1.00m;
+            });
+
             add(MarketRegime.Unknown, w => { });
         }
 
@@ -330,54 +338,54 @@ namespace VertexAutoTradeBinance8.Services
         // DECISION TRACE LEARNING (NEW LAYER)
         // =====================================================================
         public void RecordDecisionTrace(
-      string symbol,
-      MarketRegime regime,
-      IReadOnlyList<FastFailResult> gates)
-        {
-            EnsureGateProfiles();
-
-            var profile = _gateProfiles[regime];
-
-            foreach (var g in gates)
+          string symbol,
+          MarketRegime regime,
+          IReadOnlyList<FastFailResult> gates)
             {
-                // считаем строгость как раньше
-                var strict = GetGateStrictness(symbol, regime, g.Gate);
+                EnsureGateProfiles();
 
-                // EMA-подстройка bias
-                profile.AdaptiveBias.TryGetValue(g.Gate, out var cur);
-                var target = strict;                 // 0.85 / 1.10 / 1.00
-                var updated = cur == 0 ? target : (cur * 0.9m + target * 0.1m);
-
-                profile.AdaptiveBias[g.Gate] = Math.Clamp(updated, 0.85m, 1.15m);
-            }
-            lock (_lock)
-            {
-                if (!_decisionGates.TryGetValue(symbol, out var agg))
-                {
-                    agg = new DecisionTraceAggregate { Symbol = symbol };
-                    _decisionGates[symbol] = agg;
-                }
-
-                if (!agg.ByRegime.TryGetValue(regime, out var reg))
-                {
-                    reg = new DecisionGateRegimeStats { Regime = regime };
-                    agg.ByRegime[regime] = reg;
-                }
+                var profile = _gateProfiles[regime];
 
                 foreach (var g in gates)
                 {
-                    if (!reg.Gates.TryGetValue(g.Gate, out var st))
+                    // считаем строгость как раньше
+                    var strict = GetGateStrictness(symbol, regime, g.Gate);
+
+                    // EMA-подстройка bias
+                    profile.AdaptiveBias.TryGetValue(g.Gate, out var cur);
+                    var target = strict;                 // 0.85 / 1.10 / 1.00
+                    var updated = cur == 0 ? target : (cur * 0.9m + target * 0.1m);
+
+                    profile.AdaptiveBias[g.Gate] = Math.Clamp(updated, 0.85m, 1.15m);
+                }
+                lock (_lock)
+                {
+                    if (!_decisionGates.TryGetValue(symbol, out var agg))
                     {
-                        st = new DecisionGateStats { Gate = g.Gate };
-                        reg.Gates[g.Gate] = st;
+                        agg = new DecisionTraceAggregate { Symbol = symbol };
+                        _decisionGates[symbol] = agg;
                     }
 
-                    st.Hits++;
-                    if (!g.Allow)
-                        st.Blocks++;
+                    if (!agg.ByRegime.TryGetValue(regime, out var reg))
+                    {
+                        reg = new DecisionGateRegimeStats { Regime = regime };
+                        agg.ByRegime[regime] = reg;
+                    }
+
+                    foreach (var g in gates)
+                    {
+                        if (!reg.Gates.TryGetValue(g.Gate, out var st))
+                        {
+                            st = new DecisionGateStats { Gate = g.Gate };
+                            reg.Gates[g.Gate] = st;
+                        }
+
+                        st.Hits++;
+                        if (!g.Allow)
+                            st.Blocks++;
+                    }
                 }
             }
-        }
 
         public void RecordMarketStateTriggered(
          string reason,
