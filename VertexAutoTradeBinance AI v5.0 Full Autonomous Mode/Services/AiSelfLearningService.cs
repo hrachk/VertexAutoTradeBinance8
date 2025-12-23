@@ -617,15 +617,14 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         // AI RISK (для StrategyEngine / AiLeverage / RiskManager)
         // =====================================================================
-        public decimal GetAiRiskAdjustment(string symbol, MarketRegime regime)
+ 
+        public decimal GetAiRiskAdjustment(string symbol, MarketRegime regime) 
         {
-            if (_stats.TryGetValue(symbol, out var regimes) &&
-                regimes.TryGetValue(regime, out var s))
-            {
-                return s.RiskWeight;
-            }
-
-            return 1.00m;
+            if (string.IsNullOrEmpty(symbol)) 
+                return 1.00m; 
+            if (!_stats.TryGetValue(symbol, out var regimes)) 
+                return 1.00m; if (!regimes.TryGetValue(regime, out var s)) 
+                return 1.00m; return s?.RiskWeight ?? 1.00m;
         }
 
         // =====================================================================
