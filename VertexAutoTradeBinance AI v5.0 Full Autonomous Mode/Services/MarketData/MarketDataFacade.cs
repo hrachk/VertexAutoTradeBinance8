@@ -232,6 +232,7 @@ namespace VertexAutoTradeBinance8.Services
             _restLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
 
         private const int WarmBars = 20;
+        private const int FastWarmBars = 10; // 🔥 FAST режим
 
         public bool IsInWarmup(string symbol, KlineInterval tf)
         {
@@ -239,7 +240,9 @@ namespace VertexAutoTradeBinance8.Services
             if (!_wsBars.TryGetValue(key, out var bars))
                 return true;
 
-            return bars < WarmBars;
+            // FAST warm-up: разрешаем раньше, без REST
+            var required = Math.Min(WarmBars, FastWarmBars);
+            return bars < required;
         }
 
 
