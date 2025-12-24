@@ -11,9 +11,7 @@
 
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
-using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
@@ -21,7 +19,7 @@ using VertexAutoTradeBinance8.Services.DecisionTrace;
 
 namespace VertexAutoTradeBinance8.Strategy
 {
-   public sealed record FastFailResult(
+    public sealed record FastFailResult(
     bool Allow,
     string Gate,
     string Reason)
@@ -50,10 +48,8 @@ namespace VertexAutoTradeBinance8.Strategy
         public bool LastSoftEntry { get; private set; }
         public bool LastBlockedByLiquidity { get; private set; }
 
-      
         private MarketDataFacade? _marketData;
         private readonly IDecisionTraceService _decisionTrace;
-
 
         // какие TF реагируют мгновенно
         private static readonly KlineInterval[] ReactiveTf =
@@ -86,7 +82,7 @@ namespace VertexAutoTradeBinance8.Strategy
             _opt = opt;
             _stateSvc = stateSvc;
             _decisionTrace = decisionTrace;
-            
+
         }
         private EngineState _engineState => _stateSvc.State;
 
@@ -167,11 +163,11 @@ namespace VertexAutoTradeBinance8.Strategy
                     Timeframe = interval.ToString(),
                     Allow = decision.Allow,
                     FailedGate = decision.FailedGate?.Gate,
-                    Reason = decision.FailedGate?.Reason,                    
+                    Reason = decision.FailedGate?.Reason,
                     Time = DateTime.UtcNow
                 });
 
-               
+
                 if (!decision.Allow)
                 {
                     var fail = decision.FailedGate;
@@ -191,16 +187,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     _logger.LogInformation(
                         "[STRAT][PUSH][{symbol}][{tf}] SIGNAL GENERATED",
                         symbol, interval);
-                }
-
-                //var signal = GenerateSignal(symbol, interval, klines);
-
-                //if (signal != null)
-                //{
-                //    _logger.LogInformation(
-                //        "[STRAT][PUSH][{symbol}][{tf}] SIGNAL GENERATED",
-                //        symbol, interval);
-                //}
+                } 
             }
             catch (Exception ex)
             {
@@ -210,8 +197,6 @@ namespace VertexAutoTradeBinance8.Strategy
                     symbol, interval);
             }
         }
-
-
 
         // -------------------------------------------------------------------------------------
         // ATR/TP/SL настройки по таймфрейму
@@ -300,7 +285,6 @@ namespace VertexAutoTradeBinance8.Strategy
             var tr3 = Math.Abs(current.LowPrice - prev.ClosePrice);
             return Math.Max(tr1, Math.Max(tr2, tr3));
         }
-
         private static bool IsTooBigImpulseBar(
             BinanceFuturesUsdtKline current,
             BinanceFuturesUsdtKline prev,
@@ -1165,7 +1149,7 @@ $@"📊 Режим рынка:
                     }
                 }
             }
- 
+
 
             // 5) Pattern Filter — с защитой + RelaxPatternBlock вариант
             try
@@ -1274,7 +1258,7 @@ $@"📊 Режим рынка:
                 _logger.LogError(ex,
                     $"[STRAT][{symbol}][{interval}] AiSelfLearningService.GetAiRiskAdjustment ERROR → AIrisk=1.00.");
                 baseSignal.Reason += "|AIrisk=1.00";
-            } 
+            }
 
             // 8) DYNAMIC RR FILTER (StrongUpTrend FIX)
             if (baseSignal.TakeProfits != null && baseSignal.TakeProfits.Count > 0)
@@ -1320,7 +1304,7 @@ $@"📊 Режим рынка:
                • TP3         : {(tp3F.HasValue ? tp3F.Value.ToString("F4") : "-")}
                • Reason      : {baseSignal.Reason}");
 
-                        _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
             // =====================================================
             // 🔐 EXPOSURE CONTROL (FINAL GATE BEFORE RETURN)
@@ -1363,7 +1347,7 @@ $@"📊 Режим рынка:
                     return null;
                 }
 
-                
+
             }
             catch (Exception ex)
             {
@@ -1533,15 +1517,15 @@ $@"📊 Режим рынка:
         string symbol,
         KlineInterval tf,
         IReadOnlyList<BinanceFuturesUsdtKline> klines)
-            {
-                if (klines == null)
-                    return FastFailResult.Fail("DATA", "klines=null");
+        {
+            if (klines == null)
+                return FastFailResult.Fail("DATA", "klines=null");
 
-                if (klines.Count < 30)
-                    return FastFailResult.Fail("DATA", $"bars={klines.Count}<30");
+            if (klines.Count < 30)
+                return FastFailResult.Fail("DATA", $"bars={klines.Count}<30");
 
-                return FastFailResult.Ok();
-            }
+            return FastFailResult.Ok();
+        }
 
         private FastFailResult Gate1_SmartRegime(
         string symbol,
@@ -1566,26 +1550,26 @@ $@"📊 Режим рынка:
         private FastFailResult Gate2_Confidence(
         SmartRegimeInfo smart,
         bool lowerRegimeThreshold)
-            {
-                if (smart.IsDangerChopZone)
-                    return FastFailResult.Fail("CONF", "DangerChopZone");
+        {
+            if (smart.IsDangerChopZone)
+                return FastFailResult.Fail("CONF", "DangerChopZone");
 
-                int thr = GetAdaptiveThreshold(
-                    smart.BaseRegime,
-                    smart.SmartType,
-                    smart.VolatilityPercent,
-                    smart.TrendSlopePercent);
+            int thr = GetAdaptiveThreshold(
+                smart.BaseRegime,
+                smart.SmartType,
+                smart.VolatilityPercent,
+                smart.TrendSlopePercent);
 
-                if (lowerRegimeThreshold)
-                    thr = Math.Max(20, (int)(thr * 0.8));
+            if (lowerRegimeThreshold)
+                thr = Math.Max(20, (int)(thr * 0.8));
 
-                if (smart.Confidence < thr / 100m)
-                    return FastFailResult.Fail(
-                        "CONF",
-                        $"confidence={smart.Confidence:P0}<thr={thr}%");
+            if (smart.Confidence < thr / 100m)
+                return FastFailResult.Fail(
+                    "CONF",
+                    $"confidence={smart.Confidence:P0}<thr={thr}%");
 
-                return FastFailResult.Ok();
-            }
+            return FastFailResult.Ok();
+        }
 
         private FastFailResult Gate3_BaseSignal(
         string symbol,
@@ -1593,25 +1577,25 @@ $@"📊 Режим рынка:
         IReadOnlyList<BinanceFuturesUsdtKline> klines,
         SmartRegimeInfo smart,
         out TradeSignal? baseSignal)
-            {
-                baseSignal = null;
+        {
+            baseSignal = null;
 
-                bool rangeLike =
-                    smart.BaseRegime == MarketRegime.Range ||
-                    smart.SmartType == SmartRegimeType.SmartRange ||
-                    smart.SmartType == SmartRegimeType.SmartSqueeze;
+            bool rangeLike =
+                smart.BaseRegime == MarketRegime.Range ||
+                smart.SmartType == SmartRegimeType.SmartRange ||
+                smart.SmartType == SmartRegimeType.SmartSqueeze;
 
-                if (rangeLike)
-                    baseSignal = TryLiquidityGrab(symbol, tf, klines)
-                              ?? TryPullbackEma21(symbol, tf, klines);
-                else
-                    baseSignal = TryPullbackEma21(symbol, tf, klines);
+            if (rangeLike)
+                baseSignal = TryLiquidityGrab(symbol, tf, klines)
+                          ?? TryPullbackEma21(symbol, tf, klines);
+            else
+                baseSignal = TryPullbackEma21(symbol, tf, klines);
 
-                if (baseSignal == null)
-                    return FastFailResult.Fail("BASE", "no base pattern");
+            if (baseSignal == null)
+                return FastFailResult.Fail("BASE", "no base pattern");
 
-                return FastFailResult.Ok();
-            }
+            return FastFailResult.Ok();
+        }
 
         private FastFailResult Gate4_RR(
         string symbol,
@@ -1641,7 +1625,7 @@ $@"📊 Режим рынка:
 
             // weight < 1 → gate слишком строгий → ослабляем
             // weight > 1 → gate слабый → усиливаем
-          //  minRr *= rrGateWeight;
+            //  minRr *= rrGateWeight;
 
             if (rr < minRr)
                 return FastFailResult.Fail(

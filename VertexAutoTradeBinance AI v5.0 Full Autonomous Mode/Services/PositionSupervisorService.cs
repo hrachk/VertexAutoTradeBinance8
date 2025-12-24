@@ -1731,9 +1731,157 @@ namespace VertexAutoTradeBinance8.Services
                 symbol, side, closeQty, uPnl, addToBucket, aiEdgeScore, rr);
 
             _recentPartialClose[$"{symbol}|{side}"] =
-    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         }
+        public async Task HandleUiActionAsync(PositionActionRequest req)
+        {
+            var pos = GetTrackedPosition(req.Symbol, req.Side);
+            if (pos == null) return;
+
+            switch (req.Action)
+            {
+                case PositionActionType.CloseMarket:
+                    await ClosePositionAsync(pos, CloseReason.ManualUi);
+                    break;
+
+                case PositionActionType.UpdateStopLoss:
+                    await UpdateStopLossAsync(pos, req.Price!.Value, reason: "UI");
+                    break;
+
+                case PositionActionType.UpdateTakeProfit:
+                    await UpdateTakeProfitAsync(pos, req.Price!.Value, reason: "UI");
+                    break;
+            }
+        }
+
+        private Task UpdateTakeProfitAsync(
+    BinancePositionDetailsUsdt pos,
+    decimal price,
+    string reason)
+        {
+            _dispatcher.Enqueue(async ct =>
+            {
+                using var c = _factory.CreateRestClient();
+
+                var info = await c.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+                if (!info.Success || info.Data == null)
+                    return;
+
+                var real = info.Data.FirstOrDefault(p =>
+                    p.Symbol == pos.Symbol &&
+                    p.PositionSide == pos.PositionSide &&
+                    Math.Abs(p.Quantity) > 0);
+
+                if (real == null)
+                    return;
+
+                await CreateEmergencyTPAsync(
+                    c,
+                    real.Symbol,
+                    real.PositionSide,
+                    Math.Abs(real.Quantity),
+                    real.EntryPrice,
+                    signal: null,
+                    ct);
+            });
+
+            return Task.CompletedTask;
+        }
+
+        private Task UpdateStopLossAsync(
+        BinancePositionDetailsUsdt pos,
+        decimal price,
+        string reason)
+        {
+            _dispatcher.Enqueue(async ct =>
+            {
+                using var c = _factory.CreateRestClient();
+
+                var info = await c.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+                if (!info.Success || info.Data == null)
+                    return;
+
+                var real = info.Data.FirstOrDefault(p =>
+                    p.Symbol == pos.Symbol &&
+                    p.PositionSide == pos.PositionSide &&
+                    Math.Abs(p.Quantity) > 0);
+
+                if (real == null)
+                    return;
+
+                await CreateEmergencySLAsync(
+                    c,
+                    real.Symbol,
+                    real.PositionSide,
+                    Math.Abs(real.Quantity),
+                    real.EntryPrice,
+                    signal: null,
+                    ct);
+            });
+
+            return Task.CompletedTask;
+        }
+
+        private Task ClosePositionAsync(
+        BinancePositionDetailsUsdt pos,
+        CloseReason reason)
+        {
+            _dispatcher.Enqueue(async ct =>
+            {
+                using var c = _factory.CreateRestClient();
+
+                var info = await c.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+                if (!info.Success || info.Data == null)
+                    return;
+
+                var real = info.Data.FirstOrDefault(p =>
+                    p.Symbol == pos.Symbol &&
+                    p.PositionSide == pos.PositionSide &&
+                    Math.Abs(p.Quantity) > 0);
+
+                if (real == null)
+                    return;
+
+                var closeSide = real.PositionSide == PositionSide.Long
+                    ? OrderSide.Sell
+                    : OrderSide.Buy;
+
+                await c.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol: real.Symbol,
+                    side: closeSide,
+                    type: FuturesOrderType.Market,
+                    quantity: Math.Abs(real.Quantity),
+                    positionSide: real.PositionSide,
+                    ct: ct);
+
+                _logger.LogWarning(
+                    "[UI][CLOSE] {symbol} {side} closed by {reason}",
+                    real.Symbol, real.PositionSide, reason);
+            });
+
+            return Task.CompletedTask;
+        }
+
+        private BinancePositionDetailsUsdt? GetTrackedPosition(string symbol, PositionSide side)
+        {
+            var sKey = EngineState.Key(symbol);
+
+            if (!_engineState.Symbols.TryGetValue(sKey, out _))
+                return null;
+
+            // Supervisor уже работает с фактической позицией через REST/WS,
+            // UI-action не должен сам решать qty/entry
+            // Поэтому просто возвращаем null как "gate"
+            // Реальные действия делаются через существующие методы ниже
+            return new BinancePositionDetailsUsdt
+            {
+                Symbol = symbol,
+                PositionSide = side
+            };
+        }
+
+
 
     }
 }
