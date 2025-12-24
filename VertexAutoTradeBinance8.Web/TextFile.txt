@@ -1,0 +1,33 @@
+﻿MissedTradeFileService 		- BaseDirectory, "missed_trades.json"
+AiLearningFileService  		- BaseDirectory, "ai-models", "ai_learning.json");
+EngineStateSnapshotService 	- BaseDirectory, "engine_state.json");
+RiskManager			- BaseDirectory, "missed_trades.json");
+ExecutedSignalService		- BaseDirectory, "executed_signals.json");
+
+
+
+
+Shahen
+
+Ключ API
+WztkkdMs7ykcnEZ8bpQgcbz8Po19E5XQkP0131vkNgZjSx3rDaQ7sTxzqgkR7hEp
+Секретный ключ:
+lAyOcVCw4ohWkRvBZdYZscmF2Ps7GR5f0q8BJnAzz8ya8Vvw7KcSJtsYWrGLadsE
+
+
+
+
+
+
+ETHUSDT, 
+BTCUSDT, 
+ALPACAUSDT,
+ ETHUSDC, 
+SOLUSDT, 
+BTCUSDC, 
+BEATUSDT, 
+PIPPINUSDT, 
+XRPUSDT, 
+ZECUSDT,
+ RAVEUSDT, 
+BNXUSDT, DOGEUSDT, SOLUSDC, BNBUSDT, AVNTUSDT, SUIUSDT, NIGHTUSDT, HUSDT, ICNTUSDT, AVAXUSDT, ASTERUSDT, ADAUSDT, HYPEUSDT, PAXGUSDT, STRKUSDT
