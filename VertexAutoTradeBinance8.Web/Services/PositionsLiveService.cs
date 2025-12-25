@@ -28,7 +28,20 @@ public class PositionsLiveService
         lock (_lock)
             return _positions.Values.ToList();
     }
-
+    // =========================================================
+    // ACTIVE SYMBOLS (for WS subscriptions)
+    // =========================================================
+    public List<string> GetActiveSymbols()
+    {
+        lock (_lock)
+        {
+            return _positions.Values
+                .Where(p => p != null && p.SizeUsdt > 0)
+                .Select(p => p.Symbol)
+                .Distinct()
+                .ToList();
+        }
+    }
     public void Upsert(PositionVm vm)
     {
         lock (_lock)

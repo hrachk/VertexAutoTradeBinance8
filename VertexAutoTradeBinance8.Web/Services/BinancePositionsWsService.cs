@@ -6,6 +6,7 @@ using CryptoExchange.Net.Objects.Sockets;
 using Microsoft.Extensions.Logging;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Web.Models;
+using VertexAutoTradeBinance8.Web.Pages.Components;
 
 namespace VertexAutoTradeBinance8.Web.Services;
 
@@ -95,15 +96,24 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
             _userDataSub = userRes.Data;
 
             // === 5. MARK PRICE WS (PUBLIC STREAM) ===
-            var markRes = await _socket.UsdFuturesApi.ExchangeData
-         .SubscribeToMarkPriceUpdatesAsync(
-             symbols: null,
-             updateInterval: 1000,
-             data =>
-             {
-                 _live.UpdateMark(data.Data.Symbol, data.Data.MarkPrice);
-             });
+            // Запускаем ТОЛЬКО если есть активные позиции
+            var activeSymbols = _live.GetActiveSymbols();
 
+            if (activeSymbols.Count == 0)
+            {
+                _logger.LogWarning("[WS] No ACTIVE positions — MarkPrice WS skipped (normal state)");
+                _logger.LogInformation("[WS] Binance positions WS started (UserData only)");
+                return; // ⛔ ВАЖНО: без рестарта, без ошибки
+            }
+
+            var markRes = await _socket.UsdFuturesApi.ExchangeData
+                .SubscribeToMarkPriceUpdatesAsync(
+                    symbols: activeSymbols,
+                    updateInterval: 1000,
+                    data =>
+                    {
+                        _live.UpdateMark(data.Data.Symbol, data.Data.MarkPrice);
+                    });
 
             if (!markRes.Success)
             {
@@ -115,7 +125,10 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
 
             _markPriceSub = markRes.Data;
 
-            _logger.LogInformation("[WS] Binance positions WS started");
+            _logger.LogInformation(
+                "[WS] Binance positions WS started (UserData + MarkPrice) symbols={cnt}",
+                activeSymbols.Count);
+
         }
         catch (Exception ex)
         {
@@ -328,4 +341,5 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
         _socket?.Dispose();
         _rest?.Dispose();
     }
+ 
 }
