@@ -39,62 +39,99 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
     // =========================================================
     // START
     // =========================================================
+
+    private int _started = 0;
     public async Task StartAsync()
     {
-        // === REST ===
-        _rest = _factory.TryCreateRestClient();
-        if (_rest == null)
-        {
-            _logger.LogWarning("[WS] Binance credentials missing — WS disabled");
+        if (Interlocked.Exchange(ref _started, 1) == 1)
             return;
+
+        try
+        {
+            _rest = _factory.TryCreateRestClient();
+            if (_rest == null)
+            {
+                _logger.LogWarning("[WS] Binance credentials missing — WS disabled");
+                Interlocked.Exchange(ref _started, 0);
+                return;
+            }
+
+            // === 1. SNAPSHOT (REST) ===
+            await LoadInitialPositionsAsync();
+
+            // === 2. SOCKET CLIENT ===
+            _socket = new BinanceSocketClient();
+
+            // === 3. LISTEN KEY (ТОЛЬКО ДЛЯ USER DATA) ===
+            _listenKey = await CreateListenKeyAsync();
+            if (string.IsNullOrEmpty(_listenKey))
+            {
+                Interlocked.Exchange(ref _started, 0);
+                await RestartWithDelay();
+                return;
+            }
+            StartListenKeyRefresh();
+
+            // === 4. USER DATA WS ===
+            var userRes = await _socket.UsdFuturesApi.Account
+                .SubscribeToUserDataUpdatesAsync(
+                    _listenKey,
+                    onAccountUpdate: OnAccountUpdate,
+                    onOrderUpdate: _ => { },
+                    onListenKeyExpired: ev =>
+                    {
+                        _logger.LogWarning("[WS] listenKey expired - restarting");
+                        _ = RestartAsync();
+                    });
+
+            if (!userRes.Success)
+            {
+                _logger.LogError("[WS] UserData WS subscribe failed: {err}", userRes.Error);
+                Interlocked.Exchange(ref _started, 0);
+                await RestartWithDelay();
+                return;
+            }
+
+            _userDataSub = userRes.Data;
+
+            // === 5. MARK PRICE WS (PUBLIC STREAM) ===
+            var markRes = await _socket.UsdFuturesApi.ExchangeData
+         .SubscribeToMarkPriceUpdatesAsync(
+             symbols: null,
+             updateInterval: 1000,
+             data =>
+             {
+                 _live.UpdateMark(data.Data.Symbol, data.Data.MarkPrice);
+             });
+
+
+            if (!markRes.Success)
+            {
+                _logger.LogError("[WS] MarkPrice WS subscribe failed: {err}", markRes.Error);
+                Interlocked.Exchange(ref _started, 0);
+                await RestartWithDelay();
+                return;
+            }
+
+            _markPriceSub = markRes.Data;
+
+            _logger.LogInformation("[WS] Binance positions WS started");
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[WS] StartAsync fatal");
+            Interlocked.Exchange(ref _started, 0);
 
-        // === 1. SNAPSHOT (REST) ===
-        await LoadInitialPositionsAsync();
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(5000);
+                await RestartWithDelay();
+            });
+        }
+        // === REST ===
 
-        // === 2. SOCKET CLIENT ===
-        _socket = new BinanceSocketClient();
-
-        // === 3. LISTEN KEY (ТОЛЬКО ДЛЯ USER DATA) ===
-        _listenKey = await CreateListenKeyAsync();
-        StartListenKeyRefresh();
-
-        // === 4. USER DATA WS ===
-        var userRes = await _socket.UsdFuturesApi.Account
-            .SubscribeToUserDataUpdatesAsync(
-                _listenKey,
-                onAccountUpdate: OnAccountUpdate,
-                onOrderUpdate: _ => { },
-                onListenKeyExpired: ev =>
-                {
-                    _logger.LogWarning("[WS] listenKey expired - restarting");
-                    _ = RestartAsync();
-                });
-
-        if (!userRes.Success)
-            throw new Exception("UserData WS subscribe failed");
-
-        _userDataSub = userRes.Data;
-
-        // === 5. MARK PRICE WS (PUBLIC STREAM) ===
-        var markRes = await _socket.UsdFuturesApi.ExchangeData
-     .SubscribeToMarkPriceUpdatesAsync(
-         symbols: null,
-         updateInterval: 1000,
-         data =>
-         {
-             _live.UpdateMark(data.Data.Symbol, data.Data.MarkPrice);
-         });
-
-
-        if (!markRes.Success)
-            throw new Exception("MarkPrice WS subscribe failed");
-
-        _markPriceSub = markRes.Data;
-
-        _logger.LogInformation("[WS] Binance positions WS started");
     }
-
+   
 
     // =========================================================
     // ACCOUNT UPDATE
@@ -179,11 +216,14 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
     // =========================================================
     // LISTEN KEY
     // =========================================================
-    private async Task<string> CreateListenKeyAsync()
+    private async Task<string?> CreateListenKeyAsync()
     {
         var res = await _rest!.UsdFuturesApi.Account.StartUserStreamAsync();
         if (!res.Success || string.IsNullOrEmpty(res.Data))
-            throw new Exception("Failed to create listenKey");
+        {
+            _logger.LogError("[WS] Failed to create listenKey: {err}", res.Error);
+            return null;
+        }
 
         _logger.LogInformation("[WS] listenKey created");
         return res.Data;
@@ -203,27 +243,47 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
 
     private void StartListenKeyRefresh()
     {
-        _listenKeyTimer = new Timer(
-            async _ =>
+        _listenKeyTimer = new Timer(_ =>
+        {
+            _ = Task.Run(async () =>
             {
-                try { await RefreshListenKeyAsync(); }
+                try
+                {
+                    await RefreshListenKeyAsync();
+                }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "[WS] listenKey refresh error");
                 }
-            },
-            null,
-            ListenKeyRefreshInterval,
-            ListenKeyRefreshInterval);
+            });
+        },
+             null,
+             ListenKeyRefreshInterval,
+             ListenKeyRefreshInterval);
+
     }
 
     // =========================================================
     // RESTART / STOP
     // =========================================================
-    private async Task RestartAsync()
+    private int _restarting = 0;
+     
+    private Task RestartWithDelay() => RestartAsync(delayMs: 5000);
+    private async Task RestartAsync(int delayMs = 3000)
     {
-        await StopAsync();
-        await StartAsync();
+        if (Interlocked.Exchange(ref _restarting, 1) == 1)
+            return;
+
+        try
+        {
+            await StopAsync();
+            await Task.Delay(delayMs);
+            await StartAsync();
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _restarting, 0);
+        }
     }
 
     public async Task StopAsync()
@@ -231,16 +291,35 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
         _listenKeyTimer?.Dispose();
         _listenKeyTimer = null;
 
-        if (_userDataSub != null)
-            await _socket!.UnsubscribeAsync(_userDataSub);
+        var socket = _socket;
+        if (socket != null && _userDataSub != null)
+        {
+            await socket.UnsubscribeAsync(_userDataSub);
+        }
 
-        if (_markPriceSub != null)
-            await _socket!.UnsubscribeAsync(_markPriceSub);
+        if (socket != null && _markPriceSub != null)
+        {
+            await socket.UnsubscribeAsync(_markPriceSub);
+        }
 
         if (_listenKey != null)
-            await _rest!.UsdFuturesApi.Account.StopUserStreamAsync(_listenKey);
+            try
+            {
+                await _rest!.UsdFuturesApi.Account.StopUserStreamAsync(_listenKey);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[WS] StopUserStream failed");
+            }
 
         _listenKey = null;
+        _userDataSub = null;
+        _markPriceSub = null;
+        _socket?.Dispose();
+        _socket = null;
+        Interlocked.Exchange(ref _restarting, 0);
+        Interlocked.Exchange(ref _started, 0);
+
     }
 
     public async ValueTask DisposeAsync()
