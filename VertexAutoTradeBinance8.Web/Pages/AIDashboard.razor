@@ -224,18 +224,25 @@
         }
     }
 
-    private Task LoadAsync()
+    private async Task LoadAsync()
     {
-        var snap = FileLoader.LoadSnapshot();
-        if (snap == null) return Task.CompletedTask;
+        var snap = await FileLoader.LoadSnapshot();
+        if (snap == null)
+            return;
 
         Stats = snap;
-        MarketStates = snap.MarketStates.OrderByDescending(x => x.Time).Take(150).ToList(); 
 
-        Trades = snap.Trades.OrderByDescending(x => x.Time).Take(150).ToList();
+        MarketStates = snap.MarketStates
+            .OrderByDescending(x => x.Time)
+            .Take(150)
+            .ToList();
 
-        return Task.CompletedTask;
+        Trades = snap.Trades
+            .OrderByDescending(x => x.Time)
+            .Take(150)
+            .ToList();
     }
+
 
     public void Dispose()
     {
