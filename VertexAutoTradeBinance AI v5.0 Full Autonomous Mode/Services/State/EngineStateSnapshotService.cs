@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Options;
 using System.Text.Json;
+using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -13,7 +14,7 @@ namespace VertexAutoTradeBinance8.Services
     public class EngineStateSnapshotService
     {
         private readonly ILogger<EngineStateSnapshotService> _logger;
-        private readonly string _path;
+        private readonly string _engineStatePath;
         private readonly string _backupPath;
         public EngineState State { get; } = new EngineState();
         private readonly JsonSerializerOptions _jsonOptions = new()
@@ -24,13 +25,19 @@ namespace VertexAutoTradeBinance8.Services
 
         public EngineStateSnapshotService(
      ILogger<EngineStateSnapshotService> logger,
-     IOptions<EngineStateSettings> options)
+     IOptions<WebPathsOptions> paths)
         {
             _logger = logger;
             //  _path = options.Value.SnapshotPath ?? Path.Combine(AppContext.BaseDirectory, "engine_state.json");
-            _path = Path.Combine(AppContext.BaseDirectory, "engine_state.json");
+            //_engineStatePath = Path.Combine(AppContext.BaseDirectory, "engine_state.json");
+            var baseDir = AppContext.BaseDirectory;
 
-            _backupPath = _path + ".bak";
+            _engineStatePath = Path.Combine(
+                baseDir,
+                paths.Value.EngineState
+            );
+
+            _backupPath = _engineStatePath + ".bak";
 
             EnsureDirectoryExists();
         }
@@ -42,7 +49,7 @@ namespace VertexAutoTradeBinance8.Services
         {
             try
             {
-                var dir = Path.GetDirectoryName(_path);
+                var dir = Path.GetDirectoryName(_engineStatePath);
                 if (!string.IsNullOrWhiteSpace(dir) && !Directory.Exists(dir))
                 {
                     Directory.CreateDirectory(dir);
@@ -68,8 +75,8 @@ namespace VertexAutoTradeBinance8.Services
                 // 2 — резервная копия
                 try
                 {
-                    if (File.Exists(_path))
-                        File.Copy(_path, _backupPath, overwrite: true);
+                    if (File.Exists(_engineStatePath))
+                        File.Copy(_engineStatePath, _backupPath, overwrite: true);
                 }
                 catch (Exception backupEx)
                 {
@@ -77,9 +84,9 @@ namespace VertexAutoTradeBinance8.Services
                 }
 
                 // 3 — запись основного файла
-                File.WriteAllText(_path, json);
+                File.WriteAllText(_engineStatePath, json);
 
-                _logger.LogInformation("[ENGINE STATE] Snapshot saved → {path}", _path);
+                _logger.LogInformation("[ENGINE STATE] Snapshot saved → {path}", _engineStatePath);
             }
             catch (Exception ex)
             {
@@ -94,10 +101,10 @@ namespace VertexAutoTradeBinance8.Services
         {
             try
             {
-                if (!File.Exists(_path))
+                if (!File.Exists(_engineStatePath))
                     return null;
 
-                var json = File.ReadAllText(_path);
+                var json = File.ReadAllText(_engineStatePath);
                 return JsonSerializer.Deserialize<EngineState>(json, _jsonOptions);
             }
             catch (Exception ex)

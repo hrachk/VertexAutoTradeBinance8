@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Options;
 using Serilog;
+using Serilog.Events;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.MarketData;
 using VertexAutoTradeBinance8.Models;
@@ -23,19 +24,33 @@ public class Program
         var baseDir = AppContext.BaseDirectory;
         var logDir = Path.Combine(baseDir, "logs");
         Directory.CreateDirectory(logDir);
+
         // =====================================================
-        // 1️⃣ Serilog — САМЫЙ ПЕРВЫЙ
+        // 1️⃣ Serilog — PRO CONFIG (INFO + ERROR split)
         // =====================================================
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
+
+            // 🟢 INFO / DEBUG / WS / FLOW
             .WriteTo.File(
-    path: Path.Combine(logDir, "engine-.log"),
-    rollingInterval: RollingInterval.Day,
-    retainedFileCountLimit: 14,
-    fileSizeLimitBytes: 50 * 1024 * 1024,
-    rollOnFileSizeLimit: true,
-    shared: false)
+                path: Path.Combine(logDir, "engine-info-.log"),
+                restrictedToMinimumLevel: LogEventLevel.Information,
+                rollingInterval: RollingInterval.Hour,     // каждый час
+                fileSizeLimitBytes: 10 * 1024 * 1024,      // 10 MB
+                rollOnFileSizeLimit: true,
+                retainedFileCountLimit: 48,                // 2 дня
+                shared: false)
+
+            // 🔴 ERROR / FATAL
+            .WriteTo.File(
+                path: Path.Combine(logDir, "engine-error-.log"),
+                restrictedToMinimumLevel: LogEventLevel.Error,
+                rollingInterval: RollingInterval.Day,      // по дням
+                retainedFileCountLimit: 14,                // 14 дней
+                shared: false)
+
             .CreateLogger();
+
 
         try
         {

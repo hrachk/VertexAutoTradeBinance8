@@ -1900,3 +1900,11 @@ compact-card {
         min-width: unset;
     }
 }
+.client-badge {
+    background: #1f232a;
+    color: #f0b90b;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+}

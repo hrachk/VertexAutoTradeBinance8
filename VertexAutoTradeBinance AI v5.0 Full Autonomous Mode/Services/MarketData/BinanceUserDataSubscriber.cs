@@ -2,9 +2,6 @@
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures.Socket;
 using CryptoExchange.Net.Objects.Sockets;
-using Microsoft.Extensions.Logging;
-using System.Threading;
-using VertexAutoTradeBinance8.MarketData;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services.Interface;
 
@@ -19,7 +16,7 @@ namespace VertexAutoTradeBinance8.Services.Ws
 
         private BinanceSocketClient? _socket;
         private UpdateSubscription? _sub;
-        private string? _listenKey; 
+        private string? _listenKey;
 
         public BinanceUserDataSubscriber(
             ILogger<BinanceUserDataSubscriber> logger,
@@ -30,7 +27,7 @@ namespace VertexAutoTradeBinance8.Services.Ws
             _logger = logger;
             _factory = factory;
             _state = state;
-            _market = market; 
+            _market = market;
         }
 
 
@@ -50,7 +47,7 @@ namespace VertexAutoTradeBinance8.Services.Ws
     "[USERDATA] REST test ping starting..."
 );
 
-            var ping = await rest.UsdFuturesApi.Account.GetAccountInfoV3Async(ct:ct);
+            var ping = await rest.UsdFuturesApi.Account.GetAccountInfoV3Async(ct: ct);
             _logger.LogWarning(
                 "[USERDATA] REST test result: {ok}",
                 ping.Success
@@ -96,7 +93,7 @@ namespace VertexAutoTradeBinance8.Services.Ws
             }
 
             // 2️⃣ Подписка на WS (дельты)
-            _socket = new BinanceSocketClient();
+            _socket = _factory.CreateSocketClient();
 
             var res = await _socket.UsdFuturesApi.Account.SubscribeToUserDataUpdatesAsync(
                 _listenKey,
@@ -154,9 +151,9 @@ namespace VertexAutoTradeBinance8.Services.Ws
 
                 if (side == PositionSide.Both)
                 {
-                    if (p.Quantity > 0)    side = PositionSide.Long;
-                    else if (p.Quantity < 0)   side = PositionSide.Short;
-                    else  continue;
+                    if (p.Quantity > 0) side = PositionSide.Long;
+                    else if (p.Quantity < 0) side = PositionSide.Short;
+                    else continue;
                 }
 
 

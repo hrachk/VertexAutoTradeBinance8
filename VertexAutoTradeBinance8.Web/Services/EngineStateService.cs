@@ -14,8 +14,8 @@ public class EngineStateService
     {
         _logger = logger;
 
-        FilePath = config["EngineState:Path"]
-                   ?? throw new Exception("EngineState path not found in config");
+        FilePath = config["Paths:EngineState"]
+                   ?? throw new Exception("EngineState path not found in config"); 
     }
 
     public EngineStateModel? Load()

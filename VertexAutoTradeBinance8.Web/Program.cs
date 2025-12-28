@@ -4,6 +4,7 @@ using VertexAutoTradeBinance8.MarketData;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Services.Interface;
 using VertexAutoTradeBinance8.Services.State;
+using VertexAutoTradeBinance8.Web.Confs;
 using VertexAutoTradeBinance8.Web.Data;
  
 using VertexAutoTradeBinance8.Web.Services;
@@ -36,8 +37,12 @@ builder.Services.AddSingleton<WeatherForecastService>();
 builder.Services.Configure<TradingOptions>(
     builder.Configuration.GetSection("TradingOptions"));
 
-builder.Services.Configure<BinanceOptions>(
-    builder.Configuration.GetSection("Binance"));
+builder.Services.Configure<ClientOptions>(
+    builder.Configuration.GetSection("Client")
+);
+
+//builder.Services.Configure<BinanceOptions>(
+//    builder.Configuration.GetSection("Binance"));
 
 
 builder.Services.AddSingleton<AiStopLossOptimizer>();
