@@ -100,7 +100,7 @@ builder.Services.AddControllers();
 
 builder.Services.AddHttpClient();
 builder.Services.AddSignalR();
-
+builder.Host.UseWindowsService();
 
 var app = builder.Build();
 var ws = app.Services.GetRequiredService<BinancePositionsWsService>();
