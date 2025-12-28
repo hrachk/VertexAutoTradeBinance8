@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Text;
+using System.Text.Json;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Strategy;
 
@@ -761,6 +762,14 @@ namespace VertexAutoTradeBinance8.Services
         {
             try
             {
+                if (File.Exists(FilePath))
+                {
+                    var attr = File.GetAttributes(FilePath);
+                    if (attr.HasFlag(FileAttributes.ReadOnly))
+                        File.SetAttributes(FilePath, attr & ~FileAttributes.ReadOnly);
+                }
+
+
                 var dir = Path.GetDirectoryName(FilePath);
                 if (!string.IsNullOrWhiteSpace(dir))
                     Directory.CreateDirectory(dir);
@@ -784,14 +793,38 @@ namespace VertexAutoTradeBinance8.Services
 
                 var json = JsonSerializer.Serialize(snapshot, JsonOptions);
 
-                File.WriteAllText(FilePath, json);
-                File.Copy(FilePath, BackupPath, overwrite: true);
+                bool saved = false;
 
-                _logger.LogInformation(
-                    "[AI] Snapshot saved OK → symbols={Symbols}, states={States}, trades={Trades}",
-                    snapshot.Meta.Symbols,
-                    snapshot.Meta.MarketStates,
-                    snapshot.Meta.Trades);
+                try
+                {
+                    var tmpPath = FilePath + ".tmp";
+                    if (File.Exists(tmpPath))
+                        File.Delete(tmpPath);
+
+                    File.WriteAllText(tmpPath, json, Encoding.UTF8);
+                    File.Move(tmpPath, FilePath, overwrite: true);
+
+                    var backupDir = Path.GetDirectoryName(BackupPath);
+                    if (!string.IsNullOrWhiteSpace(backupDir))
+                        Directory.CreateDirectory(backupDir);
+
+                    File.Copy(FilePath, BackupPath, overwrite: true);
+
+                    saved = true;
+                }
+                catch (Exception ioEx)
+                {
+                    _logger.LogError(ioEx, "[AI] SAVE IO ERROR");
+                }
+
+                if (saved)
+                {
+                    _logger.LogInformation(
+                        "[AI] Snapshot saved OK → symbols={Symbols}, states={States}, trades={Trades}",
+                        snapshot.Meta.Symbols,
+                        snapshot.Meta.MarketStates,
+                        snapshot.Meta.Trades);
+                }
             }
             catch (Exception ex)
             {
