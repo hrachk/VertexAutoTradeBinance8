@@ -6,7 +6,6 @@ using CryptoExchange.Net.Objects.Sockets;
 using Microsoft.Extensions.Logging;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Web.Models;
-using VertexAutoTradeBinance8.Web.Pages.Components;
 
 namespace VertexAutoTradeBinance8.Web.Services;
 
@@ -27,6 +26,9 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
 
     private static readonly TimeSpan ListenKeyRefreshInterval = TimeSpan.FromMinutes(30);
 
+    private readonly HashSet<string> _markSymbols = new();
+    private readonly object _markLock = new();
+
     public BinancePositionsWsService(
         ILogger<BinancePositionsWsService> logger,
         PositionsLiveService live,
@@ -42,6 +44,7 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
     // =========================================================
 
     private int _started = 0;
+
     public async Task StartAsync()
     {
         if (Interlocked.Exchange(ref _started, 1) == 1)
@@ -63,7 +66,7 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
             // === 2. SOCKET CLIENT ===
             _socket = new BinanceSocketClient();
 
-            // === 3. LISTEN KEY (ТОЛЬКО ДЛЯ USER DATA) ===
+            // === 3. LISTEN KEY ===
             _listenKey = await CreateListenKeyAsync();
             if (string.IsNullOrEmpty(_listenKey))
             {
@@ -71,6 +74,7 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
                 await RestartWithDelay();
                 return;
             }
+
             StartListenKeyRefresh();
 
             // === 4. USER DATA WS ===
@@ -82,7 +86,7 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
                     onListenKeyExpired: ev =>
                     {
                         _logger.LogWarning("[WS] listenKey expired - restarting");
-                        _ = RestartAsync();
+                        Task.Run(() => RestartAsync(3000));
                     });
 
             if (!userRes.Success)
@@ -95,70 +99,74 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
 
             _userDataSub = userRes.Data;
 
-            // === 5. MARK PRICE WS (PUBLIC STREAM) ===
-            // Запускаем ТОЛЬКО если есть активные позиции
-            var activeSymbols = _live.GetActiveSymbols();
+            // === 5. MARK PRICE WS ===
+            await SubscribeMarkPriceAsync();
 
-            if (activeSymbols.Count == 0)
-            {
-                _logger.LogWarning("[WS] No ACTIVE positions — MarkPrice WS skipped (normal state)");
-                _logger.LogInformation("[WS] Binance positions WS started (UserData only)");
-                return; // ⛔ ВАЖНО: без рестарта, без ошибки
-            }
-
-            var markRes = await _socket.UsdFuturesApi.ExchangeData
-                .SubscribeToMarkPriceUpdatesAsync(
-                    symbols: activeSymbols,
-                    updateInterval: 1000,
-                    data =>
-                    {
-                        _live.UpdateMark(data.Data.Symbol, data.Data.MarkPrice);
-                    });
-
-            if (!markRes.Success)
-            {
-                _logger.LogError("[WS] MarkPrice WS subscribe failed: {err}", markRes.Error);
-                Interlocked.Exchange(ref _started, 0);
-                await RestartWithDelay();
-                return;
-            }
-
-            _markPriceSub = markRes.Data;
-
-            _logger.LogInformation(
-                "[WS] Binance positions WS started (UserData + MarkPrice) symbols={cnt}",
-                activeSymbols.Count);
-
+            _logger.LogInformation("[WS] Binance positions WS started");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "[WS] StartAsync fatal");
             Interlocked.Exchange(ref _started, 0);
-
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(5000);
-                await RestartWithDelay();
-            });
+            await RestartWithDelay();
         }
-        // === REST ===
-
     }
-   
+
+    // =========================================================
+    // MARK PRICE SUBSCRIBE (SAFE)
+    // =========================================================
+    private async Task SubscribeMarkPriceAsync()
+    {
+        var symbols = _live.GetActiveSymbols();
+
+        lock (_markLock)
+        {
+            var newSymbols = symbols.Except(_markSymbols).ToList();
+            if (newSymbols.Count == 0)
+                return;
+
+            foreach (var s in newSymbols)
+                _markSymbols.Add(s);
+        }
+
+        // Переподписываемся полностью (Binance.Net не умеет add-symbol)
+        if (_markPriceSub != null)
+        {
+            await _socket!.UnsubscribeAsync(_markPriceSub);
+            _markPriceSub = null;
+        }
+
+        var res = await _socket!.UsdFuturesApi.ExchangeData
+            .SubscribeToMarkPriceUpdatesAsync(
+                symbols: _markSymbols.ToList(),
+                updateInterval: 1000,
+                data =>
+                {
+                    _live.UpdateMark(data.Data.Symbol, data.Data.MarkPrice);
+                });
+
+        if (!res.Success)
+        {
+            _logger.LogError("[WS] MarkPrice WS subscribe failed: {err}", res.Error);
+            await RestartWithDelay();
+            return;
+        }
+
+        _markPriceSub = res.Data;
+        _logger.LogInformation("[WS] MarkPrice WS resubscribed symbols={cnt}", _markSymbols.Count);
+    }
+
 
     // =========================================================
     // ACCOUNT UPDATE
     // =========================================================
-    private void OnAccountUpdate(
-     DataEvent<BinanceFuturesStreamAccountUpdate> ev)
+    private void OnAccountUpdate(DataEvent<BinanceFuturesStreamAccountUpdate> ev)
     {
-        var update = ev.Data;
-
-        foreach (var p in update.UpdateData.Positions)
+        foreach (var p in ev.Data.UpdateData.Positions)
         {
             if (p.Quantity == 0)
             {
-                _live.Remove(p.Symbol);   // ← УДАЛЯЕМ ЗАКРЫТУЮ ПОЗИЦИЮ ИЗ UI
+                _live.Remove(p.Symbol);
                 continue;
             }
 
@@ -168,26 +176,35 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
             {
                 Symbol = p.Symbol,
                 Side = side,
-                Entry = p.EntryPrice,
-                SizeUsdt = Math.Abs(p.Quantity * p.EntryPrice),
-                Pnl = p.UnrealizedPnl,
 
-                // ❗ Mark / ROI / MarginRatio — НЕ ТУТ
-                Roi = 0
+                Entry = p.EntryPrice,
+                Mark = p.EntryPrice, // стартовое
+                SizeUsdt = Math.Abs(p.Quantity * p.EntryPrice),
+
+                // ❗ WS НЕ ДАЁТ ЭТИ ДАННЫЕ
+                Margin = 0,          // будет заполнено REST / позже
+                LiqPrice = 0,
+                Leverage = 0,
+
+                Pnl = p.UnrealizedPnl,
+                Roi = 0,
+
+                LastUpdateUtc = DateTime.UtcNow
             };
 
             _live.Upsert(vm);
         }
-    }
-     
 
+        // после появления новых позиций — убеждаемся, что Mark WS есть
+        _ = SubscribeMarkPriceAsync();
+    }
+
+    // =========================================================
+    // INITIAL SNAPSHOT (REST)
+    // =========================================================
     private async Task LoadInitialPositionsAsync()
     {
-        _logger.LogWarning("[DEBUG] LoadInitialPositionsAsync CALLED");
-
         var res = await _rest!.UsdFuturesApi.Account.GetPositionInformationAsync();
-        _logger.LogWarning("[DEBUG] REST positions count = {cnt}", res.Data.Count());
-
 
         if (!res.Success)
         {
@@ -198,27 +215,32 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
         foreach (var p in res.Data)
         {
             if (p.Quantity == 0)
-                continue; // ❗ нет позиции — не показываем
+                continue;
 
             var side = p.Quantity > 0 ? "LONG" : "SHORT";
+
+            var margin = p.MarginType == FuturesMarginType.Isolated
+                ? p.IsolatedMargin
+                : Math.Abs(p.Quantity * p.EntryPrice) / Math.Max(p.Leverage, 1);
+
             var vm = new PositionVm
             {
                 Symbol = p.Symbol,
                 Side = side,
 
                 Entry = p.EntryPrice,
-                Pnl = p.UnrealizedPnl,
-
-                Margin = p.MarginType == FuturesMarginType.Isolated
-    ? p.IsolatedMargin
-    : Math.Abs(p.Quantity * p.EntryPrice) / Math.Max(p.Leverage, 1),
-
-                LiqPrice = p.LiquidationPrice,
+                Mark = p.MarkPrice,
                 SizeUsdt = Math.Abs(p.Quantity * p.EntryPrice),
 
-                Roi = 0 // пересчитается после Mark
-            };
+                Margin = margin,
+                LiqPrice = p.LiquidationPrice,
+                Leverage = p.Leverage,
 
+                Pnl = p.UnrealizedPnl,
+                Roi = 0,
+
+                LastUpdateUtc = DateTime.UtcNow
+            };
 
             _live.Upsert(vm);
         }
@@ -238,7 +260,6 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
             return null;
         }
 
-        _logger.LogInformation("[WS] listenKey created");
         return res.Data;
     }
 
@@ -247,9 +268,7 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
         if (_listenKey == null)
             return;
 
-        var res = await _rest!.UsdFuturesApi.Account
-            .KeepAliveUserStreamAsync(_listenKey);
-
+        var res = await _rest!.UsdFuturesApi.Account.KeepAliveUserStreamAsync(_listenKey);
         if (!res.Success)
             _logger.LogWarning("[WS] listenKey refresh failed");
     }
@@ -258,31 +277,21 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
     {
         _listenKeyTimer = new Timer(_ =>
         {
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await RefreshListenKeyAsync();
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "[WS] listenKey refresh error");
-                }
-            });
+            _ = Task.Run(RefreshListenKeyAsync);
         },
-             null,
-             ListenKeyRefreshInterval,
-             ListenKeyRefreshInterval);
-
+        null,
+        ListenKeyRefreshInterval,
+        ListenKeyRefreshInterval);
     }
 
     // =========================================================
     // RESTART / STOP
     // =========================================================
     private int _restarting = 0;
-     
-    private Task RestartWithDelay() => RestartAsync(delayMs: 5000);
-    private async Task RestartAsync(int delayMs = 3000)
+
+    private Task RestartWithDelay() => RestartAsync(5000);
+
+    private async Task RestartAsync(int delayMs)
     {
         if (Interlocked.Exchange(ref _restarting, 1) == 1)
             return;
@@ -304,42 +313,34 @@ public sealed class BinancePositionsWsService : IAsyncDisposable
         _listenKeyTimer?.Dispose();
         _listenKeyTimer = null;
 
-        var socket = _socket;
-        if (socket != null && _userDataSub != null)
+        if (_socket != null)
         {
-            await socket.UnsubscribeAsync(_userDataSub);
-        }
+            if (_userDataSub != null)
+                await _socket.UnsubscribeAsync(_userDataSub);
 
-        if (socket != null && _markPriceSub != null)
-        {
-            await socket.UnsubscribeAsync(_markPriceSub);
+            if (_markPriceSub != null)
+                await _socket.UnsubscribeAsync(_markPriceSub);
+
+            _socket.Dispose();
+            _socket = null;
         }
 
         if (_listenKey != null)
-            try
-            {
-                await _rest!.UsdFuturesApi.Account.StopUserStreamAsync(_listenKey);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[WS] StopUserStream failed");
-            }
+        {
+            try { await _rest!.UsdFuturesApi.Account.StopUserStreamAsync(_listenKey); }
+            catch { }
+        }
 
         _listenKey = null;
         _userDataSub = null;
         _markPriceSub = null;
-        _socket?.Dispose();
-        _socket = null;
-        Interlocked.Exchange(ref _restarting, 0);
-        Interlocked.Exchange(ref _started, 0);
 
+        Interlocked.Exchange(ref _started, 0);
     }
 
     public async ValueTask DisposeAsync()
     {
         await StopAsync();
-        _socket?.Dispose();
         _rest?.Dispose();
     }
- 
 }

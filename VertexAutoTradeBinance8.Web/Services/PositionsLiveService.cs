@@ -15,6 +15,8 @@ public class PositionsLiveService
         Risk = 8,
         All = 255
     }
+
+
     private readonly Dictionary<string, PositionVm> _positions = new();
     private readonly object _lock = new();
     private readonly Dictionary<string, string> _symbolIndex = new();

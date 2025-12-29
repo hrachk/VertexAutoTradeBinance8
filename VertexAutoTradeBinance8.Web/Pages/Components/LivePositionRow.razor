@@ -1,8 +1,7 @@
 ﻿@using VertexAutoTradeBinance8.Web.Models
+@using static VertexAutoTradeBinance8.Web.Services.PositionsLiveService
 
- 
-
-<tr class="pos-row @(Pos.UnrealizedPnl >= 0 ? "pnl-plus" : "pnl-minus")">
+<tr class="pos-row @(Pos.UnrealizedPnl >= 0 ? "pnl-plus" : "pnl-minus") @ChangeCss">
     <td class="sym-cell">
         <span class="sym">@Pos.Symbol</span>
         <span class="side @(IsLong ? "long" : "short")">
@@ -32,6 +31,19 @@
     [Parameter] public LivePositionModel Pos { get; set; } = default!;
 
     bool IsLong => Pos.PositionSide == "LONG";
+
+    // ============================
+    // 🔥 CHANGE MASK HIGHLIGHT (ADD)
+    // ============================
+    string ChangeCss =>
+        Pos.ChangeMask switch
+        {
+            PositionChange.Pnl => "chg-pnl",
+            PositionChange.Roi => "chg-roi",
+            PositionChange.Risk => "chg-risk",
+            PositionChange.Mark => "chg-mark",
+            _ => ""
+        };
 
     decimal Notional =>
         Math.Abs(Pos.PositionAmt) * Pos.MarkPrice;

@@ -1,4 +1,6 @@
-﻿namespace VertexAutoTradeBinance8.Web.Models;
+﻿using static VertexAutoTradeBinance8.Web.Services.PositionsLiveService;
+
+namespace VertexAutoTradeBinance8.Web.Models;
 
 public sealed class LivePositionModel
 {
@@ -16,4 +18,9 @@ public sealed class LivePositionModel
     public int? Leverage { get; set; }
 
     public DateTime TimeUtc { get; set; }
+
+    // =====================================
+    // 🔥 ADD: UI Change Mask (NON-BREAKING)
+    // =====================================
+    public PositionChange ChangeMask { get; set; } = PositionChange.None;
 }

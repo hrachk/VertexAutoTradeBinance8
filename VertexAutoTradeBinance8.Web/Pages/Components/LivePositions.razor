@@ -39,12 +39,17 @@ else
 @code {
     private IReadOnlyList<LivePositionModel> Positions = Array.Empty<LivePositionModel>();
 
+    // ============================
+    // UI THROTTLE (≈5 FPS)
+    // ============================
+    private DateTime _lastUiUpdate = DateTime.MinValue;
+    private static readonly TimeSpan UiThrottle = TimeSpan.FromMilliseconds(200);
+
     protected override void OnInitialized()
     {
         LivePnl.Updated += Refresh;
 
-        // ✅ Канон: UI не знает про symbols вообще.
-        // Если symbols пустой → API вернёт все позиции из AccountStateService.
+        // Канон: UI не знает про symbols
         LivePnl.Start(null, 900);
 
         Refresh();
@@ -52,6 +57,12 @@ else
 
     private void Refresh()
     {
+        var now = DateTime.UtcNow;
+        if (now - _lastUiUpdate < UiThrottle)
+            return;
+
+        _lastUiUpdate = now;
+
         Positions = LivePnl.GetPositions();
         InvokeAsync(StateHasChanged);
     }
