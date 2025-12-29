@@ -71,39 +71,49 @@ namespace VertexAutoTradeBinance8.Services
 
         private void EnsureGateProfiles()
         {
-            void add(MarketRegime r, Action<Dictionary<string, decimal>> cfg)
+            lock (_lock)
             {
-                if (_gateProfiles.ContainsKey(r)) return;
-                var p = new RegimeGateProfile { Regime = r };
-                cfg(p.BaseWeights);
-                _gateProfiles[r] = p;
+                void add(MarketRegime r, Action<Dictionary<string, decimal>> cfg)
+                {
+                    if (_gateProfiles.ContainsKey(r)) return;
+                    var p = new RegimeGateProfile { Regime = r };
+                    cfg(p.BaseWeights);
+                    _gateProfiles[r] = p;
+                }
+
+                add(MarketRegime.StrongUpTrend, w =>
+                {
+                    w["RR"] = 0.90m;
+                    w["PATTERN"] = 0.95m;
+                    w["LIQ"] = 1.05m;
+                    w["EXPO"] = 1.00m;
+                });
+
+                add(MarketRegime.Range, w =>
+                {
+                    w["RR"] = 1.15m;
+                    w["PATTERN"] = 1.10m;
+                    w["LIQ"] = 0.95m;
+                    w["EXPO"] = 1.00m;
+                });
+
+                add(MarketRegime.StrongDownTrend, w =>
+                {
+                    w["RR"] = 0.90m;
+                    w["PATTERN"] = 0.95m;
+                    w["LIQ"] = 1.05m;
+                    w["EXPO"] = 1.00m;
+                });
+
+                add(MarketRegime.Unknown, w => { });
+
+                foreach (MarketRegime r in Enum.GetValues(typeof(MarketRegime)))
+                {
+                    if (!_gateProfiles.ContainsKey(r))
+                        _gateProfiles[r] = new RegimeGateProfile { Regime = r };
+                }
             }
-
-            add(MarketRegime.StrongUpTrend, w =>
-            {
-                w["RR"] = 0.90m;
-                w["PATTERN"] = 0.95m;
-                w["LIQ"] = 1.05m;
-                w["EXPO"] = 1.00m;
-            });
-
-            add(MarketRegime.Range, w =>
-            {
-                w["RR"] = 1.15m;
-                w["PATTERN"] = 1.10m;
-                w["LIQ"] = 0.95m;
-                w["EXPO"] = 1.00m;
-            });
-
-            add(MarketRegime.StrongDownTrend, w =>
-            {
-                w["RR"] = 0.90m;
-                w["PATTERN"] = 0.95m;
-                w["LIQ"] = 1.05m;
-                w["EXPO"] = 1.00m;
-            });
-
-            add(MarketRegime.Unknown, w => { });
+               
         }
 
 
@@ -223,28 +233,7 @@ namespace VertexAutoTradeBinance8.Services
                 return new List<MissedTradeRecord>();
             }
         }
-        /* private void LearnFromMissedTrade(MissedTradeRecord r)
-         {
-             try
-             {
-                 RecordMarketStateTriggered(
-                     reason: r.Reason,
-                     symbol: r.Symbol,
-                     timeframe: "MissedTrade",
-                     regime: ParseMarketRegime(r.Regime),
-                     slope: r.Slope,
-                     volatility: r.Vol,
-                     atr: r.Atr,
-                     confidence: r.Confidence
-                 );
-             }
-             catch (Exception ex)
-             {
-                 _logger.LogError(ex, "[AI] Failed to learn from missed trade.");
-             }
-         }
-         */
-
+       
         private void LearnFromMissedTrade(MissedTradeRecord r)
         {
             try
@@ -339,54 +328,79 @@ namespace VertexAutoTradeBinance8.Services
         // DECISION TRACE LEARNING (NEW LAYER)
         // =====================================================================
         public void RecordDecisionTrace(
-          string symbol,
-          MarketRegime regime,
-          IReadOnlyList<FastFailResult> gates)
+     string symbol,
+     MarketRegime regime,
+     IReadOnlyList<FastFailResult> gates)
+        {
+            RegimeGateProfile profile;
+
+            // ===============================
+            // 1) GateProfiles + AdaptiveBias
+            // ===============================
+            lock (_lock)
             {
                 EnsureGateProfiles();
 
-                var profile = _gateProfiles[regime];
+                if (!_gateProfiles.TryGetValue(regime, out profile))
+                {
+                    // auto-register forward-compatible
+                    profile = new RegimeGateProfile { Regime = regime };
+                    _gateProfiles[regime] = profile;
+
+                    _logger.LogWarning(
+                        "[AI] GateProfile auto-registered for new regime: {Regime}",
+                        regime);
+                }
 
                 foreach (var g in gates)
                 {
-                    // считаем строгость как раньше
+                    // строгость по прошлой статистике
                     var strict = GetGateStrictness(symbol, regime, g.Gate);
 
-                    // EMA-подстройка bias
                     profile.AdaptiveBias.TryGetValue(g.Gate, out var cur);
-                    var target = strict;                 // 0.85 / 1.10 / 1.00
-                    var updated = cur == 0 ? target : (cur * 0.9m + target * 0.1m);
 
-                    profile.AdaptiveBias[g.Gate] = Math.Clamp(updated, 0.85m, 1.15m);
-                }
-                lock (_lock)
-                {
-                    if (!_decisionGates.TryGetValue(symbol, out var agg))
-                    {
-                        agg = new DecisionTraceAggregate { Symbol = symbol };
-                        _decisionGates[symbol] = agg;
-                    }
+                    var target = strict; // 0.85 / 1.10 / 1.00
+                    var updated = cur == 0
+                        ? target
+                        : (cur * 0.9m + target * 0.1m);
 
-                    if (!agg.ByRegime.TryGetValue(regime, out var reg))
-                    {
-                        reg = new DecisionGateRegimeStats { Regime = regime };
-                        agg.ByRegime[regime] = reg;
-                    }
-
-                    foreach (var g in gates)
-                    {
-                        if (!reg.Gates.TryGetValue(g.Gate, out var st))
-                        {
-                            st = new DecisionGateStats { Gate = g.Gate };
-                            reg.Gates[g.Gate] = st;
-                        }
-
-                        st.Hits++;
-                        if (!g.Allow)
-                            st.Blocks++;
-                    }
+                    profile.AdaptiveBias[g.Gate] =
+                        Math.Clamp(updated, 0.85m, 1.15m);
                 }
             }
+
+            // ===============================
+            // 2) DecisionTrace aggregation
+            // ===============================
+            lock (_lock)
+            {
+                if (!_decisionGates.TryGetValue(symbol, out var agg))
+                {
+                    agg = new DecisionTraceAggregate { Symbol = symbol };
+                    _decisionGates[symbol] = agg;
+                }
+
+                if (!agg.ByRegime.TryGetValue(regime, out var reg))
+                {
+                    reg = new DecisionGateRegimeStats { Regime = regime };
+                    agg.ByRegime[regime] = reg;
+                }
+
+                foreach (var g in gates)
+                {
+                    if (!reg.Gates.TryGetValue(g.Gate, out var st))
+                    {
+                        st = new DecisionGateStats { Gate = g.Gate };
+                        reg.Gates[g.Gate] = st;
+                    }
+
+                    st.Hits++;
+                    if (!g.Allow)
+                        st.Blocks++;
+                }
+            }
+        }
+
 
         public void RecordMarketStateTriggered(
          string reason,
@@ -941,33 +955,22 @@ namespace VertexAutoTradeBinance8.Services
 
         public void ForceSnapshot()
         {
-            lock (_lock)
-            {
-                Save(force: true);
-                _lastSnapshot = DateTime.UtcNow;
-
-                _logger.LogInformation("[AI][SNAPSHOT] Force save triggered");
-            }
+            Save(force: true);
+            _lastSnapshot = DateTime.UtcNow;
+            _logger.LogInformation("[AI][SNAPSHOT] Force save triggered");
         }
 
         private void TrySnapshot()
         {
-            lock (_lock)
-            {
-                var now = DateTime.UtcNow;
+            var now = DateTime.UtcNow;
+            if (now - _lastSnapshot < SnapshotInterval)
+                return;
 
-                if (now - _lastSnapshot < SnapshotInterval)
-                    return;
+            Save(force: false);
+            _lastSnapshot = now;
 
-                Save(force: false);
-
-                _lastSnapshot = now;
-
-                _logger.LogInformation("[AI][SNAPSHOT] Saved (interval={Min} min)", SnapshotInterval.TotalMinutes);
-            }
+            _logger.LogInformation("[AI][SNAPSHOT] Saved (interval={Min} min)", SnapshotInterval.TotalMinutes);
         }
-
-
 
         private AiLearningSnapshot BuildSnapshot()
         {
@@ -1118,13 +1121,13 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         public void RecordSimulatedTrade(
-    string symbol,
-    string side,
-    decimal entry,
-    decimal sl,
-    decimal tp,
-    decimal outcome,
-    string reason)
+        string symbol,
+        string side,
+        decimal entry,
+        decimal sl,
+        decimal tp,
+        decimal outcome,
+        string reason)
         {
             lock (_lock)
             {

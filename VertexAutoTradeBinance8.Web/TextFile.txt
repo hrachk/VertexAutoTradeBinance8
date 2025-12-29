@@ -5,6 +5,13 @@ RiskManager			- BaseDirectory, "missed_trades.json");
 ExecutedSignalService		- BaseDirectory, "executed_signals.json");
 
 
+Armen Gevorgyan- test
+Ключ API
+mmsfbBOxHuy62Lo3xLIpt9sA0bwvId8njz4OGmYTYzmejz7VqRLOLyamQNds86eZ
+
+Секретный ключ:
+4YHCD6weHNjkZwDMPqKR9XQkce0FcHHQugxReLThUOLj96PJy5XEAg8iOrN7aCkk
+
 
 
 Shahen
