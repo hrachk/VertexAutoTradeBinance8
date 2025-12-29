@@ -40,6 +40,7 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly AiSelfLearningService _aiLearning;
         private readonly SmartRegimeService _smartRegimeService;
         private readonly TradingOptions _opt;
+        private readonly LiquidityGuardService _liquidityGuardService;
         private static readonly Dictionary<(string symbol, SignalSide side), DateTime> _lastStopTime = new();
 
         private readonly EngineStateSnapshotService _stateSvc;
@@ -70,7 +71,7 @@ namespace VertexAutoTradeBinance8.Strategy
             AiSelfLearningService aiLearning,
             SmartRegimeService smartRegimeService,
             TradingOptions opt,
-            EngineStateSnapshotService stateSvc, IDecisionTraceService decisionTrace)
+            EngineStateSnapshotService stateSvc, IDecisionTraceService decisionTrace, LiquidityGuardService liquidityGuardService)
         {
             _logger = logger;
             _correlationService = correlationService;
@@ -82,7 +83,7 @@ namespace VertexAutoTradeBinance8.Strategy
             _opt = opt;
             _stateSvc = stateSvc;
             _decisionTrace = decisionTrace;
-
+            _liquidityGuardService = liquidityGuardService;
         }
         private EngineState _engineState => _stateSvc.State;
 
@@ -1665,40 +1666,28 @@ $@"📊 Режим рынка:
                 return FastFailResult.Ok(); // паттерны не критичны
             }
         }
-
+       
         private FastFailResult Gate6_Liquidity(
         TradeSignal signal,
         SmartRegimeInfo smart,
+        IReadOnlyList<BinanceFuturesUsdtKline> klines,
+        KlineInterval tf,
         bool relaxLiquidity)
         {
             var w = _aiLearning.GetGateMultiplier(
     signal.Symbol,
     smart.BaseRegime,
     "LIQ");
+            var lg = _liquidityGuardService.Analyze(
+               symbol: signal.Symbol,
+               interval: tf,
+               klines: klines,
+               side: signal.Side,
+               superSignal: signal.IsSuperSignal);
 
-            //var after = _liquidityClusterService.FilterAndAdjust(signal);
+            if (lg.Block && !relaxLiquidity)
+                return FastFailResult.Fail("LIQ_GUARD", lg.Reason.ToString());
 
-            //if (after == null)
-            //{
-            //    if (relaxLiquidity)
-            //        return FastFailResult.Ok();
-
-            //    // 🔥 если gate слишком строгий — даём шанс
-            //    //if (liqWeight < 1.0m)
-            //    //{
-            //    //    var passProb = 1.0m - liqWeight; // 0.15…0.25
-            //    //    if (Random.Shared.NextDouble() < (double)passProb)
-            //    //        return FastFailResult.Ok();
-            //    //}
-            //    if (after == null)
-            //    {
-            //        if (relaxLiquidity) return FastFailResult.Ok();
-            //        return FastFailResult.Fail("LIQ", "Liquidity block");
-            //    }
-
-
-            //    return FastFailResult.Fail("LIQ", "Liquidity block");
-            //}
             var after = _liquidityClusterService.FilterAndAdjust(signal);
 
             if (after == null)
@@ -1715,6 +1704,7 @@ $@"📊 Режим рынка:
             return FastFailResult.Ok();
 
         }
+ 
 
         private FastFailResult Gate7_Exposure(
       string symbol,
@@ -1796,7 +1786,7 @@ $@"📊 Режим рынка:
             {
                 trace.Gates.Add(Gate4_RR(symbol, interval, baseSignal, smart, relaxRr));
                 trace.Gates.Add(Gate5_Pattern(symbol, interval, klines, baseSignal, relaxPatternBlock));
-                trace.Gates.Add(Gate6_Liquidity(baseSignal, smart, relaxLiquidity));
+                trace.Gates.Add(Gate6_Liquidity(baseSignal, smart, klines, interval, relaxLiquidity));
                 trace.Gates.Add(Gate7_Exposure(symbol, interval, baseSignal, smart));
             }
             _aiLearning.RecordDecisionTrace(
