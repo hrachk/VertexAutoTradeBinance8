@@ -6,13 +6,17 @@ namespace VertexAutoTradeBinance8.Models
     {
         SignalCreated,          // только сигнал
         OrderCreated,           // ордер создан, ждём fill
-        OrderPartiallyFilled,   // частичное исполнение (если нужно)
-        PositionOpened,         // позиция открыта (order filled)
+        OrderPartiallyFilled,   // частичное исполнение
+        PositionOpened,         // позиция открыта
+
+        ProtectionComputed,     // ✅ SL/TP рассчитаны, ждём Supervisor
+
         PositionClosedTp,       // закрыто по TP
         PositionClosedSl,       // закрыто по SL
         PositionClosedManual,   // ручное закрытие
         PositionError,          // ошибка при исполнении
         Cancelled,              // отменено
+        Blocked,              // Blocked
     }
 
 

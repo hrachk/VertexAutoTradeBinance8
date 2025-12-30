@@ -48,8 +48,10 @@ public class TradeSignal
     /// <summary>Флаг: сигнал создан из ручной позиции пользователя.</summary>
     public bool IsManual { get; set; }
 
-        /// <summary>Оценка AI (0..1), если нужно отделять "одобренные" сигналы от остальных.</summary>
-        public decimal? AiQuality { get; set; }
+    public string? RejectReason { get; set; }
+
+    /// <summary>Оценка AI (0..1), если нужно отделять "одобренные" сигналы от остальных.</summary>
+    public decimal? AiQuality { get; set; }
    
     public decimal? Leverage { get; set; }
     public AiLearningTradeMeta? Meta { get; set; }
@@ -62,4 +64,6 @@ public class TradeSignal
         if (index == 2) return 0.25m;
         return 0m;
     }
+
+
 }

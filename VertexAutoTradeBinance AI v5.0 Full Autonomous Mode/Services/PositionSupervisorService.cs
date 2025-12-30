@@ -55,6 +55,10 @@ namespace VertexAutoTradeBinance8.Services
 
         // === Funding risk guard ===
         private readonly ConcurrentDictionary<string, decimal> _fundingCost = new();
+
+        // somewhere in class (field). If you already have it - DO NOT duplicate.
+        private readonly ConcurrentDictionary<string, long> _fundingLastIncomeTs = new();
+
         // symbol -> cumulative funding (signed)
         private readonly ConcurrentDictionary<string, long> _fundingLastSync = new();   // symbol -> unixMs
 
@@ -62,7 +66,7 @@ namespace VertexAutoTradeBinance8.Services
         private static readonly ConcurrentDictionary<string, DateTime> _hedgeCooldown
             = new();
         private static readonly TimeSpan HedgeCooldownPeriod = TimeSpan.FromMinutes(10);
-
+    
         public PositionSupervisorService(
             ILogger<PositionSupervisorService> logger,
             BinanceClientFactory factory,
@@ -248,6 +252,14 @@ namespace VertexAutoTradeBinance8.Services
         IReadOnlyList<BinanceFuturesUsdtKline> klines,
         CancellationToken ct)
         {
+            // ⛔ HARD NO-HEDGE DURING LIQUIDITY DANGER
+            if (_liquidityGuard.LastDanger?.Block == true)
+            {
+                _logger.LogWarning(
+                    "[HEDGE][{symbol}] SKIP hedge decision → liquidity danger {reason}",
+                    symbol, _liquidityGuard.LastDanger?.Reason);
+                return;
+            }
 
             // ⛔ HEDGE COOLDOWN GUARD
             if (IsHedgeOnCooldown(symbol))
@@ -449,9 +461,7 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
-        // somewhere in class (field). If you already have it - DO NOT duplicate.
-        private readonly ConcurrentDictionary<string, long> _fundingLastIncomeTs = new();
-
+     
         private async Task<decimal> GetFundingIncomeDeltaAsync(
             BinanceRestClient client,
             string symbol,

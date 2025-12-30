@@ -102,8 +102,8 @@ namespace VertexAutoTradeBinance8.Services
             var exitOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: symbol,
                 side: exitSide,
-                type: FuturesOrderType.Limit,
-                reduceOnly: true,
+                type: FuturesOrderType.Market,
+                reduceOnly: null,
                 timeInForce: TimeInForce.GoodTillCanceled,
                 quantity: qty,
                 price: exitPrice,

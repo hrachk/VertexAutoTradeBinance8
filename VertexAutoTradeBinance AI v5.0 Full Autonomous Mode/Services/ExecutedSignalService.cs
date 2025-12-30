@@ -204,5 +204,53 @@ namespace VertexAutoTradeBinance8.Services
                     .ToList();
             }
         }
+
+        public void UpdateProtectionComputed(
+    string symbol,
+    DateTime time,
+    decimal stopLoss,
+    decimal takeProfit,
+    decimal atr,
+    string tags)
+        {
+            lock (_lock)
+            {
+                var list = LoadInternal();
+
+                var rec = list
+                    .Where(x => x.Symbol == symbol && x.Time <= time)
+                    .OrderByDescending(x => x.Time)
+                    .FirstOrDefault();
+
+                if (rec == null)
+                {
+                    _logger.LogWarning(
+                        "[EXEC][{symbol}] ProtectionComputed: record not found",
+                        symbol);
+                    return;
+                }
+
+                rec.StopLoss = stopLoss;
+
+                if (takeProfit > 0)
+                    rec.TakeProfits = new List<decimal> { takeProfit };
+
+                rec.Atr = atr;
+                rec.Status = TradeExecutionStatus.ProtectionComputed;
+
+                if (!string.IsNullOrWhiteSpace(tags))
+                    rec.Tags = string.IsNullOrWhiteSpace(rec.Tags)
+                        ? tags
+                        : $"{rec.Tags} | {tags}";
+
+                SaveInternal(list);
+                ExecutedSignalsChanged?.Invoke();
+
+                _logger.LogInformation(
+                    "[EXEC][{symbol}] ProtectionComputed saved → SL={sl}, TP={tp}",
+                    symbol, stopLoss, takeProfit);
+            }
+        }
+
     }
 }

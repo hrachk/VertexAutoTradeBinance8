@@ -26,7 +26,7 @@ namespace VertexAutoTradeBinance8.Services
         /// <summary>
         /// Запускает симуляцию сделки, если позиция была пропущена
         /// </summary>
-        public async Task SimulateMissedTradeAsync(TradeSignal signal, string reason)
+        public async Task SimulateMissedTradeAsync(TradeSignal signal, string reason, string? note = null)
         {
             try
             {

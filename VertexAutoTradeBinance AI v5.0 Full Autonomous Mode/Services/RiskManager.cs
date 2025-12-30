@@ -15,9 +15,9 @@ namespace VertexAutoTradeBinance8.Services
         private readonly AiLeverageService _aiLeverage;
         private readonly AiMarketRegimeService _marketRegimeService;
         private readonly SmartRegimeService _smartRegime;
-        private readonly SimulatedTradeService _simulator;
+        // private readonly SimulatedTradeService _simulator;
 
-        private static readonly string MissedTradesPath =  Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
+        public string? LastRejectReason { get; private set; }
 
         public decimal LastBalanceUsdt { get; private set; }
 
@@ -27,7 +27,9 @@ namespace VertexAutoTradeBinance8.Services
             TradingOptions options,
             BinanceClientFactory factory,
             MarketDataService marketData,
-            AiLeverageService aiLeverage, AiMarketRegimeService marketRegimeService, SmartRegimeService smartRegime, SimulatedTradeService simulator)
+            AiLeverageService aiLeverage, AiMarketRegimeService marketRegimeService, SmartRegimeService smartRegime 
+            //SimulatedTradeService simulator
+            )
         {
             _logger = logger;
             _symbolInfo = symbolInfo;
@@ -37,7 +39,7 @@ namespace VertexAutoTradeBinance8.Services
             _aiLeverage = aiLeverage;
             _marketRegimeService = marketRegimeService;
             _smartRegime = smartRegime;
-            _simulator = simulator;
+           // _simulator = simulator;
         }
 
         // ====================================================================
@@ -55,6 +57,8 @@ namespace VertexAutoTradeBinance8.Services
        List<decimal> takeProfits,
        CancellationToken ct)
         {
+            LastRejectReason = null;
+
             if (entryPrice <= 0 || stopLoss <= 0)
                 return 0;
 
@@ -160,24 +164,29 @@ namespace VertexAutoTradeBinance8.Services
 
             if (free <= 0)
             {
-                LogMissedTrade(
-                    symbol,
-                    entryPrice,
-                    stopLoss,
-                    "NoBalance",
-                    free,
-                    0,                          // attemptNotional
-                    binanceMinNotional,         // requiredMinNotional
-                    side,
-                    takeProfits,
-                    baseReg,
-                    smart,
-                    atr,
-                    scoreUi
-                );
+                //LogMissedTrade(
+                //    symbol,
+                //    entryPrice,
+                //    stopLoss,
+                //    "NoBalance",
+                //    free,
+                //    0,                          // attemptNotional
+                //    binanceMinNotional,         // requiredMinNotional
+                //    side,
+                //    takeProfits,
+                //    baseReg,
+                //    smart,
+                //    atr,
+                //    scoreUi
+                //);
 
-                await _simulator.SimulateMissedTradeAsync(signal, "NoBalance");
-                return 0;
+                //  await _simulator.SimulateMissedTradeAsync(signal, "NoBalance");
+                if (free <= 0)
+                {
+                    LastRejectReason = "NoBalance";
+                    signal.RejectReason = LastRejectReason;
+                    return 0;
+                }
             }
 
             // BASE RISK
@@ -214,21 +223,21 @@ namespace VertexAutoTradeBinance8.Services
 
             if (weak)
             {
-                LogMissedTrade(
-                    symbol,
-                    entryPrice,
-                    stopLoss,
-                    "WeakSignalRejected",
-                    free,
-                    0, // attemptNotional
-                    binanceMinNotional, // requiredMinNotional
-                    side,
-                    takeProfits,
-                    baseReg,
-                    smart,
-                    atr,
-                    scoreUi
-                );
+                //LogMissedTrade(
+                //    symbol,
+                //    entryPrice,
+                //    stopLoss,
+                //    "WeakSignalRejected",
+                //    free,
+                //    0, // attemptNotional
+                //    binanceMinNotional, // requiredMinNotional
+                //    side,
+                //    takeProfits,
+                //    baseReg,
+                //    smart,
+                //    atr,
+                //    scoreUi
+                //);
 
                 _logger.LogInformation($"[RISK][{symbol}] Weak signal detected — lowering position size.");
 
@@ -280,13 +289,15 @@ namespace VertexAutoTradeBinance8.Services
                 }
 
                 // если даже после 12 уменьшений не прошли → пропускаем
-                LogMissedTrade(
-                    symbol, entryPrice, stopLoss, "MinNotionalAfterAdaptiveReduce",
-                    free, notional, binanceMinNotional,
-                    side, takeProfits, baseReg, smart, atr, scoreUi
-                );
+                //LogMissedTrade(
+                //    symbol, entryPrice, stopLoss, "MinNotionalAfterAdaptiveReduce",
+                //    free, notional, binanceMinNotional,
+                //    side, takeProfits, baseReg, smart, atr, scoreUi
+                //);
 
-                await _simulator.SimulateMissedTradeAsync(signal, "MinNotionalAfterAdaptiveReduce");
+                //  await _simulator.SimulateMissedTradeAsync(signal, "MinNotionalAfterAdaptiveReduce");
+                LastRejectReason = "MinNotionalAfterAdaptiveReduce";
+                signal.RejectReason = LastRejectReason;
                 return 0;
             }
 
@@ -295,23 +306,25 @@ namespace VertexAutoTradeBinance8.Services
 
             if (qty <= 0 || notional <= 0)
             {
-                LogMissedTrade(
-                    symbol,
-                    entryPrice,
-                    stopLoss,
-                    "QtyZeroAfterAdjust",
-                    free,
-                    0,                          // attemptNotional
-                    binanceMinNotional,         // requiredMinNotional
-                    side,
-                    takeProfits,
-                    baseReg,
-                    smart,
-                    atr,
-                    scoreUi
-                );
+                //LogMissedTrade(
+                //    symbol,
+                //    entryPrice,
+                //    stopLoss,
+                //    "QtyZeroAfterAdjust",
+                //    free,
+                //    0,                          // attemptNotional
+                //    binanceMinNotional,         // requiredMinNotional
+                //    side,
+                //    takeProfits,
+                //    baseReg,
+                //    smart,
+                //    atr,
+                //    scoreUi
+                //);
 
-                await _simulator.SimulateMissedTradeAsync(signal, "QtyZeroAfterAdjust");
+                // await _simulator.SimulateMissedTradeAsync(signal, "QtyZeroAfterAdjust");
+                LastRejectReason = "QtyZeroAfterAdjust"; 
+                signal.RejectReason = LastRejectReason;
                 return 0;
             }
 
@@ -332,15 +345,18 @@ namespace VertexAutoTradeBinance8.Services
                 decimal maxNotional = free * leverage * 0.97m;
                 if (maxNotional <= 0)
                 {
-                    LogMissedTrade(
-                        symbol, entryPrice, stopLoss, "NoMargin",
-                        free, 0,
-                        binanceMinNotional,
-                        side, takeProfits, baseReg, smart, atr, scoreUi
-                    );
+                    //LogMissedTrade(
+                    //    symbol, entryPrice, stopLoss, "NoMargin",
+                    //    free, 0,
+                    //    binanceMinNotional,
+                    //    side, takeProfits, baseReg, smart, atr, scoreUi
+                    //);
 
-                    await _simulator.SimulateMissedTradeAsync(signal, "NoMargin");
+                    //   await _simulator.SimulateMissedTradeAsync(signal, "NoMargin");
+                    LastRejectReason = "NoMargin";
+                    signal.RejectReason = LastRejectReason;
                     return 0;
+
                 }
 
                 // 2) Уменьшаем notional пошагово, пока не пройдём фильтры
@@ -368,14 +384,15 @@ namespace VertexAutoTradeBinance8.Services
                 // 3) После цикла, если всё равно не проходит — вернуть 0
                 if (notional < binanceMinNotional || requiredMargin > free || qty < minQty)
                 {
-                    LogMissedTrade(
-                        symbol, entryPrice, stopLoss, "InsufficientBalanceAfterReduce",
-                        free, 0,
-                        binanceMinNotional,
-                        side, takeProfits, baseReg, smart, atr, scoreUi
-                    );
+                    //LogMissedTrade(
+                    //    symbol, entryPrice, stopLoss, "InsufficientBalanceAfterReduce",
+                    //    free, 0,
+                    //    binanceMinNotional,
+                    //    side, takeProfits, baseReg, smart, atr, scoreUi
+                    //);
 
-                    await _simulator.SimulateMissedTradeAsync(signal, "InsufficientBalanceAfterReduce");
+                    // await _simulator.SimulateMissedTradeAsync(signal, "InsufficientBalanceAfterReduce");
+                    signal.RejectReason = "InsufficientBalanceAfterReduce";
                     return 0;
                 }
             }
@@ -400,13 +417,14 @@ namespace VertexAutoTradeBinance8.Services
             // если даже minQty не проходит — честно выходим
             if (notional < binanceMinNotional && free < (binanceMinNotional / Math.Max(leverage, 1)))
             {
-                LogMissedTrade(
-                    symbol, entryPrice, stopLoss, "FinalSafetyQtyZero",
-                    free, notional, binanceMinNotional,
-                    side, takeProfits, baseReg, smart, atr, scoreUi
-                );
+                //LogMissedTrade(
+                //    symbol, entryPrice, stopLoss, "FinalSafetyQtyZero",
+                //    free, notional, binanceMinNotional,
+                //    side, takeProfits, baseReg, smart, atr, scoreUi
+                //);
 
-                await _simulator.SimulateMissedTradeAsync(signal, "FinalSafetyQtyZero");
+                // await _simulator.SimulateMissedTradeAsync(signal, "FinalSafetyQtyZero");
+                signal.RejectReason = "FinalSafetyQtyZero";
                 return 0;
             }
 
@@ -438,71 +456,71 @@ namespace VertexAutoTradeBinance8.Services
         // ====================================================================
         // LOG MISSED TRADES (FULL VERSION WITH ATR / VOL / SLOPE / CONF)
         // ====================================================================
-
+        /*
+        private static readonly string MissedTradesPath =  Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
         private void LogMissedTrade(
-    string symbol,
-    decimal entry,
-    decimal sl,
-    string reason,
-    decimal freeBalance,
-    decimal attemptNotional,
-    decimal requiredMinNotional,
-    SignalSide side,
-    List<decimal> takeProfits,
-    MarketRegimeResult baseReg,
-    SmartRegimeInfo smart,
-    decimal atr, int scoreUi)
+        string symbol,
+        decimal entry,
+        decimal sl,
+        string reason,
+        decimal freeBalance,
+        decimal attemptNotional,
+        decimal requiredMinNotional,
+        SignalSide side,
+        List<decimal> takeProfits,
+        MarketRegimeResult baseReg,
+        SmartRegimeInfo smart,
+        decimal atr, int scoreUi)
 
 
-        {
-            try
             {
-                var record = new
+                try
                 {
-                    symbol = symbol,
-                    time = DateTime.UtcNow,
+                    var record = new
+                    {
+                        symbol = symbol,
+                        time = DateTime.UtcNow,
 
-                    entry = entry,
-                    stopLoss = sl,
-                    side = side.ToString(),
-                    takeProfits = takeProfits,
+                        entry = entry,
+                        stopLoss = sl,
+                        side = side.ToString(),
+                        takeProfits = takeProfits,
 
-                    reason,
-                    freeBalance,
-                    attemptNotional,
-                    requiredMinNotional,
+                        reason,
+                        freeBalance,
+                        attemptNotional,
+                        requiredMinNotional,
 
-                    // === Market regime ===
-                    atr = atr,
-                    slope = baseReg.TrendSlopePercent,
-                    vol = baseReg.VolatilityPercent,
-                    deviation = baseReg.DeviationScore,
-                    regime = baseReg.Regime.ToString(),
+                        // === Market regime ===
+                        atr = atr,
+                        slope = baseReg.TrendSlopePercent,
+                        vol = baseReg.VolatilityPercent,
+                        deviation = baseReg.DeviationScore,
+                        regime = baseReg.Regime.ToString(),
 
-                    // === Smart regime ===
-                    confidence = (int)(smart.Confidence * 100),
-                    smartType = smart.SmartType.ToString(),
-                    // === NEW ===
-                    score = scoreUi
-                };
+                        // === Smart regime ===
+                        confidence = (int)(smart.Confidence * 100),
+                        smartType = smart.SmartType.ToString(),
+                        // === NEW ===
+                        score = scoreUi
+                    };
 
-                List<object> list;
+                    List<object> list;
 
-                if (File.Exists(MissedTradesPath))
-                {
-                    var json = File.ReadAllText(MissedTradesPath);
-                    list = JsonSerializer.Deserialize<List<object>>(json) ?? new();
+                    if (File.Exists(MissedTradesPath))
+                    {
+                        var json = File.ReadAllText(MissedTradesPath);
+                        list = JsonSerializer.Deserialize<List<object>>(json) ?? new();
+                    }
+                    else list = new();
+
+                    list.Add(record);
+
+                    File.WriteAllText(MissedTradesPath,
+                        JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true }));
                 }
-                else list = new();
-
-                list.Add(record);
-
-                File.WriteAllText(MissedTradesPath,
-                    JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true }));
+                catch { }
             }
-            catch { }
-        }
-
-
+        */
     }
 }

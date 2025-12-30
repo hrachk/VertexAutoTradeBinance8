@@ -23,6 +23,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly AiMarketRegimeService _marketRegimeService;
         private readonly SmartRegimeService _smartRegime;
         private readonly LiquidityGuardService _liquidityGuard;
+       
 
         public OrderExecutor(
             ILogger<OrderExecutor> logger,
@@ -50,9 +51,9 @@ namespace VertexAutoTradeBinance8.Services
         // MAIN ENTRY
         // =====================================================================
         public async Task<OrderResult> ExecuteAsync(
-                                                     TradeSignal signal,
-                                                     decimal quantity,
-                                                     CancellationToken ct = default)
+        TradeSignal signal,
+        decimal quantity,
+        CancellationToken ct = default)
         {
             using var client = _factory.CreateRestClient();
 
@@ -64,9 +65,27 @@ namespace VertexAutoTradeBinance8.Services
             quantity = Math.Floor(quantity / step) * step;
             if (quantity <= 0)
             {
-                await _simulator.SimulateMissedTradeAsync(signal, "QuantityTooSmall");
-                return OrderResult.Fail("Quantity too small");
+                var reason = signal.RejectReason ?? "RiskRejected";
+
+                _logger.LogWarning(
+                    "[ORDER][{symbol}] QTY=0 → BLOCKED by RiskManager | reason={reason}",
+                    signal.Symbol, reason);
+
+                // 1) симуляция пропущенной сделки
+                await _simulator.SimulateMissedTradeAsync(signal, reason);
+
+                // 2) статус в executed_signals.json
+                _executedSignalService.UpdateStatus(
+                    symbol: signal.Symbol,
+                    time: DateTime.UtcNow,
+                    status: TradeExecutionStatus.Blocked,
+                    qty: 0,
+                    notional: 0
+                );
+
+                return OrderResult.Fail(reason);
             }
+
 
             var side = signal.Side == SignalSide.Buy ? OrderSide.Buy : OrderSide.Sell;
             var posSide = signal.Side == SignalSide.Buy ? PositionSide.Long : PositionSide.Short;
@@ -177,7 +196,53 @@ namespace VertexAutoTradeBinance8.Services
                 $"AiRisk={aiRisk:F2}"
             );
 
- 
+
+            // =====================================================================
+            // HARD VETO GATES (PRODUCTION)
+            // =====================================================================
+
+            // 1) LiquidityGuard HARD BLOCK (no entry unless superSignal)
+            if (liquidityResult.Block)
+            {
+                _logger.LogWarning(
+                    "[ORDER][{symbol}] HARD BLOCK by LiquidityGuard | reason={reason} details={details}",
+                    signal.Symbol, liquidityResult.Reason, liquidityResult.Details);
+
+                await _simulator.SimulateMissedTradeAsync(signal, $"LiquidityGuardBlock:{liquidityResult.Reason}");
+                _executedSignalService.UpdateStatus(
+                    symbol: signal.Symbol,
+                    time: DateTime.UtcNow,
+                    status: TradeExecutionStatus.Blocked,
+                    qty: 0,
+                    notional: 0 
+                );
+
+                return OrderResult.Fail($"LiquidityGuardBlock:{liquidityResult.Reason}");
+            }
+
+            // 2) AI Risk Veto (threshold should be config later)
+            const decimal AI_RISK_VETO = 1.8m;
+            if (aiRisk >= AI_RISK_VETO)
+            {
+                _logger.LogWarning(
+                    "[ORDER][{symbol}] AI RISK VETO | aiRisk={aiRisk:F2} >= {thr}",
+                    signal.Symbol, aiRisk, AI_RISK_VETO);
+
+                await _simulator.SimulateMissedTradeAsync(signal, $"AiRiskVeto:{aiRisk:F2}");
+                _executedSignalService.UpdateStatus(
+                    symbol: signal.Symbol,
+                    time: DateTime.UtcNow,
+                    status: TradeExecutionStatus.Blocked,
+                    qty: 0,
+                    notional: 0 
+                );
+
+                return OrderResult.Fail($"AiRiskVeto:{aiRisk:F2}");
+            }
+
+            // 3) Symbol Freeze Controller (hook here once service is available)
+            // TODO: inject ISymbolFreezeController or AiSelfLearning DecisionGates and hard veto here.
+            // if (_symbolFreeze.IsFrozen(signal.Symbol)) { ... return Fail("SymbolFrozen"); }
 
 
 
@@ -283,10 +348,19 @@ namespace VertexAutoTradeBinance8.Services
                     tp = Round(tp, tick);
             }
 
+            _executedSignalService.UpdateProtectionComputed(
+            symbol: signal.Symbol,
+            time: DateTime.UtcNow,
+            stopLoss: sl,
+            takeProfit: tp,
+            atr: atr,
+            tags: $"ProtectionComputed|Regime={smart.BaseRegime}|Liquidity=OK"
+        );
+
             _logger.LogWarning(
                 "[ORDER][{symbol}] PROTECTION COMPUTED ONLY → SL={sl}, TP={tp}. Supervisor will place orders (NORMAL/ALGO).",
                 signal.Symbol, sl, tp
-            );
+            ); 
 
             // ❗ НИЧЕГО НЕ СТАВИМ ЗДЕСЬ
             return OrderResult.Successs(entryPrice, quantity, entryOrderId);
@@ -382,7 +456,7 @@ namespace VertexAutoTradeBinance8.Services
 
                     // ---- 3) Проверка "цена улетела" (только если вообще не fill'ился) ----
                     // ---- 3) Проверка "цена улетела" — НЕ ФАТАЛ, НЕ CANCEL ----
-                    if (lastExecuted <= 0)
+                    if (lastExecuted <= 0 && (i % 10 == 0))
                     {
                         try
                         {
