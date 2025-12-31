@@ -2,7 +2,7 @@
 
 @using VertexAutoTradeBinance8.Web.Models
 @using VertexAutoTradeBinance8.Web.Services
-@inject LivePnlService LivePnl
+@inject PositionsLiveService Live
 
 <h2 class="page-title">Live Positions</h2>
 
@@ -37,25 +37,27 @@ else
 }
 
 @code {
-    private IReadOnlyList<LivePositionModel> Positions = Array.Empty<LivePositionModel>();
+    // ============================
+    // DATA (КАНОН)
+    // ============================
+    private IReadOnlyList<PositionVm> Positions = Array.Empty<PositionVm>();
 
     // ============================
-    // UI THROTTLE (≈5 FPS)
+    // UI THROTTLE (~5 FPS)
     // ============================
     private DateTime _lastUiUpdate = DateTime.MinValue;
     private static readonly TimeSpan UiThrottle = TimeSpan.FromMilliseconds(200);
 
     protected override void OnInitialized()
     {
-        LivePnl.Updated += Refresh;
+        // 🔥 WS → UI
+        Live.OnPositionUpdated += OnPositionUpdated;
 
-        // Канон: UI не знает про symbols
-        LivePnl.Start(null, 900);
-
-        Refresh();
+        // первичный snapshot
+        Positions = Live.GetAll().ToList();
     }
 
-    private void Refresh()
+    private void OnPositionUpdated(PositionVm _)
     {
         var now = DateTime.UtcNow;
         if (now - _lastUiUpdate < UiThrottle)
@@ -63,13 +65,12 @@ else
 
         _lastUiUpdate = now;
 
-        Positions = LivePnl.GetPositions();
+        Positions = Live.GetAll().ToList();
         InvokeAsync(StateHasChanged);
     }
 
     public void Dispose()
     {
-        LivePnl.Updated -= Refresh;
-        LivePnl.Stop();
+        Live.OnPositionUpdated -= OnPositionUpdated;
     }
 }

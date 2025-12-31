@@ -280,6 +280,10 @@ namespace VertexAutoTradeBinance8.Services
                 qty: quantity,
                 notional: quantity * entryPrice
             );
+            await _simulator.SimulateMissedTradeAsync(
+    signal,
+    "ORDER_CREATED"
+);
 
             // =====================================================================
             // 2) WAIT-POSITION/ORDER — dual-track (ORDER + POSITION)
@@ -327,6 +331,11 @@ namespace VertexAutoTradeBinance8.Services
                 notional: quantity * entryPrice,
                 entryPrice
             );
+
+            await _simulator.SimulateMissedTradeAsync(
+    signal,
+    "POSITION_OPENED"
+);
 
             // =====================================================================
             // 3) COMPUTE SL / TP (NO PLACEMENT HERE)

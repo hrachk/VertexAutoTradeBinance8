@@ -194,7 +194,7 @@ namespace VertexAutoTradeBinance8.Services
             Load();
            
 
-
+            /*
             // 2) Потом подгружаем missed_trades.json и учимся на них БЕЗ снапшотов
             var missed = LoadMissedTradesFromFile();
 
@@ -210,9 +210,10 @@ namespace VertexAutoTradeBinance8.Services
 
             // 3) Один финальный снапшот (обновляем файл с учётом старых + новых данных)
             ForceSnapshot();
+            */
         }
 
-
+        /*
         private List<MissedTradeRecord> LoadMissedTradesFromFile()
         {
             var path = Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
@@ -255,7 +256,7 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogError(ex, "[AI] Failed to learn from missed trade.");
             }
         }
-
+        */
         private MarketRegime ParseMarketRegime(string regime)
         {
             if (Enum.TryParse<MarketRegime>(regime, out var parsed))
@@ -403,15 +404,16 @@ namespace VertexAutoTradeBinance8.Services
 
 
         public void RecordMarketStateTriggered(
-         string reason,
-         string symbol,
-         string timeframe,
-         MarketRegime regime,
-         decimal slope,
-         decimal volatility,
-         decimal atr,
-         decimal confidence,
-         bool skipSnapshot = false)   // 🔥 новый флаг
+    string reason,
+    string symbol,
+    string timeframe,
+    MarketRegime regime,
+    decimal slope,
+    decimal volatility,
+    decimal atr,
+    decimal confidence,
+    bool skipSnapshot = true   // ← БЫЛО false / неявно
+)
         {
             lock (_lock)
             {
@@ -437,8 +439,8 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // ❗ По умолчанию как раньше, но можно отключить
-            if (!skipSnapshot)
-                TrySnapshot();
+          //  if (!skipSnapshot)
+              //  TrySnapshot();
         }
 
         // 3) BACKGROUND MARKET LEARNING – глобальный 30s snapshot по режиму
@@ -525,10 +527,12 @@ namespace VertexAutoTradeBinance8.Services
                     _tradeHistory.RemoveRange(0, 2500);
             }
 
-            UpdateStats(symbol, regime, pnl);  // Обновление статистики по сделке
+            UpdateStats(symbol, regime, pnl);
+            Save(force: true);
+            TrySnapshot();  // Обновление статистики по сделке
 
             Save(force: true);  // Принудительное сохранение после каждой сделки
-
+            /*
             bool win = side == SignalSide.Buy ? exit > entry : exit < entry;
             lock (_lock)
             {
@@ -536,7 +540,7 @@ namespace VertexAutoTradeBinance8.Services
                 rs.Trades++;
                 if (win)
                     rs.Wins++;  // Учитывается выигрышная сделка
-            }
+            }*/
 
             TrySnapshot();  // Сохранение снимка данных
         }
@@ -1151,6 +1155,21 @@ namespace VertexAutoTradeBinance8.Services
                     Time = DateTime.UtcNow
                 });
             }
+
+            // === SOFT LEARNING IMPACT (SIMULATED) ===
+            // симуляция влияет на RiskWeight, но слабее реальной сделки
+            var pseudoPnl = outcome * 0.35m;
+
+            // regime неизвестен → используем Unknown
+            UpdateStats(
+                symbol,
+                MarketRegime.Unknown,
+                pseudoPnl
+            );
+
+            // snapshot разрешён — это результат обучения
+            TrySnapshot();
+
         }
 
     }

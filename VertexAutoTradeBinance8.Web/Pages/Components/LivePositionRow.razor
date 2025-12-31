@@ -1,39 +1,40 @@
 ﻿@using VertexAutoTradeBinance8.Web.Models
 @using static VertexAutoTradeBinance8.Web.Services.PositionsLiveService
 
-<tr class="pos-row @(Pos.UnrealizedPnl >= 0 ? "pnl-plus" : "pnl-minus") @ChangeCss">
+<tr class="pos-row @(Pos.Pnl >= 0 ? "pnl-plus" : "pnl-minus") @ChangeCss">
     <td class="sym-cell">
         <span class="sym">@Pos.Symbol</span>
         <span class="side @(IsLong ? "long" : "short")">
-            @Pos.PositionSide
+            @Pos.Side
         </span>
     </td>
 
     <td class="lev">@Fmt0(Pos.Leverage)x</td>
 
-    <td>@Fmt(Pos.PositionAmt)</td>
-    <td>@Fmt(Pos.EntryPrice)</td>
-    <td>@Fmt(Pos.MarkPrice)</td>
+    <td>@Fmt(Size)</td>
+    <td>@Fmt(Pos.Entry)</td>
+    <td>@Fmt(Pos.Mark)</td>
 
     <td class="pnl">
-        @FmtSigned(Pos.UnrealizedPnl)
-        <div class="roi">@FmtSignedPct(Roi)</div>
+        @FmtSigned(Pos.Pnl)
+        <div class="roi">@FmtSignedPct(Pos.Roi)</div>
     </td>
 
-    <td>@Fmt(Notional)</td>
+    <td>@Fmt(Pos.Margin)</td>
 
     <td class="liq @RiskCss">
-        @Fmt(Pos.LiquidationPrice)
+        @Fmt(Pos.LiqPrice)
     </td>
 </tr>
 
 @code {
-    [Parameter] public LivePositionModel Pos { get; set; } = default!;
+    // 🔥 КАНОН: PositionVm
+    [Parameter] public PositionVm Pos { get; set; } = default!;
 
-    bool IsLong => Pos.PositionSide == "LONG";
+    bool IsLong => Pos.Side == "LONG";
 
     // ============================
-    // 🔥 CHANGE MASK HIGHLIGHT (ADD)
+    // 🔥 CHANGE MASK HIGHLIGHT
     // ============================
     string ChangeCss =>
         Pos.ChangeMask switch
@@ -45,24 +46,18 @@
             _ => ""
         };
 
-    decimal Notional =>
-        Math.Abs(Pos.PositionAmt) * Pos.MarkPrice;
-
-    decimal Roi =>
-        Pos.IsolatedMargin.HasValue && Pos.IsolatedMargin > 0
-            ? (Pos.UnrealizedPnl / Pos.IsolatedMargin.Value) * 100m
-            : 0m;
+    decimal Size => Pos.SizeUsdt;
 
     /// <summary>
     /// Насколько близко к ликвидации (0–100%)
     /// </summary>
     decimal RiskPct =>
-        Pos.LiquidationPrice == null || Pos.EntryPrice == 0
+        Pos.LiqPrice <= 0 || Pos.Entry <= 0
             ? 0
             : Math.Min(
                 100m,
-                Math.Abs(Pos.MarkPrice - Pos.EntryPrice) /
-                Math.Abs(Pos.EntryPrice - Pos.LiquidationPrice.Value) * 100m
+                Math.Abs(Pos.Mark - Pos.Entry) /
+                Math.Abs(Pos.Entry - Pos.LiqPrice) * 100m
             );
 
     string RiskCss =>

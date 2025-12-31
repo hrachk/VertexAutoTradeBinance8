@@ -90,6 +90,11 @@ builder.Services.AddHttpClient("api", client =>
     client.BaseAddress = new Uri("https://localhost:7185/"); // твой Web API адрес
 });
 
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenAnyIP(5101);
+});
+
 builder.Services.AddSingleton<PositionsLiveService>();
  
 

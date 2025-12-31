@@ -1,4 +1,5 @@
 ﻿using Binance.Net.Enums;
+using System.Text.Json;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -21,6 +22,26 @@ namespace VertexAutoTradeBinance8.Services
             _marketData = marketData;
             _learningService = learningService;  // Lazy инъекция
             _logger = logger;
+
+            // 🔒 INIT missed_trades.json (ONCE)
+            try
+            {
+                var path = Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
+                var dir = Path.GetDirectoryName(path);
+
+                if (!string.IsNullOrWhiteSpace(dir) && !Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+
+                if (!File.Exists(path))
+                {
+                    File.WriteAllText(path, "[]");
+                    _logger.LogInformation("[SIM] missed_trades.json created");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SIM] Failed to init missed_trades.json");
+            }
         }
 
         /// <summary>
@@ -28,6 +49,7 @@ namespace VertexAutoTradeBinance8.Services
         /// </summary>
         public async Task SimulateMissedTradeAsync(TradeSignal signal, string reason, string? note = null)
         {
+
             try
             {
                 _logger.LogInformation(
@@ -78,6 +100,52 @@ namespace VertexAutoTradeBinance8.Services
                     tp,
                     result,
                     reason);
+
+                // === WRITE missed_trades.json (LOG ONLY) ===
+                try
+                {
+                    var path = Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
+
+                    List<object> list;
+
+                    if (File.Exists(path))
+                    {
+                        var json = File.ReadAllText(path);
+                        list = JsonSerializer.Deserialize<List<object>>(json) ?? new();
+                    }
+                    else
+                    {
+                        list = new();
+                    }
+
+                    list.Add(new
+                    {
+                        symbol = signal.Symbol,
+                        side = signal.Side.ToString(),
+                        entry = entry,
+                        sl = sl,
+                        tp = tp,
+                        result = result,
+                        reason = reason,
+                        note = note,
+                        time = DateTime.UtcNow
+                    });
+
+                    File.WriteAllText(
+                        path,
+                        JsonSerializer.Serialize(list, new JsonSerializerOptions
+                        {
+                            WriteIndented = true
+                        })
+                    );
+
+                    _logger.LogInformation("[SIM] missed trade appended");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[SIM] failed to write missed_trades.json");
+                }
+
 
                 _logger.LogInformation(
                     "[SIM][{symbol}] Завершена симуляция → Outcome: {result}",

@@ -41,7 +41,7 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly SmartRegimeService _smartRegimeService;
         private readonly TradingOptions _opt;
         private readonly LiquidityGuardService _liquidityGuardService;
-        private static readonly Dictionary<(string symbol, SignalSide side), DateTime> _lastStopTime = new();
+        private static readonly ConcurrentDictionary<(string symbol, SignalSide side), DateTime> _lastStopTime = new();
 
         private readonly EngineStateSnapshotService _stateSvc;
         //fot UI
@@ -801,12 +801,13 @@ namespace VertexAutoTradeBinance8.Strategy
             {
                 minRr *= 0.9m; // −10% требование к RR для SHORT
             }
-            _logger.LogWarning(
-    "[DEBUG][SIDE-STATS] {symbol} side={side} regime={regime} slope={slope:P2}",
-    symbol, signal.Side, smart.BaseRegime, smart.TrendSlopePercent);
+            //        _logger.LogWarning(
+            //"[DEBUG][SIDE-STATS] {symbol} side={side} regime={regime} slope={slope:P2}",
+            //symbol, signal.Side, smart.BaseRegime, smart.TrendSlopePercent);
 
-            var w = _aiLearning.GetGateWeight(smart.BaseRegime, "RR");
-            minRr *= w;
+          
+            //var w = _aiLearning.GetGateWeight(smart.BaseRegime, "RR");
+            //minRr *= w;
 
             return minRr;
         }
@@ -1249,17 +1250,45 @@ $@"📊 Режим рынка:
             }
 
             // 7) AI Dynamic Risk Tag — с защитой
+
+            if (baseSignal == null)
+            {
+                _aiLearning.RecordMarketStateTriggered(
+                    reason: "NO_BASE_SIGNAL",
+                    symbol: symbol,
+                    timeframe: interval.ToString(),
+                    regime: smart.BaseRegime,
+                    slope: smart.TrendSlopePercent,
+                    volatility: smart.VolatilityPercent,
+                    atr: 0m,
+                    confidence: smart.Confidence
+                );
+
+                _logger.LogInformation(
+                    "[STRAT][{symbol}][{interval}] NO BASE SIGNAL — market neutral",
+                    symbol, interval);
+
+                LastSoftEntry = false;
+                LastBlockedByLiquidity = false;
+                CurrentMode = "Detecting";
+
+                return null;
+            }
+            var riskW = 1.00m;
+
             try
             {
-                var riskW = _aiLearning.GetAiRiskAdjustment(symbol, regime);
-                baseSignal.Reason += $"|AIrisk={riskW:F2}";
+                riskW = _aiLearning.GetAiRiskAdjustment(symbol, regime);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex,
-                    $"[STRAT][{symbol}][{interval}] AiSelfLearningService.GetAiRiskAdjustment ERROR → AIrisk=1.00.");
-                baseSignal.Reason += "|AIrisk=1.00";
+                    "[STRAT][{symbol}][{interval}] AI risk fallback",
+                    symbol, interval);
             }
+
+            baseSignal.Reason ??= string.Empty;
+            baseSignal.Reason += $"|AIrisk={riskW:F2}";
 
             // 8) DYNAMIC RR FILTER (StrongUpTrend FIX)
             if (baseSignal.TakeProfits != null && baseSignal.TakeProfits.Count > 0)
@@ -1547,30 +1576,62 @@ $@"📊 Режим рынка:
                 return FastFailResult.Fail("SMART", "Evaluate error");
             }
         }
-
         private FastFailResult Gate2_Confidence(
-        SmartRegimeInfo smart,
-        bool lowerRegimeThreshold)
+    SmartRegimeInfo smart,
+    bool lowerRegimeThreshold)
         {
             if (smart.IsDangerChopZone)
                 return FastFailResult.Fail("CONF", "DangerChopZone");
 
-            int thr = GetAdaptiveThreshold(
+            int adaptiveThreshold = GetAdaptiveThreshold(
                 smart.BaseRegime,
                 smart.SmartType,
                 smart.VolatilityPercent,
                 smart.TrendSlopePercent);
 
-            if (lowerRegimeThreshold)
-                thr = Math.Max(20, (int)(thr * 0.8));
+            decimal thrFrac = adaptiveThreshold / 100m;
+            decimal safetyBuffer = 0.10m;
 
-            if (smart.Confidence < thr / 100m)
+            if (lowerRegimeThreshold)
+            {
+                adaptiveThreshold = Math.Max(20, (int)(adaptiveThreshold * 0.8));
+                thrFrac = adaptiveThreshold / 100m;
+                safetyBuffer = 0.20m;
+            }
+
+            bool fastTrendOverride = IsFastTrendOverride(smart);
+
+            if (!fastTrendOverride && smart.Confidence < thrFrac - safetyBuffer)
                 return FastFailResult.Fail(
                     "CONF",
-                    $"confidence={smart.Confidence:P0}<thr={thr}%");
+                    $"confidence={smart.Confidence:P0}<thr={adaptiveThreshold}% (buf={safetyBuffer:P0})");
 
             return FastFailResult.Ok();
         }
+
+        /*  private FastFailResult Gate2_Confidence(
+          SmartRegimeInfo smart,
+          bool lowerRegimeThreshold)
+          {
+              if (smart.IsDangerChopZone)
+                  return FastFailResult.Fail("CONF", "DangerChopZone");
+
+              int thr = GetAdaptiveThreshold(
+                  smart.BaseRegime,
+                  smart.SmartType,
+                  smart.VolatilityPercent,
+                  smart.TrendSlopePercent);
+
+              if (lowerRegimeThreshold)
+                  thr = Math.Max(20, (int)(thr * 0.8));
+
+              if (smart.Confidence < thr / 100m)
+                  return FastFailResult.Fail(
+                      "CONF",
+                      $"confidence={smart.Confidence:P0}<thr={thr}%");
+
+              return FastFailResult.Ok();
+          } */
 
         private FastFailResult Gate3_BaseSignal(
         string symbol,
@@ -1788,26 +1849,28 @@ $@"📊 Режим рынка:
                 trace.Gates.Add(Gate5_Pattern(symbol, interval, klines, baseSignal, relaxPatternBlock));
                 trace.Gates.Add(Gate6_Liquidity(baseSignal, smart, klines, interval, relaxLiquidity));
                 trace.Gates.Add(Gate7_Exposure(symbol, interval, baseSignal, smart));
-            }
-            _aiLearning.RecordDecisionTrace(
-    symbol,
-    smart.BaseRegime,
-    trace.Gates);
-            // === ФАКТИЧЕСКОЕ РЕШЕНИЕ — ЧЕРЕЗ КАНОНИЧЕСКИЙ GenerateSignal
-            //  var finalSignal = GenerateSignal(symbol, interval, klines);
+            } 
 
-            // trace.Signal = finalSignal;
-            // trace.Allow = finalSignal != null;
-            trace.Signal = baseSignal;
-            trace.Allow = baseSignal != null;
+            // 🔥 ИТОГ: allow только если нет failed gate
+            var failed = trace.FailedGate;
+            trace.Allow = failed == null;
+            trace.Signal = trace.Allow ? baseSignal : null;
+
+            _aiLearning.RecordDecisionTrace(symbol, smart.BaseRegime, trace.Gates);
+
             return trace;
         }
         public static void RegisterStop(string symbol, SignalSide side)
         {
             _lastStopTime[(symbol, side)] = DateTime.UtcNow;
+
+            // лёгкая очистка, чтобы dictionary не рос бесконечно (TTL 6 часов)
+            var cutoff = DateTime.UtcNow.AddHours(-6);
+            foreach (var kv in _lastStopTime)
+            {
+                if (kv.Value < cutoff)
+                    _lastStopTime.TryRemove(kv.Key, out _);
+            }
         }
-
     }
-
-
 }
