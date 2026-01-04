@@ -52,6 +52,8 @@ namespace VertexAutoTradeBinance8.Models
         // Доп. инфа (например, AIrisk, regime и т.п.)
         public string Tags { get; set; } = string.Empty;
 
+        public decimal? FilledEntryPrice { get; set; }
+
         public bool IsOpen =>
     Status == TradeExecutionStatus.OrderCreated ||
     Status == TradeExecutionStatus.OrderPartiallyFilled ||

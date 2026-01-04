@@ -1312,19 +1312,25 @@ namespace VertexAutoTradeBinance8.Services
                     return;
                 }
 
+                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+                _earlyTpDone[guardKey] = now;
+                _recentPartialClose[$"{symbol}|{side}"] = now;
 
                 MarkProtection(symbol);
 
+                _logger.LogWarning(
+                    "[EARLY-TP][{symbol}][{side}] Partial fixed {closed}/{total}",
+                    symbol, side, closeQty, qty);
             });
 
 
 
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-            _earlyTpDone[guardKey] = now;
-
+         //   _earlyTpDone[guardKey] = now;
             // 🔒 BLOCK HARVEST for 8 seconds after EARLY-TP
-            _recentPartialClose[$"{symbol}|{side}"] = now;
+          //  _recentPartialClose[$"{symbol}|{side}"] = now;
 
             _logger.LogWarning(
                 "[EARLY-TP][{symbol}][{side}] Partial profit fixed {closed}/{total} @price={price} (+0.9ATR)",
@@ -1400,13 +1406,17 @@ namespace VertexAutoTradeBinance8.Services
             if (side == PositionSide.Short && newSl >= oldSl) return;
 
             var ok = await UpdateSL_ProAsync(client, symbol, side, qty, slOrder, entry, newSl, signal, ct);
-            if (ok)
-            {
-                _beMoved[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                _logger.LogWarning("[BE][{symbol}][{side}] SL moved to BE+buffer newSL={sl}", symbol, side, newSl);
-                MarkProtection(symbol); // ✅ только при успехе
-            }
+       
+
+            if (!ok)
+                return;
+
+            _beMoved[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             MarkProtection(symbol);
+
+            _logger.LogWarning(
+                "[BE][{symbol}][{side}] SL moved to BE+buffer newSL={sl}",
+                symbol, side, newSl);
         }
 
         private static string BuildPosGuardKey(string symbol, PositionSide side, decimal entry, decimal qty)
@@ -1859,63 +1869,188 @@ namespace VertexAutoTradeBinance8.Services
         /// - NO reduceOnly (важно для Hedge/ошибок -1106)
         /// - WorkingType.Mark используем осторожно: сначала пробуем, если Binance ругается — повтор без него
         /// </summary>
-        private Task<bool> UpdateSL_ProAsync(
-     BinanceRestClient client,
-     string symbol,
-     PositionSide side,
-     decimal qty,
-     BinanceUsdFuturesOrder slOrder,
-     decimal entry,
-     decimal newSl,
-     TradeSignal? signal,
-     CancellationToken ct)
+        //   private Task<bool> UpdateSL_ProAsync(
+        //BinanceRestClient client,
+        //string symbol,
+        //PositionSide side,
+        //decimal qty,
+        //BinanceUsdFuturesOrder slOrder,
+        //decimal entry,
+        //decimal newSl,
+        //TradeSignal? signal,
+        //CancellationToken ct)
+        //   {
+        //       if (qty <= 0 || newSl <= 0) return Task.FromResult(false);
+
+        //       _dispatcher.Enqueue(async token =>
+        //       {
+        //           using var c = _factory.CreateRestClient();
+
+        //           var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+
+        //           var safeTrig = NormalizeToStep(newSl, f.tickSize > 0 ? f.tickSize : 0.0001m);
+        //           var safeQty = NormalizeToStep(qty, f.step > 0 ? f.step : 1m);
+
+        //           if (safeQty < f.minQty) return;
+
+        //           var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+        //           var r1 = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
+        //               symbol: symbol,
+        //               side: orderSide,
+        //               type: FuturesOrderType.StopMarket,
+        //               quantity: safeQty,
+        //               stopPrice: safeTrig,
+        //               positionSide: side,
+        //               workingType: WorkingType.Mark,
+        //               ct: token);
+
+        //           if (r1.Success) return;
+
+        //           if (!IsAlgoRequired(r1.Error)) return;
+
+        //           _logger.LogWarning(
+        //               "[ALGO-RAW][PRE][SL] {symbol} qty={qty} trig={trig}",
+        //               symbol, safeQty, safeTrig);
+
+        //           await _algoRaw.PlaceConditionalAsync(
+        //               symbol: symbol,
+        //               side: orderSide,
+        //               positionSide: side,
+        //               type: "STOP_MARKET",
+        //               quantity: safeQty,
+        //               triggerPrice: safeTrig,
+        //               workingType: "CONTRACT_PRICE",
+        //               reduceOnly: null,
+        //               ct: token);
+        //       });
+
+        //       return Task.FromResult(true);
+        //   }
+
+        private async Task<bool> UpdateSL_ProAsync(
+           BinanceRestClient client,
+           string symbol,
+           PositionSide side,
+           decimal qty,
+           BinanceUsdFuturesOrder oldSl,
+           decimal entry,
+           decimal newSl,
+           TradeSignal? signal,
+           CancellationToken ct)
         {
-            if (qty <= 0 || newSl <= 0) return Task.FromResult(false);
+            if (qty <= 0 || newSl <= 0)
+                return false;
 
-            _dispatcher.Enqueue(async token =>
+            var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+
+            var safeQty = NormalizeToStep(qty, f.step > 0 ? f.step : 1m);
+            var safeTrig = NormalizeToStep(newSl, f.tickSize > 0 ? f.tickSize : 0.0001m);
+
+            if (safeQty < f.minQty)
+                return false;
+
+            var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+            try
             {
-                using var c = _factory.CreateRestClient();
+                // 1) ❌ CANCEL OLD SL
+                try
+                {
+                    await client.UsdFuturesApi.Trading.CancelOrderAsync(
+                        symbol,
+                        oldSl.Id,
+                        ct: ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "[SL][{symbol}][{side}] Failed to cancel old SL {id}",
+                        symbol, side, oldSl.Id);
+                }
 
-                var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-
-                var safeTrig = NormalizeToStep(newSl, f.tickSize > 0 ? f.tickSize : 0.0001m);
-                var safeQty = NormalizeToStep(qty, f.step > 0 ? f.step : 1m);
-
-                if (safeQty < f.minQty) return;
-
-                var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-
-                var r1 = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
+                // 2) TRY NORMAL
+                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: symbol,
                     side: orderSide,
                     type: FuturesOrderType.StopMarket,
                     quantity: safeQty,
                     stopPrice: safeTrig,
                     positionSide: side,
+                    reduceOnly: null,
                     workingType: WorkingType.Mark,
-                    ct: token);
+                    ct: ct);
 
-                if (r1.Success) return;
+                if (res.Success)
+                {
+                    _logger.LogInformation(
+                        "[SL][{symbol}][{side}] SL updated (NORMAL) -> {sl}",
+                        symbol, side, safeTrig);
 
-                if (!IsAlgoRequired(r1.Error)) return;
+                    // =========================
+                    // AI-HOOK ON SL MOVE (AI ONLY)
+                    // =========================
+                    if (signal != null && !signal.IsManual)
+                    {
+                        HookAiLearningOnSlMove(
+                            signal,
+                            symbol,
+                            side,
+                            entry,
+                            safeTrig);
+                    }
+
+                    return true;
+                }
+
+                // 3) FALLBACK ALGO RAW (-4120)
+                if (IsAlgoRequired(res.Error))
+                {
+                    var ok = await _algoRaw.PlaceConditionalAsync(
+                        symbol: symbol,
+                        side: orderSide,
+                        positionSide: side,
+                        type: "STOP_MARKET",
+                        quantity: safeQty,
+                        triggerPrice: safeTrig,
+                        workingType: "CONTRACT_PRICE",
+                        reduceOnly: null,
+                        ct: ct);
+
+                    if (ok)
+                    {
+                        _logger.LogInformation(
+                            "[SL][{symbol}][{side}] SL updated (ALGO-RAW) -> {sl}",
+                            symbol, side, safeTrig);
+
+                        // =========================
+                        // AI-HOOK ON SL MOVE (AI ONLY)
+                        // =========================
+                        if (signal != null && !signal.IsManual)
+                        {
+                            HookAiLearningOnSlMove(
+                                signal,
+                                symbol,
+                                side,
+                                entry,
+                                safeTrig);
+                        }
+
+                        return true;
+                    }
+                }
 
                 _logger.LogWarning(
-                    "[ALGO-RAW][PRE][SL] {symbol} qty={qty} trig={trig}",
-                    symbol, safeQty, safeTrig);
-
-                await _algoRaw.PlaceConditionalAsync(
-                    symbol: symbol,
-                    side: orderSide,
-                    positionSide: side,
-                    type: "STOP_MARKET",
-                    quantity: safeQty,
-                    triggerPrice: safeTrig,
-                    workingType: "CONTRACT_PRICE",
-                    reduceOnly: null,
-                    ct: token);
-            });
-
-            return Task.FromResult(true);
+                    "[SL][{symbol}][{side}] SL update failed",
+                    symbol, side);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SL][{symbol}][{side}] EX UpdateSL", symbol, side);
+                return false;
+            }
         }
 
 

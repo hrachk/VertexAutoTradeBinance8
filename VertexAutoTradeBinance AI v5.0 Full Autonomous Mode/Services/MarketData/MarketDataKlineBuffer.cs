@@ -2,6 +2,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 
@@ -148,5 +149,26 @@ namespace VertexAutoTradeBinance8.MarketData
         {
             _buffers.Clear();
         }
+
+        public Dictionary<string, List<BinanceFuturesUsdtKline>> LoadSnapshot()
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, "market-klines.snapshot.json");
+
+            if (!File.Exists(path))
+                return new();
+
+            try
+            {
+                var json = File.ReadAllText(path);
+                return JsonSerializer.Deserialize<
+                    Dictionary<string, List<BinanceFuturesUsdtKline>>
+                >(json) ?? new();
+            }
+            catch
+            {
+                return new();
+            }
+        }
+
     }
 }

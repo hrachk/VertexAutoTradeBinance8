@@ -5,10 +5,12 @@ using VertexAutoTradeBinance8.Configuration;
 
 namespace VertexAutoTradeBinance8.Services;
 
-public class BinanceClientFactory
+public sealed class BinanceClientFactory
 {
     private readonly BinanceOptions _options;
     private readonly ILogger<BinanceClientFactory> _logger;
+
+    private BinanceRestClient? _cachedRest;
 
     public BinanceClientFactory(
         IOptions<BinanceOptions> options,
@@ -19,16 +21,32 @@ public class BinanceClientFactory
     }
 
     // =====================================================
-    // 🔴 CORE REST CLIENT (TradingWorker / critical paths)
+    // CORE REST (CACHED, PRODUCTION)
     // =====================================================
     public BinanceRestClient CreateRestClient()
     {
+        if (_cachedRest != null)
+            return _cachedRest;
+
         if (string.IsNullOrWhiteSpace(_options.ApiKey) ||
             string.IsNullOrWhiteSpace(_options.SecretKey))
             throw new InvalidOperationException("Binance API credentials missing");
 
-        return BuildRestClient(strict: true)!;
+        _logger.LogInformation("[BINANCE] Creating REST client (cached)");
+
+        _cachedRest = new BinanceRestClient(opt =>
+        {
+            opt.ApiCredentials = new ApiCredentials(
+                _options.ApiKey,
+                _options.SecretKey);
+
+            opt.UsdFuturesOptions.AutoTimestamp = true;
+            opt.RequestTimeout = TimeSpan.FromSeconds(15);
+        });
+
+        return _cachedRest;
     }
+
 
     // =====================================================
     // 🟡 SAFE REST CLIENT (UI / WS bootstrap / monitoring)
@@ -45,7 +63,6 @@ public class BinanceClientFactory
 
         return BuildRestClient(strict: false);
     }
-
     // =====================================================
     // 🔧 INTERNAL REST BUILDER (CANONICAL)
     // =====================================================
@@ -79,8 +96,9 @@ public class BinanceClientFactory
         }
     }
 
+
     // =====================================================
-    // 🔵 WS CLIENT (UserData / Streams)
+    // WS CLIENT
     // =====================================================
     public BinanceSocketClient CreateSocketClient()
     {

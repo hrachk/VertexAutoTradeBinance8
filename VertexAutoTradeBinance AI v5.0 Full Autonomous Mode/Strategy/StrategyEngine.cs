@@ -35,7 +35,7 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly ILogger<StrategyEngine> _logger;
         private readonly AiCorrelationService _correlationService;
         private readonly AiLiquidityClusterService _liquidityClusterService;
-        private readonly AiMarketRegimeService _marketRegimeService;
+        
         private readonly AiPatternEngineService _patternEngineService;
         private readonly AiSelfLearningService _aiLearning;
         private readonly SmartRegimeService _smartRegimeService;
@@ -44,6 +44,11 @@ namespace VertexAutoTradeBinance8.Strategy
         private static readonly ConcurrentDictionary<(string symbol, SignalSide side), DateTime> _lastStopTime = new();
 
         private readonly EngineStateSnapshotService _stateSvc;
+
+        public event Action<TradeSignal>? OnSignalGenerated;
+
+
+
         //fot UI
         public string CurrentMode { get; private set; } = "Detecting";
         public bool LastSoftEntry { get; private set; }
@@ -62,11 +67,13 @@ namespace VertexAutoTradeBinance8.Strategy
         // анти-дубль: symbol|tf -> last close
         private readonly ConcurrentDictionary<string, DateTime> _lastReactiveRun = new();
 
+
+
         public StrategyEngine(
             ILogger<StrategyEngine> logger,
             AiCorrelationService correlationService,
             AiLiquidityClusterService liquidityClusterService,
-            AiMarketRegimeService marketRegimeService,
+            
             AiPatternEngineService patternEngineService,
             AiSelfLearningService aiLearning,
             SmartRegimeService smartRegimeService,
@@ -76,7 +83,7 @@ namespace VertexAutoTradeBinance8.Strategy
             _logger = logger;
             _correlationService = correlationService;
             _liquidityClusterService = liquidityClusterService;
-            _marketRegimeService = marketRegimeService;
+            
             _patternEngineService = patternEngineService;
             _aiLearning = aiLearning;
             _smartRegimeService = smartRegimeService;
@@ -117,15 +124,23 @@ namespace VertexAutoTradeBinance8.Strategy
             var key = $"{symbol}:{interval}";
             var now = DateTime.UtcNow;
 
-            // ⛔ HARD WARM GATE — САМЫЙ ПЕРВЫЙ
-            if (_marketData.IsInWarmup(symbol, interval))
+            // 🔥 SNAPSHOT OVERRIDE
+            if (_marketData.HasSnapshotState)
+            {
+                _logger.LogInformation(
+       "[STRAT][SNAPSHOT] warmup bypassed → snapshot state active");
+                // разрешаем работу даже если WS ещё не warm
+            }
+
+            if (!_marketData.HasSnapshotState &&
+         _marketData.IsInWarmup(symbol, interval))
             {
                 _logger.LogDebug(
                     "[STRAT][PUSH][{symbol}][{tf}] skip — market warmup",
                     symbol, interval);
                 return;
             }
-
+             
             // ⏱ АНТИ-СПАМ:
             // CLOSE — всегда разрешаем
             if (reason != "CLOSE")
@@ -186,9 +201,21 @@ namespace VertexAutoTradeBinance8.Strategy
                 if (signal != null)
                 {
                     _logger.LogInformation(
-                        "[STRAT][PUSH][{symbol}][{tf}] SIGNAL GENERATED",
+                        "[STRAT][PUSH][{symbol}][{tf}] SIGNAL GENERATED → DISPATCH",
                         symbol, interval);
-                } 
+
+                    try
+                    {
+                        OnSignalGenerated?.Invoke(signal);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(
+                            ex,
+                            "[STRAT][PUSH][{symbol}][{tf}] OnSignalGenerated handler failed",
+                            symbol, interval);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -788,24 +815,39 @@ namespace VertexAutoTradeBinance8.Strategy
                     $"[STRAT][{symbol}][{interval}] TrendPredict: dir={trend.Direction}, conf={trend.Confidence:P0}, rrBias={trend.RrBias:F2} → adjMinRR={minRr:F2}");
             }
 
-            // safety-коридор
-            if (minRr < 1.4m) minRr = 1.4m;
-            if (minRr > 2.6m) minRr = 2.6m;
-
+            // safety corridor
+            minRr = Math.Clamp(minRr, 1.4m, 2.6m);
             _logger.LogDebug(
                 $"[STRAT][{symbol}][{interval}] Dynamic RR итог: minRR={minRr:F2}, regime={regime}, smart={smartType}, slope={slope:P2}, vol={vol:P2}, atr%={atrPct:P2}");
 
 
+           
 
-            if (signal.Side == SignalSide.Sell)
+            // short-bias ТОЛЬКО в downtrend
+            if (signal.Side == SignalSide.Sell &&
+                (smart.BaseRegime == MarketRegime.StrongDownTrend ||
+                 smart.SmartType == SmartRegimeType.SmartStrongTrend))
             {
-                minRr *= 0.9m; // −10% требование к RR для SHORT
+                minRr *= 0.9m;
             }
+
+            //if (signal.Side == SignalSide.Sell &&
+            //    (smart.BaseRegime == MarketRegime.StrongDownTrend ||
+            //     smart.SmartType == SmartRegimeType.SmartStrongTrend))
+            //{
+            //    minRr *= 0.9m; // разрешаем быстрее фиксировать профит в даунтренде
+            //}
+
+
+            //if (signal.Side == SignalSide.Sell)
+            //{
+            //    minRr *= 0.9m; // −10% требование к RR для SHORT
+            //}
             //        _logger.LogWarning(
             //"[DEBUG][SIDE-STATS] {symbol} side={side} regime={regime} slope={slope:P2}",
             //symbol, signal.Side, smart.BaseRegime, smart.TrendSlopePercent);
 
-          
+
             //var w = _aiLearning.GetGateWeight(smart.BaseRegime, "RR");
             //minRr *= w;
 
@@ -1047,20 +1089,20 @@ $@"📊 Режим рынка:
                 baseSignal = TryPullbackEma21(symbol, interval, klines);
             }
 
-            // MICRO_SIGNAL — логируется для любого режима, если baseSignal появился
-            if (baseSignal != null)
-            {
-                _aiLearning.RecordMarketStateTriggered(
-                    reason: "MICRO_SIGNAL",
-                    symbol: symbol,
-                    timeframe: interval.ToString(),
-                    regime: smart.BaseRegime,
-                    slope: smart.TrendSlopePercent,
-                    volatility: smart.VolatilityPercent,
-                    atr: baseSignal.Atr ?? 0,
-                    confidence: smart.Confidence
-                );
-            }
+            //// MICRO_SIGNAL — логируется для любого режима, если baseSignal появился
+            //if (baseSignal != null)
+            //{
+            //    _aiLearning.RecordMarketStateTriggered(
+            //        reason: "MICRO_SIGNAL",
+            //        symbol: symbol,
+            //        timeframe: interval.ToString(),
+            //        regime: smart.BaseRegime,
+            //        slope: smart.TrendSlopePercent,
+            //        volatility: smart.VolatilityPercent,
+            //        atr: baseSignal.Atr ?? 0,
+            //        confidence: smart.Confidence
+            //    );
+            //}
 
 
             // 4.1) SOFT safe mode, если нет жёсткого сигнала
@@ -1210,7 +1252,7 @@ $@"📊 Режим рынка:
                 baseSignal = _liquidityClusterService.FilterAndAdjust(beforeLiq);
                 var w = _aiLearning.GetGateWeight(smart.BaseRegime, "LIQ");
 
-                if (!relaxLiquidity && baseSignal == null && w >= 1.0m)
+                if (!relaxLiquidity && beforeLiq != null && baseSignal == null && w >= 1.0m)
                 {
                     _aiLearning.RecordMarketStateTriggered(
                         reason: "LIQUIDITY_DANGER",
@@ -1336,54 +1378,54 @@ $@"📊 Режим рынка:
 
             _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-            // =====================================================
-            // 🔐 EXPOSURE CONTROL (FINAL GATE BEFORE RETURN)
-            // =====================================================
-            try
-            {
-                var exposure = CanIncreaseExposure(
-                   state: _engineState,              // существующий EngineState
-    symbol: symbol,
-    symbolNotionalUsd: 0m,             // ❗ StrategyEngine не знает — ставим 0
-    equityUsd: 0m,                     // ❗ НЕ используется тут
-    usedMarginUsd: 0m,                 // ❗ НЕ используется тут
-    aiEdgeScore: smart.Confidence,     // ✔ корректный proxy
-    isSpecialSetup:
-        baseSignal.IsSuperSignal ||
-        baseSignal.Reason.Contains("LIQUIDITY_GRAB") ||
-        baseSignal.Reason.Contains("PULLBACK_EMA21"),
-    isHighVolatility:
-        smart.VolatilityPercent >= 0.015m,
-    isLowEquityMode: false             // ❗ решается НИЖЕ по стеку
-                );
+            //// =====================================================
+            //// 🔐 EXPOSURE CONTROL (FINAL GATE BEFORE RETURN)
+            //// =====================================================
+            //try
+            //{
+            //    var exposure = CanIncreaseExposure(
+            //       state: _engineState,              // существующий EngineState
+            //        symbol: symbol,
+            //        symbolNotionalUsd: 0m,             // ❗ StrategyEngine не знает — ставим 0
+            //        equityUsd: 0m,                     // ❗ НЕ используется тут
+            //        usedMarginUsd: 0m,                 // ❗ НЕ используется тут
+            //        aiEdgeScore: smart.Confidence,     // ✔ корректный proxy
+            //        isSpecialSetup:
+            //            baseSignal.IsSuperSignal ||
+            //            baseSignal.Reason.Contains("LIQUIDITY_GRAB") ||
+            //            baseSignal.Reason.Contains("PULLBACK_EMA21"),
+            //        isHighVolatility:
+            //            smart.VolatilityPercent >= 0.015m,
+            //        isLowEquityMode: false             // ❗ решается НИЖЕ по стеку
+            //    );
 
-                if (!exposure.AllowAdd)
-                {
-                    _aiLearning.RecordMarketStateTriggered(
-                        reason: "EXPOSURE_BLOCK",
-                        symbol: symbol,
-                        timeframe: interval.ToString(),
-                        regime: smart.BaseRegime,
-                        slope: smart.TrendSlopePercent,
-                        volatility: smart.VolatilityPercent,
-                        atr: baseSignal.Atr ?? 0,
-                        confidence: smart.Confidence
-                    );
+            //    if (!exposure.AllowAdd)
+            //    {
+            //        _aiLearning.RecordMarketStateTriggered(
+            //            reason: "EXPOSURE_BLOCK",
+            //            symbol: symbol,
+            //            timeframe: interval.ToString(),
+            //            regime: smart.BaseRegime,
+            //            slope: smart.TrendSlopePercent,
+            //            volatility: smart.VolatilityPercent,
+            //            atr: baseSignal.Atr ?? 0,
+            //            confidence: smart.Confidence
+            //        );
 
-                    _logger.LogWarning(
-                        $"⛔ EXPOSURE BLOCK: {exposure.Reason}");
+            //        _logger.LogWarning(
+            //            $"⛔ EXPOSURE BLOCK: {exposure.Reason}");
 
-                    _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    return null;
-                }
+            //        _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            //        return null;
+            //    }
 
 
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[STRAT][EXPOSURE] Fatal error → signal blocked for safety");
-                return null;
-            }
+            //}
+            //catch (Exception ex)
+            //{
+            //    _logger.LogError(ex, "[STRAT][EXPOSURE] Fatal error → signal blocked for safety");
+            //    return null;
+            //}
 
 
             return baseSignal;
@@ -1656,6 +1698,20 @@ $@"📊 Режим рынка:
             if (baseSignal == null)
                 return FastFailResult.Fail("BASE", "no base pattern");
 
+            if (baseSignal != null)
+            {
+                _aiLearning.RecordMarketStateTriggered(
+                    reason: "MICRO_SIGNAL",
+                    symbol: symbol,
+                    timeframe: tf.ToString(),
+                    regime: smart.BaseRegime,
+                    slope: smart.TrendSlopePercent,
+                    volatility: smart.VolatilityPercent,
+                    atr: baseSignal.Atr ?? 0,
+                    confidence: smart.Confidence
+                );
+            }
+
             return FastFailResult.Ok();
         }
 
@@ -1750,6 +1806,9 @@ $@"📊 Режим рынка:
                 return FastFailResult.Fail("LIQ_GUARD", lg.Reason.ToString());
 
             var after = _liquidityClusterService.FilterAndAdjust(signal);
+            if (after != null)
+                signal = after;
+
 
             if (after == null)
             {
@@ -1765,40 +1824,59 @@ $@"📊 Режим рынка:
             return FastFailResult.Ok();
 
         }
- 
+
 
         private FastFailResult Gate7_Exposure(
-      string symbol,
-      KlineInterval tf,
-      TradeSignal signal,
-      SmartRegimeInfo smart)
+       string symbol,
+       KlineInterval tf,
+       TradeSignal signal,
+       SmartRegimeInfo smart)
         {
-            // 🔥 Gate-aware multiplier по режиму
             var w = _aiLearning.GetGateMultiplier(
                 symbol,
                 smart.BaseRegime,
                 "EXPO");
 
+            var es = _engineState;
+
+            if (es == null || es.EquityUsd <= 0)
+            {
+                return FastFailResult.Ok(); // честный SKIP (нет аккаунт-состояния)
+            }
+
+            // ❗ symbolNotionalUsd здесь ОСОЗНАННО = 0
+            // фактический notional проверяется ниже уровнем (Supervisor / Executor)
+
             var res = CanIncreaseExposure(
-                state: _engineState,
+                state: es,
                 symbol: symbol,
-                symbolNotionalUsd: 0,
-                equityUsd: 0,
-                usedMarginUsd: 0,
-
-                // 🔑 ВАЖНО: multiplier применяется ТОЛЬКО ЗДЕСЬ
+                symbolNotionalUsd: 0m,
+                equityUsd: es.EquityUsd,
+                usedMarginUsd: es.UsedMarginUsd,
                 aiEdgeScore: smart.Confidence * w,
-
                 isSpecialSetup: signal.IsSuperSignal,
                 isHighVolatility: smart.VolatilityPercent >= 0.015m,
-                isLowEquityMode: false);
+                isLowEquityMode: es.EquityUsd < 500m
+            );
 
             if (!res.AllowAdd)
+            {
+                _aiLearning.RecordMarketStateTriggered(
+                    reason: "EXPOSURE_BLOCK",
+                    symbol: symbol,
+                    timeframe: tf.ToString(),
+                    regime: smart.BaseRegime,
+                    slope: smart.TrendSlopePercent,
+                    volatility: smart.VolatilityPercent,
+                    atr: signal.Atr ?? 0,
+                    confidence: smart.Confidence
+                );
+
                 return FastFailResult.Fail("EXPO", res.Reason);
+            }
 
             return FastFailResult.Ok();
-        }
-
+        } 
 
         internal sealed class SignalDecisionTrace
         {

@@ -1,6 +1,7 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using VertexAutoTradeBinance8.Models;
+using Microsoft.Extensions.Configuration;
 
 namespace VertexAutoTradeBinance8.Services
 {
@@ -16,9 +17,8 @@ namespace VertexAutoTradeBinance8.Services
         private readonly object _lock = new();
         public static event Action? ExecutedSignalsChanged;
 
-        private static readonly string FilePath =
-           Path.Combine(AppContext.BaseDirectory, "executed_signals.json");
-        
+        private readonly string _filePath;
+
         private readonly JsonSerializerOptions _jsonOptions = new()
         {
             WriteIndented = true,
@@ -28,9 +28,19 @@ namespace VertexAutoTradeBinance8.Services
             }
         };
 
-        public ExecutedSignalService(ILogger<ExecutedSignalService> logger)
+        public ExecutedSignalService(
+            ILogger<ExecutedSignalService> logger,
+            IConfiguration cfg)
         {
             _logger = logger;
+
+            var root = cfg["SharedData:Root"]
+                ?? throw new InvalidOperationException("SharedData:Root not configured");
+
+            Directory.CreateDirectory(root);
+
+            _filePath = Path.Combine(root, "executed_signals.json");
+
             EnsureFileExists();
         }
 
@@ -38,26 +48,20 @@ namespace VertexAutoTradeBinance8.Services
         // HELPERS
         // ============================================================
 
-        /// <summary>
-        /// Создание файла и директории, если их нет.
-        /// </summary>
         private void EnsureFileExists()
         {
             try
             {
-                var dir = Path.GetDirectoryName(FilePath);
-                if (!string.IsNullOrWhiteSpace(dir))
-                    Directory.CreateDirectory(dir);
-
-                if (!File.Exists(FilePath))
+                if (!File.Exists(_filePath))
                 {
-                    File.WriteAllText(FilePath, "[]");
-                    _logger.LogInformation("[EXEC] executed_signals.json created");
+                    File.WriteAllText(_filePath, "[]");
+                    _logger.LogInformation("[EXEC] executed_signals.json created at {path}", _filePath);
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[EXEC] Failed to ensure executed_signals.json exists");
+                throw;
             }
         }
 
@@ -67,10 +71,10 @@ namespace VertexAutoTradeBinance8.Services
             {
                 EnsureFileExists();
 
-                var json = File.ReadAllText(FilePath);
+                var json = File.ReadAllText(_filePath);
                 if (string.IsNullOrWhiteSpace(json))
                 {
-                    File.WriteAllText(FilePath, "[]");
+                    File.WriteAllText(_filePath, "[]");
                     return new();
                 }
 
@@ -81,12 +85,14 @@ namespace VertexAutoTradeBinance8.Services
             {
                 _logger.LogError(ex, "[EXEC] Failed to load executed_signals.json");
 
-                // Пытаемся пересоздать безопасный файл
                 try
                 {
-                    File.WriteAllText(FilePath, "[]");
+                    File.WriteAllText(_filePath, "[]");
                 }
-                catch { }
+                catch (Exception inner)
+                {
+                    _logger.LogCritical(inner, "[EXEC] Failed to recover executed_signals.json");
+                }
 
                 return new();
             }
@@ -97,11 +103,17 @@ namespace VertexAutoTradeBinance8.Services
             try
             {
                 var json = JsonSerializer.Serialize(list, _jsonOptions);
-                File.WriteAllText(FilePath, json);
+                File.WriteAllText(_filePath, json);
+
+                _logger.LogInformation(
+                    "[EXEC] File saved, records={count}, lastTime={time}",
+                    list.Count,
+                    list.LastOrDefault()?.Time);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[EXEC] Failed to save executed_signals.json");
+                throw;
             }
         }
 
@@ -143,56 +155,66 @@ namespace VertexAutoTradeBinance8.Services
                 var list = LoadInternal();
                 list.Add(record);
                 SaveInternal(list);
-                ExecutedSignalsChanged?.Invoke();
-
-
             }
 
-            _logger.LogInformation("[EXEC][{symbol}] SignalCreated saved (qty={qty}, ntn={ntn:F2})",
+            ExecutedSignalsChanged?.Invoke();
+
+            _logger.LogInformation(
+                "[EXEC][{symbol}] SignalCreated saved (qty={qty}, ntn={ntn:F2})",
                 signal.Symbol, qty, notional);
 
             return record;
         }
 
         public void UpdateStatus(
-            string symbol,
-            DateTime time,
-            TradeExecutionStatus status,
-            decimal? qty = null,
-            decimal? notional = null,
-            decimal? exitPrice = null,
-            decimal? pnl = null,
-            decimal? roi = null)
+         string symbol,
+         DateTime time,
+         TradeExecutionStatus status,
+         decimal? qty = null,
+         decimal? notional = null,
+         decimal? filledEntry = null,   // ⬅️ НОВОЕ
+         decimal? exitPrice = null,
+         decimal? pnl = null,
+         decimal? roi = null)
         {
             lock (_lock)
             {
                 var list = LoadInternal();
 
-                var rec = list
-                    .Where(x => x.Symbol == symbol && x.Time <= time)
-                    .OrderByDescending(x => x.Time)
-                    .FirstOrDefault();
+                //var rec = list
+                //              .Where(x => x.Symbol == symbol && x.Time == time)
+                //              .FirstOrDefault();
+
+                var rec = list.FirstOrDefault(x => x.Symbol == symbol && x.Time == time);
 
                 if (rec == null)
                 {
-                    _logger.LogWarning("[EXEC][{symbol}] UpdateStatus: record not found (status={status})",
-                        symbol, status);
+                    _logger.LogWarning(
+                        "[EXEC][{symbol}] UpdateStatus: record not found (time={time}, status={status})",
+                        symbol, time, status);
                     return;
                 }
 
-                rec.Status = status;
 
+                rec.Status = status;
                 if (qty.HasValue) rec.Qty = qty.Value;
                 if (notional.HasValue) rec.Notional = notional.Value;
+
+                //  фактический Price  вход
+                if (filledEntry.HasValue)
+                    rec.FilledEntryPrice = filledEntry.Value;
+
+
                 if (exitPrice.HasValue) rec.ExitPrice = exitPrice.Value;
                 if (pnl.HasValue) rec.PnL = pnl.Value;
                 if (roi.HasValue) rec.RoiPercent = roi.Value;
 
                 SaveInternal(list);
-                ExecutedSignalsChanged?.Invoke();
-
-                _logger.LogInformation("[EXEC][{symbol}] Status updated → {status}", symbol, status);
             }
+
+            ExecutedSignalsChanged?.Invoke();
+
+            _logger.LogInformation("[EXEC][{symbol}] Status updated → {status}", symbol, status);
         }
 
         public List<ExecutedSignalRecord> GetAll()
@@ -206,27 +228,26 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         public void UpdateProtectionComputed(
-    string symbol,
-    DateTime time,
-    decimal stopLoss,
-    decimal takeProfit,
-    decimal atr,
-    string tags)
+            string symbol,
+            DateTime time,
+            decimal stopLoss,
+            decimal takeProfit,
+            decimal atr,
+            string tags)
         {
             lock (_lock)
             {
                 var list = LoadInternal();
-
-                var rec = list
-                    .Where(x => x.Symbol == symbol && x.Time <= time)
-                    .OrderByDescending(x => x.Time)
-                    .FirstOrDefault();
-
+                var rec = list.FirstOrDefault(x =>
+                    x.Symbol == symbol &&
+                    x.Time == time   // ✅ строгое совпадение
+                ); 
+ 
                 if (rec == null)
                 {
                     _logger.LogWarning(
-                        "[EXEC][{symbol}] ProtectionComputed: record not found",
-                        symbol);
+                        "[EXEC][{symbol}] ProtectionComputed: record not found (time={time})",
+                        symbol, time);
                     return;
                 }
 
@@ -244,13 +265,13 @@ namespace VertexAutoTradeBinance8.Services
                         : $"{rec.Tags} | {tags}";
 
                 SaveInternal(list);
-                ExecutedSignalsChanged?.Invoke();
-
-                _logger.LogInformation(
-                    "[EXEC][{symbol}] ProtectionComputed saved → SL={sl}, TP={tp}",
-                    symbol, stopLoss, takeProfit);
             }
-        }
 
+            ExecutedSignalsChanged?.Invoke();
+
+            _logger.LogInformation(
+                "[EXEC][{symbol}] ProtectionComputed saved → SL={sl}, TP={tp}",
+                symbol, stopLoss, takeProfit);
+        }
     }
 }

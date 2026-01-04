@@ -25,14 +25,29 @@ public class EngineStateService
             if (!File.Exists(FilePath))
                 return null;
 
-            var json = File.ReadAllText(FilePath);
+            using var fs = new FileStream(
+                FilePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite);   // 🔥 КЛЮЧЕВОЕ
 
-            var state = JsonSerializer.Deserialize<EngineStateModel>(json, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            });
+            using var sr = new StreamReader(fs);
+            var json = sr.ReadToEnd();
 
-            return state;
+            if (string.IsNullOrWhiteSpace(json))
+                return null;
+
+            return JsonSerializer.Deserialize<EngineStateModel>(
+                json,
+                new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+        }
+        catch (IOException)
+        {
+            // ⚠️ НЕ ошибка — engine сейчас пишет
+            return null;
         }
         catch (Exception ex)
         {
@@ -40,4 +55,5 @@ public class EngineStateService
             return null;
         }
     }
+
 }

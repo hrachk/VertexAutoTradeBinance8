@@ -121,7 +121,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly object _lock = new();
 
         private static readonly string FilePath =
-      Path.Combine(AppContext.BaseDirectory, "ai-models/ai_learning.json");
+            Path.Combine(AppContext.BaseDirectory, "ai-models/ai_learning.json");
 
         private static readonly string BackupPath =
             Path.Combine(AppContext.BaseDirectory, "ai-models/ai_learning_backup.json");
@@ -167,7 +167,17 @@ namespace VertexAutoTradeBinance8.Services
         private readonly Dictionary<string, DecisionTraceAggregate> _decisionGates
             = new(StringComparer.OrdinalIgnoreCase);
 
+        private const double PnlHalfLifeDays = 30.0;
+        // === PnL HALF-LIFE CONFIG ===
+        private static readonly TimeSpan PnlHalfLife = TimeSpan.FromDays(30); // 30d = 0.5
+        private static readonly decimal MinPnlWeight = 0.05m;
 
+        // каждые N минут уверенность слегка затухает
+        private readonly TimeSpan ConfidenceHalfLife = TimeSpan.FromHours(45);
+
+        // минимальная уверенность (чтобы AI не "ослеп")
+        private const decimal MinConfidenceFloor = 0.22m;
+      
         public AiSelfLearningService(ILogger<AiSelfLearningService> logger )
         {
             
@@ -192,7 +202,8 @@ namespace VertexAutoTradeBinance8.Services
 
             // 1) СНАЧАЛА ГРУЗИМ СТАРОЕ СОСТОЯНИЕ
             Load();
-           
+            // 🔥 ГАРАНТИЯ: хотя бы один валидный snapshot после старта
+            ForceSnapshot();
 
             /*
             // 2) Потом подгружаем missed_trades.json и учимся на них БЕЗ снапшотов
@@ -298,6 +309,7 @@ namespace VertexAutoTradeBinance8.Services
             public decimal Entry { get; set; }
             public decimal Exit { get; set; }
             public decimal Pnl { get; set; }
+            public decimal PnlPct { get; set; }
             public MarketRegime Regime { get; set; }
             public DateTime Time { get; set; }
         }
@@ -360,7 +372,12 @@ namespace VertexAutoTradeBinance8.Services
 
                     profile.AdaptiveBias.TryGetValue(g.Gate, out var cur);
 
-                    var target = strict; // 0.85 / 1.10 / 1.00
+                
+                    var decayedStrict = ApplyConfidenceDecay(
+                                        strict,
+                                        DateTime.UtcNow.AddMinutes(-30)); // gates живут дольше
+
+                    var target = decayedStrict; // 0.85 / 1.10 / 1.00
                     var updated = cur == 0
                         ? target
                         : (cur * 0.9m + target * 0.1m);
@@ -412,7 +429,7 @@ namespace VertexAutoTradeBinance8.Services
     decimal volatility,
     decimal atr,
     decimal confidence,
-    bool skipSnapshot = true   // ← БЫЛО false / неявно
+    bool skipSnapshot = false  
 )
         {
             lock (_lock)
@@ -439,8 +456,8 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // ❗ По умолчанию как раньше, но можно отключить
-          //  if (!skipSnapshot)
-              //  TrySnapshot();
+            if (!skipSnapshot)
+              TrySnapshot();
         }
 
         // 3) BACKGROUND MARKET LEARNING – глобальный 30s snapshot по режиму
@@ -458,16 +475,21 @@ namespace VertexAutoTradeBinance8.Services
 
             _lastHybridSnapshot = DateTime.UtcNow;
 
+            // 🔥 hybrid snapshot — это фон, но он ВАЖЕН
+            Save(force: true);
+            _lastSnapshot = DateTime.UtcNow;
+
             RecordMarketStateTriggered(
-                reason: "PERIODIC_30s",
-                symbol: symbol,
-                timeframe: timeframe,
-                regime: regime,
-                slope: slope,
-                volatility: volatility,
-                atr: atr,
-                confidence: confidence
-            );
+    reason: "PERIODIC_30s",
+    symbol: symbol,
+    timeframe: timeframe,
+    regime: regime,
+    slope: slope,
+    volatility: volatility,
+    atr: atr,
+    confidence: confidence,
+    skipSnapshot: false   // ✅ ВАЖНО
+);
         }
 
 
@@ -475,13 +497,13 @@ namespace VertexAutoTradeBinance8.Services
         // BASE MARKET STATE (SmartRegimeService → StrategyEngine)
         // =====================================================================
         public void RecordMarketState(
-            string symbol,
-            string timeframe,
-            MarketRegime regime,
-            decimal trendSlopePercent,
-            decimal volatilityPercent,
-            decimal atr,
-            decimal confidence)
+         string symbol,
+         string timeframe,
+         MarketRegime regime,
+         decimal trendSlopePercent,
+         decimal volatilityPercent,
+         decimal atr,
+         decimal confidence)
         {
             lock (_lock)
             {
@@ -497,19 +519,34 @@ namespace VertexAutoTradeBinance8.Services
                     Time = DateTime.UtcNow,
                     Reason = "BASE_REGIME"
                 });
-
                 if (_marketStates.Count > 5000)
                     _marketStates.RemoveRange(0, 2500);
+
+                _logger.LogInformation(
+                "[HYBRID] MarketState tick {symbol} {tf} {regime}",
+                symbol, timeframe, regime);
             }
+
+            // 🔥 ВАЖНО: именно здесь
+            TryHybridPeriodicSnapshot(
+                symbol,
+                timeframe,
+                regime,
+                trendSlopePercent,
+                volatilityPercent,
+                atr,
+                confidence
+            );
         }
 
+        public decimal PnlPct { get; set; }
         // =====================================================================
         // 2) TRADE ENTRY (вызывается из PositionSupervisor / TradeResultMonitor)
         // =====================================================================
         public void RecordTrade(string symbol, SignalSide side, decimal entry, decimal exit, MarketRegime regime)
         {
             decimal pnl = (side == SignalSide.Buy) ? exit - entry : entry - exit;
-
+            decimal pnlPct = side == SignalSide.Buy    ? (exit - entry) / entry    : (entry - exit) / entry;
             lock (_lock)
             {
                 _tradeHistory.Add(new TradeHistoryEntry
@@ -520,6 +557,7 @@ namespace VertexAutoTradeBinance8.Services
                     Exit = exit,
                     Regime = regime,
                     Pnl = pnl,
+                    //PnlPct = pnlPct,    // NEW  TODO: realize all 
                     Time = DateTime.UtcNow
                 });
 
@@ -529,9 +567,11 @@ namespace VertexAutoTradeBinance8.Services
 
             UpdateStats(symbol, regime, pnl);
             Save(force: true);
-            TrySnapshot();  // Обновление статистики по сделке
+            _lastSnapshot = DateTime.UtcNow;
 
-            Save(force: true);  // Принудительное сохранение после каждой сделки
+          //  TrySnapshot();  // Обновление статистики по сделке
+
+          //  Save(force: true);  // Принудительное сохранение после каждой сделки
             /*
             bool win = side == SignalSide.Buy ? exit > entry : exit < entry;
             lock (_lock)
@@ -542,8 +582,10 @@ namespace VertexAutoTradeBinance8.Services
                     rs.Wins++;  // Учитывается выигрышная сделка
             }*/
 
-            TrySnapshot();  // Сохранение снимка данных
+          //  TrySnapshot();  // Сохранение снимка данных
         }
+
+
 
         private void UpdateStats(string symbol, MarketRegime regime, decimal pnl)
         {
@@ -587,6 +629,12 @@ namespace VertexAutoTradeBinance8.Services
             decimal absPnl = Math.Abs(pnl);
             if (absPnl <= 0)
                 return;
+
+
+            // === HALF-LIFE WEIGHTING ===
+            var halfLifeWeight = ApplyHalfLife(DateTime.UtcNow);
+            absPnl *= halfLifeWeight;
+
 
             const decimal K = 25m;
             const decimal minWeight = 0.3m;
@@ -642,8 +690,12 @@ namespace VertexAutoTradeBinance8.Services
             if (string.IsNullOrEmpty(symbol)) 
                 return 1.00m; 
             if (!_stats.TryGetValue(symbol, out var regimes)) 
-                return 1.00m; if (!regimes.TryGetValue(regime, out var s)) 
-                return 1.00m; return s?.RiskWeight ?? 1.00m;
+                return 1.00m; 
+            if (!regimes.TryGetValue(regime, out var s)) 
+                 return 1.00m;
+            
+            //return s?.RiskWeight ?? 1.00m;
+            return Math.Clamp(s?.RiskWeight ?? 1.00m, 0.70m, 1.30m);
         }
 
         // =====================================================================
@@ -674,58 +726,29 @@ namespace VertexAutoTradeBinance8.Services
             decimal avgVol = recent.Average(x => x.VolatilityPercent);
 
             int dir = avgSlope > 0.001m ? 1 : avgSlope < -0.001m ? -1 : 0;
-            decimal confidence = Math.Clamp(Math.Abs(avgSlope) * 25m + avgConf, 0.05m, 0.85m);
+       
+            decimal rawConfidence =
+            Math.Clamp(
+            Math.Abs(avgSlope) * 25m + avgConf,
+            0.05m,
+            0.85m);
+
+            decimal confidence = ApplyConfidenceDecay(
+            rawConfidence,
+            recent[0].Time   // последнее состояние рынка
+            );
+
 
             if (avgVol < 0.005m)
                 confidence += 0.10m;
 
-            confidence = Math.Clamp(confidence, 0.05m, 0.85m);
+            confidence = Math.Min(confidence, 0.85m);
 
             decimal rrBias = dir == 0 ? 1.00m : 0.90m;
 
             return new AiTrendPrediction(dir, confidence, rrBias);
         }
-
-
-        // =====================================================================
-        // EXPORT STATE (для TradingWorker v6 / AiModelSnapshotService)
-        // =====================================================================
-        /* public AiLearningSnapshot ExportState()
-         {
-             lock (_lock)
-             {
-                 var snap = new AiLearningSnapshot
-                 {
-                     CreatedAtUtc = DateTime.UtcNow
-                 };
-
-                 foreach (var (symbol, regimes) in _stats)
-                 {
-                     var symDto = new AiLearningSnapshot.AiSymbolStatsDto
-                     {
-                         Symbol = symbol
-                     };
-
-                     foreach (var (regime, st) in regimes)
-                     {
-                         symDto.Regimes.Add(new AiLearningSnapshot.AiRegimeStatsDto
-                         {
-                             Regime = regime,
-                             Trades = st.Count,
-                             Wins = st.Wins,
-                             SumRr = st.AvgPnl * st.Count,
-                             MaxRr = 0,
-                             MinRr = 0,
-                             LastUpdateUtc = DateTime.UtcNow
-                         });
-                     }
-
-                     snap.Symbols.Add(symDto);
-                 }
-
-                 return snap;
-             }
-         }*/
+         
         public AiLearningSnapshot ExportState()
         {
             lock (_lock)
@@ -799,7 +822,7 @@ namespace VertexAutoTradeBinance8.Services
                     // НЕ пропускаем при force=true
                     if (!force)
                     {
-                        if (_stats.Count == 0 && _tradeHistory.Count == 0 && _marketStates.Count == 0)
+                        if (_stats.Count == 0 && _tradeHistory.Count == 0)
                         {
                             _logger.LogWarning("[AI] Snapshot skipped: empty state");
                             return;
@@ -1100,6 +1123,40 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
+        // ---------------------------------------------------------------------
+        // AI META: WinRate (for SymbolRegistry dynamic cap)
+        // ---------------------------------------------------------------------
+        public decimal GetWinRate(string side, int lastN = 30, int minTrades = 10)
+        {
+            if (lastN <= 0) lastN = 30;
+
+            SignalSide ss;
+            if (string.Equals(side, "LONG", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(side, "BUY", StringComparison.OrdinalIgnoreCase))
+                ss = SignalSide.Buy;
+            else if (string.Equals(side, "SHORT", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(side, "SELL", StringComparison.OrdinalIgnoreCase))
+                ss = SignalSide.Sell;
+            else
+                return 0.55m; // unknown side → neutral
+
+            lock (_lock)
+            {
+                var trades = _tradeHistory
+                    .Where(t => t.Side == ss)
+                    .OrderByDescending(t => t.Time)
+                    .Take(lastN)
+                    .ToList();
+
+                if (trades.Count < minTrades)
+                    return 0.55m; // neutral bootstrap
+
+                var wins = trades.Count(t => t.Pnl > 0);
+                return (decimal)wins / trades.Count;
+            }
+        }
+
+
         private RegimeStats GetOrCreateRegimeStats(string symbol, MarketRegime regime)
         {
             if (!_stats.TryGetValue(symbol, out var regimes))
@@ -1170,6 +1227,109 @@ namespace VertexAutoTradeBinance8.Services
             // snapshot разрешён — это результат обучения
             TrySnapshot();
 
+        }
+
+        public decimal GetRecentPnL(
+        string symbol,
+        SignalSide side,
+        int lookback = 10)
+            {
+            lock (_lock)
+            {
+                var now = DateTime.UtcNow;
+
+                var trades = _tradeHistory
+                    .Where(t =>
+                        t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase) &&
+                        t.Side == side)
+                    .OrderByDescending(t => t.Time)
+                    .Take(lookback)
+                    .ToList();
+
+                if (trades.Count == 0)
+                    return 0m;
+
+                decimal sum = 0m;
+
+                foreach (var t in trades)
+                {
+                    var ageDays = (now - t.Time).TotalDays;
+                    var decay = Math.Exp(-Math.Log(2) * ageDays / PnlHalfLifeDays);
+
+                    sum += t.Pnl * (decimal)decay;
+                }
+
+                return sum;
+            }
+        }
+
+        public decimal GetSymbolScore(string symbol, SignalSide side)
+        {
+            lock (_lock)
+            {
+                var now = DateTime.UtcNow;
+
+                var trades = _tradeHistory
+                    .Where(t =>
+                        t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase) &&
+                        t.Side == side)
+                    .OrderByDescending(t => t.Time)
+                    .Take(20)
+                    .ToList();
+
+                if (trades.Count == 0)
+                    return 0m;
+
+                decimal score = 0m;
+
+                foreach (var t in trades)
+                {
+                    var ageDays = (now - t.Time).TotalDays;
+                    var decay = Math.Exp(-Math.Log(2) * ageDays / PnlHalfLifeDays);
+
+                    score += t.Pnl * (decimal)decay;
+                }
+
+                return score / trades.Count;
+            }
+        }
+         
+
+        private decimal ApplyHalfLife(DateTime tradeTime)
+        {
+            var age = DateTime.UtcNow - tradeTime;
+            if (age <= TimeSpan.Zero)
+                return 1.0m;
+
+            // exp decay: weight = 0.5 ^ (age / halfLife)
+            var decay =
+                Math.Pow(
+                    0.5,
+                    age.TotalSeconds / PnlHalfLife.TotalSeconds
+                );
+
+            return Math.Max((decimal)decay, MinPnlWeight);
+        }
+
+      
+        private const double Ln2 = 0.6931471805599453;
+
+        private decimal ApplyConfidenceDecay(
+            decimal confidence,
+            DateTime lastUpdateUtc)
+        {
+            var dtMinutes =
+                (DateTime.UtcNow - lastUpdateUtc).TotalMinutes;
+
+            var halfLifeMinutes = 45.0;
+
+            var decay =
+                Math.Exp(-dtMinutes * Ln2 / halfLifeMinutes);
+
+            var adjusted =
+                confidence * (decimal)decay;
+
+            return Math.Max(0.22m, adjusted);
         }
 
     }

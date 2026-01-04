@@ -1,0 +1,194 @@
+﻿using System.Collections.Concurrent;
+using System.Text;
+using System.Text.Json;
+
+namespace VertexAutoTradeBinance8.Services.MarketState
+{
+    public sealed class MarketStateService
+    {
+        private readonly ILogger<MarketStateService> _logger;
+        private readonly string _path;
+
+        private readonly ConcurrentDictionary<string, MarketStateSnapshot> _states = new();
+
+        public bool IsRestored { get; private set; }
+
+        private readonly SemaphoreSlim _persistGate = new(1, 1);
+        private DateTime _lastPersistUtc = DateTime.MinValue;
+        private static readonly TimeSpan PersistInterval = TimeSpan.FromSeconds(5);
+
+        private readonly object _lock = new();
+        private volatile bool _restoreInProgress;
+
+        // hash to detect changes
+        private int _lastSnapshotHash;
+        public event Action? OnRestored;
+
+        public MarketStateService(
+            ILogger<MarketStateService> logger,
+            IConfiguration cfg)
+        {
+            _logger = logger;
+
+            var root = cfg["SharedData:Root"]
+                ?? throw new InvalidOperationException("SharedData:Root not configured");
+
+            Directory.CreateDirectory(root);
+            _path = Path.Combine(root, "market_state_snapshot.json");
+
+            try
+            {
+                if (!File.Exists(_path))
+                {
+                    File.WriteAllText(_path, "[]");
+                    _logger.LogInformation("[STATE] snapshot created at {path}", _path);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[STATE] init failed");
+            }
+        }
+
+        private static string Key(string symbol, string tf)
+            => $"{symbol}:{tf}";
+
+        // =====================================================
+        // RESTORE (SAFE)
+        // =====================================================
+        public void Restore()
+        {
+            try
+            {
+                _restoreInProgress = true;
+
+                lock (_lock)
+                {
+                    if (!File.Exists(_path))
+                    {
+                        _logger.LogWarning("[STATE] snapshot not found → cold start");
+                        return;
+                    }
+
+                    var json = File.ReadAllText(_path);
+                    if (string.IsNullOrWhiteSpace(json))
+                        return;
+
+                    var list = JsonSerializer.Deserialize<List<MarketStateSnapshot>>(json);
+                    if (list == null || list.Count == 0)
+                        return;
+
+                    _states.Clear();
+
+                    foreach (var s in list)
+                        _states[Key(s.Symbol, s.Timeframe)] = s;
+
+                    IsRestored = true;
+                    _lastSnapshotHash = ComputeHash(list);
+
+                    _logger.LogInformation(
+                        "[STATE] snapshot restored ({count} entries)",
+                        _states.Count);
+                    // 🔥 SIGNAL UP
+                    OnRestored?.Invoke();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[STATE] snapshot restore failed");
+            }
+            finally
+            {
+                _restoreInProgress = false;
+            }
+        }
+
+        // =====================================================
+        // UPDATE (WS CLOSE SAFE)
+        // =====================================================
+        public void Update(MarketStateSnapshot snap)
+        {
+            _states[Key(snap.Symbol, snap.Timeframe)] = snap;
+
+            // fire-and-forget, non-blocking
+            _ = PersistAsync();
+        }
+
+        // =====================================================
+        // ASYNC PERSIST (THROTTLED + CHANGE AWARE)
+        // =====================================================
+        private async Task PersistAsync()
+        {
+            if (_restoreInProgress)
+                return;
+
+            if (DateTime.UtcNow - _lastPersistUtc < PersistInterval)
+                return;
+
+            if (!await _persistGate.WaitAsync(0))
+                return;
+
+            try
+            {
+                List<MarketStateSnapshot> snapshot;
+                lock (_lock)
+                {
+                    snapshot = _states.Values.ToList();
+                }
+
+                if (snapshot.Count == 0)
+                    return;
+
+                var hash = ComputeHash(snapshot);
+                if (hash == _lastSnapshotHash)
+                    return; // no real changes
+
+                var json = JsonSerializer.Serialize(
+                    snapshot,
+                    new JsonSerializerOptions { WriteIndented = true });
+
+                var tmp = _path + ".tmp";
+                await File.WriteAllTextAsync(tmp, json, Encoding.UTF8);
+                File.Move(tmp, _path, overwrite: true);
+
+                _lastSnapshotHash = hash;
+                _lastPersistUtc = DateTime.UtcNow;
+
+                _logger.LogDebug(
+                    "[STATE] snapshot persisted ({count} entries)",
+                    snapshot.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[STATE] snapshot persist failed");
+            }
+            finally
+            {
+                _persistGate.Release();
+            }
+        }
+
+        private static int ComputeHash(List<MarketStateSnapshot> list)
+        {
+            unchecked
+            {
+                int hash = 17;
+                foreach (var s in list)
+                {
+                    hash = hash * 23 + s.Symbol.GetHashCode();
+                    hash = hash * 23 + s.Timeframe.GetHashCode();
+                    hash = hash * 23 + s.Regime.GetHashCode();
+                }
+                return hash;
+            }
+        }
+
+        public bool TryGet(
+            string symbol,
+            string tf,
+            out MarketStateSnapshot snap)
+        {
+            return _states.TryGetValue(Key(symbol, tf), out snap!);
+        }
+    }
+}

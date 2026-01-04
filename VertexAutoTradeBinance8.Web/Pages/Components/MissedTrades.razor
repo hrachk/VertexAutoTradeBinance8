@@ -1,5 +1,6 @@
 ﻿@page "/missed-trades"
 
+
 @using VertexAutoTradeBinance8.Web.Services
 @using VertexAutoTradeBinance8.Web.Models
 @inject MissedTradeFileService MissedService
@@ -330,22 +331,27 @@
     }
     string SmartHint(MissedTradeRecord r)
     {
-        if (r.Regime.Contains("StrongTrend"))
-            return "StrongTrend: Рынок находится в мощном тренде. Такие режимы часто дают хорошие входы.";
+        if (r.Regime == VertexAutoTradeBinance8.Models.MarketRegime.StrongUpTrend)
+            return "Сильный тренд вверх, импульсный.: Рынок находится в мощном тренде. Такие режимы часто дают хорошие входы.";
 
-        if (r.Regime.Contains("Squeeze"))
+
+        if (r.Regime == VertexAutoTradeBinance8.Models.MarketRegime.StrongDownTrend)
+            return "StrongDownTrend: Сильный тренд вниз, импульсный.:";
+
+
+        if (r.Regime == VertexAutoTradeBinance8.Models.MarketRegime.Squeeze)
             return "Squeeze: Цена сжата. Возможно резкое движение (breakout).";
 
-        if (r.Regime.Contains("Chop"))
+        if (r.Regime == VertexAutoTradeBinance8.Models.MarketRegime.Unknown)
             return "Chop: Хаос. Рынок пилит. Входы опасны.";
 
-        if (r.Regime.Contains("Range"))
-            return "Range: Флэт. Трендов нет, движения слабые.";
+        if (r.Regime == VertexAutoTradeBinance8.Models.MarketRegime.Range)
+            return "Range: движение внутри боковика./Флэт. Трендов нет, движения слабые.";
 
         return "AI: режим рынка неопределён.";
     }
 
-  
+
     string AiHint(int score)
     {
         if (score >= 80)
@@ -375,13 +381,14 @@
         };
     }
 
-    string SmartClass(string t)
+    string SmartClass(VertexAutoTradeBinance8.Models.MarketRegime Regime)
     {
-        if (t.Contains("StrongTrend")) return "smart-strong";
-        if (t.Contains("Squeeze")) return "smart-squeeze";
-        if (t.Contains("Chop")) return "smart-chop";
-        return "smart-strong";
+        // if (t.Contains("StrongTrend")) return "smart-strong";
+        // if (t.Contains("Squeeze")) return "smart-squeeze";
+        // if (t.Contains("Chop")) return "smart-chop";
+        return $"{Regime}";
     }
+      //string RegimeToString() => $"{Regime}";
 
     int LiquidityBars(MissedTradeRecord r)
     {

@@ -7,16 +7,19 @@ namespace VertexAutoTradeBinance8.Services
 {
     /// <summary>
     /// Профессиональный сервис снапшотов движка.
-    /// Автоматически создаёт папки, пишет JSON, делает бэкап,
-    /// гарантирует 100% работоспособность даже при ошибках.
-    /// Совместим с UI и Real-Time обновлением.
+    /// Thread-safe, async-safe, без file-lock race.
     /// </summary>
     public class EngineStateSnapshotService
     {
         private readonly ILogger<EngineStateSnapshotService> _logger;
         private readonly string _engineStatePath;
         private readonly string _backupPath;
+
+        // 🔒 ЕДИНСТВЕННЫЙ writer gate (критично)
+        private static readonly SemaphoreSlim _saveGate = new(1, 1);
+
         public EngineState State { get; } = new EngineState();
+
         private readonly JsonSerializerOptions _jsonOptions = new()
         {
             WriteIndented = true,
@@ -24,12 +27,11 @@ namespace VertexAutoTradeBinance8.Services
         };
 
         public EngineStateSnapshotService(
-     ILogger<EngineStateSnapshotService> logger,
-     IOptions<WebPathsOptions> paths)
+            ILogger<EngineStateSnapshotService> logger,
+            IOptions<WebPathsOptions> paths)
         {
             _logger = logger;
-            //  _path = options.Value.SnapshotPath ?? Path.Combine(AppContext.BaseDirectory, "engine_state.json");
-            //_engineStatePath = Path.Combine(AppContext.BaseDirectory, "engine_state.json");
+
             var baseDir = AppContext.BaseDirectory;
 
             _engineStatePath = Path.Combine(
@@ -43,7 +45,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // ===============================================================
-        // Создание директории, если её нет
+        // Directory ensure
         // ===============================================================
         private void EnsureDirectoryExists()
         {
@@ -63,39 +65,72 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // ===============================================================
-        // Основной метод записи снапшота
+        // PUBLIC API (sync wrapper, чтобы не ломать вызовы)
         // ===============================================================
         public void Save(EngineState state)
         {
+            _ = SaveAsync(state);
+        }
+
+        // ===============================================================
+        // REAL SAVE (async-safe, non-blocking)
+        // ===============================================================
+        public async Task SaveAsync(EngineState state)
+        {
+            if (!await _saveGate.WaitAsync(0))
+                return;
+
             try
             {
-                // 1 — сериализация
                 var json = JsonSerializer.Serialize(state, _jsonOptions);
 
-                // 2 — резервная копия
+                var dir = Path.GetDirectoryName(_engineStatePath);
+                if (!string.IsNullOrWhiteSpace(dir))
+                    Directory.CreateDirectory(dir);
+
+                var tmpPath = _engineStatePath + ".tmp";
+
+                // 1️⃣ пишем во временный файл (НЕ блокирует основной)
+                await using (var fs = new FileStream(
+                    tmpPath,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None,
+                    4096,
+                    useAsync: true))
+                await using (var sw = new StreamWriter(fs))
+                {
+                    await sw.WriteAsync(json);
+                }
+
+                // 2️⃣ atomic replace (Windows-safe)
+                File.Copy(tmpPath, _engineStatePath, overwrite: true);
+                File.Delete(tmpPath);
+
+                // 3️⃣ backup best-effort
                 try
                 {
-                    if (File.Exists(_engineStatePath))
-                        File.Copy(_engineStatePath, _backupPath, overwrite: true);
+                    File.Copy(_engineStatePath, _backupPath, overwrite: true);
                 }
-                catch (Exception backupEx)
-                {
-                    _logger.LogWarning(backupEx, "[ENGINE STATE] Backup failed, continuing...");
-                }
+                catch { }
 
-                // 3 — запись основного файла
-                File.WriteAllText(_engineStatePath, json);
-
-                _logger.LogInformation("[ENGINE STATE] Snapshot saved → {path}", _engineStatePath);
+                _logger.LogDebug(
+                    "[ENGINE STATE] Snapshot saved ({bytes} bytes)",
+                    json.Length);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[ENGINE STATE] Snapshot SAVE ERROR");
             }
+            finally
+            {
+                _saveGate.Release();
+            }
         }
 
+
         // ===============================================================
-        // Чтение снапшота (для UI)
+        // LOAD (UI / read-only)
         // ===============================================================
         public EngineState? Load()
         {
@@ -104,8 +139,13 @@ namespace VertexAutoTradeBinance8.Services
                 if (!File.Exists(_engineStatePath))
                     return null;
 
-                var json = File.ReadAllText(_engineStatePath);
-                return JsonSerializer.Deserialize<EngineState>(json, _jsonOptions);
+                using var fs = new FileStream(
+                    _engineStatePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite); // 🔥 КЛЮЧ
+
+                return JsonSerializer.Deserialize<EngineState>(fs, _jsonOptions);
             }
             catch (Exception ex)
             {
@@ -113,5 +153,6 @@ namespace VertexAutoTradeBinance8.Services
                 return null;
             }
         }
+
     }
 }

@@ -36,7 +36,7 @@ namespace VertexAutoTradeBinance8.Services.Ws
         // =============================================================
         public async Task StartAsync(CancellationToken ct = default)
         {
-            using var rest = _factory.TryCreateRestClient();
+            using var rest = _factory.CreateRestClient();
             if (rest == null)
             {
                 _logger.LogWarning("[USERDATA] REST disabled");

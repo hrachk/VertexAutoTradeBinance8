@@ -9,6 +9,7 @@ using VertexAutoTradeBinance8.Services.Bootstrap;
 using VertexAutoTradeBinance8.Services.DecisionTrace;
 using VertexAutoTradeBinance8.Services.Engine;
 using VertexAutoTradeBinance8.Services.Interface;
+using VertexAutoTradeBinance8.Services.MarketState;
 using VertexAutoTradeBinance8.Services.Recovery;
 using VertexAutoTradeBinance8.Services.State;
 using VertexAutoTradeBinance8.Services.Ws;
@@ -101,7 +102,14 @@ public class Program
 
                     services.AddSingleton<WsKlineSubscriber>();
                     services.AddSingleton<MarketDataFacade>();
+                    services.AddSingleton<MarketStateService>();
                     services.AddSingleton<MarketDataService>();
+
+                    services.AddSingleton<SymbolLiquidityScanner>();
+                    services.AddSingleton<SymbolUniverseBuilder>();
+
+                    services.AddSingleton<UniverseDryRunFileLogger>();
+
                     services.AddSingleton<RiskManager>();
                     services.AddSingleton<OrderExecutor>();
                     services.AddSingleton<AiCorrelationService>();

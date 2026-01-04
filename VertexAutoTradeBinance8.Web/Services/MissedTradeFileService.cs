@@ -14,25 +14,56 @@ namespace VertexAutoTradeBinance8.Web.Services
             AllowTrailingCommas = true
         };
 
-        public MissedTradeFileService(IWebHostEnvironment env)
+        public MissedTradeFileService(IWebHostEnvironment env, IConfiguration cfg)
         {
-          _filePath = Path.Combine( AppContext.BaseDirectory, "missed_trades.json");
-            // _filePath = @"F:\VERTEX TRADING SYSTEM\TradingAI\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\missed_trades.json";
+          //_filePath = Path.Combine( AppContext.BaseDirectory, "missed_trades.json");
+            var root = cfg["SharedData:Root"]
+      ?? throw new InvalidOperationException("SharedData:Root not configured");
 
+            _filePath = Path.Combine( root, "missed_trades.json");
         }
+        //public async Task<List<MissedTradeRecord>> LoadAsync()
+        //{
+        //    if (!File.Exists(_filePath))
+        //        return new List<MissedTradeRecord>();
+
+        //    var json = await File.ReadAllTextAsync(_filePath);
+        //    if (string.IsNullOrWhiteSpace(json))
+        //        return new List<MissedTradeRecord>();
+
+        //    return JsonSerializer.Deserialize<List<MissedTradeRecord>>(json,
+        //        new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+        //        ?? new List<MissedTradeRecord>();
+        //}
+
         public async Task<List<MissedTradeRecord>> LoadAsync()
         {
             if (!File.Exists(_filePath))
-                return new List<MissedTradeRecord>();
+                return new();
 
-            var json = await File.ReadAllTextAsync(_filePath);
+            using var fs = new FileStream(
+                _filePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite); // 🔥 важно, ты уже сталкивался
+
+            using var sr = new StreamReader(fs);
+            var json = await sr.ReadToEndAsync();
+
             if (string.IsNullOrWhiteSpace(json))
-                return new List<MissedTradeRecord>();
+                return new();
 
-            return JsonSerializer.Deserialize<List<MissedTradeRecord>>(json,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-                ?? new List<MissedTradeRecord>();
+            try
+            {
+                return JsonSerializer.Deserialize<List<MissedTradeRecord>>(json, JsonOptions)
+                       ?? new();
+            }
+            catch
+            {
+                return new(); // временно битый файл — UI не падает
+            }
         }
+
         public List<MissedTradeRecord> Load()
         {
             if (!File.Exists(_filePath))

@@ -1,5 +1,6 @@
 ﻿using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
+using System.Collections.Concurrent;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -23,7 +24,7 @@ namespace VertexAutoTradeBinance8.Services
 
         // Порог "почти без тренда" — для флета/пилы.
         private const decimal FlatSlopePct = 0.0015m; // 0.15%
-
+        private readonly ConcurrentDictionary<string, MarketRegime> _regimes = new();
         public AiMarketRegimeService(ILogger<AiMarketRegimeService> logger)
         {
             _logger = logger;
@@ -181,6 +182,19 @@ namespace VertexAutoTradeBinance8.Services
                 result);
 
             return result;
+        }
+
+        public bool IsTradable(string symbol)
+        {
+            // если пока нет данных по режиму — НЕ БЛОКИРУЕМ
+            if (!_regimes.TryGetValue(symbol, out var regime))
+                return true;
+
+            return regime switch
+            {
+                MarketRegime.VolatileChop => false, // ❌ пила / хаос
+                _ => true
+            };
         }
 
         // Локальный ATR, чтобы не тянуть MarketDataService

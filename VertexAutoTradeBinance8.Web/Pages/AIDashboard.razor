@@ -2,8 +2,7 @@
 
 @using VertexAutoTradeBinance8.Models
 @using VertexAutoTradeBinance8.Services
-@using VertexAutoTradeBinance8.Web.Services
-@inject AiLearningFileService FileLoader
+@inject AiRuntimeDataProvider Runtime
 
 @implements IDisposable
 
@@ -11,243 +10,280 @@
 
     <h2 class="text-3xl font-bold mb-6">AI Dashboard</h2>
 
-    @if (Stats == null)
+    @if (State == null)
     {
-        <div class="text-red-400 text-lg">⚠ JSON не загружен</div>
+        <div class="text-red-400">⚠ Runtime не загружен</div>
     }
     else
     {
-        <!-- SUMMARY GRID -->
+        var Stats = State.Snapshot;
+        var MarketStates = State.MarketStates;
+        var Trades = State.Trades;
+
+        <!-- ================= SUMMARY ================= -->
         <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-
             @SummaryCard("Символов", Stats.Meta.Symbols.ToString())
-            @SummaryCard("MarketStates", Stats.Meta.MarketStates.ToString())
+            @SummaryCard("Market States", Stats.Meta.MarketStates.ToString())
             @SummaryCard("Trades", Stats.Meta.Trades.ToString())
-
-            @SnapshotAgeCard()
-
+            @RuntimeAgeCard()
         </div>
 
-    
-        <!-- WINRATE SECTION -->
-        <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700 mb-8">
-
+        <!-- ================= WINRATE ================= -->
+        <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700 mb-10">
             <div class="flex justify-between items-center mb-4">
-                <h3 class="font-bold text-xl">WinRate по Market Regime</h3>
-                <span class="text-xs text-slate-400">Symbols: @Stats.Symbols.Count</span>
+                <h3 class="font-bold text-xl">AI Performance (по символам)</h3>
+                <span class="text-xs text-slate-400">Live statistics</span>
             </div>
 
-            @if (Stats.Symbols.Count == 0)
-            {
-                <div class="text-slate-400">Нет данных по сделкам.</div>
-            }
-            else
-            {
-                <div class="wr-grid">
-                    @foreach (var s in Stats.Symbols)
-                    {
-                        <div class="wr-card">
+            <div class="wr-grid">
+                @foreach (var s in Stats.Symbols)
+                {
+                    var totalTrades = s.Regimes.Sum(x => x.Trades);
+                    var totalWins = s.Regimes.Sum(x => x.Wins);
+                    var wr = totalTrades > 0 ? (double)totalWins / totalTrades * 100.0 : 0;
 
-                            <div class="font-bold text-lg mb-2">@s.Symbol</div>
+                    <div class="wr-card">
+                        <div class="font-bold text-lg">@s.Symbol</div>
 
-                            <div class="space-y-2 text-sm">
-                                @foreach (var r in s.Regimes.OrderByDescending(x => x.Trades))
-                                {
-                                    var wr = r.Trades > 0 ? (double)r.Wins / r.Trades * 100.0 : 0;
-
-                                    <div class="flex justify-between items-center">
-                                        <div class="flex flex-col leading-tight">
-                                            <span class="font-semibold">@r.Regime</span>
-                                            <span class="text-slate-400 text-xs">@r.Trades trades</span>
-                                        </div>
-
-                                        <div class="text-right font-bold @(wr >= 55 ? "text-emerald-400" : wr >= 45 ? "text-amber-400" : "text-red-400")">
-                                            @wr.ToString("F1")%
-                                        </div>
-                                    </div>
-                                }
-                            </div>
-
+                        <div class="text-sm mt-1">
+                            <span class="font-semibold">WinRate:</span>
+                            <span class="@WinRateColor(wr)">
+                                @wr.ToString("F1")%
+                            </span>
+                            <span class="text-xs text-slate-400 ml-2">
+                                (@WinRateLabel(wr, totalTrades))
+                            </span>
                         </div>
-                    }
-                </div>
-            }
+
+                        <div class="text-xs text-slate-400">
+                            Trades: @totalTrades
+                        </div>
+
+
+                        <div class="text-xs text-slate-400">
+                            Trades: @totalTrades
+                            @if (totalTrades < 3)
+                            {
+                                <span class="ml-1">(мало данных)</span>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
         </div>
 
-
-        <!-- MARKET STATES -->
-        <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700 mb-8">
+        <!-- ================= AI BRAIN ================= -->
+        <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700 mb-10">
 
             <div class="flex justify-between items-center mb-3">
-                <h3 class="font-bold text-xl">Live Market States</h3>
-                <span class="text-xs text-slate-400">последние @MarketStates.Count</span>
+                <div>
+                    <h3 class="font-bold text-xl">AI Brain — Live Neurons</h3>
+                    <div class="text-xs text-slate-400">
+                        AI continuously analyzes market conditions
+                    </div>
+                </div>
+
+                <span class="text-xs text-slate-400">
+                    Monitoring @MarketStates.Count signals
+                </span>
             </div>
 
-            <button @onclick="ToggleMarket"
-                    class="px-3 py-1 mb-3 text-xs rounded bg-slate-800 hover:bg-slate-700 border border-slate-600">
-                @(ShowMarket ? "Свернуть" : "Развернуть")
-            </button>
+            <div class="market-grid dense">
 
-            @if (ShowMarket)
-            {
-                <div class="market-grid">
+                @foreach (var st in MarketStates)
+                {
+                    var power = NeuronPower(st);
+                    var level = NeuronLevel(power);
 
-                    @foreach (var st in MarketStates)
-                    {
-                        <div class="market-card">
+                    
+    // лёгкий фазовый сдвиг по времени обновления
+    var phase = (st.Time.Millisecond % 800) / 1000.0;
+ 
 
-                            <div class="flex justify-between mb-2">
+<div class="market-card neuron
+            @PulseClass(level)
+            @GlowClass(level)"
+     style="animation-delay:@($"{phase:F2}s")">
+
+                        <div class="flex justify-between items-center mb-2">
+                            <div class="flex items-center gap-2">
+                                <span class="live-dot @LiveDotClass(st.Time)"></span>
                                 <div>
                                     <b>@st.Symbol</b>
                                     <span class="text-slate-400 text-xs">(@st.Timeframe)</span>
                                 </div>
-
-                                <span class="reason-badge">@st.Reason</span>
                             </div>
 
-                            <div class="text-xs space-y-1">
-                                <div>Slope: <b>@st.TrendSlopePercent.ToString("F3")</b></div>
-                                <div>Vol: <b>@st.VolatilityPercent.ToString("F3")</b></div>
-                                <div>ATR: <b>@st.Atr.ToString("F2")</b></div>
-                                <div>Conf: <b>@st.Confidence.ToString("P0")</b></div>
-                            </div>
-
-                            <div class="timestamp">
-                                @st.Time.ToLocalTime()
-                            </div>
-
+                            <span class="reason-badge">@st.Reason</span>
                         </div>
-                    }
 
+                        <div class="telemetry">
+
+                            <span class="telemetry-item @TelemetryPulseByTime(st.Time)">
+                                Slope
+                                <b class="@(st.TrendSlopePercent >= 0 ? "text-emerald-400" : "text-red-400")">
+                                    @(st.TrendSlopePercent >= 0 ? "↑" : "↓")
+                                    @Math.Abs(st.TrendSlopePercent).ToString("F3")
+                                </b>
+                            </span>
+
+                            <span class="telemetry-item @TelemetryPulseByTime(st.Time)">
+                                Vol <b>@st.VolatilityPercent.ToString("F3")</b>
+                            </span>
+
+                            <span class="telemetry-item @TelemetryPulseByTime(st.Time)">
+                                ATR <b>@st.Atr.ToString("F2")</b>
+                            </span>
+                        </div>
+
+                        <div class="text-xs mt-2 flex items-center gap-2">
+                            <span>
+                                Confidence:
+                                <b>@st.Confidence.ToString("P0")</b>
+                            </span>
+
+                            <span class="px-2 py-0.5 rounded-full text-[10px]
+            @(level == 0 ? "bg-slate-700 text-slate-300" :
+                                        level == 1 ? "bg-amber-500/20 text-amber-400" :
+                                        level == 2 ? "bg-blue-500/20 text-blue-400" :
+                                                     "bg-emerald-500/20 text-emerald-400")">
+                                @(level == 0 ? "SLEEPING" :
+                                                        level == 1 ? "WATCHING" :
+                                                        level == 2 ? "THINKING" :
+                                                        "ACTIVE")
+                    </span>
                 </div>
-            }
+
+
+                        <div class="timestamp">
+                            @st.Time.ToLocalTime()
+                        </div>
+                    </div>
+                        }
+            </div>
         </div>
 
- 
-        <!-- TRADES -->
-        <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700 mb-8">
-
+        <!-- ================= TRADES ================= -->
+        <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700">
             <div class="flex justify-between items-center mb-3">
                 <h3 class="font-bold text-xl">Последние сделки</h3>
-                <span class="text-xs text-slate-400">всего @Trades.Count</span>
-
-                <button @onclick="ToggleTrades"
-                        class="px-3 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 border border-slate-600 ml-3">
-                    @(ShowTrades ? "Свернуть" : "Развернуть")
-                </button>
+                <span class="text-xs text-slate-400">Total @Trades.Count</span>
             </div>
 
-            @if (ShowTrades)
-            {
-                @if (Trades.Count == 0)
+            <div class="trade-grid">
+                @foreach (var t in Trades)
                 {
-                    <div class="text-slate-400">Сделок нет.</div>
-                }
-                else
-                {
-                    <div class="trade-grid">
-                        @foreach (var t in Trades)
-                        {
-                            var isWin = t.Pnl >= 0;
+                    var isWin = t.Pnl >= 0;
+                    <div class="trade-card">
+                        <div class="flex justify-between mb-1 items-center">
+                            <span class="trade-symbol">@t.Symbol</span>
+                            <span class="side-badge @(t.Side == SignalSide.Buy ? "buy-badge" : "sell-badge")">
+                                @t.Side
+                            </span>
+                        </div>
 
-                            <div class="trade-card">
-
-                                <div class="flex justify-between mb-1 items-center">
-                                    <span class="trade-symbol">@t.Symbol</span>
-                                    <span class="side-badge @(t.Side == SignalSide.Buy ? "buy-badge" : "sell-badge")">
-                                        @t.Side
-                                    </span>
-                                </div>
-
-                                <div class="text-xs space-y-1">
-                                    <div>Entry: <b>@t.Entry.ToString("F4")</b></div>
-                                    <div>Exit: <b>@t.Exit.ToString("F4")</b></div>
-                                    <div>
-                                        PnL:
-                                        <b class="@(isWin ? "text-emerald-400" : "text-red-400")">
-                                            @t.Pnl.ToString("F4")
-                                        </b>
-                                    </div>
-                                    <div>Regime: <b>@t.Regime</b></div>
-                                </div>
-
-                                <div class="trade-timestamp">@t.Time.ToLocalTime()</div>
-
+                        <div class="text-xs space-y-1">
+                            <div>
+                                PnL:
+                                <b class="@(isWin ? "text-emerald-400" : "text-red-400")">
+                                    @t.Pnl.ToString("F4")
+                                </b>
                             </div>
-                        }
+                            <div>Regime: <b>@t.Regime</b></div>
+                        </div>
+
+                        <div class="trade-timestamp">@t.Time.ToLocalTime()</div>
                     </div>
                 }
-            }
+            </div>
         </div>
-
     }
 </div>
 
 @code {
 
-    bool ShowMarket = true;
+    private AiRuntimeState? State => Runtime.Current;
 
-    void ToggleMarket()
+    protected override void OnInitialized()
     {
-        ShowMarket = !ShowMarket;
+        Runtime.OnUpdated += Refresh;
     }
 
-    bool ShowTrades = true;
-
-    void ToggleTrades()
-    {
-        ShowTrades = !ShowTrades;
-    }
-
-    private AiLearningSnapshot? Stats;
-    private List<AiSelfLearningService.MarketState> MarketStates = new();
-    private List<AiSelfLearningService.TradeHistoryEntry> Trades = new();
-
-
-
-    private PeriodicTimer? _timer;
-    private readonly CancellationTokenSource _cts = new();
-
-    protected override async Task OnInitializedAsync()
-    {
-        await LoadAsync();
-        _timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
-        _ = AutoRefreshLoop();
-    }
-
-    private async Task AutoRefreshLoop()
-    {
-        while (await _timer!.WaitForNextTickAsync(_cts.Token))
-        {
-            await LoadAsync();
-            await InvokeAsync(StateHasChanged);
-        }
-    }
-
-    private async Task LoadAsync()
-    {
-        var snap = await FileLoader.LoadSnapshot();
-        if (snap == null)
-            return;
-
-        Stats = snap;
-
-        MarketStates = snap.MarketStates
-            .OrderByDescending(x => x.Time)
-            .Take(150)
-            .ToList();
-
-        Trades = snap.Trades
-            .OrderByDescending(x => x.Time)
-            .Take(150)
-            .ToList();
-    }
-
+    void Refresh() => InvokeAsync(StateHasChanged);
 
     public void Dispose()
     {
-        _cts.Cancel();
-        _timer?.Dispose();
+        Runtime.OnUpdated -= Refresh;
+    }
+
+    string TelemetryPulseByTime(DateTime t)
+    {
+        var age = (DateTime.UtcNow - t.ToUniversalTime()).TotalSeconds;
+        if (age <= 5) return "telemetry-fast";
+        if (age <= 15) return "telemetry-med";
+        return "telemetry-slow";
+    }
+
+
+    /* ================= NEURON LOGIC ================= */
+
+    double NeuronPower(AiSelfLearningService.MarketState s)
+    {
+        var conf = Math.Clamp((double)s.Confidence, 0, 1);
+        var slope = Math.Min(Math.Abs((double)s.TrendSlopePercent) / 0.30, 1.0);
+
+        var vol = (double)s.VolatilityPercent;
+        var volScore =
+            vol <= 0.05 ? 0.05 :
+            vol < 0.30 ? 0.35 :
+            vol < 3.50 ? 1.00 : 0.60;
+
+        return Math.Clamp(conf * 0.65 + slope * 0.20 + volScore * 0.15, 0, 1);
+    }
+
+    int NeuronLevel(double p) =>
+        p >= 0.75 ? 3 :
+        p >= 0.50 ? 2 :
+        p >= 0.25 ? 1 : 0;
+
+    string NeuronLabel(int l) => l switch
+    {
+        3 => "HOT",
+        2 => "ACTIVE",
+        1 => "WATCH",
+        _ => "IDLE"
+    };
+
+    string PulseClass(int l) => l switch
+    {
+        3 => "pulse-fast",
+        2 => "pulse-med",
+        1 => "pulse-slow",
+        _ => "pulse-off"
+    };
+
+    string GlowClass(int l) => l switch
+    {
+        3 => "glow-strong",
+        2 => "glow-med",
+        1 => "glow-weak",
+        _ => "glow-off"
+    };
+
+    string TelemetryPulse(int l) => l switch
+    {
+        3 => "telemetry-fast",
+        2 => "telemetry-med",
+        1 => "telemetry-slow",
+        _ => "telemetry-off"
+    };
+
+    string LiveDotClass(DateTime t)
+    {
+        var age = DateTime.UtcNow - t.ToUniversalTime();
+        if (age.TotalSeconds <= 10) return "dot-live";
+        if (age.TotalSeconds <= 30) return "dot-warm";
+        return "dot-cold";
     }
 
     RenderFragment SummaryCard(string title, string value) => __builder =>
@@ -259,15 +295,30 @@
         ;
     };
 
-    RenderFragment SnapshotAgeCard() => __builder =>
+    RenderFragment RuntimeAgeCard() => __builder =>
     {
-        var age = DateTime.UtcNow - Stats!.CreatedAtUtc;
-
+        var age = DateTime.UtcNow - State!.LoadedAtUtc;
         <div class="p-3 rounded-xl bg-slate-900/60 border border-slate-700">
-            <div class="text-xs text-slate-400">Возраст snapshot</div>
-            <div class="text-2xl font-bold">@((int)age.TotalMinutes) мин</div>
-            <div class="text-xs text-slate-400">v@Stats.SnapshotVersion — @Stats.Meta.Engine</div>
+            <div class="text-xs text-slate-400">Runtime lag</div>
+            <div class="text-2xl font-bold">@((int)age.TotalSeconds)s</div>
+            <div class="text-xs text-slate-400">LIVE</div>
         </div>
         ;
     };
+
+    string WinRateLabel(double wr, int trades)
+    {
+        if (trades < 3) return "недостаточно данных";
+        if (wr >= 60) return "стабильно";
+        if (wr >= 40) return "нестабильно";
+        return "слабая история";
+    }
+
+    string WinRateColor(double wr)
+    {
+        if (wr >= 60) return "text-emerald-400";
+        if (wr >= 40) return "text-amber-400";
+        return "text-red-400";
+    }
+
 }

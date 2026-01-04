@@ -49,7 +49,7 @@ public class LivePositionsController : ControllerBase
             return Ok(list);
 
         // ✅ SAFE: может вернуть null
-        var client = _factory.TryCreateRestClient();
+        var client = _factory.CreateRestClient();
         if (client == null)
         {
             _logger.LogDebug("[LIVE] Binance private endpoints disabled (no API keys)");

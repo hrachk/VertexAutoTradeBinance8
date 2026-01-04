@@ -1,79 +1,126 @@
-﻿using Binance.Net.Enums;
+﻿using Microsoft.Extensions.Configuration;
+using VertexAutoTradeBinance8.Models;
 
-namespace VertexAutoTradeBinance8.Services
+namespace VertexAutoTradeBinance8.Services;
+
+/// <summary>
+/// SymbolLiquidityScanner (PRO)
+/// ============================
+/// - Единственный REST-вход для тикеров (GetTickersAsync)
+/// - TTL-кэш (ScannerCacheSeconds)
+/// - Singleflight (SemaphoreSlim)
+/// - Fail-safe: при ошибке возвращает последний кэш
+///
+/// Разрешено вызывать сколько угодно раз —
+/// фактический REST будет выполняться редко.
+/// </summary>
+public sealed class SymbolLiquidityScanner
 {
-    public class SymbolLiquidityScanner
-    {
-        private readonly ILogger<SymbolLiquidityScanner> _logger;
-        private readonly BinanceClientFactory _factory;
+    private readonly ILogger<SymbolLiquidityScanner> _logger;
+    private readonly BinanceClientFactory _factory;
+    private readonly IConfiguration _cfg;
 
-        public SymbolLiquidityScanner(
-            ILogger<SymbolLiquidityScanner> logger,
-            BinanceClientFactory factory)
+    // singleflight gate
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
+    // cache
+    private DateTime _cachedAtUtc = DateTime.MinValue;
+    private List<SymbolMarketSnapshot> _cache = new();
+
+    public SymbolLiquidityScanner(
+        ILogger<SymbolLiquidityScanner> logger,
+        BinanceClientFactory factory,
+        IConfiguration cfg)
+    {
+        _logger = logger;
+        _factory = factory;
+        _cfg = cfg;
+    }
+
+    public async Task<List<SymbolMarketSnapshot>> LoadSnapshotsAsync(
+        CancellationToken ct = default)
+    {
+        var ttlSec =
+            _cfg.GetValue<int?>("SymbolSelection:Auto:ScannerCacheSeconds")
+            ?? 900; // default 15 min
+
+        // FAST PATH — cache hit
+        if (_cache.Count > 0 &&
+            (DateTime.UtcNow - _cachedAtUtc).TotalSeconds < ttlSec)
         {
-            _logger = logger;
-            _factory = factory;
+            return _cache;
         }
 
-        /// <summary>
-        /// Возвращает список топ-ликвидных символов (примерно топ-30).
-        /// </summary>
-        public async Task<List<string>> GetTopSymbolsAsync()
+        await _gate.WaitAsync(ct);
+        try
         {
-            using var client = _factory.CreateRestClient();
-
-            var res = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync();
-            if (!res.Success || res.Data == null)
-                return new List<string>();
-
-            // Фильтруем только perpetual
-            var symbols = res.Data.Symbols
-                .Where(s => s.ContractType == ContractType.Perpetual)
-                .Select(s => s.Name)               // <-- здесь string, не объект
-                .ToList();
-
-            // Храним (symbol, score)
-            var liquid = new List<(string Symbol, decimal Score)>();
-
-            foreach (var symbol in symbols)
+            // DOUBLE-CHECK после входа в gate
+            if (_cache.Count > 0 &&
+                (DateTime.UtcNow - _cachedAtUtc).TotalSeconds < ttlSec)
             {
-                try
-                {
-                    // 1) 24h объём
-                    var stat = await client.UsdFuturesApi.ExchangeData.GetTickerAsync(symbol);
-                    if (!stat.Success || stat.Data == null)
-                        continue;
-
-                    decimal volumeUsd = stat.Data.QuoteVolume;
-
-                    // 2) Глубина стакана
-                    var ob = await client.UsdFuturesApi.ExchangeData.GetOrderBookAsync(symbol, 20);
-                    decimal depth = 0;
-                    if (ob.Success && ob.Data != null)
-                    {
-                        depth =
-                            ob.Data.Bids.Take(5).Sum(x => x.Quantity * x.Price) +
-                            ob.Data.Asks.Take(5).Sum(x => x.Quantity * x.Price);
-                    }
-
-                    // 3) Ликвидность
-                    decimal score = volumeUsd * 0.8m + depth * 0.2m;
-
-                    liquid.Add((symbol, score));     // <-- просто symbol
-                }
-                catch
-                {
-                    // если по какому-то символу ошибка — пропускаем
-                    continue;
-                }
+                return _cache;
             }
 
-            // сортируем по убыванию ликвидности
-            return liquid
-                .OrderByDescending(x => x.Score)
-                .Take(30)
-                .Select(x => x.Symbol)
+            using var client = _factory.CreateRestClient();
+
+            var res = await client
+                .UsdFuturesApi
+                .ExchangeData
+                .GetTickersAsync(ct);
+
+            if (!res.Success || res.Data == null)
+            {
+                _logger.LogWarning(
+                    "[SYMBOL] GetTickers REST failed → keep cache size={cnt}",
+                    _cache.Count);
+
+                return _cache.Count > 0
+                    ? _cache
+                    : new List<SymbolMarketSnapshot>();
+            }
+
+            var list = res.Data
+                .Where(t =>
+                    t.Symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase) &&
+                    t.QuoteVolume > 0 &&
+                    t.LastPrice > 0)
+                .Select(t => new SymbolMarketSnapshot
+                {
+                    Symbol = t.Symbol.ToUpperInvariant(),
+                    QuoteVolume24h = t.QuoteVolume,
+                    LastPrice = t.LastPrice,
+                    PriceChangePercent = t.PriceChangePercent
+                })
                 .ToList();
+
+            _cache = list;
+            _cachedAtUtc = DateTime.UtcNow;
+
+            _logger.LogInformation(
+                "[SYMBOL] Loaded tickers snapshots: {cnt} (cache ttl={ttl}s)",
+                list.Count,
+                ttlSec);
+
+            return list;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "[SYMBOL] LoadSnapshotsAsync error → keep cache size={cnt}",
+                _cache.Count);
+
+            return _cache.Count > 0
+                ? _cache
+                : new List<SymbolMarketSnapshot>();
+        }
+        finally
+        {
+            _gate.Release();
         }
     }
 }

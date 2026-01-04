@@ -24,7 +24,7 @@ namespace VertexAutoTradeBinance8.Models
         public decimal Slope { get; set; }
         public decimal Vol { get; set; }
         public decimal Deviation { get; set; }
-        public string Regime { get; set; } = string.Empty;
+        public MarketRegime Regime { get; set; } 
 
         public int Confidence { get; set; }
         public string SmartType { get; set; } = string.Empty;

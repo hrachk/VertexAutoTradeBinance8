@@ -39,18 +39,21 @@ namespace VertexAutoTradeBinance8.Services
                 try
                 {
                     // 1. Берём авто-список ликвидных символов
-                    var symbols = await _liquidity.GetTopSymbolsAsync();
-                    if (symbols.Count == 0)
+                    var snapshots = await _liquidity.LoadSnapshotsAsync();
+                    if (snapshots.Count == 0)
                     {
                         _logger.LogWarning("[BG-SCANNER] No symbols from liquidity scanner");
                     }
 
-                    foreach (var symbol in symbols)
+                    
+
+                    foreach (var snap in snapshots)
                     {
                         stoppingToken.ThrowIfCancellationRequested();
-
+                        var symbol = snap.Symbol;
                         try
                         {
+
                             // --- 1. Загружаем клайны ---
                             var kl = await _market.GetKlines(symbol, KlineInterval.OneMinute, 160);
                             if (kl.Count < 50)

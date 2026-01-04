@@ -1330,6 +1330,112 @@ compact-card {
     color: #e0e0e0;
 }
 
+@keyframes neuronPulse {
+    0% {
+        transform: translateY(0) scale(1);
+        filter: brightness(1);
+    }
+
+    50% {
+        transform: translateY(-3px) scale(1.02);
+        filter: brightness(1.15);
+    }
+
+    100% {
+        transform: translateY(0) scale(1);
+        filter: brightness(1);
+    }
+}
+
+.neuron::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: 18px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.glow-strong::after {
+  animation: heartbeat 1.2s infinite;
+  background: radial-gradient(circle, rgba(34,197,94,.25), transparent 60%);
+}
+
+@keyframes heartbeat {
+  0%   { opacity: 0; }
+  30%  { opacity: .6; }
+  60%  { opacity: 0; }
+}
+
+/* ================= BRAIN HEARTBEAT ================= */
+
+:root {
+  --brain-beat: 2.8s; /* общий ритм мозга */
+}
+
+@keyframes brainBeat {
+  0%   { opacity: .35; transform: scale(1); }
+  25%  { opacity: .75; transform: scale(1.015); }
+  50%  { opacity: 1.00; transform: scale(1.03); }
+  75%  { opacity: .75; transform: scale(1.015); }
+  100% { opacity: .35; transform: scale(1); }
+}
+
+.neuron {
+    animation-name: brainBeat;
+    animation-duration: var(--brain-beat);
+    animation-iteration-count: infinite;
+    animation-timing-function: ease-in-out;
+}
+
+
+
+/* intensity by level */
+.glow-strong {
+  animation-duration: calc(var(--brain-beat) * 0.7);
+}
+
+.glow-med {
+  animation-duration: calc(var(--brain-beat) * 1.0);
+}
+
+.glow-weak {
+  animation-duration: calc(var(--brain-beat) * 1.4);
+}
+
+.glow-off {
+  animation: none;
+}
+
+.market-grid {
+    position: relative;
+}
+
+    .market-grid::before {
+        content: "";
+        position: absolute;
+        inset: -20px;
+        background: radial-gradient(circle at 20% 30%, rgba(99,102,241,.08), transparent 40%), radial-gradient(circle at 80% 60%, rgba(34,197,94,.06), transparent 45%);
+        animation: brainWave 6s ease-in-out infinite;
+        pointer-events: none;
+    }
+
+@keyframes brainWave {
+    0% {
+        opacity: .15;
+    }
+
+    50% {
+        opacity: .35;
+    }
+
+    100% {
+        opacity: .15;
+    }
+}
+
+
+
 .engine-title {
     font-size: 26px;
     margin-bottom: 20px;

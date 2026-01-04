@@ -31,6 +31,7 @@ if (builder.Environment.IsDevelopment())
 builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
 builder.Services.AddSingleton<WeatherForecastService>();
+builder.Services.AddSingleton<AiRuntimeDataProvider>();
 
 
 // ============= DEPENDENCY INJECTION =============

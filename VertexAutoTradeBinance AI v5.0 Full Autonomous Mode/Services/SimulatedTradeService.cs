@@ -13,29 +13,32 @@ namespace VertexAutoTradeBinance8.Services
         
         private readonly ILogger<SimulatedTradeService> _logger;
         private readonly  AiSelfLearningService  _learningService;
+        private readonly string _filePath;
+        private readonly object _lock = new();
 
         public SimulatedTradeService(
-            MarketDataService marketData,
-             AiSelfLearningService  learningService,
-            ILogger<SimulatedTradeService> logger)
+    MarketDataService marketData,
+    AiSelfLearningService learningService,
+    ILogger<SimulatedTradeService> logger,
+    IConfiguration cfg)
         {
             _marketData = marketData;
-            _learningService = learningService;  // Lazy инъекция
+            _learningService = learningService;
             _logger = logger;
 
-            // 🔒 INIT missed_trades.json (ONCE)
+            var root = cfg["SharedData:Root"]
+                ?? throw new InvalidOperationException("SharedData:Root not configured");
+
+            _filePath = Path.Combine(root, "missed_trades.json");
+
             try
             {
-                var path = Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
-                var dir = Path.GetDirectoryName(path);
+                Directory.CreateDirectory(root);
 
-                if (!string.IsNullOrWhiteSpace(dir) && !Directory.Exists(dir))
-                    Directory.CreateDirectory(dir);
-
-                if (!File.Exists(path))
+                if (!File.Exists(_filePath))
                 {
-                    File.WriteAllText(path, "[]");
-                    _logger.LogInformation("[SIM] missed_trades.json created");
+                    File.WriteAllText(_filePath, "[]");
+                    _logger.LogInformation("[SIM] missed_trades.json created at {path}", _filePath);
                 }
             }
             catch (Exception ex)
@@ -44,30 +47,203 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
+         
+        public void AppendLifecycleEvent(
+    TradeSignal signal,
+    string stage,
+    string? note = null)
+        {
+            try
+            {
+                lock (_lock)
+                {
+                    List<object> list;
+
+                    if (File.Exists(_filePath))
+                    {
+                        var json = File.ReadAllText(_filePath);
+                        list = JsonSerializer.Deserialize<List<object>>(json) ?? new();
+                    }
+                    else
+                    {
+                        list = new();
+                    }
+
+                    list.Add(new
+                    {
+                        type = "lifecycle",
+                        stage = stage,
+                        symbol = signal.Symbol,
+                        side = signal.Side.ToString(),
+                        entry = signal.EntryPrice,
+                        sl = signal.StopLoss,
+                        tp = signal.TakeProfit,
+                        note = note,
+                        time = DateTime.UtcNow
+                    });
+
+                    File.WriteAllText(
+                        _filePath,
+                        JsonSerializer.Serialize(list, new JsonSerializerOptions
+                        {
+                            WriteIndented = true
+                        })
+                    );
+                }
+
+                _logger.LogInformation(
+                    "[SIM][LIFECYCLE] {symbol} → {stage}",
+                    signal.Symbol, stage);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SIM] failed to append lifecycle event");
+            }
+        }
+
         /// <summary>
         /// Запускает симуляцию сделки, если позиция была пропущена
         /// </summary>
-        public async Task SimulateMissedTradeAsync(TradeSignal signal, string reason, string? note = null)
-        {
+        //public async Task SimulateMissedTradeAsync(TradeSignal signal, string reason, string? note = null)
+        //{
 
+        //    try
+        //    {
+        //        _logger.LogInformation(
+        //            "[SIM][{symbol}] Старт симуляции пропущенной сделки. Причина: {reason}",
+        //            signal.Symbol, reason);
+
+        //        // Загружаем следующие 20 свечей после сигнала
+        //        var klines = await _marketData.GetFuturesKlinesAsync(
+        //            signal.Symbol,
+        //            KlineInterval.FiveMinutes,
+        //            30);
+
+        //        if (klines == null || klines.Count == 0)
+        //            return;
+
+        //        decimal entry = signal.EntryPrice;
+        //        decimal sl = signal.StopLoss;
+        //        decimal tp = signal.TakeProfit ?? (signal.EntryPrice * 1.01m);
+
+        //        bool hitSL = false;
+        //        bool hitTP = false;
+
+        //        foreach (var candle in klines)
+        //        {
+        //            if (signal.Side == SignalSide.Buy)
+        //            {
+        //                if (candle.LowPrice <= sl) { hitSL = true; break; }
+        //                if (candle.HighPrice >= tp) { hitTP = true; break; }
+        //            }
+        //            else
+        //            {
+        //                if (candle.HighPrice >= sl) { hitSL = true; break; }
+        //                if (candle.LowPrice <= tp) { hitTP = true; break; }
+        //            }
+        //        }
+
+        //        decimal result;
+        //        if (hitSL) result = -Math.Abs(entry - sl);
+        //        else if (hitTP) result = Math.Abs(tp - entry);
+        //        else result = 0;
+
+        //        // Передаём в обучающую систему
+        //        _learningService.RecordSimulatedTrade(
+        //            signal.Symbol,
+        //            signal.Side.ToString(),
+        //            entry,
+        //            sl,
+        //            tp,
+        //            result,
+        //            reason);
+
+        //        // === WRITE missed_trades.json (LOG ONLY) ===
+        //        try
+        //        {
+        //            lock (_lock)
+        //            {
+        //                List<object> list;
+
+        //                if (File.Exists(_filePath))
+        //                {
+        //                    var json = File.ReadAllText(_filePath);
+        //                    list = JsonSerializer.Deserialize<List<object>>(json) ?? new();
+        //                }
+        //                else
+        //                {
+        //                    list = new();
+        //                }
+
+        //                list.Add(new
+        //                {
+        //                    symbol = signal.Symbol,
+        //                    side = signal.Side.ToString(),
+        //                    entry = entry,
+        //                    sl = sl,
+        //                    tp = tp,
+        //                    result = result,
+        //                    reason = reason,
+        //                    note = note,
+        //                    time = DateTime.UtcNow
+        //                });
+
+        //                File.WriteAllText(
+        //                    _filePath,
+        //                    JsonSerializer.Serialize(list, new JsonSerializerOptions
+        //                    {
+        //                        WriteIndented = true
+        //                    })
+        //                );
+        //            }
+
+        //            _logger.LogInformation("[SIM] missed trade appended");
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            _logger.LogError(ex, "[SIM] failed to write missed_trades.json");
+        //        }
+
+
+        //        _logger.LogInformation(
+        //            "[SIM][{symbol}] Завершена симуляция → Outcome: {result}",
+        //            signal.Symbol, result);
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        _logger.LogError(ex, "[SIM] Ошибка симуляции сделки");
+        //    }
+        //}
+
+
+        public async Task<MissedTradeRecord?> SimulateMissedTradeAsync(
+    TradeSignal signal,
+    string reason,
+    string? note = null)
+        {
             try
             {
                 _logger.LogInformation(
                     "[SIM][{symbol}] Старт симуляции пропущенной сделки. Причина: {reason}",
                     signal.Symbol, reason);
 
-                // Загружаем следующие 20 свечей после сигнала
+                // ======================================================
+                // 1) Загружаем будущие свечи
+                // ======================================================
                 var klines = await _marketData.GetFuturesKlinesAsync(
                     signal.Symbol,
                     KlineInterval.FiveMinutes,
                     30);
 
                 if (klines == null || klines.Count == 0)
-                    return;
+                    return null;
 
                 decimal entry = signal.EntryPrice;
                 decimal sl = signal.StopLoss;
-                decimal tp = signal.TakeProfit ?? (signal.EntryPrice * 1.01m);
+
+                decimal tp =
+                    signal.TakeProfit
+                    ?? (signal.TakeProfits.Count > 0 ? signal.TakeProfits[0] : entry * 1.01m);
 
                 bool hitSL = false;
                 bool hitTP = false;
@@ -89,9 +265,48 @@ namespace VertexAutoTradeBinance8.Services
                 decimal result;
                 if (hitSL) result = -Math.Abs(entry - sl);
                 else if (hitTP) result = Math.Abs(tp - entry);
-                else result = 0;
+                else result = 0m;
 
-                // Передаём в обучающую систему
+                // ======================================================
+                // 2) Формируем MissedTradeRecord (БЕЗ ВЫДУМАННЫХ ПОЛЕЙ)
+                // ======================================================
+                var record = new MissedTradeRecord
+                {
+                    Symbol = signal.Symbol,
+                    Time = DateTime.UtcNow,
+
+                    Entry = entry,
+                    StopLoss = sl,
+                    Side = signal.Side.ToString(),
+
+                    TakeProfits = signal.TakeProfits.Count > 0
+                        ? new List<decimal>(signal.TakeProfits)
+                        : new List<decimal> { tp },
+
+                    Reason = reason,
+
+                    // --- нет в TradeSignal → safe defaults ---
+                    FreeBalance = 0m,
+                    AttemptNotional = 0m,
+                    RequiredMinNotional = 0m,
+
+                    Atr = signal.Atr ?? 0m,
+                    Vol = 0m,
+                    Slope = 0m,
+                    Confidence = (int)((signal.AiQuality ?? 0m) * 100),
+
+                    Regime = MarketRegime.Unknown,
+                    SmartType = "",
+
+                    Deviation = 0m,
+                    Score = (int)((signal.AiQuality ?? 0m) * 100)
+                };
+
+
+
+                // ======================================================
+                // 3) AI — SIMULATED TRADE CHANNEL
+                // ======================================================
                 _learningService.RecordSimulatedTrade(
                     signal.Symbol,
                     signal.Side.ToString(),
@@ -101,60 +316,55 @@ namespace VertexAutoTradeBinance8.Services
                     result,
                     reason);
 
-                // === WRITE missed_trades.json (LOG ONLY) ===
+                // ======================================================
+                // 4) WRITE missed_trades.json (LOG + UI)
+                // ======================================================
                 try
                 {
-                    var path = Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
-
-                    List<object> list;
-
-                    if (File.Exists(path))
+                    lock (_lock)
                     {
-                        var json = File.ReadAllText(path);
-                        list = JsonSerializer.Deserialize<List<object>>(json) ?? new();
-                    }
-                    else
-                    {
-                        list = new();
-                    }
+                        List<MissedTradeRecord> list;
 
-                    list.Add(new
-                    {
-                        symbol = signal.Symbol,
-                        side = signal.Side.ToString(),
-                        entry = entry,
-                        sl = sl,
-                        tp = tp,
-                        result = result,
-                        reason = reason,
-                        note = note,
-                        time = DateTime.UtcNow
-                    });
-
-                    File.WriteAllText(
-                        path,
-                        JsonSerializer.Serialize(list, new JsonSerializerOptions
+                        if (File.Exists(_filePath))
                         {
-                            WriteIndented = true
-                        })
-                    );
+                            var json = File.ReadAllText(_filePath);
+                            list = JsonSerializer.Deserialize<List<MissedTradeRecord>>(json)
+                                   ?? new List<MissedTradeRecord>();
+                        }
+                        else
+                        {
+                            list = new List<MissedTradeRecord>();
+                        }
 
-                    _logger.LogInformation("[SIM] missed trade appended");
+                        list.Add(record);
+
+                        File.WriteAllText(
+                            _filePath,
+                            JsonSerializer.Serialize(
+                                list,
+                                new JsonSerializerOptions { WriteIndented = true }
+                            ));
+                    }
+
+                    _logger.LogInformation("[SIM] missed_trades.json appended");
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "[SIM] failed to write missed_trades.json");
                 }
 
-
                 _logger.LogInformation(
                     "[SIM][{symbol}] Завершена симуляция → Outcome: {result}",
                     signal.Symbol, result);
+
+                return record;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[SIM] Ошибка симуляции сделки");
+                return null;
             }
         }
+
     }
 }

@@ -1,39 +1,37 @@
-﻿namespace VertexAutoTradeBinance8.Web.Models
+﻿using VertexAutoTradeBinance8.Models;
+
+namespace VertexAutoTradeBinance8.Web.Models
 {
     public class MissedTradeRecord
     {
         public string Symbol { get; set; } = "";
         public DateTime Time { get; set; }
 
-        public decimal Entry { get; set; }
-        public decimal StopLoss { get; set; }
-
-        // NEW: LONG / SHORT (Buy / Sell)
+        public string Stage { get; set; } = "";   // 🔥 SIGNAL / ORDER / POSITION
         public string Side { get; set; } = "";
 
-        // NEW: TakeProfit list
+        public decimal Entry { get; set; }
+        public decimal StopLoss { get; set; }
         public List<decimal> TakeProfits { get; set; } = new();
+        public decimal? Exit { get; set; }
 
         public string Reason { get; set; } = "";
+        public string Tags { get; set; } = "";
 
         public decimal FreeBalance { get; set; }
-
-        // NEW: attemptNotional — что бот пытался открыть
         public decimal AttemptNotional { get; set; }
-
-        // NEW: Binance мин. требование для символа
         public decimal RequiredMinNotional { get; set; }
 
-        // === NEW: MARKET REGIME METRICS ===
+        // === MARKET REGIME / AI ===
+        public MarketRegime Regime { get; set; }
         public decimal ATR { get; set; }
         public decimal Vol { get; set; }
         public decimal Slope { get; set; }
         public int Confidence { get; set; }
-        public string Regime { get; set; } = "";
-        public string SmartType { get; set; } = "";
-
-        public decimal Deviation { get; set; }
         public int Score { get; set; }
+        public decimal Deviation { get; set; }
+
+        public string SmartType { get; set; } = "";
 
     }
 

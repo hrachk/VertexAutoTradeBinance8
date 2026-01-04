@@ -2,205 +2,250 @@
 using Binance.Net.Objects.Models.Futures;
 using System.Collections.Concurrent;
 using VertexAutoTradeBinance8.MarketData;
+using VertexAutoTradeBinance8.Services.MarketState;
 
 namespace VertexAutoTradeBinance8.Services
 {
-    /// <summary>
-    /// MarketDataFacade
-    /// =================
-    /// Единственная точка доступа к klines.
-    ///
-    /// Приоритет:
-    ///  1) WS buffer (live)
-    ///  2) REST backfill (строго ограничен)
-    ///
-    /// Гарантии:
-    ///  - REST не спамится
-    ///  - WS имеет время на warm-up
-    ///  - StrategyEngine всегда получает List<BinanceFuturesUsdtKline>
-    /// </summary>
     public sealed class MarketDataFacade
     {
         private readonly MarketDataKlineBuffer _buf;
+        private readonly MarketStateService _marketState;
         private readonly WsKlineSubscriber _ws;
         private readonly BinanceClientFactory _factory;
         private readonly ILogger<MarketDataFacade> _logger;
 
-        // warm-up gate: symbol:tf -> first WS timestamp
-        private readonly ConcurrentDictionary<string, DateTime> _wsStartedUtc = new();
-
-        // REST fallback limiter
+       
         private readonly ConcurrentDictionary<string, DateTime> _lastRestFetchUtc = new();
-
-        private static readonly TimeSpan WsWarmupTimeout = TimeSpan.FromSeconds(1);
-        private static readonly TimeSpan RestCooldown = TimeSpan.FromMinutes(1);
-
+        private readonly ConcurrentDictionary<string, bool> _restBackfilled = new();
+        private static readonly SemaphoreSlim _globalRestLimiter = new(3, 3);
         private readonly ConcurrentDictionary<string, int> _wsBars = new();
-        // PUSH events
+
+        private volatile bool _hasSnapshotState;
+        private volatile bool _readyBySnapshot;
+
+        public bool HasSnapshotState => _hasSnapshotState;
+        public bool ReadyBySnapshot => _readyBySnapshot;
+
         public event Action<string, KlineInterval>? OnWarm;
         public event Action<string, KlineInterval, BinanceFuturesUsdtKline>? WsClosedKline;
-        public event Action<string, KlineInterval>? OnSubscribed; // NE
 
+        private const int WarmBars = 20;
+        private const int FastWarmBars = 10;
+        private static readonly TimeSpan RestCooldown = TimeSpan.FromMinutes(1);
 
         public MarketDataFacade(
             MarketDataKlineBuffer buffer,
             WsKlineSubscriber ws,
             BinanceClientFactory factory,
-            ILogger<MarketDataFacade> logger)
+            ILogger<MarketDataFacade> logger,
+            MarketStateService marketState)
         {
             _buf = buffer;
             _ws = ws;
             _factory = factory;
             _logger = logger;
+            _marketState = marketState;
 
             _ws.OnClosedKline += OnWsClosedKline;
-           /* _ws.OnClosedKline += (symbol, tf, kline) =>
-            {
-                var key = Key(symbol, tf);
-                var count = _wsBars.AddOrUpdate(key, 1, (_, v) => v + 1);
+            // 🔥 HARD LINK: MarketState → MarketData
+            if (_marketState.IsRestored)
+                MarkSnapshotReady();
 
-                // 🔥 считаем warm по количеству баров, а не по времени
+            _marketState.OnRestored += MarkSnapshotReady;
+        }
+        // =====================================================
+        // SNAPSHOT READY (FINAL)
+        // =====================================================
+        public void MarkSnapshotReady()
+        {
+            if (_readyBySnapshot)
+                return;
 
+            _hasSnapshotState = true;
+            _readyBySnapshot = true;
 
-                // OnWarm
-                if (count == WarmBars)
-                {
-                    _logger.LogInformation("[MD][WS] warm READY {symbol} {tf}", symbol, tf);
-                    OnWarm?.Invoke(symbol, tf);
-                }
-            };
-
-            // forward WS closed candles
-            _ws.OnClosedKline += (symbol, tf, candle) =>
-            {
-                WsClosedKline?.Invoke(symbol, tf, candle);
-            };*/
+            _logger.LogWarning(
+                "[MD][STATE] SNAPSHOT READY → warmup & REST backfill DISABLED");
         }
 
+        // =====================================================
+        // SNAPSHOT RESTORE (SAFE)
+        // =====================================================
+        public async Task RestoreSnapshotStateAsync(CancellationToken ct)
+        {
+            try
+            {
+                _logger.LogWarning("[MD][RESTORE] Restoring market snapshot state...");
 
-        private void OnWsClosedKline(
-    string symbol,
-    KlineInterval tf,
-    BinanceFuturesUsdtKline candle)
+                var snapshot = _buf.LoadSnapshot();
+                if (snapshot == null || snapshot.Count == 0)
+                {
+                    _logger.LogWarning("[MD][RESTORE] No snapshot found → cold start");
+                    return;
+                }
+
+                bool restoredAny = false;
+
+                foreach (var (key, candles) in snapshot)
+                {
+                    if (candles == null || candles.Count == 0)
+                        continue;
+
+                    var parts = key.Split(':');
+                    if (parts.Length != 2)
+                        continue;
+
+                    if (!Enum.TryParse<KlineInterval>(parts[1], out var tf))
+                        continue;
+
+                    var symbol = parts[0];
+
+                    foreach (var c in candles)
+                        _buf.Upsert(symbol, tf, c);
+
+                    _wsBars[key] = candles.Count;
+                    _restBackfilled[key] = true;
+
+                    restoredAny = true;
+
+                    if (candles.Count >= FastWarmBars)
+                        OnWarm?.Invoke(symbol, tf);
+
+                    _logger.LogInformation(
+                        "[MD][RESTORE] {symbol} {tf} restored bars={bars}",
+                        symbol, tf, candles.Count);
+                }
+
+                if (restoredAny)
+                {
+                    _hasSnapshotState = true;
+                    _readyBySnapshot = true;
+
+                    _logger.LogWarning("[MD][RESTORE] Snapshot restored → READY (warmup accelerated)");
+                }
+                else
+                {
+                    _logger.LogWarning("[MD][RESTORE] Snapshot empty → cold start");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[MD][RESTORE] Failed to restore snapshot");
+            }
+        }
+
+        // =====================================================
+        // WS EVENTS
+        // =====================================================
+        private void OnWsClosedKline(string symbol, KlineInterval tf, BinanceFuturesUsdtKline candle)
         {
             var key = Key(symbol, tf);
-
             var count = _wsBars.AddOrUpdate(key, 1, (_, v) => v + 1);
 
-            // 1) warm gate
-            if (count == WarmBars)
+            if (count == FastWarmBars)
             {
-                _logger.LogInformation(
-                    "[MD][WS] warm READY {symbol} {tf}",
-                    symbol, tf);
-
+                _logger.LogInformation("[MD][WS] warm READY {symbol} {tf}", symbol, tf);
                 OnWarm?.Invoke(symbol, tf);
             }
 
-            // 2) forward CLOSED candle (реактивный вход)
             WsClosedKline?.Invoke(symbol, tf, candle);
         }
 
+        private static string Key(string symbol, KlineInterval tf) => $"{symbol}:{tf}";
 
-        private static string Key(string symbol, KlineInterval tf)
-            => $"{symbol}:{tf}";
-
-        // ---------------------------------------------------------------------
-        // PUBLIC API (используется StrategyEngine / SmartRegime / Supervisor)
-        // ---------------------------------------------------------------------
+        // =====================================================
+        // MAIN API
+        // =====================================================
         public async Task<IReadOnlyList<BinanceFuturesUsdtKline>> GetKlinesAsync(
-     string symbol,
-     KlineInterval tf,
-     int need,
-     CancellationToken ct = default)
+            string symbol,
+            KlineInterval tf,
+            int need,
+            CancellationToken ct = default)
         {
+
+            if (!_hasSnapshotState)
+            {
+                _logger.LogCritical(
+                    "[MD][HARD-GUARD] GetKlinesAsync called BEFORE snapshot ready {symbol} {tf}",
+                    symbol, tf);
+
+                return _buf.GetLast(symbol, tf, need); // best-effort WS ONLY
+            }
+
+
             var key = Key(symbol, tf);
 
-            // 1) гарантируем WS подписку
+            // 1) WS subscribe (idempotent)
             await EnsureWsSubscribed(symbol, tf, ct);
 
-            // 2) пробуем WS snapshot
+            // 2) берем что есть
             var ws = _buf.GetLast(symbol, tf, need);
-
-            if (IsInWarmup(symbol, tf))
-            {
-                _logger.LogDebug(
-                    "[MD][WARMUP] block analysis {Symbol} {Timeframe} bars={Bars}/{Need}",
-                    symbol, tf, ws.Count, need);
-
+            if (ws.Count >= need)
                 return ws;
-            }
+
+            // 3) REST — ТОЛЬКО если snapshot НЕ был
+            if (_readyBySnapshot)
+                return ws;
+
+
 
             var restLock = GetRestLock(key);
             if (!await restLock.WaitAsync(0, ct))
-                return ws; // backfill уже выполняется в другом потоке
+                return ws;
 
             try
             {
-                // повторная проверка WS после входа в lock
                 ws = _buf.GetLast(symbol, tf, need);
                 if (ws.Count >= need)
-                {
-                    return ws.Count > need
-                        ? ws.Skip(ws.Count - need).Take(need).ToList()
-                        : ws;
-                }
-
-                // 4) REST fallback (rate-limited)
-                if (!CanUseRest(key))
-                {
-                    _logger.LogWarning(
-                        "[MD][REST-SKIP] cooldown active {Symbol} {Timeframe}",
-                        symbol, tf);
-
                     return ws;
-                }
+
+                if (_restBackfilled.ContainsKey(key))
+                    return ws;
+
+                if (!CanUseRest(key))
+                    return ws;
 
                 _lastRestFetchUtc[key] = DateTime.UtcNow;
 
-                _logger.LogWarning(
-                    "[MD][REST-BACKFILL] {Symbol} {Timeframe} need={Need} have={Have}",
-                    symbol, tf, need, ws.Count);
-
-                using var client = _factory.CreateRestClient();
-
-                var rest = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
-                    symbol: symbol,
-                    interval: tf,
-                    limit: need,
-                    ct: ct
-                );
-
-                if (!rest.Success || rest.Data == null)
+                await _globalRestLimiter.WaitAsync(ct);
+                try
                 {
-                    _logger.LogError(
-                        "[MD][REST-FAIL] {Symbol} {Timeframe}: {Error}",
-                        symbol, tf, rest.Error?.Message ?? "unknown");
+                    var client = _factory.CreateRestClient();
 
-                    return ws;
+                    var rest = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
+                        symbol, tf, limit: need,  ct: ct);
+
+                    if (!rest.Success || rest.Data == null)
+                        return ws;
+ 
+                        foreach (var k in rest.Data)
+                        {
+                            var candle = new BinanceFuturesUsdtKline
+                            {
+                                OpenTime = k.OpenTime,
+                                CloseTime = k.CloseTime,
+                                OpenPrice = k.OpenPrice,
+                                HighPrice = k.HighPrice,
+                                LowPrice = k.LowPrice,
+                                ClosePrice = k.ClosePrice,
+                                Volume = k.Volume,
+                                QuoteVolume = k.QuoteVolume,
+                                TradeCount = k.TradeCount,
+                                TakerBuyBaseVolume = k.TakerBuyBaseVolume,
+                                TakerBuyQuoteVolume = k.TakerBuyQuoteVolume
+                            };
+
+                            _buf.Upsert(symbol, tf, candle);
+                        }
+                     
+
+                    _restBackfilled[key] = true;
+                    return _buf.GetLast(symbol, tf, need);
                 }
-
-                foreach (var k in rest.Data)
+                finally
                 {
-                    var candle = new BinanceFuturesUsdtKline
-                    {
-                        OpenTime = k.OpenTime,
-                        CloseTime = k.CloseTime,
-                        OpenPrice = k.OpenPrice,
-                        HighPrice = k.HighPrice,
-                        LowPrice = k.LowPrice,
-                        ClosePrice = k.ClosePrice,
-                        Volume = k.Volume,
-                        QuoteVolume = k.QuoteVolume,
-                        TradeCount = k.TradeCount,
-                        TakerBuyBaseVolume = k.TakerBuyBaseVolume,
-                        TakerBuyQuoteVolume = k.TakerBuyQuoteVolume
-                    };
-
-                    _buf.Upsert(symbol, tf, candle);
+                    _globalRestLimiter.Release();
                 }
-
-                return _buf.GetLast(symbol, tf, need);
             }
             finally
             {
@@ -208,43 +253,19 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
-
-
-        private readonly ConcurrentDictionary<string, Task> _subTasks = new();
-
-        private Task EnsureWsSubscribed(string symbol, KlineInterval tf, CancellationToken ct)
-        {
-            var key = Key(symbol, tf);
-            return _subTasks.GetOrAdd(key, _ => SubscribeCore(symbol, tf, ct));
-        }
-
-        private async Task SubscribeCore(string symbol, KlineInterval tf, CancellationToken ct)
-        {
-            await _ws.SubscribeAsync(symbol, tf, ct);
-            _wsStartedUtc[Key(symbol, tf)] = DateTime.UtcNow;
-            _logger.LogInformation("[MD][WS] subscribe started {symbol} {tf}", symbol, tf);
-            OnSubscribed?.Invoke(symbol, tf);
-        }
-
-        private readonly ConcurrentDictionary<string, SemaphoreSlim> _restLocks = new();
-
-        private SemaphoreSlim GetRestLock(string key) =>
-            _restLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
-
-        private const int WarmBars = 20;
-        private const int FastWarmBars = 10; // 🔥 FAST режим
-
+        // =====================================================
+        // WARMUP LOGIC (FIXED)
+        // =====================================================
         public bool IsInWarmup(string symbol, KlineInterval tf)
         {
             var key = Key(symbol, tf);
+
             if (!_wsBars.TryGetValue(key, out var bars))
                 return true;
 
-            // FAST warm-up: разрешаем раньше, без REST
-            var required = Math.Min(WarmBars, FastWarmBars);
+            var required = _readyBySnapshot ? FastWarmBars : WarmBars;
             return bars < required;
         }
-
 
         private bool CanUseRest(string key)
         {
@@ -253,5 +274,54 @@ namespace VertexAutoTradeBinance8.Services
 
             return DateTime.UtcNow - last > RestCooldown;
         }
+
+        // =====================================================
+        // WS SUBSCRIBE SINGLEFLIGHT
+        // =====================================================
+        private readonly ConcurrentDictionary<string, Task> _subTasks = new();
+
+        //private Task EnsureWsSubscribed(string symbol, KlineInterval tf, CancellationToken ct)
+        //{
+        //    var key = Key(symbol, tf);
+
+        //    return _subTasks.GetOrAdd(key, _ =>
+        //        Task.Run(async () =>
+        //        {
+        //            await _ws.SubscribeAsync(symbol, tf, CancellationToken.None);
+        //            _wsStartedUtc[key] = DateTime.UtcNow;
+        //            _logger.LogInformation("[MD][WS] subscribe started {symbol} {tf}", symbol, tf);
+        //        }));
+        //}
+
+        private Task EnsureWsSubscribed(string symbol, KlineInterval tf, CancellationToken ct)
+        {
+            var key = Key(symbol, tf);
+
+            return _subTasks.GetOrAdd(key, _ => SubscribeInternal(symbol, tf));
+        }
+
+        private async Task SubscribeInternal(string symbol, KlineInterval tf)
+        {
+            try
+            {
+                await _ws.SubscribeAsync(symbol, tf, CancellationToken.None);
+
+                _logger.LogInformation(
+                    "[MD][WS] subscribe started {symbol} {tf}",
+                    symbol, tf);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "[MD][WS] subscribe FAILED {symbol} {tf}",
+                    symbol, tf);
+
+                throw;
+            }
+        }
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _restLocks = new();
+        private SemaphoreSlim GetRestLock(string key) =>
+            _restLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
     }
 }

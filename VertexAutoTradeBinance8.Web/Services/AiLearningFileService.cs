@@ -17,13 +17,18 @@ public sealed class AiLearningFileService
     };
 
     public AiLearningFileService(
-        IWebHostEnvironment env,
+        IWebHostEnvironment env, IConfiguration cfg,
         ILogger<AiLearningFileService> logger)
     {
+        
+        var root = cfg["SharedData:Root"]
+        ?? throw new InvalidOperationException("SharedData:Root not configured");
+
         _filePath = Path.Combine(
-            AppContext.BaseDirectory,
+            root,
             "ai-models",
             "ai_learning.json");
+
 
         _logger = logger;
     }
