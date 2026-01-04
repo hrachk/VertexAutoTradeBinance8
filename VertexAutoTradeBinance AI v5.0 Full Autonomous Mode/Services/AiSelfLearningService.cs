@@ -538,15 +538,29 @@ namespace VertexAutoTradeBinance8.Services
                 confidence
             );
         }
-
-        public decimal PnlPct { get; set; }
+ 
         // =====================================================================
         // 2) TRADE ENTRY (вызывается из PositionSupervisor / TradeResultMonitor)
         // =====================================================================
-        public void RecordTrade(string symbol, SignalSide side, decimal entry, decimal exit, MarketRegime regime)
+        public void RecordTrade(
+     string symbol,
+     SignalSide side,
+     decimal entry,
+     decimal exit,
+     MarketRegime regime)
         {
-            decimal pnl = (side == SignalSide.Buy) ? exit - entry : entry - exit;
-            decimal pnlPct = side == SignalSide.Buy    ? (exit - entry) / entry    : (entry - exit) / entry;
+            if (entry <= 0) return;
+
+            decimal pnl =
+                side == SignalSide.Buy
+                    ? exit - entry
+                    : entry - exit;
+
+            decimal pnlPct =
+                side == SignalSide.Buy
+                    ? (exit - entry) / entry
+                    : (entry - exit) / entry;
+
             lock (_lock)
             {
                 _tradeHistory.Add(new TradeHistoryEntry
@@ -557,7 +571,7 @@ namespace VertexAutoTradeBinance8.Services
                     Exit = exit,
                     Regime = regime,
                     Pnl = pnl,
-                    //PnlPct = pnlPct,    // NEW  TODO: realize all 
+                    PnlPct = pnlPct,
                     Time = DateTime.UtcNow
                 });
 
@@ -565,24 +579,11 @@ namespace VertexAutoTradeBinance8.Services
                     _tradeHistory.RemoveRange(0, 2500);
             }
 
-            UpdateStats(symbol, regime, pnl);
+            // 🔥 ОБУЧАЕМСЯ ПО ПРОЦЕНТУ, А НЕ АБСОЛЮТУ
+            UpdateStats(symbol, regime, pnlPct);
+
             Save(force: true);
             _lastSnapshot = DateTime.UtcNow;
-
-          //  TrySnapshot();  // Обновление статистики по сделке
-
-          //  Save(force: true);  // Принудительное сохранение после каждой сделки
-            /*
-            bool win = side == SignalSide.Buy ? exit > entry : exit < entry;
-            lock (_lock)
-            {
-                var rs = GetOrCreateRegimeStats(symbol, regime);
-                rs.Trades++;
-                if (win)
-                    rs.Wins++;  // Учитывается выигрышная сделка
-            }*/
-
-          //  TrySnapshot();  // Сохранение снимка данных
         }
 
 
@@ -1126,24 +1127,16 @@ namespace VertexAutoTradeBinance8.Services
         // ---------------------------------------------------------------------
         // AI META: WinRate (for SymbolRegistry dynamic cap)
         // ---------------------------------------------------------------------
-        public decimal GetWinRate(string side, int lastN = 30, int minTrades = 10)
+   
+        public decimal GetWinRate(
+    SignalSide side,
+    int lastN = 30,
+    int minTrades = 10)
         {
-            if (lastN <= 0) lastN = 30;
-
-            SignalSide ss;
-            if (string.Equals(side, "LONG", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(side, "BUY", StringComparison.OrdinalIgnoreCase))
-                ss = SignalSide.Buy;
-            else if (string.Equals(side, "SHORT", StringComparison.OrdinalIgnoreCase) ||
-                     string.Equals(side, "SELL", StringComparison.OrdinalIgnoreCase))
-                ss = SignalSide.Sell;
-            else
-                return 0.55m; // unknown side → neutral
-
             lock (_lock)
             {
                 var trades = _tradeHistory
-                    .Where(t => t.Side == ss)
+                    .Where(t => t.Side == side)
                     .OrderByDescending(t => t.Time)
                     .Take(lastN)
                     .ToList();
@@ -1156,31 +1149,7 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
-
-        private RegimeStats GetOrCreateRegimeStats(string symbol, MarketRegime regime)
-        {
-            if (!_stats.TryGetValue(symbol, out var regimes))
-            {
-                regimes = new Dictionary<MarketRegime, RegimeStats>();
-                _stats[symbol] = regimes;
-            }
-
-            if (!regimes.TryGetValue(regime, out var rs))
-            {
-                rs = new RegimeStats
-                {
-                    Regime = regime
-                };
-                regimes[regime] = rs;
-            }
-            else if (rs.Regime == MarketRegime.Unknown)
-            {
-                rs.Regime = regime;
-            }
-
-            return rs;
-        }
-
+ 
         public void RecordSimulatedTrade(
         string symbol,
         string side,

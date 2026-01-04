@@ -157,6 +157,12 @@ public class Program
                     services.AddHostedService<BinanceUserDataHostedService>();
                     services.AddSingleton<IAccountStateService, AccountStateService>();
                     services.AddSingleton<IDecisionTraceService, DecisionTraceFileService>();
+                    services.AddSingleton<IOpenPositionProvider, EngineStateOpenPositionProvider>();
+
+                    services.AddSingleton<OpenPositionSymbolTracker>();
+                    services.AddSingleton<IOpenPositionSymbolSource>(sp => sp.GetRequiredService<OpenPositionSymbolTracker>());
+
+
                 })
                 .Build();
 

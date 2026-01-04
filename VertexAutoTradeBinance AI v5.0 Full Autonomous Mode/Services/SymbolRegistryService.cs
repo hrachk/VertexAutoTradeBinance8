@@ -1,9 +1,8 @@
-﻿using VertexAutoTradeBinance8.Models;
+﻿using System.Collections.Concurrent;
+using System.Threading;
+using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services;
-
-
-
 
 public class SymbolRegistryService
 {
@@ -16,12 +15,19 @@ public class SymbolRegistryService
     private readonly AiSelfLearningService _ai;
     private readonly UniverseDryRunFileLogger _dryRun;
 
+    // OPTIONAL (but recommended): allow registry to pin open positions (no symbol loss while in position)
+    private readonly IOpenPositionSymbolSource? _posSource;
+
+
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private DateTime _lastHardRefresh = DateTime.MinValue;
 
-    public IReadOnlyList<string> ActiveSymbols { get; private set; } = new List<string>();
-    public IReadOnlyList<string> ActiveLongSymbols { get; private set; } = new List<string>();
-    public IReadOnlyList<string> ActiveShortSymbols { get; private set; } = new List<string>();
+    // Atomically swapped snapshot
+    private volatile UniverseSnapshot _snapshot = UniverseSnapshot.Empty();
+
+    public IReadOnlyList<string> ActiveSymbols => _snapshot.All;
+    public IReadOnlyList<string> ActiveLongSymbols => _snapshot.Long;
+    public IReadOnlyList<string> ActiveShortSymbols => _snapshot.Short;
 
     public SymbolRegistryService(
         IConfiguration cfg,
@@ -30,7 +36,8 @@ public class SymbolRegistryService
         SymbolUniverseBuilder universeBuilder,
         AiMarketRegimeService marketRegime,
         AiSelfLearningService ai,
-        UniverseDryRunFileLogger dryRun)
+        UniverseDryRunFileLogger dryRun,
+        IOpenPositionSymbolSource? posSource = null) // safe optional DI
     {
         _cfg = cfg;
         _logger = logger;
@@ -39,6 +46,31 @@ public class SymbolRegistryService
         _marketRegime = marketRegime;
         _ai = ai;
         _dryRun = dryRun;
+        _posSource = posSource;
+    }
+
+    private record UniverseSnapshot(
+        DateTime UtcTime,
+        IReadOnlyList<string> All,
+        IReadOnlyList<string> Long,
+        IReadOnlyList<string> Short,
+        IReadOnlyList<string> Pinned,
+        IReadOnlyList<string> PinnedByPositions,
+        int DynamicCap,
+        int AiCapLong,
+        int AiCapShort,
+        decimal BtcVol,
+        string BtcVolBucket)
+    {
+        public static UniverseSnapshot Empty() => new(
+            DateTime.MinValue,
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            0, 0, 0,
+            0m, "NA");
     }
 
     private static decimal Normalize(decimal value, decimal min, decimal max)
@@ -50,6 +82,46 @@ public class SymbolRegistryService
     private static IReadOnlyList<string> BlacklistFilter(IEnumerable<string> symbols)
         => symbols.Where(s => !string.Equals(s, "AIAUSDT", StringComparison.OrdinalIgnoreCase)).ToList();
 
+    private static IReadOnlyList<string> NormalizeSymbols(IEnumerable<string> symbols)
+        => symbols
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim().ToUpperInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private static IReadOnlyList<string> LimitUnion(
+    IEnumerable<string> pinnedCfg,
+    IEnumerable<string> pinnedByPos,
+    IEnumerable<string> longs,
+    IEnumerable<string> shorts,
+    int totalCap)
+    {
+        var pinCfg = NormalizeSymbols(pinnedCfg);
+        var pinPos = NormalizeSymbols(pinnedByPos);
+
+        // 🔒 absolute priority: symbols with open positions
+        var priority = pinPos
+            .Concat(pinCfg)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var rest = NormalizeSymbols(longs)
+            .Concat(NormalizeSymbols(shorts))
+            .Where(s => !priority.Contains(s, StringComparer.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (totalCap <= 0)
+            return priority.Concat(rest).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+        var slotsLeft = Math.Max(0, totalCap - priority.Count);
+
+        return priority
+            .Concat(rest.Take(slotsLeft))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     public async Task LoadAsync(CancellationToken ct)
     {
         var mode = _cfg["SymbolSelection:Mode"] ?? "Manual";
@@ -57,18 +129,34 @@ public class SymbolRegistryService
         if (string.Equals(mode, "Manual", StringComparison.OrdinalIgnoreCase))
         {
             var manual = _cfg.GetSection("SymbolSelection:Manual").Get<string[]>() ?? Array.Empty<string>();
+            var list = BlacklistFilter(NormalizeSymbols(manual));
 
-            var list = manual
-                .Where(s => !string.IsNullOrWhiteSpace(s))
-                .Select(s => s.Trim().ToUpperInvariant())
-                .Distinct(StringComparer.OrdinalIgnoreCase);
+            // pinned-by-position still applied in manual, for safety
+            var posPinned = await GetPinnedByOpenPositionsSafeAsync(ct);
 
-            ActiveSymbols = BlacklistFilter(list);
-            ActiveLongSymbols = ActiveSymbols;
-            ActiveShortSymbols = ActiveSymbols;
+            var all = list
+                .Concat(posPinned)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var snap = new UniverseSnapshot(
+                UtcTime: DateTime.UtcNow,
+                All: all,
+                Long: all,
+                Short: all,
+                Pinned: list,
+                PinnedByPositions: posPinned,
+                DynamicCap: all.Count,
+                AiCapLong: all.Count,
+                AiCapShort: all.Count,
+                BtcVol: 0m,
+                BtcVolBucket: "MANUAL"
+            );
+
+            _snapshot = snap;
 
             _logger.LogInformation("[SYMBOL] Manual mode: {cnt} → {list}",
-                ActiveSymbols.Count, string.Join(", ", ActiveSymbols));
+                _snapshot.All.Count, string.Join(", ", _snapshot.All));
 
             return;
         }
@@ -81,6 +169,27 @@ public class SymbolRegistryService
         {
             if (now - _lastHardRefresh < TimeSpan.FromMinutes(refreshMinutes))
             {
+                // 🔒 SOFT refresh: only update pinned-by-positions (no recompute)
+                try
+                {
+                    var pinnedPos = await GetPinnedByOpenPositionsSafeAsync(ct);
+
+                    if (pinnedPos.Count > 0)
+                    {
+                        var merged = _snapshot.All
+                            .Concat(pinnedPos)
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+
+                        _snapshot = _snapshot with
+                        {
+                            All = merged,
+                            PinnedByPositions = pinnedPos
+                        };
+                    }
+                }
+                catch { /* ignored by design */ }
+
                 SoftHealthCheck();
                 return;
             }
@@ -92,211 +201,269 @@ public class SymbolRegistryService
             _refreshLock.Release();
         }
 
-        var auto = _cfg.GetSection("SymbolSelection:Auto");
+        // last-known-good snapshot for rollback
+        var lastGood = _snapshot;
 
-        var pinned = BlacklistFilter(GetPinnedSymbols());
-        var topVolumeCount = auto.GetValue<int>("TopVolumeCount");
-
-        var minVolLong = auto.GetValue<decimal?>("Min24hVolumeLong")
-                         ?? auto.GetValue<decimal>("Min24hVolume");
-
-        var minVolShort = auto.GetValue<decimal?>("Min24hVolumeShort")
-                          ?? auto.GetValue<decimal>("Min24hVolume");
-
-        var minPrice = auto.GetValue<decimal>("MinPrice");
-        var finalCap = auto.GetValue<int?>("FinalUniverseCap") ?? 25;
-        var maxAdds = auto.GetValue<int?>("StabilityMaxAdds") ?? 3;
-
-        var aiWeight = auto.GetValue<decimal?>("AiWeight") ?? 0.65m;
-        var momWeight = auto.GetValue<decimal?>("MomentumWeight") ?? 0.35m;
-        var momCap = auto.GetValue<decimal?>("MomentumCapPercent") ?? 15m;
-
-        var dryRunLimit = auto.GetValue<int?>("DryRunLogLimit") ?? 12;
-
-        var enableBtcFilter = auto.GetValue<bool?>("EnableBtcFilter") ?? false;
-        var btcDump = auto.GetValue<decimal?>("BtcDumpThreshold") ?? -2.5m;
-        var btcSqueeze = auto.GetValue<decimal?>("BtcSqueezeThreshold") ?? 2.5m;
-
-        var baseSnapshots = await _liquidityScanner.LoadSnapshotsAsync(ct);
-        if (baseSnapshots == null || baseSnapshots.Count == 0)
+        try
         {
-            _logger.LogWarning("[SYMBOL] No market snapshots → skip refresh");
-            return;
-        }
+            var auto = _cfg.GetSection("SymbolSelection:Auto");
 
-        // Regime filter
-        baseSnapshots = baseSnapshots
-            .Where(s => _marketRegime.IsTradable(s.Symbol))
-            .ToList();
+            // ✅ hard cap: default to 20 (your target)
+            var totalUniverseCap = auto.GetValue<int?>("TotalUniverseCap") ?? 20;
 
-        // BTC bias
-        decimal btcBiasLong = 1m;
-        decimal btcBiasShort = 1m;
+            var pinnedCfg = BlacklistFilter(GetPinnedSymbols());
+            var pinnedPos = await GetPinnedByOpenPositionsSafeAsync(ct);
 
-        if (enableBtcFilter)
-        {
-            var btc = baseSnapshots.FirstOrDefault(s => s.Symbol == "BTCUSDT");
-            if (btc != null)
+            // pinned union (cfg + positions)
+            var pinned = pinnedCfg
+                .Concat(pinnedPos)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var topVolumeCount = auto.GetValue<int>("TopVolumeCount");
+
+            var minVolLong = auto.GetValue<decimal?>("Min24hVolumeLong")
+                             ?? auto.GetValue<decimal>("Min24hVolume");
+
+            var minVolShort = auto.GetValue<decimal?>("Min24hVolumeShort")
+                              ?? auto.GetValue<decimal>("Min24hVolume");
+
+            var minPrice = auto.GetValue<decimal>("MinPrice");
+
+            var finalCap = auto.GetValue<int?>("FinalUniverseCap") ?? 25;
+            var maxAdds = auto.GetValue<int?>("StabilityMaxAdds") ?? 3;
+
+            var aiWeight = auto.GetValue<decimal?>("AiWeight") ?? 0.65m;
+            var momWeight = auto.GetValue<decimal?>("MomentumWeight") ?? 0.35m;
+            var momCap = auto.GetValue<decimal?>("MomentumCapPercent") ?? 15m;
+
+            var dryRunLimit = auto.GetValue<int?>("DryRunLogLimit") ?? 12;
+
+            var enableBtcFilter = auto.GetValue<bool?>("EnableBtcFilter") ?? false;
+            var btcDump = auto.GetValue<decimal?>("BtcDumpThreshold") ?? -2.5m;
+            var btcSqueeze = auto.GetValue<decimal?>("BtcSqueezeThreshold") ?? 2.5m;
+
+            var allSnapshots = await _liquidityScanner.LoadSnapshotsAsync(ct);
+            if (allSnapshots == null || allSnapshots.Count == 0)
             {
-                if (btc.PriceChangePercent <= btcDump)
+                _logger.LogWarning("[SYMBOL] No market snapshots → keep last-good universe");
+                return;
+            }
+
+            // BTC metrics BEFORE regime-filter (important)
+            var btcSnapshotRaw = allSnapshots.FirstOrDefault(s => s.Symbol == "BTCUSDT");
+            var btcVol = btcSnapshotRaw != null ? Math.Abs(btcSnapshotRaw.PriceChangePercent) : 0m;
+
+            // Regime filter for candidates only (but keep pinned/positions regardless)
+            var baseSnapshots = allSnapshots
+                .Where(s => _marketRegime.IsTradable(s.Symbol))
+                .ToList();
+
+            if (baseSnapshots.Count == 0)
+            {
+                _logger.LogWarning("[SYMBOL] All snapshots filtered by regime → keep last-good universe");
+                return;
+            }
+
+            // BTC bias (based on raw BTC snapshot if enabled)
+            decimal btcBiasLong = 1m;
+            decimal btcBiasShort = 1m;
+
+            if (enableBtcFilter && btcSnapshotRaw != null)
+            {
+                if (btcSnapshotRaw.PriceChangePercent <= btcDump)
                 {
                     btcBiasLong = 0.35m;
-                    _logger.LogWarning("[SYMBOL][BTC] Dump {pct}% → LONG score reduced", btc.PriceChangePercent);
+                    _logger.LogWarning("[SYMBOL][BTC] Dump {pct}% → LONG score reduced", btcSnapshotRaw.PriceChangePercent);
                 }
-                else if (btc.PriceChangePercent >= btcSqueeze)
+                else if (btcSnapshotRaw.PriceChangePercent >= btcSqueeze)
                 {
                     btcBiasShort = 0.35m;
-                    _logger.LogWarning("[SYMBOL][BTC] Squeeze {pct}% → SHORT score reduced", btc.PriceChangePercent);
+                    _logger.LogWarning("[SYMBOL][BTC] Squeeze {pct}% → SHORT score reduced", btcSnapshotRaw.PriceChangePercent);
                 }
             }
-        }
 
+            // ===============================
+            // DYN CAP (BTC VOL) → THEN AI CAP
+            // ===============================
+            var dyn = _cfg.GetSection("SymbolSelection:DynamicCap");
+            var useDynCap = dyn.GetValue<bool?>("Enabled") ?? false;
 
-        var dyn = _cfg.GetSection("SymbolSelection:DynamicCap");
-        var useDynCap = dyn.GetValue<bool?>("Enabled") ?? false;
+            var dynamicCap = finalCap;
 
-        var dynamicCap = finalCap;
-
-        // === AI CAP ADJUSTMENT (WINRATE) ===
-        var longWr = _ai.GetWinRate("LONG", lastN: 30);
-        var shortWr = _ai.GetWinRate("SHORT", lastN: 30);
-
-        int AiAdjust(int cap, decimal wr)
-        {
-            if (wr < 0.35m) return Math.Max(1, cap - 2);
-            if (wr < 0.45m) return Math.Max(1, cap - 1);
-            return cap;
-        }
-
-        var aiCapLong = AiAdjust(dynamicCap, longWr);
-        var aiCapShort = AiAdjust(dynamicCap, shortWr);
-
-        _logger.LogWarning(
-            "[SYMBOL][AI-CAP] wr(L)={lwr:P0} wr(S)={swr:P0} cap={cap} → L={lcap} S={scap}",
-            longWr, shortWr, dynamicCap, aiCapLong, aiCapShort);
-
-        if (useDynCap)
-        {
-            var low = dyn.GetValue<decimal?>("LowVolPct") ?? 1.2m;
-            var mid = dyn.GetValue<decimal?>("MidVolPct") ?? 2.5m;
-
-            var capLow = dyn.GetValue<int?>("CapLowVol") ?? finalCap;
-            var capMid = dyn.GetValue<int?>("CapMidVol") ?? finalCap;
-            var capHigh = dyn.GetValue<int?>("CapHighVol") ?? Math.Max(1, Math.Min(finalCap, 4));
-
-            // Vol proxy = abs(BTC 24h %)
-            var btcVol = GetBtcVolatilityPercent(baseSnapshots);
-
-            if (btcVol <= low) dynamicCap = capLow;
-            else if (btcVol <= mid) dynamicCap = capMid;
-            else dynamicCap = capHigh;
-
-            // hard clamp: cannot exceed configured caps and TopVolumeCount
-            dynamicCap = Math.Clamp(dynamicCap, 1, Math.Min(finalCap, topVolumeCount));
-
-            _logger.LogWarning("[SYMBOL][DYN-CAP] BTC vol={vol:F2}% → cap={cap}", btcVol, dynamicCap);
-        }
-        else
-        {
-            // clamp finalCap to TopVolumeCount anyway (sanity)
-            dynamicCap = Math.Clamp(finalCap, 1, topVolumeCount);
-        }
-
-        // LONG snaps scored
-        var longSnaps = baseSnapshots
-            .Where(s => _ai.GetRecentPnL(s.Symbol, SignalSide.Buy) > -0.15m)
-            .OrderByDescending(s =>
+            if (useDynCap)
             {
-                var ai = Normalize(_ai.GetSymbolScore(s.Symbol, SignalSide.Buy), 0m, 1m);
-                var mom = Normalize((decimal)Math.Abs(s.PriceChangePercent), 0m, momCap);
-                return (ai * aiWeight + mom * momWeight) * btcBiasLong;
-            })
-            .ToList();
+                var low = dyn.GetValue<decimal?>("LowVolPct") ?? 1.2m;
+                var mid = dyn.GetValue<decimal?>("MidVolPct") ?? 2.5m;
 
-        // SHORT snaps scored
-        var shortSnaps = baseSnapshots
-            .Where(s => _ai.GetRecentPnL(s.Symbol, SignalSide.Sell) > -0.15m)
-            .OrderByDescending(s =>
+                var capLow = dyn.GetValue<int?>("CapLowVol") ?? finalCap;
+                var capMid = dyn.GetValue<int?>("CapMidVol") ?? finalCap;
+                var capHigh = dyn.GetValue<int?>("CapHighVol") ?? Math.Max(1, Math.Min(finalCap, 4));
+
+                if (btcVol <= low) dynamicCap = capLow;
+                else if (btcVol <= mid) dynamicCap = capMid;
+                else dynamicCap = capHigh;
+
+                dynamicCap = Math.Clamp(dynamicCap, 1, Math.Min(finalCap, topVolumeCount));
+
+                _logger.LogWarning("[SYMBOL][DYN-CAP] BTC vol={vol:F2}% → cap={cap}", btcVol, dynamicCap);
+            }
+            else
             {
-                var ai = Normalize(_ai.GetSymbolScore(s.Symbol, SignalSide.Sell), 0m, 1m);
-                var mom = Normalize((decimal)Math.Abs(s.PriceChangePercent), 0m, momCap);
-                return (ai * aiWeight + mom * momWeight) * btcBiasShort;
-            })
-            .ToList();
+                dynamicCap = Math.Clamp(finalCap, 1, topVolumeCount);
+            }
 
-        // UniverseBuilder
-        var longCandidates = BlacklistFilter(_universeBuilder.Build(
-            longSnaps, pinned.ToArray(), topVolumeCount, minVolLong, minPrice));
+            // === AI CAP ADJUSTMENT (WINRATE) ===
+            var longWr = _ai.GetWinRate(SignalSide.Buy);
+            var shortWr = _ai.GetWinRate(SignalSide.Sell);
 
-        var shortCandidates = BlacklistFilter(_universeBuilder.Build(
-            shortSnaps, pinned.ToArray(), topVolumeCount, minVolShort, minPrice));
+            static int AiAdjust(int cap, decimal wr)
+            {
+                if (wr < 0.35m) return Math.Max(1, cap - 2);
+                if (wr < 0.45m) return Math.Max(1, cap - 1);
+                return cap;
+            }
+
+            var aiCapLong = AiAdjust(dynamicCap, longWr);
+            var aiCapShort = AiAdjust(dynamicCap, shortWr);
+
+            _logger.LogWarning(
+                "[SYMBOL][AI-CAP] wr(L)={lwr:P0} wr(S)={swr:P0} dynCap={cap} → L={lcap} S={scap}",
+                longWr, shortWr, dynamicCap, aiCapLong, aiCapShort);
+
+            // LONG scored
+            var longSnaps = baseSnapshots
+                .Where(s => _ai.GetRecentPnL(s.Symbol, SignalSide.Buy) > -0.15m)
+                .OrderByDescending(s =>
+                {
+                    var ai = Normalize(_ai.GetSymbolScore(s.Symbol, SignalSide.Buy), 0m, 1m);
+                    var mom = Normalize((decimal)Math.Abs(s.PriceChangePercent), 0m, momCap);
+                    return (ai * aiWeight + mom * momWeight) * btcBiasLong;
+                })
+                .ToList();
+
+            // SHORT scored
+            var shortSnaps = baseSnapshots
+                .Where(s => _ai.GetRecentPnL(s.Symbol, SignalSide.Sell) > -0.15m)
+                .OrderByDescending(s =>
+                {
+                    var ai = Normalize(_ai.GetSymbolScore(s.Symbol, SignalSide.Sell), 0m, 1m);
+                    var mom = Normalize((decimal)Math.Abs(s.PriceChangePercent), 0m, momCap);
+                    return (ai * aiWeight + mom * momWeight) * btcBiasShort;
+                })
+                .ToList();
+
+            var longCandidates = BlacklistFilter(_universeBuilder.Build(
+                longSnaps, pinned.ToArray(), topVolumeCount, minVolLong, minPrice));
+
+            var shortCandidates = BlacklistFilter(_universeBuilder.Build(
+                shortSnaps, pinned.ToArray(), topVolumeCount, minVolShort, minPrice));
+
+            // Stability guard + caps
+            var longList = ApplyStabilityGuardSide(lastGood.Long, longCandidates, maxAdds)
+                .Take(aiCapLong)
+                .ToList();
+
+            var shortList = ApplyStabilityGuardSide(lastGood.Short, shortCandidates, maxAdds)
+                .Take(aiCapShort)
+                .ToList();
+
+            // HARD LIMIT total universe size (10-20 target)
+            // pinned always included; rest cut to fit.
+            var all = LimitUnion(
+     pinnedCfg,
+     pinnedPos,
+     longList,
+     shortList,
+     totalUniverseCap
+ );
 
 
-        // Stability guard (per side) + dynamic cap
-        ActiveLongSymbols = ApplyStabilityGuardSide(ActiveLongSymbols, longCandidates, maxAdds)
-            .Take(aiCapLong)
-            .ToList();
+            // rebuild per-side lists to still be subsets of ALL
+            longList = longList.Where(s => all.Contains(s, StringComparer.OrdinalIgnoreCase)).ToList();
+            shortList = shortList.Where(s => all.Contains(s, StringComparer.OrdinalIgnoreCase)).ToList();
 
-        ActiveShortSymbols = ApplyStabilityGuardSide(ActiveShortSymbols, shortCandidates, maxAdds)
-            .Take(aiCapShort)
-            .ToList();
+            var bucket =
+                btcVol <= 1.2m ? "LOW" :
+                btcVol <= 2.5m ? "MID" : "HIGH";
 
+            var snap = new UniverseSnapshot(
+                UtcTime: DateTime.UtcNow,
+                All: all,
+                Long: longList,
+                Short: shortList,
+                Pinned: pinnedCfg,
+                PinnedByPositions: pinnedPos,
+                DynamicCap: dynamicCap,
+                AiCapLong: aiCapLong,
+                AiCapShort: aiCapShort,
+                BtcVol: btcVol,
+                BtcVolBucket: bucket
+            );
 
+            _snapshot = snap;
 
+            _logger.LogInformation(
+                "[SYMBOL] Registry refresh: pinnedCfg={pc}, pinnedPos={pp}, long={lng}, short={sht}, total={tot}",
+                _snapshot.Pinned.Count,
+                _snapshot.PinnedByPositions.Count,
+                _snapshot.Long.Count,
+                _snapshot.Short.Count,
+                _snapshot.All.Count);
 
-        // Union for UI/WS warmup
-        ActiveSymbols = pinned
-            .Concat(ActiveLongSymbols)
-            .Concat(ActiveShortSymbols)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            _logger.LogInformation("[SYMBOL][DRY-RUN] LONG → {list}",
+                string.Join(", ", _snapshot.Long.Take(dryRunLimit)));
 
-        _logger.LogInformation(
-            "[SYMBOL] Registry refresh: pinned={pin}, long={lng}, short={sht}, total={tot}",
-            pinned.Count,
-            ActiveLongSymbols.Count,
-            ActiveShortSymbols.Count,
-            ActiveSymbols.Count);
+            _logger.LogInformation("[SYMBOL][DRY-RUN] SHORT → {list}",
+                string.Join(", ", _snapshot.Short.Take(dryRunLimit)));
 
-        _logger.LogInformation("[SYMBOL][DRY-RUN] LONG → {list}",
-            string.Join(", ", ActiveLongSymbols.Take(dryRunLimit)));
-
-        _logger.LogInformation("[SYMBOL][DRY-RUN] SHORT → {list}",
-            string.Join(", ", ActiveShortSymbols.Take(dryRunLimit)));
-
-        _dryRun.Log(new UniverseDryRunEntry(
-    DateTime.UtcNow,
-    GetBtcVolatilityPercent(baseSnapshots),
-    GetBtcVolatilityPercent(baseSnapshots) <= 1.2m ? "LOW"
-        : GetBtcVolatilityPercent(baseSnapshots) <= 2.5m ? "MID"
-        : "HIGH",
-    dynamicCap,
-    ActiveLongSymbols,
-    ActiveShortSymbols,
-    pinned
-));
-
+            // dry-run file must never break refresh
+            try
+            {
+                _dryRun.Log(new UniverseDryRunEntry(
+                    DateTime.UtcNow,
+                    _snapshot.BtcVol,
+                    _snapshot.BtcVolBucket,
+                    _snapshot.DynamicCap,
+                    _snapshot.Long,
+                    _snapshot.Short,
+                    _snapshot.Pinned
+                ));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[SYMBOL][DRY-RUN] log failed (ignored)");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[SYMBOL] Refresh failed → rollback last-good universe");
+            _snapshot = lastGood; // rollback
+        }
     }
 
     private void SoftHealthCheck()
     {
-        if (ActiveSymbols.Count == 0)
+        if (_snapshot.All.Count == 0)
             _logger.LogWarning("[SYMBOL] ActiveSymbols empty during soft check");
-        if (ActiveLongSymbols.Count == 0)
+        if (_snapshot.Long.Count == 0)
             _logger.LogWarning("[SYMBOL] ActiveLongSymbols empty during soft check");
-        if (ActiveShortSymbols.Count == 0)
+        if (_snapshot.Short.Count == 0)
             _logger.LogWarning("[SYMBOL] ActiveShortSymbols empty during soft check");
     }
 
     private IReadOnlyList<string> ApplyStabilityGuardSide(
-      IReadOnlyList<string> prev,
-      IReadOnlyList<string> next,
-      int maxAdds)
+        IReadOnlyList<string> prev,
+        IReadOnlyList<string> next,
+        int maxAdds)
     {
         prev ??= Array.Empty<string>();
         next ??= Array.Empty<string>();
 
-        if (prev.Count == 0)
+        if (next.Count == 0)
+            return next;
+
+        if (prev.Count == 0 || next.Count <= maxAdds)
             return next;
 
         var stayed = prev.Intersect(next, StringComparer.OrdinalIgnoreCase).ToList();
@@ -310,14 +477,6 @@ public class SymbolRegistryService
             .ToList();
     }
 
-
-    private decimal GetBtcVolatilityPercent(List<SymbolMarketSnapshot> snaps)
-    {
-        var btc = snaps.FirstOrDefault(s => s.Symbol == "BTCUSDT");
-        if (btc == null) return 0m;
-        return Math.Abs(btc.PriceChangePercent);
-    }
-
     private List<string> GetPinnedSymbols()
     {
         return _cfg
@@ -329,4 +488,30 @@ public class SymbolRegistryService
             .ToList()
             ?? new();
     }
+
+    private async Task<IReadOnlyList<string>> GetPinnedByOpenPositionsSafeAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (_posSource == null) return Array.Empty<string>();
+
+            var symbols = await _posSource.GetOpenPositionSymbolsAsync(ct);
+            return BlacklistFilter(NormalizeSymbols(symbols));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[SYMBOL] Pinned-by-positions source failed");
+            return Array.Empty<string>();
+        }
+    }
+
+}
+
+// =====================================================================
+// Contract for SymbolRegistry to pin symbols while positions are open.
+// Implement it using your existing EngineState/WS positions cache.
+// =====================================================================
+public interface IOpenPositionSymbolSource
+{
+    Task<IReadOnlyList<string>> GetOpenPositionSymbolsAsync(CancellationToken ct);
 }

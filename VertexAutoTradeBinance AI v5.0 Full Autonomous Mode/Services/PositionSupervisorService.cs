@@ -66,7 +66,14 @@ namespace VertexAutoTradeBinance8.Services
         private static readonly ConcurrentDictionary<string, DateTime> _hedgeCooldown
             = new();
         private static readonly TimeSpan HedgeCooldownPeriod = TimeSpan.FromMinutes(10);
-    
+
+        // === Position fingerprint for anti-spam (stable qty) ===
+        private readonly ConcurrentDictionary<string, decimal> _posBaseQty = new();   // key: symbol|side|entry -> baseQty
+        private readonly ConcurrentDictionary<string, decimal> _posBaseEntry = new(); // key: symbol|side -> entry (latest stable)
+
+        private readonly OpenPositionSymbolTracker _openPos;
+
+
         public PositionSupervisorService(
             ILogger<PositionSupervisorService> logger,
             BinanceClientFactory factory,
@@ -81,7 +88,7 @@ namespace VertexAutoTradeBinance8.Services
             LiquidityGuardService liquidityGuard,
             IOrderDispatcher dispatcher, EngineStateSnapshotService stateSvc,
             SmartRegimeService smartRegime,
-            ReverseProbeEngine reverseProbe)
+            ReverseProbeEngine reverseProbe, OpenPositionSymbolTracker openPos)
         {
             _logger = logger;
             _factory = factory;
@@ -100,6 +107,7 @@ namespace VertexAutoTradeBinance8.Services
             _stateSvc = stateSvc;
             _smartRegime = smartRegime;
             _reverseProbe = reverseProbe;
+            _openPos = openPos;
 
 
         }
@@ -111,6 +119,34 @@ namespace VertexAutoTradeBinance8.Services
 
             return false;
         }
+
+        private string BuildPosEntryKey(string symbol, PositionSide side, decimal entry)
+        {
+            string E(decimal v) => v.ToString("0.########", CultureInfo.InvariantCulture);
+            return $"{symbol}|{side}|e={E(entry)}";
+        }
+
+        private decimal GetOrSetBaseQty(string symbol, PositionSide side, decimal entry, decimal qtyAbs)
+        {
+            var ek = BuildPosEntryKey(symbol, side, entry);
+
+            // baseQty is set once per entry; if position is scaled up, allow increasing base
+            return _posBaseQty.AddOrUpdate(
+                ek,
+                qtyAbs,
+                (_, prev) => qtyAbs > prev ? qtyAbs : prev
+            );
+        }
+
+        private void ClearBaseQty(string symbol, PositionSide side)
+        {
+            // remove all entry-based keys for this symbol+side
+            foreach (var k in _posBaseQty.Keys.Where(k => k.StartsWith($"{symbol}|{side}|", StringComparison.OrdinalIgnoreCase)))
+                _posBaseQty.TryRemove(k, out _);
+
+            _posBaseEntry.TryRemove($"{symbol}|{side}", out _);
+        }
+
 
         private void MarkHedgeCooldown(string symbol)
         {
@@ -169,7 +205,9 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogInformation("[SUPERVISOR] {symbol}: no positions (funding reset)", symbol);
                 return;
             }
-
+            // ✅ N4: keep tracker synced (idempotent)
+            if (hasLong) _openPos.MarkOpen(symbol);
+            if (hasShort) _openPos.MarkOpen(symbol);
 
             // ===============================
             // FUNDING COST REFRESH (real, not fiction)
@@ -646,6 +684,9 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
+            // ✅ N4: track open position symbol
+            _openPos.MarkOpen(symbol);
+
             _logger.LogWarning(
                 "[SUPERVISOR][ATTACH] attaching existing position {symbol} {side} qty={qty} entry={entry}",
                 symbol, side, qty, entryPrice);
@@ -1028,54 +1069,54 @@ namespace VertexAutoTradeBinance8.Services
 
             if (prevQty != 0 && pos.Quantity == 0)
             {
-                decimal exitPrice = pos.MarkPrice > 0
-             ? pos.MarkPrice
-             : pos.EntryPrice; // fallback safety
+                decimal exitPrice = pos.MarkPrice > 0 ? pos.MarkPrice : (pos.EntryPrice > 0 ? pos.EntryPrice : prevEntry);
                 var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
 
-                _aiLearning.RecordTrade(symbol, sigSide, entry: prevEntry, exit: exitPrice, regime: _regimeNow);
+                // AI trade record (only if we had a valid prevEntry)
+                if (prevEntry > 0 && exitPrice > 0)
+                {
+                    _aiLearning.RecordTrade(symbol, sigSide, entry: prevEntry, exit: exitPrice, regime: _regimeNow);
 
-                _logger.LogWarning(
-                    "[AI][{symbol}] POSITION CLOSED → saved to ai_learning.json | entry={entry} exit={exit}",
-                    symbol, prevEntry, exitPrice);
+                    _logger.LogWarning(
+                        "[AI][{symbol}] POSITION CLOSED → saved to ai_learning.json | entry={entry} exit={exit}",
+                        symbol, prevEntry, exitPrice);
+                }
 
-
-                // =======================================
                 // STOP LOSS DETECT → STRATEGY COOLDOWN
-                // =======================================
-                bool isStopLoss =
-     side == PositionSide.Long
-         ? exitPrice < prevEntry
-         : exitPrice > prevEntry;
+                bool isStopLoss = prevEntry > 0 && exitPrice > 0 &&
+                    (side == PositionSide.Long ? exitPrice < prevEntry : exitPrice > prevEntry);
 
                 if (isStopLoss)
                 {
                     _manualHandler.RegisterStop(symbol);
-
-                    _logger.LogWarning(
-                        "[STOP][{symbol}] StopLoss detected → cooldown registered",
-                        symbol);
+                    _logger.LogWarning("[STOP][{symbol}] StopLoss detected → cooldown registered", symbol);
                 }
-                // cleanup guards
-                _earlyTpDone.TryRemove(BuildPosGuardKey(symbol, side, prevEntry, prevQty), out _);
-                _beMoved.TryRemove(BuildPosGuardKey(symbol, side, prevEntry, prevQty), out _);
 
+                // === CLEANUP: wipe all anti-spam keys for this symbol+side (qty/entry may vary) ===
+                foreach (var k in _earlyTpDone.Keys.Where(k => k.StartsWith($"{symbol}|{side}|", StringComparison.OrdinalIgnoreCase)))
+                    _earlyTpDone.TryRemove(k, out _);
 
-                // 🔥 funding reset on full close
-                // ===============================
-                // FULL CLOSE → INTERNAL STATE WIPE
-                // ===============================
+                foreach (var k in _beMoved.Keys.Where(k => k.StartsWith($"{symbol}|{side}|", StringComparison.OrdinalIgnoreCase)))
+                    _beMoved.TryRemove(k, out _);
+
+                ClearBaseQty(symbol, side);
+
+                // funding reset on full close (side closed)
+                // (если хочешь строго "только когда нет позиций вообще" — оставь reset в SuperviseAsync как сейчас)
                 var cleanKey = $"{symbol}_{side}";
-
-                // entry restore cache
                 _restoredEntries.TryRemove(cleanKey, out _);
 
-                // attach idempotency
-                foreach (var k in _attached.Keys.Where(k => k.StartsWith($"{symbol}:{side}")))
+                foreach (var k in _attached.Keys.Where(k => k.StartsWith($"{symbol}:{side}", StringComparison.OrdinalIgnoreCase)))
                     _attached.TryRemove(k, out _);
+
+
+                // ✅ N4: Instant drop from registry pinned-by-positions
+                // We close ONE leg (side). In hedge, the other side may still be open.
+                _openPos.MarkClosed(symbol);
 
                 return;
             }
+
 
             bool fundingBlocked = IsFundingRiskExceeded(symbol);
 
@@ -1093,6 +1134,9 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             decimal entry = pos.EntryPrice;
+
+            if (entry > 0)
+                _posBaseEntry[$"{symbol}|{side}"] = entry;
 
             if (entry <= 0)
             {
@@ -1141,17 +1185,22 @@ namespace VertexAutoTradeBinance8.Services
             var sl = orders.FirstOrDefault(o => o.Side == closeSide && o.Type == FuturesOrderType.StopMarket);
             var tp = orders.FirstOrDefault(o => o.Side == closeSide && o.Type == FuturesOrderType.TakeProfitMarket);
 
+            var baseQtyForGuards = GetOrSetBaseQty(symbol, side, entry, qtyAbs);
+
             // =================================================================
             // v8.2: EARLY PROFIT + BE MOVE (До restore TP/SL)
             // =================================================================
             if (klines != null && klines.Count >= 50 && atr14 > 0 && entry > 0)
             {
                 // 1) EARLY TP (partial 35% at +0.9 ATR)
-                await TryEarlyPartialTakeAsync(client, symbol, side, qtyAbs, entry, atr14, signal, klines, ct);
+                // await TryEarlyPartialTakeAsync(client, symbol, side, qtyAbs, entry, atr14, signal, klines, ct);
+                await TryEarlyPartialTakeAsync(client, symbol, side, baseQtyForGuards, entry, atr14, signal, klines, ct);
 
                 // 2) SL -> BE when +1.2 ATR (only if SL exists)
                 if (sl != null)
-                    await TryMoveSlToBeAsync(client, symbol, side, qtyAbs, entry, atr14, sl, signal, klines, ct);
+                    //await TryMoveSlToBeAsync(client, symbol, side, qtyAbs, entry, atr14, sl, signal, klines, ct);
+                    await TryMoveSlToBeAsync(client, symbol, side, baseQtyForGuards, entry, atr14, sl, signal, klines, ct);
+
             }
 
 
@@ -1929,49 +1978,42 @@ namespace VertexAutoTradeBinance8.Services
         //   }
 
         private async Task<bool> UpdateSL_ProAsync(
-           BinanceRestClient client,
-           string symbol,
-           PositionSide side,
-           decimal qty,
-           BinanceUsdFuturesOrder oldSl,
-           decimal entry,
-           decimal newSl,
-           TradeSignal? signal,
-           CancellationToken ct)
+       BinanceRestClient client,
+       string symbol,
+       PositionSide side,
+       decimal qty,
+       BinanceUsdFuturesOrder oldSl,
+       decimal entry,
+       decimal newSl,
+       TradeSignal? signal,
+       CancellationToken ct)
         {
-            if (qty <= 0 || newSl <= 0)
-                return false;
+            if (qty <= 0 || newSl <= 0) return false;
 
             var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
 
             var safeQty = NormalizeToStep(qty, f.step > 0 ? f.step : 1m);
             var safeTrig = NormalizeToStep(newSl, f.tickSize > 0 ? f.tickSize : 0.0001m);
 
-            if (safeQty < f.minQty)
-                return false;
+            if (safeQty < f.minQty) return false;
 
             var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
             try
             {
-                // 1) ❌ CANCEL OLD SL
-                try
-                {
-                    await client.UsdFuturesApi.Trading.CancelOrderAsync(
-                        symbol,
-                        oldSl.Id,
-                        ct: ct);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(
-                        ex,
-                        "[SL][{symbol}][{side}] Failed to cancel old SL {id}",
-                        symbol, side, oldSl.Id);
-                }
+                // 0) Safety: ensure position exists (avoid orphan SL spam)
+                var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+                if (!posInfo.Success || posInfo.Data == null) return false;
 
-                // 2) TRY NORMAL
-                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                var realPos = posInfo.Data.FirstOrDefault(p =>
+                    p.Symbol == symbol &&
+                    p.PositionSide == side &&
+                    Math.Abs(p.Quantity) > 0);
+
+                if (realPos == null) return false;
+
+                // 1) PLACE NEW SL FIRST (NORMAL)
+                var place = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: symbol,
                     side: orderSide,
                     type: FuturesOrderType.StopMarket,
@@ -1982,32 +2024,12 @@ namespace VertexAutoTradeBinance8.Services
                     workingType: WorkingType.Mark,
                     ct: ct);
 
-                if (res.Success)
+                bool placedOk = place.Success;
+
+                // 2) FALLBACK: ALGO RAW (-4120)
+                if (!placedOk && IsAlgoRequired(place.Error))
                 {
-                    _logger.LogInformation(
-                        "[SL][{symbol}][{side}] SL updated (NORMAL) -> {sl}",
-                        symbol, side, safeTrig);
-
-                    // =========================
-                    // AI-HOOK ON SL MOVE (AI ONLY)
-                    // =========================
-                    if (signal != null && !signal.IsManual)
-                    {
-                        HookAiLearningOnSlMove(
-                            signal,
-                            symbol,
-                            side,
-                            entry,
-                            safeTrig);
-                    }
-
-                    return true;
-                }
-
-                // 3) FALLBACK ALGO RAW (-4120)
-                if (IsAlgoRequired(res.Error))
-                {
-                    var ok = await _algoRaw.PlaceConditionalAsync(
+                    placedOk = await _algoRaw.PlaceConditionalAsync(
                         symbol: symbol,
                         side: orderSide,
                         positionSide: side,
@@ -2017,34 +2039,35 @@ namespace VertexAutoTradeBinance8.Services
                         workingType: "CONTRACT_PRICE",
                         reduceOnly: null,
                         ct: ct);
-
-                    if (ok)
-                    {
-                        _logger.LogInformation(
-                            "[SL][{symbol}][{side}] SL updated (ALGO-RAW) -> {sl}",
-                            symbol, side, safeTrig);
-
-                        // =========================
-                        // AI-HOOK ON SL MOVE (AI ONLY)
-                        // =========================
-                        if (signal != null && !signal.IsManual)
-                        {
-                            HookAiLearningOnSlMove(
-                                signal,
-                                symbol,
-                                side,
-                                entry,
-                                safeTrig);
-                        }
-
-                        return true;
-                    }
                 }
 
-                _logger.LogWarning(
-                    "[SL][{symbol}][{side}] SL update failed",
-                    symbol, side);
-                return false;
+                if (!placedOk)
+                {
+                    _logger.LogWarning(
+                        "[SL][{symbol}][{side}] New SL place FAILED -> keep old SL (NO GAP)",
+                        symbol, side);
+                    return false;
+                }
+
+                // 3) Cancel OLD SL after new one is confirmed placed
+                try
+                {
+                    await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, oldSl.Id, ct: ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[SL][{symbol}][{side}] Cancel old SL failed {id}", symbol, side, oldSl.Id);
+                    // Not fatal: at worst we have 2 SL temporarily; OrderCleaner can resolve later.
+                }
+
+                _logger.LogInformation("[SL][{symbol}][{side}] SL updated -> {sl}", symbol, side, safeTrig);
+
+                if (signal != null && !signal.IsManual)
+                {
+                    HookAiLearningOnSlMove(signal, symbol, side, entry, safeTrig);
+                }
+
+                return true;
             }
             catch (Exception ex)
             {
@@ -2052,6 +2075,7 @@ namespace VertexAutoTradeBinance8.Services
                 return false;
             }
         }
+
 
 
         private void HookAiLearningOnSlMove(TradeSignal? signal, string symbol, PositionSide side, decimal entry, decimal newSl)
