@@ -28,6 +28,7 @@ public class SymbolRegistryService
     public IReadOnlyList<string> ActiveSymbols => _snapshot.All;
     public IReadOnlyList<string> ActiveLongSymbols => _snapshot.Long;
     public IReadOnlyList<string> ActiveShortSymbols => _snapshot.Short;
+    public IReadOnlyList<string> PinnedSymbols => _snapshot.Pinned;
 
     public SymbolRegistryService(
         IConfiguration cfg,

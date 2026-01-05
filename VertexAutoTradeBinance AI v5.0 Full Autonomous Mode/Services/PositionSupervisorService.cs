@@ -777,16 +777,19 @@ namespace VertexAutoTradeBinance8.Services
                     symbol, side);
 
                 // workingType: "MARK_PRICE" чтобы совпасть с WorkingType.Mark
+                var (safeQty, safeTrig) = await NormalizeForAlgoAsync(symbol, qty, slPrice, ct);
+
                 var ok = await _algoRaw.PlaceConditionalAsync(
                     symbol: symbol,
                     side: orderSide,
                     positionSide: side,
                     type: "STOP_MARKET",
-                    quantity: qty,
-                    triggerPrice: slPrice,
+                    quantity: safeQty,
+                    triggerPrice: safeTrig,
                     workingType: "MARK_PRICE",
                     reduceOnly: null,
                     ct: ct);
+
 
                 if (ok)
                 {

@@ -57,10 +57,10 @@ public class Program
         {
             Log.Information("Engine starting");
 
-            Environment.SetEnvironmentVariable(
-                "ASPNETCORE_ENVIRONMENT",
-                "Development"
-            );
+            //Environment.SetEnvironmentVariable(
+            //    "ASPNETCORE_ENVIRONMENT",
+            //    "Development"
+            //);
 
             //  Console.OutputEncoding = System.Text.Encoding.UTF8;
             //   Console.InputEncoding = System.Text.Encoding.UTF8;
@@ -81,7 +81,7 @@ public class Program
                  .ConfigureLogging(logging =>
                  {
                      logging.ClearProviders();
-                     logging.AddConsole();
+                   //  logging.AddConsole();
                  })
                 .ConfigureServices((ctx, services) =>
                 {
@@ -98,14 +98,17 @@ public class Program
 
                     services.AddSingleton<IPositionRecoveryService, PositionRecoveryService>();
                     services.AddSingleton<IStrategyPreFilter, StrategyPreFilterService>();
+
                     services.AddHostedService<SupervisorBootstrapHostedService>();
+                    services.AddSingleton<KlineBufferPersistence>();
+
 
                     services.AddSingleton<WsKlineSubscriber>();
                     services.AddSingleton<MarketDataFacade>();
                     services.AddSingleton<MarketStateService>();
                     services.AddSingleton<MarketDataService>();
 
-                    services.AddSingleton<SymbolLiquidityScanner>();
+                  
                     services.AddSingleton<SymbolUniverseBuilder>();
 
                     services.AddSingleton<UniverseDryRunFileLogger>();
@@ -145,16 +148,20 @@ public class Program
                     services.AddSingleton<AiStopLossOptimizer>();
                     services.AddSingleton(sp => sp.GetRequiredService<IOptions<TradingOptions>>().Value);
                     services.AddSingleton<AiRiskScalerV2>();
+
                     services.AddHostedService<BackgroundMarketScannerService>();
                     services.AddSingleton<SymbolLiquidityScanner>();
                     services.AddHostedService<TradingWorker>();
+
                     services.AddSingleton<SymbolRegistryService>();
                     services.AddSingleton<AiTimeframeSelectorService>();
                     services.AddSingleton<ReverseProbeEngine>();
                     services.AddSingleton<ExecutedSignalService>();
                     services.AddSingleton<IOrderDispatcher, OrderDispatcher>();
                     services.AddSingleton<BinanceUserDataSubscriber>();
-                    services.AddHostedService<BinanceUserDataHostedService>();
+
+                 //   services.AddHostedService<BinanceUserDataHostedService>();
+
                     services.AddSingleton<IAccountStateService, AccountStateService>();
                     services.AddSingleton<IDecisionTraceService, DecisionTraceFileService>();
                     services.AddSingleton<IOpenPositionProvider, EngineStateOpenPositionProvider>();

@@ -169,6 +169,73 @@ namespace VertexAutoTradeBinance8.MarketData
                 return new();
             }
         }
+        public Dictionary<string, List<BinanceFuturesUsdtKline>> DumpAll()
+        {
+            var result = new Dictionary<string, List<BinanceFuturesUsdtKline>>();
+
+            foreach (var kv in _buffers)
+            {
+                lock (kv.Value)
+                    result[kv.Key] = kv.Value.ToList();
+            }
+
+            return result;
+        }
+
+
+        public Dictionary<string, List<BinanceFuturesUsdtKline>> ExportLast(int maxPerSeries)
+        {
+            var result = new Dictionary<string, List<BinanceFuturesUsdtKline>>();
+
+            foreach (var kv in _buffers)
+            {
+                var list = kv.Value;
+                lock (list)
+                {
+                    if (list.Count == 0)
+                        continue;
+
+                    var take = Math.Min(maxPerSeries, list.Count);
+                    var arr = new BinanceFuturesUsdtKline[take];
+
+                    var node = list.Last;
+                    for (int i = take - 1; i >= 0 && node != null; i--)
+                    {
+                        arr[i] = node.Value;
+                        node = node.Previous;
+                    }
+
+                    result[kv.Key] = arr.ToList();
+                }
+            }
+
+            return result;
+        }
+
+        public void Restore(Dictionary<string, List<BinanceFuturesUsdtKline>> data)
+        {
+            if (data == null || data.Count == 0)
+                return;
+
+            foreach (var (key, klines) in data)
+            {
+                if (klines == null || klines.Count == 0)
+                    continue;
+
+                var list = _buffers.GetOrAdd(key, _ => new LinkedList<BinanceFuturesUsdtKline>());
+
+                lock (list)
+                {
+                    list.Clear();
+
+                    foreach (var k in klines.OrderBy(x => x.OpenTime))
+                    {
+                        list.AddLast(k);
+                    }
+                }
+            }
+        }
+
 
     }
 }
