@@ -25,10 +25,25 @@ public class SymbolRegistryService
     // Atomically swapped snapshot
     private volatile UniverseSnapshot _snapshot = UniverseSnapshot.Empty();
 
+    public sealed record SymbolRegistrySnapshotDto(
+    DateTime UtcTime,
+    IReadOnlyList<string> All,
+    IReadOnlyList<string> Long,
+    IReadOnlyList<string> Short,
+    IReadOnlyList<string> Pinned,
+    IReadOnlyList<string> PinnedByPositions,
+    int DynamicCap,
+    int AiCapLong,
+    int AiCapShort,
+    decimal BtcVol,
+    string BtcVolBucket);
+
+
     public IReadOnlyList<string> ActiveSymbols => _snapshot.All;
     public IReadOnlyList<string> ActiveLongSymbols => _snapshot.Long;
     public IReadOnlyList<string> ActiveShortSymbols => _snapshot.Short;
     public IReadOnlyList<string> PinnedSymbols => _snapshot.Pinned;
+
 
     public SymbolRegistryService(
         IConfiguration cfg,
@@ -49,6 +64,25 @@ public class SymbolRegistryService
         _dryRun = dryRun;
         _posSource = posSource;
     }
+
+    public SymbolRegistrySnapshotDto GetSnapshot()
+    {
+        var s = _snapshot;
+        return new SymbolRegistrySnapshotDto(
+            s.UtcTime,
+            s.All,
+            s.Long,
+            s.Short,
+            s.Pinned,
+            s.PinnedByPositions,
+            s.DynamicCap,
+            s.AiCapLong,
+            s.AiCapShort,
+            s.BtcVol,
+            s.BtcVolBucket
+        );
+    }
+
 
     private record UniverseSnapshot(
         DateTime UtcTime,
@@ -194,8 +228,7 @@ public class SymbolRegistryService
                 SoftHealthCheck();
                 return;
             }
-
-            _lastHardRefresh = now;
+             
         }
         finally
         {
@@ -209,19 +242,18 @@ public class SymbolRegistryService
         {
             var auto = _cfg.GetSection("SymbolSelection:Auto");
 
-            // ✅ hard cap: default to 20 (your target)
+            // === CAPS / PARAMS =================================================
             var totalUniverseCap = auto.GetValue<int?>("TotalUniverseCap") ?? 20;
 
             var pinnedCfg = BlacklistFilter(GetPinnedSymbols());
             var pinnedPos = await GetPinnedByOpenPositionsSafeAsync(ct);
 
-            // pinned union (cfg + positions)
             var pinned = pinnedCfg
                 .Concat(pinnedPos)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            var topVolumeCount = auto.GetValue<int>("TopVolumeCount");
+            var topVolumeCount = auto.GetValue<int?>("TopVolumeCount") ?? 60;
 
             var minVolLong = auto.GetValue<decimal?>("Min24hVolumeLong")
                              ?? auto.GetValue<decimal>("Min24hVolume");
@@ -244,29 +276,69 @@ public class SymbolRegistryService
             var btcDump = auto.GetValue<decimal?>("BtcDumpThreshold") ?? -2.5m;
             var btcSqueeze = auto.GetValue<decimal?>("BtcSqueezeThreshold") ?? 2.5m;
 
+            // === SNAPSHOTS =====================================================
             var allSnapshots = await _liquidityScanner.LoadSnapshotsAsync(ct);
+
             if (allSnapshots == null || allSnapshots.Count == 0)
             {
-                _logger.LogWarning("[SYMBOL] No market snapshots → keep last-good universe");
+                _logger.LogWarning("[SYMBOL] No market snapshots → BOOTSTRAP pinned universe");
+
+                if (pinned.Count > 0)
+                {
+                    _snapshot = new UniverseSnapshot(
+                        UtcTime: DateTime.UtcNow,
+                        All: pinned,
+                        Long: pinned,
+                        Short: pinned,
+                        Pinned: pinnedCfg,
+                        PinnedByPositions: pinnedPos,
+                        DynamicCap: pinned.Count,
+                        AiCapLong: pinned.Count,
+                        AiCapShort: pinned.Count,
+                        BtcVol: 0m,
+                        BtcVolBucket: "BOOTSTRAP"
+                    );
+                }
+
                 return;
             }
 
-            // BTC metrics BEFORE regime-filter (important)
+            // === BTC METRICS ===================================================
             var btcSnapshotRaw = allSnapshots.FirstOrDefault(s => s.Symbol == "BTCUSDT");
-            var btcVol = btcSnapshotRaw != null ? Math.Abs(btcSnapshotRaw.PriceChangePercent) : 0m;
+            var btcVol = btcSnapshotRaw != null
+                ? Math.Abs(btcSnapshotRaw.PriceChangePercent)
+                : 0m;
 
-            // Regime filter for candidates only (but keep pinned/positions regardless)
+            // === REGIME FILTER =================================================
             var baseSnapshots = allSnapshots
                 .Where(s => _marketRegime.IsTradable(s.Symbol))
                 .ToList();
 
             if (baseSnapshots.Count == 0)
             {
-                _logger.LogWarning("[SYMBOL] All snapshots filtered by regime → keep last-good universe");
+                _logger.LogWarning("[SYMBOL] Regime filtered all → FALLBACK pinned universe");
+
+                if (pinned.Count > 0)
+                {
+                    _snapshot = new UniverseSnapshot(
+                        UtcTime: DateTime.UtcNow,
+                        All: pinned,
+                        Long: pinned,
+                        Short: pinned,
+                        Pinned: pinnedCfg,
+                        PinnedByPositions: pinnedPos,
+                        DynamicCap: pinned.Count,
+                        AiCapLong: pinned.Count,
+                        AiCapShort: pinned.Count,
+                        BtcVol: btcVol,
+                        BtcVolBucket: "REGIME-FALLBACK"
+                    );
+                }
+
                 return;
             }
 
-            // BTC bias (based on raw BTC snapshot if enabled)
+            // === BTC BIAS ======================================================
             decimal btcBiasLong = 1m;
             decimal btcBiasShort = 1m;
 
@@ -275,18 +347,16 @@ public class SymbolRegistryService
                 if (btcSnapshotRaw.PriceChangePercent <= btcDump)
                 {
                     btcBiasLong = 0.35m;
-                    _logger.LogWarning("[SYMBOL][BTC] Dump {pct}% → LONG score reduced", btcSnapshotRaw.PriceChangePercent);
+                    _logger.LogWarning("[SYMBOL][BTC] Dump {pct}% → LONG bias", btcSnapshotRaw.PriceChangePercent);
                 }
                 else if (btcSnapshotRaw.PriceChangePercent >= btcSqueeze)
                 {
                     btcBiasShort = 0.35m;
-                    _logger.LogWarning("[SYMBOL][BTC] Squeeze {pct}% → SHORT score reduced", btcSnapshotRaw.PriceChangePercent);
+                    _logger.LogWarning("[SYMBOL][BTC] Squeeze {pct}% → SHORT bias", btcSnapshotRaw.PriceChangePercent);
                 }
             }
 
-            // ===============================
-            // DYN CAP (BTC VOL) → THEN AI CAP
-            // ===============================
+            // === DYNAMIC CAP ===================================================
             var dyn = _cfg.GetSection("SymbolSelection:DynamicCap");
             var useDynCap = dyn.GetValue<bool?>("Enabled") ?? false;
 
@@ -306,15 +376,13 @@ public class SymbolRegistryService
                 else dynamicCap = capHigh;
 
                 dynamicCap = Math.Clamp(dynamicCap, 1, Math.Min(finalCap, topVolumeCount));
-
-                _logger.LogWarning("[SYMBOL][DYN-CAP] BTC vol={vol:F2}% → cap={cap}", btcVol, dynamicCap);
             }
             else
             {
                 dynamicCap = Math.Clamp(finalCap, 1, topVolumeCount);
             }
 
-            // === AI CAP ADJUSTMENT (WINRATE) ===
+            // === AI CAPS =======================================================
             var longWr = _ai.GetWinRate(SignalSide.Buy);
             var shortWr = _ai.GetWinRate(SignalSide.Sell);
 
@@ -328,11 +396,7 @@ public class SymbolRegistryService
             var aiCapLong = AiAdjust(dynamicCap, longWr);
             var aiCapShort = AiAdjust(dynamicCap, shortWr);
 
-            _logger.LogWarning(
-                "[SYMBOL][AI-CAP] wr(L)={lwr:P0} wr(S)={swr:P0} dynCap={cap} → L={lcap} S={scap}",
-                longWr, shortWr, dynamicCap, aiCapLong, aiCapShort);
-
-            // LONG scored
+            // === SCORING =======================================================
             var longSnaps = baseSnapshots
                 .Where(s => _ai.GetRecentPnL(s.Symbol, SignalSide.Buy) > -0.15m)
                 .OrderByDescending(s =>
@@ -343,7 +407,6 @@ public class SymbolRegistryService
                 })
                 .ToList();
 
-            // SHORT scored
             var shortSnaps = baseSnapshots
                 .Where(s => _ai.GetRecentPnL(s.Symbol, SignalSide.Sell) > -0.15m)
                 .OrderByDescending(s =>
@@ -360,7 +423,6 @@ public class SymbolRegistryService
             var shortCandidates = BlacklistFilter(_universeBuilder.Build(
                 shortSnaps, pinned.ToArray(), topVolumeCount, minVolShort, minPrice));
 
-            // Stability guard + caps
             var longList = ApplyStabilityGuardSide(lastGood.Long, longCandidates, maxAdds)
                 .Take(aiCapLong)
                 .ToList();
@@ -369,18 +431,13 @@ public class SymbolRegistryService
                 .Take(aiCapShort)
                 .ToList();
 
-            // HARD LIMIT total universe size (10-20 target)
-            // pinned always included; rest cut to fit.
             var all = LimitUnion(
-     pinnedCfg,
-     pinnedPos,
-     longList,
-     shortList,
-     totalUniverseCap
- );
+                pinnedCfg,
+                pinnedPos,
+                longList,
+                shortList,
+                totalUniverseCap);
 
-
-            // rebuild per-side lists to still be subsets of ALL
             longList = longList.Where(s => all.Contains(s, StringComparer.OrdinalIgnoreCase)).ToList();
             shortList = shortList.Where(s => all.Contains(s, StringComparer.OrdinalIgnoreCase)).ToList();
 
@@ -388,7 +445,7 @@ public class SymbolRegistryService
                 btcVol <= 1.2m ? "LOW" :
                 btcVol <= 2.5m ? "MID" : "HIGH";
 
-            var snap = new UniverseSnapshot(
+            _snapshot = new UniverseSnapshot(
                 UtcTime: DateTime.UtcNow,
                 All: all,
                 Long: longList,
@@ -401,9 +458,7 @@ public class SymbolRegistryService
                 BtcVol: btcVol,
                 BtcVolBucket: bucket
             );
-
-            _snapshot = snap;
-
+            _lastHardRefresh = DateTime.UtcNow;
             _logger.LogInformation(
                 "[SYMBOL] Registry refresh: pinnedCfg={pc}, pinnedPos={pp}, long={lng}, short={sht}, total={tot}",
                 _snapshot.Pinned.Count,
@@ -411,36 +466,13 @@ public class SymbolRegistryService
                 _snapshot.Long.Count,
                 _snapshot.Short.Count,
                 _snapshot.All.Count);
-
-            _logger.LogInformation("[SYMBOL][DRY-RUN] LONG → {list}",
-                string.Join(", ", _snapshot.Long.Take(dryRunLimit)));
-
-            _logger.LogInformation("[SYMBOL][DRY-RUN] SHORT → {list}",
-                string.Join(", ", _snapshot.Short.Take(dryRunLimit)));
-
-            // dry-run file must never break refresh
-            try
-            {
-                _dryRun.Log(new UniverseDryRunEntry(
-                    DateTime.UtcNow,
-                    _snapshot.BtcVol,
-                    _snapshot.BtcVolBucket,
-                    _snapshot.DynamicCap,
-                    _snapshot.Long,
-                    _snapshot.Short,
-                    _snapshot.Pinned
-                ));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[SYMBOL][DRY-RUN] log failed (ignored)");
-            }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "[SYMBOL] Refresh failed → rollback last-good universe");
-            _snapshot = lastGood; // rollback
+            _snapshot = lastGood;
         }
+
     }
 
     private void SoftHealthCheck()

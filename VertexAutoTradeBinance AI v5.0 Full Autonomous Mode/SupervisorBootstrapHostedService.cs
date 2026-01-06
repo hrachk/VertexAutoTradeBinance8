@@ -1,6 +1,7 @@
 ﻿using Binance.Net.Enums;
 using VertexAutoTradeBinance8.MarketData;
 using VertexAutoTradeBinance8.Services;
+using VertexAutoTradeBinance8.Services.Bootstrap;
 
 public sealed class SupervisorBootstrapHostedService : BackgroundService
 {
@@ -9,19 +10,22 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
     private readonly MarketDataKlineBuffer _buffer;
     private readonly KlineBufferPersistence _persistence;
     private readonly ILogger<SupervisorBootstrapHostedService> _logger;
+    private readonly IBootGate _bootGate;
 
     public SupervisorBootstrapHostedService(
-        SymbolRegistryService symbols,
-        MarketDataService market,
-        MarketDataKlineBuffer buffer,
-        ILogger<SupervisorBootstrapHostedService> logger ,
-        KlineBufferPersistence persistence)
+     SymbolRegistryService symbols,
+     MarketDataService market,
+     MarketDataKlineBuffer buffer,
+     KlineBufferPersistence persistence,
+     IBootGate bootGate,
+     ILogger<SupervisorBootstrapHostedService> logger)
     {
         _symbols = symbols;
         _market = market;
         _buffer = buffer;
-        _logger = logger;
         _persistence = persistence;
+        _bootGate = bootGate;
+        _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -37,11 +41,18 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
         if (pinned.Count == 0)
         {
             _logger.LogWarning("[BOOT] No pinned symbols — skip REST bootstrap");
+
+            _bootGate.MarkReady();
+            _logger.LogWarning("[BOOT] BootGate READY (no pinned)");
+
             return;
         }
 
         foreach (var symbol in pinned)
         {
+            if (ct.IsCancellationRequested)
+                break;
+
             // если уже есть данные — REST не нужен
             if (_buffer.Count(symbol, KlineInterval.OneMinute) >= 30)
                 continue;
@@ -69,6 +80,12 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
         }
 
         _logger.LogInformation("[BOOT] REST bootstrap done");
+
+        _logger.LogWarning("[BOOT] Supervisor bootstrap finished OK.");
+        _bootGate.MarkReady();
+        _logger.LogWarning("[BOOT] BootGate READY.");
+
+
     }
     public override async Task StopAsync(CancellationToken ct)
     {

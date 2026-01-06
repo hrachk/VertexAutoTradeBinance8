@@ -92,34 +92,91 @@ public class Program
 
                     services.AddHttpClient();
 
+
+
+
+                    // ===== BASE / MARKET =====
                     services.AddSingleton<BinanceClientFactory>();
                     services.AddSingleton<MarketDataKlineBuffer>();
-                    services.AddSingleton<IBootGate, BootGate>();
-
-                    services.AddSingleton<IPositionRecoveryService, PositionRecoveryService>();
-                    services.AddSingleton<IStrategyPreFilter, StrategyPreFilterService>();
-
-                    services.AddHostedService<SupervisorBootstrapHostedService>();
                     services.AddSingleton<KlineBufferPersistence>();
-
 
                     services.AddSingleton<WsKlineSubscriber>();
                     services.AddSingleton<MarketDataFacade>();
                     services.AddSingleton<MarketStateService>();
                     services.AddSingleton<MarketDataService>();
 
-                  
+                    // ⚠️ РЕГИСТРИРУЕМ ОДИН РАЗ
+                    services.AddSingleton<SymbolLiquidityScanner>();
                     services.AddSingleton<SymbolUniverseBuilder>();
+                    services.AddSingleton<SymbolInfoService>(); // ← 🔴 КРИТИЧНО: ДО RiskManager
 
+                    // ===== SYMBOL REGISTRY =====
+                    services.AddSingleton<SymbolRegistryService>();
                     services.AddSingleton<UniverseDryRunFileLogger>();
 
-                    services.AddSingleton<RiskManager>();
-                    services.AddSingleton<OrderExecutor>();
-                    services.AddSingleton<AiCorrelationService>();
+                    // ===== AI / CORE =====
+                    services.AddSingleton<AiSelfLearningService>();
                     services.AddSingleton<AiMarketRegimeService>();
                     services.AddSingleton<AiPatternEngineService>();
+                    services.AddSingleton<AiCorrelationService>();
+                    services.AddSingleton<AiLiquidityClusterService>();
+                    services.AddSingleton<AiLeverageService>();
+                    services.AddSingleton<AiStopLossOptimizer>();
+                    services.AddSingleton<AiRiskScalerV2>();
+
+
+                    // ===== RISK / EXECUTION =====
+                    services.AddSingleton<RiskManager>();          // ← теперь SymbolInfoService уже есть
+                    services.AddSingleton<OrderExecutor>();
+                    services.AddSingleton<OrderCleanerService>();
+                    services.AddSingleton<PnLMonitorService>();
+
+                    // ===== STRATEGY =====
                     services.AddSingleton<AdaptiveStrategyService>();
-                    services.AddSingleton<AiSelfLearningService>();
+                    services.AddSingleton<StrategyEngine>();
+                    services.AddSingleton<SmartRegimeService>();
+                    services.AddSingleton<ReverseProbeEngine>();
+
+
+                    // ===== SUPERVISOR / STATE =====
+                    services.AddSingleton<PositionSupervisorService>();
+                    services.AddSingleton<PositionGuardService>();
+                    services.AddSingleton<PositionProtectorService>();
+
+                    services.AddSingleton<IAccountStateService, AccountStateService>();
+                    services.AddSingleton<TradeStateManager>();
+                    services.AddSingleton<EngineStateBuilder>();
+                    services.AddSingleton<EngineStateSnapshotService>();
+
+
+                    // ===== HOSTED =====
+                    services.AddHostedService<SupervisorBootstrapHostedService>();
+                    services.AddHostedService<BackgroundMarketScannerService>();
+                    services.AddHostedService<TradingWorker>();
+                    services.AddHostedService<BinanceUserDataHostedService>();
+
+
+
+                    // ===== MISC =====
+                    services.AddSingleton<ExecutedSignalService>();
+                    services.AddSingleton<IDecisionTraceService, DecisionTraceFileService>();
+                    services.AddSingleton<IOpenPositionProvider, EngineStateOpenPositionProvider>();
+
+
+                    services.AddSingleton<OpenPositionSymbolTracker>();
+                    services.AddSingleton<IOpenPositionSymbolSource>(
+                        sp => sp.GetRequiredService<OpenPositionSymbolTracker>());
+
+
+                    services.AddSingleton<IBootGate, BootGate>();
+
+                    services.AddSingleton<IPositionRecoveryService, PositionRecoveryService>();
+                    services.AddSingleton<IStrategyPreFilter, StrategyPreFilterService>();
+
+                   
+
+                    
+                    
                     services.AddSingleton<SimulatedTradeService>();
                     services.AddSingleton<AiModelSnapshotService>();
                     services.AddSingleton<TradeResultMonitorService>();
@@ -128,47 +185,22 @@ public class Program
                     services.AddSingleton<OrderTracerService>();
                     services.AddSingleton<RecoverLostOrdersService>();
                     services.AddSingleton<ManualPositionHandler>();
-                    services.AddSingleton<AiLeverageService>();
-                    services.AddSingleton<AiLiquidityClusterService>();
-                    services.AddSingleton<StrategyEngine>();
-                    services.AddSingleton<SymbolInfoService>();
-                    services.AddSingleton<LiquidityGuardService>();
-                    services.AddSingleton<PositionGuardService>();
-                    services.AddSingleton<PositionProtectorService>();
-                    services.AddSingleton<PnLMonitorService>();
-                    services.AddSingleton<OrderCleanerService>();
                     
-                    services.AddSingleton<PositionSupervisorService>();
-                    services.AddSingleton<SmartRegimeService>();
-                    services.AddSingleton<TradeStateManager>();
-                    services.AddSingleton<EngineStateBuilder>();
+                    
+                    services.AddSingleton<LiquidityGuardService>(); 
+                 
+                
                     services.Configure<EngineStateSettings>(ctx.Configuration.GetSection("EngineState"));
-                    services.AddSingleton<EngineStateSnapshotService>();
-                    services.AddSingleton<PredictiveEngineV4ConfirmationService>();
-                    services.AddSingleton<AiStopLossOptimizer>();
-                    services.AddSingleton(sp => sp.GetRequiredService<IOptions<TradingOptions>>().Value);
-                    services.AddSingleton<AiRiskScalerV2>();
-
-                    services.AddHostedService<BackgroundMarketScannerService>();
-                    services.AddSingleton<SymbolLiquidityScanner>();
-                    services.AddHostedService<TradingWorker>();
+                  
+                    services.AddSingleton<PredictiveEngineV4ConfirmationService>();                  
+                    services.AddSingleton(sp => sp.GetRequiredService<IOptions<TradingOptions>>().Value);                      
 
                     services.AddSingleton<SymbolRegistryService>();
-                    services.AddSingleton<AiTimeframeSelectorService>();
-                    services.AddSingleton<ReverseProbeEngine>();
-                    services.AddSingleton<ExecutedSignalService>();
+                    services.AddSingleton<AiTimeframeSelectorService>();                 
+                  
                     services.AddSingleton<IOrderDispatcher, OrderDispatcher>();
                     services.AddSingleton<BinanceUserDataSubscriber>();
-
-                 //   services.AddHostedService<BinanceUserDataHostedService>();
-
-                    services.AddSingleton<IAccountStateService, AccountStateService>();
-                    services.AddSingleton<IDecisionTraceService, DecisionTraceFileService>();
-                    services.AddSingleton<IOpenPositionProvider, EngineStateOpenPositionProvider>();
-
-                    services.AddSingleton<OpenPositionSymbolTracker>();
-                    services.AddSingleton<IOpenPositionSymbolSource>(sp => sp.GetRequiredService<OpenPositionSymbolTracker>());
-
+ 
 
                 })
                 .Build();
