@@ -16,12 +16,7 @@ namespace VertexAutoTradeBinance8;
 public class Program
 {
     public static async Task Main(string[] args)
-    {
-        Environment.SetEnvironmentVariable(
-        "ASPNETCORE_ENVIRONMENT",
-        "Development"
-    );
-
+    { 
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         Console.InputEncoding = System.Text.Encoding.UTF8;
        

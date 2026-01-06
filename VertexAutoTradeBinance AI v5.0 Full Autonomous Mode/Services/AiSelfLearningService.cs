@@ -39,10 +39,10 @@ namespace VertexAutoTradeBinance8.Services
         private readonly object _lock = new();
 
         private static readonly string FilePath =
-      Path.Combine(AppContext.BaseDirectory, "ai-models/ai_learning.json");
+      Path.Combine(AppContext.BaseDirectory, "ai-models","ai_learning.json");
 
         private static readonly string BackupPath =
-            Path.Combine(AppContext.BaseDirectory, "ai-models/ai_learning_backup.json");
+            Path.Combine(AppContext.BaseDirectory, "ai-models", "ai_learning_backup.json");
 
         // Снимок статистики каждые N минут (для trade-based / signal-based)
         private DateTime _lastSnapshot = DateTime.MinValue;
