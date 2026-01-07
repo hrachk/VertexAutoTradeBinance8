@@ -27,19 +27,7 @@ public class TradingOptions
     /// <summary>Минимальный процент → если позиция получается слишком маленькой</summary>
     public decimal MinNotionalGuardPercent { get; set; } = 0.003m; // 0.3% капитала
 
-
-
-    
-
-    public bool Enabled { get; set; } = false;
-    public string Level { get; set; } = "off";
-
-    public bool AllowSoftEntryAlways { get; set; } = false;
-    public bool RelaxRR { get; set; } = false;
-    public bool RelaxPatternBlock { get; set; } = false;
-    public bool RelaxLiquidity { get; set; } = false;
-    public bool IgnoreCorrelation { get; set; } = false;
-    public bool LowerRegimeThreshold { set; get; } = false;
+     
 
     // =====================================================
     // STARTUP / BOOTSTRAP OPTIONS

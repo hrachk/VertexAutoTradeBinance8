@@ -443,16 +443,16 @@ namespace VertexAutoTradeBinance8.Services
 
 
         public void RecordMarketStateTriggered(
-    string reason,
-    string symbol,
-    string timeframe,
-    MarketRegime regime,
-    decimal slope,
-    decimal volatility,
-    decimal atr,
-    decimal confidence,
-    bool skipSnapshot = false  
-)
+      string reason,
+      string symbol,
+      string timeframe,
+      MarketRegime regime,
+      decimal slope,
+      decimal volatility,
+      decimal atr,
+      decimal confidence,
+      bool skipSnapshot = false
+  )
         {
             lock (_lock)
             {
@@ -469,6 +469,37 @@ namespace VertexAutoTradeBinance8.Services
                     Reason = reason
                 });
 
+                // =====================================================
+                // 🔥 BOOTSTRAP STATS (SAFE, NON-DESTRUCTIVE)
+                // =====================================================
+                if (!_stats.ContainsKey(symbol))
+                {
+                    _stats[symbol] = new Dictionary<MarketRegime, RegimeStats>
+                    {
+                        [regime] = new RegimeStats
+                        {
+                            Regime = regime,
+                            Count = 0,
+                            Wins = 0,
+                            Losses = 0,
+                            AvgPnl = 0,
+                            RiskWeight = 1.0m
+                        }
+                    };
+                }
+                else if (!_stats[symbol].ContainsKey(regime))
+                {
+                    _stats[symbol][regime] = new RegimeStats
+                    {
+                        Regime = regime,
+                        Count = 0,
+                        Wins = 0,
+                        Losses = 0,
+                        AvgPnl = 0,
+                        RiskWeight = 1.0m
+                    };
+                }
+
                 if (_marketStates.Count > 5000)
                     _marketStates.RemoveRange(0, 2500);
 
@@ -477,10 +508,10 @@ namespace VertexAutoTradeBinance8.Services
                     symbol, reason, slope, volatility, atr, confidence);
             }
 
-            // ❗ По умолчанию как раньше, но можно отключить
             if (!skipSnapshot)
-              TrySnapshot();
+                TrySnapshot();
         }
+
 
         // 3) BACKGROUND MARKET LEARNING – глобальный 30s snapshot по режиму
         public void TryHybridPeriodicSnapshot(

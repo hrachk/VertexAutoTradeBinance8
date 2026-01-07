@@ -25,6 +25,12 @@ namespace VertexAutoTradeBinance8.Services
         private readonly LiquidityGuardService _liquidityGuard;
         private readonly AiSelfLearningService _ai;
 
+        // ===== ENTRY EXECUTION TUNING (PRODUCTION) =====
+        private const int ENTRY_WAIT_SECONDS = 18;              // было 30s (60*500ms) в Wait...; здесь логика для fallback
+        private const decimal AGGR_LIMIT_OFFSET_PCT = 0.0006m;  // 0.06% агрессивный лимит (тюнится)
+        private const decimal MARKET_FALLBACK_MAX_SLIP_PCT = 0.0015m; // 0.15% макс. слип для fallback-market
+
+
         public OrderExecutor(
             ILogger<OrderExecutor> logger,
             BinanceClientFactory factory,
@@ -128,6 +134,36 @@ namespace VertexAutoTradeBinance8.Services
             var posSide = signal.Side == SignalSide.Buy ? PositionSide.Long : PositionSide.Short;
 
             decimal entryPrice = Round(signal.EntryPrice, tick);
+
+            // ===== current price for execution tuning =====
+            decimal lastPrice = 0m;
+            try
+            {
+                // Лучше брать из твоего MarketDataService/WS-cache, но не ломаем — берём REST price точечно.
+                var px = await client.UsdFuturesApi.ExchangeData.GetPriceAsync(signal.Symbol, ct: ct);
+                if (px.Success && px.Data != null)
+                    lastPrice = px.Data.Price;
+            }
+            catch { /* ignore */ }
+
+            // fallback if unavailable
+            if (lastPrice <= 0)
+                lastPrice = entryPrice;
+
+            // ===== build aggressive limit to reduce TimeoutNoFill =====
+            decimal aggrLimitPrice;
+            if (side == OrderSide.Buy)
+            {
+                // BUY: чтобы гарантировать fill лимитом, цена должна быть >= текущей
+                var p = lastPrice * (1m + AGGR_LIMIT_OFFSET_PCT);
+                aggrLimitPrice = Round(Math.Max(entryPrice, p), tick);
+            }
+            else
+            {
+                // SELL: чтобы гарантировать fill лимитом, цена должна быть <= текущей
+                var p = lastPrice * (1m - AGGR_LIMIT_OFFSET_PCT);
+                aggrLimitPrice = Round(Math.Min(entryPrice, p), tick);
+            }
 
             // =============================================================
             // 0) Regime / SmartRegime → UI / analytics
@@ -328,9 +364,12 @@ namespace VertexAutoTradeBinance8.Services
             var entryRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: signal.Symbol,
                 side: side,
+                //type: allowMarketEntry ? FuturesOrderType.Market : FuturesOrderType.Limit,
+                //quantity: quantity,
+                //price: allowMarketEntry ? null : entryPrice,
                 type: allowMarketEntry ? FuturesOrderType.Market : FuturesOrderType.Limit,
                 quantity: quantity,
-                price: allowMarketEntry ? null : entryPrice,
+                price: allowMarketEntry ? null : aggrLimitPrice,
                 positionSide: posSide,
               //  workingType: WorkingType.Mark,
                 timeInForce: allowMarketEntry ? null : TimeInForce.GoodTillCanceled,
@@ -359,8 +398,14 @@ namespace VertexAutoTradeBinance8.Services
 
 
             long entryOrderId = entryRes.Data.Id;
-            _logger.LogInformation("[ORDER][{symbol}] ENTRY OK: id={id}, price={price}, qty={qty}",
-                signal.Symbol, entryOrderId, entryPrice, quantity);
+            _logger.LogInformation("[ORDER][{symbol}] ENTRY OK: id={id}, type={type}, price={price}, qty={qty} (signalEntry={sig})",
+     signal.Symbol,
+     entryOrderId,
+     allowMarketEntry ? "MARKET" : "LIMIT",
+     allowMarketEntry ? lastPrice : aggrLimitPrice,
+     quantity,
+     entryPrice);
+
 
             _executedSignalService.UpdateStatus(
                 symbol: signal.Symbol,
@@ -385,6 +430,69 @@ namespace VertexAutoTradeBinance8.Services
                 entryPrice,
                 quantity,
                 ct);
+
+            // ===== MARKET FALLBACK (LIMIT -> MARKET) to eliminate TimeoutNoFill =====
+            if (!wait.HasPosition && !allowMarketEntry && wait.Reason == "TimeoutNoFill")
+            {
+                // переоценка цены
+                decimal nowPx = 0m;
+                try
+                {
+                    var px2 = await client.UsdFuturesApi.ExchangeData.GetPriceAsync(signal.Symbol, ct: ct);
+                    if (px2.Success && px2.Data != null)
+                        nowPx = px2.Data.Price;
+                }
+                catch { }
+
+                if (nowPx > 0 && entryPrice > 0)
+                {
+                    decimal slipPct = side == OrderSide.Buy
+                        ? (nowPx - entryPrice) / entryPrice
+                        : (entryPrice - nowPx) / entryPrice;
+
+                    // если цена ушла не слишком далеко и ликвидность ок — можно безопасно добрать MARKET
+                    if (slipPct <= MARKET_FALLBACK_MAX_SLIP_PCT && liquiditySafe)
+                    {
+                        _logger.LogWarning(
+                            "[ORDER][{symbol}] LIMIT TimeoutNoFill → FALLBACK MARKET (slip={slip:P2}, liqSafe={liq})",
+                            signal.Symbol, slipPct, liquiditySafe);
+
+                        // отменяем старый лимит (best-effort)
+                        try { await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, entryOrderId, ct: ct); } catch { }
+
+                        // ставим MARKET
+                        var mktRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                            symbol: signal.Symbol,
+                            side: side,
+                            type: FuturesOrderType.Market,
+                            quantity: quantity,
+                            positionSide: posSide,
+                            ct: ct);
+
+                        if (mktRes.Success && mktRes.Data != null)
+                        {
+                            entryOrderId = mktRes.Data.Id;
+
+                            // ждём позицию/факт fill (коротко)
+                            var wait2 = await WaitForPositionOrOrderAsync(
+                                client, signal, posSide, entryOrderId, nowPx, quantity, ct);
+
+                            if (wait2.HasPosition)
+                            {
+                                entryPrice = wait2.EntryPrice;
+                                quantity = wait2.Qty;
+
+                                _logger.LogInformation(
+                                    "[ORDER][{symbol}] MARKET FALLBACK SUCCESS → entry={entry} qty={qty}",
+                                    signal.Symbol, entryPrice, quantity);
+
+                                // и дальше код пойдёт как будто обычный успех (ниже не выходим)
+                                wait = wait2;
+                            }
+                        }
+                    }
+                }
+            }
 
             if (!wait.HasPosition)
             {
@@ -431,6 +539,44 @@ namespace VertexAutoTradeBinance8.Services
                         ct: ct);
                 }
                 catch { }
+
+
+                // =========================================================
+                // SAFE FALLBACK: LIMIT → MARKET (ONE SHOT, PRODUCTION)
+                // =========================================================
+                if (!allowMarketEntry && reason == "TimeoutNoFill")
+                {
+                    _logger.LogWarning(
+                        "[ORDER][{symbol}] LIMIT TimeoutNoFill → retry MARKET (safe fallback)",
+                        signal.Symbol);
+
+                    var marketRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol: signal.Symbol,
+                        side: side,
+                        type: FuturesOrderType.Market,
+                        quantity: quantity,
+                        positionSide: posSide,
+                        ct: ct);
+
+                    if (marketRes.Success && marketRes.Data != null)
+                    {
+                        var fillPrice =
+                            marketRes.Data.AveragePrice > 0
+                                ? marketRes.Data.AveragePrice
+                                : signal.EntryPrice;
+
+                        _logger.LogWarning(
+                            "[ORDER][{symbol}] MARKET fallback FILLED → accept entry price={price}",
+                            signal.Symbol, fillPrice);
+
+                        return OrderResult.Successs(
+                            fillPrice,
+                            quantity,
+                            marketRes.Data.Id);
+                    }
+                }
+
+                return OrderResult.Fail(reason);
 
                 return OrderResult.Fail(reason);
             }

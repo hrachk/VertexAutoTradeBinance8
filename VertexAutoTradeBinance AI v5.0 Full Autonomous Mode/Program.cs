@@ -87,8 +87,17 @@ public class Program
                 {
                     // ===== ТВОЙ СУЩЕСТВУЮЩИЙ DI — БЕЗ ИЗМЕНЕНИЙ =====
                     services.Configure<BinanceOptions>(ctx.Configuration.GetSection("Binance"));
-                    services.Configure<TradingOptions>(ctx.Configuration.GetSection("Trading"));
-                    services.Configure<TradingOptions>(ctx.Configuration.GetSection("TestMode"));
+                    services.Configure<TradingOptions>(
+                         ctx.Configuration.GetSection("Trading"));
+
+                    services.Configure<TestModeOptions>(
+                        ctx.Configuration.GetSection("TestMode"));
+
+                    services.AddSingleton(sp =>
+                        sp.GetRequiredService<IOptions<TradingOptions>>().Value);
+
+                    services.AddSingleton(sp =>
+                        sp.GetRequiredService<IOptions<TestModeOptions>>().Value);
 
                     services.AddHttpClient();
 
@@ -193,7 +202,7 @@ public class Program
                     services.Configure<EngineStateSettings>(ctx.Configuration.GetSection("EngineState"));
                   
                     services.AddSingleton<PredictiveEngineV4ConfirmationService>();                  
-                    services.AddSingleton(sp => sp.GetRequiredService<IOptions<TradingOptions>>().Value);                      
+                                         
 
                     services.AddSingleton<SymbolRegistryService>();
                     services.AddSingleton<AiTimeframeSelectorService>();                 

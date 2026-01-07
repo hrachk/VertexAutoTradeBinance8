@@ -39,7 +39,7 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly AiPatternEngineService _patternEngineService;
         private readonly AiSelfLearningService _aiLearning;
         private readonly SmartRegimeService _smartRegimeService;
-        private readonly TradingOptions _opt;
+         
         private readonly LiquidityGuardService _liquidityGuardService;
         private static readonly ConcurrentDictionary<(string symbol, SignalSide side), DateTime> _lastStopTime = new();
 
@@ -67,7 +67,8 @@ namespace VertexAutoTradeBinance8.Strategy
         // анти-дубль: symbol|tf -> last close
         private readonly ConcurrentDictionary<string, DateTime> _lastReactiveRun = new();
 
-
+        private readonly TradingOptions _opt;
+        private readonly TestModeOptions _test;
 
         public StrategyEngine(
             ILogger<StrategyEngine> logger,
@@ -78,6 +79,7 @@ namespace VertexAutoTradeBinance8.Strategy
             AiSelfLearningService aiLearning,
             SmartRegimeService smartRegimeService,
             TradingOptions opt,
+            TestModeOptions test,
             EngineStateSnapshotService stateSvc, IDecisionTraceService decisionTrace, LiquidityGuardService liquidityGuardService)
         {
             _logger = logger;
@@ -88,9 +90,16 @@ namespace VertexAutoTradeBinance8.Strategy
             _aiLearning = aiLearning;
             _smartRegimeService = smartRegimeService;
             _opt = opt;
+            _test = test;
             _stateSvc = stateSvc;
             _decisionTrace = decisionTrace;
             _liquidityGuardService = liquidityGuardService;
+
+            _logger.LogWarning(
+    "[CONFIG][STRATEGY] Trading TF={tf} | TestMode={enabled} Level={level}",
+    _opt.TimeframeMinutes,
+    _test.Enabled,
+    _test.Level);
         }
         private EngineState _engineState => _stateSvc.State;
 
@@ -869,15 +878,15 @@ namespace VertexAutoTradeBinance8.Strategy
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
             // ==== CONFIG / TEST MODE FLAGS ==================================================
-            bool testMode = _opt.Enabled;
-            string level = _opt.Level ?? "off";
+            bool testMode = _test.Enabled;
+            string level = _test.Level;
 
-            bool allowSoftEntryAlways = testMode && _opt.AllowSoftEntryAlways;
-            bool relaxRr = testMode && _opt.RelaxRR;
-            bool relaxPatternBlock = testMode && _opt.RelaxPatternBlock;
-            bool relaxLiquidity = testMode && _opt.RelaxLiquidity;
-            bool ignoreCorrelation = testMode && _opt.IgnoreCorrelation;
-            bool lowerRegimeThreshold = testMode && _opt.LowerRegimeThreshold;
+            bool allowSoftEntryAlways = testMode && _test.AllowSoftEntryAlways;
+            bool relaxRr = testMode && _test.RelaxRR;
+            bool relaxPatternBlock = testMode && _test.RelaxPatternBlock;
+            bool relaxLiquidity = testMode && _test.RelaxLiquidity;
+            bool ignoreCorrelation = testMode && _test.IgnoreCorrelation;
+            bool lowerRegimeThreshold = testMode && _test.LowerRegimeThreshold;
 
             if (testMode)
             {
@@ -1890,33 +1899,34 @@ $@"📊 Режим рынка:
         }
 
         internal SignalDecisionTrace EvaluateSignal(
-    string symbol,
-    KlineInterval interval,
-    IReadOnlyList<BinanceFuturesUsdtKline> klines)
+     string symbol,
+     KlineInterval interval,
+     IReadOnlyList<BinanceFuturesUsdtKline> klines)
         {
             var trace = new SignalDecisionTrace();
 
-            // === CONFIG FLAGS (те же самые!)
-            bool testMode = _opt.Enabled;
-            bool relaxRr = testMode && _opt.RelaxRR;
-            bool relaxPatternBlock = testMode && _opt.RelaxPatternBlock;
-            bool relaxLiquidity = testMode && _opt.RelaxLiquidity;
-            bool lowerRegimeThreshold = testMode && _opt.LowerRegimeThreshold;
+            // === CONFIG FLAGS (ЕДИНЫЙ ИСТОЧНИК — TestModeOptions)
+            bool testMode = _test.Enabled;
+
+            bool relaxRr = testMode && _test.RelaxRR;
+            bool relaxPatternBlock = testMode && _test.RelaxPatternBlock;
+            bool relaxLiquidity = testMode && _test.RelaxLiquidity;
+            bool lowerRegimeThreshold = testMode && _test.LowerRegimeThreshold;
 
             // --- Gate 0: Data
             var r0 = Gate0_Data(symbol, interval, klines);
             trace.Gates.Add(r0);
 
-            // SmartRegime считается ВСЕГДА (как и сейчас)
+            // --- Gate 1: SmartRegime (ВСЕГДА)
             SmartRegimeInfo smart;
             var r1 = Gate1_SmartRegime(symbol, interval, klines, out smart);
             trace.Gates.Add(r1);
 
-            // Confidence
+            // --- Gate 2: Confidence
             var r2 = Gate2_Confidence(smart, lowerRegimeThreshold);
             trace.Gates.Add(r2);
 
-            // Base signal
+            // --- Gate 3: Base Signal
             TradeSignal? baseSignal;
             var r3 = Gate3_BaseSignal(symbol, interval, klines, smart, out baseSignal);
             trace.Gates.Add(r3);
@@ -1927,17 +1937,19 @@ $@"📊 Режим рынка:
                 trace.Gates.Add(Gate5_Pattern(symbol, interval, klines, baseSignal, relaxPatternBlock));
                 trace.Gates.Add(Gate6_Liquidity(baseSignal, smart, klines, interval, relaxLiquidity));
                 trace.Gates.Add(Gate7_Exposure(symbol, interval, baseSignal, smart));
-            } 
+            }
 
-            // 🔥 ИТОГ: allow только если нет failed gate
+            // --- FINAL DECISION
             var failed = trace.FailedGate;
             trace.Allow = failed == null;
             trace.Signal = trace.Allow ? baseSignal : null;
 
+            // 🔥 CRITICAL: DecisionTrace должен соответствовать РЕАЛЬНОМУ решению
             _aiLearning.RecordDecisionTrace(symbol, smart.BaseRegime, trace.Gates);
 
             return trace;
         }
+
         public static void RegisterStop(string symbol, SignalSide side)
         {
             _lastStopTime[(symbol, side)] = DateTime.UtcNow;
