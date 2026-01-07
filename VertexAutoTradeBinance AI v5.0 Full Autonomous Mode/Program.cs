@@ -116,6 +116,7 @@ public class Program
                     services.AddSingleton<MarketDataService>();
 
                     // ⚠️ РЕГИСТРИРУЕМ ОДИН РАЗ
+                  
                     services.AddSingleton<SymbolLiquidityScanner>();
                     services.AddSingleton<SymbolUniverseBuilder>();
                     services.AddSingleton<SymbolInfoService>(); // ← 🔴 КРИТИЧНО: ДО RiskManager

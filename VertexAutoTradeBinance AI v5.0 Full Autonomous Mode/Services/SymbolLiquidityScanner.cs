@@ -79,19 +79,26 @@ public sealed class SymbolLiquidityScanner
                     : new List<SymbolMarketSnapshot>();
             }
 
+            var scannerCap =
+    _cfg.GetValue<int?>("SymbolSelection:Auto:ScannerTopLimit")
+    ?? 30; // SAFE DEFAULT
+
             var list = res.Data
-                .Where(t =>
-                    t.Symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase) &&
-                    t.QuoteVolume > 0 &&
-                    t.LastPrice > 0)
-                .Select(t => new SymbolMarketSnapshot
-                {
-                    Symbol = t.Symbol.ToUpperInvariant(),
-                    QuoteVolume24h = t.QuoteVolume,
-                    LastPrice = t.LastPrice,
-                    PriceChangePercent = t.PriceChangePercent
-                })
-                .ToList();
+    .Where(t =>
+        t.Symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase) &&
+        t.QuoteVolume > 0 &&
+        t.LastPrice > 0
+    )
+    .OrderByDescending(t => t.QuoteVolume)
+    .Take(scannerCap) // 🔥 ВАЖНО
+    .Select(t => new SymbolMarketSnapshot
+    {
+        Symbol = t.Symbol.ToUpperInvariant(),
+        QuoteVolume24h = t.QuoteVolume,
+        LastPrice = t.LastPrice,
+        PriceChangePercent = t.PriceChangePercent
+    })
+    .ToList();
 
             _cache = list;
             _cachedAtUtc = DateTime.UtcNow;

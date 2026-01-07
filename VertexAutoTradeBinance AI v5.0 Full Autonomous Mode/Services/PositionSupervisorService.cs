@@ -1092,7 +1092,13 @@ namespace VertexAutoTradeBinance8.Services
                 if (isStopLoss)
                 {
                     _manualHandler.RegisterStop(symbol);
-                    _logger.LogWarning("[STOP][{symbol}] StopLoss detected → cooldown registered", symbol);
+                    // 🔑 ВАЖНО: уведомляем StrategyEngine
+                    StrategyEngine.RegisterStop(
+                        symbol,
+                        side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell
+                    );
+                  
+                    _logger.LogWarning("[STOP][{symbol}] StopLoss detected → strategy cooldown registered", symbol);
                 }
 
                 // === CLEANUP: wipe all anti-spam keys for this symbol+side (qty/entry may vary) ===
