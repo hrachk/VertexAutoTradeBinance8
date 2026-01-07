@@ -109,6 +109,7 @@ public class Program
                     services.AddSingleton<MarketDataKlineBuffer>();
                     services.AddSingleton<KlineBufferPersistence>();
 
+                    services.AddSingleton<MarketContextService>();
                     services.AddSingleton<WsKlineSubscriber>();
                     services.AddSingleton<MarketDataFacade>();
                     services.AddSingleton<MarketStateService>();

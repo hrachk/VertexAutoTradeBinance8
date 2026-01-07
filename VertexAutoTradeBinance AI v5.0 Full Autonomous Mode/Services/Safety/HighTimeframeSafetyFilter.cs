@@ -8,6 +8,7 @@ namespace VertexAutoTradeBinance8.Services
     /// Optional-фильтр: 1H + 1D трендовая защита против ложных пробоев.
     /// Усиливает надёжность входа на младших ТФ.
     /// </summary>
+      [Obsolete("Replaced by MarketContextService")]
     public class HighTimeframeSafetyFilter
     {
         private readonly ILogger<HighTimeframeSafetyFilter> _logger;

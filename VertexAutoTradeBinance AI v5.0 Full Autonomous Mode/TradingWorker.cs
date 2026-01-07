@@ -3,6 +3,7 @@ using Binance.Net.Objects.Models.Futures;
 using Microsoft.Extensions.Options;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
+using VertexAutoTradeBinance8.Models.HTF;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Services.Bootstrap;
 using VertexAutoTradeBinance8.Services.Engine;
@@ -39,6 +40,7 @@ namespace VertexAutoTradeBinance8
         private readonly EngineStateSnapshotService _engineStateSnapshot;
         private readonly IBootGate _bootGate;
         private readonly IStrategyPreFilter _pre;
+        private readonly MarketContextService _marketContext;
 
         private DateTime _lastQuantTick = DateTime.UtcNow;
 
@@ -79,7 +81,7 @@ namespace VertexAutoTradeBinance8
             EngineStateBuilder engineState,
             EngineStateSnapshotService engineStateSnapshot,
             IBootGate bootGate,
-            IStrategyPreFilter pre)
+            IStrategyPreFilter pre, MarketContextService marketContext)
         {
             _logger = logger;
             _options = options.Value;
@@ -104,6 +106,7 @@ namespace VertexAutoTradeBinance8
             _engineStateSnapshot = engineStateSnapshot;
             _bootGate = bootGate;
             _pre = pre;
+            _marketContext = marketContext;
 
             learn.ForceSnapshot();
         }
@@ -188,9 +191,18 @@ namespace VertexAutoTradeBinance8
                     var tf = await ResolveTimeframeSafeAsync(symbol, ct);
 
                     // ENTRIES only if symbol is in universe side lists
-                    await ProcessSymbolWithUniverseSide(symbol, tf, SignalSide.Buy, ct);
-                    await ProcessSymbolWithUniverseSide(symbol, tf, SignalSide.Sell, ct);
+                    // await ProcessSymbolWithUniverseSide(symbol, tf, SignalSide.Buy, ct);
+                    // await ProcessSymbolWithUniverseSide(symbol, tf, SignalSide.Sell, ct);
+                    var ctx = await _marketContext.GetContextAsync(symbol, ct);
 
+                    // ENTRIES (respect HTF bias)
+                    if (ctx.Allows(SignalSide.Buy))
+                        await ProcessSymbolWithUniverseSide(symbol, tf, SignalSide.Buy, ct);
+
+                    if (ctx.Allows(SignalSide.Sell))
+                        await ProcessSymbolWithUniverseSide(symbol, tf, SignalSide.Sell, ct);
+
+                
                     // SUPERVISION always for tracked (positions-safe)
                     await _supervisor.SuperviseAsync(symbol, null, ct);
 
