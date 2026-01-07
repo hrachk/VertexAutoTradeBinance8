@@ -1,0 +1,438 @@
+﻿/* ===============================
+   ROOT
+================================ */
+.ai-learning-root {
+    padding: 24px;
+    background: radial-gradient(1200px at 20% -10%, #1b1f2a 0%, #0b0e14 60%);
+    color: #e5e7eb;
+}
+
+/* ===============================
+   HEADER
+================================ */
+.ai-header {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.ai-header-card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    padding: 16px;
+    backdrop-filter: blur(12px);
+}
+
+    .ai-header-card.accent {
+        background: linear-gradient(135deg, #5b8cff, #7c5cff);
+    }
+
+    .ai-header-card.wide {
+        grid-column: span 2;
+    }
+
+.ai-header-title {
+    font-size: 12px;
+    opacity: 0.7;
+}
+
+.ai-header-value {
+    font-size: 28px;
+    font-weight: 700;
+}
+
+.ai-header-sub {
+    font-size: 14px;
+    opacity: 0.8;
+}
+
+/* ===============================
+   PANELS
+================================ */
+.ai-panel {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    padding: 20px;
+    margin-bottom: 24px;
+}
+
+.ai-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.ai-panel-title {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+/* ===============================
+   FILTERS
+================================ */
+.ai-filters {
+    display: flex;
+    gap: 24px;
+    margin: 16px 0;
+}
+
+.filter-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+    .filter-group span {
+        font-size: 12px;
+        opacity: 0.7;
+    }
+
+.ai-chip {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.15);
+    color: #ccc;
+    padding: 6px 12px;
+    border-radius: 999px;
+}
+
+.ai-chip-active {
+    background: #5b8cff;
+    border-color: #5b8cff;
+    color: #fff;
+}
+
+.badge {
+    font-size: 12px;
+    opacity: 0.8;
+}
+
+/* ===============================
+   CHART
+================================ */
+.ai-chart-wrap {
+    position: relative;
+    height: 420px;
+}
+
+.ai-empty-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(6px);
+    background: rgba(0,0,0,0.4);
+}
+
+/* ===============================
+   REASONS
+================================ */
+.reason-row {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 16px;
+    margin-bottom: 12px;
+}
+
+.reason-name {
+    font-weight: 600;
+}
+
+.reason-meta {
+    font-size: 12px;
+    opacity: 0.6;
+}
+
+.reason-bar-bg {
+    background: rgba(255,255,255,0.08);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.reason-bar-fill {
+    height: 10px;
+    background: linear-gradient(90deg, #3b82f6, #22c55e);
+}
+
+/* ===============================
+   SYMBOL GRID
+================================ */
+.symbol-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 16px;
+}
+
+.symbol-card {
+    background: rgba(255,255,255,0.04);
+    border-radius: 14px;
+    padding: 16px;
+    border: 1px solid rgba(255,255,255,0.08);
+}
+
+.symbol-name {
+    font-weight: 700;
+}
+
+.symbol-metric,
+.symbol-score,
+.symbol-regime {
+    font-size: 13px;
+    opacity: 0.7;
+}
+
+
+
+.neural-title {
+    font-size: 20px;
+    font-weight: 600;
+    display: flex;
+    gap: 10px;
+}
+
+.neural-live {
+    color: #22c55e;
+    font-size: 12px;
+    animation: pulse 1.6s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        opacity: .4
+    }
+
+    50% {
+        opacity: 1
+    }
+
+    100% {
+        opacity: .4
+    }
+}
+
+/* === KPI === */
+.neural-kpis {
+    display: flex;
+    gap: 20px;
+}
+
+.neural-kpi b {
+    margin-left: 6px;
+    color: #e5e7eb;
+}
+
+.neural-kpi.accent b {
+    color: #22d3ee;
+}
+
+/* === CARDS === */
+.neural-card {
+    background: rgba(15,23,42,0.75);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 16px;
+    padding: 18px;
+    margin-bottom: 20px;
+    backdrop-filter: blur(10px);
+}
+
+/* ===============================
+   AI NEURAL PULSE CORE
+================================ */
+
+.ai-learning-root::before {
+    content: "";
+    position: fixed;
+    inset: -20%;
+    background: radial-gradient(circle at 20% 30%, rgba(124,92,255,0.12), transparent 40%), radial-gradient(circle at 80% 70%, rgba(59,130,246,0.10), transparent 45%);
+    animation: ai-breath 14s ease-in-out infinite;
+    z-index: 0;
+    pointer-events: none;
+}
+
+@keyframes ai-breath {
+    0% {
+        transform: scale(1);
+        opacity: 0.55;
+    }
+
+    50% {
+        transform: scale(1.06);
+        opacity: 0.75;
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: 0.55;
+    }
+}
+.ai-chart-wrap {
+    position: relative;
+    height: 420px;
+    border-radius: 18px;
+    background: linear-gradient( 180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.35) );
+    box-shadow: inset 0 0 60px rgba(124,92,255,0.05), 0 0 0 1px rgba(255,255,255,0.06), 0 25px 80px rgba(0,0,0,0.6);
+}
+.ai-panel {
+    position: relative;
+    overflow: hidden;
+}
+
+    .ai-panel::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient( 120deg, transparent 30%, rgba(124,92,255,0.08), transparent 70% );
+        animation: ai-scan 6s linear infinite;
+        pointer-events: none;
+    }
+
+@keyframes ai-scan {
+    0% {
+        transform: translateX(-120%);
+    }
+
+    100% {
+        transform: translateX(120%);
+    }
+}
+.ai-header-card {
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+    .ai-header-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 0 0 1px rgba(124,92,255,0.35), 0 10px 40px rgba(124,92,255,0.25);
+    }
+
+
+
+/* === Decision Drivers === */
+
+.decision-drivers .drivers-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 16px;
+}
+
+.driver-card {
+    background: linear-gradient(180deg,#11141b,#0c0f14);
+    border-radius: 14px;
+    padding: 14px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
+}
+
+.driver-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.driver-name {
+    font-weight: 600;
+    letter-spacing: .3px;
+}
+
+.driver-impact {
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 10px;
+}
+
+.impact-HIGH {
+    background: #1e3a2f;
+    color: #4cffb0;
+}
+
+.impact-MEDIUM {
+    background: #2e2a1e;
+    color: #ffd966;
+}
+
+.impact-LOW {
+    background: #2a1e1e;
+    color: #ff8a8a;
+}
+
+.driver-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    opacity: .7;
+    margin-top: 6px;
+}
+
+.driver-bar {
+    height: 6px;
+    background: #1b1f2a;
+    border-radius: 6px;
+    margin-top: 10px;
+}
+
+.driver-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg,#3b82f6,#22c55e);
+    border-radius: 6px;
+}
+
+/* === Exposure Matrix === */
+
+.exposure-table {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.exposure-row {
+    display: grid;
+    grid-template-columns: 140px 160px 80px 1fr;
+    align-items: center;
+    background: #0e1118;
+    border-radius: 12px;
+    padding: 10px 14px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
+}
+
+.exposure-symbol {
+    font-weight: 600;
+}
+
+.exposure-bias {
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 10px;
+    width: max-content;
+}
+
+.bias-StrongUpTrend {
+    background: #123a2b;
+    color: #4cffb0;
+}
+
+.bias-StrongDownTrend {
+    background: #3a1e1e;
+    color: #ff8a8a;
+}
+
+.bias-Range {
+    background: #2a2e3a;
+    color: #9ca3af;
+}
+
+.exposure-trust {
+    font-weight: 600;
+}
+
+.exposure-bar {
+    height: 6px;
+    background: #1b1f2a;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.exposure-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg,#60a5fa,#22c55e);
+}
