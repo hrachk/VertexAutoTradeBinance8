@@ -56,7 +56,7 @@ namespace VertexAutoTradeBinance8
         private readonly Dictionary<string, DateTime> _trackedUntilUtc = new(StringComparer.OrdinalIgnoreCase);
         private static readonly TimeSpan TrackedGrace = TimeSpan.FromMinutes(20);
 
-
+        public int StartupSubscriptionCap { get; set; } = 8;
         public TradingWorker(
             ILogger<TradingWorker> logger,
             IOptions<TradingOptions> options,
@@ -130,8 +130,22 @@ namespace VertexAutoTradeBinance8
             _strategy.BindReactive(_marketDataFacade);
 
             // Initial tracked set = universe
-            foreach (var s in _symbols.ActiveSymbols)
+            // =====================================================
+            // STARTUP SUBSCRIPTION CAP (CRITICAL)
+            // =====================================================
+            var startupCap =
+                _options.StartupSubscriptionCap > 0
+                    ? _options.StartupSubscriptionCap
+                    : 8; // SAFE DEFAULT
+
+            foreach (var s in _symbols.ActiveSymbols.Take(startupCap))
                 TrackSymbol(s, keepAlive: true);
+
+            _logger.LogWarning(
+                "[STARTUP] Subscribed symbols capped to {cap} (universe={uni})",
+                startupCap,
+                _symbols.ActiveSymbols.Count);
+
 
             // Warmup initial tracked (safe, sequential)
             await WarmupMarketDataForTrackedAsync(ct);
@@ -215,8 +229,13 @@ namespace VertexAutoTradeBinance8
         private async Task<IReadOnlyList<string>> BuildTrackedSymbolsAsync(CancellationToken ct)
         {
             // Always include current universe + pinned (already included in ActiveSymbols in your registry)
-            foreach (var s in _symbols.ActiveSymbols)
+            var subCap = _options.StartupSubscriptionCap > 0
+    ? _options.StartupSubscriptionCap
+    : 8;
+
+            foreach (var s in _symbols.ActiveSymbols.Take(subCap))
                 TrackSymbol(s, keepAlive: true);
+          
 
             // Add all symbols that currently have open positions (safe throttle)
             var posSymbols = await GetPositionSymbolsThrottledAsync(ct);
@@ -294,7 +313,14 @@ namespace VertexAutoTradeBinance8
         private async Task WarmupMarketDataForTrackedAsync(CancellationToken ct)
         {
             // Warm only NEW symbols
-            var toWarm = _tracked.Except(_warm, StringComparer.OrdinalIgnoreCase).ToList();
+            // =====================================================
+            // WARMUP BATCH LIMIT (ANTI-STORM)
+            // =====================================================
+            var toWarm = _tracked
+                .Except(_warm, StringComparer.OrdinalIgnoreCase)
+                .Take(3) // 🔥 НЕ БОЛЕЕ 3 СИМВОЛОВ ЗА ПРОХОД
+                .ToList();
+
             if (toWarm.Count == 0)
                 return;
 

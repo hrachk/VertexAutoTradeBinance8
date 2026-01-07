@@ -242,6 +242,14 @@ public class SymbolRegistryService
         {
             var auto = _cfg.GetSection("SymbolSelection:Auto");
 
+            // =====================================================
+            // STARTUP RELAX MODE (AI COLD START)
+            // =====================================================
+            var isStartup =
+                _ai.TotalTrades < 5 ||
+                (DateTime.UtcNow - _ai.StartedUtc) < TimeSpan.FromMinutes(15);
+
+
             // === CAPS / PARAMS =================================================
             var totalUniverseCap = auto.GetValue<int?>("TotalUniverseCap") ?? 20;
 
@@ -386,19 +394,23 @@ public class SymbolRegistryService
             var longWr = _ai.GetWinRate(SignalSide.Buy);
             var shortWr = _ai.GetWinRate(SignalSide.Sell);
 
-            static int AiAdjust(int cap, decimal wr)
+           
+            static int AiAdjust(int cap, decimal wr, bool isStartup)
             {
+                if (isStartup)
+                    return cap; // 🔥 NO AI PENALTY ON STARTUP
+
                 if (wr < 0.35m) return Math.Max(1, cap - 2);
                 if (wr < 0.45m) return Math.Max(1, cap - 1);
                 return cap;
             }
+            var aiCapLong = AiAdjust(dynamicCap, longWr, isStartup);
+            var aiCapShort = AiAdjust(dynamicCap, shortWr, isStartup);
 
-            var aiCapLong = AiAdjust(dynamicCap, longWr);
-            var aiCapShort = AiAdjust(dynamicCap, shortWr);
 
             // === SCORING =======================================================
             var longSnaps = baseSnapshots
-                .Where(s => _ai.GetRecentPnL(s.Symbol, SignalSide.Buy) > -0.15m)
+    .Where(s => isStartup || _ai.GetRecentPnL(s.Symbol, SignalSide.Buy) > -0.15m)
                 .OrderByDescending(s =>
                 {
                     var ai = Normalize(_ai.GetSymbolScore(s.Symbol, SignalSide.Buy), 0m, 1m);
@@ -408,8 +420,8 @@ public class SymbolRegistryService
                 .ToList();
 
             var shortSnaps = baseSnapshots
-                .Where(s => _ai.GetRecentPnL(s.Symbol, SignalSide.Sell) > -0.15m)
-                .OrderByDescending(s =>
+      .Where(s => isStartup || _ai.GetRecentPnL(s.Symbol, SignalSide.Sell) > -0.15m)
+                  .OrderByDescending(s =>
                 {
                     var ai = Normalize(_ai.GetSymbolScore(s.Symbol, SignalSide.Sell), 0m, 1m);
                     var mom = Normalize((decimal)Math.Abs(s.PriceChangePercent), 0m, momCap);

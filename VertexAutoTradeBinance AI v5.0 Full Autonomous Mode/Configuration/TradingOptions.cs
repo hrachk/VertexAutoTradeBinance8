@@ -41,5 +41,14 @@ public class TradingOptions
     public bool IgnoreCorrelation { get; set; } = false;
     public bool LowerRegimeThreshold { set; get; } = false;
 
+    // =====================================================
+    // STARTUP / BOOTSTRAP OPTIONS
+    // =====================================================
+
+    /// <summary>
+    /// Max symbols to subscribe on cold start (before engine is warm).
+    /// Prevents WS / warmup storm.
+    /// </summary>
+    public int StartupSubscriptionCap { get; set; } = 8;
 
 }

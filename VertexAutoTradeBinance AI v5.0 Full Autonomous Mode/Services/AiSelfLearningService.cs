@@ -158,6 +158,28 @@ namespace VertexAutoTradeBinance8.Services
         /// </summary>
         private readonly List<TradeHistoryEntry> _tradeHistory = new();
 
+        // =====================================================
+        // AI META (for startup / registry / dashboard)
+        // =====================================================
+
+        /// <summary>
+        /// UTC time when AI service instance was created.
+        /// Used for cold-start detection.
+        /// </summary>
+        public DateTime StartedUtc { get; } = DateTime.UtcNow;
+
+        /// <summary>
+        /// Total number of recorded real trades (learning-confirmed).
+        /// </summary>
+        public int TotalTrades
+        {
+            get
+            {
+                lock (_lock)
+                    return _tradeHistory.Count;
+            }
+        }
+
         // TREND MODEL
         public record AiTrendPrediction(int Direction, decimal Confidence, decimal RrBias);
 
