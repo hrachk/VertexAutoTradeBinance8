@@ -33,6 +33,7 @@ builder.Services.AddServerSideBlazor();
 builder.Services.AddSingleton<WeatherForecastService>();
 builder.Services.AddSingleton<AiRuntimeDataProvider>();
 builder.Services.AddSingleton<SymbolRegistryService>();
+builder.Services.AddSingleton<TradePermissionFileService>();
 
 // ============= DEPENDENCY INJECTION =============
 builder.Services.Configure<TradingOptions>(
