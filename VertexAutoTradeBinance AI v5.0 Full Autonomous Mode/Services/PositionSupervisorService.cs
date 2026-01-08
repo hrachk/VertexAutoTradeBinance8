@@ -7,6 +7,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using VertexAutoTradeBinance8.Models;
+using VertexAutoTradeBinance8.Services.Diagnostics;
 using VertexAutoTradeBinance8.Strategy;
 
 namespace VertexAutoTradeBinance8.Services
@@ -367,6 +368,71 @@ namespace VertexAutoTradeBinance8.Services
             if (!winnerConfirmed)
                 return;
 
+            //===============3) Production-патч: “Smart Hedge Kill Gate” (точечно, без ломки архитектуры)======================================================
+            /*
+             * Что это даёт:
+
+            Если общий hedge ещё “живой” (netPnL нормальный) — не фиксируем большой минус
+
+            Если фиксировать минус придётся, то он ограничен “бюджетом отдачи” от уже заработанного bucket
+
+            Если реально опасно (hardLoss / fundingPressure) — режем без разговоров
+             * */
+            // ===============================
+            // SMART HEDGE-KILL GATES (PRO)
+            // цель: не отдавать весь общий профит и не резать loser, если netPnL еще терпимый
+            // ===============================
+
+            // 1) Net uPnL on symbol (hedge as a whole)
+            decimal netPnl = longPnl + shortPnl; // sum uPnL of both legs
+
+            // 2) Pull realized bucket (profit reserve from harvests)
+            var sKey = EngineState.Key(symbol);
+            var st = _engineState.Symbols.GetOrAdd(sKey, _ => new SymbolState());
+            decimal bucket = st.RealizedPnlBucketUsd;
+
+            // 3) Hard loss threshold for emergency (always allow kill if too deep)
+            const decimal hardLoserUsd = 18m;      // absolute pain for 1 symbol (tune)
+            const decimal hardNetUsd = -10m;       // if net hedge is already negative -> allow cut faster
+
+            // 4) Giveback budget: allow to "pay" only part of earned bucket
+            // If bucket == 0 => allow small giveback only (avoid "10 earned -> 10 lost")
+            decimal givebackBudget = bucket > 0m ? bucket * 0.35m : 4m; // allow max 35% of bucket, else $4 cap
+
+            // loserPnl is negative usually
+            decimal loserPnl = loser == PositionSide.Long ? longPnl : shortPnl;
+            decimal loserLossAbs = Math.Abs(Math.Min(0m, loserPnl)); // only negative part
+
+            // === Gate A: if hedge netPnL is still positive enough, don't finalize loser ===
+            // Example: net still >= +3$ => don't lock loss; let system work (trail/harvest/BE)
+            if (netPnl >= 3m && !IsFundingRiskExceeded(symbol))
+            {
+                _logger.LogInformation(
+                    "[HEDGE-KILL][{symbol}] SKIP → netPnL still ok net={net:F2} loser={loser} loserPnl={lp:F2} bucket={bucket:F2}",
+                    symbol, netPnl, loser, loserPnl, bucket);
+                return;
+            }
+
+            // === Gate B: giveback limiter ===
+            // if cutting loser would consume too much of earned bucket -> skip, unless hard loss or funding pressure
+            bool hardLoss = loserLossAbs >= hardLoserUsd || netPnl <= hardNetUsd;
+            bool fundingPressure = IsFundingRiskExceeded(symbol);
+
+            if (!hardLoss && !fundingPressure && loserLossAbs > givebackBudget)
+            {
+                _logger.LogWarning(
+                    "[HEDGE-KILL][{symbol}] SKIP → giveback limit. loserLoss={loss:F2} budget={budget:F2} net={net:F2} bucket={bucket:F2}",
+                    symbol, loserLossAbs, givebackBudget, netPnl, bucket);
+                return;
+            }
+
+
+
+            //==================================================================================================================================
+
+
+
+
             // === FUNDING GUARD ===
             if (IsFundingRiskExceeded(symbol))
             {
@@ -396,7 +462,22 @@ namespace VertexAutoTradeBinance8.Services
             // ❌ CLOSE LOSER (MARKET)
             // ===================================
             var closeSide = loser == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-            var closeQty = Math.Abs(loserPos.Quantity);
+            // soften kill: reduce loser first, not always full close
+            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+            var step = filters.step > 0 ? filters.step : 1m;
+
+            decimal loserQtyAbs = Math.Abs(loserPos.Quantity);
+
+            // default: close 60% of loser, keep 40% if price may mean-revert
+            decimal closeQty = loserQtyAbs * 0.60m;
+            closeQty = Math.Floor(closeQty / step) * step;
+
+            // if funding pressure OR hard loss -> full close
+            if (IsFundingRiskExceeded(symbol) || Math.Abs(Math.Min(0m, loserPnl)) >= 25m)
+                closeQty = loserQtyAbs;
+
+            if (closeQty < filters.minQty)
+                closeQty = loserQtyAbs; // fallback: if too small -> close all
 
             await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: symbol,
@@ -1121,8 +1202,23 @@ namespace VertexAutoTradeBinance8.Services
 
                 // ✅ N4: Instant drop from registry pinned-by-positions
                 // We close ONE leg (side). In hedge, the other side may still be open.
-                _openPos.MarkClosed(symbol);
+                //_openPos.MarkClosed(symbol);
+                // ✅ N4: close tracking only if no positions left on symbol
+                try
+                {
+                    // if we just detected this side is 0, other side might still be open.
+                    // Use engine snapshot: if symbol state exists -> keep open; otherwise fallback to REST.
+                    
 
+                    var info = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+                    if (info.Success && info.Data != null)
+                    {
+                        bool anyLeft = info.Data.Any(p => p.Symbol == symbol && p.Quantity != 0m);
+                        if (!anyLeft) _openPos.MarkClosed(symbol);
+                       
+                    }
+                }
+                catch { /* ignore */ }
                 return;
             }
 
@@ -1311,19 +1407,28 @@ namespace VertexAutoTradeBinance8.Services
             IReadOnlyList<BinanceFuturesUsdtKline> klines,
             CancellationToken ct)
         {
+            var last = klines[^1].ClosePrice;
             // Блокируем, если LiquidityGuard сигналит опасность (не лезем в рынок лишний раз)
             if (_liquidityGuard.LastDanger?.Block == true)
+            {
+                EarlyTpTrace.Skip(_logger, symbol, side, entry, last, atr, "LIQUIDITY_BLOCK");
                 return;
+            }
 
             // ⚠️ skip early TP if liquidity was recent (soft protection)
             // if liquidity recent → wait a bit, but allow early TP later
             if (_liquidityGuard.IsDangerRecent(TimeSpan.FromMinutes(5)))
             {
-                if (DateTime.UtcNow - _liquidityGuard.LastDanger!.UtcTime < TimeSpan.FromMinutes(2))
+                var age = DateTime.UtcNow - _liquidityGuard.LastDanger!.UtcTime;
+                if (age < TimeSpan.FromMinutes(2))
+                {
+                    EarlyTpTrace.Skip(
+                        _logger, symbol, side, entry, last, atr,
+                        "LIQUIDITY_RECENT",
+                        $"age={age.TotalSeconds:F0}s");
                     return;
+                }
             }
-
-            var last = klines[^1].ClosePrice;
 
             var lastCandle = klines[^1];
             var body = Math.Abs(lastCandle.ClosePrice - lastCandle.OpenPrice);
@@ -1334,7 +1439,14 @@ namespace VertexAutoTradeBinance8.Services
 
             // если свеча с хвостом против — это не импульс
             if (wickAgainst > body * 0.8m)
+            {
+                EarlyTpTrace.Skip(
+                    _logger, symbol, side, entry, last, atr,
+                    "WICK_REJECTION",
+                    $"wick={wickAgainst:F4} body={body:F4}");
                 return;
+            }
+
 
 
             bool reached =
@@ -1342,13 +1454,34 @@ namespace VertexAutoTradeBinance8.Services
                     ? last >= entry + atr * 0.90m
                     : last <= entry - atr * 0.90m;
 
-            if (!reached) return;
+            if (!reached)
+            {
+                var need = atr * 0.90m;
+                EarlyTpTrace.Skip(
+                    _logger, symbol, side, entry, last, atr,
+                    "ATR_NOT_REACHED",
+                    $"need={need:F6}");
+                return;
+            }
 
-            var guardKey = BuildPosGuardKey(symbol, side, entry, qty);
-            if (_earlyTpDone.ContainsKey(guardKey)) return;
+            var guardKey = BuildPosGuardKey(symbol, side, entry);
+            if (_earlyTpDone.ContainsKey(guardKey))
+            {
+                EarlyTpTrace.Skip(
+                    _logger, symbol, side, entry, last, atr,
+                    "ALREADY_DONE");
+                return;
+            }
 
             var closeQty = Math.Round(qty * 0.35m, 8);
-            if (closeQty <= 0) return;
+            if (closeQty <= 0)
+            {
+                EarlyTpTrace.Skip(
+                    _logger, symbol, side, entry, last, atr,
+                    "QTY_ZERO",
+                    $"baseQty={qty}");
+                return;
+            }
 
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
@@ -1370,6 +1503,17 @@ namespace VertexAutoTradeBinance8.Services
                     return;
                 }
 
+                // ✅ SUCCESS (HIT) — СТАВИТЬ ИМЕННО ЗДЕСЬ
+                EarlyTpTrace.Hit(
+                    _logger,
+                    symbol,
+                    side,
+                    entry,
+                    last,
+                    atr,
+                    closeQty,
+                    qty);
+
                 var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
                 _earlyTpDone[guardKey] = now;
@@ -1377,9 +1521,9 @@ namespace VertexAutoTradeBinance8.Services
 
                 MarkProtection(symbol);
 
-                _logger.LogWarning(
-                    "[EARLY-TP][{symbol}][{side}] Partial fixed {closed}/{total}",
-                    symbol, side, closeQty, qty);
+                //_logger.LogWarning(
+                //    "[EARLY-TP][{symbol}][{side}] Partial fixed {closed}/{total}",
+                //    symbol, side, closeQty, qty);
             });
 
 
@@ -1430,7 +1574,7 @@ namespace VertexAutoTradeBinance8.Services
 
             if (!reached) return;
 
-            var guardKey = BuildPosGuardKey(symbol, side, entry, qty);
+            var guardKey = BuildPosGuardKey(symbol, side, entry);
             if (_beMoved.ContainsKey(guardKey)) return;
 
             decimal buffer = atr * 0.15m;
@@ -1477,11 +1621,11 @@ namespace VertexAutoTradeBinance8.Services
                 symbol, side, newSl);
         }
 
-        private static string BuildPosGuardKey(string symbol, PositionSide side, decimal entry, decimal qty)
+        private static string BuildPosGuardKey(string symbol, PositionSide side, decimal entry)
         {
             // грубый, но рабочий ключ: символ+side+entry+qty (округлим)
             string E(decimal v) => v.ToString("0.########", CultureInfo.InvariantCulture);
-            return $"{symbol}|{side}|e={E(entry)}|q={E(qty)}";
+            return $"{symbol}|{side}|e={E(entry)}";
         }
         // =====================================================================
         // EMERGENCY SL  (TRY NORMAL → FALLBACK ALGO RAW on -4120)
