@@ -1,4 +1,6 @@
-﻿@page "/ai-learning"
+﻿ 
+
+@page "/ai-learning"
 
 @using VertexAutoTradeBinance8.Services
 @using VertexAutoTradeBinance8.Web.Services
@@ -8,126 +10,72 @@
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
-<div class="ai-learn-container">
+@* <div class="ai-learn-container neural-bg">
 
-    <!-- KPI блоки -->
-    <div class="ai-learn-kpi-row">
-        <div class="ai-kpi-card">
-            <div class="ai-kpi-label">Всего записей</div>
-            <div class="ai-kpi-value">@_filtered.Count</div>
+    <!-- === NEURAL TOP BAR === -->
+    <div class="neural-topbar">
+        <div class="neural-title">
+            🧠 AI Learning
+            <span class="neural-live">LIVE</span>
         </div>
 
-        <div class="ai-kpi-card">
-            <div class="ai-kpi-label">Уникальных символов</div>
-            <div class="ai-kpi-value">@_uniqueSymbols</div>
-        </div>
-
-        <div class="ai-kpi-card">
-            <div class="ai-kpi-label">Последнее событие</div>
-            <div class="ai-kpi-value">
-                @(_filtered.Count == 0
-                                ? "-"
-                                : _filtered.Max(x => x.Time).ToLocalTime().ToString("dd.MM.yyyy HH:mm"))
+        <div class="neural-kpis">
+            <div class="neural-kpi">Episodes <b>@_filtered.Count</b></div>
+            <div class="neural-kpi">Symbols <b>@_uniqueSymbols</b></div>
+            <div class="neural-kpi">
+                Last <b>@(_filtered.Count == 0 ? "-" : _filtered.Max(x => x.Time).ToLocalTime().ToString("HH:mm"))</b>
             </div>
-        </div>
-
-        <div class="ai-kpi-card">
-            <div class="ai-kpi-label">Средний Score</div>
-            <div class="ai-kpi-value">
-                @(_filtered.Count == 0 ? "-" : _filtered.Average(x => x.Score).ToString("0.0"))
+            <div class="neural-kpi accent">
+                Avg Score <b>@(_filtered.Count == 0 ? "-" : _filtered.Average(x => x.Score).ToString("0.0"))</b>
             </div>
         </div>
     </div>
 
-    <!-- === График обучения === -->
-    <div class="ai-section">
+    <!-- === LEARNING CHART === -->
+    <div class="ai-section neural-card">
         <div class="ai-section-title flex-between">
-            График обучения
+            Learning Timeline
             <button class="help-btn" @onclick="() => _showHelp = true">ℹ</button>
         </div>
 
         @if (_showHelp)
         {
             <div class="help-overlay" @onclick="() => _showHelp = false"></div>
-
             <div class="help-modal">
                 <div class="help-header">
-                    <span>Пояснение графика AI Learning</span>
+                    <span>AI Learning — Chart Guide</span>
                     <button class="help-close" @onclick="() => _showHelp = false">✕</button>
                 </div>
-
                 <div class="help-body ai-help-scroll">
-
-                    <h4>🟦 Score</h4>
-                    <p>Уровень уверенности AI в общем рыночном состоянии. 0–100. Стабильность Score означает чистое состояние рынка.</p>
-
-                    <h4>🟩 Confidence %</h4>
-                    <p>Уверенность SmartRegime-модуля. Чем стабильнее линия — тем меньше манипуляций и резких смен режимов.</p>
-
-                    <h4>🟪 Slope ×8000</h4>
-                    <p>Показывает силу тренда и импульсы. Высокие пики — ускорения тренда. Падения — выход из импульса.</p>
-
-                    <h4>🟦 Volatility %</h4>
-                    <p>Оценивает колебания размера свечей. Стабильность показывает отсутствие хаоса на рынке.</p>
-
-                    <h4>🟥 Liquidity Danger</h4>
-                    <p>Флаг манипуляций: охота за стопами, резкие шпильки, выбросы объёма. Если линия равна 0 — рынок чистый.</p>
-
-                    <h4>📊 Топ причин обучающих событий</h4>
-                    <p>
-                        <b>BASE_REGIME</b> — базовое состояние рынка.<br />
-                        <b>SOFT_ENTRY</b> — потенциальный вход, недостаточно подтверждений.<br />
-                        <b>RR_BLOCK</b> — отказ из-за плохого соотношения риск/прибыль.<br />
-                        <b>MICRO_SIGNAL</b> — слабые микро-сигналы AI.<br />
-                        <b>AI_PATTERN_BLOCK</b> — найден паттерн, но не подтверждён.<br />
-                        <b>LIQUIDITY_DANGER</b> — события опасной ликвидности.
-                    </p>
-
-                    <h4>📈 Как читать график</h4>
-                    <p>
-                        • Ровные Score + Confidence = рынок предсказуем.<br />
-                        • Высокие Slope = сильные тренды.<br />
-                        • Нулевая Liquidity Danger = чистый рынок.<br />
-                        • Сильные всплески Slope без волатильности = структурные импульсы (идеально для торговли).
-                    </p>
-
+                    <p><b>Score</b> — общее качество рыночного состояния</p>
+                    <p><b>Confidence</b> — уверенность SmartRegime</p>
+                    <p><b>Slope</b> — сила импульса</p>
+                    <p><b>Volatility</b> — хаотичность рынка</p>
+                    <p><b>Liquidity Danger</b> — риск манипуляций</p>
                 </div>
             </div>
         }
 
-        <!-- Фильтры для графика (и для статистики одновременно) -->
+        <!-- Filters -->
         <div class="ai-learn-filters">
             <div class="ai-filter-group">
-                <span class="ai-filter-label">Период:</span>
-
-                <button class="@ChipClass(TimeFilter.Last24h)" @onclick="@(() => SetTimeFilter(TimeFilter.Last24h))">
-                    24 часа
-                </button>
-                <button class="@ChipClass(TimeFilter.Last7d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last7d))">
-                    7 дней
-                </button>
-                <button class="@ChipClass(TimeFilter.Last30d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last30d))">
-                    30 дней
-                </button>
-                <button class="@ChipClass(TimeFilter.All)" @onclick="@(() => SetTimeFilter(TimeFilter.All))">
-                    Всё время
-                </button>
+                <span class="ai-filter-label">Period:</span>
+                <button class="@ChipClass(TimeFilter.Last24h)" @onclick="@(() => SetTimeFilter(TimeFilter.Last24h))">24h</button>
+                <button class="@ChipClass(TimeFilter.Last7d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last7d))">7d</button>
+                <button class="@ChipClass(TimeFilter.Last30d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last30d))">30d</button>
+                <button class="@ChipClass(TimeFilter.All)" @onclick="@(() => SetTimeFilter(TimeFilter.All))">All</button>
             </div>
 
             <div class="ai-filter-group">
-                <span class="ai-filter-label">Мин. Score:</span>
-                <input type="range"
-                       min="0" max="100" step="5"
-                       @bind="_minScore"
-                       @bind:event="oninput" />
+                <span class="ai-filter-label">Min Score</span>
+                <input type="range" min="0" max="100" step="5" @bind="_minScore" @bind:event="oninput" />
                 <span class="ai-filter-badge">@_minScore</span>
             </div>
 
-            <!-- 🔥 Новый фильтр по символу -->
             <div class="ai-filter-group">
-                <span class="ai-filter-label">Символ:</span>
+                <span class="ai-filter-label">Symbol</span>
                 <select value="@_selectedSymbol" @onchange="OnSymbolChanged">
-                    <option value="">Все</option>
+                    <option value="">All</option>
                     @foreach (var s in _allSymbols)
                     {
                         <option value="@s">@s</option>
@@ -136,62 +84,215 @@
             </div>
         </div>
 
-        <div class="chart-wrapper" style="height:400px; margin-top:15px;">
-            <div style="position:relative; height:400px;">
-                <canvas id="learningChart"></canvas>
+        <div class="chart-wrapper">
+            <canvas id="learningChart"></canvas>
 
-                @if (_chartPoints.Count == 0)
-                {
-                    <div class="ai-empty"
-                         style="
-                    position:absolute;
-                    top:0; left:0; right:0; bottom:0;
-                    display:flex;
-                    align-items:center;
-                    justify-content:center;
-                    background:rgba(0,0,0,0.4);
-                    backdrop-filter:blur(4px);
-                    font-size:18px;">
-                        Нет данных по фильтрам
-                    </div>
-                }
-            </div>
-
+            @if (_chartPoints.Count == 0)
+            {
+                <div class="ai-empty-overlay">No data</div>
+            }
         </div>
     </div>
 
-    <!-- Последние симулированные сделки -->
-    @if (_snapshot != null)
-    {
-        <div class="ai-section">
-            <div class="ai-section-title">Последние симулированные сделки</div>
-            <TradeTable Trades="_snapshot.Trades" />
-        </div>
-    }
+    <!-- === REASONS === -->
+    <div class="ai-section neural-card">
+        <div class="ai-section-title">Top Learning Reasons</div>
 
-    <!-- ТОП причин (Reason) -->
-    <div class="ai-section">
-        <div class="ai-section-title">Топ причин обучающих событий</div>
+        @foreach (var r in _reasonStats)
+        {
+            <div class="ai-reason-row">
+                <div class="ai-reason-main">
+                    <div class="ai-reason-name">@r.Reason</div>
+                    <div class="ai-reason-meta">@r.Count events • Avg @r.AvgScore.ToString("0.0")</div>
+                </div>
+                <div class="ai-reason-bar-bg">
+                    <div class="ai-reason-bar-fill" style="width:@r.PercentOfMax%"></div>
+                </div>
+            </div>
+        }
+    </div>
+
+    <!-- === SYMBOL STATS === -->
+    <div class="ai-section neural-card">
+        <div class="ai-section-title">Top Symbols</div>
+
+        <table class="ai-table">
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Episodes</th>
+                    <th>Score</th>
+                    <th>Conf</th>
+                    <th>Regime</th>
+                    <th>Smart</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var s in _symbolStats)
+                {
+                    <tr>
+                        <td>@s.Symbol</td>
+                        <td>@s.Count</td>
+                        <td>@s.AvgScore.ToString("0.0")</td>
+                        <td>@s.AvgConf.ToString("0.0")</td>
+                        <td>@s.TopRegime</td>
+                        <td>@s.TopSmartType</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+</div> *@
+
+ 
+<div class="ai-learning-root">
+
+    <!-- =========================
+         TOP CONTROL ROOM HEADER
+    ========================== -->
+    <div class="ai-header">
+        <div class="neural-title">
+            🧠 AI Learning
+            <span class="neural-live">LIVE</span>
+        </div>
+      
+        <div class="ai-header-card">
+            <div class="ai-header-title">Episodes</div>
+            <div class="ai-header-value">@_filtered.Count</div>
+        </div>
+
+        <div class="ai-header-card">
+            <div class="ai-header-title">Symbols</div>
+            <div class="ai-header-value">@_uniqueSymbols</div>
+        </div>
+
+        <div class="ai-header-card">
+            <div class="ai-header-title">Avg Score</div>
+            <div class="ai-header-value">
+                @(_filtered.Count == 0 ? "-" : _filtered.Average(x => x.Score).ToString("0.0"))
+            </div>
+        </div>
+
+        <div class="ai-header-card wide">
+            <div class="ai-header-title">Last Event</div>
+            <div class="ai-header-sub">
+                @(_filtered.Count == 0
+                                ? "-"
+                                : _filtered.Max(x => x.Time).ToLocalTime().ToString("dd.MM.yyyy HH:mm"))
+            </div>
+        </div>
+    </div>
+
+    <!-- =========================
+         LEARNING TIMELINE
+    ========================== -->
+    <div class="ai-panel">
+        <div class="ai-panel-header">
+            <div class="ai-panel-title">Learning Timeline</div>
+            <button class="help-btn" @onclick="() => _showHelp = true">ℹ</button>
+        </div>
+
+        <!-- FILTER BAR -->
+        <div class="ai-filters">
+            <div class="filter-group">
+                <span>Period</span>
+                <button class="@ChipClass(TimeFilter.Last24h)" @onclick="@(() => SetTimeFilter(TimeFilter.Last24h))">24h</button>
+                <button class="@ChipClass(TimeFilter.Last7d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last7d))">7d</button>
+                <button class="@ChipClass(TimeFilter.Last30d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last30d))">30d</button>
+                <button class="@ChipClass(TimeFilter.All)" @onclick="@(() => SetTimeFilter(TimeFilter.All))">All</button>
+            </div>
+
+            <div class="filter-group">
+                <span>Min Score</span>
+                <input type="range" min="0" max="100" step="5"
+                       @bind="_minScore" @bind:event="oninput" />
+                <span class="badge">@_minScore</span>
+            </div>
+
+            <div class="filter-group">
+                <span>Symbol</span>
+                <select value="@_selectedSymbol" @onchange="OnSymbolChanged">
+                    <option value="">All</option>
+                    @foreach (var s in _allSymbols)
+                    {
+                        <option value="@s">@s</option>
+                    }
+                </select>
+            </div>
+        </div>
+
+        <!-- CHART -->
+        <div class="ai-chart-wrap">
+            <canvas id="learningChart"></canvas>
+
+            @if (_chartPoints.Count == 0)
+            {
+                <div class="ai-empty-overlay">No data for selected filters</div>
+            }
+        </div>
+    </div>
+
+    <!-- =========================
+         TOP LEARNING REASONS
+    ========================== -->
+    <div class="ai-panel">
+        <div class="ai-panel-title">Top Learning Reasons</div>
 
         @if (_reasonStats.Count == 0)
         {
-            <div class="ai-empty">Нет данных под текущие фильтры.</div>
+            <div class="ai-empty">No data</div>
         }
         else
         {
-            <div class="ai-reason-list">
+            <div class="reason-bars">
                 @foreach (var r in _reasonStats)
                 {
-                    <div class="ai-reason-row">
-                        <div class="ai-reason-main">
-                            <div class="ai-reason-name">@r.Reason</div>
-                            <div class="ai-reason-meta">
-                                @r.Count событий • сред. Score @r.AvgScore.ToString("0.0") • Conf @r.AvgConf.ToString("0.0")%
-                            </div>
+                    <div class="reason-row">
+                        <div class="reason-label">
+                            <div class="reason-name">@r.Reason</div>
+                            <div class="reason-meta">@r.Count events · Avg @r.AvgScore.ToString("0.0")</div>
                         </div>
-                        <div class="ai-reason-bar-wrap">
-                            <div class="ai-reason-bar-bg">
-                                <div class="ai-reason-bar-fill" style="width:@r.PercentOfMax%"></div>
+
+                        <div class="reason-bar-bg">
+                            <div class="reason-bar-fill" style="width:@r.PercentOfMax%"></div>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+
+    <!-- =========================
+         TOP SYMBOLS
+    ========================== -->
+    <!-- AI Exposure Matrix -->
+    <div class="ai-section exposure-matrix">
+        <div class="ai-section-title">AI Exposure Matrix</div>
+
+        @if (_symbolStats.Count == 0)
+        {
+            <div class="ai-empty">No exposure data</div>
+        }
+        else
+        {
+            <div class="exposure-table">
+                @foreach (var s in _symbolStats)
+                {
+                    <div class="exposure-row">
+                        <div class="exposure-symbol">@s.Symbol</div>
+
+                        <div class="exposure-bias bias-@s.TopRegime">
+                            @s.TopRegime
+                        </div>
+
+                        <div class="exposure-trust">
+                            @s.AvgScore.ToString("0.0")
+                        </div>
+
+                        <div class="exposure-bar">
+                            <div class="exposure-bar-fill"
+                                 style="width:@(s.Count * 100 / _symbolStats.Max(x => x.Count))%">
                             </div>
                         </div>
                     </div>
@@ -200,41 +301,40 @@
         }
     </div>
 
-    <!-- ТОП символов -->
-    <div class="ai-section">
-        <div class="ai-section-title">Символы с наибольшим количеством обучающих эпизодов</div>
 
-        @if (_symbolStats.Count == 0)
+    <!-- AI Decision Drivers -->
+    <div class="ai-section decision-drivers">
+        <div class="ai-section-title">AI Decision Drivers</div>
+
+        @if (_reasonStats.Count == 0)
         {
-            <div class="ai-empty">Нет данных под текущие фильтры.</div>
+            <div class="ai-empty">No decision drivers</div>
         }
         else
         {
-            <table class="ai-table">
-                <thead>
-                    <tr>
-                        <th>Символ</th>
-                        <th>Эпизодов</th>
-                        <th>Средний Score</th>
-                        <th>Средний Conf%</th>
-                        <th>Частый режим</th>
-                        <th>Частый SmartType</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var s in _symbolStats)
-                    {
-                        <tr>
-                            <td>@s.Symbol</td>
-                            <td>@s.Count</td>
-                            <td>@s.AvgScore.ToString("0.0")</td>
-                            <td>@s.AvgConf.ToString("0.0")</td>
-                            <td>@s.TopRegime</td>
-                            <td>@s.TopSmartType</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
+            <div class="drivers-grid">
+                @foreach (var r in _reasonStats)
+                {
+                    <div class="driver-card">
+                        <div class="driver-header">
+                            <span class="driver-name">@r.Reason</span>
+                            <span class="driver-impact impact-@GetImpact(r.Count)">
+                                @GetImpact(r.Count)
+                            </span>
+                        </div>
+
+                        <div class="driver-meta">
+                            <span>@r.Count episodes</span>
+                            <span>Avg @r.AvgScore.ToString("0.0")</span>
+                        </div>
+
+                        <div class="driver-bar">
+                            <div class="driver-bar-fill"
+                                 style="width:@r.PercentOfMax%"></div>
+                        </div>
+                    </div>
+                }
+            </div>
         }
     </div>
 
@@ -242,6 +342,13 @@
 
 
 @code {
+
+    private string GetImpact(int count)
+{
+    if (count >= 20) return "HIGH";
+    if (count >= 5) return "MEDIUM";
+    return "LOW";
+}
 
     private enum TimeFilter
     {
