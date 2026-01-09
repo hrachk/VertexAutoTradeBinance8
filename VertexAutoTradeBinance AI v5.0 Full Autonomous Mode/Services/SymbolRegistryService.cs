@@ -163,23 +163,20 @@ public class SymbolRegistryService
 
         if (string.Equals(mode, "Manual", StringComparison.OrdinalIgnoreCase))
         {
-            var manual = _cfg.GetSection("SymbolSelection:Manual").Get<string[]>() ?? Array.Empty<string>();
-            var list = BlacklistFilter(NormalizeSymbols(manual));
-
-            // pinned-by-position still applied in manual, for safety
+            var pinnedCfg = BlacklistFilter(GetPinnedSymbols()); // читает SymbolSelection:Pinned
             var posPinned = await GetPinnedByOpenPositionsSafeAsync(ct);
 
-            var all = list
+            var all = pinnedCfg
                 .Concat(posPinned)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            var snap = new UniverseSnapshot(
+            _snapshot = new UniverseSnapshot(
                 UtcTime: DateTime.UtcNow,
                 All: all,
                 Long: all,
                 Short: all,
-                Pinned: list,
+                Pinned: pinnedCfg,
                 PinnedByPositions: posPinned,
                 DynamicCap: all.Count,
                 AiCapLong: all.Count,
@@ -188,11 +185,8 @@ public class SymbolRegistryService
                 BtcVolBucket: "MANUAL"
             );
 
-            _snapshot = snap;
-
             _logger.LogInformation("[SYMBOL] Manual mode: {cnt} → {list}",
                 _snapshot.All.Count, string.Join(", ", _snapshot.All));
-
             return;
         }
 
@@ -524,14 +518,18 @@ public class SymbolRegistryService
 
     private List<string> GetPinnedSymbols()
     {
-        return _cfg
-            .GetSection("SymbolSelection:Pinned")
-            .Get<string[]>()?
+        // Canonical key
+        var pinned = _cfg.GetSection("SymbolSelection:Pinned").Get<string[]>();
+
+        // Backward-compatible keys (do not remove; prevents silent empty manual universe)
+        pinned ??= _cfg.GetSection("SymbolSelection:Manual:Pinned").Get<string[]>();
+        pinned ??= _cfg.GetSection("SymbolSelection:Manual").Get<string[]>();
+
+        return (pinned ?? Array.Empty<string>())
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .Select(s => s.Trim().ToUpperInvariant())
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList()
-            ?? new();
+            .ToList();
     }
 
     private async Task<IReadOnlyList<string>> GetPinnedByOpenPositionsSafeAsync(CancellationToken ct)
