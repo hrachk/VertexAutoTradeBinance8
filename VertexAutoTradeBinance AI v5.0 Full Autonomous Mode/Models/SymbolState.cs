@@ -34,6 +34,8 @@ namespace VertexAutoTradeBinance8.Models
 
         // === SAFETY ===
         public DateTime LastSafeKillUtc { get; set; } = DateTime.MinValue;
+        // === PROTECTION (BE / EARLY TP / SUPERVISOR) ===
+        public DateTime LastProtectionUtc { get; set; } = DateTime.MinValue;
 
     }
 

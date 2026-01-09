@@ -16,9 +16,9 @@ namespace VertexAutoTradeBinance8.Services
         private readonly object _lock = new();
         public static event Action? ExecutedSignalsChanged;
 
-        //private static readonly string FilePath =
-        //    Path.Combine(AppContext.BaseDirectory, "executed_signals.json");
-        private static readonly string FilePath = @"C:\Users\karap\source\repos\VertexAutoTradeBinance8\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\executed_signals.json";
+        private static readonly string FilePath =
+            Path.Combine(AppContext.BaseDirectory, "executed_signals.json");
+        //private static readonly string FilePath = @"C:\Users\karap\source\repos\VertexAutoTradeBinance8\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\executed_signals.json";
         private readonly JsonSerializerOptions _jsonOptions = new()
         {
             WriteIndented = true,

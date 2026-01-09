@@ -860,26 +860,7 @@ $@"📊 Режим рынка:
                 _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 return null;
             }
-
-
-            // =====================================================
-            // ⏳ SIDE-AWARE COOLDOWN (PRO)
-            // =====================================================
-            if (_lastStopTime.TryGetValue((symbol, baseSignal.Side), out var lastStop))
-            {
-                var diff = DateTime.UtcNow - lastStop;
-
-                // ⛔ Блокируем ТОЛЬКО тот же side
-                if (diff < TimeSpan.FromMinutes(10))
-                {
-                    _logger.LogInformation(
-                        $"⏳ COOLDOWN SAME-SIDE: {symbol} {baseSignal.Side} blocked ({diff.TotalMinutes:F1}m)");
-                    return null;
-                }
-            }
-
-
-
+             
 
             // 3) SoftModeAllowed: можно насильно разрешить через config AllowSoftEntryAlways
             bool softModeAllowed =
@@ -982,7 +963,21 @@ $@"📊 Режим рынка:
 
                 return null;
             }
+            // =====================================================
+            // ⏳ SIDE-AWARE COOLDOWN (PRO)
+            // =====================================================
+            if (_lastStopTime.TryGetValue((symbol, baseSignal.Side), out var lastStop))
+            {
+                var diff = DateTime.UtcNow - lastStop;
 
+                // ⛔ Блокируем ТОЛЬКО тот же side
+                if (diff < TimeSpan.FromMinutes(10))
+                {
+                    _logger.LogInformation(
+                        $"⏳ COOLDOWN SAME-SIDE: {symbol} {baseSignal.Side} blocked ({diff.TotalMinutes:F1}m)");
+                    return null;
+                }
+            }
 
             // =====================================================
             // 🔁 REVERSE PROBE (PRO MODE)
@@ -1009,7 +1004,7 @@ $@"📊 Режим рынка:
                 {
                     _logger.LogWarning(
                         "[REVERSE-PROBE][{symbol}] side={side} riskScale={risk}",
-                        symbol, probe.Side, probe.RiskScale);
+                        symbol, probe.Side, probe.SafetyRiskMultiplier);
 
                     return probe; // ⛔ НИКАКОГО ДАЛЬНЕЙШЕГО ФИЛЬТРА
                 }
