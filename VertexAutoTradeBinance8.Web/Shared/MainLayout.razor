@@ -25,32 +25,38 @@
     </div>
 </header>
 
-<div class="page">
-    <div class="sidebar @(ShowSidebar ? "sidebar-open" : "")">
-        <NavMenu />
+<!-- ===== APP BODY (CRITICAL FIX) ===== -->
+<div class="app-body">
+
+    <div class="page">
+        <div class="sidebar @(ShowSidebar ? "sidebar-open" : "")">
+            <NavMenu />
+        </div>
+
+        @if (ShowSidebar)
+        {
+            <div class="sidebar-backdrop" @onclick="ToggleMenu"></div>
+        }
+
+        <main class="main-content">
+            <article class="content px-4">
+                @Body
+            </article>
+        </main>
     </div>
 
-    <!-- BACKDROP when menu open on mobile -->
-    @if (ShowSidebar)
-    {
-        <div class="sidebar-backdrop" @onclick="ToggleMenu"></div>
-    }
-
-    <main>
-        <article class="content px-4">
-            @Body
-        </article>
-    </main>
 </div>
 
 @inject Microsoft.Extensions.Options.IOptions<ClientOptions> ClientOptions
+
 @code {
     ClientOptions Client => ClientOptions.Value;
+
     public decimal Balance { get; set; }
     public string EngineStatus { get; set; } = "Loading...";
     public string TradingMode { get; set; } = "Detecting...";
 
-    private bool ShowSidebar = false;
+    private bool ShowSidebar;
 
     void ToggleMenu() => ShowSidebar = !ShowSidebar;
 }

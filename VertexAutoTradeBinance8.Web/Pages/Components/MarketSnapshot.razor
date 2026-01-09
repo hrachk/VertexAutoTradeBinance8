@@ -1,0 +1,152 @@
+﻿@page "/market"
+
+@using VertexAutoTradeBinance8.Web.Models
+@using VertexAutoTradeBinance8.Web.Services
+@inject MarketSnapshotFileService Service
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<h2 class="title">Market Snapshot</h2>
+<p class="subtitle">Live price & volume (read-only)</p>
+
+<div class="market-root">
+
+    <!-- ===== TOOLBAR ===== -->
+    <div class="toolbar">
+        <select class="selector" @onchange="OnSelect">
+            @foreach (var s in Series)
+            {
+                <option value="@Key(s)">
+                    @s.Symbol (@Tf(s.Timeframe))
+                </option>
+            }
+        </select>
+
+        <div class="right">
+            <button class="btn" @onclick="ToggleFreeze">
+                @(Frozen ? "Unfreeze" : "Freeze")
+            </button>
+            <span class="refresh">Auto refresh: 5s</span>
+        </div>
+    </div>
+
+    <!-- ===== CHARTS ===== -->
+    <div class="chart-grid">
+        <div class="chart-box">
+            <canvas id="priceChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <canvas id="volumeChart"></canvas>
+        </div>
+    </div>
+
+</div>
+
+@code {
+    // ===== STATE =====
+    private List<MarketSeries> Series = [];
+    private MarketSeries? Selected;
+
+    private PeriodicTimer? _timer;
+    private CancellationTokenSource _cts = new();
+
+    private bool Frozen;
+    private double _scrollY;
+    private bool _jsReady;
+
+    // ===== INIT (NO JS HERE) =====
+    protected override async Task OnInitializedAsync()
+    {
+        Series = (await Service.LoadAsync()).ToList();
+        Selected = Series.FirstOrDefault();
+    }
+
+    private async Task SafeJs(Func<Task> action)
+{
+    try
+    {
+        await action();
+    }
+    catch (JSException ex)
+    {
+        Console.Error.WriteLine("[JS ERROR] " + ex.Message);
+    }
+    catch (ObjectDisposedException)
+    {
+        // circuit already closed — OK
+    }
+}
+
+
+    // ===== FIRST SAFE JS CALL =====
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || Selected == null)
+            return;
+
+        _jsReady = true;
+        await LoadAndRenderAsync();
+
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (await _timer.WaitForNextTickAsync(_cts.Token))
+                {
+                    if (!Frozen)
+                        await InvokeAsync(() => SafeJs(LoadAndRenderAsync));
+                }
+            }
+            catch (OperationCanceledException) { }
+        });
+    }
+
+    // ===== CORE =====
+    private async Task LoadAndRenderAsync()
+    {
+        if (!_jsReady || Selected == null)
+            return;
+
+        var closes = Selected.Klines.Select(k => (double)k.Close).ToArray();
+        var volumes = Selected.Klines.Select(k => (double)k.Volume).ToArray();
+
+        await JS.InvokeVoidAsync(
+            "marketChart.render",
+            Selected.Symbol,
+            Selected.Timeframe,
+            closes,
+            volumes
+        );
+    }
+
+
+    // ===== UI =====
+    private async Task OnSelect(ChangeEventArgs e)
+    {
+        Selected = Series.FirstOrDefault(s => Key(s) == e.Value?.ToString());
+        if (!Frozen)
+            await LoadAndRenderAsync();
+    }
+
+    private void ToggleFreeze() => Frozen = !Frozen;
+
+    static string Key(MarketSeries s)
+        => $"{s.Symbol}:{s.Timeframe}";
+
+    static string Tf(string tf) => tf switch
+    {
+        "OneMinute" => "1m",
+        "FiveMinutes" => "5m",
+        _ => tf
+    };
+
+    // ===== DISPOSE =====
+    public async ValueTask DisposeAsync()
+    {
+        _cts.Cancel();
+        _timer?.Dispose();
+        _cts.Dispose();
+        await Task.CompletedTask;
+    }
+}

@@ -34,6 +34,7 @@ builder.Services.AddSingleton<WeatherForecastService>();
 builder.Services.AddSingleton<AiRuntimeDataProvider>();
 builder.Services.AddSingleton<SymbolRegistryService>();
 builder.Services.AddSingleton<TradePermissionFileService>();
+builder.Services.AddSingleton<MarketSnapshotFileService>();
 
 // ============= DEPENDENCY INJECTION =============
 builder.Services.Configure<TradingOptions>(

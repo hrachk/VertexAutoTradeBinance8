@@ -15,6 +15,7 @@
     <link href="/css/missed-trades.css" rel="stylesheet" />
     <link href="/css/ai-learning.css" rel="stylesheet" />
     <link href="/css/trade-permission.css" rel="stylesheet" />
+    <link href="/css/market-snapshot.css" rel="stylesheet" />
     <link href="VertexAutoTradeBinance8.Web.styles.css" rel="stylesheet" />
     <link rel="icon" type="image/png" href="favicon.png"/>
     <component type="typeof(HeadOutlet)" render-mode="ServerPrerendered" />
@@ -32,14 +33,19 @@
         <a href="" class="reload">Reload</a>
         <a class="dismiss">🗙</a>
     </div>
-
+   
+    <!-- 1️⃣ ВНЕШНИЕ БИБЛИОТЕКИ -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+ 
     <script src="~/js/vertex-ui.js"></script>
-    <script src="_framework/blazor.server.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="~/js/vertex-bridge.js"></script>
+
+    <!-- 4️⃣ CHARTS (ИСПОЛЬЗУЮТ Chart + vertex.*) -->
+    <script src="~/js/market-chart.js"></script>
     <script src="~/js/learningchart.js"></script>
 
-
-
+    <!-- 5️⃣ BLazor Server runtime — ВСЕГДА ПОСЛЕДНИМ -->
+    <script src="_framework/blazor.server.js"></script>
 
 </body>
 </html>

@@ -1,0 +1,79 @@
+﻿/* =========================================================
+   MARKET PAGE ROOT
+   ========================================================= */
+.market-root {
+    height: calc(100vh - var(--vertex-header-h));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* страница не скроллится */
+    min-height: 0; /* 🔥 критично для flex */
+}
+
+/* =========================================================
+   TOOLBAR
+   ========================================================= */
+.toolbar {
+    flex-shrink: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+    .toolbar .selector {
+        min-width: 220px;
+    }
+
+    .toolbar .right {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+    }
+
+.refresh {
+    font-size: 12px;
+    opacity: 0.7;
+}
+
+/* =========================================================
+   CHART GRID (2 COLS)
+   ========================================================= */
+.chart-grid {
+    flex: 1;
+    min-height: 0; /* 🔥 ОБЯЗАТЕЛЬНО для Chart.js */
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    overflow: hidden;
+}
+
+/* =========================================================
+   CHART BOX
+   ========================================================= */
+.chart-box {
+    background: #0b0f1a;
+    border-radius: 10px;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 220px; /* 🔥 чтобы canvas не был 0px */
+}
+
+    /* =========================================================
+   CANVAS (Chart.js SAFE MODE)
+   ========================================================= */
+    .chart-box canvas {
+        flex: 1;
+        width: 100% !important;
+        height: 100% !important;
+    }
+
+/* =========================================================
+   MOBILE FALLBACK
+   ========================================================= */
+@media (max-width: 900px) {
+    .chart-grid {
+        grid-template-columns: 1fr;
+    }
+}

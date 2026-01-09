@@ -38,6 +38,31 @@ a, .btn-link {
     color: red;
 }
 
+/* 👇 ЭТО КЛЮЧ */
+.app-body {
+    padding-top: var(--vertex-header-h);
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* основной layout */
+.page {
+    display: flex;
+    height: 100%;
+}
+
+.main-content {
+    flex: 1;
+    overflow: auto;
+    min-height: 0;
+}
+
+.content {
+    height: 100%;
+    overflow: auto;
+}
+
+
 #blazor-error-ui {
     background: lightyellow;
     bottom: 0;
@@ -1248,21 +1273,17 @@ compact-card {
     opacity: 0.85;
 }
 
- 
 
+/* header already fixed */
 .vertex-header {
-    height: 58px;
-    background: linear-gradient(90deg, #0b0b0d 0%, #141418 100%);
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 22px;
-    border-bottom: 1px solid #252530;
-    position: sticky;
+    position: fixed;
     top: 0;
+    left: 0;
+    right: 0;
+    height: var(--vertex-header-h);
     z-index: 1000;
 }
+
 
 .vertex-left {
     display: flex;
@@ -1370,7 +1391,8 @@ compact-card {
 /* ================= BRAIN HEARTBEAT ================= */
 
 :root {
-  --brain-beat: 2.8s; /* общий ритм мозга */
+    --brain-beat: 2.8s; /* общий ритм мозга */
+    --vertex-header-h: 58px;
 }
 
 @keyframes brainBeat {

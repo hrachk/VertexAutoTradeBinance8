@@ -123,15 +123,23 @@
 
         _justChanged.Clear();
 
-        foreach (var e in All)
+        // sync Trade Permission -> Market page
+        foreach (var g in All.GroupBy(x => new { x.Symbol, x.Timeframe }))
         {
-            var key = (e.Symbol, e.Timeframe);
-
-            if (_prevAllow.TryGetValue(key, out var prev) && prev != e.Allow)
-                _justChanged.Add(key);
-
-            _prevAllow[key] = e.Allow;
+            await JS.InvokeVoidAsync(
+                "vertex.tradePermission.update",
+                g.Key.Symbol,
+                g.Key.Timeframe,
+                g
+                    .Select((x, i) => new
+                    {
+                        index = i,      // индекс свечи
+                        allow = x.Allow // true / false
+                    })
+                    .ToArray()
+            );
         }
+
 
         ApplyFilter();
         StateHasChanged();
