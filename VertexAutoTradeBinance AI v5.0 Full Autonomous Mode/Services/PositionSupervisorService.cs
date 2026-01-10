@@ -73,6 +73,10 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ConcurrentDictionary<string, decimal> _posBaseEntry = new(); // key: symbol|side -> entry (latest stable)
 
         private readonly OpenPositionSymbolTracker _openPos;
+        // ===== Supervisor checks/min =====
+        private int _supervisorChecks = 0;
+        private DateTime _supervisorWindowUtc = DateTime.UtcNow;
+
 
 
         public PositionSupervisorService(
@@ -161,6 +165,19 @@ namespace VertexAutoTradeBinance8.Services
         public async Task SuperviseAsync(string symbol, TradeSignal? lastSignal, CancellationToken ct)
         {
             using var client = _factory.CreateRestClient();
+            // ✅ SUPERVISOR HEARTBEAT (ПЕРВЫМ ДЕЛОМ, ДО ВСЕХ early-return)
+            var nowUtc = DateTime.UtcNow;
+
+            _engineState.LastSupervisorAction = nowUtc;
+            _engineState.LastSupervisorMessage =  $"Supervisor: no positions (funding reset) [{symbol}]";
+
+            _supervisorChecks++;
+            if ((nowUtc - _supervisorWindowUtc).TotalSeconds >= 60)
+            {
+                _engineState.SupervisorChecksLastMinute = _supervisorChecks;
+                _supervisorChecks = 0;
+                _supervisorWindowUtc = nowUtc;
+            }
 
             // 0) MANUAL → виртуальный сигнал
             if (lastSignal == null)

@@ -16,9 +16,7 @@ public class EngineStateModel
     public decimal Slope { get; set; }
     public decimal Volatility { get; set; }
 
-    // В JSON decimal → значит decimal
-    public decimal Confidence { get; set; }
-
+   
     public bool LiquidityDanger { get; set; }
     public string LiquidityReason { get; set; } = "";
 

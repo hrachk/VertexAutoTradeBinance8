@@ -28,12 +28,21 @@ namespace VertexAutoTradeBinance8.Services
 
         public EngineState Build(string symbol, string timeframe)
         {
+            var confidenceRaw = _regime.LastConfidence; // 0..1
+
+            int confidencePercent = (int)Math.Round(confidenceRaw * 100m);
+
+            string confidenceLevel =
+                confidencePercent >= 75 ? "HIGH" :
+                confidencePercent >= 45 ? "MEDIUM" :
+                "LOW";
+
             return new EngineState
             {
                 Status = "Running",
 
                 Mode = _strategy.CurrentMode ?? "Detecting",
-                BalanceUsdt = _risk.LastBalanceUsdt,       // У тебя есть LastKnownBalance в RiskManager
+                BalanceUsdt = _risk.LastBalanceUsdt,
 
                 Symbol = symbol,
                 Timeframe = timeframe,
@@ -42,7 +51,11 @@ namespace VertexAutoTradeBinance8.Services
                 SmartRegime = _regime.LastSmartRegime.ToString(),
                 Slope = _regime.LastSlope,
                 Volatility = _regime.LastVolatility,
-                Confidence = _regime.LastConfidence,
+
+                // ✅ КАНОНИЧЕСКИ
+                ConfidenceRaw = confidenceRaw,
+                ConfidencePercent = confidencePercent,
+                ConfidenceLevel = confidenceLevel,
 
                 LiquidityDanger = _liq.LastDanger?.Block ?? false,
                 LiquidityReason = _liq.LastDanger?.Reason.ToString() ?? "",

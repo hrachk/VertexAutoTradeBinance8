@@ -36,13 +36,24 @@ namespace VertexAutoTradeBinance8
         private readonly Dictionary<string, DateTime> _lastTrade = new();
         private readonly SymbolRegistryService _symbols;
         private readonly AiTimeframeSelectorService _tfSelector;
-        private readonly EngineStateBuilder _engineState;
+        private readonly EngineStateBuilder _engineStateBuilder;
         private readonly EngineStateSnapshotService _engineStateSnapshot;
         private readonly IBootGate _bootGate;
         private readonly IStrategyPreFilter _pre;
         private readonly MarketContextService _marketContext;
+         
 
         private DateTime _lastQuantTick = DateTime.UtcNow;
+
+
+        // ===== Engine heartbeat / CPM =====
+        private int _cycleCounter = 0;
+        private DateTime _cycleWindowUtc = DateTime.UtcNow;
+
+        // Optional: чтобы не писать слишком часто, но можно и без этого
+        private DateTime _lastEngineTickUtc = DateTime.MinValue;
+
+        
 
         // ===============================
         // TRACKED SYMBOLS (positions-safe)
@@ -78,7 +89,7 @@ namespace VertexAutoTradeBinance8
             AiModelSnapshotService snapshot,
             SymbolRegistryService symbols,
             AiTimeframeSelectorService tfSelector,
-            EngineStateBuilder engineState,
+            EngineStateBuilder engineStateBuilder,
             EngineStateSnapshotService engineStateSnapshot,
             IBootGate bootGate,
             IStrategyPreFilter pre, MarketContextService marketContext)
@@ -102,7 +113,7 @@ namespace VertexAutoTradeBinance8
             _snapshot = snapshot;
             _symbols = symbols;
             _tfSelector = tfSelector;
-            _engineState = engineState;
+            _engineStateBuilder = engineStateBuilder;
             _engineStateSnapshot = engineStateSnapshot;
             _bootGate = bootGate;
             _pre = pre;
@@ -110,6 +121,9 @@ namespace VertexAutoTradeBinance8
 
             learn.ForceSnapshot();
         }
+
+        private int _lastCyclesPerMinute = 0;
+
 
         protected override async Task ExecuteAsync(CancellationToken ct)
         {
@@ -170,51 +184,71 @@ namespace VertexAutoTradeBinance8
 
             while (!ct.IsCancellationRequested)
             {
+                var nowUtc = DateTime.UtcNow;
+
+                // ===============================
+                // ENGINE HEARTBEAT / CPM (GLOBAL)
+                // ===============================
+                _lastEngineTickUtc = nowUtc;
+                _cycleCounter++;
+
+                if ((nowUtc - _cycleWindowUtc).TotalSeconds >= 60)
+                {
+                    _lastCyclesPerMinute = _cycleCounter;
+                    _cycleCounter = 0;
+                    _cycleWindowUtc = nowUtc;
+                }
+
                 await RunQuantRealtimeTick(ct);
 
-                // ✅ Refresh universe (internally gated by RefreshInterval)
+                // ===============================
+                // UNIVERSE / TRACKED
+                // ===============================
                 await _symbols.LoadAsync(ct);
-
-                // ✅ Update tracked set: universe + positions (+ grace)
                 var trackedSymbols = await BuildTrackedSymbolsAsync(ct);
-
-                // ✅ Warmup only new tracked symbols
                 await WarmupMarketDataForTrackedAsync(ct);
 
                 // ===============================
-                // MAIN LOOP BY TRACKED SYMBOLS
-                // - entries only for universe sides
-                // - supervisor ALWAYS for tracked
+                // SYMBOL LOOP (TRADING ONLY)
                 // ===============================
                 foreach (var symbol in trackedSymbols)
                 {
                     var tf = await ResolveTimeframeSafeAsync(symbol, ct);
-
-                    // ENTRIES only if symbol is in universe side lists
-                    // await ProcessSymbolWithUniverseSide(symbol, tf, SignalSide.Buy, ct);
-                    // await ProcessSymbolWithUniverseSide(symbol, tf, SignalSide.Sell, ct);
                     var ctx = await _marketContext.GetContextAsync(symbol, ct);
 
-                    // ENTRIES (respect HTF bias)
                     if (ctx.Allows(SignalSide.Buy))
                         await ProcessSymbolWithUniverseSide(symbol, tf, SignalSide.Buy, ct);
 
                     if (ctx.Allows(SignalSide.Sell))
                         await ProcessSymbolWithUniverseSide(symbol, tf, SignalSide.Sell, ct);
 
-                
-                    // SUPERVISION always for tracked (positions-safe)
                     await _supervisor.SuperviseAsync(symbol, null, ct);
-
-                    var engineState = _engineState.Build(symbol, tf.ToString());
-                    _engineStateSnapshot.Save(engineState);
 
                     await Task.Delay(25, ct);
                 }
 
+                // ===============================
+                // 🔥 ENGINE STATE SNAPSHOT (ОДИН РАЗ)
+                // ===============================
+                var engineState = _engineStateBuilder.Build(
+                    symbol: trackedSymbols.FirstOrDefault() ?? "—",
+                    timeframe: _options.TimeframeMinutes.ToString()
+                );
+
+                engineState.LastEngineTick = _lastEngineTickUtc;
+                engineState.CyclesPerMinute = _lastCyclesPerMinute;
+                engineState.TrackedSymbols = trackedSymbols.Count;
+                engineState.UniverseSize = _symbols.ActiveSymbols.Count;
+
+                // ❗ OpenPositions НЕ ТРОГАЕМ, если нет готового счётчика
+                // engineState.OpenPositions = ... (оставь как было / позже)
+
+                _engineStateSnapshot.Save(engineState);
+
                 await PeriodicSnapshot(ct);
                 await Task.Delay(80, ct);
             }
+
         }
 
         // ===========================================

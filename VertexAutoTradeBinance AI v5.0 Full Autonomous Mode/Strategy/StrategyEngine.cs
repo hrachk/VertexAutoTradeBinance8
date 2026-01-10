@@ -1138,6 +1138,9 @@ $@"📊 Режим рынка:
                     LastSoftEntry = true;
                     LastBlockedByLiquidity = false;
                     CurrentMode = "SoftTrend";
+                    _engineState.LastEntryDecision = "SOFT_ENTRY";
+                    _engineState.SoftEntry = true;
+
                     baseSignal = soft;
                 }
             }
@@ -1652,6 +1655,14 @@ $@"📊 Режим рынка:
 
             bool fastTrendOverride = IsFastTrendOverride(smart);
 
+            _engineState.LastEntryDecision = "LOW_CONFIDENCE";
+            _engineState.ConfidenceRaw = smart.Confidence;
+            _engineState.ConfidencePercent = (int)(smart.Confidence * 100);
+            _engineState.ConfidenceLevel =
+                smart.Confidence >= 0.65m ? "HIGH" :
+                smart.Confidence >= 0.45m ? "MEDIUM" : "LOW";
+
+
             if (!fastTrendOverride && smart.Confidence < thrFrac - safetyBuffer)
                 return FastFailResult.Fail(
                     "CONF",
@@ -1703,6 +1714,8 @@ $@"📊 Режим рынка:
                           ?? TryPullbackEma21(symbol, tf, klines);
             else
                 baseSignal = TryPullbackEma21(symbol, tf, klines);
+
+            _engineState.LastEntryDecision = "WAITING_PULLBACK";
 
             if (baseSignal == null)
                 return FastFailResult.Fail("BASE", "no base pattern");
@@ -1812,7 +1825,13 @@ $@"📊 Режим рынка:
                superSignal: signal.IsSuperSignal);
 
             if (lg.Block && !relaxLiquidity)
+            {
+                _engineState.LastEntryDecision = "BLOCKED_LIQUIDITY";
+                _engineState.BlockedByLiquidity = true;
+                _engineState.LiquidityReason = lg.Reason.ToString();
                 return FastFailResult.Fail("LIQ_GUARD", lg.Reason.ToString());
+            }
+
 
             var after = _liquidityClusterService.FilterAndAdjust(signal);
             if (after != null)
@@ -1905,6 +1924,14 @@ $@"📊 Режим рынка:
         {
             var trace = new SignalDecisionTrace();
 
+
+            // === ENGINE LIVE STATE RESET (PER DECISION) ===
+            _engineState.LastDecisionTime = DateTime.UtcNow;
+            _engineState.LastEntryDecision = "EVALUATING";
+            _engineState.BlockedByLiquidity = false;
+            _engineState.SoftEntry = false;
+
+
             // === CONFIG FLAGS (ЕДИНЫЙ ИСТОЧНИК — TestModeOptions)
             bool testMode = _test.Enabled;
 
@@ -1946,6 +1973,16 @@ $@"📊 Режим рынка:
 
             // 🔥 CRITICAL: DecisionTrace должен соответствовать РЕАЛЬНОМУ решению
             _aiLearning.RecordDecisionTrace(symbol, smart.BaseRegime, trace.Gates);
+
+            if (trace.Allow)
+            {
+                _engineState.LastEntryDecision = "ENTER_ALLOWED";
+                _engineState.ConfidenceRaw = smart.Confidence;
+                _engineState.ConfidencePercent = (int)(smart.Confidence * 100);
+                _engineState.ConfidenceLevel =
+                    smart.Confidence >= 0.65m ? "HIGH" :
+                    smart.Confidence >= 0.45m ? "MEDIUM" : "LOW";
+            }
 
             return trace;
         }

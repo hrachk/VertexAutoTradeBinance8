@@ -16,8 +16,7 @@ namespace VertexAutoTradeBinance8.Models
 
         public decimal Slope { get; set; }
         public decimal Volatility { get; set; }
-        public decimal Confidence { get; set; }
-
+      
  
 
         // --- Liquidity ---
@@ -29,11 +28,7 @@ namespace VertexAutoTradeBinance8.Models
         public bool SoftEntry { get; set; }
         public bool BlockedByLiquidity { get; set; }
 
-        public DateTime LastUpdate { get; set; }
-
-
-
-
+        public DateTime LastUpdate { get; set; } 
 
         public ConcurrentDictionary<string, SymbolState> Symbols { get; set; } = new();
 
@@ -41,5 +36,24 @@ namespace VertexAutoTradeBinance8.Models
         public decimal UsedMarginUsd { get; set; }
 
         public static string Key(string symbol) => symbol.ToUpperInvariant();
+
+
+        //new 10/01/26
+        public DateTime LastEngineTick { get; set; }
+        public int CyclesPerMinute { get; set; }
+        public int SupervisorChecksLastMinute { get; set; }
+        public DateTime LastSupervisorAction { get; set; }
+        public string LastSupervisorMessage { get; set; }
+        public string LastEntryDecision { get; set; }
+        // examples: BLOCKED_RANGE, WAITING_PULLBACK, LOW_CONFIDENCE
+        public DateTime LastDecisionTime { get; set; }
+        public int TrackedSymbols { get; set; }
+        public int UniverseSize { get; set; }
+        public int OpenPositions { get; set; }
+
+        public decimal ConfidenceRaw { get; set; }
+        public int ConfidencePercent { get; set; }
+        public string ConfidenceLevel { get; set; }
+        // LOW / MEDIUM / HIGH
     }
 }
