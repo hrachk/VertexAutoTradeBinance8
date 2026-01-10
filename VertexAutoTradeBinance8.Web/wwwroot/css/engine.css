@@ -1,0 +1,65 @@
+﻿.engine-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+}
+
+.state-card {
+    background: #1e1e1e;
+    border-radius: 10px;
+    padding: 14px;
+}
+
+    .state-card.wide {
+        grid-column: span 2;
+    }
+
+    .state-card .label {
+        font-size: 12px;
+        opacity: 0.6;
+    }
+
+    .state-card .value {
+        font-size: 16px;
+        margin-top: 4px;
+    }
+
+    .state-card .mono {
+        font-family: monospace;
+    }
+
+    .state-card.ok {
+        border: 1px solid #1f7a4f;
+    }
+
+    .state-card.warn {
+        border: 1px solid #a17c1a;
+    }
+
+    .state-card.danger {
+        border: 1px solid #8a2b2b;
+    }
+
+.badge {
+    margin-left: 6px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-size: 11px;
+}
+
+.badge-high {
+    background: #1f7a4f;
+}
+
+.badge-mid {
+    background: #a17c1a;
+}
+
+.badge-low {
+    background: #8a2b2b;
+}
+
+.time {
+    opacity: 0.6;
+    margin-left: 6px;
+}

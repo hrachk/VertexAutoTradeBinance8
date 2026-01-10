@@ -1,114 +1,198 @@
 ﻿@page "/engine"
 @using VertexAutoTradeBinance8.Web.Models
 @using VertexAutoTradeBinance8.Web.Services
-@inject EngineStateService EngineService
+@inject EngineStateService EngineState
 
-<div class="engine-container">
+<h2 class="page-title">Vertex Engine — Реальное состояние</h2>
 
-    @if (state == null)
-    {
-        <div class="empty">Нет данных от движка...</div>
-    }
-    else
-    {
-        <div class="engine-title">Vertex Engine — Реальное состояние</div>
+@if (_state == null)
+{
+    <div class="state-card danger">
+        Engine state not available (engine writing / not started)
+    </div>
+}
+else
+{
+    <div class="engine-grid">
 
-        <div class="engine-grid">
+        <!-- ===================== CORE STATUS ===================== -->
+        <div class="state-card">
+            <div class="label">Статус</div>
+            <div class="value">@_state.Status</div>
+        </div>
 
-            <div class="block">
-                <div class="label">Статус</div>
-                <div class="value">@state.Status</div>
-            </div>
+        <div class="state-card">
+            <div class="label">Режим</div>
+            <div class="value">@_state.Mode</div>
+        </div>
 
-            <div class="block">
-                <div class="label">Режим</div>
-                <div class="value">@state.Mode</div>
-            </div>
+        <div class="state-card">
+            <div class="label">Баланс USDT</div>
+            <div class="value">@_state.BalanceUsdt.ToString("F2")</div>
+        </div>
 
-            <div class="block">
-                <div class="label">Баланс USDT</div>
-                <div class="value">@state.BalanceUsdt</div>
-            </div>
+        <div class="state-card">
+            <div class="label">TF</div>
+            <div class="value">@_state.Timeframe</div>
+        </div>
 
-            <div class="block">
-                <div class="label">Символ</div>
-                <div class="value">@state.Symbol</div>
-            </div>
+        <!-- ===================== MARKET ===================== -->
+        <div class="state-card">
+            <div class="label">Символ</div>
+            <div class="value">@_state.Symbol</div>
+        </div>
 
-            <div class="block">
-                <div class="label">TF</div>
-                <div class="value">@state.Timeframe</div>
-            </div>
+        <div class="state-card">
+            <div class="label">Base Regime</div>
+            <div class="value">@_state.MarketRegime</div>
+        </div>
 
-            <div class="block">
-                <div class="label">Base Regime</div>
-                <div class="value">@state.MarketRegime</div>
-            </div>
+        <div class="state-card">
+            <div class="label">Smart Regime</div>
+            <div class="value">@_state.SmartRegime</div>
+        </div>
 
-            <div class="block">
-                <div class="label">Smart Regime</div>
-                <div class="value">@state.SmartRegime</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Confidence</div>
-                <div class="value">@state.Confidence %</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Slope</div>
-                <div class="value">@state.Slope</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Volatility</div>
-                <div class="value">@state.Volatility</div>
-            </div>
-
-            <div class="block danger">
-                <div class="label">Liquidity Danger</div>
-                <div class="value">@state.LiquidityDanger</div>
-            </div>
-
-            <div class="block reason">
-                <div class="label">Причина блокировки</div>
-                <div class="value">@state.LiquidityReason</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Soft Entry</div>
-                <div class="value">@state.SoftEntry</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Blocked By Liquidity</div>
-                <div class="value">@state.BlockedByLiquidity</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Последнее обновление</div>
-                <div class="value">@state.LastUpdate.ToLocalTime()</div>
+        <div class="state-card">
+            <div class="label">Confidence</div>
+            <div class="value">
+                @_state.ConfidencePercent%
+                <span class="badge @ConfidenceCss(_state.ConfidenceLevel)">
+                    @_state.ConfidenceLevel
+                </span>
             </div>
         </div>
-    }
-</div>
+
+        <!-- ===================== MARKET METRICS ===================== -->
+        <div class="state-card">
+            <div class="label">Slope</div>
+            <div class="value">@_state.Slope.ToString("F6")</div>
+        </div>
+
+        <div class="state-card">
+            <div class="label">Volatility</div>
+            <div class="value">@_state.Volatility.ToString("F6")</div>
+        </div>
+
+        <!-- ===================== ENGINE HEARTBEAT ===================== -->
+        <div class="state-card @(EngineAlive ? "ok" : "danger")">
+            <div class="label">Engine Heartbeat</div>
+            <div class="value">
+                @EngineHeartbeatText
+            </div>
+        </div>
+
+        <div class="state-card">
+            <div class="label">Cycles / min</div>
+            <div class="value">@_state.CyclesPerMinute</div>
+        </div>
+
+        <!-- ===================== SUPERVISOR ===================== -->
+        <div class="state-card @(SupervisorAlive ? "ok" : "warn")">
+            <div class="label">Supervisor</div>
+            <div class="value">
+                checks/min: @_state.SupervisorChecksLastMinute
+            </div>
+        </div>
+
+        <div class="state-card wide">
+            <div class="label">Последнее действие Supervisor</div>
+            <div class="value mono">
+                @_state.LastSupervisorMessage
+            </div>
+        </div>
+
+        <!-- ===================== STRATEGY ===================== -->
+        <div class="state-card wide">
+            <div class="label">Последнее решение Strategy</div>
+            <div class="value mono">
+                @_state.LastEntryDecision
+                <span class="time">
+                    (@_state.LastDecisionTime.ToLocalTime())
+                </span>
+            </div>
+        </div>
+
+        <!-- ===================== UNIVERSE ===================== -->
+        <div class="state-card">
+            <div class="label">Tracked Symbols</div>
+            <div class="value">@_state.TrackedSymbols</div>
+        </div>
+
+        <div class="state-card">
+            <div class="label">Universe Size</div>
+            <div class="value">@_state.UniverseSize</div>
+        </div>
+
+        <div class="state-card @( _state.OpenPositions > 0 ? "ok" : "warn")">
+            <div class="label">Open Positions</div>
+            <div class="value">@_state.OpenPositions</div>
+        </div>
+
+        <!-- ===================== LIQUIDITY ===================== -->
+        <div class="state-card @( _state.LiquidityDanger ? "danger" : "ok")">
+            <div class="label">Liquidity Danger</div>
+            <div class="value">
+                @_state.LiquidityDanger
+                @if (_state.LiquidityDanger)
+                {
+                    <div class="sub">@_state.LiquidityReason</div>
+                }
+            </div>
+        </div>
+
+        <!-- ===================== LAST UPDATE ===================== -->
+        <div class="state-card wide">
+            <div class="label">Последнее обновление</div>
+            <div class="value">@_state.LastUpdate.ToLocalTime()</div>
+        </div>
+
+    </div>
+}
 
 @code {
-    private EngineStateModel? state;
+    private EngineStateModel? _state;
 
     protected override void OnInitialized()
     {
-      
         Load();
-        var timer = new System.Timers.Timer(2000);
-        timer.Elapsed += (_, _) => InvokeAsync(Load);
-        timer.Start();
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        _ = Tick();
+    }
+
+    private PeriodicTimer? _timer;
+
+    private async Task Tick()
+    {
+        while (await _timer!.WaitForNextTickAsync())
+        {
+            Load();
+            InvokeAsync(StateHasChanged);
+        }
     }
 
     private void Load()
     {
-        
-        state = EngineService.Load();
-        StateHasChanged();
+        _state = EngineState.Load();
     }
+
+    private bool EngineAlive =>
+        _state != null &&
+        (DateTime.UtcNow - _state.LastEngineTick) < TimeSpan.FromSeconds(5);
+
+    private bool SupervisorAlive =>
+        _state != null &&
+        (DateTime.UtcNow - _state.LastSupervisorAction) < TimeSpan.FromSeconds(30);
+
+    private string EngineHeartbeatText =>
+        _state == null
+            ? "N/A"
+            : $"{(DateTime.UtcNow - _state.LastEngineTick).TotalSeconds:F1}s ago";
+
+    private static string ConfidenceCss(string level) =>
+        level switch
+        {
+            "HIGH" => "badge-high",
+            "MEDIUM" => "badge-mid",
+            _ => "badge-low"
+        };
 }
