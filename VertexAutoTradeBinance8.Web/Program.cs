@@ -8,6 +8,7 @@ using VertexAutoTradeBinance8.Web.Confs;
 using VertexAutoTradeBinance8.Web.Data;
  
 using VertexAutoTradeBinance8.Web.Services;
+using VertexAutoTradeBinance8.Web.Services.Runtime;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -44,11 +45,18 @@ builder.Services.Configure<ClientOptions>(
     builder.Configuration.GetSection("Client")
 );
 
+builder.Services.AddSingleton<ConfigEditorService>();
+builder.Services.Configure<EngineConfigRoot>(
+    builder.Configuration.GetSection("Runtime")); // future-ready
+
 //builder.Services.Configure<BinanceOptions>(
 //    builder.Configuration.GetSection("Binance"));
 
 
 builder.Services.AddSingleton<AiStopLossOptimizer>();
+builder.Services.AddSingleton<EngineRuntimeSettings>();
+builder.Services.AddSingleton<ConfigEditorService>();
+builder.Services.AddSingleton<ConfigAdvisorService>(); // ниже
 
 
 // ========================================================================
