@@ -1428,15 +1428,16 @@ namespace VertexAutoTradeBinance8.Services
                         : 0.62m;
 
                 await TryHarvestProfitAsync(
-                    client,
-                    _engineState,
-                    symbol,
-                    side,
-                    pos,
-                    klines,
-                    aiEdgeScore,
-                    minUsd: 6m,
-                    ct);
+     client,
+     _engineState,
+     symbol,
+     side,
+     pos,
+     baseQtyForGuards,    // ✅ ДОБАВИЛИ
+     klines,
+     aiEdgeScore,
+     minUsd: 6m,
+     ct);
             }
 
             // 1) SL отсутствует → аварийный SL (если нет дублей)
@@ -1516,11 +1517,12 @@ namespace VertexAutoTradeBinance8.Services
             IReadOnlyList<BinanceFuturesUsdtKline> klines,
             CancellationToken ct)
         {
-            var last = klines[^1].ClosePrice;
+            var c = klines[^1];
+            var lastClose = c.ClosePrice; // для логов и wick/body
             // Блокируем, если LiquidityGuard сигналит опасность (не лезем в рынок лишний раз)
             if (_liquidityGuard.LastDanger?.Block == true)
             {
-                EarlyTpTrace.Skip(_logger, symbol, side, entry, last, atr, "LIQUIDITY_BLOCK");
+                EarlyTpTrace.Skip(_logger, symbol, side, entry, lastClose, atr, "LIQUIDITY_BLOCK");
                 return;
             }
 
@@ -1532,39 +1534,46 @@ namespace VertexAutoTradeBinance8.Services
                 if (age < TimeSpan.FromMinutes(2))
                 {
                     EarlyTpTrace.Skip(
-                        _logger, symbol, side, entry, last, atr,
+                        _logger, symbol, side, entry, lastClose, atr,
                         "LIQUIDITY_RECENT",
                         $"age={age.TotalSeconds:F0}s");
                     return;
                 }
             }
 
-            var lastCandle = klines[^1];
-            var body = Math.Abs(lastCandle.ClosePrice - lastCandle.OpenPrice);
+            var body = Math.Abs(c.ClosePrice - c.OpenPrice);
+
             var wickAgainst =
-                side == PositionSide.Long
-                    ? lastCandle.HighPrice - lastCandle.ClosePrice
-                    : lastCandle.ClosePrice - lastCandle.LowPrice;
+            side == PositionSide.Long
+             ? c.HighPrice - c.ClosePrice
+                             : c.ClosePrice - c.LowPrice;
+
+
+            decimal hit =
+    side == PositionSide.Long
+        ? c.HighPrice
+        : c.LowPrice;
+
 
             // если свеча с хвостом против — это не импульс
             if (wickAgainst > body * 0.8m)
             {
                 EarlyTpTrace.Skip(
-                    _logger, symbol, side, entry, last, atr,
+                    _logger, symbol, side, entry, lastClose, atr,
                     "WICK_REJECTION",
                     $"wick={wickAgainst:F4} body={body:F4}");
                 return;
             }
             bool reached =
-                side == PositionSide.Long
-                    ? last >= entry + atr * 0.90m
-                    : last <= entry - atr * 0.90m;
+ side == PositionSide.Long
+         ? hit >= entry + atr * 0.90m
+        : hit <= entry - atr * 0.90m;
 
             if (!reached)
             {
                 var need = atr * 0.90m;
                 EarlyTpTrace.Skip(
-                    _logger, symbol, side, entry, last, atr,
+                    _logger, symbol, side, entry, lastClose, atr,
                     "ATR_NOT_REACHED",
                     $"need={need:F6}");
                 return;
@@ -1578,13 +1587,15 @@ namespace VertexAutoTradeBinance8.Services
             //        "ALREADY_DONE");
             //    return;
             //}
-           // var guardKey = BuildPosGuardKey(symbol, side, entry);
+    
+            
             var guardKey = BuildPosGuardKey(symbol, side, entry, qty);
+
             // ✅ reserve immediately (prevents harvest race / double enqueue)
             var nowReserve = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             if (!_earlyTpDone.TryAdd(guardKey, nowReserve))
             {
-                EarlyTpTrace.Skip(_logger, symbol, side, entry, last, atr, "ALREADY_DONE");
+                EarlyTpTrace.Skip(_logger, symbol, side, entry, lastClose, atr, "ALREADY_DONE");
                 return;
             }
 
@@ -1596,7 +1607,7 @@ namespace VertexAutoTradeBinance8.Services
             if (closeQty <= 0)
             {
                 EarlyTpTrace.Skip(
-                    _logger, symbol, side, entry, last, atr,
+                    _logger, symbol, side, entry, lastClose, atr,
                     "QTY_ZERO",
                     $"baseQty={qty}");
                 return;
@@ -1605,53 +1616,80 @@ namespace VertexAutoTradeBinance8.Services
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
 
-            _dispatcher.Enqueue(async ct =>
+            _dispatcher.Enqueue(async token =>
             {
                 using var c = _factory.CreateRestClient();
+
+                // 1) Реальная позиция на момент исполнения
+                var info = await c.UsdFuturesApi.Account.GetPositionInformationAsync(ct: token);
+                if (!info.Success || info.Data == null)
+                {
+                    _earlyTpDone.TryRemove(guardKey, out _);
+                    _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
+                    return;
+                }
+
+                var real = info.Data.FirstOrDefault(p =>
+                    p.Symbol == symbol &&
+                    p.PositionSide == side &&
+                    Math.Abs(p.Quantity) > 0m);
+
+                if (real == null)
+                {
+                    _earlyTpDone.TryRemove(guardKey, out _);
+                    _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
+                    return;
+                }
+
+                var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+                var step = filters.step > 0 ? filters.step : 1m;
+
+                decimal realQtyAbs = Math.Abs(real.Quantity);
+
+                // qty тут = baseQtyForGuards (стабильная база), close = 35% базы, но не больше реальной
+                decimal want = qty * 0.35m;
+                decimal closeQty = Math.Min(want, realQtyAbs);
+
+                // 2) step/minQty вниз
+                closeQty = Math.Floor(closeQty / step) * step;
+                if (closeQty < filters.minQty)
+                {
+                    _earlyTpDone.TryRemove(guardKey, out _);
+                    _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
+                    return;
+                }
+
                 var res = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: symbol,
                     side: closeSide,
                     type: FuturesOrderType.Market,
                     quantity: closeQty,
                     positionSide: side,
-                    ct: ct);
+                    ct: token);
 
                 if (!res.Success)
                 {
                     _logger.LogWarning("[EARLY-TP][{symbol}][{side}] Market partial close failed: {err}", symbol, side, res.Error);
 
-                    // 🔁 rollback reservation (so it can retry later)
+                    // rollback reservation (so it can retry later)
                     _earlyTpDone.TryRemove(guardKey, out _);
                     _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
-
                     return;
                 }
 
-                // ✅ SUCCESS (HIT) — СТАВИТЬ ИМЕННО ЗДЕСЬ
-                EarlyTpTrace.Hit(
-                    _logger,
-                    symbol,
-                    side,
-                    entry,
-                    last,
-                    atr,
-                    closeQty,
-                    qty);
-
                 var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-               
                 _earlyTpDone[guardKey] = now;
-                // also block harvest immediately
                 _recentPartialClose[$"{symbol}|{side}"] = now;
                 MarkProtection(symbol);
             });
-            
+
+
             // 🔒 BLOCK HARVEST for 8 seconds after EARLY-TP
-          //  _recentPartialClose[$"{symbol}|{side}"] = now;
+            //  _recentPartialClose[$"{symbol}|{side}"] = now;
 
             _logger.LogWarning(
                 "[EARLY-TP][{symbol}][{side}] Partial profit fixed {closed}/{total} @price={price} (+0.9ATR)",
-                symbol, side, closeQty, qty, last);
+                symbol, side, closeQty, qty, lastClose);
 
             // Optional learning hook
             try
@@ -1659,7 +1697,7 @@ namespace VertexAutoTradeBinance8.Services
                 if (signal != null && !signal.IsManual)
                 {
                     var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
-                    _aiLearning.RecordTrade(symbol, sigSide, entry, last, _regimeNow);
+                    _aiLearning.RecordTrade(symbol, sigSide, entry, lastClose, _regimeNow);
                 }
             }
             catch { }
@@ -1680,27 +1718,34 @@ namespace VertexAutoTradeBinance8.Services
             IReadOnlyList<BinanceFuturesUsdtKline> klines,
             CancellationToken ct)
         {
-            var last = klines[^1].ClosePrice;
+            var c = klines[^1];
+
+            decimal hit =
+                side == PositionSide.Long ? c.HighPrice : c.LowPrice;
 
             bool reached =
                 side == PositionSide.Long
-                    ? last >= entry + atr * 1.20m
-                    : last <= entry - atr * 1.20m;
+                    ? hit >= entry + atr * 1.20m
+                    : hit <= entry - atr * 1.20m;
 
             if (!reached) return;
 
-            //var guardKey = BuildPosGuardKey(symbol, side, entry);
-            var guardKey = BuildPosGuardKey(symbol, side, entry, qty);
+            // === импульс подтверждён телом свечи
+            var body = Math.Abs(c.ClosePrice - c.OpenPrice);
+            if (body < atr * 0.35m)
+                return;
+
+            // === STABLE GUARD KEY
+            var baseQtyForGuards = GetOrSetBaseQty(symbol, side, entry, qty);
+            var guardKey = BuildPosGuardKey(symbol, side, entry, baseQtyForGuards);
 
             if (_beMoved.ContainsKey(guardKey)) return;
 
             decimal buffer = atr * 0.15m;
 
-            // если была ликвидность недавно — НЕ ставим SL близко
             if (_liquidityGuard.IsDangerRecent(TimeSpan.FromMinutes(6)))
                 buffer *= 0.5m;
 
-            // structural swing (последние 5 свечей)
             decimal structural =
                 side == PositionSide.Long
                     ? klines.TakeLast(5).Min(k => k.LowPrice)
@@ -1711,13 +1756,12 @@ namespace VertexAutoTradeBinance8.Services
                     ? entry + buffer
                     : entry - buffer;
 
-            // берём более «дальний» уровень
+            // === NEVER WORSE THAN ENTRY
             decimal newSl =
                 side == PositionSide.Long
-                    ? Math.Max(beBase, structural)
-                    : Math.Min(beBase, structural);
+                    ? Math.Max(beBase, Math.Max(structural, entry))
+                    : Math.Min(beBase, Math.Min(structural, entry));
 
-            // только если реально улучшает SL
             decimal oldSl = slOrder.StopPrice ?? slOrder.Price;
             if (oldSl <= 0) return;
 
@@ -1725,10 +1769,7 @@ namespace VertexAutoTradeBinance8.Services
             if (side == PositionSide.Short && newSl >= oldSl) return;
 
             var ok = await UpdateSL_ProAsync(client, symbol, side, qty, slOrder, entry, newSl, signal, ct);
-       
-
-            if (!ok)
-                return;
+            if (!ok) return;
 
             _beMoved[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             MarkProtection(symbol);
@@ -1736,6 +1777,7 @@ namespace VertexAutoTradeBinance8.Services
             _logger.LogWarning(
                 "[BE][{symbol}][{side}] SL moved to BE+buffer newSL={sl}",
                 symbol, side, newSl);
+
         }
 
         private static string BuildPosGuardKey(string symbol, PositionSide side, decimal entry)
@@ -2135,9 +2177,40 @@ namespace VertexAutoTradeBinance8.Services
             if (closeQty <= 0 || runnerQty <= 0) return;
 
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-            _dispatcher.Enqueue(async ct =>
+            _dispatcher.Enqueue(async token =>
             {
                 using var c = _factory.CreateRestClient();
+
+                // Реальная позиция на момент исполнения
+                var info = await c.UsdFuturesApi.Account.GetPositionInformationAsync(ct: token);
+                if (!info.Success || info.Data == null) return;
+
+                var real = info.Data.FirstOrDefault(p =>
+                    p.Symbol == symbol &&
+                    p.PositionSide == side &&
+                    Math.Abs(p.Quantity) > 0m);
+
+                if (real == null) return;
+
+                var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+                var step = filters.step > 0 ? filters.step : 1m;
+
+                decimal realQtyAbs = Math.Abs(real.Quantity);
+
+                decimal wantClose = realQtyAbs * 0.70m;
+                decimal closeQty = Math.Floor(wantClose / step) * step;
+
+                if (closeQty < filters.minQty) return;
+
+                decimal runnerQty = realQtyAbs - closeQty;
+                runnerQty = Math.Floor(runnerQty / step) * step;
+
+                if (runnerQty < filters.minQty)
+                {
+                    // если раннер слишком мал — тогда закрываем всё
+                    closeQty = realQtyAbs;
+                    runnerQty = 0m;
+                }
 
                 await c.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: symbol,
@@ -2145,22 +2218,28 @@ namespace VertexAutoTradeBinance8.Services
                     type: FuturesOrderType.Market,
                     quantity: closeQty,
                     positionSide: side,
-                    ct: ct);
+                    ct: token);
 
-                _logger.LogInformation("[TP-EXT][{symbol}] Partial TP executed {closed}/{total}, runner={runner}",
-                    symbol, closeQty, qty, runnerQty);
+                _logger.LogInformation("[TP-EXT][{symbol}] Partial TP executed close={closed} real={real}, runner={runner}",
+                    symbol, closeQty, realQtyAbs, runnerQty);
+
+                if (runnerQty <= 0m) return;
 
                 decimal newSl =
                     side == PositionSide.Long ? entryPrice + atr * 0.25m : entryPrice - atr * 0.25m;
 
-                var slOrder = orders.FirstOrDefault(o =>
+                var open = await c.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: token);
+                if (!open.Success || open.Data == null) return;
+
+                var slOrder = open.Data.FirstOrDefault(o =>
                     o.Type == FuturesOrderType.StopMarket &&
-                    o.PositionSide == side);
+                    o.PositionSide == side &&
+                    o.Side == closeSide);
 
                 if (slOrder != null)
-                    await UpdateSL_ProAsync(c, symbol, side, runnerQty, slOrder, entryPrice, newSl, signal, ct);
+                    await UpdateSL_ProAsync(c, symbol, side, runnerQty, slOrder, entryPrice, newSl, signal, token);
 
-                _logger.LogWarning("[TP-EXT][{symbol}] Runner activated | new SL={sl}", symbol, newSl);
+                MarkProtection(symbol);
             });
         }
         private async Task<bool> UpdateSL_ProAsync(
@@ -2455,42 +2534,209 @@ namespace VertexAutoTradeBinance8.Services
                 var sb = new StringBuilder(hash.Length * 2);
                 foreach (var b in hash) sb.Append(b.ToString("x2"));
                 return sb.ToString();
-            }
-
-
-
+            } 
         }
-        private async Task TryHarvestProfitAsync(
-            BinanceRestClient client,
-            EngineState state,
-            string symbol,
-            PositionSide side,
-            BinancePositionDetailsUsdt pos,
-            IReadOnlyList<BinanceFuturesUsdtKline> klines,
-            decimal aiEdgeScore,
-            decimal minUsd,
-            CancellationToken ct)
-        {
-            var guardKey = BuildPosGuardKey(symbol, side, pos.EntryPrice);
+        /*  private async Task TryHarvestProfitAsync(
+       BinanceRestClient client,
+       EngineState state,
+       string symbol,
+       PositionSide side,
+       BinancePositionDetailsUsdt pos,
+       decimal baseQtyForGuards,                 // ✅ ДОБАВИЛИ
+       IReadOnlyList<BinanceFuturesUsdtKline> klines,
+       decimal aiEdgeScore,
+       decimal minUsd,
+       CancellationToken ct)
 
-            if (_earlyTpDone.TryGetValue(guardKey, out var tpTs))
-            {
-                var ageMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - tpTs;
-                if (ageMs < 60_000) // 60 секунд после EARLY-TP
-                    return;
-            }
+          {
+
+
+              // ==========================================================
+              // 🔒 BLOCK HARVEST right after EARLY-TP (Binance sync lag)
+              // ==========================================================
+              var harvestKey = $"{symbol}|{side}";
+
+              if (_recentPartialClose.TryGetValue(harvestKey, out var ts))
+              {
+                  var ageMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - ts;
+                  if (ageMs < 8000) // 8 seconds hard block
+                  {
+                      _logger.LogInformation(
+                          "[HARVEST][{symbol}][{side}] SKIP → recent EARLY-TP ({ms}ms)",
+                          symbol, side, ageMs);
+                      return;
+                  }
+
+                  _recentPartialClose.TryRemove(harvestKey, out _);
+              }
+
+              var sKey = $"{EngineState.Key(symbol)}|{side}";
+              var st = state.Symbols.GetOrAdd(sKey, _ => new SymbolState());
+
+              // throttle per SIDE
+              if ((DateTime.UtcNow - st.LastHarvestUtc) < TimeSpan.FromMinutes(6))
+                  return;
+
+              // ==========================================================
+              // 🔒 ЖЁСТКАЯ ПРОВЕРКА ФАКТИЧЕСКОЙ ПОЗИЦИИ
+              // ==========================================================
+              var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+              if (!posInfo.Success || posInfo.Data == null)
+                  return;
+
+              var realPos = posInfo.Data.FirstOrDefault(p =>
+                  p.Symbol == symbol &&
+                  p.PositionSide == side &&
+                  Math.Abs(p.Quantity) > 0);
+
+              if (realPos == null)
+              {
+                  _logger.LogWarning("[HARVEST][{symbol}][{side}] SKIP → no open position", symbol, side);
+                  return;
+              }
+
+              decimal entryForGuards = realPos.EntryPrice > 0 ? realPos.EntryPrice : pos.EntryPrice;
+
+              // если entry всё равно 0 — не делаем harvest (слишком рискованно)
+              if (entryForGuards <= 0)
+              {
+                  _logger.LogWarning("[HARVEST][{symbol}][{side}] SKIP → entry unresolved", symbol, side);
+                  return;
+              }
+
+              var guardKey = BuildPosGuardKey(symbol, side, entryForGuards, baseQtyForGuards);
+
+              if (_earlyTpDone.TryGetValue(guardKey, out var tpTs))
+              {
+                  var ageMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - tpTs;
+                  if (ageMs < 60_000)
+                      return;
+              }
+
+
+              decimal qty = Math.Abs(realPos.Quantity);
+              if (qty <= 0) return;
+
+              // ==========================================================
+              // uPnL
+              // ==========================================================
+              decimal uPnl;
+              try { uPnl = realPos.UnrealizedPnl; }
+              catch { return; }
+
+              if (uPnl <= 0m || uPnl < minUsd)
+                  return;
+
+              decimal atr = _marketData.CalculateAtr(klines);
+              if (atr <= 0) atr = 0.00000001m;
+
+              var last = klines[^1];
+              var body = Math.Abs(last.ClosePrice - last.OpenPrice);
+
+              // сильный импульс → не режем
+              if (
+                  (_regimeNow == MarketRegime.StrongUpTrend ||
+                   _regimeNow == MarketRegime.StrongDownTrend)
+                  && body > atr * 1.1m
+              )
+              {
+                  _logger.LogInformation(
+                      "[HARVEST][{symbol}] SKIP → trend expansion",
+                      symbol);
+                  return;
+              }
+
+              decimal rr = Math.Abs(realPos.MarkPrice - realPos.EntryPrice) / atr;
+
+              decimal harvestPct =
+                  aiEdgeScore >= 0.80m && rr >= 1.4m ? 0.18m :
+                  aiEdgeScore >= 0.70m ? 0.28m :
+                  0.45m;
+
+              //  decimal closeQty = Math.Round(qty * harvestPct, 8);
+              // if (closeQty <= 0) return;
+
+              // ==========================================================
+              // 🔥 FULL vs PARTIAL CLOSE LOGIC (КЛЮЧЕВО)
+              // ==========================================================
+
+              decimal closeQty = qty * harvestPct;
+
+              var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+              var step = filters.step > 0 ? filters.step : 1m;
+
+              // ❗ КЛЮЧЕВО: всегда вниз
+              closeQty = Math.Floor(closeQty / step) * step;
+
+              if (closeQty < filters.minQty)
+              {
+                  _logger.LogInformation(
+                      "[HARVEST][{symbol}][{side}] SKIP → rounded closeQty {q} < minQty {min}",
+                      symbol, side, closeQty, filters.minQty);
+                  return;
+              }
+
+              bool isFullClose = closeQty >= qty;
+
+              var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+              var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+       symbol: symbol,
+       side: closeSide,
+       type: FuturesOrderType.Market,
+       quantity: closeQty,
+       positionSide: side,
+       ct: ct);
+
+              if (!res.Success)
+              {
+                  _logger.LogWarning("[HARVEST][{symbol}][{side}] FAIL: {err}", symbol, side, res.Error);
+                  return;
+              }
+
+              // decimal addToBucket = uPnl * harvestPct;
+              //  st.RealizedPnlBucketUsd += Math.Max(0m, addToBucket);
+
+              var effectivePct = closeQty / qty;
+              decimal addToBucket = uPnl * effectivePct;
+              st.RealizedPnlBucketUsd += Math.Max(0m, addToBucket);
+
+              st.LastHarvestUtc = DateTime.UtcNow;
+              st.HarvestsToday++;
+
+              _logger.LogInformation(
+                  "[HARVEST][{symbol}][{side}] OK closeQty={q} uPnl={pnl:F2} addBucket={b:F2} edge={e:F2} rr={rr:F2}",
+                  symbol, side, closeQty, uPnl, effectivePct, aiEdgeScore, rr);
+
+              _recentPartialClose[$"{symbol}|{side}"] =
+              DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+          }*/
+
+        private async Task TryHarvestProfitAsync(
+    BinanceRestClient client,
+    EngineState state,
+    string symbol,
+    PositionSide side,
+    BinancePositionDetailsUsdt pos,
+    decimal baseQtyForGuards,
+    IReadOnlyList<BinanceFuturesUsdtKline> klines,
+    decimal aiEdgeScore,
+    decimal minUsd,
+    CancellationToken ct)
+        {
             // ==========================================================
-            // 🔒 BLOCK HARVEST right after EARLY-TP (Binance sync lag)
+            // harvestKey (anti-spam short cooldown after partial close)
             // ==========================================================
             var harvestKey = $"{symbol}|{side}";
 
             if (_recentPartialClose.TryGetValue(harvestKey, out var ts))
             {
                 var ageMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - ts;
-                if (ageMs < 8000) // 8 seconds hard block
+                if (ageMs < 8000)
                 {
                     _logger.LogInformation(
-                        "[HARVEST][{symbol}][{side}] SKIP → recent EARLY-TP ({ms}ms)",
+                        "[HARVEST][{symbol}][{side}] SKIP → recent partial close ({ms}ms)",
                         symbol, side, ageMs);
                     return;
                 }
@@ -2498,15 +2744,17 @@ namespace VertexAutoTradeBinance8.Services
                 _recentPartialClose.TryRemove(harvestKey, out _);
             }
 
-            var sKey = EngineState.Key(symbol);
+            // ==========================================================
+            // ✅ state per SIDE (hedge-safe)
+            // ==========================================================
+            var sKey = $"{EngineState.Key(symbol)}|{side}";
             var st = state.Symbols.GetOrAdd(sKey, _ => new SymbolState());
 
-            // throttle
             if ((DateTime.UtcNow - st.LastHarvestUtc) < TimeSpan.FromMinutes(6))
                 return;
 
             // ==========================================================
-            // 🔒 ЖЁСТКАЯ ПРОВЕРКА ФАКТИЧЕСКОЙ ПОЗИЦИИ
+            // ✅ Hard real position check
             // ==========================================================
             var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
             if (!posInfo.Success || posInfo.Data == null)
@@ -2527,6 +2775,25 @@ namespace VertexAutoTradeBinance8.Services
             if (qty <= 0) return;
 
             // ==========================================================
+            // ✅ GuardKey must use REAL entry (same as EarlyTP/BE)
+            // ==========================================================
+            decimal entryForGuards = realPos.EntryPrice > 0 ? realPos.EntryPrice : pos.EntryPrice;
+            if (entryForGuards <= 0)
+            {
+                _logger.LogWarning("[HARVEST][{symbol}][{side}] SKIP → entry unresolved", symbol, side);
+                return;
+            }
+
+            var guardKey = BuildPosGuardKey(symbol, side, entryForGuards, baseQtyForGuards);
+
+            if (_earlyTpDone.TryGetValue(guardKey, out var tpTs))
+            {
+                var ageMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - tpTs;
+                if (ageMs < 60_000)
+                    return;
+            }
+
+            // ==========================================================
             // uPnL
             // ==========================================================
             decimal uPnl;
@@ -2542,16 +2809,13 @@ namespace VertexAutoTradeBinance8.Services
             var last = klines[^1];
             var body = Math.Abs(last.ClosePrice - last.OpenPrice);
 
-            // сильный импульс → не режем
             if (
                 (_regimeNow == MarketRegime.StrongUpTrend ||
                  _regimeNow == MarketRegime.StrongDownTrend)
                 && body > atr * 1.1m
             )
             {
-                _logger.LogInformation(
-                    "[HARVEST][{symbol}] SKIP → trend expansion",
-                    symbol);
+                _logger.LogInformation("[HARVEST][{symbol}] SKIP → trend expansion", symbol);
                 return;
             }
 
@@ -2562,22 +2826,18 @@ namespace VertexAutoTradeBinance8.Services
                 aiEdgeScore >= 0.70m ? 0.28m :
                 0.45m;
 
-            //  decimal closeQty = Math.Round(qty * harvestPct, 8);
-            // if (closeQty <= 0) return;
-
             // ==========================================================
-            // 🔥 FULL vs PARTIAL CLOSE LOGIC (КЛЮЧЕВО)
+            // closeQty with symbol filters
             // ==========================================================
-
             decimal closeQty = qty * harvestPct;
 
             var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
             var step = filters.step > 0 ? filters.step : 1m;
 
-            // ❗ КЛЮЧЕВО: всегда вниз
             closeQty = Math.Floor(closeQty / step) * step;
+            closeQty = Math.Min(closeQty, qty);
 
-            if (closeQty < filters.minQty)
+            if (closeQty < filters.minQty || closeQty <= 0)
             {
                 _logger.LogInformation(
                     "[HARVEST][{symbol}][{side}] SKIP → rounded closeQty {q} < minQty {min}",
@@ -2585,17 +2845,15 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-            bool isFullClose = closeQty >= qty;
-
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
             var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-     symbol: symbol,
-     side: closeSide,
-     type: FuturesOrderType.Market,
-     quantity: closeQty,
-     positionSide: side,
-     ct: ct);
+                symbol: symbol,
+                side: closeSide,
+                type: FuturesOrderType.Market,
+                quantity: closeQty,
+                positionSide: side,
+                ct: ct);
 
             if (!res.Success)
             {
@@ -2603,19 +2861,21 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-            decimal addToBucket = uPnl * harvestPct;
+            // ✅ bucket must use effectivePct (because closeQty was floored)
+            var effectivePct = closeQty / qty;
+
+            decimal addToBucket = uPnl * effectivePct;
             st.RealizedPnlBucketUsd += Math.Max(0m, addToBucket);
             st.LastHarvestUtc = DateTime.UtcNow;
             st.HarvestsToday++;
 
             _logger.LogInformation(
-                "[HARVEST][{symbol}][{side}] OK closeQty={q} uPnl={pnl:F2} addBucket={b:F2} edge={e:F2} rr={rr:F2}",
-                symbol, side, closeQty, uPnl, addToBucket, aiEdgeScore, rr);
+                "[HARVEST][{symbol}][{side}] OK closeQty={q} qty={qty} effPct={pct:P1} uPnl={pnl:F2} addBucket={b:F2} edge={e:F2} rr={rr:F2}",
+                symbol, side, closeQty, qty, effectivePct, uPnl, addToBucket, aiEdgeScore, rr);
 
-            _recentPartialClose[$"{symbol}|{side}"] =
-            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
+            _recentPartialClose[harvestKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         }
+
         public async Task HandleUiActionAsync(PositionActionRequest req)
         {
             if (!UiSpamGuard(req.Symbol, req.Side, req.Action.ToString()))
