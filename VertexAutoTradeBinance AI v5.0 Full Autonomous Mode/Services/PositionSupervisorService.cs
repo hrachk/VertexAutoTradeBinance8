@@ -2,10 +2,12 @@
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using CryptoExchange.Net.Objects;
+using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services.Diagnostics;
 using VertexAutoTradeBinance8.Strategy;
@@ -67,7 +69,7 @@ namespace VertexAutoTradeBinance8.Services
         private DateTime _supervisorWindowUtc = DateTime.UtcNow;
 
         private readonly ConcurrentDictionary<string, long> _uiGuard = new();
-
+        private readonly HedgeKillSettings _hedgeCfg;
         private bool UiSpamGuard(string symbol, PositionSide side, string action, int ms = 2500)
         {
             var key = $"{symbol}|{side}|{action}";
@@ -94,7 +96,8 @@ namespace VertexAutoTradeBinance8.Services
             LiquidityGuardService liquidityGuard,
             IOrderDispatcher dispatcher, EngineStateSnapshotService stateSvc,
             SmartRegimeService smartRegime,
-            ReverseProbeEngine reverseProbe, OpenPositionSymbolTracker openPos)
+            ReverseProbeEngine reverseProbe, OpenPositionSymbolTracker openPos,
+            IOptions<HedgeKillSettings> hedgeCfg)
         {
             _logger = logger;
             _factory = factory;
@@ -112,15 +115,17 @@ namespace VertexAutoTradeBinance8.Services
             _smartRegime = smartRegime;
             _reverseProbe = reverseProbe;
             _openPos = openPos;
+            _hedgeCfg = hedgeCfg.Value;
         }
         private bool IsHedgeOnCooldown(string symbol)
         {
+            if (!_hedgeCfg.UseCooldown) return false;
+
             if (_hedgeCooldown.TryGetValue(symbol, out var until))
                 return DateTime.UtcNow < until;
 
             return false;
         }
-
         private string BuildPosEntryKey(string symbol, PositionSide side, decimal entry)
         {
             string E(decimal v) => v.ToString("0.########", CultureInfo.InvariantCulture);
@@ -150,7 +155,10 @@ namespace VertexAutoTradeBinance8.Services
 
         private void MarkHedgeCooldown(string symbol)
         {
-            _hedgeCooldown[symbol] = DateTime.UtcNow.Add(HedgeCooldownPeriod);
+            if (!_hedgeCfg.UseCooldown) return;
+
+            var mins = _hedgeCfg.CooldownMinutes <= 0 ? 10 : _hedgeCfg.CooldownMinutes;
+            _hedgeCooldown[symbol] = DateTime.UtcNow.AddMinutes(mins);
         }
 
         private EngineState _engineState => _stateSvc.State;
@@ -309,6 +317,69 @@ namespace VertexAutoTradeBinance8.Services
                 await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, openOrders, lastSignal, klines1m, ct);
         }
 
+
+        //========================================================new for HIIBRID 
+
+        private decimal CalcAtrPct(decimal atr, decimal price)
+        {
+            if (atr <= 0m || price <= 0m) return 0m;
+            return atr / price; // 0.01 = 1%
+        }
+
+        private decimal CalcKillConfidence(
+            string symbol,
+            SmartRegimeInfo? smart,
+            decimal atrPct,
+            bool fundingPressure,
+            bool liquidityDanger)
+        {
+            // confidence 0..1
+            decimal c = 0.50m;
+
+            if (smart != null)
+            {
+                var slope = Math.Abs(smart.TrendSlopePercent);
+
+                // Strong trend confirmation increases confidence to cut loser (keep winner)
+                if (smart.BaseRegime is MarketRegime.StrongUpTrend or MarketRegime.StrongDownTrend)
+                    c += 0.15m;
+
+                if (slope >= _hedgeCfg.SlopeWeak) c += 0.10m;
+                if (slope >= _hedgeCfg.SlopeStrong) c += 0.10m;
+            }
+
+            // liquidity danger -> lower confidence to do decisive kill (market is "dirty")
+            if (liquidityDanger) c -= 0.20m;
+
+            // extreme vol -> lower confidence (more whipsaw)
+            if (atrPct >= _hedgeCfg.AtrPctExtreme) c -= 0.15m;
+
+            // funding pressure -> increase confidence to resolve (cost bleeding)
+            if (fundingPressure) c += 0.20m;
+
+            if (c < 0.05m) c = 0.05m;
+            if (c > 0.95m) c = 0.95m;
+            return c;
+        }
+
+        private decimal CalcGivebackBudget(decimal bucket, decimal confidence)
+        {
+            // map confidence -> bucket share
+            decimal share =
+                confidence >= 0.80m ? _hedgeCfg.GivebackBucketHigh :
+                confidence >= 0.65m ? _hedgeCfg.GivebackBucketMid :
+                                      _hedgeCfg.GivebackBucketLow;
+
+            decimal budget = bucket > 0m ? bucket * share : _hedgeCfg.GivebackMinUsd;
+
+            // clamp in absolute USD bounds (golden middle)
+            if (budget < _hedgeCfg.GivebackMinUsd) budget = _hedgeCfg.GivebackMinUsd;
+            if (budget > _hedgeCfg.GivebackMaxUsd) budget = _hedgeCfg.GivebackMaxUsd;
+
+            return budget;
+        }
+        //==================================================
+
         private async Task ConfirmOrKillHedgeAsync(
         BinanceRestClient client,
         string symbol,
@@ -428,27 +499,23 @@ namespace VertexAutoTradeBinance8.Services
 
             // 4) Giveback budget: allow to "pay" only part of earned bucket
             // If bucket == 0 => allow small giveback only (avoid "10 earned -> 10 lost")
-            decimal givebackBudget = bucket > 0m ? bucket * 0.35m : 4m; // allow max 35% of bucket, else $4 cap
+           // decimal givebackBudget = bucket > 0m ? bucket * 0.35m : 4m; // allow max 35% of bucket, else $4 cap
 
 
             // loserPnl is negative usually
-            decimal loserPnl = loser == PositionSide.Long ? longPnl : shortPnl;
-            decimal loserLossAbs = Math.Abs(Math.Min(0m, loserPnl)); // only negative part
+         //   decimal loserPnl = loser == PositionSide.Long ? longPnl : shortPnl;
+         //   decimal loserLossAbs = Math.Abs(Math.Min(0m, loserPnl)); // only negative part
 
-            // === FUNDING GUARD ===
+            
             // ===============================
             // FUNDING GUARD (NOTIONAL-BASED, HEDGE)
             // ===============================
             decimal symbolNotional = 0m;
+ 
+            if (longPos.Quantity != 0) symbolNotional += Math.Abs(longPos.Quantity) * longPos.MarkPrice;
+            if (shortPos.Quantity != 0) symbolNotional += Math.Abs(shortPos.Quantity) * shortPos.MarkPrice;
 
-            if (longPos.Quantity != 0)
-                symbolNotional += Math.Abs(longPos.Quantity) * longPos.MarkPrice;
-
-            if (shortPos.Quantity != 0)
-                symbolNotional += Math.Abs(shortPos.Quantity) * shortPos.MarkPrice;
-
-            bool fundingPressureByNotional =
-                IsFundingRiskExceeded(symbol, symbolNotional);
+            bool fundingPressureByNotional = IsFundingRiskExceeded(symbol, symbolNotional);
 
             if (fundingPressureByNotional)
             {
@@ -457,35 +524,93 @@ namespace VertexAutoTradeBinance8.Services
                     symbol,
                     symbolNotional,
                     _fundingCost.TryGetValue(symbol, out var c) ? c : 0m);
-            }  
+            }
+
+            // Liquidity danger
+            bool liquidityDanger =
+                _liquidityGuard.LastDanger?.Block == true ||
+                (_liquidityGuard.IsDangerRecent(TimeSpan.FromMinutes(5)) &&
+                 DateTime.UtcNow - _liquidityGuard.LastDanger!.UtcTime < TimeSpan.FromMinutes(2));
+
+
+            // Smart regime (analysis signal)
+            SmartRegimeInfo? smart = null;
+            try
+            {
+                if (klines != null && klines.Count >= 50)
+                    smart = _smartRegime.Evaluate(symbol, KlineInterval.OneMinute, klines);
+            }
+            catch { /* ignore */ }
+
+            // ATR% (vol)
+            var atrLocal = atr; // already computed above
+            var lastPrice = klines[^1].ClosePrice;
+            var atrPct = CalcAtrPct(atrLocal, lastPrice);
+
+
+            // Confidence (0..1)
+            var confidence = CalcKillConfidence(symbol, smart, atrPct, fundingPressureByNotional, liquidityDanger);
+
+            // Giveback budget (USD) dynamic
+            var givebackBudget = CalcGivebackBudget(bucket, confidence);
+
+            // loserPnl (negative usually)
+            decimal loserPnl = loser == PositionSide.Long ? longPnl : shortPnl;
+            decimal loserLossAbs = Math.Abs(Math.Min(0m, loserPnl)); // only negative part
+
+            // HardLoss by USD and ATR-notional
+            decimal atrNotional = atrLocal * Math.Abs(loserPos.Quantity);
+            decimal hardLoserByAtr = atrNotional * _hedgeCfg.HardLoserAtrMult;
+
+            bool hardLoss =
+                loserLossAbs >= Math.Max(_hedgeCfg.HardLoserUsd, hardLoserByAtr) ||
+                netPnl <= _hedgeCfg.HardNetUsd;
+
+
+
+
+
             // === Gate A: if hedge netPnL is still positive enough, don't finalize loser ===
             // Example: net still >= +3$ => don't lock loss; let system work (trail/harvest/BE)
-            if (netPnl >= 3m && !fundingPressureByNotional)
+            // Gate A: if hedge netPnL is ok -> don't cut (unless fundingPressure/hardLoss)
+            if (!hardLoss && !fundingPressureByNotional && netPnl >= _hedgeCfg.NetOkUsd)
             {
                 _logger.LogInformation(
-                    "[HEDGE-KILL][{symbol}] SKIP → netPnL still ok net={net:F2} loser={loser} loserPnl={lp:F2} bucket={bucket:F2}",
-                    symbol, netPnl, loser, loserPnl, bucket);
+                    "[HEDGE-KILL][{symbol}] SKIP → netPnL ok net={net:F2} loser={loser} loss={loss:F2} bucket={bucket:F2} conf={conf:F2}",
+                    symbol, netPnl, loser, loserLossAbs, bucket, confidence);
                 return;
             }
 
+
             // === Gate B: giveback limiter ===
             // if cutting loser would consume too much of earned bucket -> skip, unless hard loss or funding pressure
-            decimal atrNotional = atr * (Math.Abs(loserPos.Quantity)); // USD move of 1 ATR on loser qty
-            decimal hardLoserByAtr = atrNotional * 1.8m; // 1.8 ATR pain
-            bool hardLoss = loserLossAbs >= Math.Max(hardLoserUsd, hardLoserByAtr) || netPnl <= hardNetUsd;
+            //decimal atrNotional = atr * (Math.Abs(loserPos.Quantity)); // USD move of 1 ATR on loser qty
+            //decimal hardLoserByAtr = atrNotional * 1.8m; // 1.8 ATR pain
+            //bool hardLoss = loserLossAbs >= Math.Max(hardLoserUsd, hardLoserByAtr) || netPnl <= hardNetUsd;
             // bool hardLoss = loserLossAbs >= hardLoserUsd || netPnl <= hardNetUsd;
-            bool fundingPressure = fundingPressureByNotional;
-              
-            if (!hardLoss && !fundingPressure && loserLossAbs > givebackBudget)
+
+
+            //bool fundingPressure = fundingPressureByNotional;
+
+            //if (!hardLoss && !fundingPressure && loserLossAbs > givebackBudget)
+            //{
+            //    _logger.LogWarning(
+            //        "[HEDGE-KILL][{symbol}] SKIP → giveback limit. loserLoss={loss:F2} budget={budget:F2} net={net:F2} bucket={bucket:F2}",
+            //        symbol, loserLossAbs, givebackBudget, netPnl, bucket);
+            //    return;
+            //}
+            // Gate B: Giveback limiter (analysis-driven)
+            // If cutting loser consumes too much budget -> skip, unless hardLoss or fundingPressure
+            if (!hardLoss && !fundingPressureByNotional && loserLossAbs > givebackBudget)
             {
                 _logger.LogWarning(
-                    "[HEDGE-KILL][{symbol}] SKIP → giveback limit. loserLoss={loss:F2} budget={budget:F2} net={net:F2} bucket={bucket:F2}",
-                    symbol, loserLossAbs, givebackBudget, netPnl, bucket);
+                    "[HEDGE-KILL][{symbol}] SKIP → giveback limit loss={loss:F2} budget={budget:F2} net={net:F2} bucket={bucket:F2} conf={conf:F2}",
+                    symbol, loserLossAbs, givebackBudget, netPnl, bucket, confidence);
                 return;
             }
             //==================================================================================================================================
 
-             _logger.LogWarning(
+            _logger.LogWarning(
                 "[HEDGE-KILL][{symbol}] CLOSE LOSER {loser} pnl={pnl:F2} | KEEP {winner}",
                 symbol, loser, loser == PositionSide.Long ? longPnl : shortPnl, winner);
 
@@ -510,14 +635,21 @@ namespace VertexAutoTradeBinance8.Services
             var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
             var step = filters.step > 0 ? filters.step : 1m;
 
+            
+
+            // default: close X0% of loser, keep 40% if price may mean-revert
+            
             decimal loserQtyAbs = Math.Abs(loserPos.Quantity);
 
-            // default: close 60% of loser, keep 40% if price may mean-revert
-            decimal closeQty = loserQtyAbs * 0.60m;
-            closeQty = Math.Floor(closeQty / step) * step;
+            decimal frac =
+                _hedgeCfg.Mode == HedgeKillMode.Aggressive ? 1.00m :
+                _hedgeCfg.Mode == HedgeKillMode.Safe ? 0.80m :
+                _hedgeCfg.LoserCloseFraction; // Hybrid default 0.60
+
+            decimal closeQty = loserQtyAbs * frac;
 
             // if funding pressure OR hard loss -> full close
-            if (fundingPressureByNotional || Math.Abs(Math.Min(0m, loserPnl)) >= 25m)
+            if (fundingPressureByNotional || hardLoss)
                 closeQty = loserQtyAbs;
 
             if (closeQty < filters.minQty)

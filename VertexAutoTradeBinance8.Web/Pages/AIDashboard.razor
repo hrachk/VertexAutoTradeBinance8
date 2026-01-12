@@ -9,36 +9,16 @@
 
     <h2 class="text-3xl font-bold mb-4">AI Dashboard</h2>
 
-    @if (State == null)
+    @if (State is null)
     {
         <div class="text-red-400">⚠ Runtime не загружен</div>
-        return;
     }
-
-    @{
+    else
+    {
         var Stats = State.Snapshot;
-        var MarketStates = State.MarketStates;
-        var Trades = State.Trades;
+        var MarketStates = State.MarketStates ?? new List<AiSelfLearningService.MarketState>();
+        var Trades = State?.Trades;
 
-
-        @* BrainSymbols is built in @code (RebuildBrainSymbols) *@
-
-        // // ===== SYMBOL-CENTRIC AI BRAIN =====
-        //  var brainBySymbol = MarketStates
-        // .GroupBy(x => x.Symbol)
-        // .Select(g => new
-        // {
-        //     Symbol = g.Key,
-        //     Strongest = g.OrderByDescending(s => NeuronPower(s)).First(),
-        //     All = g
-        //         .OrderByDescending(s => NeuronPower(s))
-        //         .ToList()
-        // })
-        // .OrderByDescending(x => NeuronPower(x.Strongest))
-        // .ToList();
-
-    }
-    
     <!-- ================= SUMMARY ================= -->
     <div class="summary-bar mb-6">
         @SummaryChip("Символы", Stats.Meta.Symbols.ToString())
@@ -296,6 +276,10 @@ else{
         }
     </div>
 
+    }
+
+   
+
 </div>
 
 
@@ -441,25 +425,18 @@ else{
     bool _autoExpandedOnce = false;
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender && !_autoExpandedOnce)
-    {
-        AutoExpandStrongSignals();
-        _autoExpandedOnce = true;
-        StateHasChanged();
-    }
-
         if (!firstRender) return;
 
         PerformanceOpen = await JS.InvokeAsync<bool>("uiState.get", "ai.performance.open", true);
         BrainOpen = await JS.InvokeAsync<bool>("uiState.get", "ai.brain.open", true);
         TradesOpen = await JS.InvokeAsync<bool>("uiState.get", "ai.trades.open", false);
 
-            if (firstRender && !_autoExpandedOnce)
-            {
-                AutoExpandStrongSignals();
-                _autoExpandedOnce = true;
-                StateHasChanged();
-            }
+        if (!_autoExpandedOnce)
+        {
+            AutoExpandStrongSignals();
+            _autoExpandedOnce = true;
+            StateHasChanged();
+        }
     }
 
     public void Dispose()
@@ -468,23 +445,17 @@ else{
     }
 
     /* ===== SUMMARY ===== */
+ 
 
-    RenderFragment SummaryChip(string title, string value) => __builder =>
-    {
-        <div class="summary-chip">
-            <span class="label">@title</span>
-            <span class="value">@value</span>
-        </div>;
-    };
+    RenderFragment SummaryChip(string title, string value) => @<div class="summary-chip">
+        <span class="label">@title</span>
+        <span class="value">@value</span>
+    </div>;
 
-    RenderFragment RuntimeChip() => __builder =>
-    {
-        var age = DateTime.UtcNow - State!.LoadedAtUtc;
-        <div class="summary-chip">
-            <span class="label">Runtime</span>
-            <span class="value">@((int)age.TotalSeconds)s</span>
-        </div>;
-    };
+    RenderFragment RuntimeChip() => @<div class="summary-chip">
+        <span class="label">Runtime</span>
+        <span class="value">@((int)(DateTime.UtcNow - (State?.LoadedAtUtc ?? DateTime.UtcNow)).TotalSeconds)s</span>
+    </div>;
 
     /* ===== NEURON HELPERS (без логических изменений) ===== */
 
@@ -540,84 +511,126 @@ else{
         if (wr >= 40) return "text-amber-400";
         return "text-red-400";
     }
+    RenderFragment MarketCard(AiSelfLearningService.MarketState st) => @<div class="market-card neuron
+        @(IsPinned(st.Symbol) ? "pinned" : "")
+        @PulseClass(NeuronLevel(NeuronPower(st)))
+        @GlowClass(NeuronLevel(NeuronPower(st)))">
+        <div class="flex justify-between items-center mb-2">
+            <div class="flex items-center gap-2">
+                <span class="pin-icon @(IsPinned(st.Symbol) ? "pinned" : "")"
+                      title="Pin symbol"
+                      @onclick:stopPropagation
+                      @onclick="() => TogglePin(st.Symbol)">📌</span>
 
-
-    RenderFragment MarketCard(AiSelfLearningService.MarketState st) => __builder =>
-    {
-        var power = NeuronPower(st);
-        var level = NeuronLevel(power);
-        var phase = (st.Time.Millisecond % 800) / 1000.0;
-
-        <div class="market-card neuron
-            @(IsPinned(st.Symbol) ? "pinned" : "")
-            @PulseClass(level)
-            @GlowClass(level)"
-             style="animation-delay:@($"{phase:F2}s")">
-
-            <div class="flex justify-between items-center mb-2">
-                <div class="flex items-center gap-2">
-
-                    <!-- PIN -->
-                    <span class="pin-icon @(IsPinned(st.Symbol) ? "pinned" : "")"
-                          title="Pin symbol"
-                          @onclick:stopPropagation
-                          @onclick="() => TogglePin(st.Symbol)">
-                        📌
-                    </span>
-
-                    <span class="live-dot @LiveDotClass(st.Time)"></span>
-                    <div>
-                        <b>@st.Symbol</b>
-                        <span class="text-slate-400 text-xs">(@st.Timeframe)</span>
-                    </div>
+                <div>
+                    <b>@st.Symbol</b>
+                    <span class="text-slate-400 text-xs">(@st.Timeframe)</span>
                 </div>
-
-                <span class="reason-badge">@st.Reason</span>
             </div>
 
-            <div class="telemetry">
-                <span class="telemetry-item">
-                    Slope
-                    <b class="@(st.TrendSlopePercent >= 0 ? "text-emerald-400" : "text-red-400")">
-                        @(st.TrendSlopePercent >= 0 ? "↑" : "↓")
-                        @Math.Abs(st.TrendSlopePercent).ToString("F3")
-                    </b>
-                </span>
+            <span class="reason-badge">@st.Reason</span>
+        </div>
 
-                <span class="telemetry-item">
-                    Vol <b>@st.VolatilityPercent.ToString("F3")</b>
-                </span>
+        <div class="telemetry">
+            <span class="telemetry-item">
+                Slope
+                <b class="@(st.TrendSlopePercent >= 0 ? "text-emerald-400" : "text-red-400")">
+                    @(st.TrendSlopePercent >= 0 ? "↑" : "↓")
+                    @Math.Abs(st.TrendSlopePercent).ToString("F3")
+                </b>
+            </span>
 
-                <span class="telemetry-item">
-                    ATR <b>@st.Atr.ToString("F2")</b>
-                </span>
-            </div>
+            <span class="telemetry-item">
+                Vol <b>@st.VolatilityPercent.ToString("F3")</b>
+            </span>
 
-            <div class="text-xs mt-2 flex items-center gap-2">
-                <span>
-                    Confidence:
-                    <b>@st.Confidence.ToString("P0")</b>
-                </span>
+            <span class="telemetry-item">
+                ATR <b>@st.Atr.ToString("F2")</b>
+            </span>
+        </div>
 
-                <span class="status-pill @(level switch {
-                    3 => "hot",
-                    2 => "active",
-                    1 => "watch",
-                    _ => "idle"
-                })">
-                    @(level switch {
-                        3 => "ACTIVE",
-                        2 => "THINKING",
-                        1 => "WATCHING",
-                        _ => "SLEEPING"
-                    })
-                </span>
-            </div>
+        <div class="timestamp">
+            @st.Time.ToLocalTime()
+        </div>
+    </div>;
 
-            <div class="timestamp">
-                @st.Time.ToLocalTime()
-            </div>
-        </div>;
-    };
+
+    // RenderFragment MarketCard(AiSelfLearningService.MarketState st) => __builder =>
+    // {
+    //     var power = NeuronPower(st);
+    //     var level = NeuronLevel(power);
+    //     var phase = (st.Time.Millisecond % 800) / 1000.0;
+
+    //     <div class="market-card neuron
+    //         @(IsPinned(st.Symbol) ? "pinned" : "")
+    //         @PulseClass(level)
+    //         @GlowClass(level)"
+    //          style="animation-delay:@($"{phase:F2}s")">
+
+    //         <div class="flex justify-between items-center mb-2">
+    //             <div class="flex items-center gap-2">
+
+    //                 <!-- PIN -->
+    //                 <span class="pin-icon @(IsPinned(st.Symbol) ? "pinned" : "")"
+    //                       title="Pin symbol"
+    //                       @onclick:stopPropagation
+    //                       @onclick="() => TogglePin(st.Symbol)">
+    //                     📌
+    //                 </span>
+
+    //                 <span class="live-dot @LiveDotClass(st.Time)"></span>
+    //                 <div>
+    //                     <b>@st.Symbol</b>
+    //                     <span class="text-slate-400 text-xs">(@st.Timeframe)</span>
+    //                 </div>
+    //             </div>
+
+    //             <span class="reason-badge">@st.Reason</span>
+    //         </div>
+
+    //         <div class="telemetry">
+    //             <span class="telemetry-item">
+    //                 Slope
+    //                 <b class="@(st.TrendSlopePercent >= 0 ? "text-emerald-400" : "text-red-400")">
+    //                     @(st.TrendSlopePercent >= 0 ? "↑" : "↓")
+    //                     @Math.Abs(st.TrendSlopePercent).ToString("F3")
+    //                 </b>
+    //             </span>
+
+    //             <span class="telemetry-item">
+    //                 Vol <b>@st.VolatilityPercent.ToString("F3")</b>
+    //             </span>
+
+    //             <span class="telemetry-item">
+    //                 ATR <b>@st.Atr.ToString("F2")</b>
+    //             </span>
+    //         </div>
+
+    //         <div class="text-xs mt-2 flex items-center gap-2">
+    //             <span>
+    //                 Confidence:
+    //                 <b>@st.Confidence.ToString("P0")</b>
+    //             </span>
+
+    //             <span class="status-pill @(level switch {
+    //                 3 => "hot",
+    //                 2 => "active",
+    //                 1 => "watch",
+    //                 _ => "idle"
+    //             })">
+    //                 @(level switch {
+    //                     3 => "ACTIVE",
+    //                     2 => "THINKING",
+    //                     1 => "WATCHING",
+    //                     _ => "SLEEPING"
+    //                 })
+    //             </span>
+    //         </div>
+
+    //         <div class="timestamp">
+    //             @st.Time.ToLocalTime()
+    //         </div>
+    //     </div>;
+    // };
 }
 

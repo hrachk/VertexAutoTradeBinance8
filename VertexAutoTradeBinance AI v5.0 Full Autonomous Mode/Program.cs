@@ -87,11 +87,10 @@ public class Program
                 {
                     // ===== ТВОЙ СУЩЕСТВУЮЩИЙ DI — БЕЗ ИЗМЕНЕНИЙ =====
                     services.Configure<BinanceOptions>(ctx.Configuration.GetSection("Binance"));
-                    services.Configure<TradingOptions>(
-                         ctx.Configuration.GetSection("Trading"));
+                    services.Configure<TradingOptions>(ctx.Configuration.GetSection("Trading"));
+                    services.Configure<TestModeOptions>(ctx.Configuration.GetSection("TestMode"));
+                    services.Configure<HedgeKillSettings>(ctx.Configuration.GetSection("HedgeKill"));
 
-                    services.Configure<TestModeOptions>(
-                        ctx.Configuration.GetSection("TestMode"));
 
                     services.AddSingleton(sp =>
                         sp.GetRequiredService<IOptions<TradingOptions>>().Value);
@@ -99,9 +98,13 @@ public class Program
                     services.AddSingleton(sp =>
                         sp.GetRequiredService<IOptions<TestModeOptions>>().Value);
 
+                    services.AddSingleton(sp =>
+                        sp.GetRequiredService<IOptions<HedgeKillSettings>>().Value);
+
+
                     services.AddHttpClient();
 
-
+                 
 
 
                     // ===== BASE / MARKET =====
