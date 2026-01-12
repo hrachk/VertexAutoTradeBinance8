@@ -11,23 +11,28 @@ namespace VertexAutoTradeBinance8.Services
         private readonly LiquidityGuardService _liq;
         private readonly AiSelfLearningService _learn;
         private readonly RiskManager _risk;
+        private readonly EngineStateSnapshotService _stateSvc;
+
 
         public EngineStateBuilder(
             StrategyEngine strategy,
             SmartRegimeService regime,
             LiquidityGuardService liq,
             AiSelfLearningService learn,
-            RiskManager risk)
+            RiskManager risk,
+            EngineStateSnapshotService stateSvc)
         {
             _strategy = strategy;
             _regime = regime;
             _liq = liq;
             _learn = learn;
             _risk = risk;
+            _stateSvc = stateSvc;
         }
 
         public EngineState Build(string symbol, string timeframe)
         {
+            var s = _stateSvc.State;
             var confidenceRaw = _regime.LastConfidence; // 0..1
 
             int confidencePercent = (int)Math.Round(confidenceRaw * 100m);
@@ -62,7 +67,9 @@ namespace VertexAutoTradeBinance8.Services
 
                 SoftEntry = _strategy.LastSoftEntry,
                 BlockedByLiquidity = _strategy.LastBlockedByLiquidity,
-
+                SupervisorChecksLastMinute = s.SupervisorChecksLastMinute,
+                LastSupervisorAction = s.LastSupervisorAction,
+                LastSupervisorMessage = s.LastSupervisorMessage,
                 LastUpdate = DateTime.UtcNow
             };
         }

@@ -35,6 +35,9 @@ namespace VertexAutoTradeBinance8.Models
         // === SAFETY ===
         public DateTime LastSafeKillUtc { get; set; } = DateTime.MinValue;
         public DateTime LastProtectionUtc { get; set; } = DateTime.MinValue;
+
+        // === POSITION STATE ===
+        public bool HasOpenPosition { get; set; }
     }
 
     [JsonConverter(typeof(JsonStringEnumConverter))]

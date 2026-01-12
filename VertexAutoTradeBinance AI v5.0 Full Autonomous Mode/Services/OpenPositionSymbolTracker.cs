@@ -12,7 +12,7 @@ public sealed class OpenPositionSymbolTracker : IOpenPositionSymbolSource
 {
     // symbol -> open legs count (e.g. long+short = 2). We store count to be safe for hedge.
     private readonly ConcurrentDictionary<string, int> _open = new(StringComparer.OrdinalIgnoreCase);
-
+ 
     public void MarkOpen(string symbol)
     {
         if (string.IsNullOrWhiteSpace(symbol)) return;
@@ -44,4 +44,6 @@ public sealed class OpenPositionSymbolTracker : IOpenPositionSymbolSource
         var list = _open.Keys.ToList();
         return Task.FromResult((IReadOnlyList<string>)list);
     }
+
+    public int OpenSymbolsCount => _open.Count;
 }

@@ -10,13 +10,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="~/" />
     <link rel="stylesheet" href="css/bootstrap/bootstrap.min.css" />
-    <link href="css/site.css" rel="stylesheet" />
-    <link href="css/positions.css" rel="stylesheet" />
+    <link href="/css/site.css" rel="stylesheet" />
+    <link href="/css/positions.css" rel="stylesheet" />
     <link href="/css/missed-trades.css" rel="stylesheet" />
     <link href="/css/ai-learning.css" rel="stylesheet" />
     <link href="/css/trade-permission.css" rel="stylesheet" />
     <link href="/css/market-snapshot.css" rel="stylesheet" />
     <link href="/css/engine.css" rel="stylesheet" />
+    <link href="/css/ai-dashboard.css" rel="stylesheet" />
     <link href="VertexAutoTradeBinance8.Web.styles.css" rel="stylesheet" />
     <link rel="icon" type="image/png" href="favicon.png"/>
     <component type="typeof(HeadOutlet)" render-mode="ServerPrerendered" />
@@ -40,10 +41,12 @@
  
     <script src="~/js/vertex-ui.js"></script>
     <script src="~/js/vertex-bridge.js"></script>
+    <script src="~/js/ui-state.js"></script>
 
     <!-- 4️⃣ CHARTS (ИСПОЛЬЗУЮТ Chart + vertex.*) -->
     <script src="~/js/market-chart.js"></script>
     <script src="~/js/learningchart.js"></script>
+  
 
     <!-- 5️⃣ BLazor Server runtime — ВСЕГДА ПОСЛЕДНИМ -->
     <script src="_framework/blazor.server.js"></script>

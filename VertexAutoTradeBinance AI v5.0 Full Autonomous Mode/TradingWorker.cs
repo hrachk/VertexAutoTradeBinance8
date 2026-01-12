@@ -68,6 +68,8 @@ namespace VertexAutoTradeBinance8
         // Safety: if symbol was tracked, keep it a bit even after close (prevent flapping)
         private readonly Dictionary<string, DateTime> _trackedUntilUtc = new(StringComparer.OrdinalIgnoreCase);
         private static readonly TimeSpan TrackedGrace = TimeSpan.FromMinutes(20);
+        private volatile string _currentSymbol = "—";
+
 
         public int StartupSubscriptionCap { get; set; } = 8;
         public TradingWorker(
@@ -137,84 +139,82 @@ namespace VertexAutoTradeBinance8
             {
                 await _marketDataFacade.RestoreSnapshotStateAsync(ct);
                 _marketDataFacade.MarkSnapshotReady();
-                _logger.LogWarning("[BOOT][MD] Snapshot restored");
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[BOOT][MD] Snapshot restore failed");
-            }
+            catch { }
 
             _strategy.BindReactive(_marketDataFacade);
 
-            // Initial tracked set = universe
-            // =====================================================
-            // STARTUP SUBSCRIPTION CAP (CRITICAL)
-            // =====================================================
-            var startupCap =
-                _options.StartupSubscriptionCap > 0
-                    ? _options.StartupSubscriptionCap
-                    : 8; // SAFE DEFAULT
+            var startupCap = _options.StartupSubscriptionCap > 0
+                ? _options.StartupSubscriptionCap
+                : 8;
 
             foreach (var s in _symbols.ActiveSymbols.Take(startupCap))
                 TrackSymbol(s, keepAlive: true);
 
-            _logger.LogWarning(
-                "[STARTUP] Subscribed symbols capped to {cap} (universe={uni})",
-                startupCap,
-                _symbols.ActiveSymbols.Count);
-
-
-            // Warmup initial tracked (safe, sequential)
             await WarmupMarketDataForTrackedAsync(ct);
-
             await EnableHedgeMode();
 
             try
             {
-                var state = await _snapshot.LoadLatestAsync(ct);
-                if (state != null)
-                    _learn.ImportState(state);
+                var snap = await _snapshot.LoadLatestAsync(ct);
+                if (snap != null)
+                    _learn.ImportState(snap);
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[AI] snapshot load failed");
-            }
+            catch { }
 
             _logger.LogWarning("TradingWorker QUANT-REALTIME STARTED");
 
             while (!ct.IsCancellationRequested)
             {
-                var nowUtc = DateTime.UtcNow;
+                var now = DateTime.UtcNow;
 
-                // ===============================
-                // ENGINE HEARTBEAT / CPM (GLOBAL)
-                // ===============================
-                _lastEngineTickUtc = nowUtc;
+                // ===== ENGINE HEARTBEAT =====
+                _lastEngineTickUtc = now;
                 _cycleCounter++;
 
-                if ((nowUtc - _cycleWindowUtc).TotalSeconds >= 60)
+                if ((now - _cycleWindowUtc).TotalSeconds >= 60)
                 {
                     _lastCyclesPerMinute = _cycleCounter;
                     _cycleCounter = 0;
-                    _cycleWindowUtc = nowUtc;
+                    _cycleWindowUtc = now;
                 }
 
-                await RunQuantRealtimeTick(ct);
+                IReadOnlyList<string> trackedSymbols;
 
-                // ===============================
-                // UNIVERSE / TRACKED
-                // ===============================
-                await _symbols.LoadAsync(ct);
-                var trackedSymbols = await BuildTrackedSymbolsAsync(ct);
-                await WarmupMarketDataForTrackedAsync(ct);
+                try
+                {
+                    await RunQuantRealtimeTick(ct);
+                    await _symbols.LoadAsync(ct);
+                    trackedSymbols = await BuildTrackedSymbolsAsync(ct);
+                    await WarmupMarketDataForTrackedAsync(ct);
+                }
+                catch
+                {
+                    await Task.Delay(200, ct);
+                    continue;
+                }
 
-                // ===============================
-                // SYMBOL LOOP (TRADING ONLY)
-                // ===============================
+                // ===== ROTATION: ПО КАЖДОМУ СИМВОЛУ =====
                 foreach (var symbol in trackedSymbols)
                 {
+                    _currentSymbol = symbol;
+
                     var tf = await ResolveTimeframeSafeAsync(symbol, ct);
                     var ctx = await _marketContext.GetContextAsync(symbol, ct);
+
+                    var state = _engineStateBuilder.Build(
+                        symbol: symbol,
+                        timeframe: _options.TimeframeMinutes.ToString()
+                    );
+
+                    state.LastEngineTick = DateTime.UtcNow;
+                    state.LastUpdate = state.LastEngineTick;
+                    state.CyclesPerMinute = _lastCyclesPerMinute;
+                    state.UniverseSize = _symbols.ActiveSymbols.Count;
+                    state.TrackedSymbols = trackedSymbols.Count;
+                    state.OpenPositions = _supervisor.GetOpenPositionsCount();
+
+                    _engineStateSnapshot.Save(state);
 
                     if (ctx.Allows(SignalSide.Buy))
                         await ProcessSymbolWithUniverseSide(symbol, tf, SignalSide.Buy, ct);
@@ -224,31 +224,13 @@ namespace VertexAutoTradeBinance8
 
                     await _supervisor.SuperviseAsync(symbol, null, ct);
 
+                    // КОРОТКАЯ ПАУЗА ДЛЯ UI-КАРУСЕЛИ
                     await Task.Delay(25, ct);
                 }
-
-                // ===============================
-                // 🔥 ENGINE STATE SNAPSHOT (ОДИН РАЗ)
-                // ===============================
-                var engineState = _engineStateBuilder.Build(
-                    symbol: trackedSymbols.FirstOrDefault() ?? "—",
-                    timeframe: _options.TimeframeMinutes.ToString()
-                );
-
-                engineState.LastEngineTick = _lastEngineTickUtc;
-                engineState.CyclesPerMinute = _lastCyclesPerMinute;
-                engineState.TrackedSymbols = trackedSymbols.Count;
-                engineState.UniverseSize = _symbols.ActiveSymbols.Count;
-
-                // ❗ OpenPositions НЕ ТРОГАЕМ, если нет готового счётчика
-                // engineState.OpenPositions = ... (оставь как было / позже)
-
-                _engineStateSnapshot.Save(engineState);
 
                 await PeriodicSnapshot(ct);
                 await Task.Delay(80, ct);
             }
-
         }
 
         // ===========================================
@@ -263,7 +245,7 @@ namespace VertexAutoTradeBinance8
             symbol = symbol.Trim().ToUpperInvariant();
 
             // hard block forever
-            if (string.Equals(symbol, "AIAUSDT", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(symbol, "QQQQUSDT", StringComparison.OrdinalIgnoreCase))
                 return;
 
             _tracked.Add(symbol);

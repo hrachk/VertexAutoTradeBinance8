@@ -24,21 +24,37 @@ public sealed class AiRuntimeDataProvider : IAsyncDisposable
         while (await _timer.WaitForNextTickAsync(_cts.Token))
         {
             var snap = await _loader.LoadSnapshot();
-            if (snap == null) continue;
+            if (snap == null)
+                continue;
+
+            // 1) Deduplicate MarketStates: (Symbol + Timeframe) -> latest
+            var latestByTf = snap.MarketStates
+                .GroupBy(x => new { x.Symbol, x.Timeframe })
+                .Select(g => g
+                    .OrderByDescending(x => x.Time)
+                    .First());
+
+            // 2) Limit noise per symbol (например: максимум 2 TF на символ)
+            var normalizedMarketStates = latestByTf
+                .GroupBy(x => x.Symbol)
+                .SelectMany(g => g
+                    .OrderByDescending(x => x.Time)
+                    .Take(2)) // 1m + 5m (или самые свежие)
+                .OrderByDescending(x => x.Time)
+                .Take(100)
+                .ToList();
+
+            // 3) Trades — тоже нормализуем (последние, без мусора)
+            var latestTrades = snap.Trades
+                .OrderByDescending(x => x.Time)
+                .Take(150)
+                .ToList();
 
             _state = new AiRuntimeState
             {
                 Snapshot = snap,
-                MarketStates = snap.MarketStates
-                    .OrderByDescending(x => x.Time)
-                    .Take(150)
-                    .ToList(),
-
-                Trades = snap.Trades
-                    .OrderByDescending(x => x.Time)
-                    .Take(150)
-                    .ToList(),
-
+                MarketStates = normalizedMarketStates,
+                Trades = latestTrades,
                 LoadedAtUtc = DateTime.UtcNow
             };
 

@@ -38,46 +38,47 @@ namespace VertexAutoTradeBinance8.Services
         private readonly LiquidityGuardService _liquidityGuard;
         private readonly IOrderDispatcher _dispatcher;
         private MarketRegime _regimeNow;
-
         // === Anti-spam guards for EarlyTP / BE-move ===
         private readonly ConcurrentDictionary<string, long> _earlyTpDone = new();   // key -> unixMs
         private readonly ConcurrentDictionary<string, long> _beMoved = new();      // key -> unixMs
         private readonly ConcurrentDictionary<string, decimal> _restoredEntries = new();
         // === Harvest block after partial close ===
         private readonly ConcurrentDictionary<string, long> _recentPartialClose = new();
-
         private readonly EngineStateSnapshotService _stateSvc;
-
         private readonly SmartRegimeService _smartRegime;
         private readonly ReverseProbeEngine _reverseProbe;
-
         // === Attach idempotency (existing position attach) ===
         private readonly ConcurrentDictionary<string, bool> _attached = new();
-
         // === Funding risk guard ===
         private readonly ConcurrentDictionary<string, decimal> _fundingCost = new();
-
         // somewhere in class (field). If you already have it - DO NOT duplicate.
         private readonly ConcurrentDictionary<string, long> _fundingLastIncomeTs = new();
-
         // symbol -> cumulative funding (signed)
         private readonly ConcurrentDictionary<string, long> _fundingLastSync = new();   // symbol -> unixMs
-
         // === HEDGE COOLDOWN (GLOBAL) ===
-        private static readonly ConcurrentDictionary<string, DateTime> _hedgeCooldown
-            = new();
+        private static readonly ConcurrentDictionary<string, DateTime> _hedgeCooldown = new();
         private static readonly TimeSpan HedgeCooldownPeriod = TimeSpan.FromMinutes(10);
-
         // === Position fingerprint for anti-spam (stable qty) ===
         private readonly ConcurrentDictionary<string, decimal> _posBaseQty = new();   // key: symbol|side|entry -> baseQty
         private readonly ConcurrentDictionary<string, decimal> _posBaseEntry = new(); // key: symbol|side -> entry (latest stable)
-
         private readonly OpenPositionSymbolTracker _openPos;
         // ===== Supervisor checks/min =====
         private int _supervisorChecks = 0;
         private DateTime _supervisorWindowUtc = DateTime.UtcNow;
 
+        private readonly ConcurrentDictionary<string, long> _uiGuard = new();
 
+        private bool UiSpamGuard(string symbol, PositionSide side, string action, int ms = 2500)
+        {
+            var key = $"{symbol}|{side}|{action}";
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            if (_uiGuard.TryGetValue(key, out var prev) && (now - prev) < ms)
+                return false;
+
+            _uiGuard[key] = now;
+            return true;
+        }
 
         public PositionSupervisorService(
             ILogger<PositionSupervisorService> logger,
@@ -103,9 +104,7 @@ namespace VertexAutoTradeBinance8.Services
             _marketData = marketData;
             _regime = regime;
             _manualHandler = manualHandler;
-
             _regimeNow = MarketRegime.Range;
-
             _algoRaw = new BinanceAlgoOrderRaw(cfg, httpFactory, _logger);
             _liquidityGuard = liquidityGuard;
             _dispatcher = dispatcher;
@@ -113,10 +112,7 @@ namespace VertexAutoTradeBinance8.Services
             _smartRegime = smartRegime;
             _reverseProbe = reverseProbe;
             _openPos = openPos;
-
-
         }
-
         private bool IsHedgeOnCooldown(string symbol)
         {
             if (_hedgeCooldown.TryGetValue(symbol, out var until))
@@ -152,7 +148,6 @@ namespace VertexAutoTradeBinance8.Services
             _posBaseEntry.TryRemove($"{symbol}|{side}", out _);
         }
 
-
         private void MarkHedgeCooldown(string symbol)
         {
             _hedgeCooldown[symbol] = DateTime.UtcNow.Add(HedgeCooldownPeriod);
@@ -169,7 +164,7 @@ namespace VertexAutoTradeBinance8.Services
             var nowUtc = DateTime.UtcNow;
 
             _engineState.LastSupervisorAction = nowUtc;
-            _engineState.LastSupervisorMessage =  $"Supervisor: no positions (funding reset) [{symbol}]";
+          //  _engineState.LastSupervisorMessage =  $"Supervisor: no positions (funding reset) [{symbol}]";
 
             _supervisorChecks++;
             if ((nowUtc - _supervisorWindowUtc).TotalSeconds >= 60)
@@ -206,33 +201,52 @@ namespace VertexAutoTradeBinance8.Services
             p => p.PositionSide,
             p => p);
 
-
             var longPos = positions.FirstOrDefault(p => p.PositionSide == PositionSide.Long);
             var shortPos = positions.FirstOrDefault(p => p.PositionSide == PositionSide.Short);
-
 
             var hasLong = longPos != null && longPos.Quantity != 0m;
             var hasShort = shortPos != null && shortPos.Quantity != 0m;
 
+            var sKey = EngineState.Key(symbol);
+            var st = _engineState.Symbols.GetOrAdd(sKey, _ => new SymbolState());
+
+            st.HasOpenPosition = hasLong || hasShort;
+
             if (!hasLong && !hasShort)
             {
-                // 🔥 FUNDING RESET ONLY WHEN SYMBOL HAS NO POSITIONS AT ALL
-                _fundingCost.TryRemove(symbol, out _);
-                _fundingLastIncomeTs.TryRemove(symbol, out _);
+                await Task.Delay(800, ct); // debounce
 
-                _logger.LogInformation("[SUPERVISOR] {symbol}: no positions (funding reset)", symbol);
+                var confirm = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+                if (confirm.Success && confirm.Data != null &&
+                    !confirm.Data.Any(p => p.Symbol == symbol && p.Quantity != 0m))
+                {
+                    _fundingCost.TryRemove(symbol, out _);
+                    _fundingLastIncomeTs.TryRemove(symbol, out _);
+
+                    // ✅ ВАЖНО: синхронизируем tracker
+                    _openPos.MarkClosed(symbol);
+
+                    // ✅ И ТОЛЬКО ЗДЕСЬ ПИШЕМ СООБЩЕНИЕ
+                    _engineState.LastSupervisorMessage =
+                        $"Supervisor: no positions (funding reset) [{symbol}]";
+                }
+
                 return;
             }
+
             // ✅ N4: keep tracker synced (idempotent)
             if (hasLong) _openPos.MarkOpen(symbol);
             if (hasShort) _openPos.MarkOpen(symbol);
 
+            if (hasLong || hasShort)
+            {
+                _engineState.LastSupervisorMessage =
+                    $"Supervisor: active position [{symbol}]";
+            }
             // ===============================
             // FUNDING COST REFRESH (real, not fiction)
             // ===============================
             await RefreshFundingCostAsync(client, symbol, ct);
-
-           
 
             // 2) Ордера
             var openOrders = await LoadOrdersAsync(client, symbol);
@@ -250,7 +264,6 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogWarning(ex, "[SUPERVISOR] Klines load error {symbol}", symbol);
             }
 
-
             // =======================================
             // CONFIRM OR KILL HEDGE (v8.2 PRO)
             // =======================================
@@ -264,7 +277,6 @@ namespace VertexAutoTradeBinance8.Services
                     klines1m,
                     ct);
             }
-
 
             SmartRegimeInfo? smart1m = null;
             decimal atr14_1m = 0m;
@@ -289,8 +301,6 @@ namespace VertexAutoTradeBinance8.Services
 
             }
 
-
-
             // 4) Обработка сторон
             if (hasLong)
                 await HandleSideAsync(client, symbol, PositionSide.Long, longPos!, openOrders, lastSignal, klines1m, ct);
@@ -298,7 +308,6 @@ namespace VertexAutoTradeBinance8.Services
             if (hasShort)
                 await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, openOrders, lastSignal, klines1m, ct);
         }
-
 
         private async Task ConfirmOrKillHedgeAsync(
         BinanceRestClient client,
@@ -368,7 +377,15 @@ namespace VertexAutoTradeBinance8.Services
 
             // === Минимальная разница, чтобы не дёргаться ===
             if (Math.Abs(longPnl - shortPnl) < 3m)
-                return;
+            {
+                // allow funding-driven resolution even if pnl diff is small
+                decimal symbolNotionalCheck =
+                    Math.Abs(longPos.Quantity) * longPos.MarkPrice +
+                    Math.Abs(shortPos.Quantity) * shortPos.MarkPrice;
+
+                if (!IsFundingRiskExceeded(symbol, symbolNotionalCheck))
+                    return;
+            }
 
             // === ATR ===
             var atr = _marketData.CalculateAtr(klines, 14);
@@ -388,11 +405,8 @@ namespace VertexAutoTradeBinance8.Services
             //===============3) Production-патч: “Smart Hedge Kill Gate” (точечно, без ломки архитектуры)======================================================
             /*
              * Что это даёт:
-
             Если общий hedge ещё “живой” (netPnL нормальный) — не фиксируем большой минус
-
             Если фиксировать минус придётся, то он ограничен “бюджетом отдачи” от уже заработанного bucket
-
             Если реально опасно (hardLoss / fundingPressure) — режем без разговоров
              * */
             // ===============================
@@ -416,13 +430,37 @@ namespace VertexAutoTradeBinance8.Services
             // If bucket == 0 => allow small giveback only (avoid "10 earned -> 10 lost")
             decimal givebackBudget = bucket > 0m ? bucket * 0.35m : 4m; // allow max 35% of bucket, else $4 cap
 
+
             // loserPnl is negative usually
             decimal loserPnl = loser == PositionSide.Long ? longPnl : shortPnl;
             decimal loserLossAbs = Math.Abs(Math.Min(0m, loserPnl)); // only negative part
 
+            // === FUNDING GUARD ===
+            // ===============================
+            // FUNDING GUARD (NOTIONAL-BASED, HEDGE)
+            // ===============================
+            decimal symbolNotional = 0m;
+
+            if (longPos.Quantity != 0)
+                symbolNotional += Math.Abs(longPos.Quantity) * longPos.MarkPrice;
+
+            if (shortPos.Quantity != 0)
+                symbolNotional += Math.Abs(shortPos.Quantity) * shortPos.MarkPrice;
+
+            bool fundingPressureByNotional =
+                IsFundingRiskExceeded(symbol, symbolNotional);
+
+            if (fundingPressureByNotional)
+            {
+                _logger.LogWarning(
+                    "[HEDGE][{symbol}] Funding pressure (NOTIONAL) detected | notional={notional:F2} cost={cost:F4}",
+                    symbol,
+                    symbolNotional,
+                    _fundingCost.TryGetValue(symbol, out var c) ? c : 0m);
+            }  
             // === Gate A: if hedge netPnL is still positive enough, don't finalize loser ===
             // Example: net still >= +3$ => don't lock loss; let system work (trail/harvest/BE)
-            if (netPnl >= 3m && !IsFundingRiskExceeded(symbol))
+            if (netPnl >= 3m && !fundingPressureByNotional)
             {
                 _logger.LogInformation(
                     "[HEDGE-KILL][{symbol}] SKIP → netPnL still ok net={net:F2} loser={loser} loserPnl={lp:F2} bucket={bucket:F2}",
@@ -432,9 +470,12 @@ namespace VertexAutoTradeBinance8.Services
 
             // === Gate B: giveback limiter ===
             // if cutting loser would consume too much of earned bucket -> skip, unless hard loss or funding pressure
-            bool hardLoss = loserLossAbs >= hardLoserUsd || netPnl <= hardNetUsd;
-            bool fundingPressure = IsFundingRiskExceeded(symbol);
-
+            decimal atrNotional = atr * (Math.Abs(loserPos.Quantity)); // USD move of 1 ATR on loser qty
+            decimal hardLoserByAtr = atrNotional * 1.8m; // 1.8 ATR pain
+            bool hardLoss = loserLossAbs >= Math.Max(hardLoserUsd, hardLoserByAtr) || netPnl <= hardNetUsd;
+            // bool hardLoss = loserLossAbs >= hardLoserUsd || netPnl <= hardNetUsd;
+            bool fundingPressure = fundingPressureByNotional;
+              
             if (!hardLoss && !fundingPressure && loserLossAbs > givebackBudget)
             {
                 _logger.LogWarning(
@@ -442,23 +483,9 @@ namespace VertexAutoTradeBinance8.Services
                     symbol, loserLossAbs, givebackBudget, netPnl, bucket);
                 return;
             }
-
-
-
             //==================================================================================================================================
 
-
-
-
-            // === FUNDING GUARD ===
-            if (IsFundingRiskExceeded(symbol))
-            {
-                _logger.LogWarning(
-                    "[HEDGE-KILL][{symbol}] funding pressure → force close loser {side}",
-                    symbol, loser);
-            }
-
-            _logger.LogWarning(
+             _logger.LogWarning(
                 "[HEDGE-KILL][{symbol}] CLOSE LOSER {loser} pnl={pnl:F2} | KEEP {winner}",
                 symbol, loser, loser == PositionSide.Long ? longPnl : shortPnl, winner);
 
@@ -490,7 +517,7 @@ namespace VertexAutoTradeBinance8.Services
             closeQty = Math.Floor(closeQty / step) * step;
 
             // if funding pressure OR hard loss -> full close
-            if (IsFundingRiskExceeded(symbol) || Math.Abs(Math.Min(0m, loserPnl)) >= 25m)
+            if (fundingPressureByNotional || Math.Abs(Math.Min(0m, loserPnl)) >= 25m)
                 closeQty = loserQtyAbs;
 
             if (closeQty < filters.minQty)
@@ -567,8 +594,42 @@ namespace VertexAutoTradeBinance8.Services
 
         }
 
+        //private bool IsFundingRiskExceeded(string symbol)
+        //{
+        //    if (!_fundingCost.TryGetValue(symbol, out var cost))
+        //        return false;
 
-        private bool IsFundingRiskExceeded(string symbol)
+        //    var equity = _engineState.EquityUsd;
+        //    if (equity <= 0)
+        //    {
+        //        _logger.LogWarning("[FUNDING-GUARD] equity unavailable, skip funding check");
+        //        return false; // allow but log
+        //    }
+
+        //    const decimal maxFundingPct = 0.03m; // 3% equity
+        //    return Math.Abs(cost) / equity >= maxFundingPct;
+        //}
+        //private bool IsFundingRiskExceeded(string symbol, decimal? notionalOverride = null)
+        //{
+        //    if (!_fundingCost.TryGetValue(symbol, out var cost))
+        //        return false;
+
+        //    var equity = _engineState.EquityUsd;
+        //    if (equity <= 0) return false;
+
+        //    var notional = notionalOverride ?? GetSymbolNotionalEstimate(symbol); // markPrice * qtyAbs (sum legs)
+        //    if (notional <= 0) notional = equity; // fallback
+
+        //    const decimal maxEqPct = 0.03m;     // 3% equity
+        //    const decimal maxNotionalBps = 0.0025m; // 0.25% notional (25 bps)
+
+        //    var eqPct = Math.Abs(cost) / equity;
+        //    var notionalPct = Math.Abs(cost) / notional;
+
+        //    return (eqPct >= maxEqPct) || (notionalPct >= maxNotionalBps);
+        //}
+
+        private bool IsFundingRiskExceeded(string symbol, decimal? notionalOverride = null)
         {
             if (!_fundingCost.TryGetValue(symbol, out var cost))
                 return false;
@@ -577,18 +638,38 @@ namespace VertexAutoTradeBinance8.Services
             if (equity <= 0)
             {
                 _logger.LogWarning("[FUNDING-GUARD] equity unavailable, skip funding check");
-                return false; // allow but log
+                return false;
             }
 
-            const decimal maxFundingPct = 0.03m; // 3% equity
-            return Math.Abs(cost) / equity >= maxFundingPct;
+            var notional = notionalOverride ?? GetSymbolNotionalEstimate(symbol);
+            if (notional <= 0) notional = equity; // fallback
+
+            const decimal maxEqPct = 0.03m;        // 3% equity
+            const decimal maxNotionalPct = 0.0025m; // 0.25% notional (25 bps)
+
+            var eqPct = Math.Abs(cost) / equity;
+            var nPct = Math.Abs(cost) / notional;
+
+            return (eqPct >= maxEqPct) || (nPct >= maxNotionalPct);
         }
+
+        private bool IsFundingRiskExceeded(string symbol, decimal notionalOverride)
+        {
+            if (!_fundingCost.TryGetValue(symbol, out var cost))
+                return false;
+
+            if (notionalOverride <= 0)
+                return false;
+
+            const decimal maxFundingPct = 0.03m; // 3% от NOTIONAL
+            return Math.Abs(cost) / notionalOverride >= maxFundingPct;
+        }
+
 
         private bool CanIncreasePosition(string symbol)
         {
             return !IsFundingRiskExceeded(symbol);
         }
-
 
         private async Task RefreshFundingCostAsync(BinanceRestClient client, string symbol, CancellationToken ct)
         {
@@ -618,7 +699,6 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogDebug(ex, "[FUNDING][{symbol}] refresh failed", symbol);
             }
         }
-
      
         private async Task<decimal> GetFundingIncomeDeltaAsync(
             BinanceRestClient client,
@@ -632,15 +712,12 @@ namespace VertexAutoTradeBinance8.Services
             // Поэтому передаём Binance API code:
             const string fundingType = "FUNDING_FEE";
 
-
-
             var res = await client.UsdFuturesApi.Account.GetIncomeHistoryAsync(
-    symbol: symbol,
-    incomeType: fundingType,
-    startTime: DateTime.UtcNow.AddDays(-2),
-    limit: 100,
-    ct: ct);
-
+            symbol: symbol,
+            incomeType: fundingType,
+            startTime: DateTime.UtcNow.AddDays(-2),
+            limit: 100,
+            ct: ct);
 
             if (!res.Success || res.Data == null)
                 return 0m;
@@ -727,9 +804,6 @@ namespace VertexAutoTradeBinance8.Services
             return delta;
         }
 
-
-
-
         // =====================================================================
         // RETRY POSITIONS
         // =====================================================================
@@ -762,7 +836,6 @@ namespace VertexAutoTradeBinance8.Services
             return last;
         }
 
-
         public async Task AttachExistingPositionAsync(
          string symbol,
          PositionSide side,
@@ -791,8 +864,6 @@ namespace VertexAutoTradeBinance8.Services
 
             await EnsureEmergencyProtectionAsync(symbol, side, qty, entryPrice, ct);
         }
-
-
         private async Task EnsureEmergencyProtectionAsync(
         string symbol,
         PositionSide side,
@@ -908,20 +979,18 @@ namespace VertexAutoTradeBinance8.Services
                 symbol, sl.Error?.Message);
         }
 
-
-
         private async Task TryReverseProbeAsync(
-    BinanceRestClient client,
-    string symbol,
-    BinancePositionDetailsUsdt? longPos,
-    BinancePositionDetailsUsdt? shortPos,
-    SmartRegimeInfo smart,
-    decimal atr,
-    CancellationToken ct)
+      BinanceRestClient client,
+      string symbol,
+      BinancePositionDetailsUsdt? longPos,
+      BinancePositionDetailsUsdt? shortPos,
+      SmartRegimeInfo smart,
+      decimal atr,
+      CancellationToken ct)
         {
-
-
-            // 0) protection must exist (PROTECT stage already done by EarlyTP/BE)
+            // ==========================================================
+            // 0) PROTECT STAGE — must exist (EarlyTP / BE already done)
+            // ==========================================================
             var sKey = EngineState.Key(symbol);
             if (!_engineState.Symbols.TryGetValue(sKey, out var st))
                 return;
@@ -930,41 +999,33 @@ namespace VertexAutoTradeBinance8.Services
             if (!protectedRecently)
                 return;
 
-            // 🔒 FUNDING RISK GATE (before any exposure logic)
-            if (IsFundingRiskExceeded(symbol))
-            {
-                _logger.LogWarning(
-                    "[FUNDING-GUARD][{symbol}] funding > limit → probe blocked",
-                    symbol);
-                return;
-            }
-
-            // 1) do not probe if both sides already exist (already hedged)
+            // ==========================================================
+            // 1) POSITION STATE — exactly ONE side must exist
+            // ==========================================================
             bool hasLong = longPos != null && longPos.Quantity != 0m;
             bool hasShort = shortPos != null && shortPos.Quantity != 0m;
 
             if (hasLong && hasShort)
                 return;
 
+            // ==========================================================
+            // 2) REFERENCE PRICE (from existing leg only)
+            // ==========================================================
             decimal refPrice =
-     hasLong ? longPos!.MarkPrice : shortPos!.MarkPrice;
+                hasLong ? longPos!.MarkPrice :
+                hasShort ? shortPos!.MarkPrice : 0m;
 
-            if (refPrice <= 0)
+            if (refPrice <= 0m)
                 return;
-            // ===============================
-            // VOLATILITY GATE (block probe in extreme vol)
-            // ===============================
-            // smart.VolatilityPercent у тебя уже есть в SmartRegimeInfo? Если нет — используй atr relative.
+
+            // ==========================================================
+            // 3) VOLATILITY GATE — extreme ATR relative block
+            // ==========================================================
             try
             {
-                // 1) ATR relative gate (универсально)
-                // Берём текущий "price" из имеющейся позиции, без лишних REST вызовов
-
-
-                if (refPrice > 0 && atr > 0)
+                if (atr > 0m)
                 {
                     var atrPct = atr / refPrice; // 0.01 = 1%
-                                                 // Жёстко: >1.8% ATR на 1m = часто уже “шум/взрыв”
                     if (atrPct >= 0.018m)
                     {
                         _logger.LogWarning(
@@ -973,14 +1034,12 @@ namespace VertexAutoTradeBinance8.Services
                         return;
                     }
                 }
-
-                // 2) Если у тебя есть smart.VolatilityPercent — можно добавить ещё одно условие
-                // if (smart.VolatilityPercent >= 2.5m) return;
             }
             catch { }
 
-
-            // 2) base side = existing position side
+            // ==========================================================
+            // 4) BASE SIDE (existing position)
+            // ==========================================================
             PositionSide baseSide =
                 hasLong ? PositionSide.Long :
                 hasShort ? PositionSide.Short :
@@ -989,8 +1048,9 @@ namespace VertexAutoTradeBinance8.Services
             if (baseSide == PositionSide.Both)
                 return;
 
-            // if liquidity recent → wait a bit, but allow early TP later           
-            // 🚫 no probe right after liquidity event
+            // ==========================================================
+            // 5) LIQUIDITY GUARD — recent danger veto
+            // ==========================================================
             if (_liquidityGuard.IsDangerRecent(TimeSpan.FromMinutes(5)))
             {
                 if (DateTime.UtcNow - _liquidityGuard.LastDanger!.UtcTime < TimeSpan.FromMinutes(2))
@@ -1005,8 +1065,9 @@ namespace VertexAutoTradeBinance8.Services
             if (_liquidityGuard.LastDanger?.Reason == LiquidityGuardReason.LowVolume)
                 return;
 
-
-            // 3) flip condition (strict)
+            // ==========================================================
+            // 6) FLIP CONDITION — strict regime confirmation
+            // ==========================================================
             bool flipToShort =
                 baseSide == PositionSide.Long &&
                 smart.BaseRegime == MarketRegime.StrongDownTrend &&
@@ -1022,64 +1083,84 @@ namespace VertexAutoTradeBinance8.Services
 
             var probeSide = flipToShort ? PositionSide.Short : PositionSide.Long;
 
-            // 4) anti-spam (single probe per 5 minutes per symbol)
+            // ==========================================================
+            // 7) ANTI-SPAM — one probe per symbol window
+            // ==========================================================
             if (!_reverseProbe.CanProbeNow(symbol))
                 return;
 
-            // 5) size = 7% of existing position qty (micro-hedge, no RiskManager needed)
-            decimal baseQtyAbs = Math.Abs((baseSide == PositionSide.Long ? longPos!.Quantity : shortPos!.Quantity));
+            // ==========================================================
+            // 8) BASE QTY (existing exposure)
+            // ==========================================================
+            decimal baseQtyAbs =
+                Math.Abs(baseSide == PositionSide.Long
+                    ? longPos!.Quantity
+                    : shortPos!.Quantity);
+
             if (baseQtyAbs <= 0m)
                 return;
 
+            // ==========================================================
+            // 9) BASE NOTIONAL (USD exposure of existing leg)
+            // ==========================================================
+            decimal baseNotional = baseQtyAbs * refPrice;
+
+            // ==========================================================
+            // 🔒 FUNDING RISK GATE — FAIL FAST (ONCE, BEFORE SIZING)
+            // ==========================================================
+            if (IsFundingRiskExceeded(symbol, baseNotional))
+            {
+                _logger.LogWarning(
+                    "[REVERSE-PROBE][{symbol}] Funding pressure (NOTIONAL) → probe blocked | notional={notional:F2}",
+                    symbol, baseNotional);
+                return;
+            }
+
+            // ==========================================================
+            // 10) PROBE SIZING — % of base notional
+            // ==========================================================
+            decimal probeNotionalTarget = baseNotional * 0.07m;
+
+            // ==========================================================
+            // 11) EXCHANGE FILTERS
+            // ==========================================================
             var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
             var step = filters.step > 0 ? filters.step : 1m;
 
-            decimal probeQty = baseQtyAbs * 0.07m;
+            // ==========================================================
+            // 12) PROBE QTY — floor only (never round up)
+            // ==========================================================
+            decimal probeQty = probeNotionalTarget / refPrice;
             probeQty = Math.Floor(probeQty / step) * step;
-
-
 
             if (probeQty < filters.minQty)
                 return;
 
-            // ===============================
-            // PORTFOLIO-CAP (SIDE EXPOSURE)
-            // ===============================
+            // ==========================================================
+            // 13) PORTFOLIO / SYMBOL EXPOSURE CAP
+            // ==========================================================
             decimal equity = _engineState.EquityUsd;
-            if (equity <= 0)
+            if (equity <= 0m)
                 return;
 
-            // текущая экспозиция по стороне (ТОЛЬКО из реальных позиций)
-            decimal currentNotional = 0m;
-
-            if (probeSide == PositionSide.Long && longPos != null)
-                currentNotional = Math.Abs(longPos.Quantity) * longPos.MarkPrice;
-
-            if (probeSide == PositionSide.Short && shortPos != null)
-                currentNotional = Math.Abs(shortPos.Quantity) * shortPos.MarkPrice;
-
-            // notional нового probe
-            //decimal probePrice =
-            //    probeSide == PositionSide.Long
-            //        ? (longPos?.MarkPrice ?? shortPos!.MarkPrice)
-            //        : (shortPos?.MarkPrice ?? longPos!.MarkPrice);
+            decimal existingSymbolNotional = 0m;
+            if (hasLong) existingSymbolNotional += Math.Abs(longPos!.Quantity) * longPos.MarkPrice;
+            if (hasShort) existingSymbolNotional += Math.Abs(shortPos!.Quantity) * shortPos.MarkPrice;
 
             decimal probeNotional = probeQty * refPrice;
+            const decimal maxSymbolPct = 0.55m;
 
-            // лимит — 35% equity
-            const decimal maxSidePct = 0.35m;
-
-            if ((currentNotional + probeNotional) / equity > maxSidePct)
+            if ((existingSymbolNotional + probeNotional) / equity > maxSymbolPct)
             {
                 _logger.LogWarning(
-                    "[PORTFOLIO-CAP][{symbol}] {side} exposure limit hit → probe blocked",
-                    symbol, probeSide);
+                    "[PORTFOLIO-CAP][{symbol}] symbol exposure limit hit → probe blocked",
+                    symbol);
                 return;
             }
 
-
-
-            // 6) place MARKET entry (Hedge side-aware)
+            // ==========================================================
+            // 14) PLACE MARKET ENTRY (HEDGE-AWARE)
+            // ==========================================================
             var orderSide = probeSide == PositionSide.Long ? OrderSide.Buy : OrderSide.Sell;
 
             _logger.LogWarning(
@@ -1104,10 +1185,7 @@ namespace VertexAutoTradeBinance8.Services
                     return;
                 }
 
-                // small sync lag
                 await Task.Delay(350, token);
-
-                // resolve entry from actual position
 
                 var posInfo = await c.UsdFuturesApi.Account.GetPositionInformationAsync(ct: token);
                 if (!posInfo.Success || posInfo.Data == null)
@@ -1116,9 +1194,9 @@ namespace VertexAutoTradeBinance8.Services
                 var p = posInfo.Data.FirstOrDefault(x =>
                     x.Symbol == symbol &&
                     x.PositionSide == probeSide &&
-                    Math.Abs(x.Quantity) > 0);
+                    Math.Abs(x.Quantity) > 0m);
 
-                if (p == null || p.EntryPrice <= 0)
+                if (p == null || p.EntryPrice <= 0m)
                 {
                     _logger.LogWarning("[PROBE][{symbol}] Entry resolve failed after open", symbol);
                     return;
@@ -1126,7 +1204,6 @@ namespace VertexAutoTradeBinance8.Services
 
                 var entry = p.EntryPrice;
 
-                // set emergency SL/TP for probe immediately
                 await CreateEmergencySLAsync(c, symbol, probeSide, probeQty, entry, signal: null, token);
                 await CreateEmergencyTPAsync(c, symbol, probeSide, probeQty, entry, signal: null, token);
 
@@ -1139,13 +1216,26 @@ namespace VertexAutoTradeBinance8.Services
         }
 
 
+        private decimal GetSymbolNotionalEstimate(string symbol)
+        {
+            try
+            {
+                var sKey = EngineState.Key(symbol);
+                if (!_engineState.Symbols.TryGetValue(sKey, out _))
+                    return 0m;
+
+                // Best-effort: use snapshot positions if you store them elsewhere.
+                // If not available here, return 0 and rely on callers passing notionalOverride.
+                return 0m;
+            }
+            catch { return 0m; }
+        }
+
         private async Task<List<BinanceUsdFuturesOrder>> LoadOrdersAsync(BinanceRestClient client, string symbol)
         {
             var res = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol);
             return res.Success && res.Data != null ? res.Data.ToList() : new List<BinanceUsdFuturesOrder>();
         }
-
-
         // =====================================================================
         // HANDLE SIDE  (v8.2 PRO)
         // =====================================================================
@@ -1216,7 +1306,6 @@ namespace VertexAutoTradeBinance8.Services
                 foreach (var k in _attached.Keys.Where(k => k.StartsWith($"{symbol}:{side}", StringComparison.OrdinalIgnoreCase)))
                     _attached.TryRemove(k, out _);
 
-
                 // ✅ N4: Instant drop from registry pinned-by-positions
                 // We close ONE leg (side). In hedge, the other side may still be open.
                 //_openPos.MarkClosed(symbol);
@@ -1225,20 +1314,24 @@ namespace VertexAutoTradeBinance8.Services
                 {
                     // if we just detected this side is 0, other side might still be open.
                     // Use engine snapshot: if symbol state exists -> keep open; otherwise fallback to REST.
-                    
 
                     var info = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
                     if (info.Success && info.Data != null)
                     {
                         bool anyLeft = info.Data.Any(p => p.Symbol == symbol && p.Quantity != 0m);
                         if (!anyLeft) _openPos.MarkClosed(symbol);
-                       
                     }
                 }
                 catch { /* ignore */ }
+
+                var sKey = EngineState.Key(symbol);
+                if (_engineState.Symbols.TryGetValue(sKey, out var st))
+                {
+                    st.HasOpenPosition = false;
+                }
+
                 return;
             }
-
 
             bool fundingBlocked = IsFundingRiskExceeded(symbol);
 
@@ -1325,7 +1418,6 @@ namespace VertexAutoTradeBinance8.Services
 
             }
 
-
             // PROFIT HARVEST (ПОСЛЕ early/BE, ДО restore SL/TP)
             // =================================================================
             if (klines != null && klines.Count >= 50)
@@ -1346,8 +1438,6 @@ namespace VertexAutoTradeBinance8.Services
                     minUsd: 6m,
                     ct);
             }
-
-
 
             // 1) SL отсутствует → аварийный SL (если нет дублей)
             if (sl == null && !hasMultipleSL)
@@ -1373,15 +1463,17 @@ namespace VertexAutoTradeBinance8.Services
                 await ManageRunnerTpExtensionAsync(client, symbol, side, qtyAbs, entry, signal, orders, klines, ct);
                 await MultiLayerTrailingAsync(client, symbol, side, qtyAbs, entry, signal, orders, klines, ct);
             }
-
         }
 
-
+        public int GetOpenPositionsCount()
+        {
+            return _openPos.OpenSymbolsCount;
+        }
         private async Task<decimal?> ResolveEntryFromExchangeAsync(
-    BinanceRestClient client,
-    string symbol,
-    PositionSide side,
-    CancellationToken ct)
+        BinanceRestClient client,
+        string symbol,
+        PositionSide side,
+        CancellationToken ct)
         {
             var trades = await client.UsdFuturesApi.Trading.GetUserTradesAsync(
                 symbol: symbol,
@@ -1463,9 +1555,6 @@ namespace VertexAutoTradeBinance8.Services
                     $"wick={wickAgainst:F4} body={body:F4}");
                 return;
             }
-
-
-
             bool reached =
                 side == PositionSide.Long
                     ? last >= entry + atr * 0.90m
@@ -1481,14 +1570,27 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-            var guardKey = BuildPosGuardKey(symbol, side, entry);
-            if (_earlyTpDone.ContainsKey(guardKey))
+            //var guardKey = BuildPosGuardKey(symbol, side, entry);
+            //if (_earlyTpDone.ContainsKey(guardKey))
+            //{
+            //    EarlyTpTrace.Skip(
+            //        _logger, symbol, side, entry, last, atr,
+            //        "ALREADY_DONE");
+            //    return;
+            //}
+           // var guardKey = BuildPosGuardKey(symbol, side, entry);
+            var guardKey = BuildPosGuardKey(symbol, side, entry, qty);
+            // ✅ reserve immediately (prevents harvest race / double enqueue)
+            var nowReserve = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (!_earlyTpDone.TryAdd(guardKey, nowReserve))
             {
-                EarlyTpTrace.Skip(
-                    _logger, symbol, side, entry, last, atr,
-                    "ALREADY_DONE");
+                EarlyTpTrace.Skip(_logger, symbol, side, entry, last, atr, "ALREADY_DONE");
                 return;
             }
+
+            // ✅ also block harvest immediately (Binance sync lag)
+            _recentPartialClose[$"{symbol}|{side}"] = nowReserve;
+
 
             var closeQty = Math.Round(qty * 0.35m, 8);
             if (closeQty <= 0)
@@ -1502,6 +1604,7 @@ namespace VertexAutoTradeBinance8.Services
 
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
+
             _dispatcher.Enqueue(async ct =>
             {
                 using var c = _factory.CreateRestClient();
@@ -1513,10 +1616,14 @@ namespace VertexAutoTradeBinance8.Services
                     positionSide: side,
                     ct: ct);
 
-
                 if (!res.Success)
                 {
                     _logger.LogWarning("[EARLY-TP][{symbol}][{side}] Market partial close failed: {err}", symbol, side, res.Error);
+
+                    // 🔁 rollback reservation (so it can retry later)
+                    _earlyTpDone.TryRemove(guardKey, out _);
+                    _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
+
                     return;
                 }
 
@@ -1532,22 +1639,13 @@ namespace VertexAutoTradeBinance8.Services
                     qty);
 
                 var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
+               
                 _earlyTpDone[guardKey] = now;
+                // also block harvest immediately
                 _recentPartialClose[$"{symbol}|{side}"] = now;
-
                 MarkProtection(symbol);
-
-                //_logger.LogWarning(
-                //    "[EARLY-TP][{symbol}][{side}] Partial fixed {closed}/{total}",
-                //    symbol, side, closeQty, qty);
             });
-
-
-
-            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-         //   _earlyTpDone[guardKey] = now;
+            
             // 🔒 BLOCK HARVEST for 8 seconds after EARLY-TP
           //  _recentPartialClose[$"{symbol}|{side}"] = now;
 
@@ -1591,7 +1689,9 @@ namespace VertexAutoTradeBinance8.Services
 
             if (!reached) return;
 
-            var guardKey = BuildPosGuardKey(symbol, side, entry);
+            //var guardKey = BuildPosGuardKey(symbol, side, entry);
+            var guardKey = BuildPosGuardKey(symbol, side, entry, qty);
+
             if (_beMoved.ContainsKey(guardKey)) return;
 
             decimal buffer = atr * 0.15m;
@@ -1640,10 +1740,17 @@ namespace VertexAutoTradeBinance8.Services
 
         private static string BuildPosGuardKey(string symbol, PositionSide side, decimal entry)
         {
-            // грубый, но рабочий ключ: символ+side+entry+qty (округлим)
             string E(decimal v) => v.ToString("0.########", CultureInfo.InvariantCulture);
             return $"{symbol}|{side}|e={E(entry)}";
         }
+
+        private static string BuildPosGuardKey(string symbol, PositionSide side, decimal entry, decimal baseQty)
+        {
+            string E(decimal v) => v.ToString("0.########", CultureInfo.InvariantCulture);
+            return $"{symbol}|{side}|e={E(entry)}|q={E(baseQty)}";
+        }
+
+
         // =====================================================================
         // EMERGENCY SL  (TRY NORMAL → FALLBACK ALGO RAW on -4120)
         // =====================================================================
@@ -1694,25 +1801,7 @@ namespace VertexAutoTradeBinance8.Services
                     rawSl = signal.StopLoss;
                 }
                 else
-                {
-                    //var kl = await _marketData.GetKlines(symbol, KlineInterval.OneMinute, 100);
-                    //if (kl.Count < 30) return;
-
-                    //var atr = _marketData.CalculateAtr(kl, 14);
-                    //if (atr <= 0) return;
-
-                    //var atrMult = _regimeNow switch
-                    //{
-                    //    MarketRegime.Range => 1.2m,
-                    //    MarketRegime.Squeeze => 1.5m,
-                    //    MarketRegime.UpTrend or MarketRegime.DownTrend => 1.8m,
-                    //    MarketRegime.VolatileChop => 2.0m,
-                    //    _ => 2.2m
-                    //};
-
-                    //rawSl = side == PositionSide.Long
-                    //    ? entryPrice - atr * atrMult
-                    //    : entryPrice + atr * atrMult;
+                { 
                     // BOOTSTRAP SAFE: без klines
                     // База: процент от entry + лёгкая адаптация по режиму
                     decimal pct = _regimeNow switch
@@ -1799,15 +1888,15 @@ namespace VertexAutoTradeBinance8.Services
                             symbol, side);
 
                         var ok = await _algoRaw.PlaceConditionalAsync(
-    symbol: symbol,
-    side: orderSide,
-    positionSide: side,
-    type: "STOP_MARKET",
-    quantity: safeQty,        // ✅ ИСПОЛЬЗУЕМ SAFE
-    triggerPrice: safeTrig,   // ✅ ИСПОЛЬЗУЕМ SAFE
-    workingType: "CONTRACT_PRICE",
-    reduceOnly: true,
-    ct: ct);
+                        symbol: symbol,
+                        side: orderSide,
+                        positionSide: side,
+                        type: "STOP_MARKET",
+                        quantity: safeQty,        // ✅ ИСПОЛЬЗУЕМ SAFE
+                        triggerPrice: safeTrig,   // ✅ ИСПОЛЬЗУЕМ SAFE
+                        workingType: "CONTRACT_PRICE",
+                        reduceOnly: true,
+                        ct: ct);
 
                         if (ok)
                         {
@@ -1833,7 +1922,6 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogError(ex, "[SUPERVISOR] EX SL create {symbol}", symbol);
             }
         }
-
         // =====================================================================
         // EMERGENCY TP  (TRY NORMAL → FALLBACK ALGO RAW on -4120)
         // =====================================================================
@@ -1922,8 +2010,6 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogError(ex, "[SUPERVISOR] EX CreateEmergencyTP {symbol}", symbol);
             }
         }
-
-
         private static int GetPrecision(decimal value)
         {
             value = Math.Abs(value);
@@ -1945,7 +2031,6 @@ namespace VertexAutoTradeBinance8.Services
             var p = (decimal)Math.Pow(10, precision);
             return Math.Truncate(value * p) / p;
         }
-
 
         private static int GetPrecisionFromStep(decimal step)
         {
@@ -2077,76 +2162,7 @@ namespace VertexAutoTradeBinance8.Services
 
                 _logger.LogWarning("[TP-EXT][{symbol}] Runner activated | new SL={sl}", symbol, newSl);
             });
-
         }
-
-        /// <summary>
-        /// v8.2 PRO SL update:
-        /// - Cancel old SL
-        /// - Place new SL via NORMAL endpoint
-        /// - If -4120 -> ALGO-RAW
-        /// - NO reduceOnly (важно для Hedge/ошибок -1106)
-        /// - WorkingType.Mark используем осторожно: сначала пробуем, если Binance ругается — повтор без него
-        /// </summary>
-        //   private Task<bool> UpdateSL_ProAsync(
-        //BinanceRestClient client,
-        //string symbol,
-        //PositionSide side,
-        //decimal qty,
-        //BinanceUsdFuturesOrder slOrder,
-        //decimal entry,
-        //decimal newSl,
-        //TradeSignal? signal,
-        //CancellationToken ct)
-        //   {
-        //       if (qty <= 0 || newSl <= 0) return Task.FromResult(false);
-
-        //       _dispatcher.Enqueue(async token =>
-        //       {
-        //           using var c = _factory.CreateRestClient();
-
-        //           var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-
-        //           var safeTrig = NormalizeToStep(newSl, f.tickSize > 0 ? f.tickSize : 0.0001m);
-        //           var safeQty = NormalizeToStep(qty, f.step > 0 ? f.step : 1m);
-
-        //           if (safeQty < f.minQty) return;
-
-        //           var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-
-        //           var r1 = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
-        //               symbol: symbol,
-        //               side: orderSide,
-        //               type: FuturesOrderType.StopMarket,
-        //               quantity: safeQty,
-        //               stopPrice: safeTrig,
-        //               positionSide: side,
-        //               workingType: WorkingType.Mark,
-        //               ct: token);
-
-        //           if (r1.Success) return;
-
-        //           if (!IsAlgoRequired(r1.Error)) return;
-
-        //           _logger.LogWarning(
-        //               "[ALGO-RAW][PRE][SL] {symbol} qty={qty} trig={trig}",
-        //               symbol, safeQty, safeTrig);
-
-        //           await _algoRaw.PlaceConditionalAsync(
-        //               symbol: symbol,
-        //               side: orderSide,
-        //               positionSide: side,
-        //               type: "STOP_MARKET",
-        //               quantity: safeQty,
-        //               triggerPrice: safeTrig,
-        //               workingType: "CONTRACT_PRICE",
-        //               reduceOnly: null,
-        //               ct: token);
-        //       });
-
-        //       return Task.FromResult(true);
-        //   }
-
         private async Task<bool> UpdateSL_ProAsync(
        BinanceRestClient client,
        string symbol,
@@ -2184,18 +2200,33 @@ namespace VertexAutoTradeBinance8.Services
 
                 // 1) PLACE NEW SL FIRST (NORMAL)
                 var place = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol: symbol,
-                    side: orderSide,
-                    type: FuturesOrderType.StopMarket,
-                    quantity: safeQty,
-                    stopPrice: safeTrig,
-                    positionSide: side,
-                    reduceOnly: null,
-                    workingType: WorkingType.Mark,
-                    ct: ct);
+                symbol: symbol,
+                side: orderSide,
+                type: FuturesOrderType.StopMarket,
+                quantity: safeQty,
+                stopPrice: safeTrig,
+                positionSide: side,
+                reduceOnly: null,
+                workingType: WorkingType.Mark,
+                ct: ct);
 
                 bool placedOk = place.Success;
 
+                // 🔁 FALLBACK without WorkingType.Mark
+                if (!placedOk && place.Error != null)
+                {
+                    place = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol: symbol,
+                        side: orderSide,
+                        type: FuturesOrderType.StopMarket,
+                        quantity: safeQty,
+                        stopPrice: safeTrig,
+                        positionSide: side,
+                        reduceOnly: null,
+                        ct: ct);
+
+                    placedOk = place.Success;
+                }
                 // 2) FALLBACK: ALGO RAW (-4120)
                 if (!placedOk && IsAlgoRequired(place.Error))
                 {
@@ -2245,9 +2276,6 @@ namespace VertexAutoTradeBinance8.Services
                 return false;
             }
         }
-
-
-
         private void HookAiLearningOnSlMove(TradeSignal? signal, string symbol, PositionSide side, decimal entry, decimal newSl)
         {
             try
@@ -2268,8 +2296,6 @@ namespace VertexAutoTradeBinance8.Services
             if (step <= 0) return value;
             return Math.Floor(value / step) * step;
         }
-
-
         private async Task MultiLayerTrailingAsync(
             BinanceRestClient client,
             string symbol,
@@ -2283,26 +2309,7 @@ namespace VertexAutoTradeBinance8.Services
         {
             await Task.CompletedTask;
         }
-        // =====================================================================
-        // MARK PRICE SAFE
-        // =====================================================================
-        /* private static async Task<decimal> GetMarkPriceSafeAsync(
-             BinanceRestClient client,
-             string symbol,
-             decimal fallback,
-             CancellationToken ct)
-         {
-             try
-             {
-                 var r = await client.UsdFuturesApi.ExchangeData.GetPriceAsync(symbol, ct: ct);
-                 if (r.Success && r.Data != null && r.Data.Price > 0)
-                     return r.Data.Price;
-             }
-             catch { }
-
-             return fallback > 0 ? fallback : 0m;
-         }*/
-
+        
         private static async Task<decimal> GetMarkPriceSafeAsync(
     BinanceRestClient client,
     string symbol,
@@ -2332,7 +2339,6 @@ namespace VertexAutoTradeBinance8.Services
 
             return fallback > 0 ? fallback : 0m;
         }
-
         // =====================================================================
         // RAW BINANCE ALGO ORDER (POST /fapi/v1/algoOrder)
         // =====================================================================
@@ -2454,11 +2460,6 @@ namespace VertexAutoTradeBinance8.Services
 
 
         }
-
-
-
-
-
         private async Task TryHarvestProfitAsync(
             BinanceRestClient client,
             EngineState state,
@@ -2470,7 +2471,14 @@ namespace VertexAutoTradeBinance8.Services
             decimal minUsd,
             CancellationToken ct)
         {
+            var guardKey = BuildPosGuardKey(symbol, side, pos.EntryPrice);
 
+            if (_earlyTpDone.TryGetValue(guardKey, out var tpTs))
+            {
+                var ageMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - tpTs;
+                if (ageMs < 60_000) // 60 секунд после EARLY-TP
+                    return;
+            }
             // ==========================================================
             // 🔒 BLOCK HARVEST right after EARLY-TP (Binance sync lag)
             // ==========================================================
@@ -2489,9 +2497,6 @@ namespace VertexAutoTradeBinance8.Services
 
                 _recentPartialClose.TryRemove(harvestKey, out _);
             }
-
-
-
 
             var sKey = EngineState.Key(symbol);
             var st = state.Symbols.GetOrAdd(sKey, _ => new SymbolState());
@@ -2550,8 +2555,6 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-
-
             decimal rr = Math.Abs(realPos.MarkPrice - realPos.EntryPrice) / atr;
 
             decimal harvestPct =
@@ -2582,7 +2585,6 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-
             bool isFullClose = closeQty >= qty;
 
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
@@ -2594,7 +2596,6 @@ namespace VertexAutoTradeBinance8.Services
      quantity: closeQty,
      positionSide: side,
      ct: ct);
-
 
             if (!res.Success)
             {
@@ -2617,6 +2618,12 @@ namespace VertexAutoTradeBinance8.Services
         }
         public async Task HandleUiActionAsync(PositionActionRequest req)
         {
+            if (!UiSpamGuard(req.Symbol, req.Side, req.Action.ToString()))
+            {
+                _logger.LogInformation("[UI][GUARD] spam blocked {symbol} {side} {action}", req.Symbol, req.Side, req.Action);
+                return;
+            }
+
             var pos = GetTrackedPosition(req.Symbol, req.Side);
             if (pos == null) return;// NOTE: dummy object, real position resolved later via REST
 
@@ -2635,6 +2642,54 @@ namespace VertexAutoTradeBinance8.Services
                     break;
             }
         }
+        /* private Task UpdateTakeProfitAsync(BinancePositionDetailsUsdt pos, decimal price, string reason)
+         {
+             _dispatcher.Enqueue(async ct =>
+             {
+                 using var c = _factory.CreateRestClient();
+
+                 var info = await c.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+                 if (!info.Success || info.Data == null) return;
+
+                 var real = info.Data.FirstOrDefault(p =>
+                     p.Symbol == pos.Symbol &&
+                     p.PositionSide == pos.PositionSide &&
+                     Math.Abs(p.Quantity) > 0);
+
+                 if (real == null) return;
+
+                 var filters = await _symbolInfo.GetFuturesFiltersAsync(real.Symbol);
+                 var tick = filters.tickSize > 0 ? filters.tickSize : 0.0001m;
+                 var tp = Math.Round(price / tick) * tick;
+
+                 // cancel existing TP for side
+                 var open = await c.UsdFuturesApi.Trading.GetOpenOrdersAsync(real.Symbol, ct: ct);
+                 if (open.Success && open.Data != null)
+                 {
+                     foreach (var o in open.Data.Where(o => o.Type == FuturesOrderType.TakeProfitMarket && o.PositionSide == real.PositionSide))
+                     {
+                         try { await c.UsdFuturesApi.Trading.CancelOrderAsync(real.Symbol, o.Id, ct: ct); } catch { }
+                     }
+                 }
+
+                 var orderSide = real.PositionSide == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+                 await c.UsdFuturesApi.Trading.PlaceOrderAsync(
+                     symbol: real.Symbol,
+                     side: orderSide,
+                     type: FuturesOrderType.TakeProfitMarket,
+                     quantity: Math.Abs(real.Quantity),
+                     positionSide: real.PositionSide,
+                     stopPrice: tp,
+                     reduceOnly: null, // ✅ no reduceOnly
+                     ct: ct);
+
+                 _logger.LogWarning("[UI][TP] {symbol} {side} -> {tp} ({reason})", real.Symbol, real.PositionSide, tp, reason);
+                 MarkProtection(real.Symbol);
+             });
+
+             return Task.CompletedTask;
+         }*/
 
         private Task UpdateTakeProfitAsync(BinancePositionDetailsUsdt pos, decimal price, string reason)
         {
@@ -2656,27 +2711,75 @@ namespace VertexAutoTradeBinance8.Services
                 var tick = filters.tickSize > 0 ? filters.tickSize : 0.0001m;
                 var tp = Math.Round(price / tick) * tick;
 
-                // cancel existing TP for side
                 var open = await c.UsdFuturesApi.Trading.GetOpenOrdersAsync(real.Symbol, ct: ct);
-                if (open.Success && open.Data != null)
-                {
-                    foreach (var o in open.Data.Where(o => o.Type == FuturesOrderType.TakeProfitMarket && o.PositionSide == real.PositionSide))
-                    {
-                        try { await c.UsdFuturesApi.Trading.CancelOrderAsync(real.Symbol, o.Id, ct: ct); } catch { }
-                    }
-                }
+                if (!open.Success || open.Data == null) return;
 
                 var orderSide = real.PositionSide == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
-                await c.UsdFuturesApi.Trading.PlaceOrderAsync(
+                // existing TP for this side
+                var oldTp = open.Data
+                    .Where(o => o.Type == FuturesOrderType.TakeProfitMarket && o.PositionSide == real.PositionSide && o.Side == orderSide)
+                    .OrderByDescending(o => o.CreateTime)
+                    .FirstOrDefault();
+
+                // place new TP first
+                var place = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: real.Symbol,
                     side: orderSide,
                     type: FuturesOrderType.TakeProfitMarket,
                     quantity: Math.Abs(real.Quantity),
                     positionSide: real.PositionSide,
                     stopPrice: tp,
-                    reduceOnly: null, // ✅ no reduceOnly
+                    reduceOnly: null,
+                    workingType: WorkingType.Mark,
                     ct: ct);
+
+                if (!place.Success)
+                {
+                    // fallback without WorkingType.Mark
+                    place = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol: real.Symbol,
+                        side: orderSide,
+                        type: FuturesOrderType.TakeProfitMarket,
+                        quantity: Math.Abs(real.Quantity),
+                        positionSide: real.PositionSide,
+                        stopPrice: tp,
+                        reduceOnly: null,
+                        ct: ct);
+                }
+
+                if (!place.Success)
+                {
+                    // fallback to ALGO RAW if required
+                    if (IsAlgoRequired(place.Error))
+                    {
+                        var safeQty = NormalizeToStep(Math.Abs(real.Quantity), filters.step > 0 ? filters.step : 1m);
+                        var safeTrig = NormalizeToStep(tp, filters.tickSize > 0 ? filters.tickSize : 0.0001m);
+
+                        if (safeQty >= filters.minQty)
+                        {
+                            await _algoRaw.PlaceConditionalAsync(
+                                symbol: real.Symbol,
+                                side: orderSide,
+                                positionSide: real.PositionSide,
+                                type: "TAKE_PROFIT_MARKET",
+                                quantity: safeQty,
+                                triggerPrice: safeTrig,
+                                workingType: "CONTRACT_PRICE",
+                                reduceOnly: true,
+                                ct: ct);
+                        }
+                        else return;
+                    }
+                    else return;
+                }
+
+                // cancel old TP after new is placed
+                if (oldTp != null)
+                {
+                    try { await c.UsdFuturesApi.Trading.CancelOrderAsync(real.Symbol, oldTp.Id, ct: ct); }
+                    catch { /* ignore */ }
+                }
 
                 _logger.LogWarning("[UI][TP] {symbol} {side} -> {tp} ({reason})", real.Symbol, real.PositionSide, tp, reason);
                 MarkProtection(real.Symbol);
@@ -2686,7 +2789,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
 
-        private Task UpdateStopLossAsync(BinancePositionDetailsUsdt pos, decimal price, string reason)
+        /*private Task UpdateStopLossAsync(BinancePositionDetailsUsdt pos, decimal price, string reason)
         {
             _dispatcher.Enqueue(async ct =>
             {
@@ -2733,8 +2836,82 @@ namespace VertexAutoTradeBinance8.Services
             });
 
             return Task.CompletedTask;
-        }
+        }*/
+        private Task UpdateStopLossAsync(BinancePositionDetailsUsdt pos, decimal price, string reason)
+        {
+            _dispatcher.Enqueue(async ct =>
+            {
+                using var c = _factory.CreateRestClient();
 
+                var info = await c.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+                if (!info.Success || info.Data == null) return;
+
+                var real = info.Data.FirstOrDefault(p =>
+                    p.Symbol == pos.Symbol &&
+                    p.PositionSide == pos.PositionSide &&
+                    Math.Abs(p.Quantity) > 0);
+
+                if (real == null) return;
+
+                var filters = await _symbolInfo.GetFuturesFiltersAsync(real.Symbol);
+                var tick = filters.tickSize > 0 ? filters.tickSize : 0.0001m;
+                var sl = Math.Round(price / tick) * tick;
+
+                var open = await c.UsdFuturesApi.Trading.GetOpenOrdersAsync(real.Symbol, ct: ct);
+                if (!open.Success || open.Data == null) return;
+
+                var closeSide = real.PositionSide == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+                // find existing SL for this side
+                var oldSl = open.Data
+                    .Where(o => o.Type == FuturesOrderType.StopMarket && o.PositionSide == real.PositionSide && o.Side == closeSide)
+                    .OrderByDescending(o => o.CreateTime)
+                    .FirstOrDefault();
+
+                // if no SL -> just place emergency SL
+                if (oldSl == null)
+                {
+                    await c.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol: real.Symbol,
+                        side: closeSide,
+                        type: FuturesOrderType.StopMarket,
+                        quantity: Math.Abs(real.Quantity),
+                        positionSide: real.PositionSide,
+                        stopPrice: sl,
+                        reduceOnly: null,
+                        workingType: WorkingType.Mark,
+                        ct: ct);
+
+                    _logger.LogWarning("[UI][SL] {symbol} {side} -> {sl} ({reason}) [created]", real.Symbol, real.PositionSide, sl, reason);
+                    MarkProtection(real.Symbol);
+                    return;
+                }
+
+                // NO-GAP: place new first, cancel old after confirm
+                var ok = await UpdateSL_ProAsync(
+                    c,
+                    real.Symbol,
+                    real.PositionSide,
+                    Math.Abs(real.Quantity),
+                    oldSl,
+                    entry: real.EntryPrice > 0 ? real.EntryPrice : sl, // fallback (rare)
+                    newSl: sl,
+                    signal: null,
+                    ct);
+
+                if (ok)
+                {
+                    _logger.LogWarning("[UI][SL] {symbol} {side} -> {sl} ({reason}) [updated]", real.Symbol, real.PositionSide, sl, reason);
+                    MarkProtection(real.Symbol);
+                }
+                else
+                {
+                    _logger.LogWarning("[UI][SL] update failed (kept old SL) {symbol} {side}", real.Symbol, real.PositionSide);
+                }
+            });
+
+            return Task.CompletedTask;
+        }
 
         private Task ClosePositionAsync(
         BinancePositionDetailsUsdt pos,
@@ -2808,8 +2985,6 @@ namespace VertexAutoTradeBinance8.Services
 
             return (safeQty, safeTrig);
         }
-
-
         private BinancePositionDetailsUsdt? GetTrackedPosition(string symbol, PositionSide side)
         {
             var sKey = EngineState.Key(symbol);
