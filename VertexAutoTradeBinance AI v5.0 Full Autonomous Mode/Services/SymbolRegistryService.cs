@@ -159,25 +159,26 @@ public class SymbolRegistryService
 
     public async Task LoadAsync(CancellationToken ct)
     {
-        var mode = _cfg["SymbolSelection:Mode"] ?? "Manual";
+        var mode = _cfg["SymbolSelection:Mode"] ?? "Auto";
 
+        // Manual — как и было
         if (string.Equals(mode, "Manual", StringComparison.OrdinalIgnoreCase))
         {
-            var pinnedCfg = BlacklistFilter(GetPinnedSymbols()); // читает SymbolSelection:Pinned
-            var posPinned = await GetPinnedByOpenPositionsSafeAsync(ct);
+            var pinnedCfg = BlacklistFilter(GetPinnedSymbols());
+            var pinnedPos = await GetPinnedByOpenPositionsSafeAsync(ct);
 
-            var all = pinnedCfg
-                .Concat(posPinned)
+            var all = pinnedCfg.Concat(pinnedPos)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
+            // ✅ Canonical: manual может быть пустым (если конфиг пустой), но это осознанно
             _snapshot = new UniverseSnapshot(
                 UtcTime: DateTime.UtcNow,
                 All: all,
                 Long: all,
                 Short: all,
                 Pinned: pinnedCfg,
-                PinnedByPositions: posPinned,
+                PinnedByPositions: pinnedPos,
                 DynamicCap: all.Count,
                 AiCapLong: all.Count,
                 AiCapShort: all.Count,
@@ -196,290 +197,292 @@ public class SymbolRegistryService
         await _refreshLock.WaitAsync(ct);
         try
         {
-            if (now - _lastHardRefresh < TimeSpan.FromMinutes(refreshMinutes))
+            // =========================================================
+            // 1) SOFT window? (only if snapshot is non-empty)
+            // =========================================================
+            var inSoftWindow = (now - _lastHardRefresh) < TimeSpan.FromMinutes(refreshMinutes);
+
+            if (inSoftWindow && _snapshot.All.Count > 0)
             {
-                // 🔒 SOFT refresh: only update pinned-by-positions (no recompute)
-                try
-                {
-                    var pinnedPos = await GetPinnedByOpenPositionsSafeAsync(ct);
-
-                    if (pinnedPos.Count > 0)
-                    {
-                        var merged = _snapshot.All
-                            .Concat(pinnedPos)
-                            .Distinct(StringComparer.OrdinalIgnoreCase)
-                            .ToList();
-
-                        _snapshot = _snapshot with
-                        {
-                            All = merged,
-                            PinnedByPositions = pinnedPos
-                        };
-                    }
-                }
-                catch { /* ignored by design */ }
-
+                await SoftRefreshPinnedByPositionsAsync(ct);
                 SoftHealthCheck();
                 return;
             }
-             
+
+            if (inSoftWindow && _snapshot.All.Count == 0)
+            {
+                _logger.LogWarning("[SYMBOL] Soft window but universe EMPTY → forcing HARD refresh");
+                // fall through to hard refresh
+            }
+
+            // =========================================================
+            // 2) HARD refresh (always under the same lock)
+            // =========================================================
+            var built = await BuildUniverseSnapshotHardAsync(ct);
+
+            // ✅ Hard refresh success gate: only commit if non-empty
+            if (built.All.Count > 0)
+            {
+                _snapshot = built;
+                _lastHardRefresh = now;
+
+                _logger.LogInformation(
+                    "[SYMBOL] Registry refresh: pinnedCfg={pc}, pinnedPos={pp}, long={lng}, short={sht}, total={tot}, bucket={bucket}",
+                    _snapshot.Pinned.Count,
+                    _snapshot.PinnedByPositions.Count,
+                    _snapshot.Long.Count,
+                    _snapshot.Short.Count,
+                    _snapshot.All.Count,
+                    _snapshot.BtcVolBucket);
+
+                return;
+            }
+
+            // =========================================================
+            // 3) If built empty → do NOT freeze, do NOT advance lastHardRefresh
+            // =========================================================
+            _logger.LogError("[SYMBOL] HARD refresh produced EMPTY universe → keep previous snapshot and retry next tick");
+
+            // Если предыдущий snapshot тоже пустой — это сигнал upstream (нет snapshots/WS/market data)
+            if (_snapshot.All.Count == 0)
+                _logger.LogCritical("[SYMBOL] Universe still EMPTY after hard refresh. Market snapshots source likely failing.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[SYMBOL] Refresh failed (canonical): keep last snapshot, do not freeze");
+            // ✅ не трогаем _snapshot и _lastHardRefresh
         }
         finally
         {
             _refreshLock.Release();
         }
-
-        // last-known-good snapshot for rollback
-        var lastGood = _snapshot;
-
+    }
+    private async Task SoftRefreshPinnedByPositionsAsync(CancellationToken ct)
+    {
         try
         {
-            var auto = _cfg.GetSection("SymbolSelection:Auto");
-
-            // =====================================================
-            // STARTUP RELAX MODE (AI COLD START)
-            // =====================================================
-            var isStartup =
-                _ai.TotalTrades < 5 ||
-                (DateTime.UtcNow - _ai.StartedUtc) < TimeSpan.FromMinutes(15);
-
-
-            // === CAPS / PARAMS =================================================
-            var totalUniverseCap = auto.GetValue<int?>("TotalUniverseCap") ?? 20;
-
-            var pinnedCfg = BlacklistFilter(GetPinnedSymbols());
             var pinnedPos = await GetPinnedByOpenPositionsSafeAsync(ct);
+            if (pinnedPos.Count == 0)
+                return;
 
-            var pinned = pinnedCfg
+            var merged = _snapshot.All
                 .Concat(pinnedPos)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            var topVolumeCount = auto.GetValue<int?>("TopVolumeCount") ?? 60;
-
-            var minVolLong = auto.GetValue<decimal?>("Min24hVolumeLong")
-                             ?? auto.GetValue<decimal>("Min24hVolume");
-
-            var minVolShort = auto.GetValue<decimal?>("Min24hVolumeShort")
-                              ?? auto.GetValue<decimal>("Min24hVolume");
-
-            var minPrice = auto.GetValue<decimal>("MinPrice");
-
-            var finalCap = auto.GetValue<int?>("FinalUniverseCap") ?? 25;
-            var maxAdds = auto.GetValue<int?>("StabilityMaxAdds") ?? 3;
-
-            var aiWeight = auto.GetValue<decimal?>("AiWeight") ?? 0.65m;
-            var momWeight = auto.GetValue<decimal?>("MomentumWeight") ?? 0.35m;
-            var momCap = auto.GetValue<decimal?>("MomentumCapPercent") ?? 15m;
-
-            var dryRunLimit = auto.GetValue<int?>("DryRunLogLimit") ?? 12;
-
-            var enableBtcFilter = auto.GetValue<bool?>("EnableBtcFilter") ?? false;
-            var btcDump = auto.GetValue<decimal?>("BtcDumpThreshold") ?? -2.5m;
-            var btcSqueeze = auto.GetValue<decimal?>("BtcSqueezeThreshold") ?? 2.5m;
-
-            // === SNAPSHOTS =====================================================
-            var allSnapshots = await _liquidityScanner.LoadSnapshotsAsync(ct);
-
-            if (allSnapshots == null || allSnapshots.Count == 0)
+            _snapshot = _snapshot with
             {
-                _logger.LogWarning("[SYMBOL] No market snapshots → BOOTSTRAP pinned universe");
+                All = merged,
+                PinnedByPositions = pinnedPos
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[SYMBOL] Soft refresh pinned-by-positions failed (ignored)");
+        }
+    }
+    private async Task<UniverseSnapshot> BuildUniverseSnapshotHardAsync(CancellationToken ct)
+    {
+        var auto = _cfg.GetSection("SymbolSelection:Auto");
 
-                if (pinned.Count > 0)
-                {
-                    _snapshot = new UniverseSnapshot(
-                        UtcTime: DateTime.UtcNow,
-                        All: pinned,
-                        Long: pinned,
-                        Short: pinned,
-                        Pinned: pinnedCfg,
-                        PinnedByPositions: pinnedPos,
-                        DynamicCap: pinned.Count,
-                        AiCapLong: pinned.Count,
-                        AiCapShort: pinned.Count,
-                        BtcVol: 0m,
-                        BtcVolBucket: "BOOTSTRAP"
-                    );
-                }
+        var totalUniverseCap = auto.GetValue<int?>("TotalUniverseCap") ?? 20;
+        var finalCap = auto.GetValue<int?>("FinalUniverseCap") ?? 25;
+        var maxAdds = auto.GetValue<int?>("StabilityMaxAdds") ?? 3;
 
-                return;
-            }
+        var pinnedCfg = BlacklistFilter(GetPinnedSymbols());
+        var pinnedPos = await GetPinnedByOpenPositionsSafeAsync(ct);
+        var pinned = pinnedCfg.Concat(pinnedPos).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
-            // === BTC METRICS ===================================================
-            var btcSnapshotRaw = allSnapshots.FirstOrDefault(s => s.Symbol == "BTCUSDT");
-            var btcVol = btcSnapshotRaw != null
-                ? Math.Abs(btcSnapshotRaw.PriceChangePercent)
-                : 0m;
+        var topVolumeCount = auto.GetValue<int?>("TopVolumeCount") ?? 60;
 
-            // === REGIME FILTER =================================================
-            var baseSnapshots = allSnapshots
-                .Where(s => _marketRegime.IsTradable(s.Symbol))
+        var minVolLong = auto.GetValue<decimal?>("Min24hVolumeLong") ?? auto.GetValue<decimal>("Min24hVolume");
+        var minVolShort = auto.GetValue<decimal?>("Min24hVolumeShort") ?? auto.GetValue<decimal>("Min24hVolume");
+        var minPrice = auto.GetValue<decimal>("MinPrice");
+
+        var aiWeight = auto.GetValue<decimal?>("AiWeight") ?? 0.65m;
+        var momWeight = auto.GetValue<decimal?>("MomentumWeight") ?? 0.35m;
+        var momCap = auto.GetValue<decimal?>("MomentumCapPercent") ?? 15m;
+
+        var enableBtcFilter = auto.GetValue<bool?>("EnableBtcFilter") ?? false;
+        var btcDump = auto.GetValue<decimal?>("BtcDumpThreshold") ?? -2.5m;
+        var btcSqueeze = auto.GetValue<decimal?>("BtcSqueezeThreshold") ?? 2.5m;
+
+        var lastGood = _snapshot;
+
+        // =====================================================
+        // MARKET SNAPSHOTS
+        // =====================================================
+        var allSnapshots = await _liquidityScanner.LoadSnapshotsAsync(ct);
+        if (allSnapshots == null || allSnapshots.Count == 0)
+        {
+            _logger.LogWarning("[SYMBOL] No market snapshots → cannot build universe");
+            // ❗ не pinned-only: возвращаем пусто, чтобы LoadAsync НЕ зафиксировал пустоту и повторил позже
+            return UniverseSnapshot.Empty() with { BtcVolBucket = "NO-SNAPSHOTS" };
+        }
+
+        // BTC metrics
+        var btcSnapshotRaw = allSnapshots.FirstOrDefault(s => s.Symbol == "BTCUSDT");
+        var btcVol = btcSnapshotRaw != null ? Math.Abs(btcSnapshotRaw.PriceChangePercent) : 0m;
+
+        // =====================================================
+        // BASE candidates (tradable)
+        // =====================================================
+        var tradable = allSnapshots.Where(s => _marketRegime.IsTradable(s.Symbol)).ToList();
+
+        // ✅ canonical fallback: если regime убил всё — используем raw snapshots (кроме blacklist/price/volume фильтров builder'а)
+        if (tradable.Count == 0)
+        {
+            _logger.LogWarning("[SYMBOL] Regime filtered all → fallback to raw snapshots");
+            tradable = allSnapshots.ToList();
+        }
+
+        // BTC bias
+        decimal btcBiasLong = 1m, btcBiasShort = 1m;
+        if (enableBtcFilter && btcSnapshotRaw != null)
+        {
+            if (btcSnapshotRaw.PriceChangePercent <= btcDump) btcBiasLong = 0.35m;
+            else if (btcSnapshotRaw.PriceChangePercent >= btcSqueeze) btcBiasShort = 0.35m;
+        }
+
+        // Startup relax
+        var isStartup =
+            _ai.TotalTrades < 5 ||
+            (DateTime.UtcNow - _ai.StartedUtc) < TimeSpan.FromMinutes(15);
+
+        // Dynamic cap (как у тебя было)
+        var dyn = _cfg.GetSection("SymbolSelection:DynamicCap");
+        var useDynCap = dyn.GetValue<bool?>("Enabled") ?? false;
+        var dynamicCap = finalCap;
+
+        if (useDynCap)
+        {
+            var low = dyn.GetValue<decimal?>("LowVolPct") ?? 1.2m;
+            var mid = dyn.GetValue<decimal?>("MidVolPct") ?? 2.5m;
+
+            var capLow = dyn.GetValue<int?>("CapLowVol") ?? finalCap;
+            var capMid = dyn.GetValue<int?>("CapMidVol") ?? finalCap;
+            var capHigh = dyn.GetValue<int?>("CapHighVol") ?? Math.Max(1, Math.Min(finalCap, 4));
+
+            if (btcVol <= low) dynamicCap = capLow;
+            else if (btcVol <= mid) dynamicCap = capMid;
+            else dynamicCap = capHigh;
+
+            dynamicCap = Math.Clamp(dynamicCap, 1, Math.Min(finalCap, topVolumeCount));
+        }
+        else
+        {
+            dynamicCap = Math.Clamp(finalCap, 1, topVolumeCount);
+        }
+
+        // AI caps
+        var longWr = _ai.GetWinRate(SignalSide.Buy);
+        var shortWr = _ai.GetWinRate(SignalSide.Sell);
+
+        static int AiAdjust(int cap, decimal wr, bool isStartup)
+        {
+            if (isStartup) return cap;
+            if (wr < 0.35m) return Math.Max(1, cap - 2);
+            if (wr < 0.45m) return Math.Max(1, cap - 1);
+            return cap;
+        }
+
+        var aiCapLong = AiAdjust(dynamicCap, longWr, isStartup);
+        var aiCapShort = AiAdjust(dynamicCap, shortWr, isStartup);
+
+        // =====================================================
+        // SCORING
+        // =====================================================
+        var longSnaps = tradable
+            .Where(s => isStartup || _ai.GetRecentPnL(s.Symbol, SignalSide.Buy) > -0.15m)
+            .OrderByDescending(s =>
+            {
+                var ai = Normalize(_ai.GetSymbolScore(s.Symbol, SignalSide.Buy), 0m, 1m);
+                var mom = Normalize((decimal)Math.Abs(s.PriceChangePercent), 0m, momCap);
+                return (ai * aiWeight + mom * momWeight) * btcBiasLong;
+            })
+            .ToList();
+
+        var shortSnaps = tradable
+            .Where(s => isStartup || _ai.GetRecentPnL(s.Symbol, SignalSide.Sell) > -0.15m)
+            .OrderByDescending(s =>
+            {
+                var ai = Normalize(_ai.GetSymbolScore(s.Symbol, SignalSide.Sell), 0m, 1m);
+                var mom = Normalize((decimal)Math.Abs(s.PriceChangePercent), 0m, momCap);
+                return (ai * aiWeight + mom * momWeight) * btcBiasShort;
+            })
+            .ToList();
+
+        var longCandidates = BlacklistFilter(_universeBuilder.Build(
+            longSnaps, pinned.ToArray(), topVolumeCount, minVolLong, minPrice));
+
+        var shortCandidates = BlacklistFilter(_universeBuilder.Build(
+            shortSnaps, pinned.ToArray(), topVolumeCount, minVolShort, minPrice));
+
+        // ✅ canonical fallback: если builder вернул пусто — берём ТОП по объёму (raw), а не pinned-only
+        if (longCandidates.Count == 0 && shortCandidates.Count == 0)
+        {
+            _logger.LogWarning("[SYMBOL] Builder produced empty candidates → fallback to top-volume raw list");
+
+            var topRaw = allSnapshots
+                .OrderByDescending(s => s.QuoteVolume24h) // если у Snapshot есть QuoteVolume; если нет — оставь как было или используй Volume field
+                .Select(s => s.Symbol)
+                .Where(s => !string.Equals(s, "AIAUSDT", StringComparison.OrdinalIgnoreCase))
+                .Take(Math.Max(5, Math.Min(totalUniverseCap, topVolumeCount)))
                 .ToList();
 
-            if (baseSnapshots.Count == 0)
-            {
-                _logger.LogWarning("[SYMBOL] Regime filtered all → FALLBACK pinned universe");
+            // pinned остаётся приоритетом, но не единственным источником
+            var allFallback = LimitUnion(pinnedCfg, pinnedPos, topRaw, topRaw, totalUniverseCap);
 
-                if (pinned.Count > 0)
-                {
-                    _snapshot = new UniverseSnapshot(
-                        UtcTime: DateTime.UtcNow,
-                        All: pinned,
-                        Long: pinned,
-                        Short: pinned,
-                        Pinned: pinnedCfg,
-                        PinnedByPositions: pinnedPos,
-                        DynamicCap: pinned.Count,
-                        AiCapLong: pinned.Count,
-                        AiCapShort: pinned.Count,
-                        BtcVol: btcVol,
-                        BtcVolBucket: "REGIME-FALLBACK"
-                    );
-                }
-
-                return;
-            }
-
-            // === BTC BIAS ======================================================
-            decimal btcBiasLong = 1m;
-            decimal btcBiasShort = 1m;
-
-            if (enableBtcFilter && btcSnapshotRaw != null)
-            {
-                if (btcSnapshotRaw.PriceChangePercent <= btcDump)
-                {
-                    btcBiasLong = 0.35m;
-                    _logger.LogWarning("[SYMBOL][BTC] Dump {pct}% → LONG bias", btcSnapshotRaw.PriceChangePercent);
-                }
-                else if (btcSnapshotRaw.PriceChangePercent >= btcSqueeze)
-                {
-                    btcBiasShort = 0.35m;
-                    _logger.LogWarning("[SYMBOL][BTC] Squeeze {pct}% → SHORT bias", btcSnapshotRaw.PriceChangePercent);
-                }
-            }
-
-            // === DYNAMIC CAP ===================================================
-            var dyn = _cfg.GetSection("SymbolSelection:DynamicCap");
-            var useDynCap = dyn.GetValue<bool?>("Enabled") ?? false;
-
-            var dynamicCap = finalCap;
-
-            if (useDynCap)
-            {
-                var low = dyn.GetValue<decimal?>("LowVolPct") ?? 1.2m;
-                var mid = dyn.GetValue<decimal?>("MidVolPct") ?? 2.5m;
-
-                var capLow = dyn.GetValue<int?>("CapLowVol") ?? finalCap;
-                var capMid = dyn.GetValue<int?>("CapMidVol") ?? finalCap;
-                var capHigh = dyn.GetValue<int?>("CapHighVol") ?? Math.Max(1, Math.Min(finalCap, 4));
-
-                if (btcVol <= low) dynamicCap = capLow;
-                else if (btcVol <= mid) dynamicCap = capMid;
-                else dynamicCap = capHigh;
-
-                dynamicCap = Math.Clamp(dynamicCap, 1, Math.Min(finalCap, topVolumeCount));
-            }
-            else
-            {
-                dynamicCap = Math.Clamp(finalCap, 1, topVolumeCount);
-            }
-
-            // === AI CAPS =======================================================
-            var longWr = _ai.GetWinRate(SignalSide.Buy);
-            var shortWr = _ai.GetWinRate(SignalSide.Sell);
-
-           
-            static int AiAdjust(int cap, decimal wr, bool isStartup)
-            {
-                if (isStartup)
-                    return cap; // 🔥 NO AI PENALTY ON STARTUP
-
-                if (wr < 0.35m) return Math.Max(1, cap - 2);
-                if (wr < 0.45m) return Math.Max(1, cap - 1);
-                return cap;
-            }
-            var aiCapLong = AiAdjust(dynamicCap, longWr, isStartup);
-            var aiCapShort = AiAdjust(dynamicCap, shortWr, isStartup);
-
-
-            // === SCORING =======================================================
-            var longSnaps = baseSnapshots
-    .Where(s => isStartup || _ai.GetRecentPnL(s.Symbol, SignalSide.Buy) > -0.15m)
-                .OrderByDescending(s =>
-                {
-                    var ai = Normalize(_ai.GetSymbolScore(s.Symbol, SignalSide.Buy), 0m, 1m);
-                    var mom = Normalize((decimal)Math.Abs(s.PriceChangePercent), 0m, momCap);
-                    return (ai * aiWeight + mom * momWeight) * btcBiasLong;
-                })
-                .ToList();
-
-            var shortSnaps = baseSnapshots
-      .Where(s => isStartup || _ai.GetRecentPnL(s.Symbol, SignalSide.Sell) > -0.15m)
-                  .OrderByDescending(s =>
-                {
-                    var ai = Normalize(_ai.GetSymbolScore(s.Symbol, SignalSide.Sell), 0m, 1m);
-                    var mom = Normalize((decimal)Math.Abs(s.PriceChangePercent), 0m, momCap);
-                    return (ai * aiWeight + mom * momWeight) * btcBiasShort;
-                })
-                .ToList();
-
-            var longCandidates = BlacklistFilter(_universeBuilder.Build(
-                longSnaps, pinned.ToArray(), topVolumeCount, minVolLong, minPrice));
-
-            var shortCandidates = BlacklistFilter(_universeBuilder.Build(
-                shortSnaps, pinned.ToArray(), topVolumeCount, minVolShort, minPrice));
-
-            var longList = ApplyStabilityGuardSide(lastGood.Long, longCandidates, maxAdds)
-                .Take(aiCapLong)
-                .ToList();
-
-            var shortList = ApplyStabilityGuardSide(lastGood.Short, shortCandidates, maxAdds)
-                .Take(aiCapShort)
-                .ToList();
-
-            var all = LimitUnion(
-                pinnedCfg,
-                pinnedPos,
-                longList,
-                shortList,
-                totalUniverseCap);
-
-            longList = longList.Where(s => all.Contains(s, StringComparer.OrdinalIgnoreCase)).ToList();
-            shortList = shortList.Where(s => all.Contains(s, StringComparer.OrdinalIgnoreCase)).ToList();
-
-            var bucket =
-                btcVol <= 1.2m ? "LOW" :
-                btcVol <= 2.5m ? "MID" : "HIGH";
-
-            _snapshot = new UniverseSnapshot(
+            return new UniverseSnapshot(
                 UtcTime: DateTime.UtcNow,
-                All: all,
-                Long: longList,
-                Short: shortList,
+                All: allFallback,
+                Long: allFallback,
+                Short: allFallback,
                 Pinned: pinnedCfg,
                 PinnedByPositions: pinnedPos,
                 DynamicCap: dynamicCap,
                 AiCapLong: aiCapLong,
                 AiCapShort: aiCapShort,
                 BtcVol: btcVol,
-                BtcVolBucket: bucket
+                BtcVolBucket: "FALLBACK-TOPVOLUME"
             );
-            _lastHardRefresh = DateTime.UtcNow;
-            _logger.LogInformation(
-                "[SYMBOL] Registry refresh: pinnedCfg={pc}, pinnedPos={pp}, long={lng}, short={sht}, total={tot}",
-                _snapshot.Pinned.Count,
-                _snapshot.PinnedByPositions.Count,
-                _snapshot.Long.Count,
-                _snapshot.Short.Count,
-                _snapshot.All.Count);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[SYMBOL] Refresh failed → rollback last-good universe");
-            _snapshot = lastGood;
         }
 
+        var longList = ApplyStabilityGuardSide(lastGood.Long, longCandidates, maxAdds)
+            .Take(aiCapLong)
+            .ToList();
+
+        var shortList = ApplyStabilityGuardSide(lastGood.Short, shortCandidates, maxAdds)
+            .Take(aiCapShort)
+            .ToList();
+
+        var all = LimitUnion(
+            pinnedCfg,
+            pinnedPos,
+            longList,
+            shortList,
+            totalUniverseCap);
+
+        longList = longList.Where(s => all.Contains(s, StringComparer.OrdinalIgnoreCase)).ToList();
+        shortList = shortList.Where(s => all.Contains(s, StringComparer.OrdinalIgnoreCase)).ToList();
+
+        var bucket = btcVol <= 1.2m ? "LOW" : btcVol <= 2.5m ? "MID" : "HIGH";
+
+        return new UniverseSnapshot(
+            UtcTime: DateTime.UtcNow,
+            All: all,
+            Long: longList,
+            Short: shortList,
+            Pinned: pinnedCfg,
+            PinnedByPositions: pinnedPos,
+            DynamicCap: dynamicCap,
+            AiCapLong: aiCapLong,
+            AiCapShort: aiCapShort,
+            BtcVol: btcVol,
+            BtcVolBucket: bucket
+        );
     }
+
 
     private void SoftHealthCheck()
     {
