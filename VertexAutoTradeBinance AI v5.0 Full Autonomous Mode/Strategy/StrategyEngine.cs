@@ -47,7 +47,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
         public event Action<TradeSignal>? OnSignalGenerated;
 
-
+        private readonly SignalConfidenceSettings _confidenceCfg;
 
         //fot UI
         public string CurrentMode { get; private set; } = "Detecting";
@@ -70,6 +70,9 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly TradingOptions _opt;
         private readonly TestModeOptions _test;
 
+        public decimal? Confidence { get; set; } // 0..1
+
+
         public StrategyEngine(
             ILogger<StrategyEngine> logger,
             AiCorrelationService correlationService,
@@ -80,7 +83,8 @@ namespace VertexAutoTradeBinance8.Strategy
             SmartRegimeService smartRegimeService,
             TradingOptions opt,
             TestModeOptions test,
-            EngineStateSnapshotService stateSvc, IDecisionTraceService decisionTrace, LiquidityGuardService liquidityGuardService)
+            EngineStateSnapshotService stateSvc, IDecisionTraceService decisionTrace, LiquidityGuardService liquidityGuardService
+            , SignalConfidenceSettings confidenceCfg)
         {
             _logger = logger;
             _correlationService = correlationService;
@@ -94,6 +98,7 @@ namespace VertexAutoTradeBinance8.Strategy
             _stateSvc = stateSvc;
             _decisionTrace = decisionTrace;
             _liquidityGuardService = liquidityGuardService;
+            _confidenceCfg = confidenceCfg;
 
             _logger.LogWarning(
     "[CONFIG][STRATEGY] Trading TF={tf} | TestMode={enabled} Level={level}",
@@ -569,7 +574,8 @@ namespace VertexAutoTradeBinance8.Strategy
                         entry - atr * tp1Mult,
                         entry - atr * tp2Mult,
                         entry - atr * tp3Mult
-                    }
+                    },
+
                 };
 
                 NormalizeEntryAndSl(s);
@@ -657,7 +663,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 Timeframe = interval.ToString(),
                 Reason = "SOFT_TREND_PROBE",
                 TakeProfits = new List<decimal> { tp1, tp2 },
-                IsSuperSignal = false
+                IsSuperSignal = false 
             };
 
             NormalizeEntryAndSl(s);
@@ -1631,12 +1637,13 @@ $@"📊 Режим рынка:
             }
         }
         private FastFailResult Gate2_Confidence(
-    SmartRegimeInfo smart,
-    bool lowerRegimeThreshold)
+      SmartRegimeInfo smart,
+      bool lowerRegimeThreshold)
         {
             if (smart.IsDangerChopZone)
                 return FastFailResult.Fail("CONF", "DangerChopZone");
 
+            // === ADAPTIVE PART (ОСТАЁТСЯ)
             int adaptiveThreshold = GetAdaptiveThreshold(
                 smart.BaseRegime,
                 smart.SmartType,
@@ -1655,45 +1662,42 @@ $@"📊 Режим рынка:
 
             bool fastTrendOverride = IsFastTrendOverride(smart);
 
-            _engineState.LastEntryDecision = "LOW_CONFIDENCE";
+            // === ENGINE STATE (UI / TRACE)
+            _engineState.LastEntryDecision = "CONF_CHECK";
             _engineState.ConfidenceRaw = smart.Confidence;
             _engineState.ConfidencePercent = (int)(smart.Confidence * 100);
+
             _engineState.ConfidenceLevel =
-                smart.Confidence >= 0.65m ? "HIGH" :
-                smart.Confidence >= 0.45m ? "MEDIUM" : "LOW";
+                smart.Confidence >= _confidenceCfg.Bands.HighFrom ? "HIGH" :
+                smart.Confidence >= _confidenceCfg.MinEntry ? "MEDIUM" :
+                                                                    "LOW";
 
+            // ======================================================
+            // 🔒 HARD FLOOR (PRODUCTION RULE)
+            // ======================================================
+            // НИКАКИХ входов < 46% — даже если adaptive разрешает
+            if (smart.Confidence < _confidenceCfg.MinEntry)
+            {
+                return FastFailResult.Fail(
+                    "CONF",
+                    $"confidence={smart.Confidence:P0}<min={_confidenceCfg.MinEntry:P0}");
+            }
 
+            // ======================================================
+            // ADAPTIVE CHECK (ТОЛЬКО ЕСЛИ ПРОШЛИ HARD FLOOR)
+            // ======================================================
             if (!fastTrendOverride && smart.Confidence < thrFrac - safetyBuffer)
+            {
                 return FastFailResult.Fail(
                     "CONF",
                     $"confidence={smart.Confidence:P0}<thr={adaptiveThreshold}% (buf={safetyBuffer:P0})");
+            }
 
             return FastFailResult.Ok();
         }
 
-        /*  private FastFailResult Gate2_Confidence(
-          SmartRegimeInfo smart,
-          bool lowerRegimeThreshold)
-          {
-              if (smart.IsDangerChopZone)
-                  return FastFailResult.Fail("CONF", "DangerChopZone");
 
-              int thr = GetAdaptiveThreshold(
-                  smart.BaseRegime,
-                  smart.SmartType,
-                  smart.VolatilityPercent,
-                  smart.TrendSlopePercent);
 
-              if (lowerRegimeThreshold)
-                  thr = Math.Max(20, (int)(thr * 0.8));
-
-              if (smart.Confidence < thr / 100m)
-                  return FastFailResult.Fail(
-                      "CONF",
-                      $"confidence={smart.Confidence:P0}<thr={thr}%");
-
-              return FastFailResult.Ok();
-          } */
 
         private FastFailResult Gate3_BaseSignal(
         string symbol,
@@ -1958,8 +1962,10 @@ $@"📊 Режим рынка:
             var r3 = Gate3_BaseSignal(symbol, interval, klines, smart, out baseSignal);
             trace.Gates.Add(r3);
 
+           
             if (baseSignal != null)
-            {
+            {  // 🔥 CRITICAL: фиксируем confidence НА ВХОДЕ
+                baseSignal.Confidence = smart.Confidence;
                 trace.Gates.Add(Gate4_RR(symbol, interval, baseSignal, smart, relaxRr));
                 trace.Gates.Add(Gate5_Pattern(symbol, interval, klines, baseSignal, relaxPatternBlock));
                 trace.Gates.Add(Gate6_Liquidity(baseSignal, smart, klines, interval, relaxLiquidity));

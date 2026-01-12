@@ -56,6 +56,13 @@ public class TradeSignal
     public decimal? Leverage { get; set; }
     public AiLearningTradeMeta? Meta { get; set; }
 
+    /// <summary>
+    /// Уверенность сигнала (0..1), вычисляется StrategyEngine (SmartRegime.Confidence)
+    /// Используется для динамического управления (Early TP / BE / Risk)
+    /// </summary>
+    public decimal? Confidence { get; set; }
+
+
     public decimal GetTpPart(int index)
     {
         // возвращает часть позиции для TP1 / TP2 / TP3

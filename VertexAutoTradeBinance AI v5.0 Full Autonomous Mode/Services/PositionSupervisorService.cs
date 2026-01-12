@@ -71,7 +71,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ConcurrentDictionary<string, long> _uiGuard = new();
         private readonly HedgeKillSettings _hedgeCfg;
 
-
+        private readonly SignalConfidenceSettings _confidenceCfg;
         private bool UiSpamGuard(string symbol, PositionSide side, string action, int ms = 2500)
         {
             var key = $"{symbol}|{side}|{action}";
@@ -99,7 +99,7 @@ namespace VertexAutoTradeBinance8.Services
             IOrderDispatcher dispatcher, EngineStateSnapshotService stateSvc,
             SmartRegimeService smartRegime,
             ReverseProbeEngine reverseProbe, OpenPositionSymbolTracker openPos,
-            IOptions<HedgeKillSettings> hedgeCfg)
+            IOptions<HedgeKillSettings> hedgeCfg, SignalConfidenceSettings confidenceCfg)
         {
             _logger = logger;
             _factory = factory;
@@ -118,6 +118,7 @@ namespace VertexAutoTradeBinance8.Services
             _reverseProbe = reverseProbe;
             _openPos = openPos;
             _hedgeCfg = hedgeCfg.Value;
+            _confidenceCfg = confidenceCfg;
         }
         private bool IsHedgeOnCooldown(string symbol)
         {
@@ -241,7 +242,7 @@ namespace VertexAutoTradeBinance8.Services
                         $"Supervisor: no positions (funding reset) [{symbol}]";
                 }
 
-                return;
+               // return;
             }
 
             // ✅ N4: keep tracker synced (idempotent)
@@ -1651,8 +1652,42 @@ namespace VertexAutoTradeBinance8.Services
             IReadOnlyList<BinanceFuturesUsdtKline> klines,
             CancellationToken ct)
         {
+           
+
+
             var c = klines[^1];
             var lastClose = c.ClosePrice; // для логов и wick/body
+ 
+ 
+            // =====================
+            // DYNAMIC EARLY TP (PRO)
+            // =====================
+            decimal earlyTpAtrMult =
+                _confidenceCfg.EarlyTpAtr.High; // default = 0.90
+
+            decimal confidence = signal?.Confidence ?? _confidenceCfg.MinEntry;
+
+            // Confidence уже ПРОВЕРЕН Gate2_Confidence
+            // здесь мы ТОЛЬКО ВЫБИРАЕМ МОДЕЛЬ УПРАВЛЕНИЯ
+
+            if (confidence < _confidenceCfg.Bands.HighFrom)
+            {
+                // 46–54%
+                earlyTpAtrMult = _confidenceCfg.EarlyTpAtr.Medium; // 0.75
+
+                EarlyTpTrace.Skip(
+                    _logger, symbol, side, entry, lastClose, atr,
+                    "CONFIDENCE_MEDIUM",
+                    $"conf={confidence:P0}, model=EARLY_TP_0.75");
+
+            }
+            else
+            {
+                EarlyTpTrace.Skip(
+                    _logger, symbol, side, entry, lastClose, atr,
+                    "CONFIDENCE_HIGH",
+                    $"conf={confidence:P0}, model=EARLY_TP_0.90");
+            }
             // Блокируем, если LiquidityGuard сигналит опасность (не лезем в рынок лишний раз)
             if (_liquidityGuard.LastDanger?.Block == true)
             {
@@ -1700,12 +1735,12 @@ namespace VertexAutoTradeBinance8.Services
             }
             bool reached =
  side == PositionSide.Long
-         ? hit >= entry + atr * 0.90m
-        : hit <= entry - atr * 0.90m;
+         ? hit >= entry + atr * earlyTpAtrMult
+        : hit <= entry - atr * earlyTpAtrMult;
 
             if (!reached)
             {
-                var need = atr * 0.90m;
+                var need = atr * earlyTpAtrMult;
                 EarlyTpTrace.Skip(
                     _logger, symbol, side, entry, lastClose, atr,
                     "ATR_NOT_REACHED",
@@ -1810,6 +1845,59 @@ namespace VertexAutoTradeBinance8.Services
                     _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
                     return;
                 }
+                bool isMediumConfidence =
+    confidence >= _confidenceCfg.MinEntry &&
+    confidence < _confidenceCfg.Bands.HighFrom;
+                // ==========================================================
+                // 🔴 MEDIUM CONFIDENCE → FULL EXIT AFTER EARLY TP
+                // ==========================================================
+                if (isMediumConfidence)
+                {
+                    _logger.LogWarning(
+                        "[EARLY-TP][{symbol}][{side}] MEDIUM CONFIDENCE → FULL EXIT conf={conf:P0}",
+                        symbol, side, confidence);
+
+                    var closeAllSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+                    var infoAll = await c.UsdFuturesApi.Account.GetPositionInformationAsync(ct: token);
+                    if (infoAll.Success && infoAll.Data != null)
+                    {
+                        var realAll = infoAll.Data.FirstOrDefault(p =>
+                            p.Symbol == symbol &&
+                            p.PositionSide == side);
+
+                        // 🛡️ HARD GUARD: Binance lag / already closed
+                        if (realAll == null || Math.Abs(realAll.Quantity) <= 0m)
+                        {
+                            _logger.LogWarning(
+                                "[EARLY-TP][{symbol}][{side}] FULL EXIT SKIPPED → position already closed",
+                                symbol, side);
+
+                            _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
+                            MarkProtection(symbol);
+                            return;
+                        }
+
+                        var qtyAll = Math.Abs(realAll.Quantity);
+
+                        await c.UsdFuturesApi.Trading.PlaceOrderAsync(
+                            symbol: symbol,
+                            side: closeAllSide,
+                            type: FuturesOrderType.Market,
+                            quantity: qtyAll,
+                            positionSide: side,
+                            ct: token);
+
+                        _logger.LogWarning(
+                            "[EARLY-TP][{symbol}][{side}] FULL EXIT DONE qty={qty}",
+                            symbol, side, qtyAll);
+                    }
+
+                    _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
+                    MarkProtection(symbol);
+                    return;
+                }
+ 
 
                 var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 _earlyTpDone[guardKey] = now;
@@ -1821,9 +1909,9 @@ namespace VertexAutoTradeBinance8.Services
             // 🔒 BLOCK HARVEST for 8 seconds after EARLY-TP
             //  _recentPartialClose[$"{symbol}|{side}"] = now;
 
-            _logger.LogWarning(
-                "[EARLY-TP][{symbol}][{side}] Partial profit fixed {closed}/{total} @price={price} (+0.9ATR)",
-                symbol, side, closeQty, qty, lastClose);
+            //_logger.LogWarning(
+            //    "[EARLY-TP][{symbol}][{side}] Partial profit fixed {closed}/{total} @price={price} (+0.9ATR)",
+            //    symbol, side, closeQty, qty, lastClose);
 
             // Optional learning hook
             try

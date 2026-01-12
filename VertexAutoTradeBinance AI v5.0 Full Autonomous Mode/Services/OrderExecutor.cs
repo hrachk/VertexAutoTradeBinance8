@@ -576,9 +576,7 @@ namespace VertexAutoTradeBinance8.Services
                     }
                 }
 
-                return OrderResult.Fail(reason);
-
-                return OrderResult.Fail(reason);
+                return OrderResult.Fail(reason); 
             }
 
 

@@ -9,142 +9,7 @@
 @inject AiLearningFileService AiLearnService
 @inject IJSRuntime JS
 @implements IAsyncDisposable
-
-@* <div class="ai-learn-container neural-bg">
-
-    <!-- === NEURAL TOP BAR === -->
-    <div class="neural-topbar">
-        <div class="neural-title">
-            🧠 AI Learning
-            <span class="neural-live">LIVE</span>
-        </div>
-
-        <div class="neural-kpis">
-            <div class="neural-kpi">Episodes <b>@_filtered.Count</b></div>
-            <div class="neural-kpi">Symbols <b>@_uniqueSymbols</b></div>
-            <div class="neural-kpi">
-                Last <b>@(_filtered.Count == 0 ? "-" : _filtered.Max(x => x.Time).ToLocalTime().ToString("HH:mm"))</b>
-            </div>
-            <div class="neural-kpi accent">
-                Avg Score <b>@(_filtered.Count == 0 ? "-" : _filtered.Average(x => x.Score).ToString("0.0"))</b>
-            </div>
-        </div>
-    </div>
-
-    <!-- === LEARNING CHART === -->
-    <div class="ai-section neural-card">
-        <div class="ai-section-title flex-between">
-            Learning Timeline
-            <button class="help-btn" @onclick="() => _showHelp = true">ℹ</button>
-        </div>
-
-        @if (_showHelp)
-        {
-            <div class="help-overlay" @onclick="() => _showHelp = false"></div>
-            <div class="help-modal">
-                <div class="help-header">
-                    <span>AI Learning — Chart Guide</span>
-                    <button class="help-close" @onclick="() => _showHelp = false">✕</button>
-                </div>
-                <div class="help-body ai-help-scroll">
-                    <p><b>Score</b> — общее качество рыночного состояния</p>
-                    <p><b>Confidence</b> — уверенность SmartRegime</p>
-                    <p><b>Slope</b> — сила импульса</p>
-                    <p><b>Volatility</b> — хаотичность рынка</p>
-                    <p><b>Liquidity Danger</b> — риск манипуляций</p>
-                </div>
-            </div>
-        }
-
-        <!-- Filters -->
-        <div class="ai-learn-filters">
-            <div class="ai-filter-group">
-                <span class="ai-filter-label">Period:</span>
-                <button class="@ChipClass(TimeFilter.Last24h)" @onclick="@(() => SetTimeFilter(TimeFilter.Last24h))">24h</button>
-                <button class="@ChipClass(TimeFilter.Last7d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last7d))">7d</button>
-                <button class="@ChipClass(TimeFilter.Last30d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last30d))">30d</button>
-                <button class="@ChipClass(TimeFilter.All)" @onclick="@(() => SetTimeFilter(TimeFilter.All))">All</button>
-            </div>
-
-            <div class="ai-filter-group">
-                <span class="ai-filter-label">Min Score</span>
-                <input type="range" min="0" max="100" step="5" @bind="_minScore" @bind:event="oninput" />
-                <span class="ai-filter-badge">@_minScore</span>
-            </div>
-
-            <div class="ai-filter-group">
-                <span class="ai-filter-label">Symbol</span>
-                <select value="@_selectedSymbol" @onchange="OnSymbolChanged">
-                    <option value="">All</option>
-                    @foreach (var s in _allSymbols)
-                    {
-                        <option value="@s">@s</option>
-                    }
-                </select>
-            </div>
-        </div>
-
-        <div class="chart-wrapper">
-            <canvas id="learningChart"></canvas>
-
-            @if (_chartPoints.Count == 0)
-            {
-                <div class="ai-empty-overlay">No data</div>
-            }
-        </div>
-    </div>
-
-    <!-- === REASONS === -->
-    <div class="ai-section neural-card">
-        <div class="ai-section-title">Top Learning Reasons</div>
-
-        @foreach (var r in _reasonStats)
-        {
-            <div class="ai-reason-row">
-                <div class="ai-reason-main">
-                    <div class="ai-reason-name">@r.Reason</div>
-                    <div class="ai-reason-meta">@r.Count events • Avg @r.AvgScore.ToString("0.0")</div>
-                </div>
-                <div class="ai-reason-bar-bg">
-                    <div class="ai-reason-bar-fill" style="width:@r.PercentOfMax%"></div>
-                </div>
-            </div>
-        }
-    </div>
-
-    <!-- === SYMBOL STATS === -->
-    <div class="ai-section neural-card">
-        <div class="ai-section-title">Top Symbols</div>
-
-        <table class="ai-table">
-            <thead>
-                <tr>
-                    <th>Symbol</th>
-                    <th>Episodes</th>
-                    <th>Score</th>
-                    <th>Conf</th>
-                    <th>Regime</th>
-                    <th>Smart</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var s in _symbolStats)
-                {
-                    <tr>
-                        <td>@s.Symbol</td>
-                        <td>@s.Count</td>
-                        <td>@s.AvgScore.ToString("0.0")</td>
-                        <td>@s.AvgConf.ToString("0.0")</td>
-                        <td>@s.TopRegime</td>
-                        <td>@s.TopSmartType</td>
-                    </tr>
-                }
-            </tbody>
-        </table>
-    </div>
-
-</div> *@
-
+ 
  
 <div class="ai-learning-root">
 
@@ -376,7 +241,7 @@
 
     private int _uniqueSymbols;
     private TimeFilter _timeFilter = TimeFilter.Last7d;
-    private int _minScore = 50;
+    private int _minScore = 45;
 
     private List<ReasonStat> _reasonStats = new();
     private List<SymbolStat> _symbolStats = new();

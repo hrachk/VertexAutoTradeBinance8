@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Options;
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using Serilog;
 using Serilog.Events;
 using VertexAutoTradeBinance8.Configuration;
@@ -90,6 +91,8 @@ public class Program
                     services.Configure<TradingOptions>(ctx.Configuration.GetSection("Trading"));
                     services.Configure<TestModeOptions>(ctx.Configuration.GetSection("TestMode"));
                     services.Configure<HedgeKillSettings>(ctx.Configuration.GetSection("HedgeKill"));
+                    services.Configure<SignalConfidenceSettings>(ctx.Configuration.GetSection("SignalConfidence"));
+                    
 
 
                     services.AddSingleton(sp =>
@@ -101,6 +104,8 @@ public class Program
                     services.AddSingleton(sp =>
                         sp.GetRequiredService<IOptions<HedgeKillSettings>>().Value);
 
+                    services.AddSingleton(sp =>
+                        sp.GetRequiredService<IOptions<SignalConfidenceSettings>>().Value);
 
                     services.AddHttpClient();
 

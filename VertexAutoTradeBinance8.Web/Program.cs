@@ -55,7 +55,7 @@ builder.Services.Configure<EngineConfigRoot>(
 
 builder.Services.AddSingleton<AiStopLossOptimizer>();
 builder.Services.AddSingleton<EngineRuntimeSettings>();
-builder.Services.AddSingleton<ConfigEditorService>();
+ 
 builder.Services.AddSingleton<ConfigAdvisorService>(); // ниже
 
 
