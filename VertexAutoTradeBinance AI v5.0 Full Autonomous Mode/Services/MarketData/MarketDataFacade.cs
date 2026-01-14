@@ -33,6 +33,10 @@ namespace VertexAutoTradeBinance8.Services
         private const int FastWarmBars = 10;
         private static readonly TimeSpan RestCooldown = TimeSpan.FromMinutes(1);
 
+        // === UNIVERSE SUBSCRIPTIONS ===
+        private readonly object _universeLock = new();
+        private HashSet<string> _universe = new(StringComparer.OrdinalIgnoreCase);
+
         public MarketDataFacade(
             MarketDataKlineBuffer buffer,
             WsKlineSubscriber ws,
@@ -56,6 +60,35 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================
         // SNAPSHOT READY (FINAL)
         // =====================================================
+
+        public void ApplyUniverse(IReadOnlyList<string> symbols)
+        {
+            if (symbols == null || symbols.Count == 0)
+                return;
+
+            var target = new HashSet<string>(
+                symbols.Select(s => s.Trim().ToUpperInvariant()),
+                StringComparer.OrdinalIgnoreCase);
+
+            lock (_universeLock)
+            {
+                var toAdd = target.Except(_universe).ToList();
+                if (toAdd.Count == 0)
+                    return;
+
+                foreach (var sym in toAdd)
+                {
+                    // КЛЮЧЕВО: подписываемся СРАЗУ
+                    _ = EnsureWsSubscribed(sym, KlineInterval.OneMinute, CancellationToken.None);
+                    _ = EnsureWsSubscribed(sym, KlineInterval.FiveMinutes, CancellationToken.None);
+
+                    _logger.LogInformation("[MD][UNIVERSE] subscribe {sym}", sym);
+                }
+
+                _universe = target;
+            }
+        }
+
         public void MarkSnapshotReady()
         {
             if (_readyBySnapshot)

@@ -41,7 +41,7 @@ public sealed class AiRuntimeDataProvider : IAsyncDisposable
                     .OrderByDescending(x => x.Time)
                     .Take(2)) // 1m + 5m (или самые свежие)
                 .OrderByDescending(x => x.Time)
-                .Take(100)
+                .Take(150)
                 .ToList();
 
             // 3) Trades — тоже нормализуем (последние, без мусора)

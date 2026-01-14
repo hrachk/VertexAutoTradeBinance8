@@ -50,9 +50,12 @@ public sealed class SymbolLiquidityScanner
                     var res = await client.UsdFuturesApi.ExchangeData.GetTickersAsync(ct);
                     if (res.Success && res.Data != null)
                     {
-                        var cap =
-                            _cfg.GetValue<int?>("SymbolSelection:Auto:ScannerTopLimit")
-                            ?? 60;
+                        var topVolumeCount = _cfg.GetValue<int?>("SymbolSelection:Auto:TopVolumeCount") ?? 60;
+
+                        // scanner должен иметь запас, иначе universe будет "липнуть" к pinned
+                        var cap = Math.Clamp(Math.Max(topVolumeCount * 2, 60), 40, 200);
+
+                       
 
                         var list = res.Data
                             .Where(t =>

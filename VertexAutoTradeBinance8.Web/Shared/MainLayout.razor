@@ -3,14 +3,18 @@
 
 <PageTitle>VERTEX AUTOTRADE AI</PageTitle>
 
-<!-- === MOBILE MENU BUTTON === -->
-<button class="menu-toggle" @onclick="ToggleMenu">☰</button>
-
 <header class="vertex-header">
     <div class="vertex-left">
-        <img src="images/vertexailogo.png" class="vertex-logo" alt="logo" />
-        <span class="vertex-title">VERTEX AUTOTRADE AI</span>
-        <span class="vertex-subtitle">Quant Engine v8</span>
+        <button class="menu-toggle" @onclick="ToggleMenu" aria-label="Menu">
+            <span class="burger"></span>
+        </button>
+
+        <img src="images/vertexailogo.png" class="vertex-logo" alt="Vertex" />
+
+        <div class="vertex-brand">
+            <div class="vertex-title">VERTEX AUTOTRADE AI</div>
+            <div class="vertex-subtitle">Quant Engine v8</div>
+        </div>
 
         <span class="client-badge">
             @Client.Id (@Client.Name)
@@ -18,20 +22,24 @@
     </div>
 
     <div class="vertex-right">
-        <span class="vertex-status-dot @(EngineStatus == "Running" ? "ok" : "bad")"></span>
-        <span class="vertex-status-text">@EngineStatus</span>
-        <span class="vertex-balance">Balance: @Balance USDT</span>
-        <span class="vertex-mode">Mode: @TradingMode</span>
+        <div class="status-pill">
+            <span class="vertex-status-dot @(EngineStatus == "Running" ? "ok" : "bad")"></span>
+            <span class="vertex-status-text">@EngineStatus</span>
+        </div>
+
+        <div class="meta-pill">
+            <span class="vertex-balance">@Balance USDT</span>
+            <span class="sep">•</span>
+            <span class="vertex-mode">@TradingMode</span>
+        </div>
     </div>
 </header>
 
-<!-- ===== APP BODY (CRITICAL FIX) ===== -->
 <div class="app-body">
-
     <div class="page">
-        <div class="sidebar @(ShowSidebar ? "sidebar-open" : "")">
+        <aside class="sidebar @(ShowSidebar ? "sidebar-open" : "")">
             <NavMenu />
-        </div>
+        </aside>
 
         @if (ShowSidebar)
         {
@@ -44,7 +52,6 @@
             </article>
         </main>
     </div>
-
 </div>
 
 @inject Microsoft.Extensions.Options.IOptions<ClientOptions> ClientOptions
@@ -57,6 +64,5 @@
     public string TradingMode { get; set; } = "Detecting...";
 
     private bool ShowSidebar;
-
     void ToggleMenu() => ShowSidebar = !ShowSidebar;
 }

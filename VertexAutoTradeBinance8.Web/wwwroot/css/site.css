@@ -18,14 +18,15 @@ a, .btn-link {
     border-color: #1861ac;
 }
 
-.btn:focus, .btn:active:focus, .btn-link.nav-link:focus, .form-control:focus, .form-check-input:focus {
-  box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
+.btn:focus,
+.btn:active:focus,
+.btn-link.nav-link:focus,
+.form-control:focus,
+.form-check-input:focus {
+    box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
 }
 
-.content {
-    padding-top: 1.1rem;
-}
-
+ 
 .valid.modified:not([type=checkbox]) {
     outline: 1px solid #26b050;
 }
@@ -42,9 +43,14 @@ a, .btn-link {
 .app-body {
     padding-top: var(--vertex-header-h);
     height: 100vh;
-    overflow: hidden;
+    overflow: hidden; /* ОСТАВЛЯЕМ */
 }
 
+/* 👇 НО sidebar должен скроллиться сам */
+.sidebar {
+    overflow-y: auto;
+}
+ 
 /* основной layout */
 .page {
     display: flex;
@@ -108,7 +114,7 @@ a, .btn-link {
     border: 1px solid #2b3139;
     padding: 12px 14px;
     border-radius: 12px;
-    height: 160px; /* одинаковая высота */
+    height: auto; /* одинаковая высота */
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -842,11 +848,25 @@ compact-card {
 }
 
 
+.sidebar {
+    position: fixed;
+    top: var(--vertex-header-h);
+    left: 0;
+    width: 240px;
+    height: calc(100vh - var(--vertex-header-h));
+    overflow-y: auto;
+    transform: translateX(-260px);
+    transition: transform 0.3s ease;
+    z-index: 2000;
+}
 
+    .sidebar.sidebar-open {
+        transform: translateX(0);
+    }
 /* === SIDEBAR NEW PRO STYLE === */
 .sidebar {
-    width: 230px;
-    height: 100vh;
+   
+   
     background: linear-gradient(180deg, #1a1f3c 0%, #0d0f1d 100%);
     padding-top: 25px;
     padding-left: 10px;
@@ -1224,20 +1244,8 @@ compact-card {
 
 /* ===== TOP HEADER ===== */
 
-
-
-.vertex-left {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-}
-
-.vertex-logo {
-    width: 34px;
-    height: 34px;
-    border-radius: 6px;
-    box-shadow: 0 0 12px rgba(140, 0, 255, 0.4);
-}
+ 
+ 
 
 .vertex-title {
     font-size: 20px;
@@ -1254,19 +1262,8 @@ compact-card {
 }
 
 /* STATUS */
-.vertex-right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
 
-.vertex-status-dot {
-    width: 12px;
-    height: 12px;
-    background: #6fff90;
-    border-radius: 50%;
-    box-shadow: 0px 0px 10px rgba(0, 255, 120, 0.6);
-}
+ 
 
 .vertex-status-text {
     font-size: 14px;
@@ -1275,76 +1272,111 @@ compact-card {
 
 
 /* header already fixed */
-.vertex-header {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: var(--vertex-header-h);
-    z-index: 1000;
-}
-
-
+ 
 .vertex-left {
     display: flex;
     align-items: center;
     gap: 14px;
 }
 
-.vertex-logo {
-    width: 34px;
-    height: 34px;
-    border-radius: 6px;
-    box-shadow: 0 0 12px rgba(140, 0, 255, 0.4);
+.vertex-brand {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.05;
 }
-
-.vertex-title {
-    font-size: 20px;
-    font-weight: 700;
-}
+ 
 
 .vertex-subtitle {
-    font-size: 13px;
-    opacity: 0.5;
-    color: #b57aff;
+    font-size: 12px;
+    opacity: 0.6;
+    margin-top: 2px;
 }
+ 
+.vertex-logo {
+    width: 50px;
+    height: 50px;
+    border-radius: 10px;
+    box-shadow: 0 0 14px rgba(140, 0, 255, 0.45);
+}
+    .vertex-logo:hover {
+        transform: scale(1.05);
+        box-shadow: 0 0 18px rgba(160, 120, 255, 0.6), 0 0 36px rgba(120, 80, 255, 0.35);
+    }
 
 .vertex-right {
+    margin-left: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+}
+
+.vertex-status-box {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    padding: 6px 12px;
+    border-radius: 10px;
+    background: rgba(20, 22, 30, 0.55);
+    border: 1px solid rgba(120, 130, 255, 0.25);
+    backdrop-filter: blur(6px);
+    box-shadow: 0 0 12px rgba(80, 90, 255, 0.25);
+}
+
+@media (max-width: 1024px) {
+
+    .sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        transform: translateX(-260px);
+        z-index: 2000;
+        width: 240px;
+        height: calc(100vh - var(--vertex-header-h));
+        margin-top: var(--vertex-header-h);
+        overflow-y: auto;
+        background: linear-gradient(180deg, #0a0a50, #020050);
+        box-shadow: 4px 0 12px rgba(0,0,0,0.4);
+    }
+
+    .sidebar-open {
+        transform: translateX(0);
+    }
+
+    .menu-toggle {
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.12);
+        color: #d0dfff;
+        font-size: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+        .menu-toggle:hover {
+            background: rgba(140,110,255,0.18);
+        }
+}
+
+.vertex-status-line {
     display: flex;
     align-items: center;
-    gap: 18px;
-}
-
-.vertex-status-dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-}
-
-    .vertex-status-dot.ok {
-        background: #27e86c;
-        box-shadow: 0px 0px 10px rgba(39, 232, 108, 0.5);
-    }
-
-    .vertex-status-dot.bad {
-        background: #ff4f4f;
-        box-shadow: 0px 0px 10px rgba(255, 0, 0, 0.5);
-    }
-
-.vertex-status-text {
-    opacity: 0.85;
-}
-
-.vertex-balance {
-    font-size: 14px;
+    gap: 6px;
+    font-size: 13px;
     font-weight: 600;
-    color: #cda6ff;
 }
 
-.vertex-mode {
-    font-size: 14px;
+.vertex-meta-line {
+    display: flex;
+    gap: 10px;
+    font-size: 12px;
     opacity: 0.85;
 }
+  
 /*ENGINE DASHBOARD*/
 .engine-container {
     padding: 20px;
@@ -2035,4 +2067,253 @@ compact-card {
     border-radius: 6px;
     font-size: 12px;
     font-weight: 600;
+}
+.vertex-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
+
+    .vertex-status-dot.ok {
+        background: #27e86c;
+        box-shadow: 0 0 10px rgba(39, 232, 108, 0.5);
+    }
+
+    .vertex-status-dot.bad {
+        background: #e82727;
+        box-shadow: 0 0 10px rgba(232, 39, 39, 0.5);
+    }
+
+.vertex-balance {
+    color: #d4d6ff;
+    font-weight: 600;
+}
+
+.vertex-mode {
+    color: #9ca3ff;
+}
+
+
+
+
+
+:root {
+   // --header-h: 64px;
+    --sidebar-w: 260px;
+}
+
+/* ==== HEADER ==== */
+.vertex-header {
+    position: sticky;
+    top: 0;
+    z-index: 2000;
+    height: var(--header-h);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    background: rgba(6, 10, 18, 0.78);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.vertex-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.vertex-brand {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.05;
+    min-width: 0;
+}
+
+.vertex-title {
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    font-size: 16px;
+    white-space: nowrap;
+}
+
+.vertex-subtitle {
+    font-size: 12px;
+    opacity: 0.75;
+    white-space: nowrap;
+}
+
+/* Logo - аккуратно и крупнее */
+.vertex-logo {
+    width: 38px;
+    height: 38px;
+    object-fit: contain;
+    border-radius: 10px;
+    filter: drop-shadow(0 0 10px rgba(140, 70, 255, 0.35));
+}
+
+/* Burger */
+.menu-toggle {
+    width: 42px;
+    height: 42px;
+    border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(255,255,255,0.06);
+    border-radius: 12px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+    .menu-toggle:hover {
+        background: rgba(255,255,255,0.10);
+    }
+
+    .menu-toggle .burger,
+    .menu-toggle .burger::before,
+    .menu-toggle .burger::after {
+        content: "";
+        width: 18px;
+        height: 2px;
+        background: rgba(255,255,255,0.85);
+        display: block;
+        border-radius: 2px;
+        position: relative;
+    }
+
+        .menu-toggle .burger::before {
+            position: absolute;
+            top: -6px;
+            left: 0;
+        }
+
+        .menu-toggle .burger::after {
+            position: absolute;
+            top: 6px;
+            left: 0;
+        }
+
+/* Client badge */
+.client-badge {
+    margin-left: 10px;
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: rgba(255, 196, 0, 0.10);
+    border: 1px solid rgba(255, 196, 0, 0.28);
+    color: rgba(255, 220, 120, 0.95);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+/* Right side pills */
+.vertex-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    white-space: nowrap;
+}
+
+.status-pill,
+.meta-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(255,255,255,0.06);
+}
+
+.vertex-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    box-shadow: 0 0 10px rgba(255,255,255,0.10);
+}
+
+    .vertex-status-dot.ok {
+        background: #2bdc7f;
+        box-shadow: 0 0 12px rgba(43,220,127,0.35);
+    }
+
+    .vertex-status-dot.bad {
+        background: #ff4d4f;
+        box-shadow: 0 0 12px rgba(255,77,79,0.35);
+    }
+
+.vertex-status-text {
+    font-size: 12px;
+    opacity: 0.92;
+}
+
+.vertex-balance {
+    font-size: 12px;
+    opacity: 0.95;
+}
+
+.vertex-mode {
+    font-size: 12px;
+    opacity: 0.75;
+}
+
+.meta-pill .sep {
+    opacity: 0.35;
+}
+
+/* ==== BODY LAYOUT ==== */
+.app-body {
+    /* если header sticky — offset НЕ нужен, но оставим защиту */
+    min-height: calc(100vh - var(--header-h));
+}
+
+.page {
+    display: flex;
+    min-height: calc(100vh - var(--header-h));
+}
+
+/* Sidebar desktop */
+.sidebar {
+    width: var(--sidebar-w);
+    flex: 0 0 var(--sidebar-w);
+}
+
+/* Main */
+.main-content {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* ==== Mobile overlay sidebar ==== */
+@media (max-width: 980px) {
+    .sidebar {
+        position: fixed;
+        top: var(--header-h);
+        left: 0;
+        height: calc(100vh - var(--header-h));
+        transform: translateX(-102%);
+        transition: transform 160ms ease;
+        z-index: 2500;
+        box-shadow: 0 10px 60px rgba(0,0,0,0.55);
+    }
+
+        .sidebar.sidebar-open {
+            transform: translateX(0);
+        }
+
+    .sidebar-backdrop {
+        position: fixed;
+        inset: var(--header-h) 0 0 0;
+        background: rgba(0,0,0,0.45);
+        z-index: 2400;
+    }
+
+    .client-badge {
+        display: none;
+    }
+    /* чтобы не ломало */
+    .meta-pill {
+        display: none;
+    }
+    /* можно оставить только status */
 }

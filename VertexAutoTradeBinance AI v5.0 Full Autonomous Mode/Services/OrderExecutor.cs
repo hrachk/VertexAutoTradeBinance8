@@ -54,6 +54,24 @@ namespace VertexAutoTradeBinance8.Services
             _ai = ai;
         }
 
+        private static decimal NormalizeToStep(decimal value, decimal step)
+        {
+            if (step <= 0) return value;
+            return Math.Floor(value / step) * step;
+        }
+
+        private static decimal NormalizeToTick(decimal price, decimal tick)
+        {
+            if (tick <= 0) return price;
+
+            // количество знаков по tick (0.01 => 2, 0.0001 => 4)
+            var decimals = BitConverter.GetBytes(decimal.GetBits(tick)[3])[2];
+            var rounded = Math.Round(price, decimals, MidpointRounding.ToZero);
+
+            // финально прижать к сетке
+            return NormalizeToStep(rounded, tick);
+        }
+
         // =====================================================================
         // MAIN ENTRY
         // =====================================================================
@@ -356,7 +374,27 @@ namespace VertexAutoTradeBinance8.Services
             // TODO: inject ISymbolFreezeController or AiSelfLearning DecisionGates and hard veto here.
             // if (_symbolFreeze.IsFrozen(signal.Symbol)) { ... return Fail("SymbolFrozen"); }
 
+            var orderPrice = allowMarketEntry ? lastPrice : aggrLimitPrice;
+            var orderNotional = quantity * orderPrice;
 
+            if (!allowMarketEntry && filters.minNotional > 0 && orderNotional < filters.minNotional)
+            {
+                var reason = $"MinNotionalAtOrderPrice:{orderNotional:F4}<{filters.minNotional:F4}";
+                _logger.LogWarning("[ORDER][{symbol}] BLOCK {reason} | qty={qty} price={price}",
+                    signal.Symbol, reason, quantity, orderPrice);
+
+                _executedSignalService.UpdateStatus(signal.Symbol, execTime, TradeExecutionStatus.Blocked, 0, 0);
+                return OrderResult.Fail(reason);
+            }
+
+            quantity = NormalizeToStep(quantity, step);
+
+            entryPrice = NormalizeToTick(entryPrice, tick);
+            aggrLimitPrice = NormalizeToTick(aggrLimitPrice, tick);
+            signal.StopLoss = NormalizeToTick(signal.StopLoss, tick);
+
+            if (signal.TakeProfit.HasValue)
+                signal.TakeProfit = NormalizeToTick(signal.TakeProfit.Value, tick);
 
             // =====================================================================
             // 1) ENTRY (LIMIT) — БЕЗ reduceOnly
@@ -377,23 +415,16 @@ namespace VertexAutoTradeBinance8.Services
 
             if (!entryRes.Success || entryRes.Data == null)
             {
-                var reason = "EntryError";
+                var code = entryRes.Error?.Code;
+                var msg = entryRes.Error?.Message ?? "Unknown";
+                var reason = code.HasValue ? $"EntryError:{code}:{msg}" : $"EntryError:{msg}";
 
-                var missed = await _simulator.SimulateMissedTradeAsync(signal, reason);
+                _logger.LogError("[ORDER][{symbol}] ENTRY ERROR | {reason}", signal.Symbol, reason);
 
-                _logger.LogError(
-                    "[ORDER][{symbol}] ENTRY ERROR → missed recorded | err={err}",
-                    signal.Symbol, entryRes.Error);
+                await _simulator.SimulateMissedTradeAsync(signal, reason);
 
-              _executedSignalService.UpdateStatus(
-                symbol: signal.Symbol,
-                time: execTime,
-                status: TradeExecutionStatus.Blocked,
-                qty: 0,
-                notional: 0
-                     );
-
-                return OrderResult.Fail(entryRes.Error?.Message ?? reason);
+                _executedSignalService.UpdateStatus(signal.Symbol, execTime, TradeExecutionStatus.Blocked, 0, 0);
+                return OrderResult.Fail(reason);
             }
 
 

@@ -3,23 +3,8 @@
     height: 234px;" />
  *@
  
-<div class="@NavMenuCssClass nav-scrollable" @onclick="ToggleNavMenu">
+<div class="nav-scrollable">
     <nav class="flex-column">
-        @* <div class="nav-item px-3">
-            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                <span class="oi oi-home" aria-hidden="true"></span> Home
-            </NavLink>
-        </div> *@
-       @*  <div class="nav-item px-3">
-            <NavLink class="nav-link" href="counter">
-                <span class="oi oi-plus" aria-hidden="true"></span> Counter
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="fetchdata">
-                <span class="oi oi-list-rich" aria-hidden="true"></span> Fetch data
-            </NavLink>
-        </div> *@
         <div class="nav-item px-3">
             <NavLink class="nav-link" href="/engine">
                 <span class="oi oi-dashboard"></span> Engine Dashboard
@@ -38,7 +23,6 @@
                 Market
             </NavLink>
         </div>
-       
 
         <div class="nav-item px-3">
           <NavLink class="nav-link" href="ai-dashboard" Match="NavLinkMatch.All">
@@ -47,51 +31,22 @@
         </div>
 
         <div class="nav-item px-3">
-           
-                <NavLink class="nav-link" href="ai-learning" Match="NavLinkMatch.All">
-                    <span class="oi oi-home" aria-hidden="true"></span> AI LEARNING
-                </NavLink>
-            
+         <NavLink class="nav-link" href="ai-learning" Match="NavLinkMatch.All">
+             <span class="oi oi-home" aria-hidden="true"></span> AI LEARNING
+         </NavLink>
        </div>
 
-        @* <div class="nav-item px-3">
-            <li class="nav-item px-3">
-                <NavLink class="nav-link" href="ai-marketheatmap" Match="NavLinkMatch.All">
-                    <span class="oi oi-graph" aria-hidden="true"></span> AI Market
-                </NavLink>
-            </li>
-        </div> *@
         <div class="nav-item px-3">
-           
-                <NavLink class="nav-link" href="missed-trades" Match="NavLinkMatch.All">
-                    <span class="oi oi-graph" aria-hidden="true"></span> Signals
-                </NavLink>
-            
+         <NavLink class="nav-link" href="missed-trades" Match="NavLinkMatch.All">
+             <span class="oi oi-graph" aria-hidden="true"></span> Signals
+         </NavLink>
         </div>
        
         <div class="nav-item px-3">
-
-            <NavLink class="nav-link" href="positions" Match="NavLinkMatch.All">
-                <span class="oi oi-graph" aria-hidden="true"></span>Positions
-            </NavLink>
-
+          <NavLink class="nav-link" href="positions" Match="NavLinkMatch.All">
+              <span class="oi oi-graph" aria-hidden="true"></span>Positions
+          </NavLink>
         </div>
-      @*   <li class="nav-item px-3">
-            <NavLink class="nav-link" href="executed-signals" Match="NavLinkMatch.All">
-                <span class="oi oi-list-rich" aria-hidden="true"></span> Executed Signals
-            </NavLink>
-        </li> *@
-
-
     </nav>
 </div>
-@code {
-    private bool collapseNavMenu = true;
-
-    private string? NavMenuCssClass => collapseNavMenu ? "collapse" : null;
-
-    private void ToggleNavMenu()
-    {
-        collapseNavMenu = !collapseNavMenu;
-    }
-}
+ 

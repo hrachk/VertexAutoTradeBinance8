@@ -24,7 +24,7 @@ public class SymbolRegistryService
 
     // Atomically swapped snapshot
     private volatile UniverseSnapshot _snapshot = UniverseSnapshot.Empty();
-
+    public event Action<IReadOnlyList<string>>? UniverseChanged;
     public sealed record SymbolRegistrySnapshotDto(
     DateTime UtcTime,
     IReadOnlyList<string> All,
@@ -83,7 +83,17 @@ public class SymbolRegistryService
         );
     }
 
+    private void PublishUniverseIfChanged(IReadOnlyList<string> newAll)
+    {
+        var old = _snapshot.All;
 
+        // сравнение по множеству (без порядка)
+        if (old.Count == newAll.Count &&
+            old.All(s => newAll.Contains(s, StringComparer.OrdinalIgnoreCase)))
+            return;
+
+        UniverseChanged?.Invoke(newAll);
+    }
     private record UniverseSnapshot(
         DateTime UtcTime,
         IReadOnlyList<string> All,
@@ -173,23 +183,38 @@ public class SymbolRegistryService
 
             // ✅ Canonical: manual может быть пустым (если конфиг пустой), но это осознанно
             _snapshot = new UniverseSnapshot(
-                UtcTime: DateTime.UtcNow,
-                All: all,
-                Long: all,
-                Short: all,
-                Pinned: pinnedCfg,
-                PinnedByPositions: pinnedPos,
-                DynamicCap: all.Count,
-                AiCapLong: all.Count,
-                AiCapShort: all.Count,
-                BtcVol: 0m,
-                BtcVolBucket: "MANUAL"
-            );
+            UtcTime: DateTime.UtcNow,
+            All: all,
+            Long: all,
+            Short: all,
+            Pinned: pinnedCfg,
+            PinnedByPositions: pinnedPos,
+            DynamicCap: all.Count,
+            AiCapLong: all.Count,
+            AiCapShort: all.Count,
+            BtcVol: 0m,
+            BtcVolBucket: "MANUAL"
+        );
+
+            // ⛔ НЕ публикуем пустой universe
+            if (_snapshot.All.Count > 0)
+            {
+                PublishUniverseIfChanged(_snapshot.All);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "[SYMBOL] Manual mode produced EMPTY universe → NOT published");
+            }
 
             _logger.LogInformation("[SYMBOL] Manual mode: {cnt} → {list}",
                 _snapshot.All.Count, string.Join(", ", _snapshot.All));
             return;
         }
+
+        _logger.LogInformation("[SYMBOL] Manual mode: {cnt} → {list}",
+        _snapshot.All.Count,
+        _snapshot.All.Count > 0 ? string.Join(", ", _snapshot.All) : "<empty>"); 
 
         var refreshMinutes = _cfg.GetValue<int?>("SymbolSelection:Auto:RefreshInterval") ?? 10;
         var now = DateTime.UtcNow;
@@ -220,21 +245,22 @@ public class SymbolRegistryService
             // =========================================================
             var built = await BuildUniverseSnapshotHardAsync(ct);
 
-            // ✅ Hard refresh success gate: only commit if non-empty
+            // commit only if non-empty
             if (built.All.Count > 0)
             {
-                _snapshot = built;
+                _snapshot = built;              
                 _lastHardRefresh = now;
+                PublishUniverseIfChanged(_snapshot.All);
 
                 _logger.LogInformation(
-                    "[SYMBOL] Registry refresh: pinnedCfg={pc}, pinnedPos={pp}, long={lng}, short={sht}, total={tot}, bucket={bucket}",
+                    "[SYMBOL] Registry refresh: pinnedCfg={pc}, pinnedPos={pp}, long={lng}, short={sht}, total={tot}, btcVol={btc}",
                     _snapshot.Pinned.Count,
                     _snapshot.PinnedByPositions.Count,
                     _snapshot.Long.Count,
                     _snapshot.Short.Count,
                     _snapshot.All.Count,
-                    _snapshot.BtcVolBucket);
-
+                    _snapshot.BtcVolBucket
+                );
                 return;
             }
 
@@ -275,6 +301,7 @@ public class SymbolRegistryService
                 All = merged,
                 PinnedByPositions = pinnedPos
             };
+            PublishUniverseIfChanged(_snapshot.All);
         }
         catch (Exception ex)
         {
@@ -292,6 +319,17 @@ public class SymbolRegistryService
         var pinnedCfg = BlacklistFilter(GetPinnedSymbols());
         var pinnedPos = await GetPinnedByOpenPositionsSafeAsync(ct);
         var pinned = pinnedCfg.Concat(pinnedPos).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+        // =====================================================
+        // HARD FLOOR: Universe cap MUST be >= pinned (+1 если хочешь всегда 1 новый)
+        // =====================================================
+        var pinnedCount = pinned.Count;
+
+        // Если хочешь гарантированно 1 новый символ поверх pinned:
+        var minUniverse = Math.Min(totalUniverseCap, Math.Max(pinnedCount + 1, pinnedCount));
+
+        // Если хочешь просто "не ниже pinned":
+        // var minUniverse = Math.Min(totalUniverseCap, Math.Max(pinnedCount, 1));
 
         var topVolumeCount = auto.GetValue<int?>("TopVolumeCount") ?? 60;
 
@@ -350,6 +388,30 @@ public class SymbolRegistryService
             (DateTime.UtcNow - _ai.StartedUtc) < TimeSpan.FromMinutes(15);
 
         // Dynamic cap (как у тебя было)
+        //var dyn = _cfg.GetSection("SymbolSelection:DynamicCap");
+        //var useDynCap = dyn.GetValue<bool?>("Enabled") ?? false;
+        //var dynamicCap = finalCap;
+
+        //if (useDynCap)
+        //{
+        //    var low = dyn.GetValue<decimal?>("LowVolPct") ?? 1.2m;
+        //    var mid = dyn.GetValue<decimal?>("MidVolPct") ?? 2.5m;
+
+        //    var capLow = dyn.GetValue<int?>("CapLowVol") ?? finalCap;
+        //    var capMid = dyn.GetValue<int?>("CapMidVol") ?? finalCap;
+        //    var capHigh = dyn.GetValue<int?>("CapHighVol") ?? Math.Max(1, Math.Min(finalCap, 4));
+
+        //    if (btcVol <= low) dynamicCap = capLow;
+        //    else if (btcVol <= mid) dynamicCap = capMid;
+        //    else dynamicCap = capHigh;
+
+        //    dynamicCap = Math.Clamp(dynamicCap, 1, Math.Min(finalCap, topVolumeCount));
+        //}
+        //else
+        //{
+        //    dynamicCap = Math.Clamp(finalCap, 1, topVolumeCount);
+        //}
+        // Dynamic cap (как у тебя было)
         var dyn = _cfg.GetSection("SymbolSelection:DynamicCap");
         var useDynCap = dyn.GetValue<bool?>("Enabled") ?? false;
         var dynamicCap = finalCap;
@@ -367,12 +429,22 @@ public class SymbolRegistryService
             else if (btcVol <= mid) dynamicCap = capMid;
             else dynamicCap = capHigh;
 
+            // 1) базовый clamp (как было)
             dynamicCap = Math.Clamp(dynamicCap, 1, Math.Min(finalCap, topVolumeCount));
         }
         else
         {
             dynamicCap = Math.Clamp(finalCap, 1, topVolumeCount);
         }
+
+        // =====================================================
+        // 🔒 HARD FLOOR (FINAL): никогда не ниже pinned(+1)
+        // =====================================================
+        dynamicCap = Math.Max(dynamicCap, minUniverse);
+
+        // И страховка: dynamicCap не может быть больше totalUniverseCap
+        dynamicCap = Math.Min(dynamicCap, totalUniverseCap);
+
 
         // AI caps
         var longWr = _ai.GetWinRate(SignalSide.Buy);
@@ -389,6 +461,8 @@ public class SymbolRegistryService
         var aiCapLong = AiAdjust(dynamicCap, longWr, isStartup);
         var aiCapShort = AiAdjust(dynamicCap, shortWr, isStartup);
 
+        aiCapLong = Math.Max(aiCapLong, minUniverse);
+        aiCapShort = Math.Max(aiCapShort, minUniverse);
         // =====================================================
         // SCORING
         // =====================================================
@@ -467,6 +541,13 @@ public class SymbolRegistryService
         shortList = shortList.Where(s => all.Contains(s, StringComparer.OrdinalIgnoreCase)).ToList();
 
         var bucket = btcVol <= 1.2m ? "LOW" : btcVol <= 2.5m ? "MID" : "HIGH";
+
+        _logger.LogInformation(
+  "[UNIVERSE] pinned={pinned} dynCap={dyn} aiL={aiL} aiS={aiS} longCand={lc} shortCand={sc} long={l} short={s} all={a} bucket={b}",
+  pinned.Count, dynamicCap, aiCapLong, aiCapShort,
+  longCandidates.Count, shortCandidates.Count,
+  longList.Count, shortList.Count, all.Count, bucket
+);
 
         return new UniverseSnapshot(
             UtcTime: DateTime.UtcNow,

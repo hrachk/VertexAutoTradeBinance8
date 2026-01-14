@@ -135,6 +135,16 @@ namespace VertexAutoTradeBinance8
 
             await _symbols.LoadAsync(ct);
 
+
+            // APPLY UNIVERSE TO MARKET DATA
+            _marketDataFacade.ApplyUniverse(_symbols.ActiveSymbols);
+
+            // REACT TO FUTURE CHANGES
+            _symbols.UniverseChanged += syms =>
+            {
+                _marketDataFacade.ApplyUniverse(syms);
+            };
+
             try
             {
                 await _marketDataFacade.RestoreSnapshotStateAsync(ct);
@@ -324,7 +334,7 @@ namespace VertexAutoTradeBinance8
                 var symbols = res.Data
                     .Where(p => p != null && !string.IsNullOrWhiteSpace(p.Symbol) && p.Quantity != 0m)
                     .Select(p => p.Symbol.Trim().ToUpperInvariant())
-                    .Where(s => !string.Equals(s, "AIAUSDT", StringComparison.OrdinalIgnoreCase))
+                   // .Where(s => !string.Equals(s, "AIAUSDT", StringComparison.OrdinalIgnoreCase))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
 
