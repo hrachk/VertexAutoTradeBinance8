@@ -108,3 +108,74 @@ C:\Tools\nssm.exe remove Engine_Client_001 confirm
 
 C:\Tools\nssm.exe stop Engine_Client_001
 C:\Tools\nssm.exe start Engine_Client_001
+
+
+
+
+
+ private record UniverseSnapshot(
+        DateTime UtcTime,
+        IReadOnlyList<string> All,
+        IReadOnlyList<string> Long,
+        IReadOnlyList<string> Short,
+        IReadOnlyList<string> Pinned,
+        IReadOnlyList<string> PinnedByPositions,
+        int DynamicCap,
+        int AiCapLong,
+        int AiCapShort,
+        decimal BtcVol,
+        string BtcVolBucket)
+    {
+        public static UniverseSnapshot Empty() => new(
+            DateTime.MinValue,
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            0, 0, 0,
+            0m, "NA");
+    }
+
+    private static decimal Normalize(decimal value, decimal min, decimal max)
+    {
+        if (max <= min) return 0.5m;
+        return Math.Clamp((value - min) / (max - min), 0m, 1m);
+    }
+
+    private static IReadOnlyList<string> BlacklistFilter(IEnumerable<string> symbols)
+        => symbols.Where(s => !string.Equals(s, "AIAUSDT", StringComparison.OrdinalIgnoreCase)).ToList();
+
+    private static IReadOnlyList<string> NormalizeSymbols(IEnumerable<string> symbols)
+        => symbols
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim().ToUpperInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private static IReadOnlyList<string> LimitUnion(
+       IEnumerable<string> pinnedCfg,
+       IEnumerable<string> pinnedByPos,
+       IEnumerable<string> longs,
+       IEnumerable<string> shorts,
+       int totalCap)
+    {
+        var pinCfg = NormalizeSymbols(pinnedCfg);
+        var pinPos = NormalizeSymbols(pinnedByPos); // Открытые позиции
+
+        // 1. Позиции — абсолютный приоритет, не учитываются в лимите totalCap
+        var result = new List<string>(pinPos);
+
+        // 2. Добавляем Pinned из конфига, если есть место до totalCap
+        var otherCandidates = pinCfg
+            .Concat(NormalizeSymbols(longs))
+            .Concat(NormalizeSymbols(shorts))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(s => !result.Contains(s, StringComparer.OrdinalIgnoreCase));
+
+        // Заполняем до totalCap, но pinPos уже там (даже если их > totalCap)
+        int slotsForOthers = Math.Max(0, totalCap - result.Count);
+        result.AddRange(otherCandidates.Take(slotsForOthers));
+
+        return result.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }

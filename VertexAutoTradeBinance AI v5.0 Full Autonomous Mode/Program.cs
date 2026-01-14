@@ -213,8 +213,7 @@ public class Program
                   
                     services.AddSingleton<PredictiveEngineV4ConfirmationService>();                  
                                          
-
-                    services.AddSingleton<SymbolRegistryService>();
+ 
                     services.AddSingleton<AiTimeframeSelectorService>();                 
                   
                     services.AddSingleton<IOrderDispatcher, OrderDispatcher>();
