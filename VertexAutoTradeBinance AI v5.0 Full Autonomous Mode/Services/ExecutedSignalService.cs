@@ -71,7 +71,16 @@ namespace VertexAutoTradeBinance8.Services
             {
                 EnsureFileExists();
 
-                var json = File.ReadAllText(_filePath);
+                string json;
+
+                using var fs = new FileStream(
+                    _filePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite);
+
+                using var sr = new StreamReader(fs);
+                json = sr.ReadToEnd();
                 if (string.IsNullOrWhiteSpace(json))
                 {
                     File.WriteAllText(_filePath, "[]");

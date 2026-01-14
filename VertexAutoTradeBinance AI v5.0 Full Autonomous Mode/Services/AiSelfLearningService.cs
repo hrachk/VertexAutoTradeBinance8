@@ -226,78 +226,9 @@ namespace VertexAutoTradeBinance8.Services
             Load();
             // 🔥 ГАРАНТИЯ: хотя бы один валидный snapshot после старта
             ForceSnapshot();
-
-            /*
-            // 2) Потом подгружаем missed_trades.json и учимся на них БЕЗ снапшотов
-            var missed = LoadMissedTradesFromFile();
-
-            missed = missed
-                .GroupBy(x => $"{x.Symbol}-{x.Time:O}-{x.Reason}")
-                .Select(g => g.First())
-                .ToList();
-
-            foreach (var m in missed)
-                LearnFromMissedTrade(m);   // внутри будет skipSnapshot = true
-
-            _logger.LogInformation("[AI] Loaded and trained on {Count} missed trades.", missed.Count);
-
-            // 3) Один финальный снапшот (обновляем файл с учётом старых + новых данных)
-            ForceSnapshot();
-            */
+ 
         }
-
-        /*
-        private List<MissedTradeRecord> LoadMissedTradesFromFile()
-        {
-            var path = Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
-
-            if (!File.Exists(path))
-                return new List<MissedTradeRecord>();
-
-            try
-            {
-                var json = File.ReadAllText(path);
-                var list = JsonSerializer.Deserialize<List<MissedTradeRecord>>(json);
-
-                return list ?? new List<MissedTradeRecord>();
-            }
-            catch
-            {
-                _logger.LogError("Failed to load missed_trades.json");
-                return new List<MissedTradeRecord>();
-            }
-        }
-       
-        private void LearnFromMissedTrade(MissedTradeRecord r)
-        {
-            try
-            {
-                RecordMarketStateTriggered(
-                    reason: r.Reason,
-                    symbol: r.Symbol,
-                    timeframe: "MissedTrade",
-                    regime: ParseMarketRegime(r.Regime),
-                    slope: r.Slope,
-                    volatility: r.Vol,
-                    atr: r.Atr,
-                    confidence: r.Confidence,
-                    skipSnapshot: true   // 🔥 НЕ СНАПШОТИМ В КОНСТРУКТОРЕ
-                );
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[AI] Failed to learn from missed trade.");
-            }
-        }
-        */
-        private MarketRegime ParseMarketRegime(string regime)
-        {
-            if (Enum.TryParse<MarketRegime>(regime, out var parsed))
-                return parsed;
-
-            return MarketRegime.Unknown;  // запасной вариант
-        }
-
+         
 
         // =====================================================================
         // MODELS
@@ -892,24 +823,17 @@ namespace VertexAutoTradeBinance8.Services
 
                 try
                 {
-                    var tmpPath = FilePath + ".tmp";
-                    if (File.Exists(tmpPath))
-                        File.Delete(tmpPath);
+                    SaveSnapshotAtomic(json);
 
-                    File.WriteAllText(tmpPath, json, Encoding.UTF8);
-                    File.Move(tmpPath, FilePath, overwrite: true);
-
-                    var backupDir = Path.GetDirectoryName(BackupPath);
-                    if (!string.IsNullOrWhiteSpace(backupDir))
-                        Directory.CreateDirectory(backupDir);
-
-                    File.Copy(FilePath, BackupPath, overwrite: true);
-
-                    saved = true;
+                    _logger.LogInformation(
+                        "[AI] Snapshot saved OK → symbols={Symbols}, states={States}, trades={Trades}",
+                        snapshot.Meta.Symbols,
+                        snapshot.Meta.MarketStates,
+                        snapshot.Meta.Trades);
                 }
-                catch (Exception ioEx)
+                catch (Exception ex)
                 {
-                    _logger.LogError(ioEx, "[AI] SAVE IO ERROR");
+                    _logger.LogError(ex, "[AI] SAVE ERROR (atomic)");
                 }
 
                 if (saved)
@@ -925,7 +849,41 @@ namespace VertexAutoTradeBinance8.Services
             {
                 _logger.LogError(ex, "[AI] SAVE ERROR");
             }
-        } 
+        }
+
+        private static readonly Mutex _saveMutex =
+    new(false, "Global\\VERTEX_AI_LEARNING_SAVE");
+
+        private void SaveSnapshotAtomic(string json)
+        {
+            var tmpPath = FilePath + ".tmp";
+            var backupPath = BackupPath;
+
+            _saveMutex.WaitOne();
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+                Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
+
+                File.WriteAllText(tmpPath, json, Encoding.UTF8);
+
+                if (File.Exists(FilePath))
+                {
+                    // 🔒 ATOMIC replace
+                    File.Replace(tmpPath, FilePath, backupPath, ignoreMetadataErrors: true);
+                }
+                else
+                {
+                    File.Move(tmpPath, FilePath);
+                    File.Copy(FilePath, backupPath, overwrite: true);
+                }
+            }
+            finally
+            {
+                _saveMutex.ReleaseMutex();
+            }
+        }
+
 
         private void Load()
         {
@@ -954,7 +912,17 @@ namespace VertexAutoTradeBinance8.Services
                 }
 
                 AiLearningSnapshot? snap = null;
-                var json = File.ReadAllText(FilePath);
+                string json;
+
+                using (var fs = new FileStream(
+                    FilePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite))   // 🔥 КЛЮЧ
+                using (var sr = new StreamReader(fs))
+                {
+                    json = sr.ReadToEnd();
+                }
                 _logger.LogInformation("[AI] File read successfully: {FilePath}", FilePath);
 
                 try
