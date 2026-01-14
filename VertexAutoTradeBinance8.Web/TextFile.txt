@@ -8,7 +8,6 @@ ExecutedSignalService		- BaseDirectory, "executed_signals.json");
 Armen Gevorgyan- test
 Ключ API
 mmsfbBOxHuy62Lo3xLIpt9sA0bwvId8njz4OGmYTYzmejz7VqRLOLyamQNds86eZ
-
 Секретный ключ:
 4YHCD6weHNjkZwDMPqKR9XQkce0FcHHQugxReLThUOLj96PJy5XEAg8iOrN7aCkk
 
@@ -20,61 +19,7 @@ Shahen
 WztkkdMs7ykcnEZ8bpQgcbz8Po19E5XQkP0131vkNgZjSx3rDaQ7sTxzqgkR7hEp
 Секретный ключ:
 lAyOcVCw4ohWkRvBZdYZscmF2Ps7GR5f0q8BJnAzz8ya8Vvw7KcSJtsYWrGLadsE
-
-
-ETHUSDT,
-BTCUSDT, 
-ALPACAUSDT, 
-BTCUSDC, 
-ETHUSDC, 
-SOLUSDT,
-ZECUSDT, 
-BEATUSDT,
-PIPPINUSDT, 
-SQDUSDT, 
-
-TRXUSDT, 
-FILUSDT, 
-CHZUSDT, 
-LINKUSDT, 
-DOTUSDT, 
-XRPUSDT, 
-DOGEUSDT, 
-DOGSUSDT, 
-ADAUSDT, 
-SHIBUSDT, 
-BNBUSDT, 
-AVAXUSDT, 
-MANAUSDT,
-AXSUSDT, 
-UNIUSDT, 
-DASHUSDT, 
-GMXUSDT, 
-IOTAUSDT, 
-ALGOUSDT, 
-BICOUSDT, 
-ILVUSDT, 
-ARKMUSDT, 
-ANKRUSDT,
-IMXUSDT,
-WIFUSDT, 
-FETUSDT, 
-CFXUSDT, 
-ONTUSDT, 
-EDUUSDT, 
-SSVUSDT, 
-APEUSDT, 
-ICPUSDT, 
-RONINUSDT, 
-SEIUSDT, 
-WUSDT, 
-WOOUSDT, 
-TRUUSDT, 
-LDOUSDT, 
-STXUSDT, 
-ENAUSDT, 
-NEOUSDT, 
-NFPUSDT
+ 
 
 install_service_client_001.bat   1 client
 
@@ -110,7 +55,7 @@ C:\Tools\nssm.exe stop Engine_Client_001
 C:\Tools\nssm.exe start Engine_Client_001
 
 
-
+C:\Tools\nssm.exe install Engine_Client_001 C:\Vertex\Engines\client_001\VertexAutoTradeBinance8.exe
 
 
  private record UniverseSnapshot(
