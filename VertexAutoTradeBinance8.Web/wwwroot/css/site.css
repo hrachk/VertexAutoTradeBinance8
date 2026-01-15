@@ -1287,14 +1287,14 @@ compact-card {
  
 
 .vertex-subtitle {
-    font-size: 12px;
+    font-size: 15px;
     opacity: 0.6;
     margin-top: 2px;
 }
  
 .vertex-logo {
-    width: 50px;
-    height: 50px;
+    width: 157px;
+    height: 162px;
     border-radius: 10px;
     box-shadow: 0 0 14px rgba(140, 0, 255, 0.45);
 }

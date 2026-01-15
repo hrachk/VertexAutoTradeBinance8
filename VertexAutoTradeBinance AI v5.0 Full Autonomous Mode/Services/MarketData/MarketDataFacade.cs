@@ -331,6 +331,13 @@ namespace VertexAutoTradeBinance8.Services
                     var got = _buf.GetLast(symbol, tf, need);
                     _barsAvailable[key] = Math.Max(_barsAvailable.TryGetValue(key, out var prev) ? prev : 0, got.Count);
 
+                    if (tf is KlineInterval.OneHour or KlineInterval.FourHour or KlineInterval.OneDay or KlineInterval.OneWeek)
+                    {
+                        _logger.LogDebug(
+                            "[MD][HTF] request {symbol} {tf} readyBySnapshot={ready}",
+                            symbol, tf, _readyBySnapshot);
+                    }
+                     
                     return got;
                 }
                 finally

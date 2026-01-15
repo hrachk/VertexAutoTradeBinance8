@@ -159,6 +159,20 @@ namespace VertexAutoTradeBinance8
                 await Task.Delay(sleepMs.Value, ct);
         }
 
+        private async Task WarmupHtfAsync(
+           IReadOnlyList<string> symbols,
+           CancellationToken ct)
+        {
+            foreach (var s in symbols)
+            {
+                await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneHour, 60, ct);
+                await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FourHour, 60, ct);
+                await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneDay, 60, ct);
+                await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneHour, 60, ct);
+
+                _logger.LogInformation("[MD][HTF] warmup {symbol} 1H/4H/1D/1H", s);
+            }
+        }
 
         protected override async Task ExecuteAsync(CancellationToken ct)
         {
@@ -166,31 +180,36 @@ namespace VertexAutoTradeBinance8
             await _bootGate.WaitReadyAsync(ct);
             _logger.LogWarning("[WORKER] BootGate READY");
 
+            // 1) LOAD SYMBOLS (universe)
             if (DateTime.UtcNow - _lastUniverseRefreshUtc > UniverseRefreshPeriod)
             {
                 await _symbols.LoadAsync(ct);
                 _lastUniverseRefreshUtc = DateTime.UtcNow;
             }
 
-
-            // APPLY UNIVERSE TO MARKET DATA
+            // 2) APPLY UNIVERSE → WS subscriptions (1m/5m/15m)
             _marketDataFacade.ApplyUniverse(_symbols.ActiveSymbols);
 
-            // REACT TO FUTURE CHANGES
             _symbols.UniverseChanged += syms =>
             {
                 _marketDataFacade.ApplyUniverse(syms);
             };
 
+            // 3) RESTORE SNAPSHOT (authoritative if exists)
             try
             {
                 await _marketDataFacade.RestoreSnapshotStateAsync(ct);
-                _marketDataFacade.MarkSnapshotReady();
+                // ❗ НЕ ВЫЗЫВАТЬ MarkSnapshotReady() вручную
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[WORKER] Market snapshot restore failed");
+            }
 
+            // 4) BIND STRATEGY AFTER MARKETDATA READY
             _strategy.BindReactive(_marketDataFacade);
 
+            // 5) TRACK SYMBOLS (runtime set)
             var startupCap = _options.StartupSubscriptionCap > 0
                 ? _options.StartupSubscriptionCap
                 : 8;
@@ -198,16 +217,26 @@ namespace VertexAutoTradeBinance8
             foreach (var s in _symbols.ActiveSymbols.Take(startupCap))
                 TrackSymbol(s, keepAlive: true);
 
+            // 6) 🔥 HTF WARMUP (CRITICAL)
+            await WarmupHtfAsync(_symbols.ActiveSymbols, ct);
+
+            // 7) WARMUP LTF (1m/5m buffers)
             await WarmupMarketDataForTrackedAsync(ct);
+
+            // 8) ENABLE HEDGE
             await EnableHedgeMode();
 
+            // 9) LOAD AI SNAPSHOT
             try
             {
                 var snap = await _snapshot.LoadLatestAsync(ct);
                 if (snap != null)
                     _learn.ImportState(snap);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[WORKER] AI snapshot import failed");
+            }
 
             _logger.LogWarning("TradingWorker QUANT-REALTIME STARTED");
 

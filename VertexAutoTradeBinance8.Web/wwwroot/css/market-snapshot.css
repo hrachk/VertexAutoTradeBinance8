@@ -56,7 +56,7 @@
     padding: 6px;
     display: flex;
     flex-direction: column;
-    height: 100%;
+    height: 400pt;
     min-height: 220px; /* 🔥 чтобы canvas не был 0px */
 }
 

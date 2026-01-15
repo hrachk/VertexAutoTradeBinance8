@@ -193,13 +193,7 @@ namespace VertexAutoTradeBinance8.Services
         // === PnL HALF-LIFE CONFIG ===
         private static readonly TimeSpan PnlHalfLife = TimeSpan.FromDays(30); // 30d = 0.5
         private static readonly decimal MinPnlWeight = 0.05m;
-
-        // каждые N минут уверенность слегка затухает
-        private readonly TimeSpan ConfidenceHalfLife = TimeSpan.FromHours(45);
-
-        // минимальная уверенность (чтобы AI не "ослеп")
-        private const decimal MinConfidenceFloor = 0.22m;
-      
+ 
         public AiSelfLearningService(ILogger<AiSelfLearningService> logger )
         {
             
