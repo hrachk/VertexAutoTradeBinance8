@@ -59,19 +59,24 @@ namespace VertexAutoTradeBinance8.Services
             if (step <= 0) return value;
             return Math.Floor(value / step) * step;
         }
-
-        private static decimal NormalizeToTick(decimal price, decimal tick)
+ 
+        private static int DecimalsFromStep(decimal step)
         {
-            if (tick <= 0) return price;
-
-            // количество знаков по tick (0.01 => 2, 0.0001 => 4)
-            var decimals = BitConverter.GetBytes(decimal.GetBits(tick)[3])[2];
-            var rounded = Math.Round(price, decimals, MidpointRounding.ToZero);
-
-            // финально прижать к сетке
-            return NormalizeToStep(rounded, tick);
+            var s = step.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var i = s.IndexOf('.');
+            return i < 0 ? 0 : s.Length - i - 1;
         }
 
+        private static decimal Quantize(decimal value, decimal step)
+        {
+            if (step <= 0) return value;
+
+            var decimals = DecimalsFromStep(step);
+            var rounded = Math.Floor(value / step) * step;
+
+            // 🔒 КЛЮЧ: финальное округление ПО КОЛ-ВУ ЗНАКОВ
+            return Math.Round(rounded, decimals, MidpointRounding.ToZero);
+        }
         // =====================================================================
         // MAIN ENTRY
         // =====================================================================
@@ -87,7 +92,16 @@ namespace VertexAutoTradeBinance8.Services
             var step = filters.step <= 0 ? 0.0001m : filters.step;
 
             // Округление количества
-            quantity = Math.Floor(quantity / step) * step;
+            quantity = Quantize(quantity, step);
+
+            if (quantity < filters.minQty)
+            {
+                _logger.LogWarning(
+                    "[ORDER][{symbol}] qty<{minQty} after quantize → BLOCK",
+                    signal.Symbol, filters.minQty);
+
+                return OrderResult.Fail("QTY_TOO_SMALL");
+            }
             if (quantity <= 0)
             {
                 var reason = signal.RejectReason ?? "RiskRejected";
@@ -151,7 +165,7 @@ namespace VertexAutoTradeBinance8.Services
             var side = signal.Side == SignalSide.Buy ? OrderSide.Buy : OrderSide.Sell;
             var posSide = signal.Side == SignalSide.Buy ? PositionSide.Long : PositionSide.Short;
 
-            decimal entryPrice = Round(signal.EntryPrice, tick);
+            decimal entryPrice = Quantize(signal.EntryPrice, tick);
 
             // ===== current price for execution tuning =====
             decimal lastPrice = 0m;
@@ -174,13 +188,13 @@ namespace VertexAutoTradeBinance8.Services
             {
                 // BUY: чтобы гарантировать fill лимитом, цена должна быть >= текущей
                 var p = lastPrice * (1m + AGGR_LIMIT_OFFSET_PCT);
-                aggrLimitPrice = Round(Math.Max(entryPrice, p), tick);
+                aggrLimitPrice = Quantize(Math.Max(entryPrice, p), tick);
             }
             else
             {
                 // SELL: чтобы гарантировать fill лимитом, цена должна быть <= текущей
                 var p = lastPrice * (1m - AGGR_LIMIT_OFFSET_PCT);
-                aggrLimitPrice = Round(Math.Min(entryPrice, p), tick);
+                aggrLimitPrice = Quantize(Math.Min(entryPrice, p), tick);
             }
 
             // =============================================================
@@ -389,12 +403,30 @@ namespace VertexAutoTradeBinance8.Services
 
             quantity = NormalizeToStep(quantity, step);
 
-            entryPrice = NormalizeToTick(entryPrice, tick);
-            aggrLimitPrice = NormalizeToTick(aggrLimitPrice, tick);
-            signal.StopLoss = NormalizeToTick(signal.StopLoss, tick);
+            entryPrice = Quantize(signal.EntryPrice, tick);
+            aggrLimitPrice = Quantize(aggrLimitPrice, tick);
+            signal.StopLoss = Quantize(signal.StopLoss, tick);
+
+            if (signal.StopLoss > 0)
+                signal.StopLoss = Quantize(signal.StopLoss, tick);
 
             if (signal.TakeProfit.HasValue)
-                signal.TakeProfit = NormalizeToTick(signal.TakeProfit.Value, tick);
+                signal.TakeProfit = Quantize(signal.TakeProfit.Value, tick);
+
+             
+
+            var entryType = allowMarketEntry ? FuturesOrderType.Market : FuturesOrderType.Limit;
+
+            _logger.LogInformation(
+                "[ORDER][{symbol}] EntryMode={mode} smart={smart} base={baseReg} impulse={imp} rrOk={rrOk} liqSafe={liqSafe}",
+                signal.Symbol,
+                allowMarketEntry ? "MARKET" : "LIMIT",
+                smart.SmartType,
+                smart.BaseRegime,
+                hasImpulse,
+                rrOk,
+                liquiditySafe
+            );
 
             // =====================================================================
             // 1) ENTRY (LIMIT) — БЕЗ reduceOnly
@@ -405,7 +437,7 @@ namespace VertexAutoTradeBinance8.Services
                 //type: allowMarketEntry ? FuturesOrderType.Market : FuturesOrderType.Limit,
                 //quantity: quantity,
                 //price: allowMarketEntry ? null : entryPrice,
-                type: allowMarketEntry ? FuturesOrderType.Market : FuturesOrderType.Limit,
+                type: entryType,
                 quantity: quantity,
                 price: allowMarketEntry ? null : aggrLimitPrice,
                 positionSide: posSide,
@@ -650,9 +682,9 @@ namespace VertexAutoTradeBinance8.Services
 
             if (atr > 0)
             {
-                sl = Round(sl, tick);
+                sl = Quantize(sl, tick);
                 if (tp > 0)
-                    tp = Round(tp, tick);
+                    tp = Quantize(tp, tick);
             }
 
             _executedSignalService.UpdateProtectionComputed(
@@ -896,17 +928,7 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogError(exFinal, "[ORDER][{symbol}] Fatal in WaitForPositionOrOrderAsync", signal.Symbol);
                 return (false, 0m, 0m, "WaitFatalError");
             }
-        }
-
-
-        // =====================================================================
-        // ROUND UTIL
-        // =====================================================================
-        private static decimal Round(decimal value, decimal tick)
-        {
-            return Math.Round(value / tick) * tick;
-        }
-
+        } 
         private static bool IsImpulse(
         IReadOnlyList<BinanceFuturesUsdtKline> klines,
         decimal atr,

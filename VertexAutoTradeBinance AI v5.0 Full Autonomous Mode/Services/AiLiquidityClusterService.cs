@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using VertexAutoTradeBinance8.Models;
+using Binance.Net.Enums;
 
 namespace VertexAutoTradeBinance8.Services
 {
@@ -12,16 +13,16 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ILogger<AiLiquidityClusterService> _logger;
         private readonly MarketDataService _marketData;
 
-        // Порог по объёму кластера (в USDT), чтобы считать его "значимым".
+        // Порог по объёму кластера (в USDT)
         private const decimal ClusterNotionalThreshold = 50_000m;
 
-        // Порог дисбаланса, при котором считаем ситуацию опасной.
+        // Порог дисбаланса
         private const decimal ImbalanceDangerThreshold = 0.75m;
 
-        // Максимальное расстояние (в процентах) от entry до "стены", чтобы заблокировать вход.
+        // Макс. расстояние до стены, чтобы блокировать вход
         private const decimal MaxDistancePctToBlockEntry = 0.0015m; // 0.15%
 
-        // Насколько дальше за кластер уводить стоп (в процентах).
+        // Насколько дальше за кластер уводить стоп
         private const decimal StopBeyondClusterPct = 0.0007m; // 0.07%
 
         private const int DefaultDepth = 50;
@@ -35,21 +36,68 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         /// <summary>
-        /// Высокоуровневая точка входа: фильтруем и при необходимости корректируем сигнал.
-        /// Если ситуация опасная → возвращаем null.
-        /// Иначе можем немного поправить StopLoss (за кластер) и Entry.
+        /// Backward-compatible sync wrapper.
+        /// ВАЖНО: в production лучше вызывать async-версию из StrategyEngine,
+        /// но этот метод оставляем чтобы не ломать текущие вызовы.
         /// </summary>
         public TradeSignal? FilterAndAdjust(TradeSignal signal)
         {
-            var snapshot = _marketData
-                .GetOrderBookAsync(signal.Symbol, DefaultDepth)
+            // Do NOT use .Result. This still blocks, but avoids AggregateException wrapping.
+            // Prefer async path in new code.
+            return FilterAndAdjustAsync(signal, CancellationToken.None)
+                .ConfigureAwait(false)
                 .GetAwaiter()
                 .GetResult();
+        }
+
+        public async Task<TradeSignal?> FilterAndAdjustAsync(TradeSignal signal, CancellationToken ct)
+        {
+            OrderBookSnapshot? snapshot = null;
+
+            try
+            {
+                snapshot = await _marketData.GetOrderBookAsync(signal.Symbol, DefaultDepth)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "LiquidityCluster: depth fetch failed for {symbol} → soft-pass", signal.Symbol);
+                return signal; // fail-safe: do not block trade due to depth errors
+            }
 
             if (snapshot == null)
             {
-                _logger.LogWarning("LiquidityCluster: no depth for {symbol} → skip filter", signal.Symbol);
+                _logger.LogDebug("LiquidityCluster: no depth for {symbol} → soft-pass", signal.Symbol);
                 return signal;
+            }
+
+            // Validate book
+            if (snapshot.Bids == null || snapshot.Asks == null || snapshot.Bids.Count == 0 || snapshot.Asks.Count == 0)
+            {
+                _logger.LogDebug("LiquidityCluster: empty depth for {symbol} → soft-pass", signal.Symbol);
+                return signal;
+            }
+
+            // Ensure bestBid/bestAsk sane
+            var bestBid = snapshot.Bids[0].price;
+            var bestAsk = snapshot.Asks[0].price;
+
+            if (bestBid <= 0m || bestAsk <= 0m || bestAsk < bestBid)
+            {
+                // book may be unsorted or stale; try fallback by sorting shallowly
+                var bids = snapshot.Bids.OrderByDescending(x => x.price).ToList();
+                var asks = snapshot.Asks.OrderBy(x => x.price).ToList();
+
+                if (bids.Count == 0 || asks.Count == 0)
+                    return signal;
+
+                bestBid = bids[0].price;
+                bestAsk = asks[0].price;
+
+                if (bestBid <= 0m || bestAsk <= 0m || bestAsk < bestBid)
+                    return signal;
+
+                snapshot = new OrderBookSnapshot(snapshot.Symbol, bids, asks, snapshot.Timestamp);
             }
 
             var analysis = AnalyzeInternal(signal, snapshot);
@@ -57,30 +105,31 @@ namespace VertexAutoTradeBinance8.Services
             if (analysis.IsDangerZone)
             {
                 _logger.LogInformation(
-                    "LiquidityCluster: DANGER for {symbol} side={side}, reason={reason}, imbalance={imbalance:F2}",
+                    "LiquidityCluster: DANGER for {symbol} side={side}, reason={reason}, imbalance={imb:F2}",
                     signal.Symbol, signal.Side, analysis.Reason ?? "n/a", analysis.Imbalance);
 
-                // Блокируем вход — считаем, что стакан с высокой вероятностью ведёт к стоп-ханту.
                 return null;
             }
 
-            // Мягкая корректировка SL/Entry, если найдены значимые кластеры.
+            // Apply adjustments (only if meaningful)
             if (analysis.SuggestedStopLoss is decimal newSl)
             {
-                _logger.LogInformation(
-                    "LiquidityCluster: adjust SL for {symbol} {old} → {new}",
-                    signal.Symbol, signal.StopLoss, newSl);
-
-                signal.StopLoss = newSl;
+                if (newSl > 0m && newSl != signal.StopLoss)
+                {
+                    _logger.LogInformation("LiquidityCluster: adjust SL for {symbol} {old} → {new}",
+                        signal.Symbol, signal.StopLoss, newSl);
+                    signal.StopLoss = newSl;
+                }
             }
 
             if (analysis.SuggestedEntry is decimal newEntry)
             {
-                _logger.LogInformation(
-                    "LiquidityCluster: adjust Entry for {symbol} {old} → {new}",
-                    signal.Symbol, signal.EntryPrice, newEntry);
-
-                signal.EntryPrice = newEntry;
+                if (newEntry > 0m && newEntry != signal.EntryPrice)
+                {
+                    _logger.LogInformation("LiquidityCluster: adjust Entry for {symbol} {old} → {new}",
+                        signal.Symbol, signal.EntryPrice, newEntry);
+                    signal.EntryPrice = newEntry;
+                }
             }
 
             return signal;
@@ -102,29 +151,41 @@ namespace VertexAutoTradeBinance8.Services
 
             var bestBid = depth.Bids[0].price;
             var bestAsk = depth.Asks[0].price;
+            if (bestBid <= 0m || bestAsk <= 0m)
+                return result;
+
             var mid = (bestBid + bestAsk) / 2m;
+            if (mid <= 0m)
+                return result;
 
-            // 1) Суммарный нотионал и дисбаланс
-            decimal bidNotional = 0;
-            foreach (var (price, qty) in depth.Bids)
-                bidNotional += price * qty;
+            // 1) Total notionals + imbalance
+            decimal bidNotional = 0m;
+            for (int i = 0; i < depth.Bids.Count; i++)
+            {
+                var (price, qty) = depth.Bids[i];
+                if (price > 0m && qty > 0m) bidNotional += price * qty;
+            }
 
-            decimal askNotional = 0;
-            foreach (var (price, qty) in depth.Asks)
-                askNotional += price * qty;
+            decimal askNotional = 0m;
+            for (int i = 0; i < depth.Asks.Count; i++)
+            {
+                var (price, qty) = depth.Asks[i];
+                if (price > 0m && qty > 0m) askNotional += price * qty;
+            }
 
             result.BidNotional = bidNotional;
             result.AskNotional = askNotional;
 
             var total = bidNotional + askNotional;
-            if (total > 0)
+            if (total > 0m)
                 result.Imbalance = (bidNotional - askNotional) / total;
 
-            // 2) Поиск кластеров
-            var clusters = new List<LiquidityCluster>();
+            // 2) Find clusters
+            var clusters = new List<LiquidityCluster>(capacity: 16);
 
-            foreach (var (price, qty) in depth.Bids)
+            for (int i = 0; i < depth.Bids.Count; i++)
             {
+                var (price, qty) = depth.Bids[i];
                 var notional = price * qty;
                 if (notional < ClusterNotionalThreshold)
                     continue;
@@ -143,8 +204,9 @@ namespace VertexAutoTradeBinance8.Services
                 });
             }
 
-            foreach (var (price, qty) in depth.Asks)
+            for (int i = 0; i < depth.Asks.Count; i++)
             {
+                var (price, qty) = depth.Asks[i];
                 var notional = price * qty;
                 if (notional < ClusterNotionalThreshold)
                     continue;
@@ -165,12 +227,11 @@ namespace VertexAutoTradeBinance8.Services
 
             result.Clusters = clusters;
 
-            // 3) Проверка "стены" рядом с entry в сторону против сигнала
-            if (clusters.Count > 0)
+            // 3) Wall near entry (against the signal)
+            if (clusters.Count > 0 && signal.EntryPrice > 0m)
             {
                 if (signal.Side == SignalSide.Buy)
                 {
-                    // ищем ближайший крупный ASK выше entry (стена сверху)
                     var nearestAsk = clusters
                         .Where(c => c.Side == LiquidityClusterSide.Ask && c.Price >= signal.EntryPrice)
                         .OrderBy(c => c.Price)
@@ -189,7 +250,6 @@ namespace VertexAutoTradeBinance8.Services
                 }
                 else if (signal.Side == SignalSide.Sell)
                 {
-                    // ищем ближайший крупный BID ниже entry
                     var nearestBid = clusters
                         .Where(c => c.Side == LiquidityClusterSide.Bid && c.Price <= signal.EntryPrice)
                         .OrderByDescending(c => c.Price)
@@ -208,51 +268,46 @@ namespace VertexAutoTradeBinance8.Services
                 }
             }
 
-            // 4) Дисбаланс стакана как общий риск-фактор
+            // 4) Imbalance danger
             if (Math.Abs(result.Imbalance) > ImbalanceDangerThreshold)
             {
-                // Сильный перекос → часто признак агрессивного выноса/сброса
                 result.IsDangerZone = true;
                 result.Reason = $"Orderbook imbalance={result.Imbalance:F2} > {ImbalanceDangerThreshold:F2}";
                 return result;
             }
 
-            // 5) Мягкая коррекция стопа относительно кластеров
-            if (clusters.Count > 0)
+            // 5) Soft SL adjustment
+            if (clusters.Count > 0 && signal.EntryPrice > 0m && signal.StopLoss > 0m)
             {
                 if (signal.Side == SignalSide.Buy)
                 {
-                    // ищем крупный BID между SL и entry → ставим стоп ЧУТЬ ниже кластера
                     var support = clusters
-                        .Where(c =>
-                            c.Side == LiquidityClusterSide.Bid &&
-                            c.Price < signal.EntryPrice &&
-                            c.Price > signal.StopLoss)
+                        .Where(c => c.Side == LiquidityClusterSide.Bid &&
+                                    c.Price < signal.EntryPrice &&
+                                    c.Price > signal.StopLoss)
                         .OrderByDescending(c => c.Notional)
                         .FirstOrDefault();
 
                     if (support != null)
                     {
                         var newSl = support.Price * (1m - StopBeyondClusterPct);
-                        if (newSl < signal.StopLoss)
+                        if (newSl > 0m && newSl < signal.StopLoss)
                             result.SuggestedStopLoss = newSl;
                     }
                 }
                 else if (signal.Side == SignalSide.Sell)
                 {
-                    // ищем крупный ASK между entry и SL → ставим стоп чуть выше стенки
                     var resistance = clusters
-                        .Where(c =>
-                            c.Side == LiquidityClusterSide.Ask &&
-                            c.Price > signal.EntryPrice &&
-                            c.Price < signal.StopLoss)
+                        .Where(c => c.Side == LiquidityClusterSide.Ask &&
+                                    c.Price > signal.EntryPrice &&
+                                    c.Price < signal.StopLoss)
                         .OrderByDescending(c => c.Notional)
                         .FirstOrDefault();
 
                     if (resistance != null)
                     {
                         var newSl = resistance.Price * (1m + StopBeyondClusterPct);
-                        if (newSl > signal.StopLoss)
+                        if (newSl > 0m && newSl > signal.StopLoss)
                             result.SuggestedStopLoss = newSl;
                     }
                 }

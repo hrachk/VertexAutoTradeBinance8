@@ -83,7 +83,7 @@ namespace VertexAutoTradeBinance8.Services
                 await PlaceMissingOrders(symbol, qty, side, signal, ct);
             }
         }
-
+       
         private async Task PlaceMissingOrders(
             string symbol,
             decimal qty,

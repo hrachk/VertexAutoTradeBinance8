@@ -1,6 +1,8 @@
 ﻿using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using Microsoft.Extensions.Options;
+using System.Collections.Concurrent;
+using System.Linq;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Models.HTF;
@@ -41,7 +43,7 @@ namespace VertexAutoTradeBinance8
         private readonly IBootGate _bootGate;
         private readonly IStrategyPreFilter _pre;
         private readonly MarketContextService _marketContext;
-         
+        private readonly SimulatedTradeService _sim;
 
         private DateTime _lastQuantTick = DateTime.UtcNow;
 
@@ -53,13 +55,13 @@ namespace VertexAutoTradeBinance8
         // Optional: чтобы не писать слишком часто, но можно и без этого
         private DateTime _lastEngineTickUtc = DateTime.MinValue;
 
-        
+
 
         // ===============================
         // TRACKED SYMBOLS (positions-safe)
         // ===============================
-        private readonly HashSet<string> _tracked = new(StringComparer.OrdinalIgnoreCase);
-        private readonly HashSet<string> _warm = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, byte> _tracked = new();
+        private readonly ConcurrentDictionary<string, byte> _warm = new();
 
         // REST throttle for positions scan (avoid spam)
         private DateTime _lastPositionsScanUtc = DateTime.MinValue;
@@ -94,7 +96,7 @@ namespace VertexAutoTradeBinance8
             EngineStateBuilder engineStateBuilder,
             EngineStateSnapshotService engineStateSnapshot,
             IBootGate bootGate,
-            IStrategyPreFilter pre, MarketContextService marketContext)
+            IStrategyPreFilter pre, MarketContextService marketContext, SimulatedTradeService sim)
         {
             _logger = logger;
             _options = options.Value;
@@ -122,9 +124,40 @@ namespace VertexAutoTradeBinance8
             _marketContext = marketContext;
 
             learn.ForceSnapshot();
+            _sim = sim;
         }
 
         private int _lastCyclesPerMinute = 0;
+        private DateTime _lastUniverseRefreshUtc = DateTime.MinValue;
+        private static readonly TimeSpan UniverseRefreshPeriod = TimeSpan.FromSeconds(30);
+        private readonly SemaphoreSlim _positionsScanLock = new(1, 1);
+
+        private async Task RejectAsync(
+        TradeSignal? signal,
+        string symbol,
+        KlineInterval tf,
+        string stage,
+        string reason,
+        CancellationToken ct,
+        int? sleepMs = null,
+        string? extra = null)
+        {
+            _logger.LogWarning(
+                "[PROC][{symbol}][{tf}] REJECT stage={stage} reason={reason}{extra}",
+                symbol, tf, stage, reason,
+                extra != null ? $" | {extra}" : string.Empty
+            );
+
+            // lifecycle + missed trade только если есть signal
+            if (signal != null)
+            {
+                try { _sim.AppendLifecycleEvent(signal, $"REJECT_{stage}", reason); } catch { }
+                try { await _sim.SimulateMissedTradeAsync(signal, $"{stage}:{reason}"); } catch { }
+            }
+
+            if (sleepMs.HasValue && sleepMs.Value > 0)
+                await Task.Delay(sleepMs.Value, ct);
+        }
 
 
         protected override async Task ExecuteAsync(CancellationToken ct)
@@ -133,7 +166,11 @@ namespace VertexAutoTradeBinance8
             await _bootGate.WaitReadyAsync(ct);
             _logger.LogWarning("[WORKER] BootGate READY");
 
-            await _symbols.LoadAsync(ct);
+            if (DateTime.UtcNow - _lastUniverseRefreshUtc > UniverseRefreshPeriod)
+            {
+                await _symbols.LoadAsync(ct);
+                _lastUniverseRefreshUtc = DateTime.UtcNow;
+            }
 
 
             // APPLY UNIVERSE TO MARKET DATA
@@ -194,7 +231,11 @@ namespace VertexAutoTradeBinance8
                 try
                 {
                     await RunQuantRealtimeTick(ct);
-                    await _symbols.LoadAsync(ct);
+                    if (DateTime.UtcNow - _lastUniverseRefreshUtc > UniverseRefreshPeriod)
+                    {
+                        await _symbols.LoadAsync(ct);
+                        _lastUniverseRefreshUtc = DateTime.UtcNow;
+                    }
                     trackedSymbols = await BuildTrackedSymbolsAsync(ct);
                     await WarmupMarketDataForTrackedAsync(ct);
                 }
@@ -209,7 +250,9 @@ namespace VertexAutoTradeBinance8
                 {
                     _currentSymbol = symbol;
 
-                    var tf = await ResolveTimeframeSafeAsync(symbol, ct);
+                    var selectedTf = await ResolveTimeframeSafeAsync(symbol, ct);  // можно для аналитики/логов
+                    var tradeTf = KlineInterval.FiveMinutes; // жестко
+                                                             // либо маппинг из _options.TimeframeMinutes -> KlineInterval
                     var ctx = await _marketContext.GetContextAsync(symbol, ct);
 
                     var state = _engineStateBuilder.Build(
@@ -227,10 +270,13 @@ namespace VertexAutoTradeBinance8
                     _engineStateSnapshot.Save(state);
 
                     if (ctx.Allows(SignalSide.Buy))
-                        await ProcessSymbolWithUniverseSide(symbol, tf, SignalSide.Buy, ct);
+                        await ProcessSymbolWithUniverseSide(symbol, tradeTf, SignalSide.Buy, ct);
 
                     if (ctx.Allows(SignalSide.Sell))
-                        await ProcessSymbolWithUniverseSide(symbol, tf, SignalSide.Sell, ct);
+                        await ProcessSymbolWithUniverseSide(symbol, tradeTf, SignalSide.Sell, ct);
+
+                    ConsoleSymbolTableFormatter.UpdateTf(symbol, tradeTf, $"TF={tradeTf} (sel={selectedTf})", "...");
+
 
                     await _supervisor.SuperviseAsync(symbol, null, ct);
 
@@ -246,7 +292,6 @@ namespace VertexAutoTradeBinance8
         // ===========================================
         // TRACKED SYMBOLS CORE
         // ===========================================
-
         private void TrackSymbol(string symbol, bool keepAlive)
         {
             if (string.IsNullOrWhiteSpace(symbol))
@@ -254,11 +299,7 @@ namespace VertexAutoTradeBinance8
 
             symbol = symbol.Trim().ToUpperInvariant();
 
-            // hard block forever
-            if (string.Equals(symbol, "QQQQUSDT", StringComparison.OrdinalIgnoreCase))
-                return;
-
-            _tracked.Add(symbol);
+            _tracked.TryAdd(symbol, 0);
 
             if (keepAlive)
                 _trackedUntilUtc[symbol] = DateTime.UtcNow.Add(TrackedGrace);
@@ -266,45 +307,51 @@ namespace VertexAutoTradeBinance8
 
         private async Task<IReadOnlyList<string>> BuildTrackedSymbolsAsync(CancellationToken ct)
         {
-            // Always include current universe + pinned (already included in ActiveSymbols in your registry)
-            var subCap = _options.StartupSubscriptionCap > 0
-    ? _options.StartupSubscriptionCap
-    : 8;
+            var pinnedSet = new HashSet<string>(
+                _symbols.PinnedSymbols ?? Array.Empty<string>(),
+                StringComparer.OrdinalIgnoreCase);
 
-            foreach (var s in _symbols.ActiveSymbols.Take(subCap))
-                TrackSymbol(s, keepAlive: true);
-          
+            // 1) universe — всегда отслеживаем
+            foreach (var s in _symbols.ActiveSymbols)
+                TrackSymbol(s, keepAlive: false);
 
-            // Add all symbols that currently have open positions (safe throttle)
+            // 2) позиции — всегда keepAlive
             var posSymbols = await GetPositionSymbolsThrottledAsync(ct);
             foreach (var s in posSymbols)
                 TrackSymbol(s, keepAlive: true);
 
-            // Cleanup: remove symbols that are no longer in universe and grace expired and no longer in positions
             var now = DateTime.UtcNow;
+
             var posSet = new HashSet<string>(posSymbols, StringComparer.OrdinalIgnoreCase);
             var uniSet = new HashSet<string>(_symbols.ActiveSymbols, StringComparer.OrdinalIgnoreCase);
 
-            foreach (var sym in _tracked.ToArray())
+            foreach (var sym in _tracked.Keys.ToArray())
             {
-                if (uniSet.Contains(sym)) continue;
-                if (posSet.Contains(sym)) continue;
+                if (uniSet.Contains(sym))
+                    continue;
+
+                if (posSet.Contains(sym))
+                    continue;
+
+                if (pinnedSet.Contains(sym))
+                    continue;
 
                 if (_trackedUntilUtc.TryGetValue(sym, out var until) && until > now)
                     continue;
 
-                _tracked.Remove(sym);
+                // DROP
+                _tracked.TryRemove(sym, out _);
                 _trackedUntilUtc.Remove(sym);
 
-                // We do NOT attempt "unsubscribe" here (MarketDataFacade can handle evictions via its own cache/TTL if any)
-                _logger.LogInformation("[TRACKED] drop {sym} (no universe, no position, grace expired)", sym);
+                _logger.LogInformation(
+                    "[TRACKED] drop {sym} (not in universe, no position, not pinned, grace expired)",
+                    sym);
             }
 
-            var list = _tracked
+            var list = _tracked.Keys
                 .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            // observability
             _logger.LogInformation(
                 "[TRACKED] total={tot} universe={uni} positions={pos}",
                 list.Count,
@@ -316,17 +363,19 @@ namespace VertexAutoTradeBinance8
 
         private async Task<IReadOnlyList<string>> GetPositionSymbolsThrottledAsync(CancellationToken ct)
         {
-            // REST scan at most once per 30 seconds (production-safe)
             if ((DateTime.UtcNow - _lastPositionsScanUtc) < TimeSpan.FromSeconds(30))
                 return _cachedPositionSymbols;
 
-            _lastPositionsScanUtc = DateTime.UtcNow;
-
+            await _positionsScanLock.WaitAsync(ct);
             try
             {
+                if ((DateTime.UtcNow - _lastPositionsScanUtc) < TimeSpan.FromSeconds(30))
+                    return _cachedPositionSymbols;
+
+                _lastPositionsScanUtc = DateTime.UtcNow;
+
                 using var client = _factory.CreateRestClient();
 
-                // One call, no symbol filter (Binance bug-safe)
                 var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
                 if (!res.Success || res.Data == null)
                     return _cachedPositionSymbols;
@@ -334,7 +383,6 @@ namespace VertexAutoTradeBinance8
                 var symbols = res.Data
                     .Where(p => p != null && !string.IsNullOrWhiteSpace(p.Symbol) && p.Quantity != 0m)
                     .Select(p => p.Symbol.Trim().ToUpperInvariant())
-                   // .Where(s => !string.Equals(s, "AIAUSDT", StringComparison.OrdinalIgnoreCase))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
 
@@ -346,6 +394,10 @@ namespace VertexAutoTradeBinance8
                 _logger.LogDebug(ex, "[TRACKED] position scan failed");
                 return _cachedPositionSymbols;
             }
+            finally
+            {
+                _positionsScanLock.Release();
+            }
         }
 
         private async Task WarmupMarketDataForTrackedAsync(CancellationToken ct)
@@ -354,10 +406,10 @@ namespace VertexAutoTradeBinance8
             // =====================================================
             // WARMUP BATCH LIMIT (ANTI-STORM)
             // =====================================================
-            var toWarm = _tracked
-                .Except(_warm, StringComparer.OrdinalIgnoreCase)
-                .Take(3) // 🔥 НЕ БОЛЕЕ 3 СИМВОЛОВ ЗА ПРОХОД
-                .ToList();
+            var toWarm = _tracked.Keys
+            .Except(_warm.Keys, StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .ToList();
 
             if (toWarm.Count == 0)
                 return;
@@ -370,7 +422,7 @@ namespace VertexAutoTradeBinance8
                     await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneMinute, 20, ct);
                     await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FiveMinutes, 20, ct);
 
-                    _warm.Add(s);
+                    _warm.TryAdd(s, 0);
                     _logger.LogInformation("[BOOT][MD] warmup ok {sym}", s);
                 }
                 catch (Exception ex)
@@ -414,10 +466,7 @@ namespace VertexAutoTradeBinance8
             return fallback;
         }
 
-        private async Task ProcessSymbolWithUniverseSide(
-            string symbol,
-            KlineInterval tf,
-            SignalSide desiredSide,
+        private async Task ProcessSymbolWithUniverseSide(string symbol, KlineInterval tf, SignalSide desiredSide,
             CancellationToken ct)
         {
             // entries strictly gated by universe sides
@@ -431,66 +480,202 @@ namespace VertexAutoTradeBinance8
         }
 
         private async Task ProcessSymbol(
-            string symbol,
-            KlineInterval tf,
-            SignalSide desiredSide,
-            CancellationToken ct)
+     string symbol,
+     KlineInterval tf,
+     SignalSide desiredSide,
+     CancellationToken ct)
         {
             ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏳ RUN", desiredSide.ToString());
 
+            // =====================================================
+            // 0) PREFILTER
+            // =====================================================
             var pre = await _pre.EvaluateAsync(symbol, tf, ct);
             if (!pre.Allow)
             {
-                if (pre.SleepMs.HasValue)
-                    await Task.Delay(pre.SleepMs.Value, ct);
+                await RejectAsync(
+                    signal: null,
+                    symbol: symbol,
+                    tf: tf,
+                    stage: "PREFILTER",
+                    reason: pre.Reason ?? "NOT_ALLOWED",
+                    ct: ct,
+                    sleepMs: pre.SleepMs
+                );
                 return;
             }
 
-            IReadOnlyList<BinanceFuturesUsdtKline>? klines;
+            // =====================================================
+            // 1) LOAD MARKET DATA
+            // =====================================================
+            IReadOnlyList<BinanceFuturesUsdtKline> klines;
             try
             {
                 klines = await _marketDataFacade.GetKlinesAsync(symbol, tf, 200, ct);
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogWarning(
+                    ex,
+                    "[PROC][{symbol}][{tf}] MARKET_DATA fetch failed",
+                    symbol, tf
+                );
                 return;
             }
 
             if (klines == null || klines.Count < 60)
+            {
+                _logger.LogInformation(
+                    "[PROC][{symbol}][{tf}] MARKET_DATA insufficient: {cnt}",
+                    symbol, tf, klines?.Count ?? 0
+                );
                 return;
+            }
 
-            TradeSignal? signal;
+            // =====================================================
+            // 2) STRATEGY SIGNAL
+            // =====================================================
+            TradeSignal signal;
             try
             {
                 signal = _strategy.GenerateSignal(symbol, tf, klines);
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogError(
+                    ex,
+                    "[PROC][{symbol}][{tf}] STRATEGY threw exception",
+                    symbol, tf
+                );
                 return;
             }
 
-            // side-strict: this pass serves ONLY desiredSide
-            if (signal == null || signal.Side != desiredSide)
+            if (signal == null)
+            {
+                _logger.LogInformation(
+                    "[PROC][{symbol}][{tf}] STRATEGY no signal",
+                    symbol, tf
+                );
                 return;
+            }
 
+            if (signal.Side != desiredSide)
+            {
+                _logger.LogInformation(
+                    "[PROC][{symbol}][{tf}] STRATEGY side mismatch: got={got} need={need}",
+                    symbol, tf, signal.Side, desiredSide
+                );
+                return;
+            }
+
+            // 🔥 фиксируем микро-сигнал (AI telemetry)
+            _learn.RecordMarketStateTriggered(
+                reason: "MICRO_SIGNAL",
+                symbol: symbol,
+                timeframe: tf.ToString(),
+                regime: MarketRegime.Unknown,
+                slope: 0m,
+                volatility: 0m,
+                atr: signal.Atr ?? 0m,
+                confidence: signal.Confidence ?? 0.3m
+            );
+
+            // =====================================================
+            // 3) COOLDOWN
+            // =====================================================
             if (InCooldown(symbol))
+            {
+                await RejectAsync(
+                    signal,
+                    symbol,
+                    tf,
+                    "COOLDOWN",
+                    "COOLDOWN_ACTIVE",
+                    ct
+                );
                 return;
+            }
 
+            // =====================================================
+            // 4) AI CONFIRMATION
+            // =====================================================
             var ai = _predict.Decide(symbol, tf, klines, signal);
             if (!ai.Allow)
-                return;
+            {
+                _learn.RecordMarketStateTriggered(
+                    reason: "AI_PATTERN_BLOCK",
+                    symbol: symbol,
+                    timeframe: tf.ToString(),
+                    regime: MarketRegime.Unknown,
+                    slope: 0m,
+                    volatility: 0m,
+                    atr: signal.Atr ?? 0m,
+                    confidence: signal.Confidence ?? 0.25m
+                );
 
+                await RejectAsync(
+                    signal,
+                    symbol,
+                    tf,
+                    "AI",
+                    "AI_BLOCK",
+                    ct,
+                    extra: ai.Reason
+                );
+                return;
+            }
+
+            // =====================================================
+            // 5) RISK SCALING
+            // =====================================================
             var riskMult = _riskScaler.Scale(ai.Grade);
             if (riskMult <= 0)
+            {
+                await RejectAsync(
+                    signal,
+                    symbol,
+                    tf,
+                    "RISK",
+                    "RISK_MULT_ZERO",
+                    ct
+                );
                 return;
+            }
 
+            // =====================================================
+            // 6) LIQUIDITY GUARD
+            // =====================================================
             var liq = _liq.Analyze(symbol, tf, klines, signal.Side, signal.IsSuperSignal);
             if (liq.Block)
-                return;
+            {
+                _learn.RecordMarketStateTriggered(
+                    reason: "LIQUIDITY_DANGER",
+                    symbol: symbol,
+                    timeframe: tf.ToString(),
+                    regime: MarketRegime.Unknown,
+                    slope: 0m,
+                    volatility: 0m,
+                    atr: signal.Atr ?? 0m,
+                    confidence: signal.Confidence ?? 0.25m
+                );
 
+                await RejectAsync(
+                    signal,
+                    symbol,
+                    tf,
+                    "LIQUIDITY",
+                    $"LIQUIDITY_{liq.Reason}",
+                    ct
+                );
+                return;
+            }
+
+            // =====================================================
+            // 7) QTY / BALANCE / MIN NOTIONAL
+            // =====================================================
             var qty = await _risk.CalculateSafeQty(
                 signal,
-                signal.Symbol,
+                symbol,
                 signal.EntryPrice,
                 signal.StopLoss,
                 riskMult,
@@ -498,28 +683,66 @@ namespace VertexAutoTradeBinance8
                 signal.Leverage ?? 1m,
                 signal.Side,
                 signal.TakeProfits,
-                ct);
+                ct
+            );
 
             if (qty <= 0)
+            {
+                await RejectAsync(
+                    signal,
+                    symbol,
+                    tf,
+                    "RISK",
+                    "NO_BALANCE_OR_MIN_NOTIONAL",
+                    ct
+                );
                 return;
+            }
 
+            // =====================================================
+            // 8) SL / TP OPTIMIZATION
+            // =====================================================
             signal.StopLoss = _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
-
             await _cleaner.CleanupOutdatedOrdersAsync(symbol, signal, ct);
 
+            // =====================================================
+            // 9) EXECUTION
+            // =====================================================
             var result = await _executor.ExecuteAsync(signal, qty, ct);
             if (!result.Success)
+            {
+                await RejectAsync(
+                    signal,
+                    symbol,
+                    tf,
+                    "EXEC",
+                    "EXECUTION_FAILED",
+                    ct,
+                    extra: result.Error
+                );
                 return;
+            }
 
+            _sim.AppendLifecycleEvent(signal, "EXEC_OK");
+
+            // =====================================================
+            // 10) SUCCESS PATH
+            // =====================================================
             MarkTrade(symbol);
-
-            // IMPORTANT: after entry -> ensure symbol stays tracked
             TrackSymbol(symbol, keepAlive: true);
+
+            _sim.AppendLifecycleEvent(signal, "ENTRY_OK");
 
             await _supervisor.SuperviseAsync(symbol, signal, ct);
 
-            ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🟩 OK", $"{signal.Side} qty={qty:F4}");
+            ConsoleSymbolTableFormatter.UpdateTf(
+                symbol,
+                tf,
+                "🟩 OK",
+                $"{signal.Side} qty={qty:F4}"
+            );
         }
+
 
         private bool InCooldown(string symbol)
         {
@@ -546,7 +769,6 @@ namespace VertexAutoTradeBinance8
             }
             catch { }
         }
-
         private async Task PeriodicSnapshot(CancellationToken ct)
         {
             try

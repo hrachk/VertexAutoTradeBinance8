@@ -1263,51 +1263,32 @@ $@"📊 Режим рынка:
                     $"[STRAT][{symbol}][{interval}] PatternEngine ERROR → паттерны игнорируем.");
             }
 
-            // 6) Liquidity Cluster Filter — с защитой + RelaxLiquidity
+            // =====================================================
+            // 6) AI Liquidity Weight (SIGNAL-LEVEL, NO BLOCKING)
+            // =====================================================
             try
             {
-                var beforeLiq = baseSignal;
-                baseSignal = _liquidityClusterService.FilterAndAdjust(beforeLiq);
-                var w = _aiLearning.GetGateWeight(smart.BaseRegime, "LIQ");
-
-                if (!relaxLiquidity && beforeLiq != null && baseSignal == null && w >= 1.0m)
+                if (baseSignal != null)
                 {
-                    _aiLearning.RecordMarketStateTriggered(
-                        reason: "LIQUIDITY_DANGER",
-                        symbol: symbol,
-                        timeframe: interval.ToString(),
-                        regime: smart.BaseRegime,
-                        slope: smart.TrendSlopePercent,
-                        volatility: smart.VolatilityPercent,
-                        atr: beforeLiq?.Atr ?? 0,
-                        confidence: smart.Confidence
-                    );
+                    var w = _aiLearning.GetGateWeight(smart.BaseRegime, "LIQ");
 
-                    if (relaxLiquidity && beforeLiq != null)
-                    {
-                        _logger.LogInformation(
-                            "🧪 TestMode: RelaxLiquidity=TRUE → игнорируем блок по ликвидности, берём базовый сигнал.");
-                        baseSignal = beforeLiq;
-                    }
-                    else
-                    {
-                        _logger.LogInformation(
-                            "🚫 Сигнал заблокирован по ликвидности (опасная стена/дисбаланс).");
-                        _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                        LastSoftEntry = false;
-                        LastBlockedByLiquidity = true;
-                        CurrentMode = "LiquidityBlocked";
+                    // 🔒 AI decision shaping — НЕ блокируем, а модифицируем уверенность
+                    baseSignal.Confidence = baseSignal.Confidence.HasValue
+                        ? baseSignal.Confidence.Value * w
+                        : w;
 
-                        return null;
-                    }
+                    baseSignal.Reason ??= string.Empty;
+                    baseSignal.Reason += $"|LIQw={w:F2}";
                 }
             }
             catch (Exception ex)
             {
+                // fail-safe: генерация сигнала не должна падать
                 _logger.LogError(ex,
-                    $"[STRAT][{symbol}][{interval}] LiquidityClusterService ERROR → используем базовый сигнал без корректировок.");
-                // оставляем baseSignal как есть
+                    "[STRAT][{symbol}][{interval}] AI liquidity weight failed → ignored",
+                    symbol, interval);
             }
+
 
             // 7) AI Dynamic Risk Tag — с защитой
 
@@ -1334,8 +1315,9 @@ $@"📊 Режим рынка:
 
                 return null;
             }
-            var riskW = 1.00m;
+            decimal riskW = 1.00m;
 
+            // 7.1 — AI Dynamic Risk Tag
             try
             {
                 riskW = _aiLearning.GetAiRiskAdjustment(symbol, regime);
@@ -1359,12 +1341,10 @@ $@"📊 Режим рынка:
 
                 if (isStrongTrend)
                 {
-                    // ❗ В сильном тренде НЕ фиксируем TP
-                    // Только первый TP как trigger для runner
                     baseSignal.TakeProfits = new List<decimal>
-        {
-            baseSignal.TakeProfits[0]
-        };
+                    {
+                        baseSignal.TakeProfits[0]
+                    };
 
                     baseSignal.Reason += "|STRONG_TREND_RUNNER";
                 }
@@ -1396,56 +1376,7 @@ $@"📊 Режим рынка:
 
             _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-            //// =====================================================
-            //// 🔐 EXPOSURE CONTROL (FINAL GATE BEFORE RETURN)
-            //// =====================================================
-            //try
-            //{
-            //    var exposure = CanIncreaseExposure(
-            //       state: _engineState,              // существующий EngineState
-            //        symbol: symbol,
-            //        symbolNotionalUsd: 0m,             // ❗ StrategyEngine не знает — ставим 0
-            //        equityUsd: 0m,                     // ❗ НЕ используется тут
-            //        usedMarginUsd: 0m,                 // ❗ НЕ используется тут
-            //        aiEdgeScore: smart.Confidence,     // ✔ корректный proxy
-            //        isSpecialSetup:
-            //            baseSignal.IsSuperSignal ||
-            //            baseSignal.Reason.Contains("LIQUIDITY_GRAB") ||
-            //            baseSignal.Reason.Contains("PULLBACK_EMA21"),
-            //        isHighVolatility:
-            //            smart.VolatilityPercent >= 0.015m,
-            //        isLowEquityMode: false             // ❗ решается НИЖЕ по стеку
-            //    );
-
-            //    if (!exposure.AllowAdd)
-            //    {
-            //        _aiLearning.RecordMarketStateTriggered(
-            //            reason: "EXPOSURE_BLOCK",
-            //            symbol: symbol,
-            //            timeframe: interval.ToString(),
-            //            regime: smart.BaseRegime,
-            //            slope: smart.TrendSlopePercent,
-            //            volatility: smart.VolatilityPercent,
-            //            atr: baseSignal.Atr ?? 0,
-            //            confidence: smart.Confidence
-            //        );
-
-            //        _logger.LogWarning(
-            //            $"⛔ EXPOSURE BLOCK: {exposure.Reason}");
-
-            //        _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            //        return null;
-            //    }
-
-
-            //}
-            //catch (Exception ex)
-            //{
-            //    _logger.LogError(ex, "[STRAT][EXPOSURE] Fatal error → signal blocked for safety");
-            //    return null;
-            //}
-
-
+             
             return baseSignal;
         }
 
@@ -1809,54 +1740,98 @@ $@"📊 Режим рынка:
                 return FastFailResult.Ok(); // паттерны не критичны
             }
         }
-       
+
         private FastFailResult Gate6_Liquidity(
-        TradeSignal signal,
-        SmartRegimeInfo smart,
-        IReadOnlyList<BinanceFuturesUsdtKline> klines,
-        KlineInterval tf,
-        bool relaxLiquidity)
+      TradeSignal signal,
+      SmartRegimeInfo smart,
+      IReadOnlyList<BinanceFuturesUsdtKline> klines,
+      KlineInterval tf,
+      bool relaxLiquidity)
+        {
+            return Gate6_LiquidityAsync(
+                    signal,
+                    smart,
+                    klines,
+                    tf,
+                    relaxLiquidity,
+                    CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+        }
+
+
+        private async Task<FastFailResult> Gate6_LiquidityAsync(
+      TradeSignal signal,
+      SmartRegimeInfo smart,
+      IReadOnlyList<BinanceFuturesUsdtKline> klines,
+      KlineInterval tf,
+      bool relaxLiquidity,
+      CancellationToken ct)
         {
             var w = _aiLearning.GetGateMultiplier(
-    signal.Symbol,
-    smart.BaseRegime,
-    "LIQ");
+                signal.Symbol,
+                smart.BaseRegime,
+                "LIQ");
+
+            // 1) LiquidityGuard — быстрый hard-block
             var lg = _liquidityGuardService.Analyze(
-               symbol: signal.Symbol,
-               interval: tf,
-               klines: klines,
-               side: signal.Side,
-               superSignal: signal.IsSuperSignal);
+                symbol: signal.Symbol,
+                interval: tf,
+                klines: klines,
+                side: signal.Side,
+                superSignal: signal.IsSuperSignal);
 
             if (lg.Block && !relaxLiquidity)
             {
-                _engineState.LastEntryDecision = "BLOCKED_LIQUIDITY";
+                _engineState.LastEntryDecision = "BLOCKED_LIQ_GUARD";
                 _engineState.BlockedByLiquidity = true;
                 _engineState.LiquidityReason = lg.Reason.ToString();
+
                 return FastFailResult.Fail("LIQ_GUARD", lg.Reason.ToString());
             }
 
+            // 2) LiquidityCluster — async
+            TradeSignal? after;
+            try
+            {
+                after = await _liquidityClusterService
+                    .FilterAndAdjustAsync(signal, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return FastFailResult.Fail("CANCELLED", "Liquidity analysis cancelled");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[STRAT][{symbol}][{tf}] LiquidityCluster ERROR → soft-pass",
+                    signal.Symbol, tf);
 
-            var after = _liquidityClusterService.FilterAndAdjust(signal);
-            if (after != null)
-                signal = after;
+                return FastFailResult.Ok(); // fail-safe
+            }
 
-
+            // 3) Cluster решил BLOCK
             if (after == null)
             {
-                if (relaxLiquidity)
-                    return FastFailResult.Ok();
+                if (!relaxLiquidity && w >= 1.0m)
+                {
+                    _engineState.LastEntryDecision = "BLOCKED_LIQ_CLUSTER";
+                    _engineState.BlockedByLiquidity = true;
+                    _engineState.LiquidityReason = "ClusterDanger";
 
-                // gate-weight влияет ТОЛЬКО на пороги, не на случайность
-                if (w >= 1.0m)
-                    return FastFailResult.Fail("LIQ", "Liquidity block");
+                    return FastFailResult.Fail("LIQ", "Liquidity cluster block");
+                }
 
                 return FastFailResult.Ok(); // ослабленный режим
             }
+
+            // 4) Cluster разрешил → применяем корректировки
+            signal.CopyFrom(after); // ОБЯЗАТЕЛЬНО
+
             return FastFailResult.Ok();
-
         }
-
+       
 
         private FastFailResult Gate7_Exposure(
        string symbol,

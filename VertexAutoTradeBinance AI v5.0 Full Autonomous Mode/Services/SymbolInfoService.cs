@@ -1,152 +1,203 @@
 ﻿using System.Globalization;
+using System.Text.Json;
 using Binance.Net.Objects.Models.Futures;
 using Microsoft.Extensions.Logging;
 
 namespace VertexAutoTradeBinance8.Services;
 
-public class SymbolInfoService
+public sealed class SymbolInfoService
 {
     private readonly ILogger<SymbolInfoService> _logger;
     private readonly BinanceClientFactory _factory;
 
-    // PROD SAFE STATIC CACHE
     private static BinanceFuturesUsdtExchangeInfo? _cachedExchangeInfo;
-    private static DateTime _exchangeInfoTs;
+    private static DateTime _exchangeInfoTsUtc;
     private static readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private static readonly HashSet<string> _loggedSymbols = new(StringComparer.OrdinalIgnoreCase);
 
-    // (опционально) лог типов фильтров один раз на символ
-    private static readonly HashSet<string> _loggedSymbols =
-        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
 
-    public SymbolInfoService(
-        ILogger<SymbolInfoService> logger,
-        BinanceClientFactory factory)
+    public SymbolInfoService(ILogger<SymbolInfoService> logger, BinanceClientFactory factory)
     {
         _logger = logger;
         _factory = factory;
     }
 
-    /// <summary>
-    /// Возвращает stepSize, minQty, minNotional, tickSize
-    /// </summary>
+    public enum QtyRule
+    {
+        Market, // StopMarket / TakeProfitMarket / Market close (SL/TP)
+        Limit   // Limit entry
+    }
+
+    public sealed record FuturesFilters(
+        decimal StepSize,
+        decimal MinQty,
+        decimal MinNotional,
+        decimal TickSize,
+        QtyRule RuleUsed);
+
     public async Task<(decimal step, decimal minQty, decimal minNotional, decimal tickSize)>
-        GetFuturesFiltersAsync(string symbol)
+        GetFuturesFiltersAsync(string symbol, QtyRule rule = QtyRule.Market, CancellationToken ct = default)
+    {
+        var f = await GetFuturesFiltersDetailedAsync(symbol, rule, ct).ConfigureAwait(false);
+        return (f.StepSize, f.MinQty, f.MinNotional, f.TickSize);
+    }
+
+    public async Task<FuturesFilters> GetFuturesFiltersDetailedAsync(
+        string symbol,
+        QtyRule rule = QtyRule.Market,
+        CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(symbol))
-            return SafeDefault("UNKNOWN", "EMPTY_SYMBOL");
+            throw new ArgumentException("Symbol cannot be empty.", nameof(symbol));
 
-        await EnsureExchangeInfoCachedAsync(symbol);
+        await EnsureExchangeInfoCachedAsync(ct).ConfigureAwait(false);
 
-        var sym = _cachedExchangeInfo!
-            .Symbols
-            .FirstOrDefault(s => string.Equals(s.Name, symbol, StringComparison.OrdinalIgnoreCase));
+        var info = _cachedExchangeInfo;
+        if (info?.Symbols == null || info.Symbols.Length == 0)
+            throw new InvalidOperationException($"[FILTER][{symbol}] ExchangeInfo missing/empty → TRADING BLOCKED");
+
+        var sym = info.Symbols.FirstOrDefault(s =>
+            s.Name.Equals(symbol, StringComparison.OrdinalIgnoreCase));
 
         if (sym == null)
-        {
-            _logger.LogError("[FILTER][{symbol}] Symbol not found → SAFE DEFAULT", symbol);
-            return SafeDefault(symbol, "SYMBOL_NOT_FOUND");
-        }
+            throw new InvalidOperationException($"[FILTER][{symbol}] Symbol not found → TRADING BLOCKED");
 
-        var filtersList = sym.Filters?.ToList();
-        if (filtersList == null || filtersList.Count == 0)
-        {
-            _logger.LogCritical("[FILTER][{symbol}] EMPTY filters → SAFE DEFAULT", symbol);
-            return SafeDefault(symbol, "EMPTY_FILTERS");
-        }
+        var filters = sym.Filters;
+        if (filters == null || filters.Length == 0)
+            throw new InvalidOperationException($"[FILTER][{symbol}] Filters empty → TRADING BLOCKED");
 
-        // типы фильтров — один раз на символ, иначе лог-спам
+        // Log filter types once per symbol
         if (_loggedSymbols.Add(symbol))
         {
-            _logger.LogInformation("[FILTER][{symbol}] FilterTypes={types}",
-                symbol, string.Join(", ", filtersList.Select(x => x.GetType().Name)));
+            var types = new List<string>(filters.Length);
+            foreach (var f in filters)
+            {
+                var el = JsonSerializer.SerializeToElement(f, JsonOpts);
+                types.Add(ReadString(el, "FilterType", "filterType") ?? "UNKNOWN");
+            }
+            _logger.LogInformation("[FILTER][{symbol}] FilterTypes={types}", symbol, string.Join(", ", types));
         }
 
-        decimal step = 0m;
-        decimal minQty = 0m;
-        decimal minNotional = 0m;
+        decimal lotStep = 0m, lotMinQty = 0m;
+        decimal marketStep = 0m, marketMinQty = 0m;
         decimal tickSize = 0m;
+        decimal minNotional = 0m;
 
-        foreach (var f in filtersList)
+        foreach (var f in filters)
         {
-            var type = f.GetType().Name;
+            var el = JsonSerializer.SerializeToElement(f, JsonOpts);
 
-            if (type.Contains("LotSize", StringComparison.OrdinalIgnoreCase) ||
-                type.Contains("MarketLotSize", StringComparison.OrdinalIgnoreCase))
+            var type = ReadString(el, "FilterType", "filterType") ?? string.Empty;
+            switch (type)
             {
-                step = ReadDec(f, "StepSize", "Step", "QtyStep");
-                minQty = ReadDec(f, "MinQuantity", "MinQty", "MinQuantityValue");
-            }
-            else if (type.Contains("Price", StringComparison.OrdinalIgnoreCase))
-            {
-                tickSize = ReadDec(f, "TickSize", "Tick", "PriceTick");
-            }
-            else if (type.Contains("Notional", StringComparison.OrdinalIgnoreCase))
-            {
-                minNotional = ReadDec(f, "MinNotional", "Notional", "MinNotionalValue");
+                case "LOT_SIZE":
+                    lotStep = ReadDecimal(el, "StepSize", "stepSize");
+                    lotMinQty = ReadDecimal(el, "MinQuantity", "minQty", "minQuantity");
+                    break;
+
+                case "MARKET_LOT_SIZE":
+                    marketStep = ReadDecimal(el, "StepSize", "stepSize");
+                    marketMinQty = ReadDecimal(el, "MinQuantity", "minQty", "minQuantity");
+                    break;
+
+                case "PRICE_FILTER":
+                    tickSize = ReadDecimal(el, "TickSize", "tickSize");
+                    break;
+
+                case "MIN_NOTIONAL":
+                    minNotional = ReadDecimal(el, "MinNotional", "minNotional");
+                    break;
+
+                default:
+                    // Важно: не спамим логами постоянно
+                    break;
             }
         }
 
-        // MANDATORY SAFE DEFAULTS
+        decimal step;
+        decimal minQty;
+
+        if (rule == QtyRule.Market)
+        {
+            if (marketStep <= 0m || marketMinQty <= 0m)
+                throw new InvalidOperationException($"[FILTER][{symbol}] MARKET_LOT_SIZE missing/invalid → TRADING BLOCKED");
+
+            step = marketStep;
+            minQty = marketMinQty;
+        }
+        else
+        {
+            if (lotStep <= 0m || lotMinQty <= 0m)
+                throw new InvalidOperationException($"[FILTER][{symbol}] LOT_SIZE missing/invalid → TRADING BLOCKED");
+
+            step = lotStep;
+            minQty = lotMinQty;
+        }
+
         if (tickSize <= 0m)
-        {
-            tickSize = 0.0001m;
-            _logger.LogWarning("[FILTER][{symbol}] tickSize missing → fallback {tick}", symbol, tickSize);
-        }
+            throw new InvalidOperationException($"[FILTER][{symbol}] PRICE_FILTER missing/invalid → TRADING BLOCKED");
 
-        if (step <= 0m)
-        {
-            step = tickSize;
-            _logger.LogWarning("[FILTER][{symbol}] stepSize missing → fallback {step}", symbol, step);
-        }
-
-        if (minQty <= 0m) minQty = step;
-        if (minNotional <= 0m) minNotional = 5m;
+        if (step <= 0m || minQty <= 0m)
+            throw new InvalidOperationException($"[FILTER][{symbol}] INVALID qty filters step={step} minQty={minQty} → TRADING BLOCKED");
 
         _logger.LogInformation(
-            "[FILTER][{symbol}] step={step}, minQty={minQty}, minNotional={minNotional}, tick={tick}",
-            symbol, step, minQty, minNotional, tickSize);
+            "[FILTER][{symbol}] rule={rule} step={step} minQty={minQty} minNotional={minNotional} tick={tick}",
+            symbol, rule, step, minQty, minNotional, tickSize);
 
-        return (step, minQty, minNotional, tickSize);
+        return new FuturesFilters(step, minQty, minNotional, tickSize, rule);
     }
 
-    public async Task<decimal> GetTickSizeAsync(string symbol)
+    public async Task<decimal> GetTickSizeAsync(string symbol, CancellationToken ct = default)
     {
-        var (_, _, _, tick) = await GetFuturesFiltersAsync(symbol);
-        return tick;
+        var f = await GetFuturesFiltersDetailedAsync(symbol, QtyRule.Market, ct).ConfigureAwait(false);
+        return f.TickSize;
     }
 
-    private async Task EnsureExchangeInfoCachedAsync(string symbol)
+    public static void EnforceMinNotionalOrThrow(string symbol, decimal qty, decimal price, decimal minNotional)
     {
-        // fast-path
+        if (qty <= 0m || price <= 0m || minNotional <= 0m) return;
+
+        var notional = qty * price;
+        if (notional + 1e-12m < minNotional)
+            throw new InvalidOperationException(
+                $"[FILTER][{symbol}] Notional too small: {notional.ToString("0.########", CultureInfo.InvariantCulture)} < {minNotional.ToString("0.########", CultureInfo.InvariantCulture)}");
+    }
+
+    private async Task EnsureExchangeInfoCachedAsync(CancellationToken ct)
+    {
         if (_cachedExchangeInfo != null &&
-            (DateTime.UtcNow - _exchangeInfoTs).TotalMinutes <= 30)
+            (DateTime.UtcNow - _exchangeInfoTsUtc).TotalMinutes <= 30)
             return;
 
-        await _refreshGate.WaitAsync();
+        await _refreshGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            // double-check under lock
             if (_cachedExchangeInfo != null &&
-                (DateTime.UtcNow - _exchangeInfoTs).TotalMinutes <= 30)
+                (DateTime.UtcNow - _exchangeInfoTsUtc).TotalMinutes <= 30)
                 return;
 
             using var client = _factory.CreateRestClient();
-            var ex = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync();
+            var res = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync(ct: ct).ConfigureAwait(false);
 
-            if (!ex.Success || ex.Data == null)
+            if (!res.Success || res.Data == null)
             {
-                _logger.LogError("[FILTER][{symbol}] ExchangeInfo load failed → SAFE DEFAULT. Err={err}",
-                    symbol, ex.Error);
-                _cachedExchangeInfo = null;
-                _exchangeInfoTs = DateTime.MinValue;
-                return;
+                if (_cachedExchangeInfo != null)
+                {
+                    _logger.LogWarning("[FILTER] ExchangeInfo refresh failed, keeping cache. Err={err}", res.Error);
+                    return;
+                }
+
+                throw new InvalidOperationException($"[FILTER] ExchangeInfo load failed → TRADING BLOCKED. Err={res.Error}");
             }
 
-            _cachedExchangeInfo = ex.Data;
-            _exchangeInfoTs = DateTime.UtcNow;
+            _cachedExchangeInfo = res.Data;
+            _exchangeInfoTsUtc = DateTime.UtcNow;
 
-            _logger.LogInformation("[FILTER] ExchangeInfo cached (symbols={cnt})",
-                _cachedExchangeInfo.Symbols?.Length ?? 0);
+            _logger.LogInformation("[FILTER] ExchangeInfo cached (symbols={cnt})", _cachedExchangeInfo.Symbols?.Length ?? 0);
         }
         finally
         {
@@ -154,33 +205,43 @@ public class SymbolInfoService
         }
     }
 
-    private static decimal ReadDec(object obj, params string[] names)
+    // --------------------------
+    // JSON readers (robust to lib changes)
+    // --------------------------
+    private static string? ReadString(JsonElement el, params string[] names)
     {
-        foreach (var name in names)
+        if (el.ValueKind != JsonValueKind.Object) return null;
+
+        foreach (var n in names)
         {
-            var p = obj.GetType().GetProperty(name);
-            if (p == null) continue;
-
-            var v = p.GetValue(obj);
-            if (v is null) continue;
-
-            if (v is decimal d) return d;
-            if (v is double dd) return (decimal)dd;
-            if (v is float ff) return (decimal)ff;
-            if (v is int i) return i;
-            if (v is long l) return l;
-
-            if (v is string s &&
-                decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var ds))
-                return ds;
+            if (el.TryGetProperty(n, out var p))
+            {
+                if (p.ValueKind == JsonValueKind.String) return p.GetString();
+                return p.ToString();
+            }
         }
-        return 0m;
+        return null;
     }
 
-    private (decimal step, decimal minQty, decimal minNotional, decimal tickSize)
-        SafeDefault(string symbol, string reason)
+    private static decimal ReadDecimal(JsonElement el, params string[] names)
     {
-        _logger.LogWarning("[FILTER][{symbol}] SAFE DEFAULT applied. reason={reason}", symbol, reason);
-        return (step: 0.0001m, minQty: 0.001m, minNotional: 5m, tickSize: 0.0001m);
+        if (el.ValueKind != JsonValueKind.Object) return 0m;
+
+        foreach (var n in names)
+        {
+            if (!el.TryGetProperty(n, out var p)) continue;
+
+            if (p.ValueKind == JsonValueKind.Number)
+            {
+                if (p.TryGetDecimal(out var d)) return d;
+                if (p.TryGetDouble(out var db)) return (decimal)db;
+            }
+
+            if (p.ValueKind == JsonValueKind.String &&
+                decimal.TryParse(p.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var ds))
+                return ds;
+        }
+
+        return 0m;
     }
 }

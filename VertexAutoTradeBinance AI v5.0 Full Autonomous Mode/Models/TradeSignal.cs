@@ -63,14 +63,35 @@ public class TradeSignal
     public decimal? Confidence { get; set; }
 
 
-    public decimal GetTpPart(int index)
+    public   decimal GetTpPart(int index)
     {
-        // возвращает часть позиции для TP1 / TP2 / TP3
-        if (index == 0) return 0.40m;
-        if (index == 1) return 0.35m;
-        if (index == 2) return 0.25m;
-        return 0m;
+        return index switch
+        {
+            0 => 0.40m,
+            1 => 0.35m,
+            2 => 0.25m,
+            _ => 0m
+        };
     }
 
+    public void CopyFrom(TradeSignal src)
+    {
+        if (src == null) return;
+
+        EntryPrice = src.EntryPrice;
+        StopLoss = src.StopLoss;
+
+        var tps = src.TakeProfits;
+        TakeProfits = (tps != null && tps.Count > 0)
+            ? new List<decimal>(tps)
+            : null;
+
+        Confidence = src.Confidence;
+        Reason = src.Reason;
+        Atr = src.Atr;
+        Leverage = src.Leverage;
+        SafetyRiskMultiplier = src.SafetyRiskMultiplier;
+        IsSuperSignal = src.IsSuperSignal;
+    }
 
 }

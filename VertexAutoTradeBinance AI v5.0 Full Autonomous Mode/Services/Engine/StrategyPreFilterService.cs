@@ -116,10 +116,16 @@ namespace VertexAutoTradeBinance8.Services.Engine
                     // если у тебя есть поле LastStopUtc/LastTradeUtc — используй его.
                     // Здесь — универсально: cooldown от LastProtectionUtc как safety fallback.
                     var last = st.LastProtectionUtc;
-                    if (last != default && (DateTime.UtcNow - last) < cd)
+
+                    if (last.HasValue)
                     {
-                        reason = $"Cooldown active: {(DateTime.UtcNow - last).TotalMinutes:F1}m < {cd.TotalMinutes:F1}m";
-                        return true;
+                        var elapsed = DateTime.UtcNow - last.Value;
+
+                        if (elapsed < cd)
+                        {
+                            reason = $"Cooldown active: {elapsed.TotalMinutes:F1}m < {cd.TotalMinutes:F1}m";
+                            return true;
+                        }
                     }
                 }
             }

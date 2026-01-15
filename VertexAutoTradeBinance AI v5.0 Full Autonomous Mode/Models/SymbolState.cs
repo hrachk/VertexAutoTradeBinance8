@@ -33,8 +33,8 @@ namespace VertexAutoTradeBinance8.Models
         public int AddsToday { get; set; } = 0;
 
         // === SAFETY ===
-        public DateTime LastSafeKillUtc { get; set; } = DateTime.MinValue;
-        public DateTime LastProtectionUtc { get; set; } = DateTime.MinValue;
+        public DateTime? LastSafeKillUtc { get; set; } = DateTime.MinValue;
+        public DateTime? LastProtectionUtc { get; set; } = DateTime.MinValue;
 
         // === POSITION STATE ===
         public bool HasOpenPosition { get; set; }

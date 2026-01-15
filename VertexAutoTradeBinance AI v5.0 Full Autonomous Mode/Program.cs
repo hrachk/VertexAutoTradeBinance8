@@ -72,6 +72,15 @@ public class Program
             // =====================================================
             // 2️⃣ ОДИН Host
             // =====================================================
+
+            //var builder = Host.CreateDefaultBuilder(args);
+
+            //if (!Environment.UserInteractive)
+            //{
+            //    builder.UseWindowsService();
+            //}
+           
+
             using IHost host = Host.CreateDefaultBuilder(args)
                  .UseWindowsService() // 👈 ВОТ ЭТО КЛЮЧ
                 .UseSerilog() // 👈 ПОДКЛЮЧАЕМ Serilog
@@ -83,6 +92,10 @@ public class Program
                  {
                      logging.ClearProviders();
                    //  logging.AddConsole();
+                 })
+                 .ConfigureHostOptions(o =>
+                 {
+                     o.ShutdownTimeout = TimeSpan.FromSeconds(30);
                  })
                 .ConfigureServices((ctx, services) =>
                 {
