@@ -10,26 +10,38 @@ public sealed class SymbolInfoService
     private readonly ILogger<SymbolInfoService> _logger;
     private readonly BinanceClientFactory _factory;
 
+    // ===== GLOBAL CACHE (INTENTIONALLY STATIC) =====
     private static BinanceFuturesUsdtExchangeInfo? _cachedExchangeInfo;
-    private static DateTime _exchangeInfoTsUtc;
+    private static DateTime _exchangeInfoTsUtc = DateTime.MinValue;
+
+    // single-flight gate for ALL instances
     private static readonly SemaphoreSlim _refreshGate = new(1, 1);
-    private static readonly HashSet<string> _loggedSymbols = new(StringComparer.OrdinalIgnoreCase);
+    private static DateTime _lastAttemptUtc = DateTime.MinValue;
+
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan RetryCooldown = TimeSpan.FromSeconds(20);
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNameCaseInsensitive = true
     };
 
-    public SymbolInfoService(ILogger<SymbolInfoService> logger, BinanceClientFactory factory)
+    public SymbolInfoService(
+        ILogger<SymbolInfoService> logger,
+        BinanceClientFactory factory)
     {
         _logger = logger;
         _factory = factory;
     }
 
+    // ======================================================
+    // PUBLIC MODELS
+    // ======================================================
+
     public enum QtyRule
     {
-        Market, // StopMarket / TakeProfitMarket / Market close (SL/TP)
-        Limit   // Limit entry
+        Market,
+        Limit
     }
 
     public sealed record FuturesFilters(
@@ -37,10 +49,27 @@ public sealed class SymbolInfoService
         decimal MinQty,
         decimal MinNotional,
         decimal TickSize,
-        QtyRule RuleUsed);
+        QtyRule RuleUsed)
+    {
+        public static FuturesFilters Fallback(QtyRule rule) =>
+            new(
+                StepSize: 0.0001m,
+                MinQty: 0.0001m,
+                MinNotional: 0m,
+                TickSize: 0.0001m,
+                RuleUsed: rule
+            );
+    }
+
+    // ======================================================
+    // PUBLIC API
+    // ======================================================
 
     public async Task<(decimal step, decimal minQty, decimal minNotional, decimal tickSize)>
-        GetFuturesFiltersAsync(string symbol, QtyRule rule = QtyRule.Market, CancellationToken ct = default)
+        GetFuturesFiltersAsync(
+            string symbol,
+            QtyRule rule = QtyRule.Market,
+            CancellationToken ct = default)
     {
         var f = await GetFuturesFiltersDetailedAsync(symbol, rule, ct).ConfigureAwait(false);
         return (f.StepSize, f.MinQty, f.MinNotional, f.TickSize);
@@ -52,114 +81,101 @@ public sealed class SymbolInfoService
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(symbol))
-            throw new ArgumentException("Symbol cannot be empty.", nameof(symbol));
+            throw new ArgumentException(nameof(symbol));
 
         await EnsureExchangeInfoCachedAsync(ct).ConfigureAwait(false);
 
         var info = _cachedExchangeInfo;
-        if (info?.Symbols == null || info.Symbols.Length == 0)
-            throw new InvalidOperationException($"[FILTER][{symbol}] ExchangeInfo missing/empty → TRADING BLOCKED");
+        if (info?.Symbols == null)
+        {
+            _logger.LogError("[FILTER][{symbol}] ExchangeInfo missing → FALLBACK", symbol);
+            return FuturesFilters.Fallback(rule);
+        }
 
         var sym = info.Symbols.FirstOrDefault(s =>
             s.Name.Equals(symbol, StringComparison.OrdinalIgnoreCase));
 
         if (sym == null)
-            throw new InvalidOperationException($"[FILTER][{symbol}] Symbol not found → TRADING BLOCKED");
-
-        var filters = sym.Filters;
-        if (filters == null || filters.Length == 0)
-            throw new InvalidOperationException($"[FILTER][{symbol}] Filters empty → TRADING BLOCKED");
-
-        // Log filter types once per symbol
-        if (_loggedSymbols.Add(symbol))
         {
-            var types = new List<string>(filters.Length);
-            foreach (var f in filters)
-            {
-                var el = JsonSerializer.SerializeToElement(f, JsonOpts);
-                types.Add(ReadString(el, "FilterType", "filterType") ?? "UNKNOWN");
-            }
-            _logger.LogInformation("[FILTER][{symbol}] FilterTypes={types}", symbol, string.Join(", ", types));
+            _logger.LogError("[FILTER][{symbol}] Symbol not found → FALLBACK", symbol);
+            return FuturesFilters.Fallback(rule);
         }
 
-        decimal lotStep = 0m, lotMinQty = 0m;
-        decimal marketStep = 0m, marketMinQty = 0m;
-        decimal tickSize = 0m;
+        decimal step = 0m;
+        decimal minQty = 0m;
+        decimal tick = 0.0001m;
         decimal minNotional = 0m;
 
-        foreach (var f in filters)
+        if (sym.Filters != null)
         {
-            var el = JsonSerializer.SerializeToElement(f, JsonOpts);
-
-            var type = ReadString(el, "FilterType", "filterType") ?? string.Empty;
-            switch (type)
+            foreach (var raw in sym.Filters)
             {
-                case "LOT_SIZE":
-                    lotStep = ReadDecimal(el, "StepSize", "stepSize");
-                    lotMinQty = ReadDecimal(el, "MinQuantity", "minQty", "minQuantity");
-                    break;
+                JsonElement el;
+                try
+                {
+                    el = JsonSerializer.SerializeToElement(raw, JsonOpts);
+                }
+                catch
+                {
+                    continue; // 🔒 Binance occasionally returns garbage
+                }
 
-                case "MARKET_LOT_SIZE":
-                    marketStep = ReadDecimal(el, "StepSize", "stepSize");
-                    marketMinQty = ReadDecimal(el, "MinQuantity", "minQty", "minQuantity");
-                    break;
+                var type = ReadString(el, "filterType", "FilterType");
+                if (type == null) continue;
 
-                case "PRICE_FILTER":
-                    tickSize = ReadDecimal(el, "TickSize", "tickSize");
-                    break;
+                switch (type)
+                {
+                    case "LOT_SIZE":
+                    case "MARKET_LOT_SIZE":
+                        step = Math.Max(step, ReadDecimal(el, "stepSize", "StepSize"));
+                        minQty = Math.Max(minQty, ReadDecimal(el, "minQty", "MinQuantity"));
+                        break;
 
-                case "MIN_NOTIONAL":
-                    minNotional = ReadDecimal(el, "MinNotional", "minNotional");
-                    break;
+                    case "PRICE_FILTER":
+                        tick = ReadDecimal(el, "tickSize", "TickSize");
+                        break;
 
-                default:
-                    // Важно: не спамим логами постоянно
-                    break;
+                    case "MIN_NOTIONAL":
+                    case "NOTIONAL":
+                        minNotional = ReadDecimal(el, "minNotional", "Notional");
+                        break;
+                }
             }
         }
 
-        decimal step;
-        decimal minQty;
-
-        if (rule == QtyRule.Market)
-        {
-            if (marketStep <= 0m || marketMinQty <= 0m)
-                throw new InvalidOperationException($"[FILTER][{symbol}] MARKET_LOT_SIZE missing/invalid → TRADING BLOCKED");
-
-            step = marketStep;
-            minQty = marketMinQty;
-        }
-        else
-        {
-            if (lotStep <= 0m || lotMinQty <= 0m)
-                throw new InvalidOperationException($"[FILTER][{symbol}] LOT_SIZE missing/invalid → TRADING BLOCKED");
-
-            step = lotStep;
-            minQty = lotMinQty;
-        }
-
-        if (tickSize <= 0m)
-            throw new InvalidOperationException($"[FILTER][{symbol}] PRICE_FILTER missing/invalid → TRADING BLOCKED");
-
-        if (step <= 0m || minQty <= 0m)
-            throw new InvalidOperationException($"[FILTER][{symbol}] INVALID qty filters step={step} minQty={minQty} → TRADING BLOCKED");
+        // ===== HARD FAIL-SAFE NORMALIZATION =====
+        if (step <= 0m) step = 0.0001m;
+        if (minQty <= 0m) minQty = step;
+        if (tick <= 0m) tick = 0.0001m;
 
         _logger.LogInformation(
-            "[FILTER][{symbol}] rule={rule} step={step} minQty={minQty} minNotional={minNotional} tick={tick}",
-            symbol, rule, step, minQty, minNotional, tickSize);
+            "[FILTER][{symbol}] rule={rule} step={step} minQty={minQty} tick={tick} minNotional={minNotional}",
+            symbol, rule, step, minQty, tick, minNotional);
 
-        return new FuturesFilters(step, minQty, minNotional, tickSize, rule);
+        return new FuturesFilters(step, minQty, minNotional, tick, rule);
     }
 
-    public async Task<decimal> GetTickSizeAsync(string symbol, CancellationToken ct = default)
+    public async Task<decimal> GetTickSizeAsync(
+        string symbol,
+        CancellationToken ct = default)
     {
-        var f = await GetFuturesFiltersDetailedAsync(symbol, QtyRule.Market, ct).ConfigureAwait(false);
+        var f = await GetFuturesFiltersDetailedAsync(symbol, QtyRule.Market, ct)
+            .ConfigureAwait(false);
         return f.TickSize;
     }
 
-    public static void EnforceMinNotionalOrThrow(string symbol, decimal qty, decimal price, decimal minNotional)
+    /// <summary>
+    /// ⚠️ Использовать ТОЛЬКО в OrderExecutor перед реальным placement.
+    /// В логике сигналов / симуляции НЕ вызывать.
+    /// </summary>
+    public static void EnforceMinNotionalOrThrow(
+        string symbol,
+        decimal qty,
+        decimal price,
+        decimal minNotional)
     {
-        if (qty <= 0m || price <= 0m || minNotional <= 0m) return;
+        if (qty <= 0m || price <= 0m || minNotional <= 0m)
+            return;
 
         var notional = qty * price;
         if (notional + 1e-12m < minNotional)
@@ -167,37 +183,78 @@ public sealed class SymbolInfoService
                 $"[FILTER][{symbol}] Notional too small: {notional.ToString("0.########", CultureInfo.InvariantCulture)} < {minNotional.ToString("0.########", CultureInfo.InvariantCulture)}");
     }
 
+    // ======================================================
+    // EXCHANGE INFO CACHE (PRODUCTION SAFE)
+    // ======================================================
+
     private async Task EnsureExchangeInfoCachedAsync(CancellationToken ct)
     {
         if (_cachedExchangeInfo != null &&
-            (DateTime.UtcNow - _exchangeInfoTsUtc).TotalMinutes <= 30)
+            DateTime.UtcNow - _exchangeInfoTsUtc <= CacheTtl)
+            return;
+
+        if (_cachedExchangeInfo != null &&
+            DateTime.UtcNow - _lastAttemptUtc < RetryCooldown)
             return;
 
         await _refreshGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             if (_cachedExchangeInfo != null &&
-                (DateTime.UtcNow - _exchangeInfoTsUtc).TotalMinutes <= 30)
+                DateTime.UtcNow - _exchangeInfoTsUtc <= CacheTtl)
                 return;
 
-            using var client = _factory.CreateRestClient();
-            var res = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync(ct: ct).ConfigureAwait(false);
+            _lastAttemptUtc = DateTime.UtcNow;
 
-            if (!res.Success || res.Data == null)
+            using var client = _factory.CreateRestClient();
+
+            Exception? lastError = null;
+
+            for (int attempt = 1; attempt <= 3; attempt++)
             {
-                if (_cachedExchangeInfo != null)
+                try
                 {
-                    _logger.LogWarning("[FILTER] ExchangeInfo refresh failed, keeping cache. Err={err}", res.Error);
+                    var res = await client
+                        .UsdFuturesApi
+                        .ExchangeData
+                        .GetExchangeInfoAsync(ct: ct)
+                        .ConfigureAwait(false);
+
+                    if (!res.Success || res.Data?.Symbols == null || res.Data.Symbols.Length == 0)
+                        throw new InvalidOperationException(res.Error?.Message ?? "Empty ExchangeInfo");
+
+                    _cachedExchangeInfo = res.Data;
+                    _exchangeInfoTsUtc = DateTime.UtcNow;
+
+                    _logger.LogInformation(
+                        "[FILTER] ExchangeInfo cached OK (symbols={cnt})",
+                        res.Data.Symbols.Length);
+
                     return;
                 }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                    _logger.LogWarning(
+                        ex,
+                        "[FILTER] ExchangeInfo attempt {attempt}/3 failed",
+                        attempt);
 
-                throw new InvalidOperationException($"[FILTER] ExchangeInfo load failed → TRADING BLOCKED. Err={res.Error}");
+                    await Task.Delay(300 * attempt, ct);
+                }
             }
 
-            _cachedExchangeInfo = res.Data;
-            _exchangeInfoTsUtc = DateTime.UtcNow;
+            if (_cachedExchangeInfo != null)
+            {
+                _logger.LogError(
+                    lastError,
+                    "[FILTER] ExchangeInfo refresh failed → USING STALE CACHE");
+                return;
+            }
 
-            _logger.LogInformation("[FILTER] ExchangeInfo cached (symbols={cnt})", _cachedExchangeInfo.Symbols?.Length ?? 0);
+            throw new InvalidOperationException(
+                "[FILTER] ExchangeInfo unavailable and no cache present",
+                lastError);
         }
         finally
         {
@@ -205,9 +262,10 @@ public sealed class SymbolInfoService
         }
     }
 
-    // --------------------------
-    // JSON readers (robust to lib changes)
-    // --------------------------
+    // ======================================================
+    // JSON HELPERS
+    // ======================================================
+
     private static string? ReadString(JsonElement el, params string[] names)
     {
         if (el.ValueKind != JsonValueKind.Object) return null;
@@ -216,7 +274,8 @@ public sealed class SymbolInfoService
         {
             if (el.TryGetProperty(n, out var p))
             {
-                if (p.ValueKind == JsonValueKind.String) return p.GetString();
+                if (p.ValueKind == JsonValueKind.String)
+                    return p.GetString();
                 return p.ToString();
             }
         }
@@ -238,7 +297,11 @@ public sealed class SymbolInfoService
             }
 
             if (p.ValueKind == JsonValueKind.String &&
-                decimal.TryParse(p.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var ds))
+                decimal.TryParse(
+                    p.GetString(),
+                    NumberStyles.Any,
+                    CultureInfo.InvariantCulture,
+                    out var ds))
                 return ds;
         }
 

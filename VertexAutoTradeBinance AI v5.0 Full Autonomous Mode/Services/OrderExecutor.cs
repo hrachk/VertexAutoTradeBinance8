@@ -81,64 +81,28 @@ namespace VertexAutoTradeBinance8.Services
         // MAIN ENTRY
         // =====================================================================
         public async Task<OrderResult> ExecuteAsync(
-        TradeSignal signal,
-        decimal quantity,
-        CancellationToken ct = default)
+     TradeSignal signal,
+     decimal quantity,
+     CancellationToken ct = default)
         {
             using var client = _factory.CreateRestClient();
 
+            // =============================================================
+            // SYMBOL FILTERS
+            // =============================================================
             var filters = await _symbolInfo.GetFuturesFiltersAsync(signal.Symbol);
             var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
             var step = filters.step <= 0 ? 0.0001m : filters.step;
 
-            // Округление количества
             quantity = Quantize(quantity, step);
 
-            if (quantity < filters.minQty)
+            if (quantity <= 0 || quantity < filters.minQty)
             {
-                _logger.LogWarning(
-                    "[ORDER][{symbol}] qty<{minQty} after quantize → BLOCK",
-                    signal.Symbol, filters.minQty);
+                var reason = "QTY_TOO_SMALL";
 
-                return OrderResult.Fail("QTY_TOO_SMALL");
-            }
-            if (quantity <= 0)
-            {
-                var reason = signal.RejectReason ?? "RiskRejected";
+                await _simulator.SimulateMissedTradeAsync(signal, reason);
 
-                _logger.LogWarning(
-                    "[ORDER][{symbol}] QTY=0 → BLOCKED by RiskManager | reason={reason}",
-                    signal.Symbol, reason);
-
-                // 1) симуляция пропущенной сделки
-                //  await _simulator.SimulateMissedTradeAsync(signal, reason);
-                var missed = await _simulator.SimulateMissedTradeAsync(signal, reason);
-
-                if (missed != null)
-                { 
-                    // 🔥 ОБУЧЕНИЕ AI
-                    _ai.RecordMarketStateTriggered(
-                        reason: $"MISSED:{reason}",
-                        symbol: signal.Symbol,
-                        timeframe: "MissedTrade",
-                        regime: missed.Regime,
-                        slope: missed.Slope,
-                        volatility: missed.Vol,
-                        atr: missed.Atr,
-                        confidence: missed.Confidence,
-                        skipSnapshot: true
-                    );
-                    // 2) (опционально, но правильно)
-                    _logger.LogInformation(
-                        "[ORDER][{symbol}] MissedTrade recorded → reason={reason}",
-                        missed.Symbol,
-                        missed.Reason
-                    );
-                }
-               
-
-                // 2) ОБЯЗАТЕЛЬНО: создаём запись SignalCreated (иначе нечего обновлять)
-                var blockedRec = _executedSignalService.AddSignalCreated(
+                var rec = _executedSignalService.AddSignalCreated(
                     signal,
                     opportunityScore: 0,
                     atr: signal.Atr ?? 0m,
@@ -146,16 +110,15 @@ namespace VertexAutoTradeBinance8.Services
                     slope: 0m,
                     qty: 0m,
                     notional: 0m,
-                    tags: $"BLOCKED_QTY0|reason={reason}"
+                    tags: reason
                 );
 
-                // 3) обновляем статус ЭТОЙ ЖЕ записи
                 _executedSignalService.UpdateStatus(
-                    symbol: signal.Symbol,
-                    time: blockedRec.Time,                 // ✅ тот же time
-                    status: TradeExecutionStatus.Blocked,
-                    qty: 0,
-                    notional: 0
+                    signal.Symbol,
+                    rec.Time,
+                    TradeExecutionStatus.Blocked,
+                    0,
+                    0
                 );
 
                 return OrderResult.Fail(reason);
@@ -167,71 +130,63 @@ namespace VertexAutoTradeBinance8.Services
 
             decimal entryPrice = Quantize(signal.EntryPrice, tick);
 
-            // ===== current price for execution tuning =====
-            decimal lastPrice = 0m;
+            // =============================================================
+            // LAST PRICE (SAFE, RATE-LIMIT AWARE)
+            // =============================================================
+            decimal lastPrice = entryPrice;
             try
             {
-                // Лучше брать из твоего MarketDataService/WS-cache, но не ломаем — берём REST price точечно.
-                var px = await client.UsdFuturesApi.ExchangeData.GetPriceAsync(signal.Symbol, ct: ct);
-                if (px.Success && px.Data != null)
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(TimeSpan.FromMilliseconds(800));
+
+                var px = await client.UsdFuturesApi.ExchangeData.GetPriceAsync(
+                    signal.Symbol, ct: cts.Token);
+
+                if (px.Success && px.Data != null && px.Data.Price > 0)
                     lastPrice = px.Data.Price;
             }
-            catch { /* ignore */ }
-
-            // fallback if unavailable
-            if (lastPrice <= 0)
-                lastPrice = entryPrice;
-
-            // ===== build aggressive limit to reduce TimeoutNoFill =====
-            decimal aggrLimitPrice;
-            if (side == OrderSide.Buy)
-            {
-                // BUY: чтобы гарантировать fill лимитом, цена должна быть >= текущей
-                var p = lastPrice * (1m + AGGR_LIMIT_OFFSET_PCT);
-                aggrLimitPrice = Quantize(Math.Max(entryPrice, p), tick);
-            }
-            else
-            {
-                // SELL: чтобы гарантировать fill лимитом, цена должна быть <= текущей
-                var p = lastPrice * (1m - AGGR_LIMIT_OFFSET_PCT);
-                aggrLimitPrice = Quantize(Math.Min(entryPrice, p), tick);
-            }
+            catch { /* fallback to entryPrice */ }
 
             // =============================================================
-            // 0) Regime / SmartRegime → UI / analytics
+            // AGGRESSIVE LIMIT PRICE
+            // =============================================================
+            decimal aggrLimitPrice;
+            if (side == OrderSide.Buy)
+                aggrLimitPrice = Quantize(Math.Max(entryPrice, lastPrice * 1.001m), tick);
+            else
+                aggrLimitPrice = Quantize(Math.Min(entryPrice, lastPrice * 0.999m), tick);
+
+            // =============================================================
+            // REGIME / SMART REGIME
             // =============================================================
             var klines = await _marketData.GetKlines(signal.Symbol, KlineInterval.FiveMinutes, 200);
             var baseReg = _marketRegimeService.DetectRegime(signal.Symbol, KlineInterval.FiveMinutes, klines);
             var smart = _smartRegime.Evaluate(signal.Symbol, KlineInterval.FiveMinutes, klines);
 
-            // =====================================================================
-            // MARKET ENTRY HARD FILTER (FINAL)  (ONLY ADD / FIX, NO LOGIC BREAK)
-            // =====================================================================
-
-            // 1) SmartStrongTrend
             bool isSmartStrongTrend =
                 smart.BaseRegime == MarketRegime.StrongUpTrend ||
                 smart.BaseRegime == MarketRegime.StrongDownTrend;
 
-            // 2) Impulse
             bool hasImpulse = IsImpulse(klines, signal.Atr ?? 0m);
 
-            // 3) RR CHECK
+            // =============================================================
+            // RR CHECK (MAX TP)
+            // =============================================================
             decimal rr = 0m;
-            if (signal.StopLoss > 0 && signal.TakeProfit.HasValue)
+            if (signal.StopLoss > 0 && signal.TakeProfits?.Any() == true)
             {
                 var risk = Math.Abs(signal.EntryPrice - signal.StopLoss);
-                var reward = Math.Abs(signal.TakeProfit.Value - signal.EntryPrice);
-                if (risk > 0)
-                    rr = reward / risk;
+                var reward = signal.TakeProfits.Max(tp => Math.Abs(tp - signal.EntryPrice));
+                if (risk > 0) rr = reward / risk;
             }
 
-            const decimal MIN_MARKET_RR = 1.8m;
-            bool rrOk = rr >= MIN_MARKET_RR;
+            bool rrOk = rr >= 1.8m;
 
-            // 4) LiquidityGuard (REAL API)  ✅
-            //    Никаких IsDanger/IsSymbolBlocked — у тебя есть только Analyze(...)
+            // =============================================================
+            // LIQUIDITY GUARD (FAIL-SAFE)
+            // =============================================================
             LiquidityGuardResult liquidityResult;
+
             try
             {
                 liquidityResult = _liquidityGuard.Analyze(
@@ -239,19 +194,33 @@ namespace VertexAutoTradeBinance8.Services
                     KlineInterval.FiveMinutes,
                     klines,
                     signal.Side,
-                    superSignal: false
+                    superSignal: signal.IsSuperSignal
                 );
             }
             catch (Exception ex)
             {
-                // fail-safe: если LiquidityGuard упал — не блокируем market-only по ошибке сервиса
-                _logger.LogWarning(ex, "[LiquidityGuard] Analyze failed → fail-safe allow");
-                liquidityResult = new LiquidityGuardResult(false, LiquidityGuardReason.None, "AnalyzeFailed");
+                _logger.LogWarning(
+                    ex,
+                    "[LiquidityGuard] Analyze failed → FAIL-SAFE ALLOW ({symbol})",
+                    signal.Symbol
+                );
+
+                liquidityResult = new LiquidityGuardResult(
+                    Block: false,
+                    Reason: LiquidityGuardReason.None,
+                    IsExtreme: false,
+                    Details: "AnalyzeFailed",
+                    UtcTime: DateTime.UtcNow
+                );
             }
 
             bool liquiditySafe = !liquidityResult.Block;
 
-            // === FINAL DECISION ===
+
+
+            // =============================================================
+            // MARKET ENTRY DECISION
+            // =============================================================
             bool allowMarketEntry =
                 isSmartStrongTrend &&
                 smart.AllowAggressiveTrendEntries &&
@@ -259,451 +228,189 @@ namespace VertexAutoTradeBinance8.Services
                 rrOk &&
                 liquiditySafe;
 
-            if (allowMarketEntry)
+            // 🔥 HIGH CONFIDENCE OVERRIDE
+            if (!allowMarketEntry && smart.Confidence >= 0.82m && liquiditySafe)
             {
+                allowMarketEntry = true;
                 _logger.LogWarning(
-                    "[ORDER][{symbol}] MARKET ENTRY ENABLED | SmartStrongTrend + Impulse | RR={rr:F2} | Liquidity=OK",
-                    signal.Symbol, rr
-                );
-            }
-            else
-            {
-                _logger.LogInformation(
-                    "[ORDER][{symbol}] MARKET ENTRY BLOCKED | trend={trend} impulse={imp} rr={rr:F2} liquidityBlock={block} reason={reason}",
-                    signal.Symbol,
-                    smart.BaseRegime,
-                    hasImpulse,
-                    rr,
-                    liquidityResult.Block,
-                    liquidityResult.Reason
-                );
+                    "[ORDER][{symbol}] MARKET OVERRIDE by HIGH CONFIDENCE conf={conf}",
+                    signal.Symbol, smart.Confidence);
             }
 
-            var volatility = baseReg.VolatilityPercent;
-            var slope = baseReg.TrendSlopePercent;
-            int opportunityScore = (int)(smart.Confidence * 100);
-
-            decimal aiRisk =
-                signal.SafetyRiskMultiplier *
-                (signal.AiQuality ?? 1m) *
-                (volatility < 0.01m ? 0.8m : 1.2m);
-
-            // LOG: создан сигнал
-            decimal notional = quantity * signal.EntryPrice;
-            var execRecord = _executedSignalService.AddSignalCreated(
+            // =============================================================
+            // EXECUTED SIGNAL CREATED
+            // =============================================================
+            decimal notional = quantity * entryPrice;
+            var execRec = _executedSignalService.AddSignalCreated(
                 signal,
-                opportunityScore,
-                signal.Atr ?? 0,
-                volatility,
-                slope,
-                quantity,
-                notional,
-                $"AiRisk={aiRisk:F2}"
-            );
+                opportunityScore: (int)(smart.Confidence * 100),
+                atr: signal.Atr ?? 0m,
+                volatility: baseReg.VolatilityPercent,
+                slope: baseReg.TrendSlopePercent,
+                qty: quantity,
+                notional: notional,
+                tags: $"Regime={smart.BaseRegime}");
 
-            var execTime = execRecord.Time;
+            var execTime = execRec.Time;
 
-
-            // =====================================================================
-            // HARD VETO GATES (PRODUCTION)
-            // =====================================================================
-
-            // 1) LiquidityGuard HARD BLOCK (no entry unless superSignal)
-          
+            // =============================================================
+            // HARD BLOCK: LIQUIDITY
+            // =============================================================
             if (liquidityResult.Block)
             {
-                _logger.LogWarning(
-                    "[ORDER][{symbol}] HARD BLOCK by LiquidityGuard | reason={reason} details={details}",
-                    signal.Symbol, liquidityResult.Reason, liquidityResult.Details);
-
-                var missed = await _simulator.SimulateMissedTradeAsync(
+                await _simulator.SimulateMissedTradeAsync(
                     signal,
-                    $"LiquidityGuardBlock:{liquidityResult.Reason}"
-                );
-
-                if (missed != null)
-                {
-                    _ai.RecordMarketStateTriggered(
-                        reason: $"MISSED:LiquidityGuard:{liquidityResult.Reason}",
-                        symbol: signal.Symbol,
-                        timeframe: "MissedTrade",
-                        regime: missed.Regime,
-                        slope: missed.Slope,
-                        volatility: missed.Vol,
-                        atr: missed.Atr,
-                        confidence: missed.Confidence,
-                        skipSnapshot: true
-                    );
-                }
+                    $"LiquidityGuard:{liquidityResult.Reason}");
 
                 _executedSignalService.UpdateStatus(
-                    symbol: signal.Symbol,
-                    time: execTime,
-                    status: TradeExecutionStatus.Blocked,
-                    qty: 0,
-                    notional: 0
-                );
+                    signal.Symbol, execTime,
+                    TradeExecutionStatus.Blocked, 0, 0);
 
-                return OrderResult.Fail($"LiquidityGuardBlock:{liquidityResult.Reason}");
+                return OrderResult.Fail($"LiquidityGuard:{liquidityResult.Reason}");
             }
 
+            // =============================================================
+            // ENTRY ORDER
+            // =============================================================
 
+            var entryType = allowMarketEntry
+     ? FuturesOrderType.Market
+     : FuturesOrderType.Limit;
 
-            // 2) AI Risk Veto (threshold should be config later)
-            const decimal AI_RISK_VETO = 1.8m;
-            
-            if (aiRisk >= AI_RISK_VETO)
-            {
-                var reason = $"AiRiskVeto:{aiRisk:F2}";
+            decimal? orderPrice = allowMarketEntry
+                ? null
+                : aggrLimitPrice;
 
-                _logger.LogWarning(
-                    "[ORDER][{symbol}] AI RISK VETO | aiRisk={aiRisk:F2} >= {thr}",
-                    signal.Symbol, aiRisk, AI_RISK_VETO);
+            TimeInForce? tif = allowMarketEntry
+                ? null
+                : TimeInForce.GoodTillCanceled;
 
-                // 🔥 КЛЮЧЕВОЕ: получаем MissedTradeRecord
-                var missed = await _simulator.SimulateMissedTradeAsync(signal, reason);
+            // 🔒 HARD GUARDS (оставить навсегда)
+            if (entryType == FuturesOrderType.Market && orderPrice != null)
+                return OrderResult.Fail("InvalidMarketOrderWithPrice");
 
-                // статус — для executed_signals.json
-                _executedSignalService.UpdateStatus(
-                    symbol: signal.Symbol,
-                    time: execTime,
-                    status: TradeExecutionStatus.Blocked,
-                    qty: 0,
-                    notional: 0
-                );
+            if (entryType == FuturesOrderType.Limit && orderPrice == null)
+                return OrderResult.Fail("InvalidLimitOrderWithoutPrice");
 
-                // (опционально, но правильно) — лог подтверждения
-                if (missed != null)
-                {
-                    _logger.LogInformation(
-                        "[ORDER][{symbol}] MissedTrade recorded (AI_RISK_VETO)",
-                        missed.Symbol);
-                }
-
-                return OrderResult.Fail(reason);
-            }
-
-
-            // 3) Symbol Freeze Controller (hook here once service is available)
-            // TODO: inject ISymbolFreezeController or AiSelfLearning DecisionGates and hard veto here.
-            // if (_symbolFreeze.IsFrozen(signal.Symbol)) { ... return Fail("SymbolFrozen"); }
-
-            var orderPrice = allowMarketEntry ? lastPrice : aggrLimitPrice;
-            var orderNotional = quantity * orderPrice;
-
-            if (!allowMarketEntry && filters.minNotional > 0 && orderNotional < filters.minNotional)
-            {
-                var reason = $"MinNotionalAtOrderPrice:{orderNotional:F4}<{filters.minNotional:F4}";
-                _logger.LogWarning("[ORDER][{symbol}] BLOCK {reason} | qty={qty} price={price}",
-                    signal.Symbol, reason, quantity, orderPrice);
-
-                _executedSignalService.UpdateStatus(signal.Symbol, execTime, TradeExecutionStatus.Blocked, 0, 0);
-                return OrderResult.Fail(reason);
-            }
-
-            quantity = NormalizeToStep(quantity, step);
-
-            entryPrice = Quantize(signal.EntryPrice, tick);
-            aggrLimitPrice = Quantize(aggrLimitPrice, tick);
-            signal.StopLoss = Quantize(signal.StopLoss, tick);
-
-            if (signal.StopLoss > 0)
-                signal.StopLoss = Quantize(signal.StopLoss, tick);
-
-            if (signal.TakeProfit.HasValue)
-                signal.TakeProfit = Quantize(signal.TakeProfit.Value, tick);
-
-             
-
-            var entryType = allowMarketEntry ? FuturesOrderType.Market : FuturesOrderType.Limit;
-
-            _logger.LogInformation(
-                "[ORDER][{symbol}] EntryMode={mode} smart={smart} base={baseReg} impulse={imp} rrOk={rrOk} liqSafe={liqSafe}",
-                signal.Symbol,
-                allowMarketEntry ? "MARKET" : "LIMIT",
-                smart.SmartType,
-                smart.BaseRegime,
-                hasImpulse,
-                rrOk,
-                liquiditySafe
-            );
-
-            // =====================================================================
-            // 1) ENTRY (LIMIT) — БЕЗ reduceOnly
-            // =====================================================================
             var entryRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: signal.Symbol,
                 side: side,
-                //type: allowMarketEntry ? FuturesOrderType.Market : FuturesOrderType.Limit,
-                //quantity: quantity,
-                //price: allowMarketEntry ? null : entryPrice,
                 type: entryType,
                 quantity: quantity,
-                price: allowMarketEntry ? null : aggrLimitPrice,
+                price: orderPrice,
                 positionSide: posSide,
-              //  workingType: WorkingType.Mark,
-                timeInForce: allowMarketEntry ? null : TimeInForce.GoodTillCanceled,
-                ct: ct);
+                timeInForce: tif,
+                reduceOnly: false,
+                workingType: WorkingType.Mark,
+                ct: ct
+            );
+
 
             if (!entryRes.Success || entryRes.Data == null)
             {
-                var code = entryRes.Error?.Code;
-                var msg = entryRes.Error?.Message ?? "Unknown";
-                var reason = code.HasValue ? $"EntryError:{code}:{msg}" : $"EntryError:{msg}";
+                await _simulator.SimulateMissedTradeAsync(signal, "EntryError");
+                _executedSignalService.UpdateStatus(
+                    signal.Symbol, execTime,
+                    TradeExecutionStatus.Blocked, 0, 0);
 
-                _logger.LogError("[ORDER][{symbol}] ENTRY ERROR | {reason}", signal.Symbol, reason);
-
-                await _simulator.SimulateMissedTradeAsync(signal, reason);
-
-                _executedSignalService.UpdateStatus(signal.Symbol, execTime, TradeExecutionStatus.Blocked, 0, 0);
-                return OrderResult.Fail(reason);
+                return OrderResult.Fail("ENTRY_FAILED");
             }
-
 
             long entryOrderId = entryRes.Data.Id;
-            _logger.LogInformation("[ORDER][{symbol}] ENTRY OK: id={id}, type={type}, price={price}, qty={qty} (signalEntry={sig})",
-     signal.Symbol,
-     entryOrderId,
-     allowMarketEntry ? "MARKET" : "LIMIT",
-     allowMarketEntry ? lastPrice : aggrLimitPrice,
-     quantity,
-     entryPrice);
 
+            decimal notionalAtCreate = orderPrice.HasValue
+    ? quantity * orderPrice.Value
+    : 0m; // MARKET — notional неизвестен до fill
 
             _executedSignalService.UpdateStatus(
-                symbol: signal.Symbol,
-                time: execTime,
-                status: TradeExecutionStatus.OrderCreated,
-                qty: quantity,
-                notional: quantity * entryPrice
-            );
-            _simulator.AppendLifecycleEvent(
-              signal,
-              "ORDER_CREATED"
-            );
-             
-            // =====================================================================
-            // 2) WAIT-POSITION/ORDER — dual-track (ORDER + POSITION)
-            // =====================================================================
-            var wait = await WaitForPositionOrOrderAsync(
-                client,
-                signal,
-                posSide,
-                entryOrderId,
-                entryPrice,
-                quantity,
-                ct);
+     signal.Symbol,
+     execTime,
+     TradeExecutionStatus.OrderCreated,
+     quantity,
+     orderPrice.HasValue
+         ? quantity * orderPrice.Value
+         : 0m
+ );
 
-            // ===== MARKET FALLBACK (LIMIT -> MARKET) to eliminate TimeoutNoFill =====
-            if (!wait.HasPosition && !allowMarketEntry && wait.Reason == "TimeoutNoFill")
+
+             _simulator.AppendLifecycleEventAsync(signal, "ORDER_CREATED");
+
+            // =============================================================
+            // WAIT FILL
+            // =============================================================
+            bool marketFallbackUsed = false;
+
+            var wait = await WaitForPositionOrOrderAsync(
+                client, signal, posSide,
+                entryOrderId, entryPrice,
+                quantity, ct);
+
+            if (!wait.HasPosition && !allowMarketEntry && wait.Reason == "TimeoutNoFill" && !marketFallbackUsed)
             {
-                // переоценка цены
-                decimal nowPx = 0m;
-                try
-                {
-                    var px2 = await client.UsdFuturesApi.ExchangeData.GetPriceAsync(signal.Symbol, ct: ct);
-                    if (px2.Success && px2.Data != null)
-                        nowPx = px2.Data.Price;
-                }
+                marketFallbackUsed = true;
+
+                try { await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, entryOrderId, ct: ct); }
                 catch { }
 
-                if (nowPx > 0 && entryPrice > 0)
+                var mktRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    signal.Symbol,
+                    side,
+                    FuturesOrderType.Market,
+                    quantity,
+                    positionSide: posSide,
+                    ct: ct);
+
+                if (mktRes.Success && mktRes.Data != null)
                 {
-                    decimal slipPct = side == OrderSide.Buy
-                        ? (nowPx - entryPrice) / entryPrice
-                        : (entryPrice - nowPx) / entryPrice;
-
-                    // если цена ушла не слишком далеко и ликвидность ок — можно безопасно добрать MARKET
-                    if (slipPct <= MARKET_FALLBACK_MAX_SLIP_PCT && liquiditySafe)
-                    {
-                        _logger.LogWarning(
-                            "[ORDER][{symbol}] LIMIT TimeoutNoFill → FALLBACK MARKET (slip={slip:P2}, liqSafe={liq})",
-                            signal.Symbol, slipPct, liquiditySafe);
-
-                        // отменяем старый лимит (best-effort)
-                        try { await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, entryOrderId, ct: ct); } catch { }
-
-                        // ставим MARKET
-                        var mktRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                            symbol: signal.Symbol,
-                            side: side,
-                            type: FuturesOrderType.Market,
-                            quantity: quantity,
-                            positionSide: posSide,
-                            ct: ct);
-
-                        if (mktRes.Success && mktRes.Data != null)
-                        {
-                            entryOrderId = mktRes.Data.Id;
-
-                            // ждём позицию/факт fill (коротко)
-                            var wait2 = await WaitForPositionOrOrderAsync(
-                                client, signal, posSide, entryOrderId, nowPx, quantity, ct);
-
-                            if (wait2.HasPosition)
-                            {
-                                entryPrice = wait2.EntryPrice;
-                                quantity = wait2.Qty;
-
-                                _logger.LogInformation(
-                                    "[ORDER][{symbol}] MARKET FALLBACK SUCCESS → entry={entry} qty={qty}",
-                                    signal.Symbol, entryPrice, quantity);
-
-                                // и дальше код пойдёт как будто обычный успех (ниже не выходим)
-                                wait = wait2;
-                            }
-                        }
-                    }
+                    entryOrderId = mktRes.Data.Id;
+                    wait = await WaitForPositionOrOrderAsync(
+                        client, signal, posSide,
+                        entryOrderId, lastPrice,
+                        quantity, ct);
                 }
             }
+
+
 
             if (!wait.HasPosition)
             {
-                var reason = wait.Reason ?? "EntryNotFilled";
+                var reason = marketFallbackUsed
+                    ? $"FallbackMarketFailed:{wait.Reason}"
+                    : wait.Reason ?? "NotFilled";
 
-                _logger.LogError(
-                    "[ORDER][{symbol}] ENTRY FAIL → missed | reason={reason}",
-                    signal.Symbol, reason);
+                await _simulator.SimulateMissedTradeAsync(signal, reason);
 
-                // 1) Missed trade (log + simulated learning)
-                var missed = await _simulator.SimulateMissedTradeAsync(signal, reason);
-
-                // 2) 🔥 AI learning из missed trade
-                if (missed != null)
-                {
-                    _ai.RecordMarketStateTriggered(
-                        reason: $"MISSED:{reason}",
-                        symbol: signal.Symbol,
-                        timeframe: "MissedTrade",
-                        regime: missed.Regime,
-                        slope: missed.Slope,
-                        volatility: missed.Vol,
-                        atr: missed.Atr,
-                        confidence: missed.Confidence,
-                        skipSnapshot: true
-                    );
-                }
-
-                // 3) 🔥 ОБЯЗАТЕЛЬНО: обновляем executed_signals
                 _executedSignalService.UpdateStatus(
-                    symbol: signal.Symbol,
-                    time: execTime,                 // ❗ НЕ DateTime.UtcNow
-                    status: TradeExecutionStatus.Blocked,
+                    signal.Symbol,
+                    execTime,
+                    TradeExecutionStatus.Blocked,
                     qty: 0,
                     notional: 0
                 );
 
-                // 4) cleanup
-                try
-                {
-                    await client.UsdFuturesApi.Trading.CancelOrderAsync(
-                        signal.Symbol,
-                        entryOrderId,
-                        ct: ct);
-                }
-                catch { }
-
-
-                // =========================================================
-                // SAFE FALLBACK: LIMIT → MARKET (ONE SHOT, PRODUCTION)
-                // =========================================================
-                if (!allowMarketEntry && reason == "TimeoutNoFill")
-                {
-                    _logger.LogWarning(
-                        "[ORDER][{symbol}] LIMIT TimeoutNoFill → retry MARKET (safe fallback)",
-                        signal.Symbol);
-
-                    var marketRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                        symbol: signal.Symbol,
-                        side: side,
-                        type: FuturesOrderType.Market,
-                        quantity: quantity,
-                        positionSide: posSide,
-                        ct: ct);
-
-                    if (marketRes.Success && marketRes.Data != null)
-                    {
-                        var fillPrice =
-                            marketRes.Data.AveragePrice > 0
-                                ? marketRes.Data.AveragePrice
-                                : signal.EntryPrice;
-
-                        _logger.LogWarning(
-                            "[ORDER][{symbol}] MARKET fallback FILLED → accept entry price={price}",
-                            signal.Symbol, fillPrice);
-
-                        return OrderResult.Successs(
-                            fillPrice,
-                            quantity,
-                            marketRes.Data.Id);
-                    }
-                }
-
-                return OrderResult.Fail(reason); 
+                return OrderResult.Fail(reason);
             }
+ 
 
-
-
-            // Если мы здесь — позиция реально открыта
+            // =============================================================
+            // FINAL SUCCESS
+            // =============================================================
             entryPrice = wait.EntryPrice;
             quantity = wait.Qty;
 
-            _logger.LogInformation("[ORDER][{symbol}] POSITION OPENED at {price}, qty={qty}",
-                signal.Symbol, entryPrice, quantity);
-
+            if (entryPrice <= 0 || quantity <= 0)
+                return OrderResult.Fail("InvalidFinalState");
 
             _executedSignalService.UpdateStatus(
-                symbol: signal.Symbol,
-                time: execTime,
-                status: TradeExecutionStatus.PositionOpened,
-                qty: quantity,
-                notional: quantity * entryPrice,
-                filledEntry: entryPrice                     // ✅ ФАКТИЧЕСКИЙ ВХОД
-            );
+                signal.Symbol, execTime,
+                TradeExecutionStatus.PositionOpened,
+                quantity, quantity * entryPrice,
+                filledEntry: entryPrice);
+            _simulator.AppendLifecycleEventAsync(signal, "POSITION_OPENED");
 
-            _simulator.AppendLifecycleEvent(
-      signal,
-      "POSITION_OPENED"
-  );
-
-
-            // =====================================================================
-            // 3) COMPUTE SL / TP (NO PLACEMENT HERE)
-            // Responsibility: PositionSupervisorService v8.1 (NORMAL → ALGO RAW)
-            // =====================================================================
-
-            decimal atr = signal.Atr ?? 0m;
-            decimal sl = signal.StopLoss;
-
-            // TP FIX
-            decimal tp = signal.TakeProfit ?? 0;
-            if (tp <= 0 && signal.TakeProfits != null && signal.TakeProfits.Count > 0)
-                tp = signal.TakeProfits[0];
-
-            if (atr > 0)
-            {
-                sl = Quantize(sl, tick);
-                if (tp > 0)
-                    tp = Quantize(tp, tick);
-            }
-
-            _executedSignalService.UpdateProtectionComputed(
-            symbol: signal.Symbol,
-            time: execTime,
-            stopLoss: sl,
-            takeProfit: tp,
-            atr: atr,
-            tags: $"ProtectionComputed|Regime={smart.BaseRegime}|Liquidity=OK"
-        );
-
-            _logger.LogWarning(
-                "[ORDER][{symbol}] PROTECTION COMPUTED ONLY → SL={sl}, TP={tp}. Supervisor will place orders (NORMAL/ALGO).",
-                signal.Symbol, sl, tp
-            ); 
-
-            // ❗ НИЧЕГО НЕ СТАВИМ ЗДЕСЬ
             return OrderResult.Successs(entryPrice, quantity, entryOrderId);
         }
+
 
         // =====================================================================
         // WAIT FOR POSITION or ORDER FILL (dual-track)
@@ -763,9 +470,18 @@ namespace VertexAutoTradeBinance8.Services
                         // ✅ PRO FIX: if FILLED — accept immediately, position can lag
                         if (status == OrderStatus.Filled)
                         {
-                            var qty = executedQty > 0 ? executedQty : requestedQty;
-                            var entry = avgPrice > 0 ? avgPrice : fallbackEntry;
+                            var qty =
+     executedQty > 0
+         ? executedQty
+         : (requestedQty > 0
+             ? requestedQty
+             : 0m);
 
+                            var entry =
+                                avgPrice > 0
+                                    ? avgPrice
+                                    : fallbackEntry;
+                           
                             _logger.LogInformation(
                                 "[ORDER][{symbol}] Order FILLED before position visible → accept fill. qty={qty} entry={entry}",
                                 signal.Symbol, qty, entry);
@@ -777,7 +493,13 @@ namespace VertexAutoTradeBinance8.Services
                         if (status is OrderStatus.Canceled or OrderStatus.Rejected or OrderStatus.Expired)
                         {
                             if (executedQty <= 0)
-                                return (false, 0m, 0m, "OrderCanceled");
+                                return (false, 0m, 0m, status switch
+                                {
+                                    OrderStatus.Canceled => "OrderCanceled",
+                                    OrderStatus.Rejected => "OrderRejected",
+                                    OrderStatus.Expired => "OrderExpired",
+                                    _ => "OrderDead"
+                                });
 
                             // executedQty > 0: do NOT fail here, keep checking position for a bit
                             _logger.LogWarning(

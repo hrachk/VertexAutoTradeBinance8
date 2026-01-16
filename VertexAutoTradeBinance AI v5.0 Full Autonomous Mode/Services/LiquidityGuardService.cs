@@ -12,15 +12,20 @@ public enum LiquidityGuardReason
     LowVolume
 }
 
-public record LiquidityGuardResult(
+public sealed record LiquidityGuardResult(
     bool Block,
     LiquidityGuardReason Reason,
+    bool IsExtreme,
     string? Details = null,
-    DateTime UtcTime = default);
+    DateTime UtcTime = default
+);
 
-public class LiquidityGuardService
+public sealed class LiquidityGuardService
 {
+    private static readonly TimeSpan ExtremeTtl = TimeSpan.FromMinutes(2);
+
     public LiquidityGuardResult? LastDanger { get; private set; }
+
     private readonly ILogger<LiquidityGuardService> _logger;
 
     public LiquidityGuardService(ILogger<LiquidityGuardService> logger)
@@ -29,10 +34,26 @@ public class LiquidityGuardService
     }
 
     /// <summary>
+    /// EXTREME = недавний HARD-блок по ликвидности (TTL-ограничен)
+    /// Используется для запрета counter-trend override
+    /// </summary>
+    public bool IsExtreme()
+    {
+        var d = LastDanger;
+        if (d == null) return false;
+
+        if (!d.IsExtreme) return false;
+
+        if (d.UtcTime == default) return false;
+
+        return (DateTime.UtcNow - d.UtcTime) <= ExtremeTtl;
+    }
+
+    /// <summary>
     /// PRO-фильтр ликвидности:
-    /// - умный low-volume
-    /// - smart stop-hunt detection
-    /// - major coins (BTC/ETH) НЕ блокируются по low-volume
+    /// - smart low-volume (soft / extreme)
+    /// - stop-hunt detection
+    /// - BTC/ETH не блокируются по low-volume
     /// - SuperSignal override
     /// </summary>
     public LiquidityGuardResult Analyze(
@@ -42,12 +63,16 @@ public class LiquidityGuardService
         SignalSide side,
         bool superSignal = false)
     {
-        // Всегда обновляем LastDanger, чтобы не таскать старый мусор
+        // ---------------------------------------------------------------------
+        // SAFETY: insufficient data
+        // ---------------------------------------------------------------------
         if (klines == null || klines.Count < 30)
         {
-            var r0 = new LiquidityGuardResult(false, LiquidityGuardReason.None, "insufficient klines", DateTime.UtcNow);
-            LastDanger = r0;
-            return r0;
+            return SetDanger(
+                block: false,
+                reason: LiquidityGuardReason.None,
+                isExtreme: false,
+                details: "insufficient klines");
         }
 
         bool isMajor = symbol is "BTCUSDT" or "ETHUSDT";
@@ -57,8 +82,8 @@ public class LiquidityGuardService
         decimal avgBody = window.Average(k => Math.Abs(k.ClosePrice - k.OpenPrice));
         decimal avgVolume = window.Average(k => k.Volume);
 
-        // SAFETY: чтобы avgBody не был нулём (иначе стоп-хант начинает ловить мусор)
-        if (avgBody <= 0m) avgBody = 0.00000001m;
+        if (avgBody <= 0m)
+            avgBody = 0.00000001m; // safety clamp
 
         var last = klines[^1];
 
@@ -66,84 +91,143 @@ public class LiquidityGuardService
         decimal lowerWick = Math.Min(last.OpenPrice, last.ClosePrice) - last.LowPrice;
 
         bool volumeSpike = avgVolume > 0m && last.Volume > avgVolume * 2.0m;
-        bool tinyVolume = avgVolume > 0m && last.Volume < avgVolume * 0.25m;
 
-        // градация
-        decimal volRatio = avgVolume <= 0 ? 1m : last.Volume / avgVolume;
-        bool extremeLowVolume = volRatio < 0.18m; // HARD BLOCK
-        bool softLowVolume = volRatio < 0.35m;    // SOFT DANGER
+        decimal volRatio = avgVolume <= 0m ? 1m : last.Volume / avgVolume;
+
+        bool extremeLowVolume = volRatio < 0.18m; // HARD
+        bool softLowVolume = volRatio < 0.35m; // SOFT
 
         bool hugeLowerWick = lowerWick > avgBody * 2.0m && volumeSpike;
         bool hugeUpperWick = upperWick > avgBody * 2.0m && volumeSpike;
 
-        // 1) SuperSignal — всегда разрешён, но важно сбросить LastDanger
+        // ---------------------------------------------------------------------
+        // 1) SuperSignal override
+        // ---------------------------------------------------------------------
         if (superSignal)
         {
-            var r = new LiquidityGuardResult(false, LiquidityGuardReason.None, "super-signal override", DateTime.UtcNow);
-            LastDanger = r;
-            _logger.LogInformation("[LiquidityGuard] SUPER-SIGNAL override → {Symbol} allowed", symbol);
-            return r;
+            _logger.LogInformation(
+                "[LiquidityGuard] SUPER-SIGNAL override → {Symbol} allowed",
+                symbol);
+
+            return SetDanger(
+                block: false,
+                reason: LiquidityGuardReason.None,
+                isExtreme: false,
+                details: "super-signal override");
         }
 
-        // 2) BTC/ETH — не рубим по low-volume
-        if (isMajor && tinyVolume)
+        // ---------------------------------------------------------------------
+        // 2) BTC / ETH — ignore low-volume
+        // ---------------------------------------------------------------------
+        if (isMajor && softLowVolume)
         {
             _logger.LogInformation(
-                "[LiquidityGuard] LOW-VOLUME IGNORED for MAJOR {Symbol}. vol={Vol:F2}, avg={Avg:F2}",
-                symbol, last.Volume, avgVolume);
-            tinyVolume = false;
+                "[LiquidityGuard] LOW-VOLUME IGNORED for MAJOR {Symbol} ratio={Ratio:F2}",
+                symbol, volRatio);
+
+            softLowVolume = false;
+            extremeLowVolume = false;
         }
 
-        // 3) Low Volume
+        // ---------------------------------------------------------------------
+        // 3) LOW VOLUME
+        // ---------------------------------------------------------------------
         if (softLowVolume)
         {
             var msg = $"LOW VOLUME {symbol} {interval} | ratio={volRatio:F2}";
 
-            // экстремум — блок
             if (extremeLowVolume && !isMajor)
             {
-                var result = new LiquidityGuardResult(true, LiquidityGuardReason.LowVolume, msg, DateTime.UtcNow);
-                LastDanger = result;
-                return result;
+                _logger.LogWarning(
+                    "[LiquidityGuard] EXTREME LOW-VOLUME BLOCK {Symbol} ratio={Ratio:F2}",
+                    symbol, volRatio);
+
+                return SetDanger(
+                    block: true,
+                    reason: LiquidityGuardReason.LowVolume,
+                    isExtreme: true,
+                    details: msg);
             }
 
-            // иначе — НЕ блокируем, только опасность
-            _logger.LogWarning("[LiquidityGuard] SOFT LOW-VOLUME {Symbol} ratio={Ratio:F2}", symbol, volRatio);
-            LastDanger = new LiquidityGuardResult(false, LiquidityGuardReason.LowVolume, msg, DateTime.UtcNow);
-            return LastDanger;
+            _logger.LogWarning(
+                "[LiquidityGuard] SOFT LOW-VOLUME {Symbol} ratio={Ratio:F2}",
+                symbol, volRatio);
+
+            return SetDanger(
+                block: false,
+                reason: LiquidityGuardReason.LowVolume,
+                isExtreme: false,
+                details: msg);
         }
 
-        // 4) Stop-hunt вниз → блокируем шорт
+        // ---------------------------------------------------------------------
+        // 4) STOP-HUNT DOWN → block SHORT
+        // ---------------------------------------------------------------------
         if (hugeLowerWick && last.ClosePrice > last.OpenPrice && side == SignalSide.Sell)
         {
             var msg = $"STOP-HUNT DOWN {symbol} {interval}";
+
             _logger.LogWarning("[LiquidityGuard] BLOCKED SHORT: {Msg}", msg);
 
-            var result = new LiquidityGuardResult(true, LiquidityGuardReason.StopHuntDown, msg, DateTime.UtcNow);
-            LastDanger = result;
-            return result;
+            return SetDanger(
+                block: true,
+                reason: LiquidityGuardReason.StopHuntDown,
+                isExtreme: true,
+                details: msg);
         }
 
-        // 5) Stop-hunt вверх → блокируем лонг
+        // ---------------------------------------------------------------------
+        // 5) STOP-HUNT UP → block LONG
+        // ---------------------------------------------------------------------
         if (hugeUpperWick && last.ClosePrice < last.OpenPrice && side == SignalSide.Buy)
         {
             var msg = $"STOP-HUNT UP {symbol} {interval}";
+
             _logger.LogWarning("[LiquidityGuard] BLOCKED LONG: {Msg}", msg);
 
-            var result = new LiquidityGuardResult(true, LiquidityGuardReason.StopHuntUp, msg, DateTime.UtcNow);
-            LastDanger = result;
-            return result;
+            return SetDanger(
+                block: true,
+                reason: LiquidityGuardReason.StopHuntUp,
+                isExtreme: true,
+                details: msg);
         }
 
-        var ok = new LiquidityGuardResult(false, LiquidityGuardReason.None, null, DateTime.UtcNow);
-        LastDanger = ok;
-        return ok;
+        // ---------------------------------------------------------------------
+        // OK
+        // ---------------------------------------------------------------------
+        return SetDanger(
+            block: false,
+            reason: LiquidityGuardReason.None,
+            isExtreme: false,
+            details: null);
+    }
+
+    // =====================================================================
+    // INTERNAL STATE SETTER (single point of truth)
+    // =====================================================================
+    private LiquidityGuardResult SetDanger(
+        bool block,
+        LiquidityGuardReason reason,
+        bool isExtreme,
+        string? details)
+    {
+        var r = new LiquidityGuardResult(
+            block,
+            reason,
+            isExtreme,
+            details,
+            DateTime.UtcNow);
+
+        LastDanger = r;
+        return r;
     }
 
     public bool IsDangerRecent(TimeSpan ttl)
     {
-        return LastDanger != null &&
-               LastDanger.UtcTime != default &&
-               (DateTime.UtcNow - LastDanger.UtcTime) <= ttl;
+        var d = LastDanger;
+        if (d == null) return false;
+        if (d.UtcTime == default) return false;
+
+        return (DateTime.UtcNow - d.UtcTime) <= ttl;
     }
 }

@@ -2,12 +2,19 @@
 using Binance.Net.Objects.Models.Futures;
 using System.Text.Json;
 using VertexAutoTradeBinance8.MarketData;
+using VertexAutoTradeBinance8.Services.MarketData.MDTO;
 
 public sealed class KlineBufferPersistence
 {
     private readonly MarketDataKlineBuffer _buffer;
     private readonly string _path;
     private readonly ILogger<KlineBufferPersistence> _logger;
+
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        WriteIndented = false,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
 
     public KlineBufferPersistence(
         MarketDataKlineBuffer buffer,
@@ -26,6 +33,9 @@ public sealed class KlineBufferPersistence
         _path = Path.Combine(dir, "klines_bootstrap.json");
     }
 
+    // =====================================================================
+    // RESTORE
+    // =====================================================================
     public async Task RestoreAsync(CancellationToken ct)
     {
         if (!File.Exists(_path))
@@ -34,41 +44,126 @@ public sealed class KlineBufferPersistence
             return;
         }
 
-        var json = await File.ReadAllTextAsync(_path, ct);
-
-        var data = JsonSerializer.Deserialize<
-            Dictionary<string, List<BinanceFuturesUsdtKline>>>(json);
-
-        if (data == null) return;
-
-        foreach (var (key, klines) in data)
+        try
         {
-            var parts = key.Split(':');
-            var symbol = parts[0];
-            var tf = Enum.Parse<KlineInterval>(parts[1]);
+            var json = await File.ReadAllTextAsync(_path, ct);
+            if (string.IsNullOrWhiteSpace(json))
+                return;
 
-            foreach (var k in klines)
-                _buffer.Upsert(symbol, tf, k);
+            using var doc = JsonDocument.Parse(json);
+
+            int restoredStreams = 0;
+            int skippedItems = 0;
+
+            foreach (var stream in doc.RootElement.EnumerateObject())
+            {
+                var key = stream.Name;
+                var parts = key.Split(':');
+                if (parts.Length != 2)
+                    continue;
+
+                var symbol = parts[0];
+                if (!Enum.TryParse<KlineInterval>(parts[1], out var tf))
+                    continue;
+
+                if (stream.Value.ValueKind != JsonValueKind.Array)
+                    continue;
+
+                foreach (var el in stream.Value.EnumerateArray())
+                {
+                    try
+                    {
+                        // 1️⃣ Пытаемся НОВЫЙ формат
+                        if (el.TryGetProperty("openTime", out _))
+                        {
+                            var dto = el.Deserialize<KlineSnapshotDto>(JsonOpts);
+                            if (dto == null) continue;
+
+                            _buffer.Upsert(symbol, tf, new BinanceFuturesUsdtKline
+                            {
+                                OpenTime = dto.OpenTime,
+                                OpenPrice = dto.Open,
+                                HighPrice = dto.High,
+                                LowPrice = dto.Low,
+                                ClosePrice = dto.Close,
+                                Volume = dto.Volume
+                            });
+                        }
+                        // 2️⃣ Пытаемся СТАРЫЙ формат (Binance)
+                        else
+                        {
+                            var k = el.Deserialize<BinanceFuturesUsdtKline>(JsonOpts);
+                            if (k == null) continue;
+
+                            _buffer.Upsert(symbol, tf, k);
+                        }
+                    }
+                    catch
+                    {
+                        skippedItems++;
+                    }
+                }
+
+                restoredStreams++;
+            }
+
+            _logger.LogInformation(
+                "[BOOT] Kline buffer restored: {streams} streams, skipped={skipped}",
+                restoredStreams,
+                skippedItems);
         }
-
-        _logger.LogInformation(
-            "[BOOT] Kline buffer restored: {cnt} streams",
-            data.Count);
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "[BOOT] Failed to restore kline buffer → starting empty");
+        }
     }
 
+
+    // =====================================================================
+    // SAVE
+    // =====================================================================
     public async Task SaveAsync(CancellationToken ct)
     {
-        var dump = _buffer.DumpAll();
-        var json = JsonSerializer.Serialize(dump);
+        try
+        {
+            var dump = _buffer.DumpAll();
 
-        var tmp = _path + ".tmp";
+            var dtoDump = new Dictionary<string, List<KlineSnapshotDto>>(dump.Count);
 
-        await File.WriteAllTextAsync(tmp, json, ct);
-        File.Move(tmp, _path, overwrite: true);
+            foreach (var (key, klines) in dump)
+            {
+                var list = new List<KlineSnapshotDto>(klines.Count);
 
-        _logger.LogInformation(
-            "[BOOT] Kline buffer saved: {cnt} streams",
-            dump.Count);
+                foreach (var k in klines)
+                {
+                    list.Add(new KlineSnapshotDto
+                    {
+                        OpenTime = k.OpenTime,
+                        Open = k.OpenPrice,
+                        High = k.HighPrice,
+                        Low = k.LowPrice,
+                        Close = k.ClosePrice,
+                        Volume = k.Volume
+                    });
+                }
+
+                dtoDump[key] = list;
+            }
+
+            var json = JsonSerializer.Serialize(dtoDump, JsonOpts);
+
+            var tmp = _path + ".tmp";
+            await File.WriteAllTextAsync(tmp, json, ct);
+            File.Move(tmp, _path, overwrite: true);
+
+            _logger.LogInformation(
+                "[BOOT] Kline buffer saved: {cnt} streams",
+                dtoDump.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[BOOT] Failed to save kline buffer");
+        }
     }
-
 }

@@ -181,9 +181,27 @@ namespace VertexAutoTradeBinance8.Services
                 interval.ToString(),
                 result);
 
+            _regimes[symbol] = result.Regime;
             return result;
+ 
         }
 
+        public bool IsStrongTrend(string symbol)
+        {
+            if (!_regimes.TryGetValue(symbol, out var r))
+                return false;
+
+            return r == MarketRegime.StrongUpTrend
+                || r == MarketRegime.StrongDownTrend;
+        }
+
+        public bool IsRange(string symbol)
+        {
+            if (!_regimes.TryGetValue(symbol, out var r))
+                return false;
+
+            return r == MarketRegime.Range;
+        }
         public bool IsTradable(string symbol)
         {
             // если пока нет данных по режиму — НЕ БЛОКИРУЕМ

@@ -2902,28 +2902,7 @@ namespace VertexAutoTradeBinance8.Services
                     _logger.LogError(ex, "[SUPERVISOR] EX CreateEmergencyTP {symbol}", symbol);
                 }
             }
-
-        private static int GetPrecision(decimal value)
-        {
-            value = Math.Abs(value);
-            int precision = 0;
-
-            while (value < 1m && value != Math.Round(value))
-            {
-                value *= 10;
-                precision++;
-                if (precision > 18) break;
-            }
-
-            return precision;
-        }
-
-        private static decimal Truncate(decimal value, int precision)
-        {
-            if (precision <= 0) return Math.Truncate(value);
-            var p = (decimal)Math.Pow(10, precision);
-            return Math.Truncate(value * p) / p;
-        }
+ 
 
         private static int GetPrecisionFromStep(decimal step)
         {
@@ -3056,8 +3035,7 @@ namespace VertexAutoTradeBinance8.Services
                     // если раннер слишком мал — тогда закрываем всё
                     closeQty = realQtyAbs;
                     runnerQty = 0m;
-                }
-
+                } 
                 await c.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: symbol,
                     side: closeSide,
@@ -3371,9 +3349,7 @@ namespace VertexAutoTradeBinance8.Services
                 return fallback > 0 ? fallback : 0m;
             }
 
-        private async Task TryHarvestProfitAsync(BinanceRestClient client, EngineState state,
-        string symbol, PositionSide side, BinancePositionDetailsUsdt pos,
-        decimal baseQtyForGuards, IReadOnlyList<BinanceFuturesUsdtKline> klines,
+        private async Task TryHarvestProfitAsync(BinanceRestClient client, EngineState state, string symbol, PositionSide side, BinancePositionDetailsUsdt pos, decimal baseQtyForGuards, IReadOnlyList<BinanceFuturesUsdtKline> klines,
         decimal aiEdgeScore, decimal minUsd, CancellationToken ct)
             {
                 // ==========================================================
@@ -3764,14 +3740,7 @@ namespace VertexAutoTradeBinance8.Services
 
             return Task.CompletedTask;
         }
-        
-        private static decimal TruncateByPrecision(decimal value, int precision)
-        {
-            if (precision < 0) return value;
-            var factor = (decimal)Math.Pow(10, precision);
-            return Math.Floor(value * factor) / factor;
-        }
-
+     
         private async Task<(decimal qty, decimal trig)> NormalizeForAlgoAsync(string symbol,decimal qty,decimal trigger,CancellationToken ct)
         {
             var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);

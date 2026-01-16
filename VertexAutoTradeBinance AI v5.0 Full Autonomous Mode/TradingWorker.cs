@@ -54,7 +54,7 @@ namespace VertexAutoTradeBinance8
 
         // Optional: чтобы не писать слишком часто, но можно и без этого
         private DateTime _lastEngineTickUtc = DateTime.MinValue;
-
+        private readonly AiMarketRegimeService _marketRegime;
 
 
         // ===============================
@@ -96,7 +96,7 @@ namespace VertexAutoTradeBinance8
             EngineStateBuilder engineStateBuilder,
             EngineStateSnapshotService engineStateSnapshot,
             IBootGate bootGate,
-            IStrategyPreFilter pre, MarketContextService marketContext, SimulatedTradeService sim)
+            IStrategyPreFilter pre, MarketContextService marketContext, SimulatedTradeService sim, AiMarketRegimeService marketRegime)
         {
             _logger = logger;
             _options = options.Value;
@@ -125,6 +125,7 @@ namespace VertexAutoTradeBinance8
 
             learn.ForceSnapshot();
             _sim = sim;
+            _marketRegime = marketRegime;
         }
 
         private int _lastCyclesPerMinute = 0;
@@ -149,10 +150,33 @@ namespace VertexAutoTradeBinance8
             );
 
             // lifecycle + missed trade только если есть signal
+           
             if (signal != null)
             {
-                try { _sim.AppendLifecycleEvent(signal, $"REJECT_{stage}", reason); } catch { }
-                try { await _sim.SimulateMissedTradeAsync(signal, $"{stage}:{reason}"); } catch { }
+                try
+                {
+                    await _sim.AppendLifecycleEventAsync(
+                        signal,
+                        stage: $"REJECT_{stage}",
+                        reason: reason
+                    );
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[SIM] AppendLifecycleEventAsync failed");
+                }
+
+                try
+                {
+                    await _sim.SimulateMissedTradeAsync(
+                        signal,
+                        $"{stage}:{reason}"
+                    );
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[SIM] SimulateMissedTradeAsync failed");
+                }
             }
 
             if (sleepMs.HasValue && sleepMs.Value > 0)
@@ -495,31 +519,57 @@ namespace VertexAutoTradeBinance8
             return fallback;
         }
 
-        private async Task ProcessSymbolWithUniverseSide(string symbol, KlineInterval tf, SignalSide desiredSide,
-            CancellationToken ct)
+        private async Task ProcessSymbolWithUniverseSide(string symbol, KlineInterval tf, SignalSide desiredSide, CancellationToken ct)
         {
-            // entries strictly gated by universe sides
-            if (desiredSide == SignalSide.Buy && !_symbols.ActiveLongSymbols.Contains(symbol))
-                return;
+            symbol = symbol.Trim().ToUpperInvariant();
 
-            if (desiredSide == SignalSide.Sell && !_symbols.ActiveShortSymbols.Contains(symbol))
+            bool allowed =
+                desiredSide == SignalSide.Buy
+                    ? _symbols.ActiveLongSymbols.Contains(symbol, StringComparer.OrdinalIgnoreCase)
+                    : _symbols.ActiveShortSymbols.Contains(symbol, StringComparer.OrdinalIgnoreCase);
+
+            if (!allowed)
+            {
+                await RejectAsync(
+                    signal: null,
+                    symbol: symbol,
+                    tf: tf,
+                    stage: "UNIVERSE_SIDE",
+                    reason: desiredSide == SignalSide.Buy ? "NOT_IN_ACTIVE_LONG" : "NOT_IN_ACTIVE_SHORT",
+                    ct: ct);
+
                 return;
+            }
 
             await ProcessSymbol(symbol, tf, desiredSide, ct);
         }
 
+      
         private async Task ProcessSymbol(
-     string symbol,
-     KlineInterval tf,
-     SignalSide desiredSide,
-     CancellationToken ct)
+      string symbol,
+      KlineInterval tf,
+      SignalSide desiredSide,
+      CancellationToken ct)
         {
             ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏳ RUN", desiredSide.ToString());
 
             // =====================================================
             // 0) PREFILTER
             // =====================================================
-            var pre = await _pre.EvaluateAsync(symbol, tf, ct);
+            PreFilterResult pre;
+            try
+            {
+                pre = await _pre.EvaluateAsync(symbol, tf, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[PROC][{symbol}][{tf}] PREFILTER threw", symbol, tf);
+                await RejectAsync(null, symbol, tf, "PREFILTER", "PREFILTER_ERROR", ct, extra: ex.Message)
+                    .ConfigureAwait(false);
+                return;
+            }
+
             if (!pre.Allow)
             {
                 await RejectAsync(
@@ -530,7 +580,7 @@ namespace VertexAutoTradeBinance8
                     reason: pre.Reason ?? "NOT_ALLOWED",
                     ct: ct,
                     sleepMs: pre.SleepMs
-                );
+                ).ConfigureAwait(false);
                 return;
             }
 
@@ -540,64 +590,101 @@ namespace VertexAutoTradeBinance8
             IReadOnlyList<BinanceFuturesUsdtKline> klines;
             try
             {
-                klines = await _marketDataFacade.GetKlinesAsync(symbol, tf, 200, ct);
+                klines = await _marketDataFacade.GetKlinesAsync(symbol, tf, 200, ct).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
-                _logger.LogWarning(
-                    ex,
-                    "[PROC][{symbol}][{tf}] MARKET_DATA fetch failed",
-                    symbol, tf
-                );
+                _logger.LogWarning(ex, "[PROC][{symbol}][{tf}] MARKET_DATA fetch failed", symbol, tf);
+                await RejectAsync(null, symbol, tf, "MARKET_DATA", "FETCH_FAILED", ct, extra: ex.Message)
+                    .ConfigureAwait(false);
                 return;
             }
 
-            if (klines == null || klines.Count < 60)
+            var cnt = klines?.Count ?? 0;
+            if (cnt < 60)
             {
-                _logger.LogInformation(
-                    "[PROC][{symbol}][{tf}] MARKET_DATA insufficient: {cnt}",
-                    symbol, tf, klines?.Count ?? 0
-                );
+                await RejectAsync(null, symbol, tf, "MARKET_DATA", "INSUFFICIENT_KLINES", ct, extra: $"cnt={cnt}")
+                    .ConfigureAwait(false);
                 return;
             }
 
             // =====================================================
             // 2) STRATEGY SIGNAL
             // =====================================================
-            TradeSignal signal;
+            TradeSignal? signal;
             try
             {
                 signal = _strategy.GenerateSignal(symbol, tf, klines);
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
-                _logger.LogError(
-                    ex,
-                    "[PROC][{symbol}][{tf}] STRATEGY threw exception",
-                    symbol, tf
-                );
+                _logger.LogError(ex, "[PROC][{symbol}][{tf}] STRATEGY threw", symbol, tf);
+                await RejectAsync(null, symbol, tf, "STRATEGY", "STRATEGY_EXCEPTION", ct, extra: ex.Message)
+                    .ConfigureAwait(false);
                 return;
             }
 
             if (signal == null)
             {
-                _logger.LogInformation(
-                    "[PROC][{symbol}][{tf}] STRATEGY no signal",
-                    symbol, tf
-                );
+                // ✅ ВОТ ЭТОГО ТЕБЕ НЕ ХВАТАЛО: фиксируем “BLOCK” даже без сигнала
+                await RejectAsync(null, symbol, tf, "STRATEGY", "NO_SIGNAL", ct)
+                    .ConfigureAwait(false);
                 return;
             }
-
             if (signal.Side != desiredSide)
             {
-                _logger.LogInformation(
-                    "[PROC][{symbol}][{tf}] STRATEGY side mismatch: got={got} need={need}",
-                    symbol, tf, signal.Side, desiredSide
-                );
-                return;
-            }
+                var confidence = signal.Confidence ?? 0m;
 
-            // 🔥 фиксируем микро-сигнал (AI telemetry)
+                //Если   мягче:
+                //bool allowCounterTrend =
+                //confidence >= 0.60m &&
+                //!_marketRegime.IsStrongTrend(symbol) && !_liq.IsExtreme();
+
+
+                //bool allowCounterTrend =
+                //confidence >= 0.60m &&
+                //_marketRegime.IsRange(symbol) &&  !_liq.IsExtreme();
+
+                bool allowCounterTrend =
+    confidence >= 0.60m &&
+    !_marketRegime.IsStrongTrend(symbol) &&
+    !_liq.IsExtreme();
+
+
+                if (!allowCounterTrend)
+                {
+                    await RejectAsync(
+                        signal,
+                        symbol,
+                        tf,
+                        "STRATEGY",
+                        "SIDE_MISMATCH",
+                        ct,
+                        extra: $"conf={confidence:F2}"
+                    ).ConfigureAwait(false);
+                    return;
+                }
+
+                // ✅ ЯВНО фиксируем override
+                _learn.RecordMarketStateTriggered(
+                    reason: "COUNTER_TREND_OVERRIDE",
+                    symbol: symbol,
+                    timeframe: tf.ToString(),
+                    regime: MarketRegime.Unknown,
+                    slope: 0m,
+                    volatility: 0m,
+                    atr: signal.Atr ?? 0m,
+                    confidence: confidence
+                );
+
+                _logger.LogWarning(
+                    "[PROC][{symbol}][{tf}] COUNTER-TREND OVERRIDE allowed conf={conf}",
+                    symbol, tf, confidence);
+            } 
+
+            // ✅ микро-телеметрия (норм)
             _learn.RecordMarketStateTriggered(
                 reason: "MICRO_SIGNAL",
                 symbol: symbol,
@@ -614,21 +701,28 @@ namespace VertexAutoTradeBinance8
             // =====================================================
             if (InCooldown(symbol))
             {
-                await RejectAsync(
-                    signal,
-                    symbol,
-                    tf,
-                    "COOLDOWN",
-                    "COOLDOWN_ACTIVE",
-                    ct
-                );
+                await RejectAsync(signal, symbol, tf, "COOLDOWN", "COOLDOWN_ACTIVE", ct)
+                    .ConfigureAwait(false);
                 return;
             }
 
             // =====================================================
             // 4) AI CONFIRMATION
             // =====================================================
-            var ai = _predict.Decide(symbol, tf, klines, signal);
+            AiDecision ai;
+            try
+            {
+                ai = _predict.Decide(symbol, tf, klines, signal);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[PROC][{symbol}][{tf}] AI Decide threw", symbol, tf);
+                await RejectAsync(signal, symbol, tf, "AI", "AI_ERROR", ct, extra: ex.Message)
+                    .ConfigureAwait(false);
+                return;
+            }
+
             if (!ai.Allow)
             {
                 _learn.RecordMarketStateTriggered(
@@ -642,15 +736,8 @@ namespace VertexAutoTradeBinance8
                     confidence: signal.Confidence ?? 0.25m
                 );
 
-                await RejectAsync(
-                    signal,
-                    symbol,
-                    tf,
-                    "AI",
-                    "AI_BLOCK",
-                    ct,
-                    extra: ai.Reason
-                );
+                await RejectAsync(signal, symbol, tf, "AI", "AI_BLOCK", ct, extra: ai.Reason)
+                    .ConfigureAwait(false);
                 return;
             }
 
@@ -660,21 +747,29 @@ namespace VertexAutoTradeBinance8
             var riskMult = _riskScaler.Scale(ai.Grade);
             if (riskMult <= 0)
             {
-                await RejectAsync(
-                    signal,
-                    symbol,
-                    tf,
-                    "RISK",
-                    "RISK_MULT_ZERO",
-                    ct
-                );
+                await RejectAsync(signal, symbol, tf, "RISK", "RISK_MULT_ZERO", ct)
+                    .ConfigureAwait(false);
                 return;
             }
 
             // =====================================================
             // 6) LIQUIDITY GUARD
             // =====================================================
-            var liq = _liq.Analyze(symbol, tf, klines, signal.Side, signal.IsSuperSignal);
+            LiquidityGuardResult liq;
+            try
+            {
+                liq = _liq.Analyze(symbol, tf, klines, signal.Side, signal.IsSuperSignal);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[PROC][{symbol}][{tf}] LiquidityGuard Analyze threw", symbol, tf);
+                // fail-safe: не блокируем из-за падения сервиса, но фиксируем
+                await RejectAsync(signal, symbol, tf, "LIQUIDITY", "LIQ_SERVICE_ERROR", ct, extra: ex.Message)
+                    .ConfigureAwait(false);
+                return;
+            }
+
             if (liq.Block)
             {
                 _learn.RecordMarketStateTriggered(
@@ -688,14 +783,8 @@ namespace VertexAutoTradeBinance8
                     confidence: signal.Confidence ?? 0.25m
                 );
 
-                await RejectAsync(
-                    signal,
-                    symbol,
-                    tf,
-                    "LIQUIDITY",
-                    $"LIQUIDITY_{liq.Reason}",
-                    ct
-                );
+                await RejectAsync(signal, symbol, tf, "LIQUIDITY", $"LIQUIDITY_{liq.Reason}", ct)
+                    .ConfigureAwait(false);
                 return;
             }
 
@@ -713,31 +802,36 @@ namespace VertexAutoTradeBinance8
                 signal.Side,
                 signal.TakeProfits,
                 ct
-            );
+            ).ConfigureAwait(false);
 
             if (qty <= 0)
             {
-                await RejectAsync(
-                    signal,
-                    symbol,
-                    tf,
-                    "RISK",
-                    "NO_BALANCE_OR_MIN_NOTIONAL",
-                    ct
-                );
+                await RejectAsync(signal, symbol, tf, "RISK", "NO_BALANCE_OR_MIN_NOTIONAL", ct)
+                    .ConfigureAwait(false);
                 return;
             }
 
             // =====================================================
             // 8) SL / TP OPTIMIZATION
             // =====================================================
-            signal.StopLoss = _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
-            await _cleaner.CleanupOutdatedOrdersAsync(symbol, signal, ct);
+            try
+            {
+                signal.StopLoss = _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
+                await _cleaner.CleanupOutdatedOrdersAsync(symbol, signal, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[PROC][{symbol}][{tf}] SL/TP optimize or cleanup failed", symbol, tf);
+                await RejectAsync(signal, symbol, tf, "PROTECTION", "PROTECTION_ERROR", ct, extra: ex.Message)
+                    .ConfigureAwait(false);
+                return;
+            }
 
             // =====================================================
             // 9) EXECUTION
             // =====================================================
-            var result = await _executor.ExecuteAsync(signal, qty, ct);
+            var result = await _executor.ExecuteAsync(signal, qty, ct).ConfigureAwait(false);
             if (!result.Success)
             {
                 await RejectAsync(
@@ -748,11 +842,19 @@ namespace VertexAutoTradeBinance8
                     "EXECUTION_FAILED",
                     ct,
                     extra: result.Error
-                );
+                ).ConfigureAwait(false);
                 return;
             }
 
-            _sim.AppendLifecycleEvent(signal, "EXEC_OK");
+            // lifecycle: EXEC_OK
+            try
+            {
+                await _sim.AppendLifecycleEventAsync(signal, "EXEC_OK");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[SIM] lifecycle EXEC_OK failed");
+            }
 
             // =====================================================
             // 10) SUCCESS PATH
@@ -760,9 +862,17 @@ namespace VertexAutoTradeBinance8
             MarkTrade(symbol);
             TrackSymbol(symbol, keepAlive: true);
 
-            _sim.AppendLifecycleEvent(signal, "ENTRY_OK");
+            // lifecycle: ENTRY_OK
+            try
+            {
+                await _sim.AppendLifecycleEventAsync(signal, "ENTRY_OK");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[SIM] lifecycle ENTRY_OK failed");
+            }
 
-            await _supervisor.SuperviseAsync(symbol, signal, ct);
+            await _supervisor.SuperviseAsync(symbol, signal, ct).ConfigureAwait(false);
 
             ConsoleSymbolTableFormatter.UpdateTf(
                 symbol,
@@ -771,6 +881,7 @@ namespace VertexAutoTradeBinance8
                 $"{signal.Side} qty={qty:F4}"
             );
         }
+
 
 
         private bool InCooldown(string symbol)

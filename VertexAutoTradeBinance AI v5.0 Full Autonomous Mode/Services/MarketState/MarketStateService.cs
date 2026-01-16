@@ -62,36 +62,36 @@ namespace VertexAutoTradeBinance8.Services.MarketState
             {
                 _restoreInProgress = true;
 
+                if (!File.Exists(_path))
+                {
+                    _logger.LogWarning("[STATE] snapshot not found → cold start");
+                    return;
+                }
+
+                var json = File.ReadAllText(_path);
+                if (string.IsNullOrWhiteSpace(json))
+                    return;
+
+                var list = JsonSerializer.Deserialize<List<MarketStateSnapshot>>(json, JsonOpts);
+                if (list == null || list.Count == 0)
+                    return;
+
                 lock (_lock)
                 {
-                    if (!File.Exists(_path))
-                    {
-                        _logger.LogWarning("[STATE] snapshot not found → cold start");
-                        return;
-                    }
-
-                    var json = File.ReadAllText(_path);
-                    if (string.IsNullOrWhiteSpace(json))
-                        return;
-
-                    var list = JsonSerializer.Deserialize<List<MarketStateSnapshot>>(json);
-                    if (list == null || list.Count == 0)
-                        return;
-
                     _states.Clear();
 
                     foreach (var s in list)
                         _states[Key(s.Symbol, s.Timeframe)] = s;
 
-                    IsRestored = true;
                     _lastSnapshotHash = ComputeHash(list);
-
-                    _logger.LogInformation(
-                        "[STATE] snapshot restored ({count} entries)",
-                        _states.Count);
-                    // 🔥 SIGNAL UP
-                    OnRestored?.Invoke();
+                    IsRestored = true;
                 }
+
+                _logger.LogInformation(
+                    "[STATE] snapshot restored ({count} entries)",
+                    list.Count);
+
+                OnRestored?.Invoke();
             }
             catch (Exception ex)
             {
@@ -102,6 +102,7 @@ namespace VertexAutoTradeBinance8.Services.MarketState
                 _restoreInProgress = false;
             }
         }
+
 
         // =====================================================
         // UPDATE (WS CLOSE SAFE)
@@ -141,11 +142,9 @@ namespace VertexAutoTradeBinance8.Services.MarketState
 
                 var hash = ComputeHash(snapshot);
                 if (hash == _lastSnapshotHash)
-                    return; // no real changes
+                    return;
 
-                var json = JsonSerializer.Serialize(
-                    snapshot,
-                    new JsonSerializerOptions { WriteIndented = true });
+                var json = JsonSerializer.Serialize(snapshot, JsonOpts);
 
                 var tmp = _path + ".tmp";
                 await File.WriteAllTextAsync(tmp, json, Encoding.UTF8);
@@ -168,20 +167,42 @@ namespace VertexAutoTradeBinance8.Services.MarketState
             }
         }
 
+
+        private static readonly JsonSerializerOptions JsonOpts = new()
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
         private static int ComputeHash(List<MarketStateSnapshot> list)
         {
             unchecked
             {
                 int hash = 17;
-                foreach (var s in list)
+
+                foreach (var s in list
+                    .OrderBy(x => x.Symbol, StringComparer.Ordinal)
+                    .ThenBy(x => x.Timeframe, StringComparer.Ordinal))
                 {
-                    hash = hash * 23 + s.Symbol.GetHashCode();
-                    hash = hash * 23 + s.Timeframe.GetHashCode();
-                    hash = hash * 23 + s.Regime.GetHashCode();
+                    hash = hash * 31 + StringComparer.Ordinal.GetHashCode(s.Symbol);
+                    hash = hash * 31 + StringComparer.Ordinal.GetHashCode(s.Timeframe);
+
+                    hash = hash * 31 + s.Regime.GetHashCode();
+
+                    hash = hash * 31 + s.TrendSlope.GetHashCode();
+                    hash = hash * 31 + s.Volatility.GetHashCode();
+
+                    hash = hash * 31 + s.Ema21.GetHashCode();
+                    hash = hash * 31 + s.Ema55.GetHashCode();
+                    hash = hash * 31 + s.Atr14.GetHashCode();
+
+                    hash = hash * 31 + s.LastPrice.GetHashCode();
+                    hash = hash * 31 + s.LastCloseTimeUtc.GetHashCode();
                 }
+
                 return hash;
             }
         }
+
 
         public bool TryGet(
             string symbol,
