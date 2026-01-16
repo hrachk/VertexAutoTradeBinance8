@@ -253,12 +253,7 @@ namespace VertexAutoTradeBinance8
 
 
             // 🔥 STRATEGY → WORKER(PUSH - ONLY)
-_strategy.OnSignalGenerated += signal =>
-{
-    if (signal == null) return;
-    _signalChannel.Writer.TryWrite(signal);
-};
-
+ 
             // 5) TRACK SYMBOLS (runtime set)
             var startupCap = _options.StartupSubscriptionCap > 0
                 ? _options.StartupSubscriptionCap

@@ -1981,7 +1981,7 @@ namespace VertexAutoTradeBinance8.Services
             if (isStopLoss)
             {
                 _manualHandler.RegisterStop(symbol);
-                StrategyEngine.RegisterStop(symbol, sigSide);
+                
 
                 _logger.LogWarning("[STOP][{symbol}] StopLoss detected → strategy cooldown registered", symbol);
             }
