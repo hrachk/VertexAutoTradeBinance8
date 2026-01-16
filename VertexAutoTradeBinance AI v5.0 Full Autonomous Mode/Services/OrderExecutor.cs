@@ -100,7 +100,15 @@ namespace VertexAutoTradeBinance8.Services
             {
                 var reason = "QTY_TOO_SMALL";
 
-                await _simulator.SimulateMissedTradeAsync(signal, reason);
+                await _simulator.AppendLifecycleEventAsync(
+     signal,
+     stage: "PREFILTER_REJECT",
+     reason: reason,
+     attemptNotional: 0m,
+     requiredMinNotional: 0m
+ // если есть Note в AppendLifecycleEventAsync — добавь:
+ // note: $"qty={quantity} minQty={filters.minQty} step={step}"
+ );
 
                 var rec = _executedSignalService.AddSignalCreated(
                     signal,
@@ -259,8 +267,12 @@ namespace VertexAutoTradeBinance8.Services
             if (liquidityResult.Block)
             {
                 await _simulator.SimulateMissedTradeAsync(
-                    signal,
-                    $"LiquidityGuard:{liquidityResult.Reason}");
+    signal,
+    $"LiquidityGuard:{liquidityResult.Reason}",
+    note: $"details={liquidityResult.Details}; extreme={liquidityResult.IsExtreme}; rrOk={rrOk}; impulse={hasImpulse}; smartConf={smart.Confidence:F2}",
+    attemptNotional: notional,
+    requiredMinNotional: 0m
+);
 
                 _executedSignalService.UpdateStatus(
                     signal.Symbol, execTime,
@@ -285,12 +297,21 @@ namespace VertexAutoTradeBinance8.Services
                 ? null
                 : TimeInForce.GoodTillCanceled;
 
+            // notional known at create-time for LIMIT orders
+            decimal notionalAtCreate = orderPrice.HasValue
+                ? quantity * orderPrice.Value
+                : 0m; // MARKET — unknown until fill
+
+
+
+
             // 🔒 HARD GUARDS (оставить навсегда)
             if (entryType == FuturesOrderType.Market && orderPrice != null)
                 return OrderResult.Fail("InvalidMarketOrderWithPrice");
 
             if (entryType == FuturesOrderType.Limit && orderPrice == null)
                 return OrderResult.Fail("InvalidLimitOrderWithoutPrice");
+ 
 
             var entryRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: signal.Symbol,
@@ -308,7 +329,19 @@ namespace VertexAutoTradeBinance8.Services
 
             if (!entryRes.Success || entryRes.Data == null)
             {
-                await _simulator.SimulateMissedTradeAsync(signal, "EntryError");
+                var note =
+                    entryRes.Error != null
+                        ? $"code={entryRes.Error.Code}; msg={entryRes.Error.Message}"
+                        : "no_error_object";
+
+                await _simulator.SimulateMissedTradeAsync(
+                    signal,
+                    "EntryError",
+                    note: note,
+                    attemptNotional: notionalAtCreate > 0 ? notionalAtCreate : notional,
+                    requiredMinNotional: 0m
+                );
+
                 _executedSignalService.UpdateStatus(
                     signal.Symbol, execTime,
                     TradeExecutionStatus.Blocked, 0, 0);
@@ -318,9 +351,7 @@ namespace VertexAutoTradeBinance8.Services
 
             long entryOrderId = entryRes.Data.Id;
 
-            decimal notionalAtCreate = orderPrice.HasValue
-    ? quantity * orderPrice.Value
-    : 0m; // MARKET — notional неизвестен до fill
+           
 
             _executedSignalService.UpdateStatus(
      signal.Symbol,
@@ -333,7 +364,7 @@ namespace VertexAutoTradeBinance8.Services
  );
 
 
-             _simulator.AppendLifecycleEventAsync(signal, "ORDER_CREATED");
+            await _simulator.AppendLifecycleEventAsync(signal, "ORDER_CREATED");
 
             // =============================================================
             // WAIT FILL
@@ -378,7 +409,13 @@ namespace VertexAutoTradeBinance8.Services
                     ? $"FallbackMarketFailed:{wait.Reason}"
                     : wait.Reason ?? "NotFilled";
 
-                await _simulator.SimulateMissedTradeAsync(signal, reason);
+                await _simulator.SimulateMissedTradeAsync(
+     signal,
+     reason,
+     note: $"marketFallbackUsed={marketFallbackUsed}; entryType={entryType}; orderPrice={(orderPrice?.ToString() ?? "null")}; lastPrice={lastPrice}; entryPrice={entryPrice}; waitReason={wait.Reason}",
+     attemptNotional: orderPrice.HasValue ? quantity * orderPrice.Value : notional,
+     requiredMinNotional: 0m
+ );
 
                 _executedSignalService.UpdateStatus(
                     signal.Symbol,
@@ -406,7 +443,7 @@ namespace VertexAutoTradeBinance8.Services
                 TradeExecutionStatus.PositionOpened,
                 quantity, quantity * entryPrice,
                 filledEntry: entryPrice);
-            _simulator.AppendLifecycleEventAsync(signal, "POSITION_OPENED");
+            await _simulator.AppendLifecycleEventAsync(signal, "POSITION_OPENED");
 
             return OrderResult.Successs(entryPrice, quantity, entryOrderId);
         }

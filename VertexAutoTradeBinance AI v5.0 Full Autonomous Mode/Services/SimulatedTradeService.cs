@@ -58,10 +58,14 @@ namespace VertexAutoTradeBinance8.Services
         // =========================================================
 
         public async Task<MissedTradeRecord?> SimulateMissedTradeAsync(
-            TradeSignal signal,
-            string reason,
-            string? note = null)
+       TradeSignal signal,
+       string reason,
+       string? note = null,
+       decimal? freeBalance = null,
+       decimal? attemptNotional = null,
+       decimal? requiredMinNotional = null)
         {
+            
             try
             {
                 _logger.LogInformation(
@@ -137,7 +141,8 @@ namespace VertexAutoTradeBinance8.Services
                     Score = (int)((signal.AiQuality ?? 0m) * 100),
 
                     Regime = MarketRegime.Unknown,
-                    SmartType = ""
+                    SmartType = "",
+                      Note = note ?? ""
                 };
 
                 // 2) Persist FIRST
@@ -165,52 +170,7 @@ namespace VertexAutoTradeBinance8.Services
                 return null;
             }
         }
-
-        public async Task AppendLifecycleEventAsync(
-            TradeSignal signal,
-            string stage,
-            string reason = "",
-            decimal attemptNotional = 0m,
-            decimal requiredMinNotional = 0m)
-        {
-            try
-            {
-                var record = new MissedTradeRecord
-                {
-                    Symbol = signal.Symbol,
-                    Time = DateTime.UtcNow,
-
-                    Entry = signal.EntryPrice,
-                    StopLoss = signal.StopLoss,
-                    Side = signal.Side.ToString(),
-
-                    TakeProfits = new List<decimal>(signal.TakeProfits),
-
-                    Event = stage,
-                    Reason = reason,
-
-                    AttemptNotional = attemptNotional,
-                    RequiredMinNotional = requiredMinNotional,
-                    FreeBalance = 0m,
-
-                    Atr = signal.Atr ?? 0m,
-                    Confidence = (int)((signal.Confidence ?? 0m) * 100),
-                    Score = (int)((signal.AiQuality ?? 0m) * 100),
-
-                    Regime = MarketRegime.Unknown,
-                    SmartType = "",
-                    Vol = 0m,
-                    Slope = 0m,
-                    Deviation = 0m
-                };
-
-                await AppendRecordAsync(record);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[SIM] Failed to append lifecycle event");
-            }
-        }
+ 
 
         // =========================================================
         // INTERNAL IO
@@ -247,5 +207,64 @@ namespace VertexAutoTradeBinance8.Services
                 _ioGate.Release();
             }
         }
+
+        public async Task AppendLifecycleEventAsync(
+    TradeSignal signal,
+    string stage,
+    string reason = "",
+    decimal? freeBalance = null,
+    decimal? attemptNotional = null,
+    decimal? requiredMinNotional = null,
+    string? note = null,
+    MarketRegime? regime = null,
+    string? smartType = null,
+    decimal? vol = null,
+    decimal? slope = null,
+    decimal? deviation = null)
+        {
+            try
+            {
+                var record = new MissedTradeRecord
+                {
+                    Symbol = signal.Symbol,
+                    Time = DateTime.UtcNow,
+
+                    Entry = signal.EntryPrice,
+                    StopLoss = signal.StopLoss,
+                    Side = signal.Side.ToString(),
+
+                    TakeProfits = signal.TakeProfits.Count > 0
+                        ? new List<decimal>(signal.TakeProfits)
+                        : new List<decimal>(),
+
+                    Event = stage,
+                    Reason = reason,
+
+                    AttemptNotional = attemptNotional ?? 0m,
+                    RequiredMinNotional = requiredMinNotional ?? 0m,
+                    FreeBalance = freeBalance ?? 0m,
+
+                    Atr = signal.Atr ?? 0m,
+                    Confidence = (int)((signal.Confidence ?? 0m) * 100),
+                    Score = (int)((signal.AiQuality ?? 0m) * 100),
+
+                    Regime = regime ?? MarketRegime.Unknown,
+                    SmartType = smartType ?? "",
+
+                    Vol = vol ?? 0m,
+                    Slope = slope ?? 0m,
+                    Deviation = deviation ?? 0m,
+
+                    Note = note ?? "" // см. пункт 3.2
+                };
+
+                await AppendRecordAsync(record);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SIM] Failed to append lifecycle event");
+            }
+        }
+
     }
 }

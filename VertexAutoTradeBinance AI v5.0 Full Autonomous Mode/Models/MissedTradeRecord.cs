@@ -30,5 +30,8 @@ namespace VertexAutoTradeBinance8.Models
         public int Confidence { get; set; }
         public string SmartType { get; set; } = string.Empty;
         public int Score { get; set; }
+        public string Note { get; set; } = "";
+
+
     }
 }

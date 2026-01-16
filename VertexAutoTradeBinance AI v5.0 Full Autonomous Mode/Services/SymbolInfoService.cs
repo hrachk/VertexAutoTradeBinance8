@@ -1,7 +1,8 @@
-﻿using System.Globalization;
-using System.Text.Json;
-using Binance.Net.Objects.Models.Futures;
+﻿using Binance.Net.Objects.Models.Futures;
+using Binance.Net.Objects.Models.Spot;
 using Microsoft.Extensions.Logging;
+using System.Globalization;
+using System.Text.Json;
 
 namespace VertexAutoTradeBinance8.Services;
 
@@ -75,10 +76,91 @@ public sealed class SymbolInfoService
         return (f.StepSize, f.MinQty, f.MinNotional, f.TickSize);
     }
 
+    //public async Task<FuturesFilters> GetFuturesFiltersDetailedAsync(
+    //    string symbol,
+    //    QtyRule rule = QtyRule.Market,
+    //    CancellationToken ct = default)
+    //{
+    //    if (string.IsNullOrWhiteSpace(symbol))
+    //        throw new ArgumentException(nameof(symbol));
+
+    //    await EnsureExchangeInfoCachedAsync(ct).ConfigureAwait(false);
+
+    //    var info = _cachedExchangeInfo;
+    //    if (info?.Symbols == null)
+    //    {
+    //        _logger.LogError("[FILTER][{symbol}] ExchangeInfo missing → FALLBACK", symbol);
+    //        return FuturesFilters.Fallback(rule);
+    //    }
+
+    //    var sym = info.Symbols.FirstOrDefault(s =>
+    //        s.Name.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+
+    //    if (sym == null)
+    //    {
+    //        _logger.LogError("[FILTER][{symbol}] Symbol not found → FALLBACK", symbol);
+    //        return FuturesFilters.Fallback(rule);
+    //    }
+
+    //    decimal step = 0m;
+    //    decimal minQty = 0m;
+    //    decimal tick = 0.0001m;
+    //    decimal minNotional = 0m;
+
+    //    if (sym.Filters != null)
+    //    {
+    //        foreach (var raw in sym.Filters)
+    //        {
+    //            JsonElement el;
+    //            try
+    //            {
+    //                el = JsonSerializer.SerializeToElement(raw, JsonOpts);
+    //            }
+    //            catch
+    //            {
+    //                continue; // 🔒 Binance occasionally returns garbage
+    //            }
+
+    //            var type = ReadString(el, "filterType", "FilterType");
+    //            if (type == null) continue;
+
+    //            switch (type)
+    //            {
+    //                case "LOT_SIZE":
+    //                case "MARKET_LOT_SIZE":
+    //                    step = Math.Max(step, ReadDecimal(el, "stepSize", "StepSize"));
+    //                    minQty = Math.Max(minQty, ReadDecimal(el, "minQty", "MinQuantity"));
+    //                    break;
+
+    //                case "PRICE_FILTER":
+    //                    tick = ReadDecimal(el, "tickSize", "TickSize");
+    //                    break;
+
+    //                case "MIN_NOTIONAL":
+    //                case "NOTIONAL":
+    //                    minNotional = ReadDecimal(el, "minNotional", "Notional");
+    //                    break;
+    //            }
+    //        }
+    //    }
+
+    //    // ===== HARD FAIL-SAFE NORMALIZATION =====
+    //    if (step <= 0m) step = 0.0001m;
+    //    if (minQty <= 0m) minQty = step;
+    //    if (tick <= 0m) tick = 0.0001m;
+
+    //    _logger.LogInformation(
+    //        "[FILTER][{symbol}] rule={rule} step={step} minQty={minQty} tick={tick} minNotional={minNotional}",
+    //        symbol, rule, step, minQty, tick, minNotional);
+
+    //    return new FuturesFilters(step, minQty, minNotional, tick, rule);
+    //}
+
+
     public async Task<FuturesFilters> GetFuturesFiltersDetailedAsync(
-        string symbol,
-        QtyRule rule = QtyRule.Market,
-        CancellationToken ct = default)
+    string symbol,
+    QtyRule rule = QtyRule.Market,
+    CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(symbol))
             throw new ArgumentException(nameof(symbol));
@@ -108,36 +190,26 @@ public sealed class SymbolInfoService
 
         if (sym.Filters != null)
         {
-            foreach (var raw in sym.Filters)
+            foreach (var f in sym.Filters)
             {
-                JsonElement el;
-                try
+                switch (f)
                 {
-                    el = JsonSerializer.SerializeToElement(raw, JsonOpts);
-                }
-                catch
-                {
-                    continue; // 🔒 Binance occasionally returns garbage
-                }
-
-                var type = ReadString(el, "filterType", "FilterType");
-                if (type == null) continue;
-
-                switch (type)
-                {
-                    case "LOT_SIZE":
-                    case "MARKET_LOT_SIZE":
-                        step = Math.Max(step, ReadDecimal(el, "stepSize", "StepSize"));
-                        minQty = Math.Max(minQty, ReadDecimal(el, "minQty", "MinQuantity"));
+                    case BinanceSymbolLotSizeFilter lot:
+                        step = Math.Max(step, lot.StepSize);
+                        minQty = Math.Max(minQty, lot.MinQuantity);
                         break;
 
-                    case "PRICE_FILTER":
-                        tick = ReadDecimal(el, "tickSize", "TickSize");
+                    case BinanceSymbolMarketLotSizeFilter mlot:
+                        step = Math.Max(step, mlot.StepSize);
+                        minQty = Math.Max(minQty, mlot.MinQuantity);
                         break;
 
-                    case "MIN_NOTIONAL":
-                    case "NOTIONAL":
-                        minNotional = ReadDecimal(el, "minNotional", "Notional");
+                    case BinanceSymbolPriceFilter price:
+                        tick = price.TickSize;
+                        break;
+
+                    case BinanceSymbolMinNotionalFilter notional:
+                        minNotional = notional.MinNotional;
                         break;
                 }
             }
@@ -154,6 +226,7 @@ public sealed class SymbolInfoService
 
         return new FuturesFilters(step, minQty, minNotional, tick, rule);
     }
+
 
     public async Task<decimal> GetTickSizeAsync(
         string symbol,

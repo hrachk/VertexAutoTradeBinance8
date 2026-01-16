@@ -2,10 +2,9 @@
 using Binance.Net.Objects.Models.Futures;
 using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
-using System.Linq;
+using System.Threading.Channels;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
-using VertexAutoTradeBinance8.Models.HTF;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Services.Bootstrap;
 using VertexAutoTradeBinance8.Services.Engine;
@@ -72,6 +71,16 @@ namespace VertexAutoTradeBinance8
         private static readonly TimeSpan TrackedGrace = TimeSpan.FromMinutes(20);
         private volatile string _currentSymbol = "—";
 
+        // ===============================
+        // STRATEGY SIGNAL QUEUE (PRO)
+        // ===============================
+        private readonly Channel<TradeSignal> _signalChannel =
+            Channel.CreateUnbounded<TradeSignal>(
+                new UnboundedChannelOptions
+                {
+                    SingleReader = true,
+                    SingleWriter = false
+                });
 
         public int StartupSubscriptionCap { get; set; } = 8;
         public TradingWorker(
@@ -134,14 +143,14 @@ namespace VertexAutoTradeBinance8
         private readonly SemaphoreSlim _positionsScanLock = new(1, 1);
 
         private async Task RejectAsync(
-        TradeSignal? signal,
-        string symbol,
-        KlineInterval tf,
-        string stage,
-        string reason,
-        CancellationToken ct,
-        int? sleepMs = null,
-        string? extra = null)
+       TradeSignal? signal,
+       string symbol,
+       KlineInterval tf,
+       string stage,
+       string reason,
+       CancellationToken ct,
+       int? sleepMs = null,
+       string? extra = null)
         {
             _logger.LogWarning(
                 "[PROC][{symbol}][{tf}] REJECT stage={stage} reason={reason}{extra}",
@@ -149,10 +158,9 @@ namespace VertexAutoTradeBinance8
                 extra != null ? $" | {extra}" : string.Empty
             );
 
-            // lifecycle + missed trade только если есть signal
-           
             if (signal != null)
             {
+                // 1️⃣ ВСЕГДА пишем lifecycle (чистый факт)
                 try
                 {
                     await _sim.AppendLifecycleEventAsync(
@@ -166,22 +174,32 @@ namespace VertexAutoTradeBinance8
                     _logger.LogWarning(ex, "[SIM] AppendLifecycleEventAsync failed");
                 }
 
-                try
+                // 2️⃣ MISSED TRADE — ТОЛЬКО если это реально вход
+                //    (а не prefilter / технический reject)
+                bool isEntryRelated =
+                    stage is "ENTRY" or "EXEC" or "RISK";
+
+                if (isEntryRelated)
                 {
-                    await _sim.SimulateMissedTradeAsync(
-                        signal,
-                        $"{stage}:{reason}"
-                    );
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "[SIM] SimulateMissedTradeAsync failed");
+                    try
+                    {
+                        await _sim.SimulateMissedTradeAsync(
+                            signal,
+                            $"{stage}:{reason}",
+                            note: extra
+                        );
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "[SIM] SimulateMissedTradeAsync failed");
+                    }
                 }
             }
 
             if (sleepMs.HasValue && sleepMs.Value > 0)
                 await Task.Delay(sleepMs.Value, ct);
         }
+
 
         private async Task WarmupHtfAsync(
            IReadOnlyList<string> symbols,
@@ -232,6 +250,14 @@ namespace VertexAutoTradeBinance8
 
             // 4) BIND STRATEGY AFTER MARKETDATA READY
             _strategy.BindReactive(_marketDataFacade);
+
+
+            // 🔥 STRATEGY → WORKER(PUSH - ONLY)
+_strategy.OnSignalGenerated += signal =>
+{
+    if (signal == null) return;
+    _signalChannel.Writer.TryWrite(signal);
+};
 
             // 5) TRACK SYMBOLS (runtime set)
             var startupCap = _options.StartupSubscriptionCap > 0
@@ -298,6 +324,25 @@ namespace VertexAutoTradeBinance8
                     continue;
                 }
 
+                // ===========================================
+                // STRATEGY SIGNAL CONSUMER (PRO)
+                // ===========================================
+                while (_signalChannel.Reader.TryRead(out var signal))
+                {
+                    try
+                    {
+                        await HandleStrategySignalAsync(signal, ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(
+                            ex,
+                            "[WORKER][SIGNAL] fatal handling {symbol}",
+                            signal.Symbol);
+                    }
+                }
+
                 // ===== ROTATION: ПО КАЖДОМУ СИМВОЛУ =====
                 foreach (var symbol in trackedSymbols)
                 {
@@ -341,6 +386,214 @@ namespace VertexAutoTradeBinance8
                 await Task.Delay(80, ct);
             }
         }
+
+        private async Task HandleStrategySignalAsync(
+    TradeSignal signal,
+    CancellationToken ct)
+        {
+            var symbol = signal.Symbol.Trim().ToUpperInvariant();
+            var tf = Enum.Parse<KlineInterval>(signal.Timeframe);
+
+            ConsoleSymbolTableFormatter.UpdateTf(
+                symbol, tf, "▶ STRAT", signal.Side.ToString());
+
+            // =====================================================
+            // 1) CONTEXT / UNIVERSE SIDE CHECK
+            // =====================================================
+            var ctx = await _marketContext.GetContextAsync(symbol, ct);
+            if (!ctx.Allows(signal.Side))
+            {
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "UNIVERSE_SIDE",
+                    "SIDE_NOT_ALLOWED",
+                    ct);
+                return;
+            }
+
+            // =====================================================
+            // 2) COOLDOWN
+            // =====================================================
+            if (InCooldown(symbol))
+            {
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "COOLDOWN",
+                    "COOLDOWN_ACTIVE",
+                    ct);
+                return;
+            }
+
+            // =====================================================
+            // 3) AI CONFIRMATION
+            // =====================================================
+            AiDecision ai;
+            try
+            {
+                var klines = await _marketDataFacade
+                    .GetKlinesAsync(symbol, tf, 200, ct)
+                    .ConfigureAwait(false);
+
+                ai = _predict.Decide(symbol, tf, klines, signal);
+            }
+            catch (Exception ex)
+            {
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "AI",
+                    "AI_ERROR",
+                    ct,
+                    extra: ex.Message);
+                return;
+            }
+
+            if (!ai.Allow)
+            {
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "AI",
+                    "AI_BLOCK",
+                    ct,
+                    extra: ai.Reason);
+                return;
+            }
+
+            // =====================================================
+            // 4) RISK SCALING
+            // =====================================================
+            var riskMult = _riskScaler.Scale(ai.Grade);
+            if (riskMult <= 0)
+            {
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "RISK",
+                    "RISK_MULT_ZERO",
+                    ct);
+                return;
+            }
+
+            // =====================================================
+            // 5) LIQUIDITY GUARD (FINAL)
+            // =====================================================
+            LiquidityGuardResult liq;
+            try
+            {
+                var klines = await _marketDataFacade
+                    .GetKlinesAsync(symbol, tf, 120, ct)
+                    .ConfigureAwait(false);
+
+                liq = _liq.Analyze(
+                    symbol, tf, klines,
+                    signal.Side,
+                    signal.IsSuperSignal);
+            }
+            catch (Exception ex)
+            {
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "LIQUIDITY",
+                    "LIQ_SERVICE_ERROR",
+                    ct,
+                    extra: ex.Message);
+                return;
+            }
+
+            if (liq.Block)
+            {
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "LIQUIDITY",
+                    $"LIQUIDITY_{liq.Reason}",
+                    ct);
+                return;
+            }
+
+            // =====================================================
+            // 6) QTY
+            // =====================================================
+            var qty = await _risk.CalculateSafeQty(
+                signal,
+                symbol,
+                signal.EntryPrice,
+                signal.StopLoss,
+                riskMult,
+                signal.SafetyRiskMultiplier,
+                signal.Leverage ?? 1m,
+                signal.Side,
+                signal.TakeProfits,
+                ct).ConfigureAwait(false);
+
+            if (qty <= 0)
+            {
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "RISK",
+                    "NO_BALANCE_OR_MIN_NOTIONAL",
+                    ct);
+                return;
+            }
+
+            // =====================================================
+            // 7) SL / TP OPTIMIZATION
+            // =====================================================
+            try
+            {
+                var klines = await _marketDataFacade
+                    .GetKlinesAsync(symbol, tf, 120, ct)
+                    .ConfigureAwait(false);
+
+                signal.StopLoss =
+                    _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
+
+                await _cleaner
+                    .CleanupOutdatedOrdersAsync(symbol, signal, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "PROTECTION",
+                    "PROTECTION_ERROR",
+                    ct,
+                    extra: ex.Message);
+                return;
+            }
+
+            // =====================================================
+            // 8) EXECUTION
+            // =====================================================
+            var result = await _executor
+                .ExecuteAsync(signal, qty, ct)
+                .ConfigureAwait(false);
+
+            if (!result.Success)
+            {
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "EXEC",
+                    "EXECUTION_FAILED",
+                    ct,
+                    extra: result.Error);
+                return;
+            }
+
+            // =====================================================
+            // 9) SUCCESS
+            // =====================================================
+            MarkTrade(symbol);
+            TrackSymbol(symbol, keepAlive: true);
+
+            await _supervisor
+                .SuperviseAsync(symbol, signal, ct)
+                .ConfigureAwait(false);
+
+            ConsoleSymbolTableFormatter.UpdateTf(
+                symbol, tf,
+                "🟩 OK",
+                $"{signal.Side} qty={qty:F4}");
+        }
+
 
         // ===========================================
         // TRACKED SYMBOLS CORE
@@ -544,344 +797,367 @@ namespace VertexAutoTradeBinance8
             await ProcessSymbol(symbol, tf, desiredSide, ct);
         }
 
-      
+
+        //    private async Task ProcessSymbol(
+        //  string symbol,
+        //  KlineInterval tf,
+        //  SignalSide desiredSide,
+        //  CancellationToken ct)
+        //    {
+        //        ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏳ RUN", desiredSide.ToString());
+
+        //        // =====================================================
+        //        // 0) PREFILTER
+        //        // =====================================================
+        //        PreFilterResult pre;
+        //        try
+        //        {
+        //            pre = await _pre.EvaluateAsync(symbol, tf, ct).ConfigureAwait(false);
+        //        }
+        //        catch (OperationCanceledException) { throw; }
+        //        catch (Exception ex)
+        //        {
+        //            _logger.LogWarning(ex, "[PROC][{symbol}][{tf}] PREFILTER threw", symbol, tf);
+        //            await RejectAsync(null, symbol, tf, "PREFILTER", "PREFILTER_ERROR", ct, extra: ex.Message)
+        //                .ConfigureAwait(false);
+        //            return;
+        //        }
+
+        //        if (!pre.Allow)
+        //        {
+        //            await RejectAsync(
+        //                signal: null,
+        //                symbol: symbol,
+        //                tf: tf,
+        //                stage: "PREFILTER",
+        //                reason: pre.Reason ?? "NOT_ALLOWED",
+        //                ct: ct,
+        //                sleepMs: pre.SleepMs
+        //            ).ConfigureAwait(false);
+        //            return;
+        //        }
+
+        //        // =====================================================
+        //        // 1) LOAD MARKET DATA
+        //        // =====================================================
+        //        IReadOnlyList<BinanceFuturesUsdtKline> klines;
+        //        try
+        //        {
+        //            klines = await _marketDataFacade.GetKlinesAsync(symbol, tf, 200, ct).ConfigureAwait(false);
+        //        }
+        //        catch (OperationCanceledException) { throw; }
+        //        catch (Exception ex)
+        //        {
+        //            _logger.LogWarning(ex, "[PROC][{symbol}][{tf}] MARKET_DATA fetch failed", symbol, tf);
+        //            await RejectAsync(null, symbol, tf, "MARKET_DATA", "FETCH_FAILED", ct, extra: ex.Message)
+        //                .ConfigureAwait(false);
+        //            return;
+        //        }
+
+        //        var cnt = klines?.Count ?? 0;
+        //        if (cnt < 60)
+        //        {
+        //            await RejectAsync(null, symbol, tf, "MARKET_DATA", "INSUFFICIENT_KLINES", ct, extra: $"cnt={cnt}")
+        //                .ConfigureAwait(false);
+        //            return;
+        //        }
+
+        //        // =====================================================
+        //        // 2) STRATEGY SIGNAL
+        //        // =====================================================
+        //        TradeSignal? signal;
+        //        try
+        //        {
+        //            signal = _strategy.GenerateSignal(symbol, tf, klines);
+        //        }
+        //        catch (OperationCanceledException) { throw; }
+        //        catch (Exception ex)
+        //        {
+        //            _logger.LogError(ex, "[PROC][{symbol}][{tf}] STRATEGY threw", symbol, tf);
+        //            await RejectAsync(null, symbol, tf, "STRATEGY", "STRATEGY_EXCEPTION", ct, extra: ex.Message)
+        //                .ConfigureAwait(false);
+        //            return;
+        //        }
+
+        //        if (signal == null)
+        //        {
+        //            // ✅ ВОТ ЭТОГО ТЕБЕ НЕ ХВАТАЛО: фиксируем “BLOCK” даже без сигнала
+        //            await RejectAsync(null, symbol, tf, "STRATEGY", "NO_SIGNAL", ct)
+        //                .ConfigureAwait(false);
+        //            return;
+        //        }
+        //        if (signal.Side != desiredSide)
+        //        {
+        //            var confidence = signal.Confidence ?? 0m;
+
+        //            //Если   мягче:
+        //            //bool allowCounterTrend =
+        //            //confidence >= 0.60m &&
+        //            //!_marketRegime.IsStrongTrend(symbol) && !_liq.IsExtreme();
+
+
+        //            //bool allowCounterTrend =
+        //            //confidence >= 0.60m &&
+        //            //_marketRegime.IsRange(symbol) &&  !_liq.IsExtreme();
+
+        //            bool allowCounterTrend =
+        //confidence >= 0.60m &&
+        //!_marketRegime.IsStrongTrend(symbol) &&
+        //!_liq.IsExtreme();
+
+
+        //            if (!allowCounterTrend)
+        //            {
+        //                await RejectAsync(
+        //                    signal,
+        //                    symbol,
+        //                    tf,
+        //                    "STRATEGY",
+        //                    "SIDE_MISMATCH",
+        //                    ct,
+        //                    extra: $"conf={confidence:F2}"
+        //                ).ConfigureAwait(false);
+        //                return;
+        //            }
+
+        //            // ✅ ЯВНО фиксируем override
+        //            _learn.RecordMarketStateTriggered(
+        //                reason: "COUNTER_TREND_OVERRIDE",
+        //                symbol: symbol,
+        //                timeframe: tf.ToString(),
+        //                regime: MarketRegime.Unknown,
+        //                slope: 0m,
+        //                volatility: 0m,
+        //                atr: signal.Atr ?? 0m,
+        //                confidence: confidence
+        //            );
+
+        //            _logger.LogWarning(
+        //                "[PROC][{symbol}][{tf}] COUNTER-TREND OVERRIDE allowed conf={conf}",
+        //                symbol, tf, confidence);
+        //        }
+
+        //        // ✅ микро-телеметрия (норм)
+        //        _learn.RecordMarketStateTriggered(
+        //            reason: "MICRO_SIGNAL",
+        //            symbol: symbol,
+        //            timeframe: tf.ToString(),
+        //            regime: MarketRegime.Unknown,
+        //            slope: 0m,
+        //            volatility: 0m,
+        //            atr: signal.Atr ?? 0m,
+        //            confidence: signal.Confidence ?? 0.3m
+        //        );
+
+        //        // =====================================================
+        //        // 3) COOLDOWN
+        //        // =====================================================
+        //        if (InCooldown(symbol))
+        //        {
+        //            await RejectAsync(signal, symbol, tf, "COOLDOWN", "COOLDOWN_ACTIVE", ct)
+        //                .ConfigureAwait(false);
+        //            return;
+        //        }
+
+        //        // =====================================================
+        //        // 4) AI CONFIRMATION
+        //        // =====================================================
+        //        AiDecision ai;
+        //        try
+        //        {
+        //            ai = _predict.Decide(symbol, tf, klines, signal);
+        //        }
+        //        catch (OperationCanceledException) { throw; }
+        //        catch (Exception ex)
+        //        {
+        //            _logger.LogError(ex, "[PROC][{symbol}][{tf}] AI Decide threw", symbol, tf);
+        //            await RejectAsync(signal, symbol, tf, "AI", "AI_ERROR", ct, extra: ex.Message)
+        //                .ConfigureAwait(false);
+        //            return;
+        //        }
+
+        //        if (!ai.Allow)
+        //        {
+        //            _learn.RecordMarketStateTriggered(
+        //                reason: "AI_PATTERN_BLOCK",
+        //                symbol: symbol,
+        //                timeframe: tf.ToString(),
+        //                regime: MarketRegime.Unknown,
+        //                slope: 0m,
+        //                volatility: 0m,
+        //                atr: signal.Atr ?? 0m,
+        //                confidence: signal.Confidence ?? 0.25m
+        //            );
+
+        //            await RejectAsync(signal, symbol, tf, "AI", "AI_BLOCK", ct, extra: ai.Reason)
+        //                .ConfigureAwait(false);
+        //            return;
+        //        }
+
+        //        // =====================================================
+        //        // 5) RISK SCALING
+        //        // =====================================================
+        //        var riskMult = _riskScaler.Scale(ai.Grade);
+        //        if (riskMult <= 0)
+        //        {
+        //            await RejectAsync(signal, symbol, tf, "RISK", "RISK_MULT_ZERO", ct)
+        //                .ConfigureAwait(false);
+        //            return;
+        //        }
+
+        //        // =====================================================
+        //        // 6) LIQUIDITY GUARD
+        //        // =====================================================
+        //        LiquidityGuardResult liq;
+        //        try
+        //        {
+        //            liq = _liq.Analyze(symbol, tf, klines, signal.Side, signal.IsSuperSignal);
+        //        }
+        //        catch (OperationCanceledException) { throw; }
+        //        catch (Exception ex)
+        //        {
+        //            _logger.LogError(ex, "[PROC][{symbol}][{tf}] LiquidityGuard Analyze threw", symbol, tf);
+        //            // fail-safe: не блокируем из-за падения сервиса, но фиксируем
+        //            await RejectAsync(signal, symbol, tf, "LIQUIDITY", "LIQ_SERVICE_ERROR", ct, extra: ex.Message)
+        //                .ConfigureAwait(false);
+        //            return;
+        //        }
+
+        //        if (liq.Block)
+        //        {
+        //            _learn.RecordMarketStateTriggered(
+        //                reason: "LIQUIDITY_DANGER",
+        //                symbol: symbol,
+        //                timeframe: tf.ToString(),
+        //                regime: MarketRegime.Unknown,
+        //                slope: 0m,
+        //                volatility: 0m,
+        //                atr: signal.Atr ?? 0m,
+        //                confidence: signal.Confidence ?? 0.25m
+        //            );
+
+        //            await RejectAsync(signal, symbol, tf, "LIQUIDITY", $"LIQUIDITY_{liq.Reason}", ct)
+        //                .ConfigureAwait(false);
+        //            return;
+        //        }
+
+        //        // =====================================================
+        //        // 7) QTY / BALANCE / MIN NOTIONAL
+        //        // =====================================================
+        //        var qty = await _risk.CalculateSafeQty(
+        //            signal,
+        //            symbol,
+        //            signal.EntryPrice,
+        //            signal.StopLoss,
+        //            riskMult,
+        //            signal.SafetyRiskMultiplier,
+        //            signal.Leverage ?? 1m,
+        //            signal.Side,
+        //            signal.TakeProfits,
+        //            ct
+        //        ).ConfigureAwait(false);
+
+        //        if (qty <= 0)
+        //        {
+        //            await RejectAsync(signal, symbol, tf, "RISK", "NO_BALANCE_OR_MIN_NOTIONAL", ct)
+        //                .ConfigureAwait(false);
+        //            return;
+        //        }
+
+        //        // =====================================================
+        //        // 8) SL / TP OPTIMIZATION
+        //        // =====================================================
+        //        try
+        //        {
+        //            signal.StopLoss = _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
+        //            await _cleaner.CleanupOutdatedOrdersAsync(symbol, signal, ct).ConfigureAwait(false);
+        //        }
+        //        catch (OperationCanceledException) { throw; }
+        //        catch (Exception ex)
+        //        {
+        //            _logger.LogError(ex, "[PROC][{symbol}][{tf}] SL/TP optimize or cleanup failed", symbol, tf);
+        //            await RejectAsync(signal, symbol, tf, "PROTECTION", "PROTECTION_ERROR", ct, extra: ex.Message)
+        //                .ConfigureAwait(false);
+        //            return;
+        //        }
+
+        //        // =====================================================
+        //        // 9) EXECUTION
+        //        // =====================================================
+        //        var result = await _executor.ExecuteAsync(signal, qty, ct).ConfigureAwait(false);
+        //        if (!result.Success)
+        //        {
+        //            await RejectAsync(
+        //                signal,
+        //                symbol,
+        //                tf,
+        //                "EXEC",
+        //                "EXECUTION_FAILED",
+        //                ct,
+        //                extra: result.Error
+        //            ).ConfigureAwait(false);
+        //            return;
+        //        }
+
+        //        // lifecycle: EXEC_OK
+        //        try
+        //        {
+        //            await _sim.AppendLifecycleEventAsync(signal, "EXEC_OK");
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            _logger.LogWarning(ex, "[SIM] lifecycle EXEC_OK failed");
+        //        }
+
+        //        // =====================================================
+        //        // 10) SUCCESS PATH
+        //        // =====================================================
+        //        MarkTrade(symbol);
+        //        TrackSymbol(symbol, keepAlive: true);
+
+        //        // lifecycle: ENTRY_OK
+        //        try
+        //        {
+        //            await _sim.AppendLifecycleEventAsync(signal, "ENTRY_OK");
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            _logger.LogWarning(ex, "[SIM] lifecycle ENTRY_OK failed");
+        //        }
+
+        //        await _supervisor.SuperviseAsync(symbol, signal, ct).ConfigureAwait(false);
+
+        //        ConsoleSymbolTableFormatter.UpdateTf(
+        //            symbol,
+        //            tf,
+        //            "🟩 OK",
+        //            $"{signal.Side} qty={qty:F4}"
+        //        );
+        //    }
+
         private async Task ProcessSymbol(
-      string symbol,
-      KlineInterval tf,
-      SignalSide desiredSide,
-      CancellationToken ct)
+    string symbol,
+    KlineInterval tf,
+    SignalSide desiredSide,
+    CancellationToken ct)
         {
-            ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏳ RUN", desiredSide.ToString());
+            // ❗❗❗
+            // ENTRY PATH DISABLED
+            // StrategyEngine is the ONLY signal source.
+            // This method is kept ONLY to avoid breaking legacy call sites.
+            // ❗❗❗
 
-            // =====================================================
-            // 0) PREFILTER
-            // =====================================================
-            PreFilterResult pre;
-            try
-            {
-                pre = await _pre.EvaluateAsync(symbol, tf, ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[PROC][{symbol}][{tf}] PREFILTER threw", symbol, tf);
-                await RejectAsync(null, symbol, tf, "PREFILTER", "PREFILTER_ERROR", ct, extra: ex.Message)
-                    .ConfigureAwait(false);
-                return;
-            }
+            _logger.LogDebug(
+                "[PROC][{symbol}][{tf}] ProcessSymbol skipped — entry handled by StrategyEngine",
+                symbol, tf);
 
-            if (!pre.Allow)
-            {
-                await RejectAsync(
-                    signal: null,
-                    symbol: symbol,
-                    tf: tf,
-                    stage: "PREFILTER",
-                    reason: pre.Reason ?? "NOT_ALLOWED",
-                    ct: ct,
-                    sleepMs: pre.SleepMs
-                ).ConfigureAwait(false);
-                return;
-            }
+            // НИЧЕГО НЕ ДЕЛАЕМ
+            // ❌ никаких сигналов
+            // ❌ никакого AI
+            // ❌ никакого execution
 
-            // =====================================================
-            // 1) LOAD MARKET DATA
-            // =====================================================
-            IReadOnlyList<BinanceFuturesUsdtKline> klines;
-            try
-            {
-                klines = await _marketDataFacade.GetKlinesAsync(symbol, tf, 200, ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[PROC][{symbol}][{tf}] MARKET_DATA fetch failed", symbol, tf);
-                await RejectAsync(null, symbol, tf, "MARKET_DATA", "FETCH_FAILED", ct, extra: ex.Message)
-                    .ConfigureAwait(false);
-                return;
-            }
-
-            var cnt = klines?.Count ?? 0;
-            if (cnt < 60)
-            {
-                await RejectAsync(null, symbol, tf, "MARKET_DATA", "INSUFFICIENT_KLINES", ct, extra: $"cnt={cnt}")
-                    .ConfigureAwait(false);
-                return;
-            }
-
-            // =====================================================
-            // 2) STRATEGY SIGNAL
-            // =====================================================
-            TradeSignal? signal;
-            try
-            {
-                signal = _strategy.GenerateSignal(symbol, tf, klines);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[PROC][{symbol}][{tf}] STRATEGY threw", symbol, tf);
-                await RejectAsync(null, symbol, tf, "STRATEGY", "STRATEGY_EXCEPTION", ct, extra: ex.Message)
-                    .ConfigureAwait(false);
-                return;
-            }
-
-            if (signal == null)
-            {
-                // ✅ ВОТ ЭТОГО ТЕБЕ НЕ ХВАТАЛО: фиксируем “BLOCK” даже без сигнала
-                await RejectAsync(null, symbol, tf, "STRATEGY", "NO_SIGNAL", ct)
-                    .ConfigureAwait(false);
-                return;
-            }
-            if (signal.Side != desiredSide)
-            {
-                var confidence = signal.Confidence ?? 0m;
-
-                //Если   мягче:
-                //bool allowCounterTrend =
-                //confidence >= 0.60m &&
-                //!_marketRegime.IsStrongTrend(symbol) && !_liq.IsExtreme();
-
-
-                //bool allowCounterTrend =
-                //confidence >= 0.60m &&
-                //_marketRegime.IsRange(symbol) &&  !_liq.IsExtreme();
-
-                bool allowCounterTrend =
-    confidence >= 0.60m &&
-    !_marketRegime.IsStrongTrend(symbol) &&
-    !_liq.IsExtreme();
-
-
-                if (!allowCounterTrend)
-                {
-                    await RejectAsync(
-                        signal,
-                        symbol,
-                        tf,
-                        "STRATEGY",
-                        "SIDE_MISMATCH",
-                        ct,
-                        extra: $"conf={confidence:F2}"
-                    ).ConfigureAwait(false);
-                    return;
-                }
-
-                // ✅ ЯВНО фиксируем override
-                _learn.RecordMarketStateTriggered(
-                    reason: "COUNTER_TREND_OVERRIDE",
-                    symbol: symbol,
-                    timeframe: tf.ToString(),
-                    regime: MarketRegime.Unknown,
-                    slope: 0m,
-                    volatility: 0m,
-                    atr: signal.Atr ?? 0m,
-                    confidence: confidence
-                );
-
-                _logger.LogWarning(
-                    "[PROC][{symbol}][{tf}] COUNTER-TREND OVERRIDE allowed conf={conf}",
-                    symbol, tf, confidence);
-            } 
-
-            // ✅ микро-телеметрия (норм)
-            _learn.RecordMarketStateTriggered(
-                reason: "MICRO_SIGNAL",
-                symbol: symbol,
-                timeframe: tf.ToString(),
-                regime: MarketRegime.Unknown,
-                slope: 0m,
-                volatility: 0m,
-                atr: signal.Atr ?? 0m,
-                confidence: signal.Confidence ?? 0.3m
-            );
-
-            // =====================================================
-            // 3) COOLDOWN
-            // =====================================================
-            if (InCooldown(symbol))
-            {
-                await RejectAsync(signal, symbol, tf, "COOLDOWN", "COOLDOWN_ACTIVE", ct)
-                    .ConfigureAwait(false);
-                return;
-            }
-
-            // =====================================================
-            // 4) AI CONFIRMATION
-            // =====================================================
-            AiDecision ai;
-            try
-            {
-                ai = _predict.Decide(symbol, tf, klines, signal);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[PROC][{symbol}][{tf}] AI Decide threw", symbol, tf);
-                await RejectAsync(signal, symbol, tf, "AI", "AI_ERROR", ct, extra: ex.Message)
-                    .ConfigureAwait(false);
-                return;
-            }
-
-            if (!ai.Allow)
-            {
-                _learn.RecordMarketStateTriggered(
-                    reason: "AI_PATTERN_BLOCK",
-                    symbol: symbol,
-                    timeframe: tf.ToString(),
-                    regime: MarketRegime.Unknown,
-                    slope: 0m,
-                    volatility: 0m,
-                    atr: signal.Atr ?? 0m,
-                    confidence: signal.Confidence ?? 0.25m
-                );
-
-                await RejectAsync(signal, symbol, tf, "AI", "AI_BLOCK", ct, extra: ai.Reason)
-                    .ConfigureAwait(false);
-                return;
-            }
-
-            // =====================================================
-            // 5) RISK SCALING
-            // =====================================================
-            var riskMult = _riskScaler.Scale(ai.Grade);
-            if (riskMult <= 0)
-            {
-                await RejectAsync(signal, symbol, tf, "RISK", "RISK_MULT_ZERO", ct)
-                    .ConfigureAwait(false);
-                return;
-            }
-
-            // =====================================================
-            // 6) LIQUIDITY GUARD
-            // =====================================================
-            LiquidityGuardResult liq;
-            try
-            {
-                liq = _liq.Analyze(symbol, tf, klines, signal.Side, signal.IsSuperSignal);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[PROC][{symbol}][{tf}] LiquidityGuard Analyze threw", symbol, tf);
-                // fail-safe: не блокируем из-за падения сервиса, но фиксируем
-                await RejectAsync(signal, symbol, tf, "LIQUIDITY", "LIQ_SERVICE_ERROR", ct, extra: ex.Message)
-                    .ConfigureAwait(false);
-                return;
-            }
-
-            if (liq.Block)
-            {
-                _learn.RecordMarketStateTriggered(
-                    reason: "LIQUIDITY_DANGER",
-                    symbol: symbol,
-                    timeframe: tf.ToString(),
-                    regime: MarketRegime.Unknown,
-                    slope: 0m,
-                    volatility: 0m,
-                    atr: signal.Atr ?? 0m,
-                    confidence: signal.Confidence ?? 0.25m
-                );
-
-                await RejectAsync(signal, symbol, tf, "LIQUIDITY", $"LIQUIDITY_{liq.Reason}", ct)
-                    .ConfigureAwait(false);
-                return;
-            }
-
-            // =====================================================
-            // 7) QTY / BALANCE / MIN NOTIONAL
-            // =====================================================
-            var qty = await _risk.CalculateSafeQty(
-                signal,
-                symbol,
-                signal.EntryPrice,
-                signal.StopLoss,
-                riskMult,
-                signal.SafetyRiskMultiplier,
-                signal.Leverage ?? 1m,
-                signal.Side,
-                signal.TakeProfits,
-                ct
-            ).ConfigureAwait(false);
-
-            if (qty <= 0)
-            {
-                await RejectAsync(signal, symbol, tf, "RISK", "NO_BALANCE_OR_MIN_NOTIONAL", ct)
-                    .ConfigureAwait(false);
-                return;
-            }
-
-            // =====================================================
-            // 8) SL / TP OPTIMIZATION
-            // =====================================================
-            try
-            {
-                signal.StopLoss = _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
-                await _cleaner.CleanupOutdatedOrdersAsync(symbol, signal, ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[PROC][{symbol}][{tf}] SL/TP optimize or cleanup failed", symbol, tf);
-                await RejectAsync(signal, symbol, tf, "PROTECTION", "PROTECTION_ERROR", ct, extra: ex.Message)
-                    .ConfigureAwait(false);
-                return;
-            }
-
-            // =====================================================
-            // 9) EXECUTION
-            // =====================================================
-            var result = await _executor.ExecuteAsync(signal, qty, ct).ConfigureAwait(false);
-            if (!result.Success)
-            {
-                await RejectAsync(
-                    signal,
-                    symbol,
-                    tf,
-                    "EXEC",
-                    "EXECUTION_FAILED",
-                    ct,
-                    extra: result.Error
-                ).ConfigureAwait(false);
-                return;
-            }
-
-            // lifecycle: EXEC_OK
-            try
-            {
-                await _sim.AppendLifecycleEventAsync(signal, "EXEC_OK");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[SIM] lifecycle EXEC_OK failed");
-            }
-
-            // =====================================================
-            // 10) SUCCESS PATH
-            // =====================================================
-            MarkTrade(symbol);
-            TrackSymbol(symbol, keepAlive: true);
-
-            // lifecycle: ENTRY_OK
-            try
-            {
-                await _sim.AppendLifecycleEventAsync(signal, "ENTRY_OK");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[SIM] lifecycle ENTRY_OK failed");
-            }
-
-            await _supervisor.SuperviseAsync(symbol, signal, ct).ConfigureAwait(false);
-
-            ConsoleSymbolTableFormatter.UpdateTf(
-                symbol,
-                tf,
-                "🟩 OK",
-                $"{signal.Side} qty={qty:F4}"
-            );
+            await Task.CompletedTask;
         }
-
 
 
         private bool InCooldown(string symbol)

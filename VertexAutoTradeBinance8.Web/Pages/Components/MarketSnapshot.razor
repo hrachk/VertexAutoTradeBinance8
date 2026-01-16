@@ -95,7 +95,14 @@
                 while (await _timer.WaitForNextTickAsync(_cts.Token))
                 {
                     if (!Frozen)
-                        await InvokeAsync(() => SafeJs(LoadAndRenderAsync));
+                    {
+                        await InvokeAsync(async () =>
+                        {
+                            Series = (await Service.LoadAsync()).ToList();
+                            Selected ??= Series.FirstOrDefault();
+                            await SafeJs(LoadAndRenderAsync);
+                        });
+                    }
                 }
             }
             catch (OperationCanceledException) { }
@@ -106,6 +113,9 @@
     private async Task LoadAndRenderAsync()
     {
         if (!_jsReady || Selected == null)
+            return;
+
+        if (Selected.Klines.Count == 0)
             return;
 
         var closes = Selected.Klines.Select(k => (double)k.Close).ToArray();
@@ -124,10 +134,16 @@
     // ===== UI =====
     private async Task OnSelect(ChangeEventArgs e)
     {
-        Selected = Series.FirstOrDefault(s => Key(s) == e.Value?.ToString());
+        var next = Series.FirstOrDefault(s => Key(s) == e.Value?.ToString());
+        if (next == null)
+            return;
+
+        Selected = next;
+
         if (!Frozen)
             await LoadAndRenderAsync();
     }
+
 
     private void ToggleFreeze() => Frozen = !Frozen;
 
@@ -142,11 +158,11 @@
     };
 
     // ===== DISPOSE =====
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _cts.Cancel();
         _timer?.Dispose();
         _cts.Dispose();
-        await Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }
