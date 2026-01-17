@@ -33,6 +33,7 @@ namespace VertexAutoTradeBinance8.Services
         public EngineState Build(string symbol, string timeframe)
         {
             var s = _stateSvc.State;
+
             var confidenceRaw = _regime.LastConfidence; // 0..1
 
             int confidencePercent = (int)Math.Round(confidenceRaw * 100m);
@@ -72,6 +73,8 @@ namespace VertexAutoTradeBinance8.Services
                 LastSupervisorMessage = s.LastSupervisorMessage,
                 LastUpdate = DateTime.UtcNow
             };
+
+            
         }
     }
 }

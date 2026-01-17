@@ -17,7 +17,13 @@ public sealed record LiquidityGuardResult(
     LiquidityGuardReason Reason,
     bool IsExtreme,
     string? Details = null,
-    DateTime UtcTime = default
+    DateTime UtcTime = default,
+
+    // NEW (optional): 0..1, где 1 = отлично, 0 = опасно
+    decimal Score = 1.0m,
+
+    // NEW: мягкое предупреждение (не блок)
+    bool SoftWarning = false
 );
 
 public sealed class LiquidityGuardService
@@ -136,6 +142,7 @@ public sealed class LiquidityGuardService
         {
             var msg = $"LOW VOLUME {symbol} {interval} | ratio={volRatio:F2}";
 
+            // EXTREME: как и было — блок (это реально опасно для исполнения на альтах)
             if (extremeLowVolume && !isMajor)
             {
                 _logger.LogWarning(
@@ -146,19 +153,28 @@ public sealed class LiquidityGuardService
                     block: true,
                     reason: LiquidityGuardReason.LowVolume,
                     isExtreme: true,
-                    details: msg);
+                    details: msg,
+                    score: 0.10m,
+                    softWarning: false);
             }
 
+            // SOFT: НЕ блокируем, но снижаем score и помечаем warning
             _logger.LogWarning(
                 "[LiquidityGuard] SOFT LOW-VOLUME {Symbol} ratio={Ratio:F2}",
                 symbol, volRatio);
+
+            // score шкалируем от ratio (0.35 -> ~0.65, 0.18 -> ~0.2)
+            var score = Math.Clamp((volRatio - 0.10m) / (0.35m - 0.10m), 0.15m, 0.80m);
 
             return SetDanger(
                 block: false,
                 reason: LiquidityGuardReason.LowVolume,
                 isExtreme: false,
-                details: msg);
+                details: msg,
+                score: score,
+                softWarning: true);
         }
+
 
         // ---------------------------------------------------------------------
         // 4) STOP-HUNT DOWN → block SHORT
@@ -206,17 +222,21 @@ public sealed class LiquidityGuardService
     // INTERNAL STATE SETTER (single point of truth)
     // =====================================================================
     private LiquidityGuardResult SetDanger(
-        bool block,
-        LiquidityGuardReason reason,
-        bool isExtreme,
-        string? details)
+     bool block,
+     LiquidityGuardReason reason,
+     bool isExtreme,
+     string? details,
+     decimal score = 1.0m,
+     bool softWarning = false)
     {
         var r = new LiquidityGuardResult(
-            block,
-            reason,
-            isExtreme,
-            details,
-            DateTime.UtcNow);
+     block,
+     reason,
+     isExtreme,
+     details,
+     DateTime.UtcNow,
+     score,
+     softWarning);
 
         LastDanger = r;
         return r;

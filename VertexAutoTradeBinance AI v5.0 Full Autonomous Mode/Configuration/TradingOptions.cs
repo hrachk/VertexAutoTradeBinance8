@@ -4,7 +4,7 @@ public class TradingOptions
 {
     public int TimeframeMinutes { get; set; } = 15;
     public double RiskPerTrade { get; set; } = 0.01; // доля депозита riska
-    public double Deposit { get; set; } = 100.0;    // размер депозита для расчёта
+    public decimal Deposit { get; set; } = 100m;    // размер депозита для расчёта
     public double MinQuantity { get; set; } = 0.001;
     public int CooldownSeconds { get; set; } = 120;
     public int Leverage { get; set; } = 15;
@@ -26,9 +26,7 @@ public class TradingOptions
 
     /// <summary>Минимальный процент → если позиция получается слишком маленькой</summary>
     public decimal MinNotionalGuardPercent { get; set; } = 0.003m; // 0.3% капитала
-
-     
-
+ 
     // =====================================================
     // STARTUP / BOOTSTRAP OPTIONS
     // =====================================================
@@ -38,5 +36,4 @@ public class TradingOptions
     /// Prevents WS / warmup storm.
     /// </summary>
     public int StartupSubscriptionCap { get; set; } = 8;
-
-}
+} 

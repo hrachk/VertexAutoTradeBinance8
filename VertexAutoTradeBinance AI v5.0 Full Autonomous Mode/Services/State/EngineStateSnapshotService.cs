@@ -1,10 +1,29 @@
 ﻿using Microsoft.Extensions.Options;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
 {
+
+    public class EngineStateRuntime
+    {
+        public decimal BaseDepositUsd { get; set; }   // якорь
+        public decimal RealizedPnlUsd { get; set; }   // накопленный
+        public decimal EngineEquityUsd { get; set; }  // Base + Realized
+
+        // уже есть:
+        public int SupervisorChecksLastMinute { get; set; }
+        public DateTime LastSupervisorAction { get; set; }
+        public string LastSupervisorMessage { get; set; }
+
+        // per-symbol state
+        public ConcurrentDictionary<string, SymbolState> Symbols { get; } = new();
+    }
+
+
+
     /// <summary>
     /// Профессиональный сервис снапшотов движка.
     /// Thread-safe, async-safe, без file-lock race.
@@ -19,6 +38,25 @@ namespace VertexAutoTradeBinance8.Services
         private static readonly SemaphoreSlim _saveGate = new(1, 1);
 
         public EngineState State { get; } = new EngineState();
+
+
+        public void EnsureDepositInitialized(decimal baseDepositUsd)
+        {
+            if (State.BaseDepositUsd > 0m)
+                return; // уже инициализировано, НИКОГДА не трогаем
+
+            State.BaseDepositUsd = baseDepositUsd;
+            State.RealizedPnlUsd = 0m;
+            State.EngineEquityUsd = baseDepositUsd;
+        }
+        public void AddRealizedPnl(decimal pnlUsd)
+        {
+            if (pnlUsd <= 0m) return;
+
+            State.RealizedPnlUsd += pnlUsd;
+            State.EngineEquityUsd = State.BaseDepositUsd + State.RealizedPnlUsd;
+        }
+
 
         private readonly JsonSerializerOptions _jsonOptions = new()
         {

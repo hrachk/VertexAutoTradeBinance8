@@ -288,6 +288,12 @@ _strategy.OnSignalGenerated += signal =>
                 _logger.LogError(ex, "[WORKER] AI snapshot import failed");
             }
 
+            // =======================================================
+            // 🔒 INIT BASE DEPOSIT (ONCE, HARD ANCHOR)
+            // =======================================================
+            _engineStateSnapshot.EnsureDepositInitialized(_options.Deposit);
+
+
             _logger.LogWarning("TradingWorker QUANT-REALTIME STARTED");
 
             while (!ct.IsCancellationRequested)
@@ -364,6 +370,7 @@ _strategy.OnSignalGenerated += signal =>
                     state.UniverseSize = _symbols.ActiveSymbols.Count;
                     state.TrackedSymbols = trackedSymbols.Count;
                     state.OpenPositions = _supervisor.GetOpenPositionsCount();
+
 
                     _engineStateSnapshot.Save(state);
 

@@ -54,6 +54,14 @@ namespace VertexAutoTradeBinance8.Models
         public decimal ConfidenceRaw { get; set; }
         public int ConfidencePercent { get; set; }
         public string ConfidenceLevel { get; set; }
+
+
         // LOW / MEDIUM / HIGH
+        public decimal EngineEquityUsd { get; set; }
+        // === CAPITAL ANCHORS ===
+        // депозит из Trading.Deposit (НЕ МЕНЯЕТСЯ во время работы)
+        public decimal BaseDepositUsd { get; set; }
+        // накопленный REALIZED PnL (только зафиксированный)
+        public decimal RealizedPnlUsd { get; set; }
     }
 }

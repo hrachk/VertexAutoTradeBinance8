@@ -170,23 +170,30 @@ namespace VertexAutoTradeBinance8.Services
                 return null;
             }
         }
- 
+
 
         // =========================================================
         // INTERNAL IO
         // =========================================================
 
+        private static readonly SemaphoreSlim _globalIoGate = new(1, 1);
+
         private async Task AppendRecordAsync(MissedTradeRecord record)
         {
-            await _ioGate.WaitAsync();
+            await _globalIoGate.WaitAsync();
             try
             {
                 List<MissedTradeRecord> list;
 
                 if (File.Exists(_filePath))
                 {
-                    var json = await File.ReadAllTextAsync(_filePath, Encoding.UTF8);
-                    list = JsonSerializer.Deserialize<List<MissedTradeRecord>>(json, JsonOpts)
+                    await using var fs = new FileStream(
+                        _filePath,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite);
+
+                    list = await JsonSerializer.DeserializeAsync<List<MissedTradeRecord>>(fs, JsonOpts)
                            ?? new List<MissedTradeRecord>();
                 }
                 else
@@ -197,16 +204,37 @@ namespace VertexAutoTradeBinance8.Services
                 list.Add(record);
 
                 var tmp = _filePath + ".tmp";
-                var outJson = JsonSerializer.Serialize(list, JsonOpts);
+                var bak = _filePath + ".bak";
 
-                await File.WriteAllTextAsync(tmp, outJson, Encoding.UTF8);
-                File.Move(tmp, _filePath, overwrite: true);
+                await using (var fs = new FileStream(
+                    tmp,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None))
+                {
+                    await JsonSerializer.SerializeAsync(fs, list, JsonOpts);
+                    await fs.FlushAsync();
+                }
+
+                if (File.Exists(_filePath))
+                {
+                    File.Replace(tmp, _filePath, bak, ignoreMetadataErrors: true);
+                }
+                else
+                {
+                    File.Move(tmp, _filePath);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SIM] AppendRecordAsync failed (IO-safe)");
             }
             finally
             {
-                _ioGate.Release();
+                _globalIoGate.Release();
             }
         }
+
 
         public async Task AppendLifecycleEventAsync(
     TradeSignal signal,

@@ -40,6 +40,12 @@ namespace VertexAutoTradeBinance8.Models
         public bool AllowCounterTrendEntries { get; set; }
         public bool HighTfSafetyMode { get; set; } = false;
 
+
+        public bool IsVolCompression { get; set; } = false;
+        public bool IsControlledTrend { get; set; } = false;
+        public string EntryProfile { get; set; } = string.Empty;
+        public decimal RiskBias { get; set; }
+ 
         public decimal SafetyRiskMultiplier { get; set; } = 1m;
 
     }

@@ -30,6 +30,16 @@ namespace VertexAutoTradeBinance8.Services
         private readonly AiMarketRegimeService _marketRegimeService;
         private readonly AiCorrelationService _correlationService;
 
+
+        public bool IsVolCompression { get; init; } = false;
+        public bool IsControlledTrend { get; init; } = false;
+
+        // Entry profile: "CT" (controlled trend) / "EXP" (expansion breakout) / "STD"
+        public string EntryProfile { get; init; } = "STD";
+
+        // Риск-модификатор (0.6..1.2). По умолчанию 1.
+        public decimal RiskBias { get; init; } = 1.0m;
+
         public SmartRegimeService(
             ILogger<SmartRegimeService> logger,
             AiMarketRegimeService marketRegimeService,
@@ -76,13 +86,31 @@ namespace VertexAutoTradeBinance8.Services
             var absSlope = Math.Abs(slope);
             var absVol = Math.Abs(vol);
 
+
             SmartRegimeType smartType;
 
             bool isRange = baseRegime == MarketRegime.Range;
             bool isStrongTrend = baseRegime == MarketRegime.StrongUpTrend ||
                                  baseRegime == MarketRegime.StrongDownTrend;
 
-            if (isRange && absVol < 0.004m)          // < 0.4% волы → узкий флэт/сжатие
+            // --------------------
+            // NEW: VolCompression / ControlledTrend detection
+            // --------------------
+            bool isVolCompression =
+                // классическое сжатие: очень низкая вола в range
+                (isRange && absVol < 0.004m)
+                // или почти-range с очень низкой волой и почти нулевым наклоном
+                || (absVol < 0.006m && absSlope < 0.0025m);
+
+            bool isControlledTrend =
+                // тренд есть, но вола умеренно-низкая (плавный controlled drift)
+                (!isRange && absSlope >= 0.006m && absSlope <= 0.020m && absVol <= 0.008m)
+                // либо strongtrend, но без "взрывной" волы
+                || (isStrongTrend && absSlope >= 0.008m && absVol <= 0.010m);
+
+
+
+            if (isVolCompression)
             {
                 smartType = SmartRegimeType.SmartSqueeze;
             }
@@ -90,13 +118,18 @@ namespace VertexAutoTradeBinance8.Services
             {
                 smartType = SmartRegimeType.SmartRange;
             }
-            else if (isStrongTrend && absSlope > 0.01m) // >1% наклон → сильный тренд
+            else if (isStrongTrend && absSlope > 0.01m && absVol > 0.010m)
             {
+                // strong + vol -> expansion-ish
                 smartType = SmartRegimeType.SmartStrongTrend;
+            }
+            else if (isControlledTrend)
+            {
+                // controlled trend без всплесков волы
+                smartType = SmartRegimeType.SmartTrend;
             }
             else if (!isRange && absVol > 0.02m && absSlope < 0.003m)
             {
-                // вола высокая, наклон почти 0 → рубка/хаос
                 smartType = SmartRegimeType.SmartChop;
             }
             else
@@ -110,6 +143,8 @@ namespace VertexAutoTradeBinance8.Services
 
             confidence += Math.Min(absSlope * 5m, 0.4m); // до +0.4 за тренд
             confidence += Math.Min((0.02m - Math.Min(absVol, 0.02m)) * 5m, 0.2m); // +0.2 за умеренную волу
+
+            
 
             if (smartType == SmartRegimeType.SmartChop)
                 confidence -= 0.3m;
@@ -129,6 +164,16 @@ namespace VertexAutoTradeBinance8.Services
             bool allowAggressive = smartType == SmartRegimeType.SmartStrongTrend && confidence >= 0.6m;
             bool allowCounter = isRange || smartType == SmartRegimeType.SmartSqueeze;
 
+            string entryProfile =
+    isControlledTrend ? "CT" :
+    (smartType == SmartRegimeType.SmartStrongTrend ? "EXP" : "STD");
+
+            // risk bias: в controlled trend разрешаем вход, но уменьшаем риск
+            decimal riskBias =
+                isControlledTrend ? 0.75m :
+                (smartType == SmartRegimeType.SmartChop ? 0.60m : 1.0m);
+
+
             var info = new SmartRegimeInfo
             {
                 Symbol = symbol,
@@ -141,22 +186,29 @@ namespace VertexAutoTradeBinance8.Services
                 Confidence = confidence,
                 IsDangerChopZone = dangerChop,
                 AllowAggressiveTrendEntries = allowAggressive,
-                AllowCounterTrendEntries = allowCounter
+                AllowCounterTrendEntries = allowCounter,
+                IsVolCompression = isVolCompression,
+                IsControlledTrend = isControlledTrend,
+                EntryProfile = entryProfile,
+                RiskBias = riskBias,
             };
 
             _logger.LogInformation(
-                "[SMART][{Symbol}][{TF}] base={Base} smart={Smart} slope={Slope:P2} vol={Vol:P2} corrBTC={Corr:F2} conf={Conf:P0}",
-                symbol,
-                interval,
-                info.BaseRegime,
-                info.SmartType,
-                info.TrendSlopePercent,
-                info.VolatilityPercent,
-                info.CorrelationToBtc,
-                info.Confidence);
-
-
-
+     "[SMART][{Symbol}][{TF}] base={Base} smart={Smart} slope={Slope:P2} vol={Vol:P2} corrBTC={Corr:F2} conf={Conf:P0} CT={CT} VC={VC} profile={Profile} riskBias={RiskBias:F2}",
+     symbol,
+     interval,
+     info.BaseRegime,
+     info.SmartType,
+     info.TrendSlopePercent,
+     info.VolatilityPercent,
+     info.CorrelationToBtc,
+     info.Confidence,
+     //new ppts
+     info.IsControlledTrend,
+     info.IsVolCompression,
+     info.EntryProfile,
+     info.RiskBias);
+             
 
             ////////FOR UI
 
@@ -172,7 +224,14 @@ namespace VertexAutoTradeBinance8.Services
             LastAllowAggressive = info.AllowAggressiveTrendEntries;
             LastAllowCounter = info.AllowCounterTrendEntries;
 
-
+            //ADD HERE FOR UI 
+            /*
+             *   //new ppts
+     info.IsControlledTrend,
+     info.IsVolCompression,
+     info.EntryProfile,
+     info.RiskBias);
+             * */
 
             return info;
         }
