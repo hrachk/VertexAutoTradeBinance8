@@ -163,7 +163,7 @@ public class SymbolRegistryService
     // HELPERS
     // ============================================================
     private static IReadOnlyList<string> BlacklistFilter(IEnumerable<string> symbols)
-        => symbols.Where(s => !string.Equals(s, "AIAUSDT", StringComparison.OrdinalIgnoreCase)).ToList();
+        => symbols.Where(s => !string.Equals(s, "TANSSIUSDT", StringComparison.OrdinalIgnoreCase)).ToList();
 
     private static IReadOnlyList<string> NormalizeSymbols(IEnumerable<string> symbols)
         => symbols.Where(s => !string.IsNullOrWhiteSpace(s))

@@ -39,13 +39,13 @@ public class SymbolUniverseBuilder
         var pinnedNorm = pinned
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .Select(s => s.Trim().ToUpperInvariant())
-            .Where(s => s != "AIAUSDT") // 🚫 forever
+            .Where(s => s != "TANSSIUSDT") // 🚫 forever
             .ToList();
 
         // === CORE LIQUIDITY (base filter) ===
         var core = data
             .Where(x => x.QuoteVolume24h >= min24hVolume && x.LastPrice >= minPrice)
-            .Where(x => !string.Equals(x.Symbol, "AIAUSDT", StringComparison.OrdinalIgnoreCase)) // 🚫 forever
+            .Where(x => !string.Equals(x.Symbol, "TANSSIUSDT", StringComparison.OrdinalIgnoreCase)) // 🚫 forever
             .OrderByDescending(x => x.QuoteVolume24h)
             .Take(80) // widen funnel a bit (safe)
             .ToList();
