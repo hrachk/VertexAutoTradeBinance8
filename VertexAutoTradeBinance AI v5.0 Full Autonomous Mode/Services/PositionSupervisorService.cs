@@ -3,6 +3,7 @@ using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using CryptoExchange.Net.Objects;
 using Microsoft.Extensions.Options;
+using Newtonsoft.Json.Linq;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
@@ -40,9 +41,20 @@ namespace VertexAutoTradeBinance8.Services
         private readonly LiquidityGuardService _liquidityGuard;
         private readonly IOrderDispatcher _dispatcher;
         private MarketRegime _regimeNow;
+
+
         // === Anti-spam guards for EarlyTP / BE-move ===
         private readonly ConcurrentDictionary<string, long> _earlyTpDone = new();   // key -> unixMs
         private readonly ConcurrentDictionary<string, long> _beMoved = new();      // key -> unixMs
+
+        private readonly ConcurrentDictionary<string, int> _beStage = new();
+        private static readonly (decimal triggerAtr, decimal bufferAtr)[] BeStages =
+           {
+                (1.20m, 0.15m),
+                (1.60m, 0.25m),
+                (2.10m, 0.35m),
+            };
+
         private readonly ConcurrentDictionary<string, decimal> _restoredEntries = new();
         // === Harvest block after partial close ===
         private readonly ConcurrentDictionary<string, long> _recentPartialClose = new();
@@ -496,7 +508,7 @@ namespace VertexAutoTradeBinance8.Services
             if (src.TakeProfits != null && src.TakeProfits.Count > 0)
                 copy.TakeProfits.AddRange(src.TakeProfits);
 
-           
+
 
             return copy;
         }
@@ -505,17 +517,17 @@ namespace VertexAutoTradeBinance8.Services
         BinanceRestClient client,
         string symbol,
         CancellationToken ct)
-            {
-                var res = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
+        {
+            var res = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
 
-                if (!res.Success || res.Data == null)
-                    return new List<BinanceUsdFuturesOrder>();
+            if (!res.Success || res.Data == null)
+                return new List<BinanceUsdFuturesOrder>();
 
-                return res.Data
-                    .Where(o => o.Quantity > 0m) // hard filter: ignore zero-qty garbage
-                    .OrderBy(o => GetOrderSortTime(o))
-                    .ToList();
-            }
+            return res.Data
+                .Where(o => o.Quantity > 0m) // hard filter: ignore zero-qty garbage
+                .OrderBy(o => GetOrderSortTime(o))
+                .ToList();
+        }
 
         private static long GetOrderSortTime(BinanceUsdFuturesOrder o)
         {
@@ -734,377 +746,391 @@ namespace VertexAutoTradeBinance8.Services
         //==================================================
 
         private async Task ConfirmOrKillHedgeAsync(
-         BinanceRestClient client,
-         string symbol,
-         BinancePositionDetailsUsdt longPos,
-         BinancePositionDetailsUsdt shortPos,
-         IReadOnlyList<BinanceFuturesUsdtKline> klines,
-         CancellationToken ct)
+       BinanceRestClient client,
+       string symbol,
+       BinancePositionDetailsUsdt longPos,
+       BinancePositionDetailsUsdt shortPos,
+       IReadOnlyList<BinanceFuturesUsdtKline> klines,
+       CancellationToken ct)
+        {
+            // =========================
+            // HARD BLOCKS (as-is)
+            // =========================
+
+            // ⛔ NO HEDGE IN SQUEEZE
+            if (_regimeNow == MarketRegime.Squeeze)
             {
-                // =========================
-                // HARD BLOCKS (as-is)
-                // =========================
-
-                // ⛔ NO HEDGE IN SQUEEZE
-                if (_regimeNow == MarketRegime.Squeeze)
-                {
-                    _logger.LogWarning("[HEDGE][{symbol}] SKIP hedge decision → SQUEEZE regime", symbol);
-
-                    _aiLearning.RecordMarketStateTriggered(
-                        reason: "HEDGE_BLOCK_SQUEEZE",
-                        symbol: symbol,
-                        timeframe: "HEDGE",
-                        regime: MarketRegime.Squeeze,
-                        slope: 0m,
-                        volatility: 0m,
-                        atr: 0m,
-                        confidence: 0.90m);
-
-                    return;
-                }
-
-                // ⛔ NO-HEDGE DURING LIQUIDITY DANGER
-                if (_liquidityGuard.LastDanger?.Block == true)
-                {
-                    _logger.LogWarning(
-                        "[HEDGE][{symbol}] SKIP hedge decision → liquidity danger {reason}",
-                        symbol, _liquidityGuard.LastDanger?.Reason);
-                    return;
-                }
-
-                // ⛔ HEDGE COOLDOWN
-                if (IsHedgeOnCooldown(symbol))
-                {
-                    _logger.LogDebug("[HEDGE][{symbol}] skipped — cooldown active", symbol);
-                    return;
-                }
-
-                // =========================
-                // BASIC SAFETY
-                // =========================
-
-                if (longPos == null || shortPos == null)
-                    return;
-
-                if (longPos.Quantity == 0m || shortPos.Quantity == 0m)
-                    return;
-
-                if (klines == null || klines.Count < 20)
-                    return;
-
-                // Use LAST CLOSED candle (avoid live candle noise)
-                var lastClosed = klines.Count >= 2 ? klines[^2] : klines[^1];
-                var lastClosePx = lastClosed.ClosePrice;
-
-                // =========================
-                // PnL & legs
-                // =========================
-
-                decimal longPnl = longPos.UnrealizedPnl;
-                decimal shortPnl = shortPos.UnrealizedPnl;
-
-                var loser = longPnl < shortPnl ? PositionSide.Long : PositionSide.Short;
-                var winner = loser == PositionSide.Long ? PositionSide.Short : PositionSide.Long;
-
-                var loserPos = loser == PositionSide.Long ? longPos : shortPos;
-                var winnerPos = winner == PositionSide.Long ? longPos : shortPos;
-
-                // =========================
-                // Small pnl-diff guard (keep logic, but fix notional)
-                // =========================
-                if (Math.Abs(longPnl - shortPnl) < 3m)
-                {
-                    // allow funding-driven resolution even if pnl diff is small
-                    var longNotional = (longPos.MarkPrice > 0m && longPos.Quantity != 0m) ? Math.Abs(longPos.Quantity) * longPos.MarkPrice : 0m;
-                    var shortNotional = (shortPos.MarkPrice > 0m && shortPos.Quantity != 0m) ? Math.Abs(shortPos.Quantity) * shortPos.MarkPrice : 0m;
-                    var symbolNotionalCheck = longNotional + shortNotional;
-
-                    if (symbolNotionalCheck <= 0m || !IsFundingRiskExceeded(symbol, symbolNotionalCheck))
-                        return;
-                }
-
-                // =========================
-                // ATR
-                // =========================
-                var atr = _marketData.CalculateAtr(klines, 14);
-                if (atr <= 0m)
-                    return;
-
-                // =========================
-                // Winner confirmation (keep logic, but closed candle)
-                // =========================
-                bool winnerConfirmed =
-                    winner == PositionSide.Long
-                        ? lastClosePx > winnerPos.EntryPrice + atr * 0.4m
-                        : lastClosePx < winnerPos.EntryPrice - atr * 0.4m;
-
-                if (!winnerConfirmed)
-                    return;
-
-                // =========================
-                // SMART HEDGE-KILL GATES (PRO) — keep intent, fix safety & TF
-                // =========================
-
-                decimal netPnl = longPnl + shortPnl;
-
-                var sKey = EngineState.Key(symbol);
-                var st = _engineState.Symbols.GetOrAdd(sKey, _ => new SymbolState());
-                decimal bucket = st.RealizedPnlBucketUsd;
-
-                // FUNDING GUARD (NOTIONAL-BASED, HEDGE)
-                decimal symbolNotional = 0m;
-                if (longPos.Quantity != 0m && longPos.MarkPrice > 0m)
-                    symbolNotional += Math.Abs(longPos.Quantity) * longPos.MarkPrice;
-                if (shortPos.Quantity != 0m && shortPos.MarkPrice > 0m)
-                    symbolNotional += Math.Abs(shortPos.Quantity) * shortPos.MarkPrice;
-
-                bool fundingPressureByNotional = symbolNotional > 0m && IsFundingRiskExceeded(symbol, symbolNotional);
-
-                if (fundingPressureByNotional)
-                {
-                    _logger.LogWarning(
-                        "[HEDGE][{symbol}] Funding pressure detected | notional={notional:F2} cost={cost:F4}",
-                        symbol,
-                        symbolNotional,
-                        _fundingCost.TryGetValue(symbol, out var c) ? c : 0m);
-                }
-
-                bool liquidityDanger = false;
-                try
-                {
-                    if (_liquidityGuard.LastDanger?.Block == true)
-                        liquidityDanger = true;
-                    else if (_liquidityGuard.IsDangerRecent(TimeSpan.FromMinutes(5)))
-                    {
-                        var ld = _liquidityGuard.LastDanger;
-                        if (ld != null)
-                        {
-                            var age = DateTime.UtcNow - ld.UtcTime;
-                            if (age < TimeSpan.FromMinutes(2))
-                                liquidityDanger = true;
-                        }
-                    }
-                }
-                catch { /* ignore */ }
-
-                // SmartRegime: DO NOT lie about TF. Use the same TF as klines represent.
-                // If klines are from 1m -> pass 1m. If they are from 5m -> pass 5m. Here we cannot infer reliably,
-                // so use interval "FiveMinutes" as your supervisor typically loads 5m/200 elsewhere.
-                SmartRegimeInfo? smart = null;
-                try
-                {
-                    if (klines.Count >= 50)
-                        smart = _smartRegime.Evaluate(symbol, KlineInterval.FiveMinutes, klines);
-                }
-                catch { /* ignore */ }
-
-                var atrPct = CalcAtrPct(atr, lastClosePx);
-
-                var confidence = CalcKillConfidence(symbol, smart, atrPct, fundingPressureByNotional, liquidityDanger);
-
-                var givebackBudget = CalcGivebackBudget(bucket, confidence);
-
-                decimal loserPnl = loser == PositionSide.Long ? longPnl : shortPnl;
-                decimal loserLossAbs = Math.Abs(Math.Min(0m, loserPnl));
-
-                decimal atrNotional = atr * Math.Abs(loserPos.Quantity);
-                decimal hardLoserByAtr = atrNotional * _hedgeCfg.HardLoserAtrMult;
-
-                bool hardLoss =
-                    loserLossAbs >= Math.Max(_hedgeCfg.HardLoserUsd, hardLoserByAtr) ||
-                    netPnl <= _hedgeCfg.HardNetUsd;
-
-                // Gate A: netPnL ok -> skip unless funding/hardLoss
-                if (!hardLoss && !fundingPressureByNotional && netPnl >= _hedgeCfg.NetOkUsd)
-                {
-                    _logger.LogInformation(
-                        "[HEDGE-KILL][{symbol}] SKIP → netPnL ok net={net:F2} loser={loser} loss={loss:F2} bucket={bucket:F2} conf={conf:F2}",
-                        symbol, netPnl, loser, loserLossAbs, bucket, confidence);
-                    return;
-                }
-
-                // Gate B: giveback limiter -> skip unless funding/hardLoss
-                if (!hardLoss && !fundingPressureByNotional && loserLossAbs > givebackBudget)
-                {
-                    _logger.LogWarning(
-                        "[HEDGE-KILL][{symbol}] SKIP → giveback limit loss={loss:F2} budget={budget:F2} net={net:F2} bucket={bucket:F2} conf={conf:F2}",
-                        symbol, loserLossAbs, givebackBudget, netPnl, bucket, confidence);
-                    return;
-                }
-
-                // =========================
-                // DECISION: kill loser
-                // =========================
-                _logger.LogWarning(
-                    "[HEDGE-KILL][{symbol}] CLOSE LOSER {loser} pnl={pnl:F2} | KEEP {winner}",
-                    symbol, loser, loserPnl, winner);
+                _logger.LogWarning("[HEDGE][{symbol}] SKIP hedge decision → SQUEEZE regime", symbol);
 
                 _aiLearning.RecordMarketStateTriggered(
-                    reason: "HEDGE_KILL",
+                    reason: "HEDGE_BLOCK_SQUEEZE",
                     symbol: symbol,
                     timeframe: "HEDGE",
-                    regime: MarketRegime.Unknown,
+                    regime: MarketRegime.Squeeze,
                     slope: 0m,
                     volatility: 0m,
-                    atr: atr,
-                    confidence: Math.Min(0.95m, Math.Abs(longPnl - shortPnl) / 10m));
+                    atr: 0m,
+                    confidence: 0.90m);
 
-                // =========================
-                // CLOSE LOSER (MARKET) with proper qty quantize
-                // =========================
-                var closeSide = loser == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-
-                var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-                var step = filters.step > 0m ? filters.step : 1m;
-
-                decimal loserQtyAbs = Math.Abs(loserPos.Quantity);
-
-                decimal frac =
-                    _hedgeCfg.Mode == HedgeKillMode.Aggressive ? 1.00m :
-                    _hedgeCfg.Mode == HedgeKillMode.Safe ? 0.80m :
-                    _hedgeCfg.LoserCloseFraction; // Hybrid default
-
-                decimal closeQty = loserQtyAbs * frac;
-
-                if (fundingPressureByNotional || hardLoss)
-                    closeQty = loserQtyAbs;
-
-                // Quantize DOWN to step
-                closeQty = Math.Floor(closeQty / step) * step;
-
-                // Hard minQty guard
-                if (closeQty < filters.minQty)
-                {
-                    // if partial is too small -> close all (still quantized)
-                    closeQty = Math.Floor(loserQtyAbs / step) * step;
-
-                    // If still < minQty (tiny dust) -> nothing to do safely
-                    if (closeQty < filters.minQty)
-                    {
-                        _logger.LogWarning(
-                            "[HEDGE-KILL][{symbol}] CloseQty below minQty even for full close | qty={qty} minQty={min}",
-                            symbol, closeQty, filters.minQty);
-                        return;
-                    }
-                }
-
-                var closeRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol: symbol,
-                    side: closeSide,
-                    type: FuturesOrderType.Market,
-                    quantity: closeQty,
-                    positionSide: loser,
-                    ct: ct);
-
-                if (!closeRes.Success)
-                {
-                    _logger.LogWarning(
-                        "[HEDGE-KILL][{symbol}] Close loser failed: {err}",
-                        symbol, closeRes.Error);
-                    return;
-                }
-
-                await Task.Delay(450, ct);
-
-                // =========================
-                // REFRESH winner position snapshot (critical)
-                // =========================
-                BinancePositionDetailsUsdt? winnerNow = null;
-                try
-                {
-                    var info = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
-                    if (info.Success && info.Data != null)
-                    {
-                        winnerNow = info.Data.FirstOrDefault(p =>
-                            p.Symbol == symbol &&
-                            p.PositionSide == winner &&
-                            p.Quantity != 0m);
-                    }
-                }
-                catch { /* ignore */ }
-
-                // fallback to passed winnerPos if REST fails
-                var winnerQtyAbs = winnerNow != null ? Math.Abs(winnerNow.Quantity) : Math.Abs(winnerPos.Quantity);
-                var winnerEntry = winnerNow != null && winnerNow.EntryPrice > 0m ? winnerNow.EntryPrice : winnerPos.EntryPrice;
-
-                if (winnerQtyAbs <= 0m || winnerEntry <= 0m)
-                    return;
-
-                // =========================
-                // PROTECT WINNER → SL to BE+buffer (proper tick)
-                // =========================
-                var tick = filters.tickSize > 0m ? filters.tickSize : 0.0001m;
-
-                decimal buffer = atr * 0.25m;
-
-                decimal newSlRaw =
-                    winner == PositionSide.Long
-                        ? winnerEntry + buffer
-                        : winnerEntry - buffer;
-
-                // Quantize SL to tick in correct direction (never worse than entry)
-                decimal newSl =
-                    winner == PositionSide.Long
-                        ? Math.Floor(newSlRaw / tick) * tick
-                        : Math.Ceiling(newSlRaw / tick) * tick;
-
-                if (winner == PositionSide.Long && newSl < winnerEntry)
-                    newSl = winnerEntry;
-                if (winner == PositionSide.Short && newSl > winnerEntry)
-                    newSl = winnerEntry;
-
-                var ordersRes = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
-                if (!ordersRes.Success || ordersRes.Data == null)
-                    return;
-
-                var winnerCloseSide = winner == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-
-                var slOrder = ordersRes.Data.FirstOrDefault(o =>
-                    o.Type == FuturesOrderType.StopMarket &&
-                    o.PositionSide == winner &&
-                    o.Side == winnerCloseSide);
-
-                if (slOrder != null)
-                {
-                    var ok = await UpdateSL_ProAsync(
-                        client,
-                        symbol,
-                        winner,
-                        winnerQtyAbs,
-                        slOrder,
-                        winnerEntry,
-                        newSl,
-                        signal: null,
-                        ct);
-
-                    if (!ok)
-                        return;
-                }
-                else
-                {
-                    _logger.LogWarning(
-                        "[HEDGE-KILL][{symbol}] SL missing on winner → CREATE EMERGENCY SL",
-                        symbol);
-
-                    await CreateEmergencySLAsync(
-                        client,
-                        symbol,
-                        winner,
-                        winnerQtyAbs,
-                        winnerEntry,
-                        signal: null,
-                        ct);
-                }
-
-                // keep your existing MarkProtection signature (no redesign)
-                MarkProtection(symbol);
-
-                _logger.LogWarning(
-                    "[HEDGE-KILL][{symbol}] WINNER {side} protected → SL enforced (newSL={sl})",
-                    symbol, winner, newSl);
-
-                MarkHedgeCooldown(symbol);
+                return;
             }
+
+            // ⛔ NO-HEDGE DURING LIQUIDITY DANGER
+            if (_liquidityGuard.LastDanger?.Block == true)
+            {
+                _logger.LogWarning(
+                    "[HEDGE][{symbol}] SKIP hedge decision → liquidity danger {reason}",
+                    symbol, _liquidityGuard.LastDanger?.Reason);
+                return;
+            }
+
+            // ⛔ HEDGE COOLDOWN
+            if (IsHedgeOnCooldown(symbol))
+            {
+                _logger.LogDebug("[HEDGE][{symbol}] skipped — cooldown active", symbol);
+                return;
+            }
+
+            // =========================
+            // BASIC SAFETY
+            // =========================
+            if (longPos == null || shortPos == null)
+                return;
+
+            if (longPos.Quantity == 0m || shortPos.Quantity == 0m)
+                return;
+
+            if (klines == null || klines.Count < 20)
+                return;
+
+            ct.ThrowIfCancellationRequested();
+
+            // Use LAST CLOSED candle (avoid live candle noise)
+            var lastClosed = klines.Count >= 2 ? klines[^2] : klines[^1];
+            var lastClosePx = lastClosed.ClosePrice;
+            if (lastClosePx <= 0m)
+                return;
+
+            // =========================
+            // PnL & legs
+            // =========================
+            decimal longPnl = longPos.UnrealizedPnl;
+            decimal shortPnl = shortPos.UnrealizedPnl;
+
+            var loser = longPnl < shortPnl ? PositionSide.Long : PositionSide.Short;
+            var winner = loser == PositionSide.Long ? PositionSide.Short : PositionSide.Long;
+
+            var loserPos = loser == PositionSide.Long ? longPos : shortPos;
+            var winnerPos = winner == PositionSide.Long ? longPos : shortPos;
+
+            // Entry sanity (critical for confirmation + protection)
+            var loserEntryRef = loserPos.EntryPrice;
+            var winnerEntryRef = winnerPos.EntryPrice;
+
+            if (loserEntryRef <= 0m || winnerEntryRef <= 0m)
+            {
+                _logger.LogWarning(
+                    "[HEDGE][{symbol}] SKIP → entry unresolved loserEntry={le} winnerEntry={we}",
+                    symbol, loserEntryRef, winnerEntryRef);
+                return;
+            }
+
+            // =========================
+            // Small pnl-diff guard (keep logic, but fix notional)
+            // =========================
+            if (Math.Abs(longPnl - shortPnl) < 3m)
+            {
+                var longNotional =
+                    (longPos.MarkPrice > 0m && longPos.Quantity != 0m) ? Math.Abs(longPos.Quantity) * longPos.MarkPrice : 0m;
+
+                var shortNotional =
+                    (shortPos.MarkPrice > 0m && shortPos.Quantity != 0m) ? Math.Abs(shortPos.Quantity) * shortPos.MarkPrice : 0m;
+
+                var symbolNotionalCheck = longNotional + shortNotional;
+
+                if (symbolNotionalCheck <= 0m || !IsFundingRiskExceeded(symbol, symbolNotionalCheck))
+                    return;
+            }
+
+            // =========================
+            // ATR
+            // =========================
+            var atr = _marketData.CalculateAtr(klines, 14);
+            if (atr <= 0m)
+                return;
+
+            // =========================
+            // Winner confirmation (closed candle)
+            // =========================
+            bool winnerConfirmed =
+                winner == PositionSide.Long
+                    ? lastClosePx > winnerEntryRef + atr * 0.4m
+                    : lastClosePx < winnerEntryRef - atr * 0.4m;
+
+            if (!winnerConfirmed)
+                return;
+
+            // =========================
+            // SMART HEDGE-KILL GATES (PRO)
+            // =========================
+            decimal netPnl = longPnl + shortPnl;
+
+            var sKey = EngineState.Key(symbol);
+            var st = _engineState.Symbols.GetOrAdd(sKey, _ => new SymbolState());
+            decimal bucket = st.RealizedPnlBucketUsd;
+
+            // FUNDING GUARD (NOTIONAL-BASED, HEDGE)
+            decimal symbolNotional = 0m;
+            if (longPos.Quantity != 0m && longPos.MarkPrice > 0m)
+                symbolNotional += Math.Abs(longPos.Quantity) * longPos.MarkPrice;
+            if (shortPos.Quantity != 0m && shortPos.MarkPrice > 0m)
+                symbolNotional += Math.Abs(shortPos.Quantity) * shortPos.MarkPrice;
+
+            bool fundingPressureByNotional = symbolNotional > 0m && IsFundingRiskExceeded(symbol, symbolNotional);
+
+            if (fundingPressureByNotional)
+            {
+                _logger.LogWarning(
+                    "[HEDGE][{symbol}] Funding pressure detected | notional={notional:F2} cost={cost:F4}",
+                    symbol,
+                    symbolNotional,
+                    _fundingCost.TryGetValue(symbol, out var c) ? c : 0m);
+            }
+
+            bool liquidityDanger = false;
+            try
+            {
+                if (_liquidityGuard.LastDanger?.Block == true)
+                    liquidityDanger = true;
+                else if (_liquidityGuard.IsDangerRecent(TimeSpan.FromMinutes(5)))
+                {
+                    var ld = _liquidityGuard.LastDanger;
+                    if (ld != null)
+                    {
+                        var age = DateTime.UtcNow - ld.UtcTime;
+                        if (age < TimeSpan.FromMinutes(2))
+                            liquidityDanger = true;
+                    }
+                }
+            }
+            catch { /* ignore */ }
+
+            SmartRegimeInfo? smart = null;
+            try
+            {
+                if (klines.Count >= 50)
+                    smart = _smartRegime.Evaluate(symbol, KlineInterval.FiveMinutes, klines);
+            }
+            catch { /* ignore */ }
+
+            var atrPct = CalcAtrPct(atr, lastClosePx);
+            var confidence = CalcKillConfidence(symbol, smart, atrPct, fundingPressureByNotional, liquidityDanger);
+            var givebackBudget = CalcGivebackBudget(bucket, confidence);
+
+            decimal loserPnl = loser == PositionSide.Long ? longPnl : shortPnl;
+            decimal loserLossAbs = Math.Abs(Math.Min(0m, loserPnl));
+
+            decimal loserQtyAbsForAtr = Math.Abs(loserPos.Quantity);
+            decimal atrNotional = atr * loserQtyAbsForAtr;
+            decimal hardLoserByAtr = atrNotional * _hedgeCfg.HardLoserAtrMult;
+
+            bool hardLoss =
+                loserLossAbs >= Math.Max(_hedgeCfg.HardLoserUsd, hardLoserByAtr) ||
+                netPnl <= _hedgeCfg.HardNetUsd;
+
+            // Gate A: netPnL ok -> skip unless funding/hardLoss
+            if (!hardLoss && !fundingPressureByNotional && netPnl >= _hedgeCfg.NetOkUsd)
+            {
+                _logger.LogInformation(
+                    "[HEDGE-KILL][{symbol}] SKIP → netPnL ok net={net:F2} loser={loser} loss={loss:F2} bucket={bucket:F2} conf={conf:F2}",
+                    symbol, netPnl, loser, loserLossAbs, bucket, confidence);
+                return;
+            }
+
+            // Gate B: giveback limiter -> skip unless funding/hardLoss
+            if (!hardLoss && !fundingPressureByNotional && loserLossAbs > givebackBudget)
+            {
+                _logger.LogWarning(
+                    "[HEDGE-KILL][{symbol}] SKIP → giveback limit loss={loss:F2} budget={budget:F2} net={net:F2} bucket={bucket:F2} conf={conf:F2}",
+                    symbol, loserLossAbs, givebackBudget, netPnl, bucket, confidence);
+                return;
+            }
+
+            // =========================
+            // DECISION: kill loser
+            // =========================
+            _logger.LogWarning(
+                "[HEDGE-KILL][{symbol}] CLOSE LOSER {loser} pnl={pnl:F2} | KEEP {winner}",
+                symbol, loser, loserPnl, winner);
+
+            _aiLearning.RecordMarketStateTriggered(
+                reason: "HEDGE_KILL",
+                symbol: symbol,
+                timeframe: "HEDGE",
+                regime: MarketRegime.Unknown,
+                slope: 0m,
+                volatility: 0m,
+                atr: atr,
+                confidence: Math.Min(0.95m, Math.Abs(longPnl - shortPnl) / 10m));
+
+            // =========================
+            // CLOSE LOSER (MARKET) with proper qty quantize (MARKET RULES!)
+            // =========================
+            var closeSide = loser == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+            // IMPORTANT: use MARKET qty rules here
+            var fMkt = await _symbolInfo.GetFuturesFiltersAsync(symbol, SymbolInfoService.QtyRule.Market);
+            var step = fMkt.step > 0m ? fMkt.step : 1m;
+            var minQty = fMkt.minQty;
+
+            decimal loserQtyAbs = Math.Abs(loserPos.Quantity);
+            if (loserQtyAbs <= 0m)
+                return;
+
+            decimal frac =
+                _hedgeCfg.Mode == HedgeKillMode.Aggressive ? 1.00m :
+                _hedgeCfg.Mode == HedgeKillMode.Safe ? 0.80m :
+                _hedgeCfg.LoserCloseFraction;
+
+            decimal closeQty = loserQtyAbs * frac;
+
+            if (fundingPressureByNotional || hardLoss)
+                closeQty = loserQtyAbs;
+
+            // Quantize DOWN to step
+            closeQty = Math.Floor(closeQty / step) * step;
+
+            // If partial close becomes dust -> full close (still quantized)
+            if (closeQty < minQty)
+            {
+                closeQty = Math.Floor(loserQtyAbs / step) * step;
+                if (closeQty < minQty)
+                {
+                    _logger.LogWarning(
+                        "[HEDGE-KILL][{symbol}] CloseQty below minQty even for full close | qty={qty} minQty={min}",
+                        symbol, closeQty, minQty);
+                    return;
+                }
+            }
+
+            var closeRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: symbol,
+                side: closeSide,
+                type: FuturesOrderType.Market,
+                quantity: closeQty,
+                positionSide: loser,
+                ct: ct);
+
+            if (!closeRes.Success)
+            {
+                _logger.LogWarning(
+                    "[HEDGE-KILL][{symbol}] Close loser failed: {code} {msg}",
+                    symbol, closeRes.Error?.Code, closeRes.Error?.Message);
+                return;
+            }
+
+            await Task.Delay(450, ct);
+
+            // =========================
+            // REFRESH winner position snapshot (critical)
+            // =========================
+            BinancePositionDetailsUsdt? winnerNow = null;
+            try
+            {
+                var info = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+                if (info.Success && info.Data != null)
+                {
+                    winnerNow = info.Data.FirstOrDefault(p =>
+                        p.Symbol == symbol &&
+                        p.PositionSide == winner &&
+                        p.Quantity != 0m);
+                }
+            }
+            catch { /* ignore */ }
+
+            var winnerQtyAbs = winnerNow != null ? Math.Abs(winnerNow.Quantity) : Math.Abs(winnerPos.Quantity);
+            var winnerEntry = winnerNow != null && winnerNow.EntryPrice > 0m ? winnerNow.EntryPrice : winnerEntryRef;
+
+            if (winnerQtyAbs <= 0m || winnerEntry <= 0m)
+                return;
+
+            // =========================
+            // PROTECT WINNER → SL to BE+buffer (proper tick)
+            // =========================
+            var allFilters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+            var tick = allFilters.tickSize > 0m ? allFilters.tickSize : 0.0001m;
+
+            decimal buffer = atr * 0.25m;
+
+            decimal newSlRaw =
+                winner == PositionSide.Long
+                    ? winnerEntry + buffer
+                    : winnerEntry - buffer;
+
+            // Quantize SL to tick in correct direction (never worse than entry)
+            decimal newSl =
+                winner == PositionSide.Long
+                    ? Math.Floor(newSlRaw / tick) * tick
+                    : Math.Ceiling(newSlRaw / tick) * tick;
+
+            if (winner == PositionSide.Long && newSl < winnerEntry)
+                newSl = winnerEntry;
+            if (winner == PositionSide.Short && newSl > winnerEntry)
+                newSl = winnerEntry;
+
+            var ordersRes = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
+            if (!ordersRes.Success || ordersRes.Data == null)
+                return;
+
+            var winnerCloseSide = winner == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+            var slOrder = ordersRes.Data.FirstOrDefault(o =>
+                o.Type == FuturesOrderType.StopMarket &&
+                o.PositionSide == winner &&
+                o.Side == winnerCloseSide);
+
+            if (slOrder != null)
+            {
+                var ok = await UpdateSL_ProAsync(
+                    client,
+                    symbol,
+                    winner,
+                    winnerQtyAbs,
+                    slOrder,
+                    winnerEntry,
+                    newSl,
+                    signal: null,
+                    ct);
+
+                if (!ok)
+                    return;
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "[HEDGE-KILL][{symbol}] SL missing on winner → CREATE EMERGENCY SL",
+                    symbol);
+
+                await CreateEmergencySLAsync(
+                    client,
+                    symbol,
+                    winner,
+                    winnerQtyAbs,
+                    winnerEntry,
+                    signal: null,
+                    ct);
+            }
+
+            // keep your existing MarkProtection signature (no redesign)
+            MarkProtection(symbol);
+
+            _logger.LogWarning(
+                "[HEDGE-KILL][{symbol}] WINNER {side} protected → SL enforced (newSL={sl})",
+                symbol, winner, newSl);
+
+            MarkHedgeCooldown(symbol);
+        }
+
 
         private bool IsFundingRiskExceeded(
             string symbol,
@@ -1184,7 +1210,7 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogDebug(ex, "[FUNDING][{symbol}] refresh failed", symbol);
             }
         }
-     
+
         private async Task<decimal> GetFundingIncomeDeltaAsync(
             BinanceRestClient client,
             string symbol,
@@ -1720,24 +1746,24 @@ namespace VertexAutoTradeBinance8.Services
          BinanceRestClient client,
          string symbol,
          CancellationToken ct)
-            {
-                ct.ThrowIfCancellationRequested();
+        {
+            ct.ThrowIfCancellationRequested();
 
-                var res = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(
-                    symbol: symbol,
-                    ct: ct);
+            var res = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(
+                symbol: symbol,
+                ct: ct);
 
-                if (!res.Success || res.Data == null)
-                    return new();
+            if (!res.Success || res.Data == null)
+                return new();
 
-                // HARD FILTER: ignore zero-qty garbage
-                return res.Data
-            // Binance иногда возвращает "мусорные" open-orders с qty=0
-            .Where(o => o.Quantity > 0)
-            // UpdateTime может быть DateTime.MinValue → проверяем ЯВНО
-            .OrderBy(o => o.UpdateTime > o.CreateTime ? o.UpdateTime : o.CreateTime)
-            .ToList();
-            }
+            // HARD FILTER: ignore zero-qty garbage
+            return res.Data
+        // Binance иногда возвращает "мусорные" open-orders с qty=0
+        .Where(o => o.Quantity > 0)
+        // UpdateTime может быть DateTime.MinValue → проверяем ЯВНО
+        .OrderBy(o => o.UpdateTime > o.CreateTime ? o.UpdateTime : o.CreateTime)
+        .ToList();
+        }
 
         private decimal GetOrSetBaseEntry(
     string symbol,
@@ -1771,146 +1797,274 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // =====================================================================
-        // HANDLE SIDE  (v8.2 PRO)
+        // HANDLE SIDE  (v8.2 PRO) — PROP DESK FIXED (Harvest + Restore Order)
         // =====================================================================
         private async Task HandleSideAsync(
-     BinanceRestClient client,
-     string symbol,
-     PositionSide side,
-     BinancePositionDetailsUsdt pos,
-     List<BinanceUsdFuturesOrder> allOrders,
-     TradeSignal? signal,
-     IReadOnlyList<BinanceFuturesUsdtKline>? klines,
-     CancellationToken ct)
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            BinancePositionDetailsUsdt pos,
+            List<BinanceUsdFuturesOrder> allOrders,
+            TradeSignal? signal,
+            IReadOnlyList<BinanceFuturesUsdtKline>? klines,
+            CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
 
             // ============================
-            // 0) Snapshot values
+            // 0) SNAPSHOT (authoritative)
             // ============================
-            var qty = pos.Quantity;
-            var qtyAbs = Math.Abs(qty);
+            var qtyAbs = Math.Abs(pos.Quantity);
 
             // ============================
-            // 1) CLOSE DETECTOR (robust)
+            // 1) CLOSE DETECTOR (ROBUST)
             // ============================
-            // We store previous state BEFORE we branch (so next tick is consistent).
             var stateKey = $"{symbol}_{side}";
             var prevQty = _manualHandler.GetPrevQty(stateKey);
             var prevEntry = _manualHandler.GetPrevEntry(stateKey);
 
-            _manualHandler.SetPrevState(stateKey, qty, pos.EntryPrice);
+            // update snapshot immediately (next tick consistency)
+            _manualHandler.SetPrevState(stateKey, pos.Quantity, pos.EntryPrice);
 
-            // "Closed" means: previous had qty, now qty == 0.
-            // Extra guard: prevQty must be non-zero in ABS, not just != 0 due to decimal rounding.
-            if (Math.Abs(prevQty) > 0m && qtyAbs == 0m)
+            // CLOSED = had qty → now zero
+            if (Math.Abs(prevQty) > 0m && qtyAbs <= 0m)
             {
                 await HandlePositionClosedAsync(client, symbol, side, pos, prevEntry, ct);
                 return;
             }
 
             // ============================
-            // 2) No position -> exit
+            // 2) NO POSITION → EXIT
             // ============================
             if (qtyAbs <= 0m)
             {
-                _logger.LogInformation("[SUPERVISOR] {symbol} {side}: no qty", symbol, side);
+                _logger.LogDebug("[SUPERVISOR][{symbol}][{side}] no open qty", symbol, side);
                 return;
             }
 
             // ============================
-            // 3) Funding guard (blocks ADD/SCALE only)
+            // 3) FUNDING GUARD (ADD/SCALE ONLY)
             // ============================
-
             decimal positionNotional =
-                Math.Abs(pos.Quantity) * pos.MarkPrice;
+                pos.MarkPrice > 0m
+                    ? qtyAbs * pos.MarkPrice
+                    : 0m;
 
             bool fundingBlocked =
+                positionNotional > 0m &&
                 IsFundingRiskExceeded(symbol, positionNotional);
 
-           
             if (fundingBlocked)
             {
-                _logger.LogWarning("[FUNDING-GUARD][{symbol}] funding limit → block ADD / SCALE only", symbol);
+                _logger.LogWarning(
+                    "[FUNDING-GUARD][{symbol}] funding pressure → block ADD / SCALE only",
+                    symbol);
             }
 
             // ============================
-            // 4) Resolve ENTRY (production-safe)
+            // 4) ENTRY RESOLVE (CANONICAL)
             // ============================
             var entry = await ResolveEntrySafeAsync(client, symbol, side, pos, prevEntry, ct);
             if (entry <= 0m)
             {
-                _logger.LogError("[SUPERVISOR][{symbol}][{side}] Entry unresolved → skip protection cycle", symbol, side);
+                _logger.LogError(
+                    "[SUPERVISOR][{symbol}][{side}] entry unresolved → skip cycle",
+                    symbol, side);
                 return;
             }
 
-            // keep base entry cache (optional but useful)
-           // _posBaseEntry[$"{symbol}|{side}"] = entry;
-            
-             GetOrSetBaseEntry(symbol, side, entry);
-                
-                
+            // anchor base entry (stable across partials)
+            GetOrSetBaseEntry(symbol, side, entry);
+
             // ============================
-            // 5) ATR resolve (prefer signal, fallback to klines)
+            // 5) ATR RESOLVE (NON-BLOCKING)
             // ============================
             var atr14 = ResolveAtr14(signal, klines);
-            // NOTE: atr14==0 is allowed; we’ll just skip early/BE/harvest that require ATR.
+            // atr14 may be 0 → early/BE/harvest will self-skip
 
             // ============================
-            // 6) Orders for this side (HEDGE)
+            // 6) ORDERS SNAPSHOT (HEDGE-SAFE)
             // ============================
-            // materialize once; do NOT re-enumerate allOrders multiple times
-            var orders = allOrders.Where(o => o.PositionSide == side).ToList();
-            var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+            var orders = allOrders
+                .Where(o => o.PositionSide == side)
+                .ToList();
 
-            // detect duplicates
-            var slCount = orders.Count(o => o.Side == closeSide && o.Type == FuturesOrderType.StopMarket);
-            var tpCount = orders.Count(o => o.Side == closeSide && o.Type == FuturesOrderType.TakeProfitMarket);
+            var closeSide =
+                side == PositionSide.Long
+                    ? OrderSide.Sell
+                    : OrderSide.Buy;
 
-            var hasMultipleSL = slCount > 1;
-            var hasMultipleTP = tpCount > 1;
+            var slOrders = orders
+                .Where(o => o.Side == closeSide && o.Type == FuturesOrderType.StopMarket)
+                .ToList();
+
+            var tpOrders = orders
+                .Where(o => o.Side == closeSide && o.Type == FuturesOrderType.TakeProfitMarket)
+                .ToList();
+
+            bool hasMultipleSL = slOrders.Count > 1;
+            bool hasMultipleTP = tpOrders.Count > 1;
 
             if (hasMultipleSL)
-                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] Multiple SL detected → skip SL create", symbol, side);
+                _logger.LogWarning(
+                    "[SUPERVISOR][{symbol}][{side}] multiple SL detected → skip create",
+                    symbol, side);
 
             if (hasMultipleTP)
-                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] Multiple TP detected → skip TP create", symbol, side);
+                _logger.LogWarning(
+                    "[SUPERVISOR][{symbol}][{side}] multiple TP detected → skip create",
+                    symbol, side);
 
-            var sl = orders.FirstOrDefault(o => o.Side == closeSide && o.Type == FuturesOrderType.StopMarket);
-            var tp = orders.FirstOrDefault(o => o.Side == closeSide && o.Type == FuturesOrderType.TakeProfitMarket);
-
-            // ============================
-            // 7) Stable base qty for guards
-            // ============================
-            // IMPORTANT: guards must be stable across partial closes, so use GetOrSetBaseQty
-            var baseQtyForGuards = GetOrSetBaseQty(symbol, side, entry, qtyAbs);
+            // IMPORTANT: do NOT trust presence this tick
+            var sl = slOrders.FirstOrDefault();
+            var tp = tpOrders.FirstOrDefault();
 
             // ============================
-            // 8) v8.2: EARLY TP + BE (before restore)
+            // 7) STABLE BASE QTY (GUARDS)
             // ============================
-            if (klines != null && klines.Count >= 50 && atr14 > 0m)
+            var baseQtyForGuards =
+                GetOrSetBaseQty(symbol, side, entry, qtyAbs);
+
+            // ============================
+            // 8) PROTECT FIRST (IDEMPOTENT)
+            //    SL / TP restoration MUST NOT gate logic
+            // ============================
+
+            // SL intent
+            if (sl == null && !hasMultipleSL)
             {
-                // Early TP is now sync (enqueue inside), so call without await
-                TryEarlyPartialTake(client, symbol, side, baseQtyForGuards, entry, atr14, signal, klines, ct);
+                await CreateEmergencySLAsync(
+                    client,
+                    symbol,
+                    side,
+                    qtyAbs,
+                    entry,
+                    signal,
+                    ct);
 
-                // Move SL to BE only if SL exists
-                if (sl != null)
+                _logger.LogWarning(
+                    "[SUPERVISOR][{symbol}][{side}] SL ensure requested",
+                    symbol, side);
+            }
+
+            // TP intent
+            if (tp == null && !hasMultipleTP)
+            {
+                await CreateEmergencyTPAsync(
+                    client,
+                    symbol,
+                    side,
+                    qtyAbs,
+                    entry,
+                    signal,
+                    ct);
+
+                _logger.LogWarning(
+                    "[SUPERVISOR][{symbol}][{side}] TP ensure requested",
+                    symbol, side);
+            }
+
+
+            // IMPORTANT: if we just created SL/TP, we do NOT assume order object exists in this tick.
+            // Next supervisor tick will pick it up in allOrders.
+
+            // ============================
+            // 9) EARLY TP + BE (PROP SAFE)
+            // ============================
+            if (klines != null && klines.Count >= 20 && atr14 > 0m)
+            {
+                // EARLY TP — independent, async-safe
+                TryEarlyPartialTake(
+                    client,
+                    symbol,
+                    side,
+                    baseQtyForGuards,
+                    entry,
+                    atr14,
+                    signal,
+                    klines,
+                    ct);
+
+                // BE logic must NOT depend on "sl object visibility"
+                // Use protection intent, not order snapshot
+                var canMoveBe =
+                    !_beMoved.ContainsKey(BuildPosGuardKey(symbol, side, entry, baseQtyForGuards));
+
+                if (canMoveBe)
                 {
                     await TryMoveSlToBeAsync(
-                        client, symbol, side, baseQtyForGuards, entry, atr14,
-                        sl, signal, klines, ct);
+                        client,
+                        symbol,
+                        side,
+                        baseQtyForGuards,
+                        entry,
+                        atr14,
+                        sl,              // may be null → method must handle create/update
+                        signal,
+                        klines,
+                        ct);
                 }
             }
 
+
             // ============================
-            // 9) Profit Harvest (after early/BE, before restore)
+            // 10) Profit Harvest (after protect/early/BE) — PROP 2026
+            // - No hard 50-klines gate (use 20+)
+            // - Edge is bounded, but more price-behaviour aware (silent trend)
+            // - minUsd adapts to notional + volatility proxy with floor
             // ============================
-            if (klines != null && klines.Count >= 50)
+            if (klines != null && klines.Count >= 20)
             {
-                var aiEdgeScore =
-                    _regimeNow is MarketRegime.StrongUpTrend or MarketRegime.StrongDownTrend
-                        ? 0.82m
-                        : 0.62m;
+                // drift proxy (helps "silent trend" & 2026 behaviour)
+                var lastPx = pos.MarkPrice > 0m ? pos.MarkPrice : entry;
+                var driftPct = entry > 0m ? Math.Abs(lastPx - entry) / entry : 0m;
+
+                // quick ATR proxy (if you already have atr14 earlier in HandleSideAsync, pass it in instead)
+                var atr = _marketData.CalculateAtr(klines, 14);
+                if (atr <= 0m) atr = _marketData.CalculateAtr(klines); // fallback
+                if (atr <= 0m) atr = Math.Max(entry * 0.0005m, 0.00000001m); // final fallback
+
+                // atr% helps normalize "what is meaningful" move
+                var atrPct = (lastPx > 0m) ? (atr / lastPx) : 0m;
+
+                // --- aiEdgeScore: realistic, bounded, behaviour-aware ---
+                decimal edge =
+                    _regimeNow is MarketRegime.StrongUpTrend or MarketRegime.StrongDownTrend ? 0.64m :
+                    _regimeNow is MarketRegime.UpTrend or MarketRegime.DownTrend ? 0.60m :
+                    _regimeNow is MarketRegime.Range ? 0.56m :
+                                                                                               0.58m;
+
+                // add small signal contributions if present (bounded)
+                if (signal != null)
+                {
+                    if (signal.Confidence.HasValue)
+                        edge += Math.Clamp(signal.Confidence.Value - 0.52m, -0.05m, 0.10m);
+
+                    // if AiQuality doesn't exist in your model — REMOVE this block safely
+                    if (signal.AiQuality.HasValue)
+                        edge += Math.Clamp(signal.AiQuality.Value - 0.52m, -0.04m, 0.08m);
+                }
+
+                // bonus for "silent trend move" (slow drift without obvious impulse)
+                // widen band slightly; 2026 market often prints 0.2–1.6% controlled drift legs
+                if (driftPct >= 0.0020m && driftPct <= 0.0180m)
+                    edge += 0.04m;
+
+                // small penalty in squeeze (avoid harvesting too early inside compression)
+                if (_regimeNow == MarketRegime.Squeeze)
+                    edge -= 0.03m;
+
+                var aiEdgeScore = Math.Clamp(edge, 0.52m, 0.76m);
+
+                // --- adaptive minUsd ---
+                // Floor keeps it practical; notional-based keeps it proportional.
+                // Also nudge minUsd up slightly when ATR% is high (more noise).
+                var volNudge = atrPct >= 0.020m ? 2m : atrPct >= 0.012m ? 1m : 0m;
+
+                var minUsd = Math.Clamp(
+                    Math.Max(4m, positionNotional * 0.00020m) + volNudge, // 0.02% of notional
+                    4m,
+                    12m);
 
                 await TryHarvestProfitAsync(
                     client,
@@ -1921,34 +2075,79 @@ namespace VertexAutoTradeBinance8.Services
                     baseQtyForGuards,
                     klines,
                     aiEdgeScore,
-                    minUsd: 6m,
+                    minUsd: minUsd,
                     ct);
             }
 
             // ============================
-            // 10) Restore SL/TP (emergency) — always allowed, even if fundingBlocked
+            // 11) Trailing / Runner — ALWAYS ALLOWED (risk-reducing)
             // ============================
-            if (sl == null && !hasMultipleSL)
+
+            // Funding guard MUST NOT block protection / trailing
+            if (klines != null && klines.Count >= 20) // 20 достаточно
             {
-                await CreateEmergencySLAsync(client, symbol, side, qtyAbs, entry, signal, ct);
-                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] SL restored", symbol, side);
+                try
+                {
+                    await ManageRunnerTpAsync(
+                        client,
+                        symbol,
+                        side,
+                        qtyAbs,
+                        entry,
+                        orders,
+                        signal,
+                        klines,
+                        ct);
+
+                    await ManageRunnerTpExtensionAsync(
+                        client,
+                        symbol,
+                        side,
+                        qtyAbs,
+                        entry,
+                        signal,
+                        orders,
+                        klines,
+                        ct);
+
+                    await MultiLayerTrailingAsync(
+                        client,
+                        symbol,
+                        side,
+                        qtyAbs,
+                        entry,
+                        signal,
+                        orders,
+                        klines,
+                        ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "[TRAILING][{symbol}][{side}] runner/trailing error",
+                        symbol, side);
+                }
             }
 
-            if (tp == null && !hasMultipleTP)
-            {
-                await CreateEmergencyTPAsync(client, symbol, side, qtyAbs, entry, signal, ct);
-                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] TP restored", symbol, side);
-            }
+            //// ============================
+            //// 11) Trailing / Runner — blocked only by funding guard
+            //// ============================
+            //if (!fundingBlocked && klines != null && klines.Count >= 50)
+            //{
+            //    await ManageRunnerTpAsync(client, symbol, side, qtyAbs, entry, orders, signal, klines, ct);
+            //    await ManageRunnerTpExtensionAsync(client, symbol, side, qtyAbs, entry, signal, orders, klines, ct);
+            //    await MultiLayerTrailingAsync(client, symbol, side, qtyAbs, entry, signal, orders, klines, ct);
+            //}
+        }
+        bool realPnlIsNegative(string symbol, PositionSide side, decimal entry, decimal exit)
+        {
+            var pnl = side == PositionSide.Long
+                ? exit - entry
+                : entry - exit;
 
-            // ============================
-            // 11) Trailing / Runner — blocked only by funding guard
-            // ============================
-            if (!fundingBlocked && klines != null && klines.Count >= 50)
-            {
-                await ManageRunnerTpAsync(client, symbol, side, qtyAbs, entry, orders, signal, klines, ct);
-                await ManageRunnerTpExtensionAsync(client, symbol, side, qtyAbs, entry, signal, orders, klines, ct);
-                await MultiLayerTrailingAsync(client, symbol, side, qtyAbs, entry, signal, orders, klines, ct);
-            }
+            // допускаем микрослип/комиссию
+            return pnl < -Math.Abs(entry) * 0.0004m; // ~0.04%
         }
 
         private async Task HandlePositionClosedAsync(
@@ -1979,9 +2178,11 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // StopLoss detect → cooldown (simple, deterministic)
+           
             var isStopLoss =
-                prevEntry > 0m && exitPrice > 0m &&
-                (side == PositionSide.Long ? exitPrice < prevEntry : exitPrice > prevEntry);
+    prevEntry > 0m &&
+    exitPrice > 0m &&
+    realPnlIsNegative(symbol, side, prevEntry, exitPrice);
 
             if (isStopLoss)
             {
@@ -2002,6 +2203,18 @@ namespace VertexAutoTradeBinance8.Services
 
             // attached keys: "{symbol}:{side}..."
             ClearGuardsByPrefix(_attached, $"{symbol}:{side}");
+
+            // ============================
+            // PROFIT HARVEST CLEANUP (CRITICAL)
+            // ============================
+            ClearGuardsByPrefix(_recentPartialClose, $"{symbol}|{side}|");
+
+            // cleanup harvest SymbolState(s) for this symbol+side
+            var harvestPrefix = $"{EngineState.Key(symbol)}|{side}|";
+            foreach (var k in _engineState.Symbols.Keys.Where(k => k.StartsWith(harvestPrefix)))
+            {
+                _engineState.Symbols.TryRemove(k, out _);
+            }
 
             // Mark closed only if NO positions left on symbol (hedge-safe)
             try
@@ -2040,12 +2253,12 @@ namespace VertexAutoTradeBinance8.Services
             // 2) cached base entry from previous cycles (fast path)
             // if (_posBaseEntry.TryGetValue($"{symbol}|{side}", out var cached) && cached > 0m)
             //    return cached;
- 
+
 
             var cached = TryGetValidBaseEntry(symbol, side, prevEntry);
             if (cached > 0m)
                 return cached;
-             
+
             // 3) restoredEntries cache (per side)
             var key = $"{symbol}_{side}";
             if (_restoredEntries.TryGetValue(key, out var restoredCached) && restoredCached > 0m)
@@ -2135,7 +2348,7 @@ namespace VertexAutoTradeBinance8.Services
          string symbol,
          PositionSide side,
          CancellationToken ct)
-            {
+        {
             var res = await client.UsdFuturesApi.Trading.GetUserTradesAsync(
                 symbol: symbol,
                 limit: 500,
@@ -2229,315 +2442,333 @@ namespace VertexAutoTradeBinance8.Services
         TradeSignal? signal,
         IReadOnlyList<BinanceFuturesUsdtKline> klines,
         CancellationToken ct)
-            {
+        {
             // ===== BASIC GUARDS =====
             if (atr <= 0m || qty <= 0m) return;
             if (string.IsNullOrWhiteSpace(symbol)) return;
-                if (qty <= 0m || entry <= 0m || atr <= 0m) return;
+            if (qty <= 0m || entry <= 0m || atr <= 0m) return;
             if (klines == null || klines.Count < 12) return; // чуть больше для структуры
 
             // ===== BASIC GUARDS ===== 
 
             // use LAST CLOSED candle only (anti repaint / anti wick spikes)
             var candle = klines[^2];
-                var lastClose = candle.ClosePrice;
+            var lastClose = candle.ClosePrice;
 
-                // =====================
-                // DYNAMIC EARLY TP (PRO)
-                // =====================
-                decimal confidence = signal?.Confidence ?? _confidenceCfg.MinEntry;
+            // =====================
+            // DYNAMIC EARLY TP (PRO) — CONFIDENCE BANDS FIX
+            // =====================
+            decimal confidence = signal?.Confidence ?? _confidenceCfg.MinEntry;
 
-                // Default = High model (hybrid)
-                decimal earlyTpAtrMult = _confidenceCfg.EarlyTpAtr.High; // e.g. 0.90
+            // default = DISABLED (0 → ATR gate дальше просто не пройдет)
+            decimal earlyTpAtrMult = 0m;
 
-                bool isMediumConfidence =
-                    confidence >= _confidenceCfg.MinEntry &&
-                    confidence < _confidenceCfg.Bands.HighFrom;
+            bool isHighConfidence =
+                confidence >= _confidenceCfg.Bands.HighFrom;
 
-                if (isMediumConfidence)
-                {
-                    // medium band (scalp)
-                    earlyTpAtrMult = _confidenceCfg.EarlyTpAtr.Medium; // e.g. 0.75
-                    EarlyTpTrace.Skip(
-                        _logger, symbol, side, entry, lastClose, atr,
-                        "CONFIDENCE_MEDIUM",
-                        $"conf={confidence:P0}, model=EARLY_TP_{earlyTpAtrMult:0.00}");
-                }
-                else
-                {
-                    // high band (hybrid)
-                    EarlyTpTrace.Skip(
-                        _logger, symbol, side, entry, lastClose, atr,
-                        "CONFIDENCE_HIGH",
-                        $"conf={confidence:P0}, model=EARLY_TP_{earlyTpAtrMult:0.00}");
-                }
+            bool isMediumConfidence =
+                confidence >= _confidenceCfg.MinEntry &&
+                confidence < _confidenceCfg.Bands.HighFrom;
 
-                // ===== LIQUIDITY GUARD HARD BLOCK =====
-                if (_liquidityGuard.LastDanger?.Block == true)
-                {
-                    EarlyTpTrace.Skip(_logger, symbol, side, entry, lastClose, atr, "LIQUIDITY_BLOCK");
-                    return;
-                }
+            if (isHighConfidence)
+            {
+                // HIGH confidence → hybrid runner-safe early TP
+                earlyTpAtrMult = _confidenceCfg.EarlyTpAtr.High; // e.g. 0.90
 
-                // ===== LIQUIDITY GUARD SOFT BLOCK (recent) =====
-                if (_liquidityGuard.IsDangerRecent(TimeSpan.FromMinutes(5)) && _liquidityGuard.LastDanger != null)
-                {
-                    var age = DateTime.UtcNow - _liquidityGuard.LastDanger.UtcTime;
-                    if (age < TimeSpan.FromMinutes(2))
-                    {
-                        EarlyTpTrace.Skip(
-                            _logger, symbol, side, entry, lastClose, atr,
-                            "LIQUIDITY_RECENT",
-                            $"age={age.TotalSeconds:F0}s");
-                        return;
-                    }
-                }
+                EarlyTpTrace.Skip(
+                    _logger, symbol, side, entry, lastClose, atr,
+                    "CONFIDENCE_PROFILE_HIGH",
+                    $"conf={confidence:P0}, model=EARLY_TP_{earlyTpAtrMult:0.00}");
+            }
+            else if (isMediumConfidence)
+            {
+                // MEDIUM confidence → scalp / fast partial
+                earlyTpAtrMult = _confidenceCfg.EarlyTpAtr.Medium; // e.g. 0.75
 
-                // ===== IMPULSE / WICK REJECTION FILTER =====
-                var body = Math.Abs(candle.ClosePrice - candle.OpenPrice);
-                var range = candle.HighPrice - candle.LowPrice;
-                if (range <= 0m) return;
-
-                // wick against position (rejection / stop-hunt)
-                var wickAgainst =
-                    side == PositionSide.Long
-                        ? (candle.HighPrice - candle.ClosePrice)
-                        : (candle.ClosePrice - candle.LowPrice);
-
-            // если хвост против позиции доминирует — это часто stop-hunt
-            if (wickAgainst > body * 1.15m)
-                {
-                    EarlyTpTrace.Skip(
-                        _logger, symbol, side, entry, lastClose, atr,
-                        "WICK_REJECTION",
-                        $"wick={wickAgainst:F6} body={body:F6}");
-                    return;
-                }
-
-                // optional sanity: body must be meaningful vs range
-                if (body / range < 0.35m)
-                {
-                    EarlyTpTrace.Skip(
-                        _logger, symbol, side, entry, lastClose, atr,
-                        "WEAK_BODY",
-                        $"body={body:F6} range={range:F6}");
-                    return;
-                }
-
-                // ===== ATR HIT CHECK =====
-                decimal hit = side == PositionSide.Long ? candle.HighPrice : candle.LowPrice;
-
-                bool reached =
-                    side == PositionSide.Long
-                        ? hit >= entry + atr * earlyTpAtrMult
-                        : hit <= entry - atr * earlyTpAtrMult;
-
-                if (!reached)
-                {
-                    var need = atr * earlyTpAtrMult;
-                    EarlyTpTrace.Skip(
-                        _logger, symbol, side, entry, lastClose, atr,
-                        "ATR_NOT_REACHED",
-                        $"need={need:F6}");
-                    return;
-                }
-
-                // ===== STABLE GUARD KEY (IMPORTANT) =====
-                // Use stable base qty to prevent re-key after partial closes
-                var baseQtyForGuards = GetOrSetBaseQty(symbol, side, entry, qty);
-                var guardKey = BuildPosGuardKey(symbol, side, entry, baseQtyForGuards);
-
-                // reserve immediately (prevents races)
-                var reserveTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                if (!_earlyTpDone.TryAdd(guardKey, reserveTs))
-                {
-                    EarlyTpTrace.Skip(_logger, symbol, side, entry, lastClose, atr, "ALREADY_DONE");
-                    return;
-                }
-
-                // also block harvest immediately (exchange sync lag)
-                _recentPartialClose[$"{symbol}|{side}"] = reserveTs;
-
-                // ===== DISPATCH REAL EXECUTION (do NOT trade inside supervisor tick) =====
-                var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-
-                _dispatcher.Enqueue(async token =>
-                {
-                    try
-                    {
-                        using var execClient = _factory.CreateRestClient();
-
-                        // 1) Read real position now (authoritative)
-                        var posRes = await execClient.UsdFuturesApi.Account.GetPositionInformationAsync(ct: token);
-                        if (!posRes.Success || posRes.Data == null)
-                        {
-                            _earlyTpDone.TryRemove(guardKey, out _);
-                            _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
-                            return;
-                        }
-
-                        var real = posRes.Data.FirstOrDefault(p =>
-                            p.Symbol == symbol &&
-                            p.PositionSide == side &&
-                            Math.Abs(p.Quantity) > 0m);
-
-                        if (real == null)
-                        {
-                            _earlyTpDone.TryRemove(guardKey, out _);
-                            _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
-                            return;
-                        }
-
-                        var realQtyAbs = Math.Abs(real.Quantity);
-
-                        // 2) Get MARKET qty filters (StopMarket/TPMarket/Market close uses MARKET_LOT_SIZE)
-                        var f = await _symbolInfo.GetFuturesFiltersAsync(
-                            symbol,
-                            SymbolInfoService.QtyRule.Market,
-                            token);
-
-                        var step = f.step;
-                        if (step <= 0m)
-                        {
-                            // hard fail in your production-safe SymbolInfoService (should not happen)
-                            _earlyTpDone.TryRemove(guardKey, out _);
-                            _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
-                            return;
-                        }
-
-                        // 3) Target close = 35% of stable base qty, but never > real qty
-                        var want = baseQtyForGuards * 0.35m;
-                        var closeQty = Math.Min(want, realQtyAbs);
-
-                        // step-floor
-                        closeQty = Math.Floor(closeQty / step) * step;
-
-                        if (closeQty < f.minQty || closeQty <= 0m)
-                        {
-                            _earlyTpDone.TryRemove(guardKey, out _);
-                            _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
-                            return;
-                        }
-
-                        // 4) Partial close market (reduceOnly safety)
-                        var closeRes = await execClient.UsdFuturesApi.Trading.PlaceOrderAsync(
-                            symbol: symbol,
-                            side: closeSide,
-                            type: FuturesOrderType.Market,
-                            quantity: closeQty,
-                            positionSide: side,
-                            reduceOnly: true,
-                            ct: token);
-
-                        if (!closeRes.Success)
-                        {
-                            _logger.LogWarning(
-                                "[EARLY-TP][{symbol}][{side}] Market partial close failed: {err}",
-                                symbol, side, closeRes.Error);
-
-                            // rollback reservation to allow retry later
-                            _earlyTpDone.TryRemove(guardKey, out _);
-                            _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
-                            return;
-                        }
-
-                        // ==========================================================
-                        // SCALP MODE: MEDIUM CONFIDENCE → FULL EXIT AFTER EARLY TP
-                        // ==========================================================
-                        if (isMediumConfidence)
-                        {
-                            _logger.LogWarning(
-                                "[EARLY-TP][{symbol}][{side}] MEDIUM CONFIDENCE → FULL EXIT conf={conf:P0}",
-                                symbol, side, confidence);
-
-                            var posRes2 = await execClient.UsdFuturesApi.Account.GetPositionInformationAsync(ct: token);
-                            if (posRes2.Success && posRes2.Data != null)
-                            {
-                                var real2 = posRes2.Data.FirstOrDefault(p =>
-                                    p.Symbol == symbol &&
-                                    p.PositionSide == side);
-
-                                if (real2 == null || Math.Abs(real2.Quantity) <= 0m)
-                                {
-                                    _logger.LogWarning(
-                                        "[EARLY-TP][{symbol}][{side}] FULL EXIT SKIPPED → position already closed",
-                                        symbol, side);
-
-                                    _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
-                                    MarkProtection(symbol);
-                                    return;
-                                }
-
-                                var qtyAll = Math.Abs(real2.Quantity);
-
-                                // step-floor for safety
-                                qtyAll = Math.Floor(qtyAll / step) * step;
-
-                                if (qtyAll >= f.minQty && qtyAll > 0m)
-                                {
-                                    await execClient.UsdFuturesApi.Trading.PlaceOrderAsync(
-                                        symbol: symbol,
-                                        side: closeSide,
-                                        type: FuturesOrderType.Market,
-                                        quantity: qtyAll,
-                                        positionSide: side,
-                                        reduceOnly: true,
-                                        ct: token);
-
-                                    _logger.LogWarning(
-                                        "[EARLY-TP][{symbol}][{side}] FULL EXIT DONE qty={qty}",
-                                        symbol, side, qtyAll);
-                                }
-                            }
-
-                            _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
-                            MarkProtection(symbol);
-                            return;
-                        }
-
-                        // ===== HYBRID MODE: keep reservation + harvest block =====
-                        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                        _earlyTpDone[guardKey] = now;
-                        _recentPartialClose[$"{symbol}|{side}"] = now;
-                        MarkProtection(symbol);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "[EARLY-TP][{symbol}][{side}] Dispatch execution error", symbol, side);
-
-                        // rollback reservation to allow retry (don’t brick protection)
-                        _earlyTpDone.TryRemove(guardKey, out _);
-                        _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
-                    }
-                });
-
-                // Optional learning hook (non-fatal)
-                try
-                {
-                    if (signal != null && !signal.IsManual)
-                    {
-                        var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
-                        _aiLearning.RecordTrade(symbol, sigSide, entry, lastClose, _regimeNow);
-                    }
-                }
-                catch { }
+                EarlyTpTrace.Skip(
+                    _logger, symbol, side, entry, lastClose, atr,
+                    "CONFIDENCE_PROFILE_MEDIUM",
+                    $"conf={confidence:P0}, model=EARLY_TP_{earlyTpAtrMult:0.00}");
+            }
+            else
+            {
+                // LOW confidence → early TP effectively disabled (but flow continues)
+                EarlyTpTrace.Skip(
+                    _logger, symbol, side, entry, lastClose, atr,
+                    "CONFIDENCE_PROFILE_LOW",
+                    $"conf={confidence:P0}, earlyTP=DISABLED");
             }
 
 
+            // ===== LIQUIDITY GUARD HARD BLOCK =====
+            if (_liquidityGuard.LastDanger?.Block == true)
+            {
+                EarlyTpTrace.Skip(_logger, symbol, side, entry, lastClose, atr, "LIQUIDITY_BLOCK");
+                return;
+            }
+
+            // ===== LIQUIDITY GUARD SOFT BLOCK (recent) =====
+            if (_liquidityGuard.IsDangerRecent(TimeSpan.FromMinutes(5)) && _liquidityGuard.LastDanger != null)
+            {
+                var age = DateTime.UtcNow - _liquidityGuard.LastDanger.UtcTime;
+                if (age < TimeSpan.FromMinutes(2))
+                {
+                    EarlyTpTrace.Skip(
+                        _logger, symbol, side, entry, lastClose, atr,
+                        "LIQUIDITY_RECENT",
+                        $"age={age.TotalSeconds:F0}s");
+                    return;
+                }
+            }
+
+            // ===== IMPULSE / WICK REJECTION FILTER =====
+            var body = Math.Abs(candle.ClosePrice - candle.OpenPrice);
+            var range = candle.HighPrice - candle.LowPrice;
+            if (range <= 0m) return;
+
+            // wick against position (rejection / stop-hunt)
+            var wickAgainst =
+                side == PositionSide.Long
+                    ? (candle.HighPrice - candle.ClosePrice)
+                    : (candle.ClosePrice - candle.LowPrice);
+
+            // если хвост против позиции доминирует — это часто stop-hunt
+            if (wickAgainst > body * 1.35m)
+            {
+                EarlyTpTrace.Skip(
+                    _logger, symbol, side, entry, lastClose, atr,
+                    "WICK_REJECTION",
+                    $"wick={wickAgainst:F6} body={body:F6}");
+                return;
+            }
+
+            // optional sanity: body must be meaningful vs range
+            if (body / range < 0.35m)
+            {
+                EarlyTpTrace.Skip(
+                    _logger, symbol, side, entry, lastClose, atr,
+                    "WEAK_BODY",
+                    $"body={body:F6} range={range:F6}");
+                return;
+            }
+
+            // ===== ATR HIT CHECK =====
+            decimal hit = side == PositionSide.Long ? candle.HighPrice : candle.LowPrice;
+
+            bool reached =
+                side == PositionSide.Long
+                    ? hit >= entry + atr * earlyTpAtrMult
+                    : hit <= entry - atr * earlyTpAtrMult;
+
+            if (!reached)
+            {
+                var need = atr * earlyTpAtrMult;
+                EarlyTpTrace.Skip(
+                    _logger, symbol, side, entry, lastClose, atr,
+                    "ATR_NOT_REACHED",
+                    $"need={need:F6}");
+                return;
+            }
+
+            // ===== STABLE GUARD KEY (IMPORTANT) =====
+            // Use stable base qty to prevent re-key after partial closes
+            var baseQtyForGuards = GetOrSetBaseQty(symbol, side, entry, qty);
+            var guardKey = BuildPosGuardKey(symbol, side, entry, baseQtyForGuards);
+
+            // reserve immediately (prevents races)
+            var reserveTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (!_earlyTpDone.TryAdd(guardKey, reserveTs))
+            {
+                EarlyTpTrace.Skip(_logger, symbol, side, entry, lastClose, atr, "ALREADY_DONE");
+                return;
+            }
+
+            // also block harvest immediately (exchange sync lag)
+            //_recentPartialClose[$"{symbol}|{side}"] = reserveTs;
+            _recentPartialClose.TryAdd($"{symbol}|{side}", reserveTs);
+            // ===== DISPATCH REAL EXECUTION (do NOT trade inside supervisor tick) =====
+            var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+            _dispatcher.Enqueue(async token =>
+            {
+                try
+                {
+                    using var execClient = _factory.CreateRestClient();
+
+                    // 1) Read real position now (authoritative)
+                    var posRes = await execClient.UsdFuturesApi.Account.GetPositionInformationAsync(ct: token);
+                    if (!posRes.Success || posRes.Data == null)
+                    {
+                        _earlyTpDone.TryRemove(guardKey, out _);
+                        _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
+                        return;
+                    }
+
+                    var real = posRes.Data.FirstOrDefault(p =>
+                        p.Symbol == symbol &&
+                        p.PositionSide == side &&
+                        Math.Abs(p.Quantity) > 0m);
+
+                    if (real == null)
+                    {
+                        _earlyTpDone.TryRemove(guardKey, out _);
+                        _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
+                        return;
+                    }
+
+                    var realQtyAbs = Math.Abs(real.Quantity);
+
+                    // 2) Get MARKET qty filters (StopMarket/TPMarket/Market close uses MARKET_LOT_SIZE)
+                    var f = await _symbolInfo.GetFuturesFiltersAsync(
+                        symbol,
+                        SymbolInfoService.QtyRule.Market,
+                        token);
+
+                    var step = f.step;
+                    if (step <= 0m)
+                    {
+                        // hard fail in your production-safe SymbolInfoService (should not happen)
+                        _earlyTpDone.TryRemove(guardKey, out _);
+                        _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
+                        return;
+                    }
+
+                    // 3) Target close = 35% of stable base qty, but never > real qty
+                    var want = Math.Max(
+                      baseQtyForGuards * 0.35m,
+                      realQtyAbs * 0.18m   // минимум от текущей позиции
+                    );
+                    var closeQty = Math.Min(want, realQtyAbs);
+
+                    // step-floor
+                    closeQty = Math.Floor(closeQty / step) * step;
+
+                    if (closeQty < f.minQty || closeQty <= 0m)
+                    {
+                        _earlyTpDone.TryRemove(guardKey, out _);
+                        _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
+                        return;
+                    }
+
+                    // 4) Partial close market (reduceOnly safety)
+                    var closeRes = await execClient.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol: symbol,
+                        side: closeSide,
+                        type: FuturesOrderType.Market,
+                        quantity: closeQty,
+                        positionSide: side,
+                        reduceOnly: true,
+                        ct: token);
+
+                    if (!closeRes.Success)
+                    {
+                        _logger.LogWarning(
+                            "[EARLY-TP][{symbol}][{side}] Market partial close failed: {err}",
+                            symbol, side, closeRes.Error);
+
+                        // rollback reservation to allow retry later
+                        _earlyTpDone.TryRemove(guardKey, out _);
+                        _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
+                        return;
+                    }
+
+                    // ==========================================================
+                    // SCALP MODE: MEDIUM CONFIDENCE → FULL EXIT AFTER EARLY TP
+                    // ==========================================================
+                    if (isMediumConfidence)
+                    {
+                        _logger.LogWarning(
+                            "[EARLY-TP][{symbol}][{side}] MEDIUM CONFIDENCE → FULL EXIT conf={conf:P0}",
+                            symbol, side, confidence);
+
+                        var posRes2 = await execClient.UsdFuturesApi.Account.GetPositionInformationAsync(ct: token);
+                        if (posRes2.Success && posRes2.Data != null)
+                        {
+                            var real2 = posRes2.Data.FirstOrDefault(p =>
+                                p.Symbol == symbol &&
+                                p.PositionSide == side);
+
+                            if (real2 == null || Math.Abs(real2.Quantity) <= 0m)
+                            {
+                                _logger.LogWarning(
+                                    "[EARLY-TP][{symbol}][{side}] FULL EXIT SKIPPED → position already closed",
+                                    symbol, side);
+
+                                _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
+                                MarkProtection(symbol);
+                                return;
+                            }
+
+                            var qtyAll = Math.Abs(real2.Quantity);
+
+                            // step-floor for safety
+                            qtyAll = Math.Floor(qtyAll / step) * step;
+
+                            if (qtyAll >= f.minQty && qtyAll > 0m)
+                            {
+                                await execClient.UsdFuturesApi.Trading.PlaceOrderAsync(
+                                    symbol: symbol,
+                                    side: closeSide,
+                                    type: FuturesOrderType.Market,
+                                    quantity: qtyAll,
+                                    positionSide: side,
+                                    reduceOnly: true,
+                                    ct: token);
+
+                                _logger.LogWarning(
+                                    "[EARLY-TP][{symbol}][{side}] FULL EXIT DONE qty={qty}",
+                                    symbol, side, qtyAll);
+                            }
+                        }
+
+                        _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
+                        MarkProtection(symbol);
+                        return;
+                    }
+
+                    // ===== HYBRID MODE: keep reservation + harvest block =====
+                    var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    _earlyTpDone[guardKey] = now;
+                    _recentPartialClose[$"{symbol}|{side}"] = now;
+                    MarkProtection(symbol);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[EARLY-TP][{symbol}][{side}] Dispatch execution error", symbol, side);
+
+                    // rollback reservation to allow retry (don’t brick protection)
+                    _earlyTpDone.TryRemove(guardKey, out _);
+                    _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
+                }
+            });
+
+            // Optional learning hook (non-fatal)
+            try
+            {
+                if (signal != null && !signal.IsManual)
+                {
+                    var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
+                    _aiLearning.RecordTrade(symbol, sigSide, entry, lastClose, _regimeNow);
+                }
+            }
+            catch { }
+        }
+
+
         // =====================================================================
-        // SL -> BE (безубыток + буфер) — ключевой фикс v8.2
+        // SL -> BE (soft staged trailing BE) — v8.2 FINAL
         // =====================================================================
-       private async Task TryMoveSlToBeAsync(
-       BinanceRestClient client,
-       string symbol,
-       PositionSide side,
-       decimal qty,
-       decimal entry,
-       decimal atr,
-       BinanceUsdFuturesOrder slOrder,
-       TradeSignal? signal,
-       IReadOnlyList<BinanceFuturesUsdtKline> klines,
-       CancellationToken ct)
+        private async Task TryMoveSlToBeAsync(
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            decimal entry,
+            decimal atr,
+            BinanceUsdFuturesOrder slOrder,
+            TradeSignal? signal,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            CancellationToken ct)
         {
             // ===== BASIC GUARDS =====
             if (atr <= 0 || qty <= 0)
@@ -2546,23 +2777,11 @@ namespace VertexAutoTradeBinance8.Services
             if (slOrder == null)
                 return;
 
-            if (klines == null || klines.Count < 6)
+            if (klines == null || klines.Count < 3)
                 return;
 
             // ===== USE LAST CLOSED CANDLE ONLY =====
             var c = klines[^2];
-
-            // ===== HIT CHECK (ATR BASED) =====
-            decimal hit =
-                side == PositionSide.Long ? c.HighPrice : c.LowPrice;
-
-            bool reached =
-                side == PositionSide.Long
-                    ? hit >= entry + atr * 1.20m
-                    : hit <= entry - atr * 1.20m;
-
-            if (!reached)
-                return;
 
             // ===== IMPULSE CONFIRMATION (ANTI STOP-HUNT) =====
             var body = Math.Abs(c.ClosePrice - c.OpenPrice);
@@ -2571,79 +2790,132 @@ namespace VertexAutoTradeBinance8.Services
             if (range <= 0)
                 return;
 
-            if (body < atr * 0.18m) return;              // было 0.35 -> слишком жёстко для 2026
-            if (body / range < 0.30m) return;            // было 0.45 -> тоже жёстко
+            if (body < atr * 0.18m) return;
+            if (body / range < 0.30m) return;
 
-            // ===== STABLE GUARD KEY (ANTI-SPAM) =====
+            // ===== STABLE GUARD KEY (POSITION IDENTITY) =====
             var baseQtyForGuards = GetOrSetBaseQty(symbol, side, entry, qty);
             var guardKey = BuildPosGuardKey(symbol, side, entry, baseQtyForGuards);
 
-            if (_beMoved.ContainsKey(guardKey))
-                return;
+            var lastStage = _beStage.TryGetValue(guardKey, out var s) ? s : -1;
 
-            // ===== BUFFER (LIQUIDITY-AWARE) =====
-            decimal buffer = atr * 0.15m;
+            // ===== HIT PRICE (LAST CLOSED) =====
+            decimal hit =
+                side == PositionSide.Long ? c.HighPrice : c.LowPrice;
 
-            if (_liquidityGuard.IsDangerRecent(TimeSpan.FromMinutes(6)))
-                buffer *= 0.5m;
-
-            // ===== STRUCTURAL LEVEL (ONLY CLOSED CANDLES) =====
-            var structKlines = klines
-                .Take(klines.Count - 1)
-                .TakeLast(5);
-
-            decimal structural =
-                side == PositionSide.Long
-                    ? structKlines.Min(k => k.LowPrice)
-                    : structKlines.Max(k => k.HighPrice);
-
-            // ===== BE BASE =====
-            decimal beBase =
-                side == PositionSide.Long
-                    ? entry + buffer
-                    : entry - buffer;
-
-            // ===== NEVER WORSE THAN ENTRY =====
-            decimal newSl =
-                side == PositionSide.Long
-                    ? Math.Max(beBase, Math.Max(structural, entry))
-                    : Math.Min(beBase, Math.Min(structural, entry));
-
-            // ===== VALIDATE AGAINST CURRENT SL =====
+            // ==========================================================
+            // 🔥 RESOLVE CURRENT SL (ORDER = SOURCE OF TRUTH)
+            // ==========================================================
             decimal oldSl = slOrder.StopPrice ?? slOrder.Price;
+            bool slFromOrders = true;
+
+            try
+            {
+                var ordRes = await client.UsdFuturesApi.Trading.GetOrdersAsync(symbol, ct: ct);
+                if (ordRes.Success && ordRes.Data != null)
+                {
+                    var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+                    var activeSl = ordRes.Data
+                        .Where(o =>
+                            o.PositionSide == side &&
+                            o.Side == closeSide &&
+                            o.Type == FuturesOrderType.StopMarket &&
+                            o.Status == OrderStatus.New)
+                        .OrderByDescending(o => o.UpdateTime)
+                        .FirstOrDefault();
+
+                    if (activeSl?.StopPrice > 0)
+                        oldSl = (decimal)activeSl.StopPrice;
+                    else
+                        slFromOrders = false;
+                }
+            }
+            catch
+            {
+                slFromOrders = false;
+            }
+
+            if (!slFromOrders)
+            {
+                _logger.LogWarning(
+                    "[BE][{symbol}][{side}] Active SL not resolved from orders → fallback SL={sl}",
+                    symbol, side, oldSl);
+            }
+
             if (oldSl <= 0)
                 return;
 
-            if (side == PositionSide.Long && newSl <= oldSl)
+            // ==========================================================
+            // 🔁 STAGED SOFT TRAILING BE
+            // ==========================================================
+            for (int stage = lastStage + 1; stage < BeStages.Length; stage++)
+            {
+                var (triggerAtr, bufferAtr) = BeStages[stage];
+
+                bool reached =
+                    side == PositionSide.Long
+                        ? hit >= entry + atr * triggerAtr
+                        : hit <= entry - atr * triggerAtr;
+
+                if (!reached)
+                    break;
+
+                decimal buffer = atr * bufferAtr;
+
+                if (_liquidityGuard.IsDangerRecent(TimeSpan.FromMinutes(6)))
+                    buffer *= 0.5m;
+
+                var structKlines = klines
+                    .Take(klines.Count - 1)
+                    .TakeLast(5);
+
+                decimal structural =
+                    side == PositionSide.Long
+                        ? structKlines.Min(k => k.LowPrice)
+                        : structKlines.Max(k => k.HighPrice);
+
+                decimal beBase =
+                    side == PositionSide.Long
+                        ? entry + buffer
+                        : entry - buffer;
+
+                decimal newSl =
+                    side == PositionSide.Long
+                        ? Math.Max(beBase, Math.Max(structural, entry))
+                        : Math.Min(beBase, Math.Min(structural, entry));
+
+                // ===== MUST IMPROVE CURRENT SL =====
+                if (side == PositionSide.Long && newSl <= oldSl)
+                    continue;
+
+                if (side == PositionSide.Short && newSl >= oldSl)
+                    continue;
+
+                // ===== APPLY SL UPDATE =====
+                var ok = await UpdateSL_ProAsync(
+                    client,
+                    symbol,
+                    side,
+                    qty,
+                    slOrder,
+                    entry,
+                    newSl,
+                    signal,
+                    ct);
+
+                if (!ok)
+                    return;
+
+                _beStage[guardKey] = stage;
+                MarkProtection(symbol);
+
+                _logger.LogWarning(
+                    "[BE][{symbol}][{side}] STAGE={stage} SL->{sl} (buffer={buf}ATR)",
+                    symbol, side, stage, newSl, bufferAtr);
+
                 return;
-
-            if (side == PositionSide.Short && newSl >= oldSl)
-                return;
-
-            // ===== APPLY SL UPDATE =====
-            var ok = await UpdateSL_ProAsync(
-                client,
-                symbol,
-                side,
-                qty,
-                slOrder,
-                entry,
-                newSl,
-                signal,
-                ct);
-
-            if (!ok)
-                return;
-
-            // ===== MARK STATE =====
-            _beMoved[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            MarkProtection(symbol);
-
-            _logger.LogWarning(
-                "[BE][{symbol}][{side}] SL moved to BE+buffer newSL={sl}",
-                symbol,
-                side,
-                newSl);
+            }
         }
 
 
@@ -2658,7 +2930,7 @@ namespace VertexAutoTradeBinance8.Services
             string E(decimal v) => v.ToString("0.########", CultureInfo.InvariantCulture);
             return $"{symbol}|{side}|e={E(entry)}|q={E(baseQty)}";
         }
-        
+
         // =====================================================================
         // EMERGENCY SL  (TRY NORMAL → FALLBACK ALGO RAW on -4120)
         // =====================================================================
@@ -2678,7 +2950,7 @@ namespace VertexAutoTradeBinance8.Services
                 // ==========================================================
                 // 1) ЖЁСТКАЯ ПРОВЕРКА ФАКТИЧЕСКОЙ ПОЗИЦИИ
                 // ==========================================================
-                var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: ct);
+                var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync( ct: ct);
                 if (!posInfo.Success || posInfo.Data == null)
                     return;
 
@@ -2711,7 +2983,7 @@ namespace VertexAutoTradeBinance8.Services
                     rawSl = signal.StopLoss;
                 }
                 else
-                { 
+                {
                     // BOOTSTRAP SAFE: без klines
                     // База: процент от entry + лёгкая адаптация по режиму
                     decimal pct = _regimeNow switch
@@ -2734,7 +3006,11 @@ namespace VertexAutoTradeBinance8.Services
                 var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
                 var tick = filters.tickSize > 0 ? filters.tickSize : 0.0001m;
 
-                decimal sl = Math.Round(rawSl / tick) * tick;
+                decimal sl =
+      side == PositionSide.Long
+          ? Math.Floor(rawSl / tick) * tick   // ✅ LONG → вниз
+          : Math.Ceiling(rawSl / tick) * tick; // ✅ SHORT → вверх
+
                 decimal mark = await GetMarkPriceSafeAsync(client, symbol, entryPrice, ct);
 
                 if (mark > 0)
@@ -2750,12 +3026,27 @@ namespace VertexAutoTradeBinance8.Services
                     ? OrderSide.Sell
                     : OrderSide.Buy;
 
+                var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+                closeQty = Math.Floor(closeQty / f.step) * f.step;
+                if (closeQty < f.minQty) return;
                 // ==========================================================
                 // 5) ОТПРАВКА (NORMAL → ALGO RAW)
                 // ==========================================================
                 _dispatcher.Enqueue(async ct =>
                 {
                     using var c = _factory.CreateRestClient();
+
+                    var posInfo = await c.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+                    var real = posInfo.Data.FirstOrDefault(p =>
+                        p.Symbol == symbol &&
+                        p.PositionSide == side &&
+                        Math.Abs(p.Quantity) > 0m);
+
+                    if (real == null) return;
+
+                    closeQty = Math.Min(closeQty, Math.Abs(real.Quantity));
+                    closeQty = Math.Floor(closeQty / f.step) * f.step;
+                    if (closeQty < f.minQty) return;
 
                     var res = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
                         symbol: symbol,
@@ -2764,6 +3055,7 @@ namespace VertexAutoTradeBinance8.Services
                         quantity: closeQty,
                         positionSide: side,
                         stopPrice: sl,
+                        workingType: WorkingType.Mark,
                         reduceOnly: null,
                         ct: ct);
 
@@ -2792,7 +3084,7 @@ namespace VertexAutoTradeBinance8.Services
                                 symbol, safeQty, filters2.minQty);
                             return;
                         }
-                       
+
                         _logger.LogWarning(
                             "[SUPERVISOR] SL requires ALGO endpoint (-4120) → RAW ALGO {symbol} {side}",
                             symbol, side);
@@ -2804,7 +3096,7 @@ namespace VertexAutoTradeBinance8.Services
                         type: "STOP_MARKET",
                         quantity: safeQty,        // ✅ ИСПОЛЬЗУЕМ SAFE
                         triggerPrice: safeTrig,   // ✅ ИСПОЛЬЗУЕМ SAFE
-                        workingType: "CONTRACT_PRICE",
+                        workingType: "MARK_PRICE",
                         reduceOnly: true,
                         ct: ct);
 
@@ -2838,7 +3130,7 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         private async Task CreateEmergencyTPAsync(BinanceRestClient client, string symbol, PositionSide side,
         decimal qty, decimal entryPrice, TradeSignal? signal, CancellationToken ct)
-            {
+        {
             if (IsColdStart)
             {
                 _logger.LogWarning(
@@ -2848,82 +3140,113 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
             try
+            {
+                var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync( ct: ct);
+                if (!posInfo.Success || posInfo.Data == null) return;
+
+                var pos = posInfo.Data.FirstOrDefault(p =>
+                    p.PositionSide == side && Math.Abs(p.Quantity) > 0);
+
+                if (pos == null) return;
+
+                var closeQty = Math.Min(Math.Abs(pos.Quantity), qty);
+                if (closeQty <= 0) return;
+
+                decimal trigger;
+                if (signal?.TakeProfits?.Count > 0)
+                    trigger = signal.TakeProfits[0];
+                else
+                    trigger = side == PositionSide.Long
+                        ? entryPrice * 1.016m
+                        : entryPrice * 0.984m;
+
+                var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+
+                var tick = f.tickSize > 0 ? f.tickSize : 0.0001m;
+
+                trigger =
+                    side == PositionSide.Long
+                        ? Math.Ceiling(trigger / tick) * tick
+                        : Math.Floor(trigger / tick) * tick;
+
+              //  trigger = NormalizeToStep(trigger, f.tickSize > 0 ? f.tickSize : 0.0001m);
+
+                if (side == PositionSide.Long && trigger <= entryPrice)
+                    trigger = entryPrice + f.tickSize * 3;
+                if (side == PositionSide.Short && trigger >= entryPrice)
+                    trigger = entryPrice - f.tickSize * 3;
+
+                var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+
+
+                _dispatcher.Enqueue(async token =>
                 {
-                    var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: ct);
-                    if (!posInfo.Success || posInfo.Data == null) return;
+                    using var c = _factory.CreateRestClient();
 
-                    var pos = posInfo.Data.FirstOrDefault(p =>
-                        p.PositionSide == side && Math.Abs(p.Quantity) > 0);
 
-                    if (pos == null) return;
+                    var posInfo2 = await c.UsdFuturesApi.Account.GetPositionInformationAsync(ct: token);
+                    var real = posInfo2.Data?.FirstOrDefault(p =>
+                        p.Symbol == symbol &&
+                        p.PositionSide == side &&
+                        Math.Abs(p.Quantity) > 0m);
 
-                    var closeQty = Math.Min(Math.Abs(pos.Quantity), qty);
-                    if (closeQty <= 0) return;
+                    if (real == null) return;
 
-                    decimal trigger;
-                    if (signal?.TakeProfits?.Count > 0)
-                        trigger = signal.TakeProfits[0];
-                    else
-                        trigger = side == PositionSide.Long
-                            ? entryPrice * 1.016m
-                            : entryPrice * 0.984m;
+                    closeQty = Math.Min(closeQty, Math.Abs(real.Quantity));
+                    closeQty = Math.Floor(closeQty / f.step) * f.step;
 
-                    var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+                    if (closeQty < f.minQty) return;
 
-                    trigger = NormalizeToStep(trigger, f.tickSize > 0 ? f.tickSize : 0.0001m);
 
-                    if (side == PositionSide.Long && trigger <= entryPrice)
-                        trigger = entryPrice + f.tickSize * 3;
-                    if (side == PositionSide.Short && trigger >= entryPrice)
-                        trigger = entryPrice - f.tickSize * 3;
+                    var res = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol: symbol,
+                        side: orderSide,
+                        type: FuturesOrderType.TakeProfitMarket,
+                        quantity: closeQty,
+                        positionSide: side,
+                        stopPrice: trigger,
+                        reduceOnly: null,
+                        ct: token);
 
-                    var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+                    if (res.Success) return;
 
-                    _dispatcher.Enqueue(async token =>
-                    {
-                        using var c = _factory.CreateRestClient();
+                    if (!IsAlgoRequired(res.Error)) return;
 
-                        var res = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
-                            symbol: symbol,
-                            side: orderSide,
-                            type: FuturesOrderType.TakeProfitMarket,
-                            quantity: closeQty,
-                            positionSide: side,
-                            stopPrice: trigger,
-                            reduceOnly: null,
-                            ct: token);
+                    var safeQty = closeQty;
 
-                        if (res.Success) return;
+                    var tick = f.tickSize > 0 ? f.tickSize : 0.0001m;
 
-                        if (!IsAlgoRequired(res.Error)) return;
+                    var safeTrig =
+                        side == PositionSide.Long
+                            ? Math.Ceiling(trigger / tick) * tick
+                            : Math.Floor(trigger / tick) * tick;
 
-                        var safeQty = NormalizeToStep(closeQty, f.step > 0 ? f.step : 1m);
-                        var safeTrig = NormalizeToStep(trigger, f.tickSize > 0 ? f.tickSize : 0.0001m);
 
-                        if (safeQty < f.minQty) return;
+                    if (safeQty < f.minQty) return;
 
-                        _logger.LogWarning(
-                            "[ALGO-RAW][PRE][TP] {symbol} qty={qty} trig={trig}",
-                            symbol, safeQty, safeTrig);
+                    _logger.LogWarning(
+                        "[ALGO-RAW][PRE][TP] {symbol} qty={qty} trig={trig}",
+                        symbol, safeQty, safeTrig);
 
-                        await _algoRaw.PlaceConditionalAsync(
-                            symbol: symbol,
-                            side: orderSide,
-                            positionSide: side,
-                            type: "TAKE_PROFIT_MARKET",
-                            quantity: safeQty,
-                            triggerPrice: safeTrig,
-                            workingType: "CONTRACT_PRICE",
-                            reduceOnly: true,
-                            ct: token);
-                    });
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "[SUPERVISOR] EX CreateEmergencyTP {symbol}", symbol);
-                }
+                    await _algoRaw.PlaceConditionalAsync(
+                        symbol: symbol,
+                        side: orderSide,
+                        positionSide: side,
+                        type: "TAKE_PROFIT_MARKET",
+                        quantity: safeQty,
+                        triggerPrice: safeTrig,
+                        workingType: "CONTRACT_PRICE",
+                        reduceOnly: true,
+                        ct: token);
+                });
             }
- 
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SUPERVISOR] EX CreateEmergencyTP {symbol}", symbol);
+            }
+        }
+
 
         private static int GetPrecisionFromStep(decimal step)
         {
@@ -2943,7 +3266,7 @@ namespace VertexAutoTradeBinance8.Services
             var factor = (decimal)Math.Pow(10, precision);
             return Math.Floor(value * factor) / factor;
         }
-       
+
         private static bool IsAlgoRequired(CryptoExchange.Net.Objects.Error? err)
         {
             if (err == null) return false;
@@ -2957,8 +3280,8 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         // PLACEHOLDERS: keep your existing methods below
         // =====================================================================
-        private async Task ManageRunnerTpExtensionAsync(BinanceRestClient client,string symbol,
-            PositionSide side,decimal qty,decimal entryPrice,TradeSignal? signal,List<BinanceUsdFuturesOrder> orders,IReadOnlyList<BinanceFuturesUsdtKline> klines,
+        private async Task ManageRunnerTpExtensionAsync(BinanceRestClient client, string symbol,
+            PositionSide side, decimal qty, decimal entryPrice, TradeSignal? signal, List<BinanceUsdFuturesOrder> orders, IReadOnlyList<BinanceFuturesUsdtKline> klines,
             CancellationToken ct)
         {
             await Task.CompletedTask;
@@ -3056,7 +3379,7 @@ namespace VertexAutoTradeBinance8.Services
                     // если раннер слишком мал — тогда закрываем всё
                     closeQty = realQtyAbs;
                     runnerQty = 0m;
-                } 
+                }
                 await c.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: symbol,
                     side: closeSide,
@@ -3098,109 +3421,118 @@ namespace VertexAutoTradeBinance8.Services
              decimal newSl,
              TradeSignal? signal,
              CancellationToken ct)
+        {
+            if (newSl <= 0) return false;
+
+            var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+
+            try
+            {
+                // === 1. Реальная позиция ===
+                var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+                if (!posInfo.Success || posInfo.Data == null) return false;
+
+                var realPos = posInfo.Data.FirstOrDefault(p =>
+                    p.Symbol == symbol &&
+                    p.PositionSide == side &&
+                    Math.Abs(p.Quantity) > 0m);
+
+                if (realPos == null) return false;
+
+                // ==========================================================
+                // 🔥 ГЛАВНЫЙ ФИКС — SL НИКОГДА БОЛЬШЕ ПОЗИЦИИ
+                // ==========================================================
+                var realQtyAbs = Math.Abs(realPos.Quantity);
+                qty = Math.Min(Math.Abs(qty), realQtyAbs);
+                if (qty <= 0m) return false;
+
+                var safeQty = NormalizeToStep(qty, f.step > 0 ? f.step : 1m);
+               // var safeTrig = NormalizeToStep(newSl, f.tickSize > 0 ? f.tickSize : 0.0001m);
+                decimal safeTrig =
+                side == PositionSide.Long
+                 ? Math.Floor(newSl / f.tickSize) * f.tickSize
+                    : Math.Ceiling(newSl / f.tickSize) * f.tickSize;
+
+                if (side == PositionSide.Long && safeTrig < entry)
+                    safeTrig = entry;
+                if (side == PositionSide.Short && safeTrig > entry)
+                    safeTrig = entry;
+
+                if (safeQty < f.minQty) return false;
+
+                var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+                // === 2. СТАВИМ НОВЫЙ SL СНАЧАЛА ===
+                var place = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol: symbol,
+                    side: orderSide,
+                    type: FuturesOrderType.StopMarket,
+                    quantity: safeQty,
+                    stopPrice: safeTrig,
+                    positionSide: side,
+                    workingType: WorkingType.Mark,
+                    reduceOnly: null,
+                    ct: ct);
+
+                bool placedOk = place.Success;
+
+                // fallback без WorkingType.Mark
+                if (!placedOk)
                 {
-                    if (newSl <= 0) return false;
+                    place = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol: symbol,
+                        side: orderSide,
+                        type: FuturesOrderType.StopMarket,
+                        quantity: safeQty,
+                        stopPrice: safeTrig,
+                        positionSide: side,
+                        reduceOnly: null,
+                        ct: ct);
 
-                    var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-
-                    try
-                    {
-                        // === 1. Реальная позиция ===
-                        var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
-                        if (!posInfo.Success || posInfo.Data == null) return false;
-
-                        var realPos = posInfo.Data.FirstOrDefault(p =>
-                            p.Symbol == symbol &&
-                            p.PositionSide == side &&
-                            Math.Abs(p.Quantity) > 0m);
-
-                        if (realPos == null) return false;
-
-                        // ==========================================================
-                        // 🔥 ГЛАВНЫЙ ФИКС — SL НИКОГДА БОЛЬШЕ ПОЗИЦИИ
-                        // ==========================================================
-                        var realQtyAbs = Math.Abs(realPos.Quantity);
-                        qty = Math.Min(Math.Abs(qty), realQtyAbs);
-                        if (qty <= 0m) return false;
-
-                        var safeQty = NormalizeToStep(qty, f.step > 0 ? f.step : 1m);
-                        var safeTrig = NormalizeToStep(newSl, f.tickSize > 0 ? f.tickSize : 0.0001m);
-
-                        if (safeQty < f.minQty) return false;
-
-                        var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-
-                        // === 2. СТАВИМ НОВЫЙ SL СНАЧАЛА ===
-                        var place = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                            symbol: symbol,
-                            side: orderSide,
-                            type: FuturesOrderType.StopMarket,
-                            quantity: safeQty,
-                            stopPrice: safeTrig,
-                            positionSide: side,
-                            workingType: WorkingType.Mark,
-                            reduceOnly: null,
-                            ct: ct);
-
-                        bool placedOk = place.Success;
-
-                        // fallback без WorkingType.Mark
-                        if (!placedOk)
-                        {
-                            place = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                                symbol: symbol,
-                                side: orderSide,
-                                type: FuturesOrderType.StopMarket,
-                                quantity: safeQty,
-                                stopPrice: safeTrig,
-                                positionSide: side,
-                                reduceOnly: null,
-                                ct: ct);
-
-                            placedOk = place.Success;
-                        }
-
-                        // fallback ALGO RAW
-                        if (!placedOk && IsAlgoRequired(place.Error))
-                        {
-                            placedOk = await _algoRaw.PlaceConditionalAsync(
-                                symbol: symbol,
-                                side: orderSide,
-                                positionSide: side,
-                                type: "STOP_MARKET",
-                                quantity: safeQty,
-                                triggerPrice: safeTrig,
-                                workingType: "MARK_PRICE",
-                                reduceOnly: null,
-                                ct: ct);
-                        }
-
-                        if (!placedOk)
-                        {
-                            _logger.LogWarning("[SL][{symbol}][{side}] NEW SL FAILED — OLD KEPT", symbol, side);
-                            return false;
-                        }
-
-                        // === 3. ТОЛЬКО ПОТОМ УДАЛЯЕМ СТАРЫЙ SL ===
-                        try
-                        {
-                            await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, oldSl.Id, ct: ct);
-                        }
-                        catch { }
-
-                        _logger.LogWarning("[SL][{symbol}][{side}] SL UPDATED -> {sl} qty={qty}", symbol, side, safeTrig, safeQty);
-
-                        if (signal != null && !signal.IsManual)
-                            HookAiLearningOnSlMove(signal, symbol, side, entry, safeTrig);
-
-                        return true;
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "[SL][{symbol}][{side}] UpdateSL EX");
-                        return false;
-                    }
+                    placedOk = place.Success;
                 }
+
+                // fallback ALGO RAW
+                if (!placedOk && IsAlgoRequired(place.Error))
+                {
+                    placedOk = await _algoRaw.PlaceConditionalAsync(
+                        symbol: symbol,
+                        side: orderSide,
+                        positionSide: side,
+                        type: "STOP_MARKET",
+                        quantity: safeQty,
+                        triggerPrice: safeTrig,
+                        workingType: "MARK_PRICE",
+                        reduceOnly: null,
+                        ct: ct);
+                }
+
+                if (!placedOk)
+                {
+                    _logger.LogWarning("[SL][{symbol}][{side}] NEW SL FAILED — OLD KEPT", symbol, side);
+                    return false;
+                }
+
+                // === 3. ТОЛЬКО ПОТОМ УДАЛЯЕМ СТАРЫЙ SL ===
+                try
+                {
+                    await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, oldSl.Id, ct: ct);
+                }
+                catch { }
+
+                _logger.LogWarning("[SL][{symbol}][{side}] SL UPDATED -> {sl} qty={qty}", symbol, side, safeTrig, safeQty);
+
+                if (signal != null && !signal.IsManual)
+                    HookAiLearningOnSlMove(signal, symbol, side, entry, safeTrig);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SL][{symbol}][{side}] UpdateSL EX");
+                return false;
+            }
+        }
 
         // =====================================================================
         // RAW BINANCE ALGO ORDER (POST /fapi/v1/algoOrder)
@@ -3333,203 +3665,248 @@ namespace VertexAutoTradeBinance8.Services
             if (step <= 0) return value;
             return Math.Floor(value / step) * step;
         }
-        
-        private async Task MultiLayerTrailingAsync(BinanceRestClient client,string symbol,PositionSide side,decimal qty,decimal entryPrice,
-        TradeSignal? signal,List<BinanceUsdFuturesOrder> orders,IReadOnlyList<BinanceFuturesUsdtKline> klines,CancellationToken ct)
+
+        private async Task MultiLayerTrailingAsync(BinanceRestClient client, string symbol, PositionSide side, decimal qty, decimal entryPrice,
+        TradeSignal? signal, List<BinanceUsdFuturesOrder> orders, IReadOnlyList<BinanceFuturesUsdtKline> klines, CancellationToken ct)
         {
             await Task.CompletedTask;
         }
-        
+
         private static async Task<decimal> GetMarkPriceSafeAsync(
         BinanceRestClient client,
         string symbol,
         decimal fallback,
         CancellationToken ct)
+        {
+            try
+            {
+                // 1) Prefer MARK PRICE if available in your Binance.Net version
+                try
+                {
+                    var mp = await client.UsdFuturesApi.ExchangeData.GetMarkPriceAsync(symbol, ct: ct);
+                    if (mp.Success && mp.Data != null && mp.Data.MarkPrice > 0)
+                        return mp.Data.MarkPrice;
+                }
+                catch
+                {
+                    // ignore: method not available in some versions
+                }
+
+                // 2) Fallback: last price
+                var r = await client.UsdFuturesApi.ExchangeData.GetPriceAsync(symbol, ct: ct);
+                if (r.Success && r.Data != null && r.Data.Price > 0)
+                    return r.Data.Price;
+            }
+            catch { }
+
+            return fallback > 0 ? fallback : 0m;
+        }
+
+        private async Task TryHarvestProfitAsync(
+       BinanceRestClient client,
+       EngineState state,
+       string symbol,
+       PositionSide side,
+       BinancePositionDetailsUsdt pos,
+       decimal baseQtyForGuards,
+       IReadOnlyList<BinanceFuturesUsdtKline> klines,
+       decimal aiEdgeScore,
+       decimal minUsd,
+       CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            // ==========================================================
+            // hard real position check (avoid stale pos snapshot)
+            // ==========================================================
+            var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+            if (!posInfo.Success || posInfo.Data == null)
+                return;
+
+            var realPos = posInfo.Data.FirstOrDefault(p =>
+                p.Symbol == symbol &&
+                p.PositionSide == side &&
+                Math.Abs(p.Quantity) > 0m);
+
+            if (realPos == null)
+            {
+                _logger.LogWarning("[HARVEST][{symbol}][{side}] SKIP → no open position", symbol, side);
+                return;
+            }
+
+            var qtyNow = Math.Abs(realPos.Quantity);
+            if (qtyNow <= 0m)
+                return;
+
+            // ==========================================================
+            // guardKey uses REAL entry + stable baseQty (позиция-идентичность)
+            // ==========================================================
+            var entryForGuards = realPos.EntryPrice > 0 ? realPos.EntryPrice : pos.EntryPrice;
+            if (entryForGuards <= 0m)
+            {
+                _logger.LogWarning("[HARVEST][{symbol}][{side}] SKIP → entry unresolved", symbol, side);
+                return;
+            }
+
+            var guardKey = BuildPosGuardKey(symbol, side, entryForGuards, baseQtyForGuards);
+
+            // ==========================================================
+            // harvestKey MUST include guard identity (not only symbol|side)
+            // ==========================================================
+            var harvestKey = $"{symbol}|{side}|{guardKey}";
+
+            // ==========================================================
+            // recent partial close TTL (anti-spam, NOT forever)
+            // ==========================================================
+            if (_recentPartialClose.TryGetValue(harvestKey, out var ts))
+            {
+                var ageMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - ts;
+
+                if (ageMs < 8_000)
+                {
+                    _logger.LogInformation(
+                        "[HARVEST][{symbol}][{side}] SKIP → recent partial close ({ms}ms)",
+                        symbol, side, ageMs);
+                    return;
+                }
+
+                if (ageMs > 120_000)
+                    _recentPartialClose.TryRemove(harvestKey, out _);
+            }
+
+            // ==========================================================
+            // state per POSITION identity (so new position isn't blocked)
+            // ==========================================================
+            var sKey = $"{EngineState.Key(symbol)}|{side}|{guardKey}";
+            var st = state.Symbols.GetOrAdd(sKey, _ => new SymbolState());
+
+            // short cooldown (prop-desk), but position-specific
+            if ((DateTime.UtcNow - st.LastHarvestUtc) < TimeSpan.FromSeconds(90))
+                return;
+
+            // ==========================================================
+            // uPnL gate
+            // ==========================================================
+            decimal uPnl;
+            try { uPnl = realPos.UnrealizedPnl; }
+            catch { return; }
+
+            if (uPnl <= 0m || uPnl < minUsd)
+                return;
+
+            // ==========================================================
+            // ATR / expansion skip
+            // ==========================================================
+            decimal atr = _marketData.CalculateAtr(klines);
+            if (atr <= 0m) atr = 0.00000001m;
+
+            var last = klines[^1];
+            var body = Math.Abs(last.ClosePrice - last.OpenPrice);
+
+            if ((_regimeNow == MarketRegime.StrongUpTrend || _regimeNow == MarketRegime.StrongDownTrend) &&
+                body > atr * 1.1m)
+            {
+                _logger.LogInformation("[HARVEST][{symbol}] SKIP → trend expansion", symbol);
+                return;
+            }
+
+            // ==========================================================
+            // rr proxy (ABS is correct for both long/short)
+            // ==========================================================
+            var rr = Math.Abs(realPos.MarkPrice - realPos.EntryPrice) / atr;
+
+            // ==========================================================
+            // harvest sizing — REALISTIC PROP-DESK 2026
+            // ==========================================================
+            decimal harvestPct =
+                (aiEdgeScore >= 0.75m && rr >= 1.10m) ? 0.22m :
+                (aiEdgeScore >= 0.65m && rr >= 0.90m) ? 0.16m :
+                (aiEdgeScore >= 0.55m && rr >= 0.70m) ? 0.12m :
+                (rr >= 0.55m) ? 0.08m :
+                                                       0.0m;
+
+            if (harvestPct <= 0m)
+                return;
+
+            // ==========================================================
+            // normalize to market qty rules
+            // ==========================================================
+            var f = await _symbolInfo.GetFuturesFiltersAsync(symbol, SymbolInfoService.QtyRule.Market);
+
+            // initial target (will be re-checked inside enqueue again)
+            var closeQtyTarget = NormalizeToStep(qtyNow * harvestPct, f.step > 0 ? f.step : 1m);
+            if (closeQtyTarget < f.minQty)
+                return;
+
+            // ==========================================================
+            // enqueue partial market close (NO reduceOnly, Binance-safe)
+            // ==========================================================
+            var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+            _dispatcher.Enqueue(async token =>
             {
                 try
                 {
-                    // 1) Prefer MARK PRICE if available in your Binance.Net version
-                    try
+                    using var c = _factory.CreateRestClient();
+
+                    // Re-check position just before placing order (race-safe)
+                    var pos2 = await c.UsdFuturesApi.Account.GetPositionInformationAsync(ct: token);
+                    if (!pos2.Success || pos2.Data == null)
+                        return;
+
+                    var rp = pos2.Data.FirstOrDefault(p =>
+                        p.Symbol == symbol &&
+                        p.PositionSide == side &&
+                        Math.Abs(p.Quantity) > 0m);
+
+                    if (rp == null)
+                        return;
+
+                    var liveQty = Math.Abs(rp.Quantity);
+                    if (liveQty <= 0m)
+                        return;
+
+                    // Clamp to current position qty to avoid rejection / accidental flip
+                    var closeQty = Math.Min(closeQtyTarget, liveQty);
+                    closeQty = NormalizeToStep(closeQty, f.step > 0 ? f.step : 1m);
+
+                    if (closeQty < f.minQty)
+                        return;
+
+                    var res = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol: symbol,
+                        side: orderSide,
+                        type: FuturesOrderType.Market,
+                        quantity: closeQty,
+                        positionSide: side,
+                        ct: token);
+
+                    if (!res.Success)
                     {
-                        var mp = await client.UsdFuturesApi.ExchangeData.GetMarkPriceAsync(symbol, ct: ct);
-                        if (mp.Success && mp.Data != null && mp.Data.MarkPrice > 0)
-                            return mp.Data.MarkPrice;
-                    }
-                    catch
-                    {
-                        // ignore: method not available in some versions
-                    }
-
-                    // 2) Fallback: last price
-                    var r = await client.UsdFuturesApi.ExchangeData.GetPriceAsync(symbol, ct: ct);
-                    if (r.Success && r.Data != null && r.Data.Price > 0)
-                        return r.Data.Price;
-                }
-                catch { }
-
-                return fallback > 0 ? fallback : 0m;
-            }
-
-        private async Task TryHarvestProfitAsync(BinanceRestClient client, EngineState state, string symbol, PositionSide side, BinancePositionDetailsUsdt pos, decimal baseQtyForGuards, IReadOnlyList<BinanceFuturesUsdtKline> klines,
-        decimal aiEdgeScore, decimal minUsd, CancellationToken ct)
-            {
-                // ==========================================================
-                // harvestKey (anti-spam short cooldown after partial close)
-                // ==========================================================
-                var harvestKey = $"{symbol}|{side}";
-
-                if (_recentPartialClose.TryGetValue(harvestKey, out var ts))
-                {
-                    var ageMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - ts;
-                    if (ageMs < 8000)
-                    {
-                        _logger.LogInformation(
-                            "[HARVEST][{symbol}][{side}] SKIP → recent partial close ({ms}ms)",
-                            symbol, side, ageMs);
+                        _logger.LogWarning(
+                            "[HARVEST][{symbol}][{side}] partial close failed: {code} {msg}",
+                            symbol, side, res.Error?.Code, res.Error?.Message);
                         return;
                     }
 
-                    _recentPartialClose.TryRemove(harvestKey, out _);
-                }
+                    // mark recent partial-close ONLY on success
+                    _recentPartialClose[harvestKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-                // ==========================================================
-                // ✅ state per SIDE (hedge-safe)
-                // ==========================================================
-                var sKey = $"{EngineState.Key(symbol)}|{side}";
-                var st = state.Symbols.GetOrAdd(sKey, _ => new SymbolState());
+                    // cooldown ONLY after real execution
+                    st.LastHarvestUtc = DateTime.UtcNow;
 
-                if ((DateTime.UtcNow - st.LastHarvestUtc) < TimeSpan.FromMinutes(6))
-                    return;
-
-                // ==========================================================
-                // ✅ Hard real position check
-                // ==========================================================
-                var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
-                if (!posInfo.Success || posInfo.Data == null)
-                    return;
-
-                var realPos = posInfo.Data.FirstOrDefault(p =>
-                    p.Symbol == symbol &&
-                    p.PositionSide == side &&
-                    Math.Abs(p.Quantity) > 0);
-
-                if (realPos == null)
-                {
-                    _logger.LogWarning("[HARVEST][{symbol}][{side}] SKIP → no open position", symbol, side);
-                    return;
-                }
-
-                decimal qty = Math.Abs(realPos.Quantity);
-                if (qty <= 0) return;
-
-                // ==========================================================
-                // ✅ GuardKey must use REAL entry (same as EarlyTP/BE)
-                // ==========================================================
-                decimal entryForGuards = realPos.EntryPrice > 0 ? realPos.EntryPrice : pos.EntryPrice;
-                if (entryForGuards <= 0)
-                {
-                    _logger.LogWarning("[HARVEST][{symbol}][{side}] SKIP → entry unresolved", symbol, side);
-                    return;
-                }
-
-                var guardKey = BuildPosGuardKey(symbol, side, entryForGuards, baseQtyForGuards);
-
-                if (_earlyTpDone.TryGetValue(guardKey, out var tpTs))
-                {
-                    var ageMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - tpTs;
-                    if (ageMs < 60_000)
-                        return;
-                }
-
-                // ==========================================================
-                // uPnL
-                // ==========================================================
-                decimal uPnl;
-                try { uPnl = realPos.UnrealizedPnl; }
-                catch { return; }
-
-                if (uPnl <= 0m || uPnl < minUsd)
-                    return;
-
-                decimal atr = _marketData.CalculateAtr(klines);
-                if (atr <= 0) atr = 0.00000001m;
-
-                var last = klines[^1];
-                var body = Math.Abs(last.ClosePrice - last.OpenPrice);
-
-                if (
-                    (_regimeNow == MarketRegime.StrongUpTrend ||
-                     _regimeNow == MarketRegime.StrongDownTrend)
-                    && body > atr * 1.1m
-                )
-                {
-                    _logger.LogInformation("[HARVEST][{symbol}] SKIP → trend expansion", symbol);
-                    return;
-                }
-
-                decimal rr = Math.Abs(realPos.MarkPrice - realPos.EntryPrice) / atr;
-
-                decimal harvestPct =
-                    aiEdgeScore >= 0.80m && rr >= 1.4m ? 0.18m :
-                    aiEdgeScore >= 0.70m ? 0.28m :
-                    0.45m;
-
-                // ==========================================================
-                // closeQty with symbol filters
-                // ==========================================================
-                decimal closeQty = qty * harvestPct;
-
-                var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-                var step = filters.step > 0 ? filters.step : 1m;
-
-                closeQty = Math.Floor(closeQty / step) * step;
-                closeQty = Math.Min(closeQty, qty);
-
-                if (closeQty < filters.minQty || closeQty <= 0)
-                {
                     _logger.LogInformation(
-                        "[HARVEST][{symbol}][{side}] SKIP → rounded closeQty {q} < minQty {min}",
-                        symbol, side, closeQty, filters.minQty);
-                    return;
+                        "[HARVEST][{symbol}][{side}] partial close OK qty={qty} uPnl={pnl} rr={rr:F2} edge={edge:F2} guard={gk}",
+                        symbol, side, closeQty, uPnl, rr, aiEdgeScore, guardKey);
                 }
-
-                var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-
-                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol: symbol,
-                    side: closeSide,
-                    type: FuturesOrderType.Market,
-                    quantity: closeQty,
-                    positionSide: side,
-                    ct: ct);
-
-                if (!res.Success)
+                catch (Exception ex)
                 {
-                    _logger.LogWarning("[HARVEST][{symbol}][{side}] FAIL: {err}", symbol, side, res.Error);
-                    return;
+                    _logger.LogWarning(ex, "[HARVEST][{symbol}][{side}] enqueue exception", symbol, side);
                 }
+            });
+        }
 
-                // ✅ bucket must use effectivePct (because closeQty was floored)
-                var effectivePct = closeQty / qty;
 
-              //  decimal addToBucket = uPnl * effectivePct;
-            decimal addToBucket = Math.Max(0m, uPnl * effectivePct);
-
-            // per-symbol аналитика (оставляем)
-            st.RealizedPnlBucketUsd += addToBucket;
-
-            // 🔥 ГЛОБАЛЬНЫЙ КАПИТАЛ (НОВОЕ)
-            _stateSvc.AddRealizedPnl(addToBucket);
-
-            st.LastHarvestUtc = DateTime.UtcNow;
-                st.HarvestsToday++;
-
-                _logger.LogInformation(
-                    "[HARVEST][{symbol}][{side}] OK closeQty={q} qty={qty} effPct={pct:P1} uPnl={pnl:F2} addBucket={b:F2} edge={e:F2} rr={rr:F2}",
-                    symbol, side, closeQty, qty, effectivePct, uPnl, addToBucket, aiEdgeScore, rr);
-
-                _recentPartialClose[harvestKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            }
 
         public async Task HandleUiActionAsync(PositionActionRequest req)
         {
@@ -3557,7 +3934,7 @@ namespace VertexAutoTradeBinance8.Services
                     break;
             }
         }
-       
+
         private Task UpdateTakeProfitAsync(BinancePositionDetailsUsdt pos, decimal price, string reason)
         {
             _dispatcher.Enqueue(async ct =>
@@ -3654,7 +4031,7 @@ namespace VertexAutoTradeBinance8.Services
 
             return Task.CompletedTask;
         }
-        
+
         private Task UpdateStopLossAsync(BinancePositionDetailsUsdt pos, decimal price, string reason)
         {
             _dispatcher.Enqueue(async ct =>
@@ -3730,7 +4107,7 @@ namespace VertexAutoTradeBinance8.Services
 
             return Task.CompletedTask;
         }
-        
+
         private Task ClosePositionAsync(BinancePositionDetailsUsdt pos, CloseReason reason)
         {
             _dispatcher.Enqueue(async ct =>
@@ -3768,8 +4145,8 @@ namespace VertexAutoTradeBinance8.Services
 
             return Task.CompletedTask;
         }
-     
-        private async Task<(decimal qty, decimal trig)> NormalizeForAlgoAsync(string symbol,decimal qty,decimal trigger,CancellationToken ct)
+
+        private async Task<(decimal qty, decimal trig)> NormalizeForAlgoAsync(string symbol, decimal qty, decimal trigger, CancellationToken ct)
         {
             var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
 
@@ -3780,7 +4157,7 @@ namespace VertexAutoTradeBinance8.Services
             var q1 = Math.Floor(qty / step) * step;
             var t1 = Math.Round(trigger / tick) * tick;
 
-          
+
             // HARD precision clamp (🔥 ключ к -1111)           
             var qtyPrecision = GetPrecisionFromStep(f.step);
             var pricePrecision = GetPrecisionFromStep(f.tickSize);

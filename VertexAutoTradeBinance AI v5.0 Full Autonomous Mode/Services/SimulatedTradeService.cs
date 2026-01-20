@@ -149,14 +149,27 @@ namespace VertexAutoTradeBinance8.Services
                 await AppendRecordAsync(record);
 
                 // 3) AI learning AFTER persistence
-                _learningService.RecordSimulatedTrade(
-                    signal.Symbol,
-                    signal.Side.ToString(),
-                    entry,
-                    sl,
-                    tp,
-                    result,
-                    reason);
+                bool isExecutionPolicy =
+                    reason.StartsWith("FALLBACK_MKT_BLOCKED", StringComparison.OrdinalIgnoreCase) ||
+                    reason.StartsWith("EXECUTION_POLICY", StringComparison.OrdinalIgnoreCase);
+
+                if (!isExecutionPolicy)
+                {
+                    _learningService.RecordSimulatedTrade(
+                        signal.Symbol,
+                        signal.Side.ToString(),
+                        entry,
+                        sl,
+                        tp,
+                        result,
+                        reason);
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "[SIM][{symbol}] Execution-policy miss → AI learning skipped | reason={reason}",
+                        signal.Symbol, reason);
+                }
 
                 _logger.LogInformation(
                     "[SIM][{symbol}] Simulation finished | result={res}",

@@ -13,7 +13,11 @@ namespace VertexAutoTradeBinance8.Web.Services
         {
             PropertyNameCaseInsensitive = true,
             ReadCommentHandling = JsonCommentHandling.Skip,
-            AllowTrailingCommas = true
+            AllowTrailingCommas = true,
+            Converters =
+            {
+                new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: true)
+            }
         };
 
         private const int MaxRetries = 4;

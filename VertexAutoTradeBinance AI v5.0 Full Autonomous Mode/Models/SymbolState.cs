@@ -13,7 +13,7 @@ namespace VertexAutoTradeBinance8.Models
 
 
         // === PROFIT BUCKET ===
-        public decimal RealizedPnlBucketUsd { get; set; } = 0m;
+        public decimal RealizedPnlBucketUsd { get; set; }
         public DateTime BucketDayUtc { get; set; } = DateTime.UtcNow.Date;
 
         // === HARVEST CONTROL ===

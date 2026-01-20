@@ -81,9 +81,9 @@ namespace VertexAutoTradeBinance8.Services
         // MAIN ENTRY
         // =====================================================================
         public async Task<OrderResult> ExecuteAsync(
-     TradeSignal signal,
-     decimal quantity,
-     CancellationToken ct = default)
+        TradeSignal signal,
+        decimal quantity,
+        CancellationToken ct = default)
         {
             using var client = _factory.CreateRestClient();
 
@@ -101,14 +101,11 @@ namespace VertexAutoTradeBinance8.Services
                 var reason = "QTY_TOO_SMALL";
 
                 await _simulator.AppendLifecycleEventAsync(
-     signal,
-     stage: "PREFILTER_REJECT",
-     reason: reason,
-     attemptNotional: 0m,
-     requiredMinNotional: 0m
- // если есть Note в AppendLifecycleEventAsync — добавь:
- // note: $"qty={quantity} minQty={filters.minQty} step={step}"
- );
+                    signal,
+                    stage: "PREFILTER_REJECT",
+                    reason: reason,
+                    attemptNotional: 0m,
+                    requiredMinNotional: 0m);
 
                 var rec = _executedSignalService.AddSignalCreated(
                     signal,
@@ -118,20 +115,17 @@ namespace VertexAutoTradeBinance8.Services
                     slope: 0m,
                     qty: 0m,
                     notional: 0m,
-                    tags: reason
-                );
+                    tags: reason);
 
                 _executedSignalService.UpdateStatus(
                     signal.Symbol,
                     rec.Time,
                     TradeExecutionStatus.Blocked,
                     0,
-                    0
-                );
+                    0);
 
                 return OrderResult.Fail(reason);
             }
-
 
             var side = signal.Side == SignalSide.Buy ? OrderSide.Buy : OrderSide.Sell;
             var posSide = signal.Side == SignalSide.Buy ? PositionSide.Long : PositionSide.Short;
@@ -147,22 +141,11 @@ namespace VertexAutoTradeBinance8.Services
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 cts.CancelAfter(TimeSpan.FromMilliseconds(800));
 
-                var px = await client.UsdFuturesApi.ExchangeData.GetPriceAsync(
-                    signal.Symbol, ct: cts.Token);
-
+                var px = await client.UsdFuturesApi.ExchangeData.GetPriceAsync(signal.Symbol, ct: cts.Token);
                 if (px.Success && px.Data != null && px.Data.Price > 0)
                     lastPrice = px.Data.Price;
             }
-            catch { /* fallback to entryPrice */ }
-
-            // =============================================================
-            // AGGRESSIVE LIMIT PRICE
-            // =============================================================
-            decimal aggrLimitPrice;
-            if (side == OrderSide.Buy)
-                aggrLimitPrice = Quantize(Math.Max(entryPrice, lastPrice * 1.001m), tick);
-            else
-                aggrLimitPrice = Quantize(Math.Min(entryPrice, lastPrice * 0.999m), tick);
+            catch { /* fallback */ }
 
             // =============================================================
             // REGIME / SMART REGIME
@@ -189,9 +172,9 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             decimal minRr =
-    smart.EntryProfile == "CT" ? 1.2m :
-    smart.EntryProfile == "EXP" ? 1.8m :
-    1.5m;
+                smart.EntryProfile == "CT" ? 1.2m :
+                smart.EntryProfile == "EXP" ? 1.8m :
+                1.5m;
 
             bool rrOk = rr >= minRr;
 
@@ -199,7 +182,6 @@ namespace VertexAutoTradeBinance8.Services
             // LIQUIDITY GUARD (FAIL-SAFE)
             // =============================================================
             LiquidityGuardResult liquidityResult;
-
             try
             {
                 liquidityResult = _liquidityGuard.Analyze(
@@ -207,55 +189,41 @@ namespace VertexAutoTradeBinance8.Services
                     KlineInterval.FiveMinutes,
                     klines,
                     signal.Side,
-                    superSignal: signal.IsSuperSignal
-                );
+                    superSignal: signal.IsSuperSignal);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(
-                    ex,
-                    "[LiquidityGuard] Analyze failed → FAIL-SAFE ALLOW ({symbol})",
-                    signal.Symbol
-                );
+                _logger.LogWarning(ex, "[LiquidityGuard] Analyze failed → FAIL-SAFE ALLOW ({symbol})", signal.Symbol);
 
                 liquidityResult = new LiquidityGuardResult(
                     Block: false,
                     Reason: LiquidityGuardReason.None,
                     IsExtreme: false,
                     Details: "AnalyzeFailed",
-                    UtcTime: DateTime.UtcNow
-                );
+                    UtcTime: DateTime.UtcNow);
             }
 
             bool liquiditySafe = !liquidityResult.Block;
 
-
-
             // =============================================================
-            // MARKET ENTRY DECISION
+            // MARKET ENTRY PERMISSION (STRUCTURE-BASED, NO CONFIDENCE GATE)
             // =============================================================
             bool allowMarketEntry = false;
 
-            // EXPANSION / IMPULSE MODE
             if (smart.EntryProfile == "EXP")
             {
                 allowMarketEntry =
                     isSmartStrongTrend &&
-                    hasImpulse &&
                     rrOk &&
                     liquiditySafe;
             }
-
-            // CONTROLLED TREND MODE
             else if (smart.EntryProfile == "CT")
             {
                 allowMarketEntry =
-                    rrOk &&                  // RR ниже
-                    liquiditySafe &&          // не заблокировано
-                    !liquidityResult.IsExtreme; // но без extreme-рисков
+                    rrOk &&
+                    liquiditySafe &&
+                    !liquidityResult.IsExtreme;
             }
-
-            // STANDARD
             else
             {
                 allowMarketEntry =
@@ -264,22 +232,10 @@ namespace VertexAutoTradeBinance8.Services
                     liquiditySafe;
             }
 
-
-            // 🔥 HIGH CONFIDENCE OVERRIDE
-            if (!allowMarketEntry && smart.Confidence >= 0.82m && liquiditySafe)
-            {
-                allowMarketEntry = true;
-                _logger.LogWarning(
-                    "[ORDER][{symbol}] MARKET OVERRIDE by HIGH CONFIDENCE conf={conf}",
-                    signal.Symbol, smart.Confidence);
-            }
-
             // =============================================================
             // EXECUTED SIGNAL CREATED
             // =============================================================
-            decimal executionBias =
-     Math.Clamp(smart.RiskBias * liquidityResult.Score, 0.4m, 1.0m);
-
+            decimal executionBias = Math.Clamp(smart.RiskBias * liquidityResult.Score, 0.4m, 1.0m);
             decimal adjustedQty = Math.Floor((quantity * executionBias) / step) * step;
 
             if (adjustedQty < filters.minQty)
@@ -289,8 +245,7 @@ namespace VertexAutoTradeBinance8.Services
                     "ADJUSTED_QTY_TOO_SMALL",
                     note: $"baseQty={quantity}; bias={executionBias:F2}; riskBias={smart.RiskBias:F2}; liqScore={liquidityResult.Score:F2}",
                     attemptNotional: quantity * entryPrice,
-                    requiredMinNotional: filters.minQty * entryPrice
-                );
+                    requiredMinNotional: filters.minQty * entryPrice);
 
                 return OrderResult.Fail("ADJUSTED_QTY_TOO_SMALL");
             }
@@ -298,11 +253,9 @@ namespace VertexAutoTradeBinance8.Services
             quantity = adjustedQty;
             decimal notional = quantity * entryPrice;
 
-
-
             var execRec = _executedSignalService.AddSignalCreated(
                 signal,
-                opportunityScore: (int)(smart.Confidence * 100),
+                opportunityScore: (int)(smart.Confidence * 100), // оставил для UI/аналитики, но НЕ как гейт
                 atr: signal.Atr ?? 0m,
                 volatility: baseReg.VolatilityPercent,
                 slope: baseReg.TrendSlopePercent,
@@ -322,54 +275,92 @@ namespace VertexAutoTradeBinance8.Services
                     $"LiquidityGuard:{liquidityResult.Reason}",
                     note: $"details={liquidityResult.Details}; extreme={liquidityResult.IsExtreme}; profile={smart.EntryProfile}; liqScore={liquidityResult.Score:F2}",
                     attemptNotional: notional,
-                    requiredMinNotional: 0m
-                );
+                    requiredMinNotional: 0m);
 
                 return OrderResult.Fail($"LiquidityGuard:{liquidityResult.Reason}");
             }
 
-
             // =============================================================
-            // ENTRY ORDER
+            // ENTRY ORDER — BINANCE 2026 (STRUCTURE + NO-CHASE LIMIT + CONTROLLED JOIN)
             // =============================================================
             decimal priceDriftPct =
-    entryPrice > 0
-        ? Math.Abs(lastPrice - entryPrice) / entryPrice
-        : 0m;
-            FuturesOrderType entryType;
+                entryPrice > 0 ? Math.Abs(lastPrice - entryPrice) / entryPrice : 0m;
 
-            if (smart.EntryProfile == "EXP")
-            {
-                // Expansion → всегда MARKET
-                entryType = FuturesOrderType.Market;
-            }
-            else if (smart.EntryProfile == "CT")
-            {
-                // Controlled Trend → MARKET если цена не убежала
-                entryType =
-                    allowMarketEntry && priceDriftPct <= 0.0012m   // 0.12%
-                        ? FuturesOrderType.Market
-                        : FuturesOrderType.Limit;
-            }
-            else
-            {
-                // Standard
-                entryType =
-                    allowMarketEntry
-                        ? FuturesOrderType.Market
-                        : FuturesOrderType.Limit;
-            }
+            // A) MARKET only for: breakout / tight reclaim / emergency super-signal
+            bool breakoutMarket =
+                allowMarketEntry &&
+                hasImpulse &&
+                isSmartStrongTrend &&
+                !liquidityResult.IsExtreme;
 
-            decimal? orderPrice =
-                entryType == FuturesOrderType.Market
-                    ? null
-                    : aggrLimitPrice;
+            bool reclaimMarket =
+                allowMarketEntry &&
+                !hasImpulse &&
+                smart.EntryProfile == "CT" &&
+                !liquidityResult.IsExtreme &&
+                priceDriftPct <= 0.0010m; // tight reclaim only
 
-            TimeInForce? tif =
-                entryType == FuturesOrderType.Market
-                    ? null
-                    : TimeInForce.GoodTillCanceled;
+            bool emergencyMarket =
+                allowMarketEntry &&
+                signal.IsSuperSignal &&
+                !liquidityResult.IsExtreme &&
+                priceDriftPct <= 0.0025m; // emergency only when not runaway
 
+            bool useMarket = breakoutMarket || reclaimMarket || emergencyMarket;
+
+            FuturesOrderType entryType = useMarket ? FuturesOrderType.Market : FuturesOrderType.Limit;
+
+            // B) LIMIT pricing
+            // PASSIVE anchor: do not worsen price (default)
+            decimal passiveLimit =
+                side == OrderSide.Buy
+                    ? Math.Min(entryPrice, lastPrice)
+                    : Math.Max(entryPrice, lastPrice);
+
+            // CONTROLLED JOIN: catch “silent trend” without impulse
+            // uses ONLY existing signals: strong trend + slope + drift + liq safe
+            decimal tickRel = lastPrice > 0 ? (tick / lastPrice) : 0m;
+            bool spreadOk = tickRel <= 0.00050m; // rough proxy; conservative
+
+            bool silentTrendJoin =
+                entryType == FuturesOrderType.Limit &&
+                allowMarketEntry &&
+                !hasImpulse &&
+                isSmartStrongTrend &&
+                rrOk &&
+                liquiditySafe &&
+                !liquidityResult.IsExtreme &&
+                spreadOk &&
+                baseReg.TrendSlopePercent >= 0.25m &&   // “тихий” наклон
+                priceDriftPct >= 0.0025m &&             // цена уже поехала
+                priceDriftPct <= 0.0150m;               // но не runaway
+
+            // join pct: use your constant (0.06%) but cap hard for safety
+            decimal joinPct = silentTrendJoin ? Math.Min(AGGR_LIMIT_OFFSET_PCT, 0.0010m) : 0m;
+
+            decimal joinLimit =
+                side == OrderSide.Buy
+                    ? lastPrice * (1m + joinPct)
+                    : lastPrice * (1m - joinPct);
+
+            decimal finalLimitRaw = silentTrendJoin ? joinLimit : passiveLimit;
+            decimal aggrLimitPrice = Quantize(finalLimitRaw, tick);
+
+            decimal? orderPrice = entryType == FuturesOrderType.Market ? null : aggrLimitPrice;
+            TimeInForce? tif = entryType == FuturesOrderType.Market ? null : TimeInForce.GoodTillCanceled;
+
+            _logger.LogInformation(
+                "[ORDER][{symbol}] ENTRY={type} mode={mode} entry={entry} last={last} drift={drift:P2} slope={slope:F3}% impulse={imp} liqExt={ext} liqScore={score:F2}",
+                signal.Symbol,
+                entryType,
+                entryType == FuturesOrderType.Market ? "MARKET" : (silentTrendJoin ? "JOIN_LIMIT" : "PASSIVE_LIMIT"),
+                entryPrice,
+                lastPrice,
+                priceDriftPct,
+                baseReg.TrendSlopePercent,
+                hasImpulse,
+                liquidityResult.IsExtreme,
+                liquidityResult.Score);
 
             // =============================================================
             // FIX: APPLY CORRECT QTY RULE PER ORDER TYPE (MARKET vs LIMIT)
@@ -380,7 +371,6 @@ namespace VertexAutoTradeBinance8.Services
 
             var fQty = await _symbolInfo.GetFuturesFiltersAsync(signal.Symbol, qtyRule);
 
-            // floor-quantize for safety (никогда не округляй вверх)
             quantity = Math.Floor(quantity / fQty.step) * fQty.step;
 
             if (quantity <= 0m || quantity < fQty.minQty)
@@ -390,82 +380,64 @@ namespace VertexAutoTradeBinance8.Services
                     "QTY_TOO_SMALL_AFTER_RULE",
                     note: $"entryType={entryType}; qtyRule={qtyRule}; qty={quantity}; minQty={fQty.minQty}; step={fQty.step}",
                     attemptNotional: 0m,
-                    requiredMinNotional: 0m
-                );
+                    requiredMinNotional: 0m);
 
                 _executedSignalService.UpdateStatus(signal.Symbol, execTime, TradeExecutionStatus.Blocked, 0, 0);
                 return OrderResult.Fail("QTY_TOO_SMALL_AFTER_RULE");
             }
 
-
-
-            // notional known at create-time for LIMIT orders
             decimal markForNotional = lastPrice > 0 ? lastPrice : entryPrice;
 
             decimal notionalAtCreate = orderPrice.HasValue
                 ? quantity * orderPrice.Value
-                : quantity * markForNotional; // ✅ MARKET: оцениваем по last/mark
+                : quantity * markForNotional;
 
-
-
-
-            // 🔒 HARD GUARDS (оставить навсегда)
+            // HARD GUARDS
             if (entryType == FuturesOrderType.Market && orderPrice != null)
                 return OrderResult.Fail("InvalidMarketOrderWithPrice");
 
             if (entryType == FuturesOrderType.Limit && orderPrice == null)
                 return OrderResult.Fail("InvalidLimitOrderWithoutPrice");
 
-
-
-
+            // =============================================================
+            // PLACE ENTRY
+            // =============================================================
             var entryRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-    symbol: signal.Symbol,
-    side: side,
-    type: entryType,
-    quantity: quantity,
-    price: orderPrice,
-    positionSide: posSide,
-    timeInForce: tif,
-    reduceOnly: null,      // ✅ ВАЖНО: для ENTRY держим null (ты сам подтвердил)
-                           // ✅ WorkingType НЕ ШЛЁМ в ENTRY (он для STOP/TP), иначе часто -1106/unknown param
-    ct: ct
-);
-
+                symbol: signal.Symbol,
+                side: side,
+                type: entryType,
+                quantity: quantity,
+                price: orderPrice,
+                positionSide: posSide,
+                timeInForce: tif,
+                reduceOnly: null,
+                ct: ct);
 
             if (!entryRes.Success || entryRes.Data == null)
             {
-                var note =
-                    entryRes.Error != null
-                        ? $"code={entryRes.Error.Code}; msg={entryRes.Error.Message}"
-                        : "no_error_object";
+                var note = entryRes.Error != null
+                    ? $"code={entryRes.Error.Code}; msg={entryRes.Error.Message}"
+                    : "no_error_object";
 
                 await _simulator.SimulateMissedTradeAsync(
                     signal,
                     "EntryError",
                     note: note,
                     attemptNotional: notionalAtCreate > 0 ? notionalAtCreate : notional,
-                    requiredMinNotional: 0m
-                );
+                    requiredMinNotional: 0m);
 
-                _executedSignalService.UpdateStatus(
-                    signal.Symbol, execTime,
-                    TradeExecutionStatus.Blocked, 0, 0);
-
+                _executedSignalService.UpdateStatus(signal.Symbol, execTime, TradeExecutionStatus.Blocked, 0, 0);
                 return OrderResult.Fail("ENTRY_FAILED");
             }
 
             long entryOrderId = entryRes.Data.Id;
-
 
             _executedSignalService.UpdateStatus(
                 signal.Symbol,
                 execTime,
                 TradeExecutionStatus.OrderCreated,
                 quantity,
-                notionalAtCreate
-            );
-
+                notionalAtCreate);
 
             await _simulator.AppendLifecycleEventAsync(signal, "ORDER_CREATED");
 
@@ -475,20 +447,58 @@ namespace VertexAutoTradeBinance8.Services
             bool marketFallbackUsed = false;
 
             var wait = await WaitForPositionOrOrderAsync(
-                client, signal, posSide,
-                entryOrderId, entryPrice,
-                quantity, ct);
+                client,
+                signal,
+                posSide,
+                entryOrderId,
+                entryPrice,
+                quantity,
+                ct);
 
-            // if (!wait.HasPosition && !allowMarketEntry && wait.Reason == "TimeoutNoFill" && !marketFallbackUsed)
             if (!wait.HasPosition &&
-     entryType == FuturesOrderType.Limit &&
-     wait.Reason == "TimeoutNoFill" &&
-     !marketFallbackUsed)
+                entryType == FuturesOrderType.Limit &&
+                wait.Reason == "TimeoutNoFill" &&
+                !marketFallbackUsed)
             {
                 marketFallbackUsed = true;
 
                 try { await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, entryOrderId, ct: ct); }
                 catch { }
+
+                // guard runaway before fallback-market
+                decimal markNow = lastPrice;
+                try
+                {
+                    var pxNow = await client.UsdFuturesApi.ExchangeData.GetPriceAsync(signal.Symbol, ct: ct);
+                    if (pxNow.Success && pxNow.Data?.Price > 0)
+                        markNow = pxNow.Data.Price;
+                }
+                catch { }
+
+                decimal atrSlipCap =
+              (signal.Atr ?? 0m) > 0 && entryPrice > 0
+              ? Math.Min((signal.Atr.Value / entryPrice) * 1.2m, MARKET_FALLBACK_MAX_SLIP_PCT)
+              : MARKET_FALLBACK_MAX_SLIP_PCT; 
+
+                decimal driftNowPct =
+                    entryPrice > 0 ? Math.Abs(markNow - entryPrice) / entryPrice : 0m;
+
+                bool allowFallbackMarket =
+                 !liquidityResult.IsExtreme ||
+                 (signal.IsSuperSignal && rrOk);
+
+                if (!allowFallbackMarket || driftNowPct > atrSlipCap)
+                {
+                    await _simulator.SimulateMissedTradeAsync(
+                        signal,
+                        "FALLBACK_MKT_BLOCKED_RUNAWAY_OR_EXTREME",
+                        note: $"drift={driftNowPct:P2}; max={atrSlipCap:P2}; extreme={liquidityResult.IsExtreme}",
+                        attemptNotional: notionalAtCreate,
+                        requiredMinNotional: 0m);
+
+                    _executedSignalService.UpdateStatus(signal.Symbol, execTime, TradeExecutionStatus.Blocked, 0, 0);
+                    return OrderResult.Fail("FALLBACK_MKT_BLOCKED");
+                }
 
                 var fMkt = await _symbolInfo.GetFuturesFiltersAsync(signal.Symbol, SymbolInfoService.QtyRule.Market);
                 var mktQty = Math.Floor(quantity / fMkt.step) * fMkt.step;
@@ -497,25 +507,27 @@ namespace VertexAutoTradeBinance8.Services
                     return OrderResult.Fail("FALLBACK_MKT_QTY_TOO_SMALL");
 
                 var mktRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    signal.Symbol,
-                    side,
-                    FuturesOrderType.Market,
-                    mktQty,
+                    symbol: signal.Symbol,
+                    side: side,
+                    type: FuturesOrderType.Market,
+                    quantity: mktQty,
                     positionSide: posSide,
-                    ct: ct
-                );
+                    ct: ct);
 
                 if (mktRes.Success && mktRes.Data != null)
                 {
                     entryOrderId = mktRes.Data.Id;
+
                     wait = await WaitForPositionOrOrderAsync(
-    client, signal, posSide,
-    entryOrderId, lastPrice,
-    mktQty, ct);
+                        client,
+                        signal,
+                        posSide,
+                        entryOrderId,
+                        lastPrice,
+                        mktQty,
+                        ct);
                 }
             }
-
-
 
             if (!wait.HasPosition)
             {
@@ -524,24 +536,21 @@ namespace VertexAutoTradeBinance8.Services
                     : wait.Reason ?? "NotFilled";
 
                 await _simulator.SimulateMissedTradeAsync(
-     signal,
-     reason,
-     note: $"marketFallbackUsed={marketFallbackUsed}; entryType={entryType}; orderPrice={(orderPrice?.ToString() ?? "null")}; lastPrice={lastPrice}; entryPrice={entryPrice}; waitReason={wait.Reason}",
-     attemptNotional: orderPrice.HasValue ? quantity * orderPrice.Value : notional,
-     requiredMinNotional: 0m
- );
+                    signal,
+                    reason,
+                    note: $"marketFallbackUsed={marketFallbackUsed}; entryType={entryType}; orderPrice={(orderPrice?.ToString() ?? "null")}; lastPrice={lastPrice}; entryPrice={entryPrice}; waitReason={wait.Reason}",
+                    attemptNotional: orderPrice.HasValue ? quantity * orderPrice.Value : notional,
+                    requiredMinNotional: 0m);
 
                 _executedSignalService.UpdateStatus(
                     signal.Symbol,
                     execTime,
                     TradeExecutionStatus.Blocked,
                     qty: 0,
-                    notional: 0
-                );
+                    notional: 0);
 
                 return OrderResult.Fail(reason);
             }
- 
 
             // =============================================================
             // FINAL SUCCESS
@@ -553,10 +562,13 @@ namespace VertexAutoTradeBinance8.Services
                 return OrderResult.Fail("InvalidFinalState");
 
             _executedSignalService.UpdateStatus(
-                signal.Symbol, execTime,
+                signal.Symbol,
+                execTime,
                 TradeExecutionStatus.PositionOpened,
-                quantity, quantity * entryPrice,
+                quantity,
+                quantity * entryPrice,
                 filledEntry: entryPrice);
+
             await _simulator.AppendLifecycleEventAsync(signal, "POSITION_OPENED");
 
             return OrderResult.Successs(entryPrice, quantity, entryOrderId);
@@ -791,6 +803,7 @@ namespace VertexAutoTradeBinance8.Services
                         signal.Symbol, executedQty, entry);
 
                     return (true, entry, executedQty, "OrderExecutedAwaitPosLag");
+
                 }
 
                 // Real no-fill case

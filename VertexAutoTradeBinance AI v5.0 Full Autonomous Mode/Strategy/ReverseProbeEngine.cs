@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Strategy
 {
@@ -29,6 +28,6 @@ namespace VertexAutoTradeBinance8.Strategy
         {
             _lastProbeUtc[symbol] = DateTime.UtcNow;
         }
-         
+
     }
 }

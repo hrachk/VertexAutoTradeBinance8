@@ -1,4 +1,6 @@
-﻿namespace VertexAutoTradeBinance8.Models
+﻿using System.Text.Json.Serialization;
+
+namespace VertexAutoTradeBinance8.Models
 {
     /// <summary>
     /// Режим рынка на инструменте.
@@ -33,6 +35,7 @@
         public string Symbol { get; set; } = string.Empty;
         public string Timeframe { get; set; } = string.Empty;
 
+        [JsonConverter(typeof(JsonStringEnumConverter))]
         public MarketRegime Regime { get; set; } = MarketRegime.Unknown;
 
         /// <summary>Угол наклона тренда (EMA) в % на N свечей.</summary>

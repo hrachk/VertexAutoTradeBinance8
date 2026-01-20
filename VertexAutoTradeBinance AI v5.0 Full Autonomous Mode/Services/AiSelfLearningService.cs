@@ -4,39 +4,7 @@ using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Strategy;
 
 namespace VertexAutoTradeBinance8.Services
-{
-    /// это память и AI,
-    /// <summary>
-    /// AiSelfLearningService v7.0 (QUANT-REALTIME MAX, 3-Channel Learning)
-    ///
-    /// 1) Signal-Based Learning:
-    ///    - RecordMarketStateTriggered(...)  → события сигналов/блокировок/soft-входов
-    ///    - StrategyEngine вызывает:
-    ///        • reason = "MICRO_SIGNAL"
-    ///        • reason = "SOFT_ENTRY"
-    ///        • reason = "AI_PATTERN_BLOCK"
-    ///        • reason = "LIQUIDITY_DANGER"
-    ///        • reason = "RR_BLOCK"
-    ///
-    /// 2) Trade-Based Learning:
-    ///    - RecordTrade(symbol, side, entry, exit, regime)
-    ///    - Вызывается из:
-    ///       
-    ///        • TradeResultMonitorService.CheckClosedPositionAsync (факт закрытия)
-    ///    - Строит _stats → используется GetAiRiskAdjustment(...)
-    ///
-    /// 3) Background Market Learning:
-    ///    - RecordMarketState(...)         → базовые режимы из SmartRegimeService
-    ///    - TryHybridPeriodicSnapshot(...) → периодический snapshot раз ~30 сек
-    ///
-    /// ФАЙЛ ХРАНЕНИЯ:
-    ///   ai-models/ai_learning.json
-    ///     - верхний уровень: { "SYMBOL": { "Regime": {...} }, ... }
-    ///     - + служебные ключи: CreatedAtUtc, SnapshotVersion, Meta
-    ///   Load() фильтрует служебные ключи и поднимает только реальную статистику.
-    /// </summary>
-    /// 
-
+{ 
     internal sealed class RegimeGateProfile
     {
         public MarketRegime Regime { get; init; }
@@ -1163,8 +1131,6 @@ namespace VertexAutoTradeBinance8.Services
                 return (decimal)wins / trades.Count;
             }
         }
-
- 
         public void RecordSimulatedTrade(
         string symbol,
         string side,
@@ -1174,6 +1140,15 @@ namespace VertexAutoTradeBinance8.Services
         decimal outcome,
         string reason)
         {
+            if (!string.IsNullOrEmpty(reason) &&
+    reason.StartsWith("FALLBACK_MKT_BLOCKED", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogInformation(
+                    "[AI][SIM][{symbol}] Ignored execution-policy simulated trade | reason={reason}",
+                    symbol, reason);
+                return;
+            }
+
             lock (_lock)
             {
                 _logger.LogInformation(
@@ -1196,7 +1171,6 @@ namespace VertexAutoTradeBinance8.Services
                     Time = DateTime.UtcNow
                 });
             }
-
             // === SOFT LEARNING IMPACT (SIMULATED) ===
             // симуляция влияет на RiskWeight, но слабее реальной сделки
             var pseudoPnl = outcome * 0.35m;
@@ -1207,10 +1181,8 @@ namespace VertexAutoTradeBinance8.Services
                 MarketRegime.Unknown,
                 pseudoPnl
             );
-
             // snapshot разрешён — это результат обучения
             TrySnapshot();
-
         }
 
         public decimal GetRecentPnL(
@@ -1229,12 +1201,9 @@ namespace VertexAutoTradeBinance8.Services
                     .OrderByDescending(t => t.Time)
                     .Take(lookback)
                     .ToList();
-
                 if (trades.Count == 0)
                     return 0m;
-
                 decimal sum = 0m;
-
                 foreach (var t in trades)
                 {
                     var ageDays = (now - t.Time).TotalDays;
@@ -1242,7 +1211,6 @@ namespace VertexAutoTradeBinance8.Services
 
                     sum += t.Pnl * (decimal)decay;
                 }
-
                 return sum;
             }
         }
@@ -1252,7 +1220,6 @@ namespace VertexAutoTradeBinance8.Services
             lock (_lock)
             {
                 var now = DateTime.UtcNow;
-
                 var trades = _tradeHistory
                     .Where(t =>
                         t.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase) &&
@@ -1260,24 +1227,18 @@ namespace VertexAutoTradeBinance8.Services
                     .OrderByDescending(t => t.Time)
                     .Take(20)
                     .ToList();
-
                 if (trades.Count == 0)
                     return 0m;
-
                 decimal score = 0m;
-
                 foreach (var t in trades)
                 {
                     var ageDays = (now - t.Time).TotalDays;
                     var decay = Math.Exp(-Math.Log(2) * ageDays / PnlHalfLifeDays);
-
                     score += t.Pnl * (decimal)decay;
                 }
-
                 return score / trades.Count;
             }
         }
-         
 
         private decimal ApplyHalfLife(DateTime tradeTime)
         {
@@ -1294,7 +1255,6 @@ namespace VertexAutoTradeBinance8.Services
 
             return Math.Max((decimal)decay, MinPnlWeight);
         }
-
       
         private const double Ln2 = 0.6931471805599453;
 
