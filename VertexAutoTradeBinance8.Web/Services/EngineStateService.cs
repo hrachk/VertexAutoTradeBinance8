@@ -14,8 +14,9 @@ public class EngineStateService
     {
         _logger = logger;
 
-        FilePath = config["EngineState:Path"]
-                   ?? throw new Exception("EngineState path not found in config");
+      //  FilePath = config["EngineState:Path"]
+                //   ?? throw new Exception("EngineState path not found in config");
+        FilePath = Path.Combine(AppContext.BaseDirectory, "engine_state.json");
     }
 
     public EngineStateModel? Load()

@@ -1229,11 +1229,7 @@ namespace VertexAutoTradeBinance8.Services
 
 
 
-        }
-
-
-
-
+        } 
 
         private async Task TryHarvestProfitAsync(
             BinanceRestClient client,
