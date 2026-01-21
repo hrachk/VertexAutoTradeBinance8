@@ -77,3 +77,17 @@
         grid-template-columns: 1fr;
     }
 }
+.selector {
+    background: #0b1220;
+    color: #e5e7eb;
+    border: 1px solid #1f2937;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 14px;
+    min-width: 260px;
+}
+
+    .selector option {
+        background: #0b1220;
+        color: #e5e7eb;
+    }

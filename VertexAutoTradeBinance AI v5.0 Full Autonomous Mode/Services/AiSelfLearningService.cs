@@ -20,6 +20,9 @@ namespace VertexAutoTradeBinance8.Services
             BaseWeights.TryGetValue(gate, out var baseW);
             AdaptiveBias.TryGetValue(gate, out var bias);
 
+            if (baseW == 0 && bias == 0)
+                return 1.0m;
+
             var w = (baseW == 0 ? 1.0m : baseW) * (bias == 0 ? 1.0m : bias);
             return Math.Clamp(w, 0.70m, 1.30m);
         }
@@ -287,10 +290,10 @@ namespace VertexAutoTradeBinance8.Services
 
                     profile.AdaptiveBias.TryGetValue(g.Gate, out var cur);
 
-                
-                    var decayedStrict = ApplyConfidenceDecay(
-                                        strict,
-                                        DateTime.UtcNow.AddMinutes(-30)); // gates живут дольше
+                    var lastUpdate =
+        cur == 0 ? DateTime.UtcNow : DateTime.UtcNow.AddMinutes(-10);
+
+                    var decayedStrict = ApplyConfidenceDecay(strict, lastUpdate);
 
                     var target = decayedStrict; // 0.85 / 1.10 / 1.00
                     var updated = cur == 0
@@ -344,7 +347,7 @@ namespace VertexAutoTradeBinance8.Services
       decimal volatility,
       decimal atr,
       decimal confidence,
-      bool skipSnapshot = false
+      bool skipSnapshot = true
   )
         {
             lock (_lock)
@@ -484,19 +487,27 @@ namespace VertexAutoTradeBinance8.Services
                 confidence
             );
         }
- 
+
+
+        private readonly HashSet<string> _learnedTrades = new();
+
+
         // =====================================================================
         // 2) TRADE ENTRY (вызывается из PositionSupervisor / TradeResultMonitor)
         // =====================================================================
         public void RecordTrade(
-     string symbol,
-     SignalSide side,
-     decimal entry,
-     decimal exit,
-     MarketRegime regime)
+      string symbol,
+      SignalSide side,
+      decimal entry,
+      decimal exit,
+      MarketRegime regime)
         {
-            if (entry <= 0) return;
+            if (entry <= 0)
+                return;
 
+            // ===========================
+            // 0) PnL calculation
+            // ===========================
             decimal pnl =
                 side == SignalSide.Buy
                     ? exit - entry
@@ -507,8 +518,19 @@ namespace VertexAutoTradeBinance8.Services
                     ? (exit - entry) / entry
                     : (entry - exit) / entry;
 
+            // ===========================
+            // 1) Idempotency guard
+            // ===========================
+            var tradeKey = $"{symbol}|{side}|{entry}|{exit}";
+
             lock (_lock)
             {
+                if (!_learnedTrades.Add(tradeKey))
+                    return;
+
+                // ===========================
+                // 2) Store trade history
+                // ===========================
                 _tradeHistory.Add(new TradeHistoryEntry
                 {
                     Symbol = symbol,
@@ -525,17 +547,25 @@ namespace VertexAutoTradeBinance8.Services
                     _tradeHistory.RemoveRange(0, 2500);
             }
 
-            // 🔥 ОБУЧАЕМСЯ ПО ПРОЦЕНТУ, А НЕ АБСОЛЮТУ
+            // ===========================
+            // 3) Learning (PERCENT-BASED)
+            // ===========================
             UpdateStats(symbol, regime, pnlPct);
 
+            // ===========================
+            // 4) Snapshot (forced, safe)
+            // ===========================
             Save(force: true);
             _lastSnapshot = DateTime.UtcNow;
         }
 
 
 
+
         private void UpdateStats(string symbol, MarketRegime regime, decimal pnl)
         {
+            if (regime == MarketRegime.Unknown && Math.Abs(pnl) < 0.15m)
+                return;
             if (!_stats.TryGetValue(symbol, out var regimes))
             {
                 regimes = new Dictionary<MarketRegime, RegimeStats>();
@@ -786,7 +816,7 @@ namespace VertexAutoTradeBinance8.Services
                 try
                 {
                     SaveSnapshotAtomic(json);
-
+                    saved = true;
                     _logger.LogInformation(
                         "[AI] Snapshot saved OK → symbols={Symbols}, states={States}, trades={Trades}",
                         snapshot.Meta.Symbols,

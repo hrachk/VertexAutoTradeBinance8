@@ -41,19 +41,30 @@ namespace VertexAutoTradeBinance8.Services
         private readonly LiquidityGuardService _liquidityGuard;
         private readonly IOrderDispatcher _dispatcher;
         private MarketRegime _regimeNow;
+        private readonly TradeResultMonitorService _tradeResultMonitor;
 
 
         // === Anti-spam guards for EarlyTP / BE-move ===
         private readonly ConcurrentDictionary<string, long> _earlyTpDone = new();   // key -> unixMs
         private readonly ConcurrentDictionary<string, long> _beMoved = new();      // key -> unixMs
+         
+        // BE staircase stages: (triggerATR, bufferATR)
+        private static readonly (decimal TriggerAtr, decimal BufferAtr)[] BeStages = new[]
+        {
+            (1.20m, 0.15m),
+            (1.80m, 0.25m),
+            (2.40m, 0.35m),
+        };
 
-        private readonly ConcurrentDictionary<string, int> _beStage = new();
-        private static readonly (decimal triggerAtr, decimal bufferAtr)[] BeStages =
-           {
-                (1.20m, 0.15m),
-                (1.60m, 0.25m),
-                (2.10m, 0.35m),
-            };
+        // stage per position key
+        private readonly ConcurrentDictionary<string, int> _beStage = new(StringComparer.OrdinalIgnoreCase);
+
+        // earlyTP in-flight guard (prevents double enqueue burst)
+        private readonly ConcurrentDictionary<string, long> _earlyTpInFlight = new(StringComparer.OrdinalIgnoreCase);
+
+        // BE in-flight guard (prevents double enqueue burst)
+        private readonly ConcurrentDictionary<string, long> _beInFlight = new(StringComparer.OrdinalIgnoreCase);
+
 
         private readonly ConcurrentDictionary<string, decimal> _restoredEntries = new();
         // === Harvest block after partial close ===
@@ -118,7 +129,8 @@ namespace VertexAutoTradeBinance8.Services
             IOrderDispatcher dispatcher, EngineStateSnapshotService stateSvc,
             SmartRegimeService smartRegime,
             ReverseProbeEngine reverseProbe, OpenPositionSymbolTracker openPos,
-            IOptions<HedgeKillSettings> hedgeCfg, SignalConfidenceSettings confidenceCfg, MarketDataFacade marketDataFacade)
+            IOptions<HedgeKillSettings> hedgeCfg, SignalConfidenceSettings confidenceCfg, MarketDataFacade marketDataFacade, 
+            TradeResultMonitorService tradeResultMonitor)
         {
             _logger = logger;
             _factory = factory;
@@ -139,6 +151,7 @@ namespace VertexAutoTradeBinance8.Services
             _hedgeCfg = hedgeCfg.Value;
             _confidenceCfg = confidenceCfg;
             _marketDataFacade = marketDataFacade;
+            _tradeResultMonitor = tradeResultMonitor;
         }
         private bool IsHedgeOnCooldown(string symbol)
         {
@@ -375,34 +388,69 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogWarning(ex, "[SUPERVISOR][{symbol}] LoadOrders failed", symbol);
                 openOrders = new List<BinanceUsdFuturesOrder>();
             }
-
+                       
             // ==========================================================
-            // 5) KLINES 1m + REGIME
+            // 5) KLINES 1m — EXECUTION CONTEXT ONLY (NO DECISION)
             // ==========================================================
             IReadOnlyList<BinanceFuturesUsdtKline>? klines1m = null;
-            SmartRegimeInfo? smart1m = null;
             decimal atr14_1m = 0m;
 
             try
             {
-                klines1m = await _marketDataFacade.GetKlinesAsync(symbol, KlineInterval.OneMinute, 160, ct);
-
-                if (klines1m != null && klines1m.Count >= 30)
-                {
-                    var rr = _regime.DetectRegime(symbol, KlineInterval.OneMinute, klines1m);
-                    if (rr != null) _regimeNow = rr.Regime;
-                }
+                klines1m = await _marketDataFacade.GetKlinesAsync(
+                    symbol,
+                    KlineInterval.OneMinute,
+                    160,
+                    ct);
 
                 if (klines1m != null && klines1m.Count >= 50)
                 {
-                    smart1m = _smartRegime.Evaluate(symbol, KlineInterval.OneMinute, klines1m);
+                    // ⚠️ ВАЖНО:
+                    // 1m ATR используется ТОЛЬКО для execution-фильтров
+                    // (late entry / exhaustion / impulse done)
                     atr14_1m = _marketData.CalculateAtr(klines1m, 14);
                 }
+
+                // ❌ НЕ ДЕЛАЕМ:
+                // - DetectRegime(1m)
+                // - SmartRegime.Evaluate(1m)
+                // - НЕ ТРОГАЕМ _regimeNow
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "[SUPERVISOR][{symbol}] Klines/Regime/Smart failed", symbol);
+                _logger.LogWarning(
+                    ex,
+                    "[SUPERVISOR][{symbol}] 1m execution context failed",
+                    symbol);
             }
+            // ==========================================================
+            // DECISION TF (15m) — SOURCE OF TRUTH
+            // ==========================================================
+            IReadOnlyList<BinanceFuturesUsdtKline>? klines15m = null;
+            SmartRegimeInfo? smart15m = null;
+
+            klines15m = await _marketDataFacade.GetKlinesAsync(
+                symbol,
+                KlineInterval.FifteenMinutes,
+                200,
+                ct);
+
+            if (klines15m != null && klines15m.Count >= 80)
+            {
+                var rr15 = _regime.DetectRegime(
+                    symbol,
+                    KlineInterval.FifteenMinutes,
+                    klines15m);
+
+                if (rr15 != null)
+                    _regimeNow = rr15.Regime;
+
+                smart15m = _smartRegime.Evaluate(
+                    symbol,
+                    KlineInterval.FifteenMinutes,
+                    klines15m);
+            }
+
 
             // ==========================================================
             // 6) CONFIRM OR KILL HEDGE (v8.2 PRO)
@@ -422,11 +470,11 @@ namespace VertexAutoTradeBinance8.Services
             // ==========================================================
             // 7) REVERSE PROBE (ONE SHOT per supervise tick)
             // ==========================================================
-            if (smart1m != null && atr14_1m > 0)
+            if (smart15m != null && atr14_1m > 0 && klines1m != null)
             {
                 try
                 {
-                    await TryReverseProbeAsync(client, symbol, longPos, shortPos, smart1m, atr14_1m, ct);
+                    await TryReverseProbeAsync(client, symbol, longPos, shortPos, smart15m, atr14_1m, ct);
                 }
                 catch (Exception ex)
                 {
@@ -1830,6 +1878,28 @@ namespace VertexAutoTradeBinance8.Services
             if (Math.Abs(prevQty) > 0m && qtyAbs <= 0m)
             {
                 await HandlePositionClosedAsync(client, symbol, side, pos, prevEntry, ct);
+
+                var exitPrice =
+                    pos.MarkPrice > 0m
+                        ? pos.MarkPrice
+                        : prevEntry;
+                decimal realizedPnlUsd = _engineState.RealizedPnlUsd;
+               
+
+                if (realizedPnlUsd == 0m && prevEntry > 0m)
+                {
+                    var dir = side == PositionSide.Long ? 1m : -1m;
+                    realizedPnlUsd = dir * (exitPrice - prevEntry) * Math.Abs(prevQty);
+                }
+
+                await _tradeResultMonitor.CheckClosedPositionAsync(
+                    symbol: symbol,
+                    signal: signal!,
+                    realizedPnlUsd: realizedPnlUsd,
+                    exitPrice: exitPrice,
+                    exitRegime: _regimeNow,
+                    ct: ct);
+
                 return;
             }
 
@@ -2453,6 +2523,8 @@ namespace VertexAutoTradeBinance8.Services
 
             // use LAST CLOSED candle only (anti repaint / anti wick spikes)
             var candle = klines[^2];
+
+
             var lastClose = candle.ClosePrice;
 
             // =====================
@@ -2460,7 +2532,11 @@ namespace VertexAutoTradeBinance8.Services
             // =====================
             decimal confidence = signal?.Confidence ?? _confidenceCfg.MinEntry;
 
-            // default = DISABLED (0 → ATR gate дальше просто не пройдет)
+            // =====================
+            // DYNAMIC EARLY TP (PRO) — CONFIDENCE BANDS
+            // =====================
+
+            // default = DISABLED
             decimal earlyTpAtrMult = 0m;
 
             bool isHighConfidence =
@@ -2470,35 +2546,50 @@ namespace VertexAutoTradeBinance8.Services
                 confidence >= _confidenceCfg.MinEntry &&
                 confidence < _confidenceCfg.Bands.HighFrom;
 
+            // ---------------------
+            // RESOLVE PROFILE
+            // ---------------------
             if (isHighConfidence)
             {
                 // HIGH confidence → hybrid runner-safe early TP
-                earlyTpAtrMult = _confidenceCfg.EarlyTpAtr.High; // e.g. 0.90
+                earlyTpAtrMult = _confidenceCfg.EarlyTpAtr.High; // e.g. 0.72–0.90
 
                 EarlyTpTrace.Skip(
                     _logger, symbol, side, entry, lastClose, atr,
                     "CONFIDENCE_PROFILE_HIGH",
-                    $"conf={confidence:P0}, model=EARLY_TP_{earlyTpAtrMult:0.00}");
+                    $"conf={confidence:P0}, atrMult={earlyTpAtrMult:0.00}");
             }
             else if (isMediumConfidence)
             {
                 // MEDIUM confidence → scalp / fast partial
-                earlyTpAtrMult = _confidenceCfg.EarlyTpAtr.Medium; // e.g. 0.75
+                earlyTpAtrMult = _confidenceCfg.EarlyTpAtr.Medium; // e.g. 0.55–0.65
 
                 EarlyTpTrace.Skip(
                     _logger, symbol, side, entry, lastClose, atr,
                     "CONFIDENCE_PROFILE_MEDIUM",
-                    $"conf={confidence:P0}, model=EARLY_TP_{earlyTpAtrMult:0.00}");
+                    $"conf={confidence:P0}, atrMult={earlyTpAtrMult:0.00}");
             }
             else
             {
-                // LOW confidence → early TP effectively disabled (but flow continues)
+                // LOW confidence → early TP disabled
                 EarlyTpTrace.Skip(
                     _logger, symbol, side, entry, lastClose, atr,
                     "CONFIDENCE_PROFILE_LOW",
-                    $"conf={confidence:P0}, earlyTP=DISABLED");
+                    $"conf={confidence:P0}");
+                return; // ⛔ правильно: low confidence = no early TP
             }
 
+            // ---------------------
+            // FINAL GUARD
+            // ---------------------
+            if (earlyTpAtrMult <= 0m)
+            {
+                EarlyTpTrace.Skip(
+                    _logger, symbol, side, entry, lastClose, atr,
+                    "EARLY_TP_DISABLED",
+                    $"conf={confidence:P0}");
+                return;
+            } 
 
             // ===== LIQUIDITY GUARD HARD BLOCK =====
             if (_liquidityGuard.LastDanger?.Block == true)
@@ -2533,7 +2624,7 @@ namespace VertexAutoTradeBinance8.Services
                     : (candle.ClosePrice - candle.LowPrice);
 
             // если хвост против позиции доминирует — это часто stop-hunt
-            if (wickAgainst > body * 1.35m)
+            if (wickAgainst > body * 1.8m && body / range < 0.45m)
             {
                 EarlyTpTrace.Skip(
                     _logger, symbol, side, entry, lastClose, atr,
@@ -2553,7 +2644,10 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // ===== ATR HIT CHECK =====
-            decimal hit = side == PositionSide.Long ? candle.HighPrice : candle.LowPrice;
+            decimal hit =
+    side == PositionSide.Long
+        ? Math.Max(candle.ClosePrice, candle.HighPrice)
+        : Math.Min(candle.ClosePrice, candle.LowPrice);
 
             bool reached =
                 side == PositionSide.Long
@@ -2577,15 +2671,17 @@ namespace VertexAutoTradeBinance8.Services
 
             // reserve immediately (prevents races)
             var reserveTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            
+
             if (!_earlyTpDone.TryAdd(guardKey, reserveTs))
             {
-                EarlyTpTrace.Skip(_logger, symbol, side, entry, lastClose, atr, "ALREADY_DONE");
+                EarlyTpTrace.Skip(_logger, symbol, side, entry, lastClose, atr, "ALREADY_RESERVED");
                 return;
             }
 
             // also block harvest immediately (exchange sync lag)
             //_recentPartialClose[$"{symbol}|{side}"] = reserveTs;
-            _recentPartialClose.TryAdd($"{symbol}|{side}", reserveTs);
+
             // ===== DISPATCH REAL EXECUTION (do NOT trade inside supervisor tick) =====
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
@@ -2712,7 +2808,7 @@ namespace VertexAutoTradeBinance8.Services
                                     type: FuturesOrderType.Market,
                                     quantity: qtyAll,
                                     positionSide: side,
-                                    reduceOnly: true,
+                                    reduceOnly: null,
                                     ct: token);
 
                                 _logger.LogWarning(
@@ -2729,7 +2825,12 @@ namespace VertexAutoTradeBinance8.Services
                     // ===== HYBRID MODE: keep reservation + harvest block =====
                     var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     _earlyTpDone[guardKey] = now;
-                    _recentPartialClose[$"{symbol}|{side}"] = now;
+                    _recentPartialClose.AddOrUpdate(
+    $"{symbol}|{side}",
+    now,
+    (_, __) => now
+);
+                    _recentPartialClose.TryAdd($"{symbol}|{side}", reserveTs);
                     MarkProtection(symbol);
                 }
                 catch (Exception ex)
@@ -2742,16 +2843,16 @@ namespace VertexAutoTradeBinance8.Services
                 }
             });
 
-            // Optional learning hook (non-fatal)
-            try
-            {
-                if (signal != null && !signal.IsManual)
-                {
-                    var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
-                    _aiLearning.RecordTrade(symbol, sigSide, entry, lastClose, _regimeNow);
-                }
-            }
-            catch { }
+            //// Optional learning hook (non-fatal)
+            //try
+            //{
+            //    if (signal != null && !signal.IsManual)
+            //    {
+            //        var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
+            //        _aiLearning.RecordTrade(symbol, sigSide, entry, lastClose, _regimeNow);
+            //    }
+            //}
+            //catch { }
         }
 
 

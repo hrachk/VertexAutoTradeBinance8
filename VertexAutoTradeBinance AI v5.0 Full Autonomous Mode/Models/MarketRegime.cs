@@ -22,7 +22,9 @@ namespace VertexAutoTradeBinance8.Models
         VolatileChop = 4,
         Squeeze = 5,
         UpTrend = 6,       // ← НУЖНЫ ДЛЯ v6
-        DownTrend = 7      // ← НУЖНЫ ДЛЯ v6
+        DownTrend = 7 ,     // ← НУЖНЫ ДЛЯ v6
+           
+        ExpansionDistribution = 8   // 🔥 новый режим  protiv suka MM`s
     }
 
    

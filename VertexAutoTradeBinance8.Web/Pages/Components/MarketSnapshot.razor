@@ -14,10 +14,11 @@
     <!-- ===== TOOLBAR ===== -->
     <div class="toolbar">
         <select class="selector" @onchange="OnSelect">
-            @foreach (var s in Series)
+            @for (var i = 0; i < Series.Count; i++)
             {
-                <option value="@Key(s)">
-                    @s.Symbol (@Tf(s.Timeframe))
+                var s = Series[i];
+                <option value="@i" selected="@(s == Selected)">
+                    @s.Symbol · @TfShort(s.Timeframe)
                 </option>
             }
         </select>
@@ -132,19 +133,43 @@
 
 
     // ===== UI =====
+    // private async Task OnSelect(ChangeEventArgs e)
+    // {
+    //     var next = Series.FirstOrDefault(s => Key(s) == e.Value?.ToString());
+    //     if (next == null)
+    //         return;
+
+    //     Selected = next;
+
+    //     if (!Frozen)
+    //         await LoadAndRenderAsync();
+    // }
+
     private async Task OnSelect(ChangeEventArgs e)
     {
-        var next = Series.FirstOrDefault(s => Key(s) == e.Value?.ToString());
-        if (next == null)
+        if (!int.TryParse(e.Value?.ToString(), out var idx))
             return;
 
-        Selected = next;
+        if (idx < 0 || idx >= Series.Count)
+            return;
+
+        Selected = Series[idx];
 
         if (!Frozen)
             await LoadAndRenderAsync();
     }
-
-
+    static string TfShort(string tf) => tf switch
+    {
+        "OneMinute" => "1m",
+        "ThreeMinutes" => "3m",
+        "FiveMinutes" => "5m",
+        "FifteenMinutes" => "15m",
+        "ThirtyMinutes" => "30m",
+        "OneHour" => "1h",
+        "FourHour" => "4h",
+        "OneDay" => "1D",
+        _ => tf
+    };
     private void ToggleFreeze() => Frozen = !Frozen;
 
     static string Key(MarketSeries s)

@@ -1,145 +1,97 @@
-﻿using Binance.Net.Enums;
-using Binance.Net.Objects.Models.Futures;
-using VertexAutoTradeBinance8.Helpers;
+﻿using System.Collections.Concurrent;
 using VertexAutoTradeBinance8.Models;
+using VertexAutoTradeBinance8.Services;
 
-namespace VertexAutoTradeBinance8.Services
+public class TradeResultMonitorService
 {
-    /// <summary>
-    /// v6 – обучающий модуль QUANT-REALTIME:
-    /// Проверяет закрытую позицию и отправляет данные в AiSelfLearningService.RecordTrade().
-    /// Используется как часть полного цикла анализа сигнала.
-    /// </summary>
-    public class TradeResultMonitorService
+    private readonly ILogger<TradeResultMonitorService> _logger;
+    private readonly BinanceClientFactory _factory;
+    private readonly AiSelfLearningService _aiLearning;
+
+    // idempotency: symbol|entryTime|side
+    private static readonly ConcurrentDictionary<string, bool> _processed = new();
+
+    public TradeResultMonitorService(
+        ILogger<TradeResultMonitorService> logger,
+        BinanceClientFactory factory,
+        AiSelfLearningService aiLearning)
     {
-        private readonly ILogger<TradeResultMonitorService> _logger;
-        private readonly BinanceClientFactory _factory;
-        private readonly AiSelfLearningService _aiLearning;
-        private readonly AiMarketRegimeService _regimeService;
+        _logger = logger;
+        _factory = factory;
+        _aiLearning = aiLearning;
+    }
 
-        public TradeResultMonitorService(
-            ILogger<TradeResultMonitorService> logger,
-            BinanceClientFactory factory,
-            AiSelfLearningService aiLearning,
-            AiMarketRegimeService regimeService)
+    public async Task CheckClosedPositionAsync(
+     string symbol,
+     TradeSignal signal,
+     decimal realizedPnlUsd,
+     decimal exitPrice,
+     MarketRegime exitRegime,
+     CancellationToken ct)
+    {
+        if (signal == null)
+            return;
+
+        // ------------------------------------------------------------
+        // 1) Idempotency guard (per-signal)
+        // ------------------------------------------------------------
+        var key = $"{symbol}|{signal.Side}|{signal.Time:O}";
+        if (!_processed.TryAdd(key, true))
+            return;
+
+        try
         {
-            _logger = logger;
-            _factory = factory;
-            _aiLearning = aiLearning;
-            _regimeService = regimeService;
-        }
-
-        /// <summary>
-        /// Проверяет, закрылась ли позиция после выхода — и обучает AI по фактической сделке.
-        /// </summary>
-        public async Task CheckClosedPositionAsync(string symbol, TradeSignal signal, CancellationToken ct)
-        {
-            if (signal == null)
+            // ------------------------------------------------------------
+            // 2) Geometry sanity checks
+            // ------------------------------------------------------------
+            if (signal.EntryPrice <= 0 || exitPrice <= 0)
                 return;
 
-            using var client = _factory.CreateRestClient();
-
-            // ===========================
-            // 1) Получаем позиции
-            // ===========================
-            var posResult = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, null, ct);
-            if (!posResult.Success || posResult.Data == null)
+            var risk = Math.Abs(signal.EntryPrice - signal.StopLoss);
+            if (risk <= 0)
                 return;
 
-            var longPos = posResult.Data.FirstOrDefault(p => p.PositionSide == PositionSide.Long);
-            var shortPos = posResult.Data.FirstOrDefault(p => p.PositionSide == PositionSide.Short);
+            var reward = Math.Abs(exitPrice - signal.EntryPrice);
+            var rr = reward / risk;
 
-            decimal qtyLong = longPos != null ? Math.Abs(longPos.Quantity) : 0m;
-            decimal qtyShort = shortPos != null ? Math.Abs(shortPos.Quantity) : 0m;
-
-            // Если есть активная позиция — сделка НЕ закрыта
-            if (qtyLong > 0 || qtyShort > 0)
+            // hard sanity filter
+            if (rr <= 0m || rr > 10m)
                 return;
 
-            // ===========================
-            // 2) Цена выхода
-            // ===========================
-            decimal exitPrice = 0;
+            // ------------------------------------------------------------
+            // 3) AI learning (CANONICAL CALL)
+            // ------------------------------------------------------------
+            _aiLearning.RecordTrade(
+                symbol: symbol,
+                side: signal.Side,
+                entry: signal.EntryPrice,
+                exit: exitPrice,
+                regime: exitRegime
+            );
 
-            try
-            {
-                var last = await client.UsdFuturesApi.ExchangeData.GetMarkPriceAsync(symbol, ct: ct);
-                if (last.Success && last.Data != null)
-                    exitPrice = last.Data.MarkPrice;
-            }
-            catch { }
+            // ------------------------------------------------------------
+            // 4) Logging (informational only)
+            // ------------------------------------------------------------
+            bool isWin =
+                (signal.Side == SignalSide.Buy && exitPrice > signal.EntryPrice) ||
+                (signal.Side == SignalSide.Sell && exitPrice < signal.EntryPrice);
 
-            if (exitPrice <= 0)
-                exitPrice = signal.EntryPrice; // fallback
-
-            decimal entry = signal.EntryPrice;
-            decimal sl = signal.StopLoss;
-
-            // ===========================
-            // 3) Рассчитываем R/R и win/lose
-            // ===========================
-            decimal risk = Math.Abs(entry - sl);
-            decimal reward = Math.Abs(exitPrice - entry);
-            decimal rr = reward / Math.Max(risk, 0.00001m);
-
-            bool isWin = signal.Side == SignalSide.Buy
-                ? exitPrice > entry
-                : exitPrice < entry;
-
-            // ===========================
-            // 4) Определяем режим рынка на выходе
-            // ===========================
-            MarketRegime regime = MarketRegime.Range;
-
-            try
-            {
-                var kl = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
-                    symbol,
-                    signal.Timeframe!.ToKlineInterval(),
-                    startTime: null,
-                    endTime: null,
-                    limit: 150,
-                    ct);
-
-                if (kl.Success)
-                {
-                    var det = _regimeService.DetectRegime(
-                        symbol,
-                        signal.Timeframe!.ToKlineInterval(),
-                        kl.Data.Cast<BinanceFuturesUsdtKline>().ToList());
-
-                    if (det != null)
-                        regime = det.Regime;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[TRADE-MONITOR] Error detecting market regime");
-            }
-
-            // ===========================
-            // 5) Обучаем AI (новый метод v6)
-            // ===========================
-            try
-            {
-                _aiLearning.RecordTrade(
-                    symbol,
-                    signal.Side,
-                    entry,
-                    exitPrice,
-                    regime);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[TRADE-MONITOR] AI RecordTrade error");
-            }
-
-            // ===========================
-            // 6) Логирование
-            // ===========================
             _logger.LogInformation(
-                "AI-LEARN CLOSED TRADE {symbol}: entry={entry}, exit={exit}, rr={rr:F2}, win={win}, regime={regime}",
-                symbol, entry, exitPrice, rr, isWin, regime);
+                "[AI-LEARN] CLOSED {symbol} {side} | entry={entry:F2} exit={exit:F2} rr={rr:F2} pnlUsd={pnl:F2} win={win} regime={regime}",
+                symbol,
+                signal.Side,
+                signal.EntryPrice,
+                exitPrice,
+                rr,
+                realizedPnlUsd,
+                isWin,
+                exitRegime
+            );
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[TRADE-MONITOR] RecordTrade failed");
         }
     }
+
 }
