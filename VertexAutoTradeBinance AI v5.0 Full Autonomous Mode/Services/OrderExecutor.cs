@@ -491,7 +491,7 @@ namespace VertexAutoTradeBinance8.Services
                 {
                     await _simulator.SimulateMissedTradeAsync(
                         signal,
-                        "FALLBACK_MKT_BLOCKED_RUNAWAY_OR_EXTREME",
+                        "Я тебя только что спас от херового market-влёта",//FALLBACK_MKT_BLOCKED_RUNAWAY_OR_EXTREME
                         note: $"drift={driftNowPct:P2}; max={atrSlipCap:P2}; extreme={liquidityResult.IsExtreme}",
                         attemptNotional: notionalAtCreate,
                         requiredMinNotional: 0m);
