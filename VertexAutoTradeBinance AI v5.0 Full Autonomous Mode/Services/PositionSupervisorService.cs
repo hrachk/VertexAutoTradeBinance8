@@ -2015,6 +2015,10 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogWarning(
                     "[SUPERVISOR][{symbol}][{side}] SL ensure requested",
                     symbol, side);
+
+                // ✅ если ROI/earlyTP уже дали профит, можно форсировать BE на следующий тик
+                _forceRoiBe[BuildPosGuardKey(symbol, side, entry, baseQtyForGuards)] =
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             }
 
             // TP intent
@@ -2041,6 +2045,22 @@ namespace VertexAutoTradeBinance8.Services
             // ============================
             // 9) EARLY TP + BE (PROP SAFE)
             // ============================
+
+            // BE logic must NOT depend on "sl object visibility"
+            // 9A) ROI-BE должен быть всегда (даже если atr14==0)
+            await TryMoveSlToBeAsync(
+                client,
+                symbol,
+                side,
+                qtyAbs,
+                entry,
+                atr14,     // может быть 0
+                sl,
+                signal,
+                klines,
+                ct);
+
+            // 9B) EarlyTP только когда достаточно данных
             if (klines != null && klines.Count >= 20 && atr14 > 0m)
             {
                 // EARLY TP — independent, async-safe
@@ -2054,23 +2074,8 @@ namespace VertexAutoTradeBinance8.Services
                     signal,
                     klines,
                     ct);
-
-                // BE logic must NOT depend on "sl object visibility"
-                // Use protection intent, not order snapshot
-                await TryMoveSlToBeAsync(
-     client,
-     symbol,
-     side,
-     baseQtyForGuards,
-     entry,
-     atr14,
-     sl,      // may be null: TryMoveSlToBeAsync will resolve active SL from orders
-     signal,
-     klines,
-     ct);
+                 
             }
-
-
             // ============================
             // 10) Profit Harvest (after protect/early/BE) — PROP 2026
             // - No hard 50-klines gate (use 20+)
@@ -2503,13 +2508,24 @@ namespace VertexAutoTradeBinance8.Services
        CancellationToken ct)
         {
             // ==========================================================
-            // BASIC GUARDS
+            // BASIC GUARDS (FATAL ONLY)
             // ==========================================================
-            if (atr <= 0m || qty <= 0m || entry <= 0m) return;
             if (string.IsNullOrWhiteSpace(symbol)) return;
-            if (klines == null || klines.Count < 12) return;
+            if (qty <= 0m) return;
 
+            // ==========================================================
+            // EARLY-TP / CONFIDENCE LOGIC (OPTIONAL, CAN BE BLOCKED)
+            // ==========================================================
+
+            // Liquidity block applies ONLY to Early-TP logic
             if (_liquidityGuard.LastDanger?.Block == true)
+                return;
+
+            // ATR REQUIRED for Early-TP
+            if (atr <= 0m) return;
+
+            // KLINES REQUIRED for Early-TP structure
+            if (klines == null || klines.Count < 2)
                 return;
 
             // last CLOSED candle only
@@ -2522,20 +2538,31 @@ namespace VertexAutoTradeBinance8.Services
             decimal confidence = signal?.Confidence ?? _confidenceCfg.MinEntry;
 
             decimal earlyTpAtrMult = 0m;
-            bool isHighConfidence = confidence >= _confidenceCfg.Bands.HighFrom;
+
+            bool isHighConfidence =
+                confidence >= _confidenceCfg.Bands.HighFrom;
+
             bool isMediumConfidence =
                 confidence >= _confidenceCfg.MinEntry &&
                 confidence < _confidenceCfg.Bands.HighFrom;
 
             if (isHighConfidence)
+            {
                 earlyTpAtrMult = _confidenceCfg.EarlyTpAtr.High;
+            }
             else if (isMediumConfidence)
+            {
                 earlyTpAtrMult = _confidenceCfg.EarlyTpAtr.Medium;
+            }
             else
-                return; // LOW confidence → no early TP
+            {
+                // LOW confidence → Early-TP disabled
+                return;
+            }
 
             if (earlyTpAtrMult <= 0m)
                 return;
+
 
             // ==========================================================
             // WICK / IMPULSE FILTER
@@ -2697,17 +2724,20 @@ namespace VertexAutoTradeBinance8.Services
           IReadOnlyList<BinanceFuturesUsdtKline> klines,
           CancellationToken ct)
             {
-                if (atr <= 0 || qty <= 0)
+            _logger.LogWarning(
+                "[ROI-BE][{symbol}][{side}] ENTER TryMoveSlToBeAsync qty={qty} entry={entry}",
+                symbol, side, qty, entry);
+
+            if (atr <= 0 || qty <= 0)
                     return;
 
                 if (klines == null || klines.Count < 3)
                     return;
 
-                // last CLOSED candle only
-                var c = klines[^2];
+             
 
-                // ===== STABLE GUARD KEY (POSITION IDENTITY) =====
-                var baseQtyForGuards = GetOrSetBaseQty(symbol, side, entry, qty);
+            // ===== STABLE GUARD KEY (POSITION IDENTITY) =====
+            var baseQtyForGuards = GetOrSetBaseQty(symbol, side, entry, qty);
                 var guardKey = BuildPosGuardKey(symbol, side, entry, baseQtyForGuards);
 
                 // =========================
@@ -2722,15 +2752,21 @@ namespace VertexAutoTradeBinance8.Services
                         {
                             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
-                            slOrder = ordRes.Data
-                                .Where(o =>
-                                    o.PositionSide == side &&
-                                    o.Side == closeSide &&
-                                    o.Type == FuturesOrderType.StopMarket &&
-                                    o.Status == OrderStatus.New)
-                                .OrderByDescending(o => o.UpdateTime)
-                                .FirstOrDefault();
+                        slOrder = ordRes.Data
+                        .Where(o =>
+                            o.PositionSide == side &&
+                            o.Side == closeSide &&
+                            (o.Type == FuturesOrderType.StopMarket || o.Type == FuturesOrderType.Stop) &&
+                            (o.Status == OrderStatus.New || o.Status == OrderStatus.PartiallyFilled))
+                        .OrderByDescending(o => o.UpdateTime)
+                        .FirstOrDefault();
+
+                        if (slOrder == null)
+                        {
+                            _logger.LogWarning("[BE][{symbol}][{side}] No active SL order found → cannot move SL", symbol, side);
+                            return;
                         }
+                    }
                     }
                     catch { /* ignore */ }
 
@@ -2742,9 +2778,13 @@ namespace VertexAutoTradeBinance8.Services
                 // Resolve CURRENT SL price from orders (source of truth)
                 // ==========================================================
                 decimal oldSl = slOrder.StopPrice ?? slOrder.Price;
-                if (oldSl <= 0m)
-                    return;
-
+            if (oldSl <= 0m)
+            {
+                _logger.LogWarning("[BE][{symbol}][{side}] oldSl invalid StopPrice={sp} Price={p} Type={t} Status={st}",
+                    symbol, side, slOrder.StopPrice, slOrder.Price, slOrder.Type, slOrder.Status);
+                return;
+            }
+          
                 // ==========================================================
                 // 1) ROI -> BE (IMMEDIATE PROFIT PROTECT)
                 //    Trigger on candle CLOSE (stable), not wick.
@@ -2757,6 +2797,7 @@ namespace VertexAutoTradeBinance8.Services
 
                 // leverage: prefer signal leverage if present, else assume 1
                 var lev = 1m;
+
                 try
                 {
                     var pi = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: ct);
@@ -2779,59 +2820,82 @@ namespace VertexAutoTradeBinance8.Services
                 var lockRoiPct = roiTriggerPct * lockPart;
                 var lockDp = (lockRoiPct / (100m * lev));
 
-                // Use close for confirmation
-                var pxClose = c.ClosePrice;
+            // Use close for confirmation
+            // Use authoritative price for protective triggers
+            // last CLOSED candle only
+            var clo = klines[^2];
+           
+            _logger.LogWarning(
+             "[ROI-BE-KLINES][{symbol}][{side}] k^1 O={o} C={c} H={h} L={l} entry={entry} qty={qty}",
+             symbol, side, clo.OpenPrice, clo.ClosePrice, clo.HighPrice, clo.LowPrice, entry, qty);
 
-                bool roiReached =
-                    side == PositionSide.Long
-                        ? pxClose >= entry * (1m + trigDp)
-                        : pxClose <= entry * (1m - trigDp);
+           decimal px = clo.ClosePrice;
+            
+            try
+            {
+                var pi = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: ct);
+                if (pi.Success && pi.Data != null)
+                {
+                    var p = pi.Data.FirstOrDefault(x => x.PositionSide == side && Math.Abs(x.Quantity) > 0m);
+                    if (p != null && p.MarkPrice > 0m)
+                        px = p.MarkPrice;
+                }
+            }
+            catch { }
+
+            // roiReached based on MarkPrice (best for protection)
+            bool roiReached =
+                side == PositionSide.Long
+                    ? px >= entry * (1m + trigDp)
+                    : px <= entry * (1m - trigDp);
 
             // execute once per position identity
             // ==========================================================
             // ROI -> BE (execute ONCE per position identity, only if SL really improves)
             // ==========================================================
-            bool forceBe = _forceRoiBe.ContainsKey(guardKey);
+            var forceBe = _forceRoiBe.TryGetValue(guardKey, out var forceTs);
 
-            if (roiReached || forceBe) 
+            if (roiReached || forceBe)
+            {
+                // base BE+ (fee buffer + lock part)
+                var dp = Math.Max(feeBufferPct, lockDp);
+
+                decimal roiBeSl =
+                    side == PositionSide.Long
+                        ? entry * (1m + dp)
+                        : entry * (1m - dp);
+
+                // normalize by tick and ensure not worse than entry directionally
+                var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+
+                if (f.tickSize > 0m)
                 {
-                    // base BE+ (fee buffer + lock part)
-                    var dp = Math.Max(feeBufferPct, lockDp);
-
-                    decimal roiBeSl =
+                    roiBeSl =
                         side == PositionSide.Long
-                            ? entry * (1m + dp)
-                            : entry * (1m - dp);
+                            ? Math.Floor(roiBeSl / f.tickSize) * f.tickSize
+                            : Math.Ceiling(roiBeSl / f.tickSize) * f.tickSize;
+                }
 
-                    // normalize by tick and ensure not worse than entry directionally
-                    var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+                if (side == PositionSide.Long && roiBeSl < entry)
+                    roiBeSl = entry;
 
-                    if (f.tickSize > 0m)
-                    {
-                        roiBeSl =
-                            side == PositionSide.Long
-                                ? Math.Floor(roiBeSl / f.tickSize) * f.tickSize
-                                : Math.Ceiling(roiBeSl / f.tickSize) * f.tickSize;
-                    }
+                if (side == PositionSide.Short && roiBeSl > entry)
+                    roiBeSl = entry;
 
-                    if (side == PositionSide.Long && roiBeSl < entry)
-                        roiBeSl = entry;
+                // must STRICTLY improve current SL
+                bool improves =
+                    (side == PositionSide.Long && roiBeSl > oldSl) ||
+                    (side == PositionSide.Short && roiBeSl < oldSl);
 
-                    if (side == PositionSide.Short && roiBeSl > entry)
-                        roiBeSl = entry;
-
-                    // must STRICTLY improve current SL
-                    bool improves =
-                        (side == PositionSide.Long && roiBeSl > oldSl) ||
-                        (side == PositionSide.Short && roiBeSl < oldSl);
-
-                    if (!improves)
-                        return;
-
-                    // atomic guard: allow ROI-BE exactly once per position
-                    if (!_roiBeDone.TryAdd(guardKey, nowMs))
-                        return;
-
+                if (!improves)
+                {
+                    // don't kill ATR staircase; just skip ROI-BE
+                    _logger.LogInformation(
+    "[ROI-BE][{symbol}][{side}] SKIP (no improve) oldSl={old} want={want} px={px}",
+    symbol, side, oldSl, roiBeSl, px);
+                }
+                else if (_roiBeDone.TryAdd(guardKey, nowMs))
+                {
                     var ok = await UpdateSL_ProAsync(
                         client,
                         symbol,
@@ -2842,23 +2906,26 @@ namespace VertexAutoTradeBinance8.Services
                         roiBeSl,
                         signal,
                         ct);
-
                     if (!ok)
                     {
-                        // rollback guard if SL update failed
                         _roiBeDone.TryRemove(guardKey, out _);
-                    _forceRoiBe.TryRemove(guardKey, out _);
-                    return;
+                        _forceRoiBe.TryRemove(guardKey, out _);
                     }
+                    else
+                    {
+                        oldSl = roiBeSl;
+                        MarkProtection(symbol);
+                        _forceRoiBe.TryRemove(guardKey, out _); // ✅ remove on success too
 
+                        _logger.LogWarning(
+                            "[ROI-BE][{symbol}][{side}] ROI/Force => SL->{sl} (lev={lev}, lockRoi={lock}%)",
+                            symbol, side, roiBeSl, lev, lockRoiPct);
+                    }
                     // keep state consistent for ATR staircase in this call
-                    oldSl = roiBeSl;
-                    MarkProtection(symbol);
-
-                    _logger.LogWarning(
-                        "[ROI-BE][{symbol}][{side}] ROI>={roi}% => SL->{sl} (lev={lev}, lockRoi={lock}%)",
-                        symbol, side, roiTriggerPct, roiBeSl, lev, lockRoiPct);
+                  
                 }
+
+            }
 
 
                 // ==========================================================
@@ -2867,8 +2934,8 @@ namespace VertexAutoTradeBinance8.Services
                 // ==========================================================
 
                 // ===== IMPULSE CONFIRMATION (ANTI STOP-HUNT) =====
-                var body = Math.Abs(c.ClosePrice - c.OpenPrice);
-                var range = c.HighPrice - c.LowPrice;
+                var body = Math.Abs(clo.ClosePrice - clo.OpenPrice);
+                var range = clo.HighPrice - clo.LowPrice;
                 if (range <= 0) return;
                 if (body < atr * 0.18m) return;
                 if (body / range < 0.30m) return;
@@ -2876,7 +2943,7 @@ namespace VertexAutoTradeBinance8.Services
                 var lastStage = _beStage.TryGetValue(guardKey, out var s) ? s : -1;
 
                 decimal hit =
-                    side == PositionSide.Long ? c.HighPrice : c.LowPrice;
+                    side == PositionSide.Long ? clo.HighPrice : clo.LowPrice;
 
                 for (int stage = lastStage + 1; stage < BeStages.Length; stage++)
                 {
@@ -3478,11 +3545,14 @@ namespace VertexAutoTradeBinance8.Services
                 if (qty <= 0m) return false;
 
                 var safeQty = NormalizeToStep(qty, f.step > 0 ? f.step : 1m);
-               // var safeTrig = NormalizeToStep(newSl, f.tickSize > 0 ? f.tickSize : 0.0001m);
+                // var safeTrig = NormalizeToStep(newSl, f.tickSize > 0 ? f.tickSize : 0.0001m);
+
+                var tick = f.tickSize > 0m ? f.tickSize : 0.00000001m;
+
                 decimal safeTrig =
-                side == PositionSide.Long
-                 ? Math.Floor(newSl / f.tickSize) * f.tickSize
-                    : Math.Ceiling(newSl / f.tickSize) * f.tickSize;
+                    side == PositionSide.Long
+                        ? Math.Floor(newSl / tick) * tick
+                        : Math.Ceiling(newSl / tick) * tick;
 
                 if (side == PositionSide.Long && safeTrig < entry)
                     safeTrig = entry;
