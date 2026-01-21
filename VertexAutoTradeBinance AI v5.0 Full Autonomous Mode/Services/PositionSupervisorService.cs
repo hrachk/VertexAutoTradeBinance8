@@ -446,53 +446,58 @@ namespace VertexAutoTradeBinance8.Services
 
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
-            _dispatcher.Enqueue(async ct =>
+            _dispatcher.Enqueue(async token =>
             {
                 using var c = _factory.CreateRestClient();
+
                 var res = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: symbol,
                     side: closeSide,
                     type: FuturesOrderType.Market,
                     quantity: closeQty,
                     positionSide: side,
-                    ct: ct);
-
+                    ct: token);
 
                 if (!res.Success)
                 {
-                    _logger.LogWarning("[EARLY-TP][{symbol}][{side}] Market partial close failed: {err}", symbol, side, res.Error);
+                    _logger.LogWarning(
+                        "[EARLY-TP][{symbol}][{side}] Market partial close failed: {err}",
+                        symbol, side, res.Error);
                     return;
                 }
 
+                // =========================
+                // SUCCESS PATH ONLY
+                // =========================
+                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
+                // mark Early-TP as done (authoritative)
+                _earlyTpDone[guardKey] = now;
+
+                // block harvest briefly (Binance sync lag)
+                _recentPartialClose[$"{symbol}|{side}"] = now;
+
+                // protection / BE pipeline allowed
                 MarkProtection(symbol);
 
-            });
+                _logger.LogWarning(
+                    "[EARLY-TP][{symbol}][{side}] Partial profit fixed {closed}/{total} @price={price}",
+                    symbol, side, closeQty, qty, last);
 
-
-            _earlyTpDone[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-            _earlyTpDone[guardKey] = now;
-
-            // 🔒 BLOCK HARVEST for 8 seconds after EARLY-TP
-            _recentPartialClose[$"{symbol}|{side}"] = now;
-
-            _logger.LogWarning(
-                "[EARLY-TP][{symbol}][{side}] Partial profit fixed {closed}/{total} @price={price} (+0.9ATR)",
-                symbol, side, closeQty, qty, last);
-
-            // Optional learning hook
-            try
-            {
-                if (signal != null && !signal.IsManual)
+                // Optional AI learning hook (non-fatal)
+                try
                 {
-                    var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
-                    _aiLearning.RecordTrade(symbol, sigSide, entry, last, _regimeNow);
+                    if (signal != null && !signal.IsManual)
+                    {
+                        var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
+                        _aiLearning.RecordTrade(symbol, sigSide, entry, last, _regimeNow);
+                    }
                 }
-            }
-            catch { }
+                catch
+                {
+                    // learning must never break execution
+                }
+            });
         }
 
         // =====================================================================
@@ -1229,18 +1234,19 @@ namespace VertexAutoTradeBinance8.Services
 
 
 
-        } 
+        }
+
 
         private async Task TryHarvestProfitAsync(
-            BinanceRestClient client,
-            EngineState state,
-            string symbol,
-            PositionSide side,
-            BinancePositionDetailsUsdt pos,
-            IReadOnlyList<BinanceFuturesUsdtKline> klines,
-            decimal aiEdgeScore,
-            decimal minUsd,
-            CancellationToken ct)
+    BinanceRestClient client,
+    EngineState state,
+    string symbol,
+    PositionSide side,
+    BinancePositionDetailsUsdt pos,
+    IReadOnlyList<BinanceFuturesUsdtKline> klines,
+    decimal aiEdgeScore,
+    decimal minUsd,
+    CancellationToken ct)
         {
 
             // ==========================================================
@@ -1251,7 +1257,7 @@ namespace VertexAutoTradeBinance8.Services
             if (_recentPartialClose.TryGetValue(harvestKey, out var ts))
             {
                 var ageMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - ts;
-                if (ageMs < 8000) // 8 seconds hard block
+                if (ageMs < 8_000) // 8 seconds hard block
                 {
                     _logger.LogInformation(
                         "[HARVEST][{symbol}][{side}] SKIP → recent EARLY-TP ({ms}ms)",
@@ -1261,15 +1267,11 @@ namespace VertexAutoTradeBinance8.Services
 
                 _recentPartialClose.TryRemove(harvestKey, out _);
             }
-
-
-
-
             var sKey = EngineState.Key(symbol);
             var st = state.Symbols.GetOrAdd(sKey, _ => new SymbolState());
 
             // throttle
-            if ((DateTime.UtcNow - st.LastHarvestUtc) < TimeSpan.FromMinutes(6))
+            if ((DateTime.UtcNow - st.LastHarvestUtc) < TimeSpan.FromSeconds(90))
                 return;
 
             // ==========================================================
@@ -1309,12 +1311,17 @@ namespace VertexAutoTradeBinance8.Services
             decimal rr = Math.Abs(realPos.MarkPrice - realPos.EntryPrice) / atr;
 
             decimal harvestPct =
-                aiEdgeScore >= 0.80m && rr >= 1.4m ? 0.18m :
-                aiEdgeScore >= 0.70m ? 0.28m :
-                0.45m;
+             (aiEdgeScore >= 0.75m && rr >= 1.10m) ? 0.22m :
+             (aiEdgeScore >= 0.65m && rr >= 0.90m) ? 0.16m :
+             (aiEdgeScore >= 0.55m && rr >= 0.70m) ? 0.12m :
+             (rr >= 0.55m) ? 0.08m :
+             0m;
 
-          //  decimal closeQty = Math.Round(qty * harvestPct, 8);
-           // if (closeQty <= 0) return;
+            if (harvestPct <= 0m)
+                return;
+
+            //  decimal closeQty = Math.Round(qty * harvestPct, 8);
+            // if (closeQty <= 0) return;
 
             // ==========================================================
             // 🔥 FULL vs PARTIAL CLOSE LOGIC (КЛЮЧЕВО)
@@ -1336,8 +1343,24 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-
             bool isFullClose = closeQty >= qty;
+
+            if (closeQty >= qty)
+            {
+                closeQty = qty;
+                isFullClose = true;
+            }
+            else
+            {
+                isFullClose = false;
+            }
+
+            if (isFullClose)
+            {
+                _logger.LogInformation(
+                    "[HARVEST][{symbol}][{side}] FULL CLOSE via harvest",
+                    symbol, side);
+            }
 
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
@@ -1349,25 +1372,32 @@ namespace VertexAutoTradeBinance8.Services
      positionSide: side,
      ct: ct);
 
-
             if (!res.Success)
             {
                 _logger.LogWarning("[HARVEST][{symbol}][{side}] FAIL: {err}", symbol, side, res.Error);
                 return;
             }
 
-            decimal addToBucket = uPnl * harvestPct;
+            //decimal addToBucket = uPnl * harvestPct;
+            decimal addToBucket = uPnl * (closeQty / qty);
             st.RealizedPnlBucketUsd += Math.Max(0m, addToBucket);
-            st.LastHarvestUtc = DateTime.UtcNow;
+
+            if (closeQty > 0 && !isFullClose)
+            {
+                st.LastHarvestUtc = DateTime.UtcNow;
+            }
+
             st.HarvestsToday++;
 
             _logger.LogInformation(
                 "[HARVEST][{symbol}][{side}] OK closeQty={q} uPnl={pnl:F2} addBucket={b:F2} edge={e:F2} rr={rr:F2}",
                 symbol, side, closeQty, uPnl, addToBucket, aiEdgeScore, rr);
 
-            _recentPartialClose[$"{symbol}|{side}"] =
-    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
+            if (!isFullClose)
+            {
+                _recentPartialClose[$"{symbol}|{side}"] =
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            }
         }
 
     }
