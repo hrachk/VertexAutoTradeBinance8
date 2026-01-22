@@ -899,6 +899,160 @@ namespace VertexAutoTradeBinance8.Strategy
         }
 
 
+        private FastFailResult Gate3_5_DirectionLock(
+    string symbol,
+    KlineInterval tf,
+    TradeSignal signal,
+    SmartRegimeInfo smart,
+    bool allowCounterTrendInRangeLike)
+        {
+            // Range-like: допускаем обе стороны
+            bool rangeLike =
+                smart.BaseRegime == MarketRegime.Range ||
+                smart.SmartType == SmartRegimeType.SmartRange ||
+                smart.SmartType == SmartRegimeType.SmartSqueeze;
+
+            if (rangeLike && allowCounterTrendInRangeLike)
+                return FastFailResult.Ok();
+
+            // STRONG regimes: directional lock (HARD)
+            if (smart.BaseRegime == MarketRegime.StrongDownTrend &&
+                signal.Side == SignalSide.Buy)
+            {
+                return FastFailResult.Fail(
+                    "DIR",
+                    $"BLOCK LONG in StrongDownTrend slope={smart.TrendSlopePercent:F4} conf={smart.Confidence:F2}"
+                );
+            }
+
+            if (smart.BaseRegime == MarketRegime.StrongUpTrend &&
+                signal.Side == SignalSide.Sell)
+            {
+                return FastFailResult.Fail(
+                    "DIR",
+                    $"BLOCK SHORT in StrongUpTrend slope={smart.TrendSlopePercent:F4} conf={smart.Confidence:F2}"
+                );
+            }
+
+            // SmartStrongTrend тоже лучше лочить по знаку slope
+            if (smart.SmartType == SmartRegimeType.SmartStrongTrend)
+            {
+                if (smart.TrendSlopePercent < 0m && signal.Side == SignalSide.Buy)
+                    return FastFailResult.Fail("DIR", "BLOCK LONG in SmartStrongTrend (slope<0)");
+                if (smart.TrendSlopePercent > 0m && signal.Side == SignalSide.Sell)
+                    return FastFailResult.Fail("DIR", "BLOCK SHORT in SmartStrongTrend (slope>0)");
+            }
+
+            return FastFailResult.Ok();
+        }
+
+        private FastFailResult Gate3_2_LateEntryFilter(
+    string symbol,
+    KlineInterval tf,
+    IReadOnlyList<BinanceFuturesUsdtKline> klines,
+    TradeSignal signal,
+    SmartRegimeInfo smart)
+        {
+            // Safety: need enough bars
+            if (klines == null || klines.Count < 40)
+                return FastFailResult.Ok();
+
+            int last = klines.Count - 1;
+            var c = klines[last];
+            var prev = klines[last - 1];
+
+            // ATR: must exist
+            decimal atr = signal.Atr ?? Atr(klines, 14, last);
+            if (atr <= 0m)
+                return FastFailResult.Ok();
+
+            // EMA21 distance (key anti-chase metric)
+            decimal ema21 = Ema(klines, 21, last);
+            decimal distFromEmaAtr = Math.Abs(c.ClosePrice - ema21) / atr;   // in ATRs
+
+            // Impulse detector: last 6 bars range-move vs ATR
+            // We want to detect "already happened impulse" and block chasing.
+            int lookback = 6;
+            int start = Math.Max(1, last - lookback + 1);
+
+            decimal hi = klines[start].HighPrice;
+            decimal lo = klines[start].LowPrice;
+            for (int i = start; i <= last; i++)
+            {
+                hi = Math.Max(hi, klines[i].HighPrice);
+                lo = Math.Min(lo, klines[i].LowPrice);
+            }
+
+            decimal moveAtr = (hi - lo) / atr; // impulse magnitude in ATRs
+
+            // Recent impulse bar check (avoid entering right after huge bar)
+            bool hugeBarNow = IsTooBigImpulseBar(c, prev, atr);
+
+            // RSI proxy (lightweight): use last closes momentum only if you don't have RSI impl.
+            // If you have RSI already elsewhere - replace with real RSI.
+            // We'll use a simple overheat heuristic: 4 of last 5 bars green for longs, red for shorts.
+            int sameDirBars = 0;
+            for (int i = Math.Max(1, last - 4); i <= last; i++)
+            {
+                bool up = klines[i].ClosePrice > klines[i].OpenPrice;
+                if (signal.Side == SignalSide.Buy && up) sameDirBars++;
+                if (signal.Side == SignalSide.Sell && !up) sameDirBars++;
+            }
+            bool overheatByFlow = sameDirBars >= 4;
+
+            // Regime-aware thresholds
+            bool rangeLike =
+                smart.BaseRegime == MarketRegime.Range ||
+                smart.SmartType == SmartRegimeType.SmartRange ||
+                smart.SmartType == SmartRegimeType.SmartSqueeze;
+
+            bool strongTrendLike =
+                smart.BaseRegime == MarketRegime.StrongUpTrend ||
+                smart.BaseRegime == MarketRegime.StrongDownTrend ||
+                smart.SmartType == SmartRegimeType.SmartStrongTrend;
+
+            // Hard block thresholds
+            // In range: be strict (chasing is suicide)
+            decimal maxEmaDistAtr = rangeLike ? 0.75m : (strongTrendLike ? 1.35m : 1.05m);
+
+            // Impulse "already happened" threshold
+            decimal impulseAtrThr = rangeLike ? 1.25m : (strongTrendLike ? 1.90m : 1.55m);
+
+            // If the move already exceeded threshold AND price is far from EMA21 => block chase.
+            bool lateChase =
+                moveAtr >= impulseAtrThr &&
+                distFromEmaAtr >= maxEmaDistAtr;
+
+            // Extra hard block: huge bar now + far from EMA => definitely chase
+            if (hugeBarNow && distFromEmaAtr >= (maxEmaDistAtr * 0.90m))
+                lateChase = true;
+
+            // Optional: if flow shows overheat and we are far from EMA => block
+            if (overheatByFlow && distFromEmaAtr >= maxEmaDistAtr)
+                lateChase = true;
+
+            if (!lateChase)
+                return FastFailResult.Ok();
+
+            // If signal is pullback to EMA21 -> allow (this is not chase)
+            // (Your PullbackEma21 sets EntryPrice=ema; so distance to EMA is small by design)
+            // But if cluster adjusted entry away from EMA, keep protection.
+            bool looksLikeRetest =
+                Math.Abs(signal.EntryPrice - ema21) <= atr * 0.25m;
+
+            if (looksLikeRetest)
+                return FastFailResult.Ok();
+
+            _engineState.LastEntryDecision = "BLOCKED_LATE_ENTRY";
+            CurrentMode = "Blocked:LATE";
+
+            return FastFailResult.Fail(
+                "LATE",
+                $"late-chase move={moveAtr:F2}ATR distEma21={distFromEmaAtr:F2}ATR thrMove={impulseAtrThr:F2} thrEma={maxEmaDistAtr:F2}"
+            );
+        }
+
+
         private FastFailResult Gate4_RR(
       string symbol,
       KlineInterval tf,
@@ -1223,8 +1377,17 @@ namespace VertexAutoTradeBinance8.Strategy
                 trace.Add(g3);
                 if (!g3.Allow || baseSignal == null) return Finalize(trace, smart);
 
+
                 // CRITICAL: bind confidence at entry
                 baseSignal.Confidence = smart.Confidence;
+
+                trace.Add(Gate3_2_LateEntryFilter(symbol, tf, klines, baseSignal, smart));
+                if (!trace.Allow) return Finalize(trace, smart);
+
+                // Gate3.5 Direction lock (HARD)
+                trace.Add(Gate3_5_DirectionLock(symbol, tf, baseSignal, smart, allowCounterTrendInRangeLike: true));
+                if (!trace.Allow) return Finalize(trace, smart);
+
 
                 // Gate4..5
                 trace.Add(Gate4_RR(symbol, tf, baseSignal, smart, relaxRr));

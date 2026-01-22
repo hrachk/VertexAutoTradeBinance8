@@ -29,10 +29,10 @@ namespace VertexAutoTradeBinance8.Web.Services
         {
 
           //_filePath = Path.Combine( AppContext.BaseDirectory, "missed_trades.json");
-            var root = cfg["SharedData:Root"]
-      ?? throw new InvalidOperationException("SharedData:Root not configured");
+           // var root = cfg["SharedData:Root"]
+      //?? throw new InvalidOperationException("SharedData:Root not configured");
 
-            _filePath = Path.Combine( root, "missed_trades.json");
+            _filePath = Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
 
             _logger = logger;
         }
@@ -43,8 +43,13 @@ namespace VertexAutoTradeBinance8.Web.Services
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             ReadCommentHandling = JsonCommentHandling.Skip,
             AllowTrailingCommas = true,
-            NumberHandling = JsonNumberHandling.AllowReadingFromString
+            NumberHandling = JsonNumberHandling.AllowReadingFromString,
+            Converters =
+    {
+        new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, true)
+    }
         };
+
 
         public async Task<List<MissedTradeRecord>> LoadAsync(CancellationToken ct = default)
         {

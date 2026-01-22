@@ -99,6 +99,7 @@
                                 <span class="badge @(r.Reason == "BelowMinNotional" ? "badge-yellow" : "badge-red")">
                                     @TranslateReason(r.Reason)
                                 </span>
+                              
                             </div>
 
                             <!-- SCORE BADGE -->
@@ -538,6 +539,10 @@
         "BelowMinNotional" => "Сумма ниже MinNotional",
         "InsufficientBalance" => "Недостаточно баланса",
         "InsufficientBalanceForMinNotional" => "Недостаточно для MinNotional",
+        "EXEC:EXECUTION_FAILED" => "EXEC:ВЫПОЛНЕНИЕ НЕ УДАЛОСЬ",
+        "EXECUTION_FAILED" => "ВЫПОЛНЕНИЕ НЕ УДАЛОСЬ",
+        "NO_BALANCE_OR_MIN_NOTIONAL" => "ОТСУТСТВИЕ БАЛАНСА ИЛИ МИНИМАЛЬНОГО  БАЛАНСА",
+        "RISK:NO_BALANCE_OR_MIN_NOTIONAL" => "RISK:ОТСУТСТВИЕ БАЛАНСА ИЛИ МИНИМАЛЬНОГО  БАЛАНСА",
         _ => r
     };
 
