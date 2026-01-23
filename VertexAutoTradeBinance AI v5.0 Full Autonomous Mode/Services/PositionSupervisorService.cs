@@ -1524,7 +1524,7 @@ namespace VertexAutoTradeBinance8.Services
                     type: "STOP_MARKET",
                     quantity: safeQty,
                     triggerPrice: safeTrig,
-                    workingType: "MARK_PRICE",
+                    workingType: "CONTRACT_PRICE",
                     reduceOnly: null,
                     ct: ct);
 
@@ -3395,7 +3395,7 @@ namespace VertexAutoTradeBinance8.Services
                       type: "STOP_MARKET",
                       quantity: safeQty,
                       triggerPrice: safeTrig,
-                      workingType: "MARK_PRICE",
+                      workingType: "CONTRACT_PRICE",
                       reduceOnly: null,
                       ct: ct);
 
@@ -3841,7 +3841,7 @@ namespace VertexAutoTradeBinance8.Services
                         type: "STOP_MARKET",
                         quantity: algoQty,
                         triggerPrice: algoTrig,
-                        workingType: "MARK_PRICE",
+                        workingType: "CONTRACT_PRICE",
                         reduceOnly: null,
                         ct: ct);
                 }
