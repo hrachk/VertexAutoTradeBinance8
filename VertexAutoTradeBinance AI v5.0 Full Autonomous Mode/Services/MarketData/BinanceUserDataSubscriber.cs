@@ -2,8 +2,6 @@
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures.Socket;
 using CryptoExchange.Net.Objects.Sockets;
-using Microsoft.Extensions.Logging;
-using System.Threading;
 using VertexAutoTradeBinance8.MarketData;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services.Interface;
@@ -19,7 +17,7 @@ namespace VertexAutoTradeBinance8.Services.Ws
 
         private BinanceSocketClient? _socket;
         private UpdateSubscription? _sub;
-        private string? _listenKey; 
+        private string? _listenKey;
 
         public BinanceUserDataSubscriber(
             ILogger<BinanceUserDataSubscriber> logger,
@@ -30,33 +28,30 @@ namespace VertexAutoTradeBinance8.Services.Ws
             _logger = logger;
             _factory = factory;
             _state = state;
-            _market = market; 
+            _market = market;
         }
-
 
         // =============================================================
         // START
         // =============================================================
         public async Task StartAsync(CancellationToken ct = default)
         {
-            using var rest = _factory.TryCreateRestClient();
-            if (rest == null)
+            // CORE path: REST must be present, no "disabled" fallback here
+            using var rest = _factory.CreateRestClient();
+
+            // ---- AUTH CHECK (once, explicit) ----
+            _logger.LogInformation("[USERDATA] Futures REST auth check...");
+            var account = await rest.UsdFuturesApi.Account.GetAccountInfoV3Async(ct: ct);
+            if (!account.Success)
             {
-                _logger.LogWarning("[USERDATA] REST disabled");
+                _logger.LogCritical(
+                    "[USERDATA] FUTURES REST AUTH FAILED → user-data disabled ({err})",
+                    account.Error);
                 return;
             }
+            _logger.LogInformation("[USERDATA] Futures REST auth OK");
 
-            _logger.LogWarning(
-    "[USERDATA] REST test ping starting..."
-);
-
-            var ping = await rest.UsdFuturesApi.Account.GetAccountInfoV3Async(ct:ct);
-            _logger.LogWarning(
-                "[USERDATA] REST test result: {ok}",
-                ping.Success
-            );
-
-            // 1️⃣ Получаем listenKey
+            // 1) listenKey
             var lk = await rest.UsdFuturesApi.Account.StartUserStreamAsync(ct: ct);
             if (!lk.Success)
             {
@@ -66,26 +61,30 @@ namespace VertexAutoTradeBinance8.Services.Ws
 
             _listenKey = lk.Data;
 
-            // =====================================================
-            // 🔥 BOOTSTRAP POSITIONS (INITIAL SNAPSHOT) — ОБЯЗАТЕЛЬНО
-            // =====================================================
+            // 2) BOOTSTRAP POSITIONS (initial snapshot)
             var pos = await rest.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
-            if (pos.Success && pos.Data != null)
+            if (!pos.Success)
+            {
+                _logger.LogError("[USERDATA] GetPositionInformation failed {err}", pos.Error);
+            }
+            else if (pos.Data != null)
             {
                 foreach (var p in pos.Data)
                 {
                     if (p.PositionSide == PositionSide.Both) continue;
                     if (p.Quantity == 0) continue;
 
+                    var qtyAbs = Math.Abs(p.Quantity);
+
                     var state = new LivePositionState
                     {
                         Symbol = p.Symbol,
                         Side = p.PositionSide,
-                        Qty = p.Quantity,
+                        Qty = qtyAbs,
                         EntryPrice = p.EntryPrice,
-                        MarkPrice = p.MarkPrice,
+                        MarkPrice = p.MarkPrice > 0 ? p.MarkPrice : p.EntryPrice,
                         UnrealizedPnl = p.UnrealizedPnl,
-                        Notional = Math.Abs(p.Quantity) * p.MarkPrice,
+                        Notional = qtyAbs * (p.MarkPrice > 0 ? p.MarkPrice : p.EntryPrice),
                         LiquidationPrice = p.LiquidationPrice,
                         IsolatedMargin = p.IsolatedMargin,
                         Leverage = p.Leverage
@@ -95,17 +94,16 @@ namespace VertexAutoTradeBinance8.Services.Ws
                 }
             }
 
-            // 2️⃣ Подписка на WS (дельты)
-            _socket = new BinanceSocketClient();
+            // 3) WS subscribe (PRIVATE WS, with keys)
+            _socket = _factory.CreatePrivateSocketClient();
 
             var res = await _socket.UsdFuturesApi.Account.SubscribeToUserDataUpdatesAsync(
                 _listenKey,
-                ev => { }, // Config update — игнор
-                ev => { }, // Margin update — позже
+                ev => { }, // Config update — ignore
+                ev => { }, // Margin update — later
                 HandleAccountUpdate,
                 HandleOrderUpdate,
-                ct: ct
-            );
+                ct: ct);
 
             if (!res.Success)
             {
@@ -116,7 +114,6 @@ namespace VertexAutoTradeBinance8.Services.Ws
             _sub = res.Data;
             _logger.LogInformation("[USERDATA] WS subscribed");
         }
-
 
         // =============================================================
         // ACCOUNT UPDATE
@@ -136,7 +133,7 @@ namespace VertexAutoTradeBinance8.Services.Ws
                     WalletBalanceUsd = wallet,
                     UnrealizedPnlUsd = unreal,
                     EquityUsd = wallet + unreal,
-                    AvailableBalanceUsd = wallet, // Futures WS не даёт AB
+                    AvailableBalanceUsd = wallet, // WS doesn't provide available balance cleanly
                     UsedMarginUsd = 0
                 };
 
@@ -152,13 +149,13 @@ namespace VertexAutoTradeBinance8.Services.Ws
             {
                 var side = p.PositionSide;
 
+                // Normalize "Both" (rare in hedge context, but keep safe)
                 if (side == PositionSide.Both)
                 {
-                    if (p.Quantity > 0)    side = PositionSide.Long;
-                    else if (p.Quantity < 0)   side = PositionSide.Short;
-                    else  continue;
+                    if (p.Quantity > 0) side = PositionSide.Long;
+                    else if (p.Quantity < 0) side = PositionSide.Short;
+                    else continue;
                 }
-
 
                 if (p.Quantity == 0)
                 {
@@ -166,18 +163,21 @@ namespace VertexAutoTradeBinance8.Services.Ws
                     continue;
                 }
 
-                var qty = Math.Abs(p.Quantity);
-                var mark = p.EntryPrice; // временно, но корректно
+                var qtyAbs = Math.Abs(p.Quantity);
+
+                // ❗ MarkPrice НЕ приходит в UserData WS
+                // используем EntryPrice как нейтральную базу
+                var mark = p.EntryPrice;
 
                 var pos = new LivePositionState
                 {
                     Symbol = p.Symbol,
                     Side = side,
-                    Qty = qty,
+                    Qty = qtyAbs,
                     EntryPrice = p.EntryPrice,
                     UnrealizedPnl = p.UnrealizedPnl,
                     MarkPrice = mark,
-                    Notional = qty * mark
+                    Notional = qtyAbs * mark
                 };
 
                 _state.UpsertPosition(pos);
@@ -185,7 +185,7 @@ namespace VertexAutoTradeBinance8.Services.Ws
         }
 
         // =============================================================
-        // ORDER UPDATE (пока лог)
+        // ORDER UPDATE (log-only for now)
         // =============================================================
         private void HandleOrderUpdate(DataEvent<BinanceFuturesStreamOrderUpdate> ev)
         {
@@ -212,9 +212,13 @@ namespace VertexAutoTradeBinance8.Services.Ws
             {
                 if (_sub != null)
                     await _sub.CloseAsync();
+
                 _socket?.Dispose();
             }
-            catch { }
+            catch
+            {
+                // ignore
+            }
 
             _sub = null;
             _socket = null;

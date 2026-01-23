@@ -24,18 +24,19 @@ namespace VertexAutoTradeBinance8.Services
         public event Action<string, KlineInterval, BinanceFuturesUsdtKline>? OnClosedKline;
 
         public WsKlineSubscriber(
-            BinanceClientFactory factory,
-            MarketDataKlineBuffer buffer,
-            ILogger<WsKlineSubscriber> logger)
+      BinanceClientFactory factory,
+      MarketDataKlineBuffer buffer,
+      ILogger<WsKlineSubscriber> logger)
         {
             _buffer = buffer;
             _logger = logger;
 
-            // 🔥 ВАЖНО: один socket на весь subscriber
-            _socket = factory.CreateSocketClient();
+            // ✅ PUBLIC WS — без ключей
+            _socket = factory.CreatePublicSocketClient();
 
-            _logger.LogInformation("[WS][KLINES] Socket client created");
+            _logger.LogInformation("[WS][KLINES] Public socket client created");
         }
+
 
         private static string Key(string symbol, KlineInterval tf)
             => $"{symbol}:{tf}";

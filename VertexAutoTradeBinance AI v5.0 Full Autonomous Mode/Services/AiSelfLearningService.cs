@@ -68,44 +68,18 @@ namespace VertexAutoTradeBinance8.Services
         private readonly Dictionary<MarketRegime, RegimeGateProfile> _gateProfiles
             = new();
 
-        private void EnsureGateProfiles()
-        {
-            void add(MarketRegime r, Action<Dictionary<string, decimal>> cfg)
-            {
-                if (_gateProfiles.ContainsKey(r)) return;
-                var p = new RegimeGateProfile { Regime = r };
-                cfg(p.BaseWeights);
-                _gateProfiles[r] = p;
-            }
+        private DateTime _lastForceSaveUtc = DateTime.MinValue;
 
-            add(MarketRegime.StrongUpTrend, w =>
-            {
-                w["RR"] = 0.90m;
-                w["PATTERN"] = 0.95m;
-                w["LIQ"] = 1.05m;
-                w["EXPO"] = 1.00m;
-            });
-
-            add(MarketRegime.Range, w =>
-            {
-                w["RR"] = 1.15m;
-                w["PATTERN"] = 1.10m;
-                w["LIQ"] = 0.95m;
-                w["EXPO"] = 1.00m;
-            });
-
-            add(MarketRegime.Unknown, w => { });
-        }
-
+    
 
         private readonly ILogger<AiSelfLearningService> _logger;
         private readonly object _lock = new();
 
         private static readonly string FilePath =
-      Path.Combine(AppContext.BaseDirectory, "ai-models/ai_learning.json");
+      Path.Combine(AppContext.BaseDirectory, "ai-models","ai_learning.json");
 
         private static readonly string BackupPath =
-            Path.Combine(AppContext.BaseDirectory, "ai-models/ai_learning_backup.json");
+            Path.Combine(AppContext.BaseDirectory, "ai-models","ai_learning_backup.json");
 
         // Снимок статистики каждые N минут (для trade-based / signal-based)
         private DateTime _lastSnapshot = DateTime.MinValue;
@@ -193,6 +167,78 @@ namespace VertexAutoTradeBinance8.Services
             ForceSnapshot();
         }
 
+        private void EnsureGateProfiles()
+        {
+            void add(MarketRegime r, Action<Dictionary<string, decimal>> cfg)
+            {
+                if (_gateProfiles.ContainsKey(r)) return;
+                var p = new RegimeGateProfile { Regime = r };
+                cfg(p.BaseWeights);
+                _gateProfiles[r] = p;
+            }
+
+            // ===== STRONG TRENDS =====
+            add(MarketRegime.StrongUpTrend, w =>
+            {
+                w["RR"] = 0.90m;
+                w["PATTERN"] = 0.95m;
+                w["LIQ"] = 1.05m;
+                w["EXPO"] = 1.00m;
+            });
+
+            add(MarketRegime.StrongDownTrend, w =>
+            {
+                w["RR"] = 0.90m;
+                w["PATTERN"] = 0.95m;
+                w["LIQ"] = 1.05m;
+                w["EXPO"] = 1.00m;
+            });
+
+            // ===== NORMAL TRENDS (v6 compatibility) =====
+            add(MarketRegime.UpTrend, w =>
+            {
+                w["RR"] = 0.95m;
+                w["PATTERN"] = 1.00m;
+                w["LIQ"] = 1.00m;
+                w["EXPO"] = 1.00m;
+            });
+
+            add(MarketRegime.DownTrend, w =>
+            {
+                w["RR"] = 0.95m;
+                w["PATTERN"] = 1.00m;
+                w["LIQ"] = 1.00m;
+                w["EXPO"] = 1.00m;
+            });
+
+            // ===== RANGE / SQUEEZE / CHOP =====
+            add(MarketRegime.Range, w =>
+            {
+                w["RR"] = 1.15m;
+                w["PATTERN"] = 1.10m;
+                w["LIQ"] = 0.95m;
+                w["EXPO"] = 1.00m;
+            });
+
+            add(MarketRegime.Squeeze, w =>
+            {
+                w["RR"] = 1.10m;
+                w["PATTERN"] = 1.05m;
+                w["LIQ"] = 0.90m;
+                w["EXPO"] = 0.95m;
+            });
+
+            add(MarketRegime.VolatileChop, w =>
+            {
+                w["RR"] = 1.20m;
+                w["PATTERN"] = 1.15m;
+                w["LIQ"] = 0.85m;
+                w["EXPO"] = 0.90m;
+            });
+
+            // ===== UNKNOWN =====
+            add(MarketRegime.Unknown, w => { });
+        }
 
         private List<MissedTradeRecord> LoadMissedTradesFromFile()
         {
@@ -330,26 +376,38 @@ namespace VertexAutoTradeBinance8.Services
         // DECISION TRACE LEARNING (NEW LAYER)
         // =====================================================================
         public void RecordDecisionTrace(
-      string symbol,
-      MarketRegime regime,
-      IReadOnlyList<FastFailResult> gates)
+        string symbol,
+        MarketRegime regime,
+        IReadOnlyList<FastFailResult> gates)
         {
             EnsureGateProfiles();
 
-            var profile = _gateProfiles[regime];
+            // FAIL-SAFE
+            if (!_gateProfiles.TryGetValue(regime, out var profile))
+            {
+                _logger.LogWarning(
+                    "[AI][DECISION] Unknown regime {regime} → skip decision trace",
+                    regime);
+                return;
+            }
+
+            // Unknown не обучаем
+            if (regime == MarketRegime.Unknown)
+                return;
 
             foreach (var g in gates)
             {
-                // считаем строгость как раньше
                 var strict = GetGateStrictness(symbol, regime, g.Gate);
 
-                // EMA-подстройка bias
                 profile.AdaptiveBias.TryGetValue(g.Gate, out var cur);
-                var target = strict;                 // 0.85 / 1.10 / 1.00
-                var updated = cur == 0 ? target : (cur * 0.9m + target * 0.1m);
+                var updated = cur == 0
+                    ? strict
+                    : (cur * 0.9m + strict * 0.1m);
 
-                profile.AdaptiveBias[g.Gate] = Math.Clamp(updated, 0.85m, 1.15m);
+                profile.AdaptiveBias[g.Gate] =
+                    Math.Clamp(updated, 0.85m, 1.15m);
             }
+
             lock (_lock)
             {
                 if (!_decisionGates.TryGetValue(symbol, out var agg))
@@ -378,6 +436,7 @@ namespace VertexAutoTradeBinance8.Services
                 }
             }
         }
+
 
         public void RecordMarketStateTriggered(
          string reason,
@@ -903,12 +962,23 @@ namespace VertexAutoTradeBinance8.Services
         {
             lock (_lock)
             {
+                var now = DateTime.UtcNow;
+
+                // anti-spam: не чаще чем раз в 30 секунд
+                if (now - _lastForceSaveUtc < TimeSpan.FromSeconds(30))
+                {
+                    _logger.LogDebug("[AI][SNAPSHOT] ForceSnapshot skipped (anti-spam)");
+                    return;
+                }
+
                 Save(force: true);
-                _lastSnapshot = DateTime.UtcNow;
+                _lastSnapshot = now;
+                _lastForceSaveUtc = now;
 
                 _logger.LogInformation("[AI][SNAPSHOT] Force save triggered");
             }
         }
+
 
         private void TrySnapshot()
         {
@@ -941,7 +1011,13 @@ namespace VertexAutoTradeBinance8.Services
                 }
             };
             // Логируем состояние _stats перед добавлением в snapshot
-            _logger.LogInformation("[AI] Building snapshot: {StatsCount} symbols found.", _stats.Count);
+            _logger.LogInformation(
+    "[AI] Building snapshot: statsSymbols={StatsSymbols}, stateSymbols≈{StateSymbols}, trades={TradesCount}, states={StatesCount}",
+    _stats.Count,
+    _marketStates.Select(x => x.Symbol).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+    _tradeHistory.Count,
+    _marketStates.Count);
+
 
             // --- агрегированная статистика по символам/режимам ---
             foreach (var (symbol, regimes) in _stats)
