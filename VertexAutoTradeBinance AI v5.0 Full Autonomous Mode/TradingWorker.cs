@@ -369,7 +369,7 @@ _strategy.OnSignalGenerated += signal =>
                     state.CyclesPerMinute = _lastCyclesPerMinute;
                     state.UniverseSize = _symbols.ActiveSymbols.Count;
                     state.TrackedSymbols = trackedSymbols.Count;
-                    state.OpenPositions = _supervisor.GetOpenPositionsCount();
+                   // state.OpenPositions = _supervisor.GetOpenPositionsCount();
 
 
                     _engineStateSnapshot.Save(state);

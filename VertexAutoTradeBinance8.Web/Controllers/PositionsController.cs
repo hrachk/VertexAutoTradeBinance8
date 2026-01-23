@@ -19,7 +19,7 @@ public class PositionsController : ControllerBase
         if (req == null || string.IsNullOrWhiteSpace(req.Symbol))
             return BadRequest();
 
-        await _supervisor.HandleUiActionAsync(req);
+       // await _supervisor.HandleUiActionAsync(req);
         return Ok();
     }
 
