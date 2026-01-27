@@ -11,11 +11,11 @@ public sealed class MarketSnapshotFileService
     private IReadOnlyList<MarketSeries>? _cache;
     public MarketSnapshotFileService(IConfiguration cfg)
     {
-        var root = cfg["SharedData:Root"]
-            ?? throw new InvalidOperationException("SharedData:Root missing");
+       // var root = cfg["SharedData:Root"]
+        //    ?? throw new InvalidOperationException("SharedData:Root missing");
 
         // ❗ читаем именно bootstrap, который пишет engine
-        _file = Path.Combine(root, "market", "klines_bootstrap.json");
+        _file = Path.Combine(AppContext.BaseDirectory, "market", "klines_bootstrap.json");
     }
  
     private static decimal ReadDecimal(JsonElement el)

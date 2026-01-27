@@ -33,11 +33,12 @@ namespace VertexAutoTradeBinance8.Services
             _learningService = learningService;
             _logger = logger;
 
-            var root = cfg["SharedData:Root"]
-                ?? throw new InvalidOperationException("SharedData:Root not configured");
+            var root = Path.Combine(AppContext.BaseDirectory);
+            //cfg["SharedData:Root"]
+             //   ?? throw new InvalidOperationException("SharedData:Root not configured");
 
             Directory.CreateDirectory(root);
-            _filePath = Path.Combine(root, "missed_trades.json");
+          _filePath = Path.Combine(root, "missed_trades.json");
 
             try
             {

@@ -36,7 +36,7 @@ builder.Services.AddSingleton<AiRuntimeDataProvider>();
 builder.Services.AddSingleton<SymbolRegistryService>();
 builder.Services.AddSingleton<TradePermissionFileService>();
 builder.Services.AddSingleton<MarketSnapshotFileService>();
-
+builder.Services.AddSingleton<DecisionMarkersFileService>();
 // ============= DEPENDENCY INJECTION =============
 builder.Services.Configure<TradingOptions>(
     builder.Configuration.GetSection("TradingOptions"));

@@ -38,10 +38,7 @@
         </div>
 
     </div>
-
-
-   
-
+     
 
     @if (_records == null)
     {
@@ -92,7 +89,12 @@
 
                             <div class="missed-header">
                                 <div>
-                                    <div class="missed-symbol">@r.Symbol</div>
+                                   
+                                    <div class="missed-symbol clickable"
+                                         @onclick="() => SelectSymbol(r.Symbol)">
+                                        @r.Symbol
+                                    </div>
+
                                     <div class="missed-date">@r.Time.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss")</div>
                                 </div>
 
@@ -268,8 +270,42 @@
                 </div>
             </div>
 
+            
         </div>
     }
+    @if (!string.IsNullOrWhiteSpace(SelectedSymbol))
+    {
+        <div class="chart-overlay" @onclick="CloseChart">
+            <div class="chart-modal" @onclick:stopPropagation="true">
+                <div class="chart-modal-header">
+                    <div class="chart-modal-title">
+                        @SelectedSymbol <span class="chart-modal-tf">@SelectedTimeframe</span>
+                    </div>
+
+                    <div class="chart-modal-actions">
+                        <select class="chart-tf" @onchange="OnTfChanged" value="@SelectedTimeframe">
+                            <option value="OneMinute">1m</option>
+                            <option value="FiveMinutes">5m</option>
+                            <option value="FifteenMinutes">15m</option>
+                            <option value="OneHour">1h</option>
+                            <option value="FourHour">4h</option>
+                        </select>
+
+                        <button class="chart-close" @onclick="CloseChart">✕</button>
+                    </div>
+                </div>
+
+                <div class="chart-modal-body">
+                    <MarketMiniChart @key="SelectedSymbol + ':' + SelectedTimeframe"
+                                     Symbol="@SelectedSymbol"
+                                     Timeframe="@SelectedTimeframe"
+                                     MaxBars="160" />
+                </div>
+            </div>
+        </div>
+    }
+
+
 </div>
 
 
@@ -285,13 +321,47 @@
     private string CurrentFilter = "ALL";
 
     string Key(MissedTradeRecord r) => $"{r.Symbol}-{r.Time:yyyyMMddHHmmss.ffff}";
+
+ 
+    private string? SelectedSymbol;
+    private string SelectedTimeframe = "FiveMinutes";
+
+    private void SelectSymbol(string symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol))
+            return;
+
+        SelectedSymbol = symbol.Trim().ToUpperInvariant();
+
+        // если хочешь всегда стартовать с 5m
+        if (string.IsNullOrWhiteSpace(SelectedTimeframe))
+            SelectedTimeframe = "FiveMinutes";
+
+        StateHasChanged();
+    }
+
+    private void CloseChart()
+    {
+        SelectedSymbol = null;
+        StateHasChanged();
+    }
+
+    private void OnTfChanged(ChangeEventArgs e)
+    {
+        var tf = e.Value?.ToString();
+        if (!string.IsNullOrWhiteSpace(tf))
+            SelectedTimeframe = tf;
+
+        StateHasChanged();
+    }
+
     string LiquiditySeverity(MissedTradeRecord r)
     {
         if (r.ATR > 200 && r.Vol < 0.01m) return "HIGH";   // опасно
         if (r.ATR > 100 && r.Vol < 0.02m) return "MEDIUM";
         return "LOW";
     }
-
+    
     string LiquidityClass(string sev)
     {
         return sev switch
@@ -301,7 +371,6 @@
             _ => "liq-low"
         };
     }
-
 
     string ScoreHint(MissedTradeRecord r)
     {
@@ -352,24 +421,19 @@
         return "AI: режим рынка неопределён.";
     }
 
-
     string AiHint(int score)
     {
         if (score >= 80)
             return "AI: Отличный сигнал. Сильный тренд и низкие риски. Такой вход обоснован.";
-
         if (score >= 65)
             return "AI: В целом хороший сигнал. Можно рассматривать вход с аккуратным стопом.";
-
         if (score >= 50)
             return "AI: Сигнал среднего качества. Лучше дождаться более чёткого подтверждения.";
-
         if (score >= 35)
             return "AI: Сигнал слабый. Условия неидеальные. Вход не рекомендуется.";
 
         return "AI: Высокие риски. Лучше избегать этот вход.";
     }
-
 
     string LiquidityColor(MissedTradeRecord r)
     {
@@ -486,8 +550,6 @@
             _ => _records
         };
 
-
-
     }
     int CalcScore(MissedTradeRecord r)
     {
@@ -515,12 +577,7 @@
     string GetFilterClass(string key)
     {
         return CurrentFilter == key ? "active" : "";
-    }
-
-
-    
- 
-
+    } 
     string ScoreColor(int score)
     {
         if (score >= 80) return "score-green";

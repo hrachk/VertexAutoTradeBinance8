@@ -24,13 +24,9 @@ public sealed class KlineBufferPersistence
         _buffer = buffer;
         _logger = logger;
 
-        var root = cfg["SharedData:Root"]
-            ?? throw new InvalidOperationException("SharedData:Root not configured");
-
-        var dir = Path.Combine(root, "market");
+        var dir = Path.Combine(AppContext.BaseDirectory, "market");
         Directory.CreateDirectory(dir);
-
-        _path = Path.Combine(dir, "klines_bootstrap.json");
+        _path = Path.Combine(dir,  "klines_bootstrap.json");
     }
 
     // =====================================================================
@@ -118,7 +114,6 @@ public sealed class KlineBufferPersistence
                 "[BOOT] Failed to restore kline buffer → starting empty");
         }
     }
-
 
     // =====================================================================
     // SAVE

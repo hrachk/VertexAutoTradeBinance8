@@ -622,14 +622,115 @@ namespace VertexAutoTradeBinance8.Services
             var tp = orders.FirstOrDefault(o => o.Side == closeSide && o.Type == FuturesOrderType.TakeProfitMarket);
 
             // =================================================================
-            // v8.2: EARLY PROFIT + BE MOVE (До restore TP/SL)
+            // 🔁 RESTART PROTECTION (NO KLINES / NO MEMORY)
+            // =================================================================
+            if (sl != null)
+            { 
+                var slPrice =
+    sl.StopPrice > 0
+        ? sl.StopPrice
+        : sl.Price;
+
+
+                if (slPrice > 0)
+                {
+                    var last = pos.MarkPrice > 0 ? pos.MarkPrice : entry;
+                    var guardKey = BuildPosGuardKey(symbol, side, entry, qtyAbs);
+
+                    bool slBelowEntry =
+                        side == PositionSide.Long
+                            ? slPrice < entry
+                            : slPrice > entry;
+
+                    bool marketInProfit =
+                        side == PositionSide.Long
+                            ? last > entry
+                            : last < entry;
+
+                    if (marketInProfit && slBelowEntry && !_beMoved.ContainsKey(guardKey))
+                    {
+                        decimal minimalBe =
+                            side == PositionSide.Long
+                                ? entry + entry * 0.0005m   // ~0.05%
+                                : entry - entry * 0.0005m;
+
+                        await UpdateSL_ProAsync(
+                            client,
+                            symbol,
+                            side,
+                            qtyAbs,
+                            sl,
+                            entry,
+                            minimalBe,
+                            signal,
+                            ct);
+
+                        _beMoved[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+                        _logger.LogWarning(
+                            "[RESTART-BE][{symbol}][{side}] SL moved to minimal BE (no klines)",
+                            symbol, side);
+                    }
+                }
+            }
+
+            // =================================================================
+            // v8.2 PRO: STARTUP / LIVE BE REHYDRATION (WITH KLINES)
             // =================================================================
             if (klines != null && klines.Count >= 50 && atr14 > 0 && entry > 0)
             {
-                // 1) EARLY TP (partial 35% at +0.9 ATR)
+                var guardKey = BuildPosGuardKey(symbol, side, entry, qtyAbs);
+
+                // Если позиция уже в плюсе, а BE ещё не отмечен — двигаем SL в минимальный BE
+                // Порог мягкий (0.30 ATR), чтобы не ждать 1.2 ATR
+                if (sl != null && !_beMoved.ContainsKey(guardKey))
+                {
+                    
+                    var slPrice =
+    sl.StopPrice > 0
+        ? sl.StopPrice
+        : sl.Price;
+                    if (slPrice > 0)
+                    {
+                        var last = klines[^1].ClosePrice;
+
+                        bool marketInProfit =
+                            side == PositionSide.Long
+                                ? last > entry
+                                : last < entry;
+
+                        bool slBelowEntry =
+                            side == PositionSide.Long
+                                ? slPrice < entry
+                                : slPrice > entry;
+
+                        bool beEligible =
+                            side == PositionSide.Long
+                                ? last >= entry + atr14 * 0.30m
+                                : last <= entry - atr14 * 0.30m;
+
+                        if (marketInProfit && slBelowEntry && beEligible)
+                        {
+                            decimal minimalBe =
+                                side == PositionSide.Long
+                                    ? entry + entry * 0.0005m
+                                    : entry - entry * 0.0005m;
+
+                            await UpdateSL_ProAsync(client, symbol, side, qtyAbs, sl, entry, minimalBe, signal, ct);
+
+                            _beMoved[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+                            _logger.LogWarning(
+                                "[REHYDRATE-BE][{symbol}][{side}] SL moved to minimal BE (rehydration)",
+                                symbol, side);
+                        }
+                    }
+                }
+
+                // 1) EARLY TP (ЖЁСТКО после BE) — у тебя уже есть HARD RULE внутри метода
                 await TryEarlyPartialTakeAsync(client, symbol, side, qtyAbs, entry, atr14, signal, klines, ct);
 
-                // 2) SL -> BE when +1.2 ATR (only if SL exists)
+                // 2) Стандартный BE по ATR (сработает позже, когда реально будет +1.2 ATR)
                 if (sl != null)
                     await TryMoveSlToBeAsync(client, symbol, side, qtyAbs, entry, atr14, sl, signal, klines, ct);
             }
@@ -652,7 +753,7 @@ namespace VertexAutoTradeBinance8.Services
                     pos,
                     klines,
                     aiEdgeScore,
-                    minUsd: 6m,
+                    minUsd: 4m,
                     ct);
             }
 
@@ -758,14 +859,23 @@ namespace VertexAutoTradeBinance8.Services
 
 
             bool reached =
-                side == PositionSide.Long
-                    ? last >= entry + atr * 0.90m
-                    : last <= entry - atr * 0.90m;
+    side == PositionSide.Long
+        ? last >= entry + atr * 0.90m
+        : last <= entry - atr * 0.90m;
 
             if (!reached) return;
 
             var guardKey = BuildPosGuardKey(symbol, side, entry, qty);
-            if (_earlyTpDone.ContainsKey(guardKey)) return;
+
+            // =======================
+            // 🔒 HARD RULE (PROP-DESK):
+            // BE → потом PARTIAL
+            // =======================
+            if (!_beMoved.ContainsKey(guardKey))
+                return;
+
+            if (_earlyTpDone.ContainsKey(guardKey))
+                return;
 
             var closeQty = Math.Round(qty * 0.35m, 8);
             if (closeQty <= 0) return;
@@ -821,8 +931,9 @@ namespace VertexAutoTradeBinance8.Services
             catch { }
         }
 
+
         // =====================================================================
-        // SL -> BE (безубыток + буфер) — ключевой фикс v8.2
+        // SL → BE (+ buffer, structural-aware, liquidity-safe)
         // =====================================================================
         private async Task TryMoveSlToBeAsync(
             BinanceRestClient client,
@@ -836,56 +947,101 @@ namespace VertexAutoTradeBinance8.Services
             IReadOnlyList<BinanceFuturesUsdtKline> klines,
             CancellationToken ct)
         {
+            if (klines == null || klines.Count < 10) return;
+            if (atr <= 0 || entry <= 0) return;
+
             var last = klines[^1].ClosePrice;
 
+            // ===================================================
+            // LOW-ATR BE MODE (isolated, prop-safe)
+            // ===================================================
+            bool lowAtrMode =
+                atr / entry < 0.004m;   // < 0.4% ATR от цены (DASH, cheap coins)
+
+            decimal normalTrigger =
+    atr * 0.30m;
+
+            decimal lowAtrTrigger =
+                Math.Max(
+                    atr * 0.25m,
+                    entry * 0.0006m    // ~0.06% цены
+                );
+
+            decimal trigger = lowAtrMode
+                ? lowAtrTrigger
+                : normalTrigger;
+
+            // === 1) Условие: цена дала минимальный плюс (не ждём TP)
+            // Симметрично для Long / Short
+
             bool reached =
-                side == PositionSide.Long
-                    ? last >= entry + atr * 1.20m
-                    : last <= entry - atr * 1.20m;
+    side == PositionSide.Long
+        ? last >= entry + trigger
+        : last <= entry - trigger;
+
+        
 
             if (!reached) return;
 
+            // === 2) Guard: BE уже двигали для этой позиции
             var guardKey = BuildPosGuardKey(symbol, side, entry, qty);
             if (_beMoved.ContainsKey(guardKey)) return;
 
-            decimal buffer = atr * 0.15m;
+            // === 3) Буфер BE (чтобы не выбивало комиссией / шумом)
+            decimal buffer = lowAtrMode
+    ? entry * 0.0004m   // ~0.04% (чистый + после комиссий)
+    : atr * 0.10m;
 
-            // если была ликвидность недавно — НЕ ставим SL близко
-            if (_liquidityGuard.IsDangerRecent(TimeSpan.FromMinutes(6)))
+            // если недавно был liquidity danger — уменьшаем агрессию
+            if (_liquidityGuard.IsDangerRecent(TimeSpan.FromSeconds(90)))
                 buffer *= 0.5m;
 
-            // structural swing (последние 5 свечей)
+            // === 4) Структурный уровень (антишум, локальный свинг)
             decimal structural =
                 side == PositionSide.Long
                     ? klines.TakeLast(5).Min(k => k.LowPrice)
                     : klines.TakeLast(5).Max(k => k.HighPrice);
 
+            // === 5) Базовый BE
             decimal beBase =
                 side == PositionSide.Long
                     ? entry + buffer
                     : entry - buffer;
 
-            // берём более «дальний» уровень
+            // === 6) Финальный SL — берём более «дальний» уровень
             decimal newSl =
                 side == PositionSide.Long
                     ? Math.Max(beBase, structural)
                     : Math.Min(beBase, structural);
 
-            // только если реально улучшает SL
+            // === 7) Проверка: SL реально улучшается
             decimal oldSl = slOrder.StopPrice ?? slOrder.Price;
             if (oldSl <= 0) return;
 
             if (side == PositionSide.Long && newSl <= oldSl) return;
             if (side == PositionSide.Short && newSl >= oldSl) return;
 
-            var ok = await UpdateSL_ProAsync(client, symbol, side, qty, slOrder, entry, newSl, signal, ct);
-            if (ok)
-            {
-                _beMoved[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                _logger.LogWarning("[BE][{symbol}][{side}] SL moved to BE+buffer newSL={sl}", symbol, side, newSl);
+            // === 8) Обновление SL
+            var ok = await UpdateSL_ProAsync(
+                client,
+                symbol,
+                side,
+                qty,
+                slOrder,
+                entry,
+                newSl,
+                signal,
+                ct);
 
-            }
+            if (!ok) return;
+
+            // === 9) Фиксация защиты
+            _beMoved[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             MarkProtection(symbol);
+
+            _logger.LogWarning(
+                "[BE][{symbol}][{side}] SL moved to BE+buffer newSL={sl}",
+                symbol, side, newSl);
         }
 
         private static string BuildPosGuardKey(string symbol, PositionSide side, decimal entry, decimal qty)
@@ -1647,6 +1803,30 @@ namespace VertexAutoTradeBinance8.Services
             try { uPnl = realPos.UnrealizedPnl; }
             catch { return; }
 
+            // ==========================================================
+            // dynamic minUsd (PRO, non-invasive)
+            // ==========================================================
+
+            // absolute floor (fees / noise protection)
+            const decimal ABS_MIN_USD = 3.8m;
+
+            // notional-based floor (≈0.12% position size)
+            decimal notionalUsd = Math.Abs(realPos.EntryPrice * realPos.Quantity);
+            decimal minByNotional = notionalUsd * 0.0012m;
+
+            // ATR-based floor (will be clamped later)
+            decimal atrTmp = _marketData.CalculateAtr(klines);
+            if (atrTmp <= 0) atrTmp = 0.00000001m;
+            decimal minByAtr = atrTmp * Math.Abs(realPos.Quantity) * 0.25m;
+
+            // final minUsd (keep variable name, keep logic below)
+              minUsd = Math.Max(
+                ABS_MIN_USD,
+                Math.Min(minByNotional, minByAtr)
+            );
+
+            if (symbol == "BTCUSDT")
+                return;
             if (uPnl <= 0m || uPnl < minUsd)
                 return;
 

@@ -1,0 +1,492 @@
+﻿@using VertexAutoTradeBinance8.Web.Models
+@inject VertexAutoTradeBinance8.Web.Services.MarketSnapshotFileService SnapSvc
+@inject VertexAutoTradeBinance8.Web.Services.DecisionMarkersFileService MarkerSvc
+
+<div class="chart-wrap"
+     @onwheel="OnWheel"
+     @onmousemove="OnMouseMove"
+     @onmouseleave="OnMouseLeave">
+
+    @if (_klines == null || _klines.Count == 0)
+    {
+        <div class="chart-empty">No klines</div>
+    }
+    else
+    {
+        <svg viewBox="0 0 @_w @_h"
+             class="chart-svg"
+             preserveAspectRatio="none">
+
+            <!-- ========================================================= -->
+            <!-- PRICE TICKS (RIGHT AXIS) -->
+            <!-- ========================================================= -->
+            @foreach (var p in PriceTicks)
+            {
+                <svg:text x="@(_w - 4)"
+                          y="@p.Y"
+                          text-anchor="end"
+                          dominant-baseline="middle"
+                          class="price-tick">
+                    @p.Value
+                </svg:text>
+            }
+
+            <!-- ========================================================= -->
+            <!-- TIME TICKS (BOTTOM AXIS) -->
+            <!-- ========================================================= -->
+            @for (int i = 0; i < _bars.Count; i += 10)
+            {
+                var b = _bars[i];
+                <svg:text x="@b.X"
+                          y="@(_h - 4)"
+                          text-anchor="middle"
+                          class="time-tick">
+                    @UnixToTime(b.OpenTimeMs)
+                </svg:text>
+            }
+            <!-- ================= PRICE LINE ================= -->
+            @if (!string.IsNullOrEmpty(_priceLinePath))
+            {
+                <path d="@_priceLinePath"
+                      class="price-line" />
+            }
+            <!-- ========================================================= -->
+            <!-- WICKS + BODIES -->
+            <!-- ========================================================= -->
+            @for (int i = 0; i < _bars.Count; i++)
+            {
+                var bar = _bars[i];
+                var isEval = _lastEvaluatedBarIndex == i;
+
+                <!-- Wick -->
+                <line x1="@bar.X"
+                      y1="@bar.YHigh"
+                      x2="@bar.X"
+                      y2="@bar.YLow"
+                      class="wick @(isEval ? "wick-evaluated" : "")" />
+
+                <!-- Body -->
+                <rect x="@bar.BodyX"
+                      y="@bar.BodyY"
+                      width="@bar.BodyW"
+                      height="@bar.BodyH"
+                      class="@(bar.BodyClass + (isEval ? " body-evaluated" : ""))" />
+            }
+
+            <!-- ========================================================= -->
+            <!-- DECISION MARKERS -->
+            <!-- ========================================================= -->
+            @foreach (var mk in _markerPoints)
+            {
+                <circle cx="@mk.X"
+                        cy="@mk.Y"
+                        r="4"
+                        class="@mk.Css"
+                        @onmouseenter="@(() => ShowTooltip(mk))" />
+            }
+
+        </svg>
+
+        <!-- ========================================================= -->
+        <!-- TOOLTIP (HTML OVERLAY, NOT SVG) -->
+        <!-- ========================================================= -->
+        @if (_tooltip != null)
+        {
+            <div class="chart-tooltip"
+                 style="left:@_tooltip.Xpx; top:@_tooltip.Ypx;">
+                <div class="tt-title">@_tooltip.Title</div>
+                @if (!string.IsNullOrWhiteSpace(_tooltip.Details))
+                {
+                    <div class="tt-body">@_tooltip.Details</div>
+                }
+            </div>
+        }
+    }
+</div>
+
+
+
+@code {
+    [Parameter] public string Symbol { get; set; } = "";
+    [Parameter] public string Timeframe { get; set; } = "FiveMinutes";
+    [Parameter] public int MaxBars { get; set; } = 120;
+    private const int _w = 800;
+    private const int _h = 260;
+    private IReadOnlyList<KlineDto>? _klines;
+    private readonly List<BarGeom> _bars = new();
+    private readonly List<MarkerGeom> _markerPoints = new();
+    private TooltipState? _tooltip;
+    private double _mouseX;
+    private double _mouseY;
+    private int? _lastEvaluatedBarIndex;
+    private readonly List<(double Y, string Value)> PriceTicks = new();
+    // === SCALE STATE (for ticks, crosshair, etc) ===
+    private decimal _priceMin;
+    private decimal _priceMax;
+    private double _padTop;
+    private double _plotH;
+    // ===== PRICE LINE =====
+    private string? _priceLinePath;
+
+    private void BuildPriceLine(IReadOnlyList<KlineDto> k)
+    {
+        if (k.Count < 2)
+        {
+            _priceLinePath = null;
+            return;
+        }
+
+        var sb = new System.Text.StringBuilder();
+
+        for (int i = 0; i < _bars.Count; i++)
+        {
+            var bar = _bars[i];
+
+            if (i == 0)
+                sb.Append($"M {bar.X:F1} {bar.CloseY:F1}");
+            else
+                sb.Append($" L {bar.X:F1} {bar.CloseY:F1}");
+        }
+
+        _priceLinePath = sb.ToString();
+    }
+
+    // =========================================================
+    // PARAM CHANGE → LOAD DATA
+    // =========================================================
+    protected override async Task OnParametersSetAsync()
+    {
+        // === RESET UI STATE ===
+        _tooltip = null;
+        _bars.Clear();
+        _markerPoints.Clear();
+        _lastEvaluatedBarIndex = null;
+        _klines = null;
+
+        if (string.IsNullOrWhiteSpace(Symbol))
+            return;
+
+        // === 1) NORMALIZE TF (UI → SNAPSHOT) ===
+        static string NormalizeTf(string tf) => tf switch
+        {
+            "1m" or "OneMinute" => "OneMinute",
+            "5m" or "FiveMinutes" => "FiveMinutes",
+            "15m" or "FifteenMinutes" => "FifteenMinutes",
+            "1h" or "OneHour" => "OneHour",
+            "4h" or "FourHour" => "FourHour",
+            _ => tf
+        };
+
+        var sym = Symbol.Trim().ToUpperInvariant();
+        var uiTf = NormalizeTf(Timeframe ?? string.Empty);
+
+        // === 2) LOAD SNAPSHOT SERIES ===
+        var series = await SnapSvc.LoadAsync();
+        if (series == null || series.Count == 0)
+            return;
+
+        MarketSeries? s = null;
+
+        // === 3) EXACT MATCH FIRST ===
+        if (!string.IsNullOrEmpty(uiTf))
+        {
+            s = series.FirstOrDefault(x =>
+                x.Symbol.Equals(sym, StringComparison.OrdinalIgnoreCase) &&
+                x.Timeframe.Equals(uiTf, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // === 4) FALLBACK TF (DETERMINISTIC) ===
+        if (s == null)
+        {
+            foreach (var tf in new[]
+            {
+            "FiveMinutes",
+            "FifteenMinutes",
+            "OneMinute",
+            "OneHour"
+        })
+            {
+                s = series.FirstOrDefault(x =>
+                    x.Symbol.Equals(sym, StringComparison.OrdinalIgnoreCase) &&
+                    x.Timeframe == tf);
+
+                if (s != null)
+                    break;
+            }
+        }
+
+        // === LOG ===
+        if (s == null)
+        {
+            Console.WriteLine($"[MiniChart] NO SERIES for {sym} tf={uiTf}");
+            return;
+        }
+
+        Console.WriteLine($"[MiniChart] OK {sym}:{s.Timeframe} klines={s.Klines.Count}");
+
+        if (s.Klines == null || s.Klines.Count == 0)
+            return;
+
+        _klines = s.Klines;
+
+        // === 5) LIMIT BARS ===
+        IReadOnlyList<KlineDto> k = _klines;
+        if (k.Count > MaxBars)
+            k = k.Skip(k.Count - MaxBars).ToList();
+
+        if (k.Count == 0)
+            return;
+
+        // === 6) BUILD CHART ===
+        BuildBars(k);
+        BuildPriceLine(k);
+
+        // === 7) LOAD & SNAP DECISION MARKERS ===
+        var markers = await MarkerSvc.LoadAsync(sym, s.Timeframe);
+        if (markers != null && markers.Count > 0)
+            BuildMarkers(k, markers);
+    } 
+    // =========================================================
+    // CANDLES → SVG GEOMETRY
+    // ========================================================= 
+    private void BuildBars(IReadOnlyList<KlineDto> k)
+    {
+        decimal min = decimal.MaxValue;
+        decimal max = decimal.MinValue;
+
+       
+
+        foreach (var c in k)
+        {
+            min = Math.Min(min, c.Low);
+            max = Math.Max(max, c.High);
+        }
+
+        if (min >= max)
+        {
+            min -= 1;
+            max += 1;
+        }
+
+        const double padTop = 12;
+        const double padBot = 18;
+        const double padLeft = 8;
+        const double padRight = 8;
+
+        double plotW = _w - padLeft - padRight;
+        double plotH = _h - padTop - padBot;
+
+        double step = plotW / Math.Max(1, k.Count);
+        double bodyW = Math.Max(2, step * 0.55);
+
+        double Y(decimal price)
+        {
+            var p = (double)((price - min) / (max - min));
+            return padTop + (1.0 - p) * plotH;
+        }
+
+        for (int i = 0; i < k.Count; i++)
+        {
+            var c = k[i];
+            double x = padLeft + (i + 0.5) * step;
+
+            var yH = Y(c.High);
+            var yL = Y(c.Low);
+            var yO = Y(c.Open);
+            var yC = Y(c.Close);
+
+            var top = Math.Min(yO, yC);
+            var bot = Math.Max(yO, yC);
+
+            _priceMin = min;
+            _priceMax = max;
+
+            _padTop = padTop;
+            _plotH = plotH;
+
+            _bars.Add(new BarGeom
+            {
+                OpenTimeMs = c.OpenTime,
+                X = x,
+                YHigh = yH,
+                YLow = yL,
+                BodyX = x - bodyW / 2,
+                BodyY = top,
+                BodyW = bodyW,
+                BodyH = Math.Max(1, bot - top),
+                BodyClass = c.Close >= c.Open ? "body up" : "body down",
+                CloseY = yC
+            });
+            BuildPriceTicks(min, max);
+        }
+    }
+    // =========================================================
+    // MARKERS → SNAP TO NEAREST CANDLE
+    // =========================================================
+    private void BuildMarkers(IReadOnlyList<KlineDto> k, IReadOnlyList<UiDecisionMarker> markers)
+    {
+        if (_bars.Count == 0 || markers == null || markers.Count == 0)
+            return;
+
+        int NearestIndex(long t)
+        {
+            int best = 0;
+            long bestAbs = long.MaxValue;
+
+            for (int i = 0; i < _bars.Count; i++)
+            {
+                long d = Math.Abs(_bars[i].OpenTimeMs - t);
+                if (d < bestAbs)
+                {
+                    bestAbs = d;
+                    best = i;
+                }
+            }
+
+            return best;
+        }
+
+        foreach (var m in markers)
+        {
+            var idx = NearestIndex(m.CandleOpenTimeMs);
+            var bar = _bars[idx];
+
+            if (m.Type == UiMarkerType.Evaluated)
+                _lastEvaluatedBarIndex = idx;
+
+            var css = m.Type switch
+            {
+                UiMarkerType.Evaluated => "mk evaluated",
+                UiMarkerType.BlockedLate => "mk late",
+                UiMarkerType.LowVolume => "mk lowvol",
+                UiMarkerType.ConfidenceBelow => "mk conf",
+                UiMarkerType.EntryAllowed => "mk entry",
+                UiMarkerType.EntryRejected => "mk reject",
+                _ => "mk other"
+            };
+
+            _markerPoints.Add(new MarkerGeom
+            {
+                X = bar.X,
+                Y = Math.Max(6, bar.CloseY - 14),
+                Css = css,
+                Title = MarkerTitleRu(m),
+                Details = MarkerDetailsRu(m)
+            });
+        }
+    }
+    private async Task OnWheel(WheelEventArgs e)
+    {
+        // вверх = zoom in
+        if (e.DeltaY < 0)
+            MaxBars = Math.Max(30, MaxBars - 20);
+        else
+            MaxBars = Math.Min(500, MaxBars + 20);
+
+        await OnParametersSetAsync();
+    }
+    // =========================================================
+    // TOOLTIP
+    // =========================================================
+    private void ShowTooltip(MarkerGeom mk)
+    {
+        _tooltip = new TooltipState
+        {
+            Title = mk.Title,
+            Details = mk.Details,
+            Xpx = $"{Math.Min(_w - 220, _mouseX + 12)}px",
+            Ypx = $"{Math.Min(_h - 80, _mouseY + 12)}px"
+        };
+    }
+    private void OnMouseMove(MouseEventArgs e)
+    {
+        _mouseX = e.OffsetX;
+        _mouseY = e.OffsetY;
+    }
+    private void OnMouseLeave()
+    {
+        _tooltip = null;
+    }
+    // =========================================================
+    // INTERNAL MODELS
+    // =========================================================
+    private sealed class BarGeom
+    {
+        public long OpenTimeMs { get; set; }
+        public double X { get; set; }
+        public double YHigh { get; set; }
+        public double YLow { get; set; }
+        public double BodyX { get; set; }
+        public double BodyY { get; set; }
+        public double BodyW { get; set; }
+        public double BodyH { get; set; }
+        public string BodyClass { get; set; } = "";
+        public double CloseY { get; set; }
+    }
+    private sealed class MarkerGeom
+    {
+        public double X { get; set; }
+        public double Y { get; set; }
+        public string Css { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string? Details { get; set; }
+    }
+    private sealed class TooltipState
+    {
+        public string Title { get; set; } = "";
+        public string? Details { get; set; }
+        public string Xpx { get; set; } = "0px";
+        public string Ypx { get; set; } = "0px";
+    }
+    private static string MarkerTitleRu(UiDecisionMarker m) => m.Type switch
+    {
+        UiMarkerType.Evaluated => "Сигнал проанализирован",
+        UiMarkerType.BlockedLate => "Опоздали ко входу",
+        UiMarkerType.LowVolume => "Низкий объём",
+        UiMarkerType.ConfidenceBelow => "Недостаточная уверенность",
+        UiMarkerType.EntryAllowed => "Вход разрешён",
+        UiMarkerType.EntryRejected => "Вход отклонён",
+        _ => "Событие"
+    };
+    private static string? MarkerDetailsRu(UiDecisionMarker m)
+    {
+        if (string.IsNullOrWhiteSpace(m.Details))
+            return null;
+
+        // пример: conf=44% min=72%
+        return m.Details
+            .Replace("conf=", "Уверенность: ")
+            .Replace("min=", "Минимум: ");
+    }
+    private void BuildPriceTicks(decimal min, decimal max)
+    {
+        PriceTicks.Clear();
+
+        var steps = 5;
+        for (int i = 0; i <= steps; i++)
+        {
+            var price = min + (max - min) * i / steps;
+            var y = PriceToY(price);
+            PriceTicks.Add((y, price.ToString("F4")));
+        }
+    }
+    private double PriceToY(decimal price)
+    {
+        if (_priceMax <= _priceMin)
+            return _padTop + _plotH / 2;
+
+        var p = (double)((price - _priceMin) / (_priceMax - _priceMin));
+        return _padTop + (1.0 - p) * _plotH;
+    }
+    private static string UnixToTime(long ms)
+    {
+        return DateTimeOffset
+            .FromUnixTimeMilliseconds(ms)
+            .ToLocalTime()
+            .ToString("HH:mm");
+    }
+
+
+}
+
+

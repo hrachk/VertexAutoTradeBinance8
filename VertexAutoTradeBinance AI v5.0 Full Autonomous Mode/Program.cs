@@ -8,6 +8,7 @@ using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Services.Bootstrap;
 using VertexAutoTradeBinance8.Services.DecisionTrace;
+using VertexAutoTradeBinance8.Services.DTO.Debug;
 using VertexAutoTradeBinance8.Services.Engine;
 using VertexAutoTradeBinance8.Services.Interface;
 using VertexAutoTradeBinance8.Services.MarketState;
@@ -179,13 +180,17 @@ public class Program
                     services.AddSingleton<TradeStateManager>();
                     services.AddSingleton<EngineStateBuilder>();
                     services.AddSingleton<EngineStateSnapshotService>();
-
-
+                     
+                    services.AddSingleton<DecisionMarkerSink>();
+                    services.AddSingleton<DecisionMarkersFileService>();
+                 
                     // ===== HOSTED =====
                     services.AddHostedService<SupervisorBootstrapHostedService>();
                     services.AddHostedService<BackgroundMarketScannerService>();
                     services.AddHostedService<TradingWorker>();
                     services.AddHostedService<BinanceUserDataHostedService>();
+                    services.AddHostedService<KlineSnapshotLiveSaver>();
+                    services.AddHostedService<DecisionMarkersPersistenceHostedService>();
 
 
 
@@ -205,10 +210,9 @@ public class Program
                     services.AddSingleton<IPositionRecoveryService, PositionRecoveryService>();
                     services.AddSingleton<IStrategyPreFilter, StrategyPreFilterService>();
 
-                   
 
-                    
-                    
+
+
                     services.AddSingleton<SimulatedTradeService>();
                     services.AddSingleton<AiModelSnapshotService>();
                     services.AddSingleton<TradeResultMonitorService>();

@@ -29,7 +29,7 @@ namespace VertexAutoTradeBinance8.Services
         private const int ENTRY_WAIT_SECONDS = 18;              // было 30s (60*500ms) в Wait...; здесь логика для fallback
         private const decimal AGGR_LIMIT_OFFSET_PCT = 0.0006m;  // 0.06% агрессивный лимит (тюнится)
         private const decimal MARKET_FALLBACK_MAX_SLIP_PCT = 0.0015m; // 0.15% макс. слип для fallback-market
-
+        private bool? _isHedgeMode;
 
         public OrderExecutor(
             ILogger<OrderExecutor> logger,
@@ -59,7 +59,27 @@ namespace VertexAutoTradeBinance8.Services
             if (step <= 0) return value;
             return Math.Floor(value / step) * step;
         }
- 
+        private async Task<bool> IsHedgeModeAsync(BinanceRestClient client, CancellationToken ct)
+        {
+            if (_isHedgeMode.HasValue)
+                return _isHedgeMode.Value;
+
+            try
+            {
+                var res = await client.UsdFuturesApi.Account.GetPositionModeAsync(ct: ct);
+                if (res.Success)
+                {
+                    _isHedgeMode = res.Data.IsHedgeMode; // true = Hedge (dual-side)
+                    return res.Data.IsHedgeMode;
+                }
+            }
+            catch { }
+
+            // FAIL-SAFE: assume One-Way (safer)
+            _isHedgeMode = false;
+            return false;
+        }
+
         private static int DecimalsFromStep(decimal step)
         {
             var s = step.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -86,7 +106,12 @@ namespace VertexAutoTradeBinance8.Services
         CancellationToken ct = default)
         {
             using var client = _factory.CreateRestClient();
+            var isHedge = await IsHedgeModeAsync(client, ct);
 
+            _logger.LogInformation(
+    "[ACCOUNT] Futures position mode: {mode}",
+    isHedge ? "HEDGE" : "ONE-WAY"
+);
             // =============================================================
             // SYMBOL FILTERS
             // =============================================================
@@ -231,6 +256,17 @@ namespace VertexAutoTradeBinance8.Services
                     rrOk &&
                     liquiditySafe;
             }
+
+
+            // =============================================================
+            // APPLY SOFT LIQUIDITY SIZE MULTIPLIER (EARLY EXPANSION FIX)
+            // =============================================================
+            var sizeMul = signal.SizeMultiplier <= 0 ? 1.0m : signal.SizeMultiplier;
+
+            // hard clamp — защита от глупостей
+            sizeMul = Math.Clamp(sizeMul, 0.25m, 1.0m);
+
+            quantity *= sizeMul;
 
             // =============================================================
             // EXECUTED SIGNAL CREATED
@@ -402,16 +438,17 @@ namespace VertexAutoTradeBinance8.Services
             // =============================================================
             // PLACE ENTRY
             // =============================================================
+
             var entryRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol: signal.Symbol,
-                side: side,
-                type: entryType,
-                quantity: quantity,
-                price: orderPrice,
-                positionSide: posSide,
-                timeInForce: tif,
-                reduceOnly: null,
-                ct: ct);
+              symbol: signal.Symbol,
+              side: side,
+              type: entryType,
+              quantity: quantity,
+              price: orderPrice,
+              positionSide: isHedge ? posSide : null,   // ✅ ВАЖНО
+              timeInForce: tif,
+              reduceOnly: null,
+              ct: ct);
 
             if (!entryRes.Success || entryRes.Data == null)
             {
@@ -482,6 +519,62 @@ namespace VertexAutoTradeBinance8.Services
 
                 decimal driftNowPct =
                     entryPrice > 0 ? Math.Abs(markNow - entryPrice) / entryPrice : 0m;
+                //==============================================================================================================================
+                // =============================================================
+                // LATE-CANCEL GUARD — STRUCTURE RECHECK (PRO)
+                // =============================================================
+
+                // 1) Re-read recent price (cheap)
+                // after pxNow read
+                decimal lastNow = markNow; // confirmed fresh price
+
+                // 2) Simple structure break: price crossed against trend by > X ATR
+                bool structureBroken = false;
+
+                if (signal.Side == SignalSide.Buy)
+                {
+                    // long: price fell below entry by > 0.6 ATR
+                    structureBroken =
+                        (signal.Atr ?? 0m) > 0 &&
+                        entryPrice > 0 &&
+                        lastNow < entryPrice - (signal.Atr.Value * 0.6m);
+                }
+                else
+                {
+                    // short: price rose above entry by > 0.6 ATR
+                    structureBroken =
+                        (signal.Atr ?? 0m) > 0 &&
+                        entryPrice > 0 &&
+                        lastNow > entryPrice + (signal.Atr.Value * 0.6m);
+                }
+
+                if (structureBroken)
+                {
+                    _logger.LogWarning(
+                        "[LATE-CANCEL][{symbol}] Structure broken during wait → cancel entry. last={last} entry={entry} atr={atr}",
+                        signal.Symbol,
+                        lastNow,
+                        entryPrice,
+                        signal.Atr ?? 0m);
+
+                    await _simulator.SimulateMissedTradeAsync(
+                        signal,
+                        "LateCancel:StructureBroken",
+                        note: $"last={lastNow}; entry={entryPrice}; atr={(signal.Atr ?? 0m)}",
+                        attemptNotional: notionalAtCreate,
+                        requiredMinNotional: 0m);
+
+                    _executedSignalService.UpdateStatus(
+                        signal.Symbol,
+                        execTime,
+                        TradeExecutionStatus.Blocked,
+                        0,
+                        0);
+
+                    return OrderResult.Fail("LATE_CANCEL_STRUCTURE_BROKEN");
+                }
+//=========================================================================================================NEW LATE
+
 
                 bool allowFallbackMarket =
                  !liquidityResult.IsExtreme ||
@@ -506,12 +599,13 @@ namespace VertexAutoTradeBinance8.Services
                 if (mktQty < fMkt.minQty)
                     return OrderResult.Fail("FALLBACK_MKT_QTY_TOO_SMALL");
 
+              
                 var mktRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: signal.Symbol,
                     side: side,
                     type: FuturesOrderType.Market,
                     quantity: mktQty,
-                    positionSide: posSide,
+                    positionSide: isHedge ? posSide : null,
                     ct: ct);
 
                 if (mktRes.Success && mktRes.Data != null)
@@ -815,6 +909,7 @@ namespace VertexAutoTradeBinance8.Services
                 return (false, 0m, 0m, "WaitFatalError");
             }
         } 
+
         private static bool IsImpulse(
         IReadOnlyList<BinanceFuturesUsdtKline> klines,
         decimal atr,

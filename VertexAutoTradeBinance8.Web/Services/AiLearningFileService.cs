@@ -21,11 +21,12 @@ public sealed class AiLearningFileService
         ILogger<AiLearningFileService> logger)
     {
         
-        var root = cfg["SharedData:Root"]
-        ?? throw new InvalidOperationException("SharedData:Root not configured");
+       // var root = 
+            //cfg["SharedData:Root"]
+            // ?? throw new InvalidOperationException("SharedData:Root not configured");
 
         _filePath = Path.Combine(
-            root,
+            AppContext.BaseDirectory,
             "ai-models",
             "ai_learning.json");
 

@@ -1,6 +1,4 @@
-﻿ 
-
-@page "/ai-learning"
+﻿@page "/ai-learning"
 
 @using VertexAutoTradeBinance8.Services
 @using VertexAutoTradeBinance8.Web.Services
@@ -9,8 +7,8 @@
 @inject AiLearningFileService AiLearnService
 @inject IJSRuntime JS
 @implements IAsyncDisposable
- 
- 
+
+
 <div class="ai-learning-root">
 
     <!-- =========================
@@ -21,7 +19,7 @@
             🧠 AI Learning
             <span class="neural-live">LIVE</span>
         </div>
-      
+
         <div class="ai-header-card">
             <div class="ai-header-title">Episodes</div>
             <div class="ai-header-value">@_filtered.Count</div>
@@ -53,12 +51,16 @@
          LEARNING TIMELINE
     ========================== -->
     <div class="ai-panel">
+
+        <!-- HEADER -->
         <div class="ai-panel-header">
             <div class="ai-panel-title">Learning Timeline</div>
             <button class="help-btn" @onclick="() => _showHelp = true">ℹ</button>
         </div>
 
-        <!-- FILTER BAR -->
+        <!-- =========================
+             FILTER BAR
+        ========================== -->
         <div class="ai-filters">
             <div class="filter-group">
                 <span>Period</span>
@@ -87,7 +89,9 @@
             </div>
         </div>
 
-        <!-- CHART -->
+        <!-- =========================
+             CHART
+        ========================== -->
         <div class="ai-chart-wrap">
             <canvas id="learningChart"></canvas>
 
@@ -96,7 +100,63 @@
                 <div class="ai-empty-overlay">No data for selected filters</div>
             }
         </div>
+
     </div>
+
+    <!-- =========================
+     LIVE MARKET STATE (INLINE)
+     ========================== -->
+    <div class="ai-panel">
+        <div class="ai-panel-title">
+            ⚡ Live Market Processing
+        </div>
+
+        <div class="live-grid">
+            @foreach (var r in _liveStates)
+            {
+                <div class="live-item" @key="r.Symbol">
+
+                    <!-- ROW -->
+                    <div class="live-row @(r.Status.ToLower())"
+                         @onclick="() => ToggleLive(r.Symbol)">
+
+                        <div class="live-symbol">@r.Symbol</div>
+
+                        <div class="live-regime">@r.Regime</div>
+
+                        <div class="live-confidence">@r.Confidence%</div>
+
+                        <div class="live-status">
+                            @if (r.Status == "READY")
+                            {
+                                <span class="status-ok">READY</span>
+                            }
+                            else
+                            {
+                                <span class="status-wait">WAIT</span>
+                            }
+                        </div>
+                    </div>
+
+                    <!-- INLINE DETAILS -->
+                    @if (_expandedLiveSymbol == r.Symbol)
+                    {
+                        <div class="live-inline-chart">
+                            <MarketMiniChart Symbol="@r.Symbol"
+                                             Timeframe="FiveMinutes"
+                                             MaxBars="120" />
+
+                            <div class="live-explain">
+                                @ExplainLiveState(r)
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+
+
 
     <!-- =========================
          TOP LEARNING REASONS
@@ -166,7 +226,6 @@
         }
     </div>
 
-
     <!-- AI Decision Drivers -->
     <div class="ai-section decision-drivers">
         <div class="ai-section-title">AI Decision Drivers</div>
@@ -209,11 +268,11 @@
 @code {
 
     private string GetImpact(int count)
-{
-    if (count >= 20) return "HIGH";
-    if (count >= 5) return "MEDIUM";
-    return "LOW";
-}
+    {
+        if (count >= 20) return "HIGH";
+        if (count >= 5) return "MEDIUM";
+        return "LOW";
+    }
 
     private enum TimeFilter
     {
@@ -333,6 +392,54 @@
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(x => x)
             .ToList();
+        var now = DateTime.UtcNow;
+
+        // 1) Собираем свежие состояния
+        var fresh = snap.MarketStates
+            .Where(x => x.Time > now.AddSeconds(-10))
+            .GroupBy(x => x.Symbol)
+            .Select(g =>
+            {
+                var last = g.OrderByDescending(x => x.Time).First();
+                var confPct = (int)(last.Confidence * 100m);
+
+                return new LiveSymbolState
+                {
+                    Symbol = last.Symbol,
+                    Regime = last.Regime.ToString(),
+                    Confidence = confPct,
+                    Status = confPct >= 72 ? "READY" : "WAIT",
+                    BlockReason = confPct >= 72
+                        ? "AI signal ready. Waiting execution window."
+                        : $"Confidence too low: {confPct}% (need ≥ 72%)",
+                    LastUpdateUtc = now
+                };
+            })
+            .ToList();
+
+        // 2) Обновляем существующие / добавляем новые
+        foreach (var f in fresh)
+        {
+            var existing = _liveStates.FirstOrDefault(x =>
+                x.Symbol.Equals(f.Symbol, StringComparison.OrdinalIgnoreCase));
+
+            if (existing == null)
+            {
+                _liveStates.Add(f); // 🟢 новый символ
+            }
+            else
+            {
+                // 🔁 REPLACE данных (без удаления строки)
+                existing.Regime = f.Regime;
+                existing.Confidence = f.Confidence;
+                existing.Status = f.Status;
+                existing.BlockReason = f.BlockReason;
+                existing.LastUpdateUtc = now;
+            }
+        }
+        // 3) Мягкий TTL — убираем ТОЛЬКО если давно мёртвые
+        _liveStates.RemoveAll(x =>
+            now - x.LastUpdateUtc > TimeSpan.FromSeconds(30));
     }
 
     private void SetTimeFilter(TimeFilter filter)
@@ -511,4 +618,66 @@
             try { await _refreshTask; } catch { }
         }
     }
+
+    public class AiLiveStateRow
+    {
+        public string Symbol { get; set; } = "";
+        public string Timeframe { get; set; } = "OneMinute";
+
+        public string Regime { get; set; } = "";
+        public string SmartType { get; set; } = "";
+
+        public int Confidence { get; set; }          // 0–100
+        public decimal VolatilityPct { get; set; }
+        public bool LiquidityDanger { get; set; }
+
+        public string Status { get; set; } = "";     // READY / WAIT / BLOCK
+        public string? BlockReason { get; set; }
+    }
+    private List<LiveSymbolState> _liveStates = new();
+    private string? _selectedLiveSymbol;
+
+
+    private string? _expandedLiveSymbol;
+    void ToggleLive(string symbol)
+    {
+        _expandedLiveSymbol =
+            _expandedLiveSymbol == symbol
+                ? null
+                : symbol;
+    }
+
+    
+  string ExplainLiveState(LiveSymbolState r)
+{
+    if (r.Status == "READY")
+        return "🟢 Все условия выполнены. Вход разрешён.";
+
+    if (r.BlockReason.Contains("Confidence"))
+        return "🟡 Недостаточная уверенность сигнала. Ожидание ≥ 72%.";
+
+    if (r.BlockReason.Contains("BASE"))
+        return "🔴 Нет базового паттерна. Есть тренд, но отсутствует структура для входа.";
+
+    if (r.BlockReason.Contains("DIR"))
+        return "🔴 Направление запрещено. Вход против доминирующего тренда.";
+
+    return "🕒 Ожидание подтверждения рыночной структуры.";
+}
+
+
+
+    private sealed class LiveSymbolState
+    {
+        public string Symbol { get; set; } = "";
+        public string Regime { get; set; } = "";
+        public int Confidence { get; set; }
+        public string Status { get; set; } = "";
+        public string BlockReason { get; set; } = "";
+
+        public DateTime LastUpdateUtc { get; set; } // 🔥 важно
+    }
+
+
+
 }

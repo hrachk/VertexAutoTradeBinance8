@@ -342,6 +342,9 @@ function customTooltipHandler(context) {
 
 
 
+function customTooltipHandler(context) {
+    return; // ⛔ временно отключено
+}
 
 
 // =============================

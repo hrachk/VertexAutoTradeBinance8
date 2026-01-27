@@ -12,6 +12,10 @@ namespace VertexAutoTradeBinance8.MarketData
     /// Canonical in-memory kline buffer.
     /// Source-agnostic: WS + REST are both normalized to BinanceFuturesUsdtKline.
     /// Thread-safe. Bounded. PROD-ready.
+    ///
+    /// ⚠ COMPAT NOTE:
+    /// LoadSnapshot() is kept for backward compatibility.
+    /// New persistence should use KlineBufferPersistence instead.
     /// </summary>
     public sealed class MarketDataKlineBuffer
     {
@@ -30,17 +34,26 @@ namespace VertexAutoTradeBinance8.MarketData
             _maxBars = maxBars;
         }
 
+        private int GetMaxBarsForTf(KlineInterval tf)
+        {
+            return tf switch
+            {
+                KlineInterval.OneMinute => 800,
+                KlineInterval.FiveMinutes => 500,
+                KlineInterval.FifteenMinutes => 300,
+                KlineInterval.OneHour => 200,
+                KlineInterval.FourHour => 150,
+                _ => _maxBars
+            };
+        }
+
         private static string MakeKey(string symbol, KlineInterval tf)
             => $"{symbol}:{tf}";
 
-        /// <summary>
-        /// Insert or replace last kline by OpenTime.
-        /// Safe for WS (updates same candle) and REST (historical batch).
-        /// </summary>
-        public void Upsert(
-            string symbol,
-            KlineInterval tf,
-            BinanceFuturesUsdtKline kline)
+        // =====================================================
+        // UPSERT (WS + REST SAFE)
+        // =====================================================
+        public void Upsert(string symbol, KlineInterval tf, BinanceFuturesUsdtKline kline)
         {
             if (kline == null)
                 return;
@@ -50,44 +63,36 @@ namespace VertexAutoTradeBinance8.MarketData
 
             lock (list)
             {
-                // Replace last candle if same OpenTime (WS update)
+                // WS update: replace last candle if same OpenTime
                 if (list.Last != null && list.Last.Value.OpenTime == kline.OpenTime)
-                {
                     list.RemoveLast();
-                }
 
                 list.AddLast(kline);
 
-                // Bound memory
-                while (list.Count > _maxBars)
+                // bounded memory
+                var limit = GetMaxBarsForTf(tf);
+                while (list.Count > limit)
                     list.RemoveFirst();
             }
         }
 
-        /// <summary>
-        /// Snapshot (copy) of current buffer.
-        /// </summary>
-        public IReadOnlyList<BinanceFuturesUsdtKline> Snapshot(
-            string symbol,
-            KlineInterval tf)
+        // =====================================================
+        // READ API
+        // =====================================================
+        public IReadOnlyList<BinanceFuturesUsdtKline> Snapshot(string symbol, KlineInterval tf)
         {
             var key = MakeKey(symbol, tf);
             if (!_buffers.TryGetValue(key, out var list))
                 return Array.Empty<BinanceFuturesUsdtKline>();
 
             lock (list)
-            {
                 return list.ToList();
-            }
         }
 
-        /// <summary>
-        /// Get last N klines (safe slice).
-        /// </summary>
         public IReadOnlyList<BinanceFuturesUsdtKline> GetLast(
-       string symbol,
-       KlineInterval tf,
-       int count)
+            string symbol,
+            KlineInterval tf,
+            int count)
         {
             if (count <= 0)
                 return Array.Empty<BinanceFuturesUsdtKline>();
@@ -98,13 +103,9 @@ namespace VertexAutoTradeBinance8.MarketData
 
             lock (list)
             {
-                if (list.Count == 0)
-                    return Array.Empty<BinanceFuturesUsdtKline>();
-
                 if (list.Count <= count)
-                    return list.ToList(); // редкий случай, ок
+                    return list.ToList();
 
-                // ✅ копируем ТОЛЬКО последние count
                 var result = new BinanceFuturesUsdtKline[count];
                 var node = list.Last;
 
@@ -118,10 +119,6 @@ namespace VertexAutoTradeBinance8.MarketData
             }
         }
 
-
-        /// <summary>
-        /// Current bar count in buffer.
-        /// </summary>
         public int Count(string symbol, KlineInterval tf)
         {
             var key = MakeKey(symbol, tf);
@@ -132,24 +129,18 @@ namespace VertexAutoTradeBinance8.MarketData
                 return list.Count;
         }
 
-
-        /// <summary>
-        /// Clear buffer for symbol/timeframe (maintenance / reconnect).
-        /// </summary>
+        // =====================================================
+        // MAINTENANCE
+        // =====================================================
         public void Clear(string symbol, KlineInterval tf)
-        {
-            var key = MakeKey(symbol, tf);
-            _buffers.TryRemove(key, out _);
-        }
+            => _buffers.TryRemove(MakeKey(symbol, tf), out _);
 
-        /// <summary>
-        /// Clear everything (shutdown / full reset).
-        /// </summary>
         public void ClearAll()
-        {
-            _buffers.Clear();
-        }
+            => _buffers.Clear();
 
+        // =====================================================
+        // ⚠ LEGACY SNAPSHOT API (used by MarketDataFacade)
+        // =====================================================
         public Dictionary<string, List<BinanceFuturesUsdtKline>> LoadSnapshot()
         {
             var path = Path.Combine(AppContext.BaseDirectory, "market-klines.snapshot.json");
@@ -169,6 +160,7 @@ namespace VertexAutoTradeBinance8.MarketData
                 return new();
             }
         }
+
         public Dictionary<string, List<BinanceFuturesUsdtKline>> DumpAll()
         {
             var result = new Dictionary<string, List<BinanceFuturesUsdtKline>>();
@@ -181,7 +173,6 @@ namespace VertexAutoTradeBinance8.MarketData
 
             return result;
         }
-
 
         public Dictionary<string, List<BinanceFuturesUsdtKline>> ExportLast(int maxPerSeries)
         {
@@ -227,15 +218,10 @@ namespace VertexAutoTradeBinance8.MarketData
                 lock (list)
                 {
                     list.Clear();
-
                     foreach (var k in klines.OrderBy(x => x.OpenTime))
-                    {
                         list.AddLast(k);
-                    }
                 }
             }
         }
-
-
     }
 }
