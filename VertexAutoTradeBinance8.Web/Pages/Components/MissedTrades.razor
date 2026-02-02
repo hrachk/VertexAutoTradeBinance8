@@ -34,7 +34,7 @@
 
         <div class="@ChipClass("HIGH")"
              @onclick="@(() => SetFilter("HIGH"))">
-            Score > 70
+            Confidence > 70
         </div>
 
     </div>
@@ -63,7 +63,7 @@
                 <div class="missed-grid">
                     @foreach (var r in FilteredRecords
                                     .OrderByDescending(x => x.Time)   // всегда самые свежие
-                                    .Take(15))                         // показываем только 10 (можешь поменять)
+                                    .Take(30))                         // показываем только X count (можешь поменять)
                     {
                         var score = CalcScore(r);
 
@@ -83,7 +83,7 @@
                             <div class="tooltip-container">
                                 <div class="tooltip-trigger">ℹ</div>
                                 <div class="tooltip-box">
-                                    @AiHint(r.Score)
+                                    @AiHint(r.Confidence)
                                 </div>
                             </div> 
 
@@ -105,8 +105,8 @@
                             </div>
 
                             <!-- SCORE BADGE -->
-                            <div class="score-block @ScoreColor(r.Score)">
-                                Opportunity Score: <b>@r.Score</b>/100
+                            <div class="score-block @ScoreColor(r.Confidence)">
+                                Opportunity Score: <b>@r.Confidence</b>/100
 
                                 <span class="info-icon"
                                       title="@ScoreHint(r)">
@@ -242,7 +242,7 @@
                 </div>
             </div>
 
-            <!-- === RIGHT SIDE — AI SUMMARY === -->
+          @*   <!-- === RIGHT SIDE — AI SUMMARY === -->
             <div class="ai-summary">
                 <div class="summary-title">AI Summary (24h)</div>
 
@@ -269,7 +269,7 @@
                     <b>@TranslateReason(TopReason)</b>
                 </div>
             </div>
-
+ *@
             
         </div>
     }
@@ -374,16 +374,16 @@
 
     string ScoreHint(MissedTradeRecord r)
     {
-        if (r.Score >= 80)
+        if (r.Confidence >= 80)
             return "AI: Очень сильный сигнал. Тренд мощный, волатильность низкая. Такой вход был бы безопасным.";
 
-        if (r.Score >= 65)
+        if (r.Confidence >= 65)
             return "AI: Хороший сигнал. Достаточно стабильный рынок, можно рассматривать вход.";
 
-        if (r.Score >= 50)
+        if (r.Confidence >= 50)
             return "AI: Средний сигнал. Рынок неоднозначный — лучше подождать.";
 
-        if (r.Score >= 35)
+        if (r.Confidence >= 35)
             return "AI: Слабый сигнал. Условия плохие для входа.";
 
         return "AI: Очень высокий риск. Такой вход лучше избегать.";
@@ -546,7 +546,7 @@
             "MIN" => _records.Where(x => x.Reason.Contains("MinNotional")).ToList(),
             "LONG" => _records.Where(x => x.Side == "Buy").ToList(),
             "SHORT" => _records.Where(x => x.Side == "Sell").ToList(),
-            "HIGH" => _records.Where(x => x.Score > 70).ToList(),
+            "HIGH" => _records.Where(x => x.Confidence > 70).ToList(),
             _ => _records
         };
 

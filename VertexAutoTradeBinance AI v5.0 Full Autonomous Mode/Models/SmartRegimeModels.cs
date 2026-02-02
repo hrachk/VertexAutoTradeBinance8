@@ -48,5 +48,8 @@ namespace VertexAutoTradeBinance8.Models
  
         public decimal SafetyRiskMultiplier { get; set; } = 1m;
 
+        public override string ToString()
+          => $"{SmartType}";
+
     }
 }

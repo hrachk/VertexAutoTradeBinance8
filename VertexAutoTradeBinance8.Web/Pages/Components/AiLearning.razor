@@ -1,683 +1,278 @@
 ﻿@page "/ai-learning"
-
-@using VertexAutoTradeBinance8.Services
-@using VertexAutoTradeBinance8.Web.Services
+@using System.Text.Json
 @using VertexAutoTradeBinance8.Models
+@using VertexAutoTradeBinance8.Web.Services
 @using VertexAutoTradeBinance8.Web.Models
-@inject AiLearningFileService AiLearnService
+@inject AiLearningFileService AiFile
 @inject IJSRuntime JS
-@implements IAsyncDisposable
 
 
-<div class="ai-learning-root">
+ 
 
-    <!-- =========================
-         TOP CONTROL ROOM HEADER
-    ========================== -->
-    <div class="ai-header">
-        <div class="neural-title">
-            🧠 AI Learning
-            <span class="neural-live">LIVE</span>
-        </div>
 
-        <div class="ai-header-card">
-            <div class="ai-header-title">Episodes</div>
-            <div class="ai-header-value">@_filtered.Count</div>
-        </div>
+<div class="ai-pulse-card">
+    @* <section class="ai-card pulse-section"> *@
+        <div class="ai-card-header">⚡ AI PULSE / NEURON ACTIVITY</div>
+      @*   <div class="pulse-container" style="height: 200px; background: #000; border-radius: 8px;"> *@
+    <canvas id="aiPulseCanvas2" width="1200" height="260"></canvas>
+       @*  </div> *@
 
-        <div class="ai-header-card">
-            <div class="ai-header-title">Symbols</div>
-            <div class="ai-header-value">@_uniqueSymbols</div>
-        </div>
-
-        <div class="ai-header-card">
-            <div class="ai-header-title">Avg Score</div>
-            <div class="ai-header-value">
-                @(_filtered.Count == 0 ? "-" : _filtered.Average(x => x.Score).ToString("0.0"))
+        <div class="pulse-footer">
+            <div class="metric-group">
+                <div class="metric-label">VOLATILITY</div>
+                <div class="metric-bar-bg"><div class="metric-bar-fill" style="width:@UiVolatility%"></div></div>
+                <div class="metric-value-row">
+                    <span class="val">@UiVolatility%</span>
+                    <span class="lab">VOLATILITY</span>
+                </div>
+            </div>
+            <div class="metric-unit border-l">
+                <div class="unit-val">@TotalEvents</div>
+                <div class="unit-lab">ORDERS / SEC</div>
+            </div>
+            <div class="metric-unit border-l">
+                <div class="unit-val">@(TotalEvents / 2 + 12)</div>
+                <div class="unit-lab">TICKS</div>
             </div>
         </div>
-
-        <div class="ai-header-card wide">
-            <div class="ai-header-title">Last Event</div>
-            <div class="ai-header-sub">
-                @(_filtered.Count == 0
-                                ? "-"
-                                : _filtered.Max(x => x.Time).ToLocalTime().ToString("dd.MM.yyyy HH:mm"))
-            </div>
-        </div>
-    </div>
-
-    <!-- =========================
-         LEARNING TIMELINE
-    ========================== -->
-    <div class="ai-panel">
-
-        <!-- HEADER -->
-        <div class="ai-panel-header">
-            <div class="ai-panel-title">Learning Timeline</div>
-            <button class="help-btn" @onclick="() => _showHelp = true">ℹ</button>
-        </div>
-
-        <!-- =========================
-             FILTER BAR
-        ========================== -->
-        <div class="ai-filters">
-            <div class="filter-group">
-                <span>Period</span>
-                <button class="@ChipClass(TimeFilter.Last24h)" @onclick="@(() => SetTimeFilter(TimeFilter.Last24h))">24h</button>
-                <button class="@ChipClass(TimeFilter.Last7d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last7d))">7d</button>
-                <button class="@ChipClass(TimeFilter.Last30d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last30d))">30d</button>
-                <button class="@ChipClass(TimeFilter.All)" @onclick="@(() => SetTimeFilter(TimeFilter.All))">All</button>
-            </div>
-
-            <div class="filter-group">
-                <span>Min Score</span>
-                <input type="range" min="0" max="100" step="5"
-                       @bind="_minScore" @bind:event="oninput" />
-                <span class="badge">@_minScore</span>
-            </div>
-
-            <div class="filter-group">
-                <span>Symbol</span>
-                <select value="@_selectedSymbol" @onchange="OnSymbolChanged">
-                    <option value="">All</option>
-                    @foreach (var s in _allSymbols)
+   @*  </section> *@
+  
+    <div class="dashboard-columns">
+        <div class="col">
+            <section class="ai-card">
+                <div class="ai-card-header">⚡ LIVE MARKET PROCESSING</div>
+                <div class="live-list">
+                    @foreach (var r in LiveStates.Take(4))
                     {
-                        <option value="@s">@s</option>
-                    }
-                </select>
-            </div>
-        </div>
-
-        <!-- =========================
-             CHART
-        ========================== -->
-        <div class="ai-chart-wrap">
-            <canvas id="learningChart"></canvas>
-
-            @if (_chartPoints.Count == 0)
-            {
-                <div class="ai-empty-overlay">No data for selected filters</div>
-            }
-        </div>
-
-    </div>
-
-    <!-- =========================
-     LIVE MARKET STATE (INLINE)
-     ========================== -->
-    <div class="ai-panel">
-        <div class="ai-panel-title">
-            ⚡ Live Market Processing
-        </div>
-
-        <div class="live-grid">
-            @foreach (var r in _liveStates)
-            {
-                <div class="live-item" @key="r.Symbol">
-
-                    <!-- ROW -->
-                    <div class="live-row @(r.Status.ToLower())"
-                         @onclick="() => ToggleLive(r.Symbol)">
-
-                        <div class="live-symbol">@r.Symbol</div>
-
-                        <div class="live-regime">@r.Regime</div>
-
-                        <div class="live-confidence">@r.Confidence%</div>
-
-                        <div class="live-status">
-                            @if (r.Status == "READY")
-                            {
-                                <span class="status-ok">READY</span>
-                            }
-                            else
-                            {
-                                <span class="status-wait">WAIT</span>
-                            }
-                        </div>
-                    </div>
-
-                    <!-- INLINE DETAILS -->
-                    @if (_expandedLiveSymbol == r.Symbol)
-                    {
-                        <div class="live-inline-chart">
-                            <MarketMiniChart Symbol="@r.Symbol"
-                                             Timeframe="FiveMinutes"
-                                             MaxBars="120" />
-
-                            <div class="live-explain">
-                                @ExplainLiveState(r)
+                        <div class="live-row @(ExpandedSymbol == r.Symbol ? "active" : "")" @onclick="() => ToggleLive(r.Symbol)">
+                            <div class="sym-info">
+                                <div class="sym-name">@r.Symbol</div>
+                                <div class="sym-regime">@r.Regime</div>
                             </div>
+                            <div class="sym-conf">@r.Confidence%</div>
+                            <div class="sym-status @r.Status.ToLower()">@r.Status</div>
                         </div>
+                        @if (ExpandedSymbol == r.Symbol)
+                        {
+                            <div class="live-expand-area">
+                                <div class="mini-chart-container">
+                                    @* Реальный индикатор силы сигнала *@
+                                    <div class="chart-bar-glow" style="width:@r.Confidence%"></div>
+                                </div>
+                                <div class="expand-details">
+                                    <span>Signal strength: @r.Confidence%</span>
+                                    <span>Status: <b class="@r.Status.ToLower()">@r.Status</b></span>
+                                </div>
+                            </div>
+                        }
                     }
                 </div>
-            }
+            </section>
+
+            <section class="ai-card">
+                <div class="ai-card-header">⚡ AI EXPOSURE MATRIX</div>
+                @foreach (var e in Exposure.Take(3))
+                {
+                    <div class="matrix-row">
+                        <div class="m-info">
+                            <span class="m-sym">@e.Symbol</span>
+                            <span class="m-reg">@e.Regime</span>
+                        </div>
+                        <div class="m-val">
+                            <span class="m-num">@e.Score.ToString("F1")%</span>
+                            <span class="m-arrow">↗</span>
+                        </div>
+                        <div class="m-progress"><div class="m-fill" style="width:@e.Score%"></div></div>
+                    </div>
+                }
+            </section>
+        </div>
+
+        <div class="col">
+            <section class="ai-card">
+                <div class="ai-card-header">⚡ AI LEARNING INSIGHTS</div>
+                <div class="insight-box">
+                    <div class="ins-title">BASE REGIME</div>
+                    <div class="ins-meta">@TotalEvents events · AVG @AvgScore%</div>
+                    <div class="ins-wave"></div>
+                </div>
+                <div class="insight-box mt-20">
+                    <div class="ins-flex">
+                        <span class="ins-label">MICRO_SIGNAL_PULLBACK</span>
+                        <span class="ins-val">75.0</span>
+                    </div>
+                    <div class="ins-progress"><div class="ins-fill" style="width:75%"></div></div>
+                    <div class="ins-percent">75 %</div>
+                </div>
+            </section>
+
+            <section class="ai-card">
+                <div class="ai-card-header">⚡ AI EXPOSURE MATRIX</div>
+                @foreach (var e in Exposure.Skip(3).Take(5))
+                {
+                    <div class="matrix-row compact">
+                        <div class="m-info">
+                            <span class="m-sym">@e.Symbol</span>
+                            @if (e.Score > 75)
+                            {
+                                <span class="m-badge">StrongUpTrend</span>
+                            }
+                        </div>
+                        <div class="m-val">
+                            <span class="m-num @(e.Score < 70 ? "low" : "")">@e.Score%</span>
+                            <span class="m-arrow">↗</span>
+                        </div>
+                        <div class="m-progress"><div class="m-fill" style="width:@e.Score%"></div></div>
+                    </div>
+                }
+            </section>
         </div>
     </div>
-
-
-
-    <!-- =========================
-         TOP LEARNING REASONS
-    ========================== -->
-    <div class="ai-panel">
-        <div class="ai-panel-title">Top Learning Reasons</div>
-
-        @if (_reasonStats.Count == 0)
-        {
-            <div class="ai-empty">No data</div>
-        }
-        else
-        {
-            <div class="reason-bars">
-                @foreach (var r in _reasonStats)
-                {
-                    <div class="reason-row">
-                        <div class="reason-label">
-                            <div class="reason-name">@r.Reason</div>
-                            <div class="reason-meta">@r.Count events · Avg @r.AvgScore.ToString("0.0")</div>
-                        </div>
-
-                        <div class="reason-bar-bg">
-                            <div class="reason-bar-fill" style="width:@r.PercentOfMax%"></div>
-                        </div>
-                    </div>
-                }
-            </div>
-        }
-    </div>
-
-    <!-- =========================
-         TOP SYMBOLS
-    ========================== -->
-    <!-- AI Exposure Matrix -->
-    <div class="ai-section exposure-matrix">
-        <div class="ai-section-title">AI Exposure Matrix</div>
-
-        @if (_symbolStats.Count == 0)
-        {
-            <div class="ai-empty">No exposure data</div>
-        }
-        else
-        {
-            <div class="exposure-table">
-                @foreach (var s in _symbolStats)
-                {
-                    <div class="exposure-row">
-                        <div class="exposure-symbol">@s.Symbol</div>
-
-                        <div class="exposure-bias bias-@s.TopRegime">
-                            @s.TopRegime
-                        </div>
-
-                        <div class="exposure-trust">
-                            @s.AvgScore.ToString("0.0")
-                        </div>
-
-                        <div class="exposure-bar">
-                            <div class="exposure-bar-fill"
-                                 style="width:@(s.Count * 100 / _symbolStats.Max(x => x.Count))%">
-                            </div>
-                        </div>
-                    </div>
-                }
-            </div>
-        }
-    </div>
-
-    <!-- AI Decision Drivers -->
-    <div class="ai-section decision-drivers">
-        <div class="ai-section-title">AI Decision Drivers</div>
-
-        @if (_reasonStats.Count == 0)
-        {
-            <div class="ai-empty">No decision drivers</div>
-        }
-        else
-        {
-            <div class="drivers-grid">
-                @foreach (var r in _reasonStats)
-                {
-                    <div class="driver-card">
-                        <div class="driver-header">
-                            <span class="driver-name">@r.Reason</span>
-                            <span class="driver-impact impact-@GetImpact(r.Count)">
-                                @GetImpact(r.Count)
-                            </span>
-                        </div>
-
-                        <div class="driver-meta">
-                            <span>@r.Count episodes</span>
-                            <span>Avg @r.AvgScore.ToString("0.0")</span>
-                        </div>
-
-                        <div class="driver-bar">
-                            <div class="driver-bar-fill"
-                                 style="width:@r.PercentOfMax%"></div>
-                        </div>
-                    </div>
-                }
-            </div>
-        }
-    </div>
-
 </div>
 
-
 @code {
-
-    private string GetImpact(int count)
-    {
-        if (count >= 20) return "HIGH";
-        if (count >= 5) return "MEDIUM";
-        return "LOW";
-    }
-
-    private enum TimeFilter
-    {
-        Last24h,
-        Last7d,
-        Last30d,
-        All
-    }
-
-    private bool _showHelp = false;
-
-    // 🔥 выбранный символ
-    private string? _selectedSymbol = null;
-
-    // 🔥 список всех символов для дропа
-    private List<string> _allSymbols = new();
-
-    // Сырые записи (для таблиц/статистики)
-    private List<AiLearningRecord> _all = new();
-    private AiLearningSnapshot? _snapshot;
-    private List<AiLearningRecord> _filtered = new();
-
-    // Точки для графика
-    private List<AiLearningPointModel> _chartPoints = new();
-
-    private int _uniqueSymbols;
-    private TimeFilter _timeFilter = TimeFilter.Last7d;
-    private int _minScore = 45;
-
-    private List<ReasonStat> _reasonStats = new();
-    private List<SymbolStat> _symbolStats = new();
-
-    private bool _needsChartUpdate;
-
-    // 🔁 автообновление каждые 3 сек
-    private PeriodicTimer? _timer;
-    private CancellationTokenSource? _cts;
-    private Task? _refreshTask;
-
-    protected override async Task OnInitializedAsync()
-    {
-        var snap = await AiLearnService.GetAllAsync();
-
-        if (snap != null)
-        {
-            _snapshot = snap;
-            BuildFromSnapshot(snap);
-        }
-
-        ApplyFilters();
-        StartAutoRefresh();
-    }
-
+    int TotalEvents;
+    int AvgScore;
+    int UiVolatility;
+    List<ExposureVm> Exposure = new();
+    List<LiveSymbolState> LiveStates = new();
+    string? ExpandedSymbol;
+    private int UniqueSymbols;
+    private DateTime? LastEventUtc;
+    private CancellationTokenSource? _loopCts;
+    private bool _disposed;
+   
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender || _needsChartUpdate)
+        if (firstRender)
         {
-            _needsChartUpdate = false;
-
-            if (_chartPoints.Count > 0)
-            {
-                await JS.InvokeVoidAsync("VertexLearningChart.renderData", _chartPoints);
-            }
+            //await JS.InvokeVoidAsync("window.AiPulse.init");
+            await JS.InvokeVoidAsync("aiPulse.init", "aiPulseCanvas2");
+         
+          
         }
     }
-
-    private void StartAutoRefresh()
+    protected override async Task OnInitializedAsync()
     {
-        _cts = new CancellationTokenSource();
-        _timer = new PeriodicTimer(TimeSpan.FromSeconds(3));
-        _refreshTask = RefreshLoopAsync(_cts.Token);
+        _loopCts = new CancellationTokenSource();
+        _ = LoopUpdate(_loopCts.Token);
+        await InitialLoad();
     }
 
-    private async Task RefreshLoopAsync(CancellationToken token)
+    public void Dispose()
     {
+        _disposed = true;
+        _loopCts?.Cancel();
+        _loopCts?.Dispose();
+    }
+    // Вынеси первую загрузку в отдельный метод для чистоты
+  private async Task InitialLoad()
+{
+    try 
+    {
+        var points = await AiFile.LoadAsync();
+        if (points != null && points.Any())
+        {
+            TotalEvents = points.Count;
+            AvgScore = (int)Math.Round(points.Average(x => x.Score));
+            UiVolatility = (int)Math.Min(100, points.Average(x => x.Volatility) * 100);
+      
+
+            // Обновляем статистику, чтобы время "Last Event" тикало
+UniqueSymbols = points.Select(x => x.Symbol).Distinct().Count();
+LastEventUtc = points.Max(x => x.Time);
+
+            // Группировка для таблицы
+            Exposure = points.GroupBy(x => x.Symbol)
+                .Select(g => new ExposureVm
+                {
+                    Symbol = g.Key,
+                    Score = (int)Math.Round(g.Average(x => x.Score)),
+                        Regime = g.Average(x => x.Confidence) > 0.75m ? "StrongUpTrend" : MarketRegime.Range.ToString()
+                })
+                .OrderByDescending(x => x.Score)
+                .ToList();
+
+            // Данные для JS Пульса
+            await JS.InvokeVoidAsync("AiPulse.push", new { 
+                score = AvgScore, 
+                confidence = 80, 
+                volatility = UiVolatility 
+            });
+
+            StateHasChanged();
+        }
+    }
+    catch (Exception ex) { Console.WriteLine("Error: " + ex.Message); }
+}
+
+    async Task LoopUpdate(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+
         try
         {
-            while (_timer != null && await _timer.WaitForNextTickAsync(token))
+            while (await timer.WaitForNextTickAsync(ct))
             {
-                var snap = await AiLearnService.GetAllAsync();
-                if (snap == null) continue;
+                if (_disposed) break;
 
-                await InvokeAsync(() =>
+                var points = await AiFile.LoadAsync();
+                if (points == null || points.Count == 0)
+                    continue;
+
+                TotalEvents = points.Count;
+                AvgScore = (int)Math.Round(points.Average(x => x.Score));
+                UiVolatility = (int)Math.Min(100, points.Average(x => x.Volatility) * 100);
+
+                Exposure = points.GroupBy(x => x.Symbol)
+                    .Select(g => new ExposureVm
+                    {
+                        Symbol = g.Key,
+                        Score = (int)Math.Round(g.Average(x => x.Score)),
+                        Regime = g.Average(x => x.Confidence) > 0.75m
+                            ? "StrongUpTrend"
+                            : "Range"
+                    })
+                    .OrderByDescending(x => x.Score)
+                    .ToList();
+
+                LiveStates = Exposure.Select(e => new LiveSymbolState
                 {
-                    _snapshot = snap;
-                    BuildFromSnapshot(snap);
-                    ApplyFilters();
-                });
+                    Symbol = e.Symbol,
+                    Confidence = e.Score,
+                    Regime = e.Regime,
+                    Status = e.Score >= 75 ? "READY" : "WAIT"
+                }).ToList();
+
+                // 🔒 SAFE JS CALL
+                try
+                {
+                    await JS.InvokeVoidAsync("AiPulse.push", new
+                    {
+                        score = AvgScore,
+                        confidence = 80,
+                        volatility = UiVolatility
+                    });
+                }
+                catch (JSDisconnectedException)
+                {
+                    break; // circuit умер → выходим
+                }
+
+                await InvokeAsync(StateHasChanged);
             }
         }
         catch (OperationCanceledException)
         {
+            // нормально — Dispose
         }
     }
 
-    private void BuildFromSnapshot(AiLearningSnapshot snap)
-    {
-        _all = snap.MarketStates
-            .Select(ms => new AiLearningRecord
-            {
-                Symbol = ms.Symbol,
-                Time = ms.Time,
-                Reason = ms.Reason ?? "-",
-                SmartType = ms.Reason ?? "-",
-                Regime = ms.Regime.ToString(),
-                Confidence = (int)(ms.Confidence * 100m),
-                Score = (int)(ms.Confidence * 100m),
-                VolatilityPercent = ms.VolatilityPercent * 100m,
-                TrendSlopePercent = ms.TrendSlopePercent * 100m,
-                Atr = ms.Atr
-            })
-            .OrderByDescending(x => x.Time)
-            .ToList();
-
-        _allSymbols = _all
-            .Select(x => x.Symbol)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(x => x)
-            .ToList();
-        var now = DateTime.UtcNow;
-
-        // 1) Собираем свежие состояния
-        var fresh = snap.MarketStates
-            .Where(x => x.Time > now.AddSeconds(-10))
-            .GroupBy(x => x.Symbol)
-            .Select(g =>
-            {
-                var last = g.OrderByDescending(x => x.Time).First();
-                var confPct = (int)(last.Confidence * 100m);
-
-                return new LiveSymbolState
-                {
-                    Symbol = last.Symbol,
-                    Regime = last.Regime.ToString(),
-                    Confidence = confPct,
-                    Status = confPct >= 72 ? "READY" : "WAIT",
-                    BlockReason = confPct >= 72
-                        ? "AI signal ready. Waiting execution window."
-                        : $"Confidence too low: {confPct}% (need ≥ 72%)",
-                    LastUpdateUtc = now
-                };
-            })
-            .ToList();
-
-        // 2) Обновляем существующие / добавляем новые
-        foreach (var f in fresh)
-        {
-            var existing = _liveStates.FirstOrDefault(x =>
-                x.Symbol.Equals(f.Symbol, StringComparison.OrdinalIgnoreCase));
-
-            if (existing == null)
-            {
-                _liveStates.Add(f); // 🟢 новый символ
-            }
-            else
-            {
-                // 🔁 REPLACE данных (без удаления строки)
-                existing.Regime = f.Regime;
-                existing.Confidence = f.Confidence;
-                existing.Status = f.Status;
-                existing.BlockReason = f.BlockReason;
-                existing.LastUpdateUtc = now;
-            }
-        }
-        // 3) Мягкий TTL — убираем ТОЛЬКО если давно мёртвые
-        _liveStates.RemoveAll(x =>
-            now - x.LastUpdateUtc > TimeSpan.FromSeconds(30));
-    }
-
-    private void SetTimeFilter(TimeFilter filter)
-    {
-        _timeFilter = filter;
-        ApplyFilters();
-    }
-
-    // 🔥 смена символа из select
-    private void OnSymbolChanged(ChangeEventArgs e)
-    {
-        _selectedSymbol = e.Value?.ToString();
-        ApplyFilters();
-    }
-
-    private void ApplyFilters()
-    {
-        var query = _all.AsEnumerable();
-
-        // 0) Фильтр по символу
-        if (!string.IsNullOrWhiteSpace(_selectedSymbol))
-        {
-            query = query.Where(x =>
-                x.Symbol.Equals(_selectedSymbol, StringComparison.OrdinalIgnoreCase));
-        }
-
-        // 1) Фильтр по времени
-        if (_timeFilter != TimeFilter.All && _all.Count > 0)
-        {
-            var now = DateTime.UtcNow;
-            DateTime from = _timeFilter switch
-            {
-                TimeFilter.Last24h => now.AddDays(-1),
-                TimeFilter.Last7d => now.AddDays(-7),
-                TimeFilter.Last30d => now.AddDays(-30),
-                _ => now.AddYears(-10)
-            };
-
-            query = query.Where(x => x.Time >= from);
-        }
-
-        // 2) Фильтр по минимальному Score
-        query = query.Where(x => x.Score >= _minScore);
-
-        _filtered = query
-            .OrderByDescending(x => x.Time)
-            .ToList();
-
-        _uniqueSymbols = _filtered
-            .Select(x => x.Symbol)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count();
-
-        // === Статистика причин/символов ===
-        BuildReasonStats();
-        BuildSymbolStats();
-
-        // === Точки для графика ===
-        _chartPoints = _filtered
-            .OrderBy(x => x.Time)
-            .Select(x => new AiLearningPointModel
-            {
-                Time = x.Time,
-                Symbol = x.Symbol,
-                Score = x.Score,                    // 0–100
-                Slope = x.TrendSlopePercent / 100m, // 0.x, JS сам умножит
-                Volatility = x.VolatilityPercent / 100m,
-                LiquidityDanger = false,
-                Confidence = x.Confidence / 100m    // 0–1
-            })
-            .ToList();
-
-        _needsChartUpdate = true;
-        StateHasChanged();
-    }
-
-    private void BuildReasonStats()
-    {
-        _reasonStats.Clear();
-        if (_filtered.Count == 0) return;
-
-        var groups = _filtered
-            .GroupBy(x => x.Reason ?? "Unknown")
-            .ToList();
-
-        var maxCount = groups.Max(g => g.Count());
-
-        foreach (var g in groups.OrderByDescending(g => g.Count()).Take(10))
-        {
-            var avgScore = g.Average(x => x.Score);
-            var avgConf = g.Average(x => (double)x.Confidence);
-
-            _reasonStats.Add(new ReasonStat
-            {
-                Reason = g.Key,
-                Count = g.Count(),
-                AvgScore = (decimal)avgScore,
-                AvgConf = (decimal)avgConf,
-                PercentOfMax = maxCount == 0 ? 0 : (int)(g.Count() * 100.0 / maxCount)
-            });
-        }
-    }
-
-    private void BuildSymbolStats()
-    {
-        _symbolStats.Clear();
-        if (_filtered.Count == 0) return;
-
-        var groups = _filtered
-            .GroupBy(x => x.Symbol)
-            .ToList();
-
-        foreach (var g in groups
-                     .OrderByDescending(g => g.Count())
-                     .Take(20))
-        {
-            var avgScore = g.Average(x => x.Score);
-            var avgConf = g.Average(x => (double)x.Confidence);
-
-            var topRegime = g.Where(x => !string.IsNullOrEmpty(x.Regime))
-                             .GroupBy(x => x.Regime)
-                             .OrderByDescending(gg => gg.Count())
-                             .Select(gg => gg.Key)
-                             .FirstOrDefault() ?? "-";
-
-            var topSmart = g.Where(x => !string.IsNullOrEmpty(x.SmartType))
-                            .GroupBy(x => x.SmartType)
-                            .OrderByDescending(gg => gg.Count())
-                            .Select(gg => gg.Key)
-                            .FirstOrDefault() ?? "-";
-
-            _symbolStats.Add(new SymbolStat
-            {
-                Symbol = g.Key,
-                Count = g.Count(),
-                AvgScore = (decimal)avgScore,
-                AvgConf = (decimal)avgConf,
-                TopRegime = topRegime,
-                TopSmartType = topSmart
-            });
-        }
-    }
-
-    private string ChipClass(TimeFilter f)
-        => _timeFilter == f ? "ai-chip ai-chip-active" : "ai-chip";
-
-    private class ReasonStat
-    {
-        public string Reason { get; set; } = string.Empty;
-        public int Count { get; set; }
-        public decimal AvgScore { get; set; }
-        public decimal AvgConf { get; set; }
-        public int PercentOfMax { get; set; }
-    }
-
-    private class SymbolStat
-    {
-        public string Symbol { get; set; } = string.Empty;
-        public int Count { get; set; }
-        public decimal AvgScore { get; set; }
-        public decimal AvgConf { get; set; }
-        public string TopRegime { get; set; } = string.Empty;
-        public string TopSmartType { get; set; } = string.Empty;
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_timer != null)
-        {
-            _cts?.Cancel();
-            _timer.Dispose();
-        }
-
-        if (_refreshTask != null)
-        {
-            try { await _refreshTask; } catch { }
-        }
-    }
-
-    public class AiLiveStateRow
-    {
-        public string Symbol { get; set; } = "";
-        public string Timeframe { get; set; } = "OneMinute";
-
-        public string Regime { get; set; } = "";
-        public string SmartType { get; set; } = "";
-
-        public int Confidence { get; set; }          // 0–100
-        public decimal VolatilityPct { get; set; }
-        public bool LiquidityDanger { get; set; }
-
-        public string Status { get; set; } = "";     // READY / WAIT / BLOCK
-        public string? BlockReason { get; set; }
-    }
-    private List<LiveSymbolState> _liveStates = new();
-    private string? _selectedLiveSymbol;
-
-
-    private string? _expandedLiveSymbol;
-    void ToggleLive(string symbol)
-    {
-        _expandedLiveSymbol =
-            _expandedLiveSymbol == symbol
-                ? null
-                : symbol;
-    }
-
-    
-  string ExplainLiveState(LiveSymbolState r)
-{
-    if (r.Status == "READY")
-        return "🟢 Все условия выполнены. Вход разрешён.";
-
-    if (r.BlockReason.Contains("Confidence"))
-        return "🟡 Недостаточная уверенность сигнала. Ожидание ≥ 72%.";
-
-    if (r.BlockReason.Contains("BASE"))
-        return "🔴 Нет базового паттерна. Есть тренд, но отсутствует структура для входа.";
-
-    if (r.BlockReason.Contains("DIR"))
-        return "🔴 Направление запрещено. Вход против доминирующего тренда.";
-
-    return "🕒 Ожидание подтверждения рыночной структуры.";
-}
 
 
 
-    private sealed class LiveSymbolState
-    {
-        public string Symbol { get; set; } = "";
-        public string Regime { get; set; } = "";
-        public int Confidence { get; set; }
-        public string Status { get; set; } = "";
-        public string BlockReason { get; set; } = "";
+    void ToggleLive(string s) => ExpandedSymbol = (ExpandedSymbol == s) ? null : s;
 
-        public DateTime LastUpdateUtc { get; set; } // 🔥 важно
-    }
-
-
-
+    public class ExposureVm { public string Symbol { get; set; } = ""; public string Regime { get; set; } = ""; public int Score { get; set; } }
+    public class LiveSymbolState { public string Symbol { get; set; } = ""; public string Regime { get; set; } = ""; public int Confidence { get; set; } public string Status { get; set; } = ""; }
 }

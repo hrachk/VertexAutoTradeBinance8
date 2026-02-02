@@ -28,8 +28,21 @@ else
 
         <div class="state-card">
             <div class="label">Баланс USDT</div>
-            <div class="value">@_state.BalanceUsdt.ToString("F2")</div>
+            <div class="value">@_state.BalanceUsdt.ToString("F2") $</div>
+            <br />
+            <div class="label" style="color: #9eff9e;">Реализованный Pnl</div>
+            @if (_state.RealizedPnlUsd < 0)
+            {
+                <div class="value" style="color:#e14646;">@_state.RealizedPnlUsd.ToString("F2") $</div>
+            }
+           
+            @if (_state.RealizedPnlUsd > 0)
+            {
+                <div class="value" style="color: #47c547;">@_state.RealizedPnlUsd.ToString("F2") $</div>
+
+            }
         </div>
+        
 
         <div class="state-card">
             <div class="label">TF</div>

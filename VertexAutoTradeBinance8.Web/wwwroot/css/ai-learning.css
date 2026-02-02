@@ -1,546 +1,215 @@
-﻿/* ===============================
-   ROOT
-================================ */
-.ai-learning-root {
+﻿:root {
+    --accent: #00ffd5;
+    --bg-dark: #06080b;
+    --card-gradient: linear-gradient(180deg, #101422 0%, #080a11 100%);
+}
+
+.ai-root {
+    background: var(--bg-dark);
     padding: 24px;
-    background: radial-gradient(1200px at 20% -10%, #1b1f2a 0%, #0b0e14 60%);
-    color: #e5e7eb;
+    color: #fff;
+    font-family: 'Inter', sans-serif;
 }
 
-/* ===============================
-   HEADER
-================================ */
-.ai-header {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 16px;
-    margin-bottom: 24px;
-}
-
-.ai-header-card {
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 14px;
+.ai-card {
+    background: var(--card-gradient);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 12px;
     padding: 16px;
-    backdrop-filter: blur(12px);
+    margin-bottom: 20px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
 }
 
-    .ai-header-card.accent {
-        background: linear-gradient(135deg, #5b8cff, #7c5cff);
-    }
-
-    .ai-header-card.wide {
-        grid-column: span 2;
-    }
-
-.ai-header-title {
-    font-size: 12px;
-    opacity: 0.7;
-}
-
-.ai-header-value {
-    font-size: 28px;
-    font-weight: 700;
-}
-
-.ai-header-sub {
-    font-size: 14px;
-    opacity: 0.8;
-}
-
-/* ===============================
-   PANELS
-================================ */
-.ai-panel {
-    background: rgba(255,255,255,0.03);
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 16px;
-    padding: 20px;
-    margin-bottom: 24px;
-}
-
-.ai-panel-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.ai-panel-title {
-    font-size: 18px;
-    font-weight: 600;
-}
-
-/* ===============================
-   FILTERS
-================================ */
-.ai-filters {
-    display: flex;
-    gap: 24px;
-    margin: 16px 0;
-}
-
-.filter-group {
+.ai-card-header {
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 1.5px;
+    color: #fff;
+    margin-bottom: 20px;
     display: flex;
     align-items: center;
     gap: 10px;
 }
 
-    .filter-group span {
-        font-size: 12px;
-        opacity: 0.7;
-    }
-
-.ai-chip {
-    background: transparent;
-    border: 1px solid rgba(255,255,255,0.15);
-    color: #ccc;
-    padding: 6px 12px;
-    border-radius: 999px;
+.header-sub {
+    color: #5c637a;
 }
 
-.ai-chip-active {
-    background: #5b8cff;
-    border-color: #5b8cff;
-    color: #fff;
-}
-
-.badge {
-    font-size: 12px;
-    opacity: 0.8;
-}
-
-/* ===============================
-   CHART
-================================ */
-.ai-chart-wrap {
+/* FIX: PULSE CANVAS */
+.pulse-container {
     position: relative;
-    height: 420px;
-}
-
-.ai-empty-overlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    backdrop-filter: blur(6px);
-    background: rgba(0,0,0,0.4);
-}
-
-/* ===============================
-   REASONS
-================================ */
-.reason-row {
-    display: grid;
-    grid-template-columns: 220px 1fr;
-    gap: 16px;
-    margin-bottom: 12px;
-}
-
-.reason-name {
-    font-weight: 600;
-}
-
-.reason-meta {
-    font-size: 12px;
-    opacity: 0.6;
-}
-
-.reason-bar-bg {
-    background: rgba(255,255,255,0.08);
-    border-radius: 999px;
+    width: 100%;
+    height: 200px; /* Фиксированная высота обязательна! */
+    background: #000;
+    border-radius: 8px;
     overflow: hidden;
 }
 
-.reason-bar-fill {
-    height: 10px;
-    background: linear-gradient(90deg, #3b82f6, #22c55e);
+#aiPulseCanvas2 {
+    background: rgba(55, 0, 0, 0.2) !important; /* Если увидишь красный фон — холст на месте */
+    min-height: 200px;
+    min-width: 100%;
+    display: block;
+    /* Создает глубокое неоновое свечение всей области */
+    filter: drop-shadow(0 0 15px rgba(0, 255, 213, 0.4)) contrast(1.3);
+    /* Добавляем легкое размытие для мягкости искр */
+    backdrop-filter: blur(1px);
 }
 
-/* ===============================
-   SYMBOL GRID
-================================ */
-.symbol-grid {
+.pulse-footer {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 16px;
+    grid-template-columns: 2fr 1fr 1fr;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    padding-top: 16px;
+    margin-top: 16px;
 }
 
-.symbol-card {
-    background: rgba(255,255,255,0.04);
-    border-radius: 14px;
-    padding: 16px;
-    border: 1px solid rgba(255,255,255,0.08);
+.metric-bar-bg {
+    height: 4px;
+    background: #1a1e2e;
+    border-radius: 2px;
+    margin: 10px 0;
 }
 
-.symbol-name {
-    font-weight: 700;
+.metric-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    box-shadow: 0 0 10px var(--accent);
+    transition: width 0.6s;
 }
 
-.symbol-metric,
-.symbol-score,
-.symbol-regime {
-    font-size: 13px;
-    opacity: 0.7;
+.unit-val {
+    font-size: 24px;
+    font-weight: 800;
 }
 
-
-
-.neural-title {
-    font-size: 20px;
-    font-weight: 600;
-    display: flex;
-    gap: 10px;
+.unit-lab {
+    font-size: 10px;
+    color: #5c637a;
 }
 
-.neural-live {
-    color: #22c55e;
-    font-size: 12px;
-    animation: pulse 1.6s infinite;
+.border-l {
+    border-left: 1px solid rgba(255,255,255,0.1);
+    padding-left: 20px;
 }
 
-@keyframes pulse {
-    0% {
-        opacity: .4
-    }
-
-    50% {
-        opacity: 1
-    }
-
-    100% {
-        opacity: .4
-    }
-}
-
-/* === KPI === */
-.neural-kpis {
-    display: flex;
+/* GRID */
+.dashboard-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: 20px;
 }
 
-.neural-kpi b {
-    margin-left: 6px;
+/* LIVE MARKET ITEMS */
+.live-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    padding: 14px;
+    background: rgba(255,255,255,0.02);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+}
+
+    .live-row.active {
+        border-left-color: var(--accent);
+        background: rgba(0,255,213,0.05);
+    }
+
+.sym-status.ready {
+    color: var(--accent);
+    font-weight: 800;
+}
+
+.sym-status.wait {
+    color: #ffb300;
+}
+
+/* MINI CHART (EXPANDED) */
+.live-expand-area {
+    background: rgba(0,0,0,0.3);
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 12px;
+}
+
+.mini-chart-container {
+    height: 20px;
+    background: #1a1e2e;
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 10px;
+}
+
+.chart-bar-glow {
+    height: 100%;
+    background: linear-gradient(90deg, #00ffd5, #008cff);
+    box-shadow: 0 0 15px rgba(0,255,213,0.5);
+}
+
+/* MATRIX */
+.matrix-row {
+    display: flex;
+    flex-direction: column;
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    position: relative;
+}
+
+.m-val {
+    position: absolute;
+    right: 0;
+    top: 12px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.m-num {
+    color: var(--accent);
+    font-weight: 800;
+}
+
+    .m-num.low {
+        color: #ff4d4d;
+    }
+
+.m-progress {
+    height: 3px;
+    background: #1a1e2e;
+    margin-top: 8px;
+}
+
+.m-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), #008cff);
+}
+
+.m-badge {
+    background: rgba(0,255,213,0.1);
+    color: var(--accent);
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+
+.ai-pulse-card {
+    background: radial-gradient(ellipse at top, #111827, #05070d);
+    border-radius: 16px;
+    padding: 20px;
     color: #e5e7eb;
 }
 
-.neural-kpi.accent b {
-    color: #22d3ee;
-}
-
-/* === CARDS === */
-.neural-card {
-    background: rgba(15,23,42,0.75);
-    border: 1px solid rgba(255,255,255,0.05);
-    border-radius: 16px;
-    padding: 18px;
-    margin-bottom: 20px;
-    backdrop-filter: blur(10px);
-}
-
-/* ===============================
-   AI NEURAL PULSE CORE
-================================ */
-
-.ai-learning-root::before {
-    content: "";
-    position: fixed;
-    inset: -20%;
-    background: radial-gradient(circle at 20% 30%, rgba(124,92,255,0.12), transparent 40%), radial-gradient(circle at 80% 70%, rgba(59,130,246,0.10), transparent 45%);
-    animation: ai-breath 14s ease-in-out infinite;
-    z-index: 0;
-    pointer-events: none;
-}
-
-@keyframes ai-breath {
-    0% {
-        transform: scale(1);
-        opacity: 0.55;
-    }
-
-    50% {
-        transform: scale(1.06);
-        opacity: 0.75;
-    }
-
-    100% {
-        transform: scale(1);
-        opacity: 0.55;
-    }
-}
-.ai-chart-wrap {
-    position: relative;
-    height: 420px;
-    border-radius: 18px;
-    background: linear-gradient( 180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.35) );
-    box-shadow: inset 0 0 60px rgba(124,92,255,0.05), 0 0 0 1px rgba(255,255,255,0.06), 0 25px 80px rgba(0,0,0,0.6);
-}
-.ai-panel {
-    position: relative;
-    overflow: hidden;
-}
-
-    .ai-panel::after {
-        content: "";
-        position: absolute;
-        inset: 0;
-        background: linear-gradient( 120deg, transparent 30%, rgba(124,92,255,0.08), transparent 70% );
-        animation: ai-scan 6s linear infinite;
-        pointer-events: none;
-    }
-
-@keyframes ai-scan {
-    0% {
-        transform: translateX(-120%);
-    }
-
-    100% {
-        transform: translateX(120%);
-    }
-}
-.ai-header-card {
-    transition: transform 0.3s ease, box-shadow 0.3s ease;
-}
-
-    .ai-header-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 0 0 1px rgba(124,92,255,0.35), 0 10px 40px rgba(124,92,255,0.25);
-    }
-
-
-
-/* === Decision Drivers === */
-
-.decision-drivers .drivers-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 16px;
-}
-
-.driver-card {
-    background: linear-gradient(180deg,#11141b,#0c0f14);
-    border-radius: 14px;
-    padding: 14px;
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
-}
-
-.driver-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.driver-name {
-    font-weight: 600;
-    letter-spacing: .3px;
-}
-
-.driver-impact {
-    font-size: 11px;
-    padding: 4px 8px;
-    border-radius: 10px;
-}
-
-.impact-HIGH {
-    background: #1e3a2f;
-    color: #4cffb0;
-}
-
-.impact-MEDIUM {
-    background: #2e2a1e;
-    color: #ffd966;
-}
-
-.impact-LOW {
-    background: #2a1e1e;
-    color: #ff8a8a;
-}
-
-.driver-meta {
-    display: flex;
-    justify-content: space-between;
-    font-size: 12px;
-    opacity: .7;
-    margin-top: 6px;
-}
-
-.driver-bar {
-    height: 6px;
-    background: #1b1f2a;
-    border-radius: 6px;
-    margin-top: 10px;
-}
-
-.driver-bar-fill {
-    height: 100%;
-    background: linear-gradient(90deg,#3b82f6,#22c55e);
-    border-radius: 6px;
-}
-
-/* === Exposure Matrix === */
-
-.exposure-table {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.exposure-row {
-    display: grid;
-    grid-template-columns: 140px 160px 80px 1fr;
-    align-items: center;
-    background: #0e1118;
+canvas {
+    width: 100%;
     border-radius: 12px;
-    padding: 10px 14px;
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
 }
 
-.exposure-symbol {
-    font-weight: 600;
-}
-
-.exposure-bias {
-    font-size: 12px;
-    padding: 6px 10px;
-    border-radius: 10px;
-    width: max-content;
-}
-
-.bias-StrongUpTrend {
-    background: #123a2b;
-    color: #4cffb0;
-}
-
-.bias-StrongDownTrend {
-    background: #3a1e1e;
-    color: #ff8a8a;
-}
-
-.bias-Range {
-    background: #2a2e3a;
-    color: #9ca3af;
-}
-
-.exposure-trust {
-    font-weight: 600;
-}
-
-.exposure-bar {
-    height: 6px;
-    background: #1b1f2a;
-    border-radius: 6px;
-    overflow: hidden;
-}
-
-.exposure-bar-fill {
-    height: 100%;
-    background: linear-gradient(90deg,#60a5fa,#22c55e);
-}
-
-
-
-
-/* =========================================================
-   📱 TABLET OPTIMIZATION — AI LEARNING (iPad / Android)
-   ========================================================= */
-
-/* === Общие отступы под планшет === */
-@media (max-width: 1024px) {
-
-    .ai-learning-root {
-        padding: 16px;
-    }
-
-    /* ===============================
-       HEADER → 2 ROW GRID
-    =============================== */
-    .ai-header {
-        grid-template-columns: repeat(2, 1fr);
-        gap: 12px;
-    }
-
-    .ai-header-card.wide {
-        grid-column: span 2;
-    }
-
-    .neural-title {
-        grid-column: span 2;
-        font-size: 22px;
-        justify-content: space-between;
-    }
-
-    /* ===============================
-       PANELS
-    =============================== */
-    .ai-panel {
-        padding: 16px;
-        margin-bottom: 18px;
-    }
-
-    .ai-panel-title {
-        font-size: 20px;
-    }
-
-    /* ===============================
-       FILTER BAR → WRAP + TOUCH
-    =============================== */
-    .ai-filters {
-        flex-wrap: wrap;
-        gap: 14px;
-    }
-
-    .filter-group {
-        flex-wrap: wrap;
-        gap: 8px;
-    }
-
-        .filter-group span {
-            font-size: 13px;
-        }
-
-    .ai-chip,
-    select,
-    input[type="range"] {
-        min-height: 36px;
-    }
-
-    /* ===============================
-       📊 CHART — MAIN HERO
-    =============================== */
-    .ai-chart-wrap {
-        height: clamp(420px, 55vh, 620px);
-        margin-top: 10px;
-    }
-
-    /* ===============================
-       LIVE MARKET — 1 COLUMN
-    =============================== */
-    .live-grid {
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 12px;
-    }
-
-    /* ===============================
-       REASONS — FULL WIDTH
-    =============================== */
-    .reason-row {
-        grid-template-columns: 1fr;
-        gap: 8px;
-    }
-
-    /* ===============================
-       EXPOSURE MATRIX — COMPACT
-    =============================== */
-    .exposure-row {
-        grid-template-columns: 120px 140px 60px 1fr;
-        padding: 10px;
-    }
-
-    /* ===============================
-       DRIVERS GRID
-    =============================== */
-    .decision-drivers .drivers-grid {
-        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    }
+.stats {
+    display: flex;
+    gap: 40px;
+    margin-top: 12px;
+    font-size: 14px;
 }

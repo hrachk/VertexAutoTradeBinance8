@@ -1,5 +1,6 @@
 ﻿using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
+using CryptoExchange.Net.Objects;
 using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
@@ -71,6 +72,8 @@ namespace VertexAutoTradeBinance8
         private static readonly TimeSpan TrackedGrace = TimeSpan.FromMinutes(20);
         private volatile string _currentSymbol = "—";
 
+        private readonly BinanceHistoryImporter _importer;
+
         // ===============================
         // STRATEGY SIGNAL QUEUE (PRO)
         // ===============================
@@ -105,7 +108,7 @@ namespace VertexAutoTradeBinance8
             EngineStateBuilder engineStateBuilder,
             EngineStateSnapshotService engineStateSnapshot,
             IBootGate bootGate,
-            IStrategyPreFilter pre, MarketContextService marketContext, SimulatedTradeService sim, AiMarketRegimeService marketRegime)
+            IStrategyPreFilter pre, MarketContextService marketContext, SimulatedTradeService sim, AiMarketRegimeService marketRegime, BinanceHistoryImporter importer)
         {
             _logger = logger;
             _options = options.Value;
@@ -135,6 +138,7 @@ namespace VertexAutoTradeBinance8
             learn.ForceSnapshot();
             _sim = sim;
             _marketRegime = marketRegime;
+            _importer = importer;
         }
 
         private int _lastCyclesPerMinute = 0;
@@ -216,11 +220,128 @@ namespace VertexAutoTradeBinance8
             }
         }
 
+        private async Task<List<BinanceFuturesUsdtUserTrade>> LoadFromBinanceAsync(
+            DateTime fromUtc, CancellationToken ct)
+        {
+            var client = _factory.CreateRestClient();
+            var allTrades = new List<BinanceFuturesUsdtUserTrade>();
+            var retryDelay = TimeSpan.FromSeconds(3);
+            const int maxRetries = 5;
+
+            foreach (var symbol in _symbols.ActiveSymbols)
+            {
+                long? fromId = null;
+                bool finished = false;
+
+                while (!finished)
+                {
+                    ct.ThrowIfCancellationRequested();
+
+                    int attempt = 0;
+                    WebCallResult<BinanceFuturesUsdtTrade[]> res = null!;
+
+                    // ===== RETRY LOOP =====
+                    while (attempt < maxRetries)
+                    {
+                        attempt++;
+                        try
+                        {
+                            res = await client.UsdFuturesApi.Trading.GetUserTradesAsync(
+                                symbol: symbol,
+                                startTime: fromUtc,
+                                limit: 1000,
+                                fromId: fromId,
+                                ct: ct
+                            ).ConfigureAwait(false);
+
+                            if (res.Success)
+                                break;
+
+                            _logger.LogWarning(
+                                "[BINANCE][{symbol}] Attempt {attempt}/{maxRetries} failed: {msg}",
+                                symbol, attempt, maxRetries, res.Error
+                            );
+
+                            // Unauthorized / invalid API key → skip symbol
+                            if (res.Error?.Code == -2015 || res.Error?.Code == -2014)
+                            {
+                                _logger.LogError(
+                                    "[BINANCE][{symbol}] Unauthorized / invalid API key. Skipping symbol.",
+                                    symbol
+                                );
+                                finished = true;
+                                break;
+                            }
+
+                            await Task.Delay(retryDelay, ct).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(
+                                ex,
+                                "[BINANCE][{symbol}] Attempt {attempt}/{maxRetries} exception",
+                                symbol, attempt, maxRetries
+                            );
+                            await Task.Delay(retryDelay, ct).ConfigureAwait(false);
+                        }
+                    }
+
+                    if (res == null || !res.Success || finished)
+                        break;
+
+                    if (res.Data == null || res.Data.Length == 0)
+                        break;
+
+                    // ===== ADD TO LIST =====
+                    allTrades.AddRange(res.Data.Select(t => new BinanceFuturesUsdtUserTrade
+                    {
+                        Id = t.Id,
+                        Symbol = t.Symbol,
+                        PositionSide = t.PositionSide,
+                        Price = t.Price,
+                        Quantity = t.Quantity,
+                        Time = t.Timestamp,
+                        Buyer = t.Buyer,
+                        RealizedPnl = t.RealizedPnl
+                    }));
+
+                    // ===== PAGINATION =====
+                    fromId = res.Data.Max(t => t.Id) + 1;
+                }
+            }
+
+            return allTrades;
+        }
+
         protected override async Task ExecuteAsync(CancellationToken ct)
         {
             _logger.LogWarning("[WORKER] Waiting BootGate ...");
             await _bootGate.WaitReadyAsync(ct);
             _logger.LogWarning("[WORKER] BootGate READY");
+
+
+            // ============================================
+            // 0️⃣ IMPORT BINANCE FUTURES HISTORY (AI)
+            // ============================================
+            try
+            {
+                var from = _learn.LastImportedTradeCloseUtc ?? DateTime.UtcNow.AddDays(-90);
+                _logger.LogInformation("[AI-BOOT] Importing Binance Futures history from {From}", from);
+
+                var fills = await LoadFromBinanceAsync(from.AddMilliseconds(1), ct);
+                _importer.ImportClosedTrades(fills);
+
+                _learn.ForceSnapshot();
+
+                _logger.LogInformation("[AI-BOOT] Import done → trades={Count}", _learn.TotalTrades);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[AI-BOOT] Failed to import Binance Futures history");
+            }
+
+
 
             // 1) LOAD SYMBOLS (universe)
             if (DateTime.UtcNow - _lastUniverseRefreshUtc > UniverseRefreshPeriod)
@@ -355,13 +476,14 @@ _strategy.OnSignalGenerated += signal =>
                     _currentSymbol = symbol;
 
                     var selectedTf = await ResolveTimeframeSafeAsync(symbol, ct);  // можно для аналитики/логов
-                    var tradeTf = KlineInterval.FiveMinutes; // жестко
-                                                             // либо маппинг из _options.TimeframeMinutes -> KlineInterval
+                    var tradeTf = KlineInterval.FifteenMinutes; // жестко   // либо маппинг из _options.TimeframeMinutes -> KlineInterval
+
+
                     var ctx = await _marketContext.GetContextAsync(symbol, ct);
 
                     var state = _engineStateBuilder.Build(
                         symbol: symbol,
-                        timeframe: _options.TimeframeMinutes.ToString()
+                        timeframe: selectedTf.ToString()
                     );
 
                     state.LastEngineTick = DateTime.UtcNow;
@@ -369,8 +491,9 @@ _strategy.OnSignalGenerated += signal =>
                     state.CyclesPerMinute = _lastCyclesPerMinute;
                     state.UniverseSize = _symbols.ActiveSymbols.Count;
                     state.TrackedSymbols = trackedSymbols.Count;
-                   // state.OpenPositions = _supervisor.GetOpenPositionsCount();
-
+                    state.Timeframe = selectedTf.ToString();
+                     state.OpenPositions = await _supervisor.GetActivePositionsCountAsync(ct);
+                   
 
                     _engineStateSnapshot.Save(state);
 
@@ -395,211 +518,237 @@ _strategy.OnSignalGenerated += signal =>
         }
 
         private async Task HandleStrategySignalAsync(
-    TradeSignal signal,
-    CancellationToken ct)
-        {
-            var symbol = signal.Symbol.Trim().ToUpperInvariant();
-            var tf = Enum.Parse<KlineInterval>(signal.Timeframe);
-
-            ConsoleSymbolTableFormatter.UpdateTf(
-                symbol, tf, "▶ STRAT", signal.Side.ToString());
-
-            // =====================================================
-            // 1) CONTEXT / UNIVERSE SIDE CHECK
-            // =====================================================
-            var ctx = await _marketContext.GetContextAsync(symbol, ct);
-            if (!ctx.Allows(signal.Side))
+        TradeSignal signal,
+        CancellationToken ct)
             {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "UNIVERSE_SIDE",
-                    "SIDE_NOT_ALLOWED",
-                    ct);
-                return;
-            }
+                var symbol = signal.Symbol.Trim().ToUpperInvariant();
+                //var tf = Enum.Parse<KlineInterval>(signal.Timeframe);
 
-            // =====================================================
-            // 2) COOLDOWN
-            // =====================================================
-            if (InCooldown(symbol))
-            {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "COOLDOWN",
-                    "COOLDOWN_ACTIVE",
-                    ct);
-                return;
-            }
+                if (string.IsNullOrWhiteSpace(signal.Timeframe))
+                {
+                    await RejectAsync(
+                        signal,
+                        symbol,
+                        default,
+                        "INVALID_SIGNAL",
+                        "TIMEFRAME_NULL",
+                        ct);
+                    return;
+                }
 
-            // =====================================================
-            // 3) AI CONFIRMATION
-            // =====================================================
-            AiDecision ai;
-            try
-            {
-                var klines = await _marketDataFacade
-                    .GetKlinesAsync(symbol, tf, 200, ct)
-                    .ConfigureAwait(false);
+                if (!Enum.TryParse<KlineInterval>(
+                        signal.Timeframe,
+                        ignoreCase: true,
+                        out var tf))
+                {
+                    await RejectAsync(
+                        signal,
+                        symbol,
+                        default,
+                        "INVALID_SIGNAL",
+                        $"TIMEFRAME_INVALID:{signal.Timeframe}",
+                        ct);
+                    return;
+                }
+                ConsoleSymbolTableFormatter.UpdateTf(
+                    symbol, tf, "▶ STRAT", signal.Side.ToString());
 
-                ai = _predict.Decide(symbol, tf, klines, signal);
-            }
-            catch (Exception ex)
-            {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "AI",
-                    "AI_ERROR",
-                    ct,
-                    extra: ex.Message);
-                return;
-            }
+                // =====================================================
+                // 1) CONTEXT / UNIVERSE SIDE CHECK
+                // =====================================================
+                var ctx = await _marketContext.GetContextAsync(symbol, ct);
+                if (!ctx.Allows(signal.Side))
+                {
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "UNIVERSE_SIDE",
+                        "SIDE_NOT_ALLOWED",
+                        ct);
+                    return;
+                }
 
-            if (!ai.Allow)
-            {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "AI",
-                    "AI_BLOCK",
-                    ct,
-                    extra: ai.Reason);
-                return;
-            }
+                // =====================================================
+                // 2) COOLDOWN
+                // =====================================================
+                if (InCooldown(symbol))
+                {
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "COOLDOWN",
+                        "COOLDOWN_ACTIVE",
+                        ct);
+                    return;
+                }
 
-            // =====================================================
-            // 4) RISK SCALING
-            // =====================================================
-            var riskMult = _riskScaler.Scale(ai.Grade);
-            if (riskMult <= 0)
-            {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "RISK",
-                    "RISK_MULT_ZERO",
-                    ct);
-                return;
-            }
+                // =====================================================
+                // 3) AI CONFIRMATION
+                // =====================================================
+                AiDecision ai;
+                try
+                {
+                    var klines = await _marketDataFacade
+                        .GetKlinesAsync(symbol, tf, 200, ct)
+                        .ConfigureAwait(false);
 
-            // =====================================================
-            // 5) LIQUIDITY GUARD (FINAL)
-            // =====================================================
-            LiquidityGuardResult liq;
-            try
-            {
-                var klines = await _marketDataFacade
-                    .GetKlinesAsync(symbol, tf, 120, ct)
-                    .ConfigureAwait(false);
+                    ai = _predict.Decide(symbol, tf, klines, signal);
+                }
+                catch (Exception ex)
+                {
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "AI",
+                        "AI_ERROR",
+                        ct,
+                        extra: ex.Message);
+                    return;
+                }
 
-                liq = _liq.Analyze(
-                    symbol, tf, klines,
+                if (!ai.Allow)
+                {
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "AI",
+                        "AI_BLOCK",
+                        ct,
+                        extra: ai.Reason);
+                    return;
+                }
+
+                // =====================================================
+                // 4) RISK SCALING
+                // =====================================================
+                var riskMult = _riskScaler.Scale(ai.Grade);
+                if (riskMult <= 0)
+                {
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "RISK",
+                        "RISK_MULT_ZERO",
+                        ct);
+                    return;
+                }
+
+                // =====================================================
+                // 5) LIQUIDITY GUARD (FINAL)
+                // =====================================================
+                LiquidityGuardResult liq;
+                try
+                {
+                    var klines = await _marketDataFacade
+                        .GetKlinesAsync(symbol, tf, 120, ct)
+                        .ConfigureAwait(false);
+
+                    liq = _liq.Analyze(
+                        symbol, tf, klines,
+                        signal.Side,
+                        signal.IsSuperSignal);
+                }
+                catch (Exception ex)
+                {
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "LIQUIDITY",
+                        "LIQ_SERVICE_ERROR",
+                        ct,
+                        extra: ex.Message);
+                    return;
+                }
+
+                if (liq.Block)
+                {
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "LIQUIDITY",
+                        $"LIQUIDITY_{liq.Reason}",
+                        ct);
+                    return;
+                }
+
+                // =====================================================
+                // 6) QTY
+                // =====================================================
+                var qty = await _risk.CalculateSafeQty(
+                    signal,
+                    symbol,
+                    signal.EntryPrice,
+                    signal.StopLoss,
+                    riskMult,
+                    signal.SafetyRiskMultiplier,
+                    signal.Leverage ?? 1m,
                     signal.Side,
-                    signal.IsSuperSignal);
-            }
-            catch (Exception ex)
-            {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "LIQUIDITY",
-                    "LIQ_SERVICE_ERROR",
-                    ct,
-                    extra: ex.Message);
-                return;
-            }
+                    signal.TakeProfits,
+                    ct).ConfigureAwait(false);
 
-            if (liq.Block)
-            {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "LIQUIDITY",
-                    $"LIQUIDITY_{liq.Reason}",
-                    ct);
-                return;
-            }
+                if (qty <= 0)
+                {
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "RISK",
+                        "NO_BALANCE_OR_MIN_NOTIONAL",
+                        ct);
+                    return;
+                }
 
-            // =====================================================
-            // 6) QTY
-            // =====================================================
-            var qty = await _risk.CalculateSafeQty(
-                signal,
-                symbol,
-                signal.EntryPrice,
-                signal.StopLoss,
-                riskMult,
-                signal.SafetyRiskMultiplier,
-                signal.Leverage ?? 1m,
-                signal.Side,
-                signal.TakeProfits,
-                ct).ConfigureAwait(false);
+                // =====================================================
+                // 7) SL / TP OPTIMIZATION
+                // =====================================================
+                try
+                {
+                    var klines = await _marketDataFacade
+                        .GetKlinesAsync(symbol, tf, 120, ct)
+                        .ConfigureAwait(false);
 
-            if (qty <= 0)
-            {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "RISK",
-                    "NO_BALANCE_OR_MIN_NOTIONAL",
-                    ct);
-                return;
-            }
+                    signal.StopLoss =
+                        _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
 
-            // =====================================================
-            // 7) SL / TP OPTIMIZATION
-            // =====================================================
-            try
-            {
-                var klines = await _marketDataFacade
-                    .GetKlinesAsync(symbol, tf, 120, ct)
+                    await _cleaner
+                        .CleanupOutdatedOrdersAsync(symbol, signal, ct)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "PROTECTION",
+                        "PROTECTION_ERROR",
+                        ct,
+                        extra: ex.Message);
+                    return;
+                }
+
+                // =====================================================
+                // 8) EXECUTION
+                // =====================================================
+                var result = await _executor
+                    .ExecuteAsync(signal, qty, ct)
                     .ConfigureAwait(false);
 
-                signal.StopLoss =
-                    _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
+                if (!result.Success)
+                {
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "EXEC",
+                        "EXECUTION_FAILED",
+                        ct,
+                        extra: result.Error);
+                    return;
+                }
 
-                await _cleaner
-                    .CleanupOutdatedOrdersAsync(symbol, signal, ct)
+                // =====================================================
+                // 9) SUCCESS
+                // =====================================================
+                MarkTrade(symbol);
+                TrackSymbol(symbol, keepAlive: true);
+
+                await _supervisor
+                    .SuperviseAsync(symbol, signal, ct)
                     .ConfigureAwait(false);
+
+                ConsoleSymbolTableFormatter.UpdateTf(
+                    symbol, tf,
+                    "🟩 OK",
+                    $"{signal.Side} qty={qty:F4}");
             }
-            catch (Exception ex)
-            {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "PROTECTION",
-                    "PROTECTION_ERROR",
-                    ct,
-                    extra: ex.Message);
-                return;
-            }
-
-            // =====================================================
-            // 8) EXECUTION
-            // =====================================================
-            var result = await _executor
-                .ExecuteAsync(signal, qty, ct)
-                .ConfigureAwait(false);
-
-            if (!result.Success)
-            {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "EXEC",
-                    "EXECUTION_FAILED",
-                    ct,
-                    extra: result.Error);
-                return;
-            }
-
-            // =====================================================
-            // 9) SUCCESS
-            // =====================================================
-            MarkTrade(symbol);
-            TrackSymbol(symbol, keepAlive: true);
-
-            await _supervisor
-                .SuperviseAsync(symbol, signal, ct)
-                .ConfigureAwait(false);
-
-            ConsoleSymbolTableFormatter.UpdateTf(
-                symbol, tf,
-                "🟩 OK",
-                $"{signal.Side} qty={qty:F4}");
-        }
 
 
         // ===========================================
@@ -734,6 +883,7 @@ _strategy.OnSignalGenerated += signal =>
                     // WS warmup (safe, sequential)
                     await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneMinute, 20, ct);
                     await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FiveMinutes, 20, ct);
+                    await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FifteenMinutes, 20, ct);
 
                     _warm.TryAdd(s, 0);
                     _logger.LogInformation("[BOOT][MD] warmup ok {sym}", s);
@@ -752,24 +902,27 @@ _strategy.OnSignalGenerated += signal =>
 
         private async Task<KlineInterval> ResolveTimeframeSafeAsync(string symbol, CancellationToken ct)
         {
-            var fallback = KlineInterval.FiveMinutes;
+            var fallback = KlineInterval.FifteenMinutes;
 
             try
             {
                 var m1Task = _market.GetMarketSnapshot(symbol, KlineInterval.OneMinute, ct);
                 var m5Task = _market.GetMarketSnapshot(symbol, KlineInterval.FiveMinutes, ct);
+                var m15Task = _market.GetMarketSnapshot(symbol, KlineInterval.FifteenMinutes, ct);
 
                 var m1 = await m1Task;
                 var m5 = await m5Task;
+                var m15 = await m15Task;
 
-                if (m1 != null && m5 != null)
+                if (m1 != null && m5 != null && m15 != null)
                 {
-                    var d = _tfSelector.SelectTF(m1, m5);
+                    var d = _tfSelector.SelectTF(m1, m5, m15);
                     return d switch
                     {
                         DominantTF.OneMinute => KlineInterval.OneMinute,
                         DominantTF.FiveMinutes => KlineInterval.FiveMinutes,
-                        DominantTF.Both => KlineInterval.FiveMinutes,
+                        DominantTF.FifteenMinutes => KlineInterval.FifteenMinutes,
+                        DominantTF.Both => KlineInterval.FifteenMinutes,
                         _ => fallback
                     };
                 }

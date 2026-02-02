@@ -6,7 +6,7 @@ public class EngineStateModel
     public string Mode { get; set; } = "";
 
     public decimal BalanceUsdt { get; set; }
-
+    public decimal RealizedPnlUsd { get; set; }
     public string Symbol { get; set; } = "";
     public string Timeframe { get; set; } = "";
 

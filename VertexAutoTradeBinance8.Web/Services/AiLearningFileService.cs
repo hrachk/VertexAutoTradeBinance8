@@ -1,9 +1,7 @@
 ﻿using System.Text.Json;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Web.Models;
-
 namespace VertexAutoTradeBinance8.Web.Services;
-
 public sealed class AiLearningFileService
 {
     private readonly string _filePath;
@@ -15,22 +13,14 @@ public sealed class AiLearningFileService
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true
     };
-
     public AiLearningFileService(
         IWebHostEnvironment env, IConfiguration cfg,
         ILogger<AiLearningFileService> logger)
     {
-        
-       // var root = 
-            //cfg["SharedData:Root"]
-            // ?? throw new InvalidOperationException("SharedData:Root not configured");
-
         _filePath = Path.Combine(
             AppContext.BaseDirectory,
             "ai-models",
             "ai_learning.json");
-
-
         _logger = logger;
     }
 
@@ -41,7 +31,6 @@ public sealed class AiLearningFileService
     {
         if (!File.Exists(_filePath))
             return default;
-
         try
         {
             await using var fs = new FileStream(
@@ -49,7 +38,6 @@ public sealed class AiLearningFileService
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.ReadWrite | FileShare.Delete);
-
             return await JsonSerializer.DeserializeAsync<T>(fs, JsonOptions);
         }
         catch (IOException ex)
@@ -62,33 +50,46 @@ public sealed class AiLearningFileService
             _logger.LogError(ex, "[AI-LEARN-WEB] Read error");
             return default;
         }
-    }
-
+    } 
     // ===============================
     // PUBLIC API
     // ===============================
-
     public Task<AiLearningSnapshot?> LoadSnapshot()
         => ReadSafeAsync<AiLearningSnapshot>();
-
-    public Task<AiLearningSnapshot?> GetAllAsync()
-        => ReadSafeAsync<AiLearningSnapshot>();
+  
 
     public async Task<IReadOnlyList<AiLearningPointModel>> LoadAsync(
-        DateTime? fromUtc = null,
-        int minScore = 0)
+     DateTime? fromUtc = null,
+     int minScore = 0)
     {
-        var data = await ReadSafeAsync<List<AiLearningPointModel>>()
-                   ?? new();
+        var snap = await ReadSafeAsync<AiLearningSnapshot>();
+        if (snap == null)
+            return Array.Empty<AiLearningPointModel>();
 
+        var points = snap.MarketStates
+            .Select(ms => new AiLearningPointModel
+            {
+                Time = ms.Time,
+                Symbol = ms.Symbol,
+
+                // 🔥 DERIVED FIELDS (как раньше)
+                Score = (int)Math.Round(ms.Confidence * 100m),
+                Confidence = ms.Confidence,
+
+                Slope = ms.TrendSlopePercent / 100m,
+                Volatility = ms.VolatilityPercent / 100m,
+
+                LiquidityDanger =
+                    ms.VolatilityPercent > 0.06m &&
+                    Math.Abs(ms.TrendSlopePercent) < 0.002m
+            })
+            .ToList();
         if (fromUtc.HasValue)
-            data = data.Where(e => e.Time >= fromUtc.Value).ToList();
-
+            points = points.Where(p => p.Time >= fromUtc.Value).ToList();
         if (minScore > 0)
-            data = data.Where(e => e.Score >= minScore).ToList();
-
-        return data
-            .OrderBy(e => e.Time)
+            points = points.Where(p => p.Score >= minScore).ToList();
+        return points
+            .OrderBy(p => p.Time)
             .ToList();
     }
 }

@@ -71,7 +71,9 @@ namespace VertexAutoTradeBinance8.Services
                 SupervisorChecksLastMinute = s.SupervisorChecksLastMinute,
                 LastSupervisorAction = s.LastSupervisorAction,
                 LastSupervisorMessage = s.LastSupervisorMessage,
-                LastUpdate = DateTime.UtcNow
+                LastUpdate = DateTime.UtcNow,
+                 OpenPositions = s.OpenPositions,
+                  RealizedPnlUsd = s.RealizedPnlUsd,
             };
 
             

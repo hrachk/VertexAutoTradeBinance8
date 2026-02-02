@@ -101,11 +101,21 @@ builder.Services.AddHttpClient("api", client =>
     client.BaseAddress = new Uri("https://localhost:7185/"); // твой Web API адрес
 });
 
+// читаем IP и порт из конфига
+string ip = builder.Configuration.GetValue<string>("Kestrel:Http:IP");
+int port = builder.Configuration.GetValue<int>("Kestrel:Http:Port");
+
+if (string.IsNullOrWhiteSpace(ip))
+    throw new InvalidOperationException("Kestrel:Http:IP not configured");
+
+if (port <= 0)
+    throw new InvalidOperationException("Kestrel:Http:Port not configured");
+
+// биндим вручную
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenAnyIP(5101);
+    options.Listen(System.Net.IPAddress.Parse(ip), port);
 });
-
 builder.Services.AddSingleton<PositionsLiveService>();
  
 

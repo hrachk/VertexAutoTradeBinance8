@@ -15,6 +15,7 @@ namespace VertexAutoTradeBinance8.Services.Engine
         // WS latency guard (если нет новых данных — не гоняем стратегию)
         private readonly TimeSpan _maxStaleness1m = TimeSpan.FromSeconds(25);
         private readonly TimeSpan _maxStaleness5m = TimeSpan.FromSeconds(75);
+        private readonly TimeSpan _maxStaleness15m = TimeSpan.FromSeconds(125);
 
         public StrategyPreFilterService(
             ILogger<StrategyPreFilterService> logger,
@@ -58,6 +59,7 @@ namespace VertexAutoTradeBinance8.Services.Engine
                 {
                     KlineInterval.OneMinute => _maxStaleness1m,
                     KlineInterval.FiveMinutes => _maxStaleness5m,
+                    KlineInterval.FifteenMinutes => _maxStaleness15m,
                     _ => TimeSpan.FromSeconds(90)
                 };
 

@@ -59,15 +59,16 @@ public class TradeSignal
     /// <summary>Оценка AI (0..1), если нужно отделять "одобренные" сигналы от остальных.</summary>
     public decimal? AiQuality { get; set; }
    
-    public decimal? Leverage { get; set; }
-    public AiLearningTradeMeta? Meta { get; set; }
+    public decimal? Leverage { get; set; } 
 
     /// <summary>
     /// Уверенность сигнала (0..1), вычисляется StrategyEngine (SmartRegime.Confidence)
     /// Используется для динамического управления (Early TP / BE / Risk)
     /// </summary>
     public decimal? Confidence { get; set; }
-
+    public bool ForceFullExit { get; set; } = false;
+    public decimal? TimeStopBars { get; set; }
+   
 
     public   decimal GetTpPart(int index)
     {
@@ -98,6 +99,7 @@ public class TradeSignal
         Leverage = src.Leverage;
         SafetyRiskMultiplier = src.SafetyRiskMultiplier;
         IsSuperSignal = src.IsSuperSignal;
+
     }
 
 }

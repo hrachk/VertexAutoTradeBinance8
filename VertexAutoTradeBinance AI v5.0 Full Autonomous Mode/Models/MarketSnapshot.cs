@@ -6,5 +6,7 @@
         public decimal VolatilityPercent { get; set; }
         public decimal Atr { get; set; }
         public decimal Confidence { get; set; }
+        // Efficiency Ratio: 1.0 — идеальный тренд, 0.0 — хаотичный шум
+        public decimal EfficiencyRatio { get; set; }
     }
 }

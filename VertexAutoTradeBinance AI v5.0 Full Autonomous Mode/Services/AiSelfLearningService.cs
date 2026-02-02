@@ -14,6 +14,7 @@ namespace VertexAutoTradeBinance8.Services
 
         // авто-коррекция от AI (накопленная)
         public Dictionary<string, decimal> AdaptiveBias { get; } = new();
+      
 
         public decimal GetWeight(string gate)
         {
@@ -29,6 +30,13 @@ namespace VertexAutoTradeBinance8.Services
     }
     public class AiSelfLearningService
     {
+        private DateTime? _lastImportedTradeCloseUtc;
+        public DateTime? LastImportedTradeCloseUtc => _lastImportedTradeCloseUtc;
+
+        public void UpdateLastImportedTradeCloseUtc(DateTime time)
+        {
+            _lastImportedTradeCloseUtc = time;
+        }
 
         public decimal GetGateMultiplier(string symbol, MarketRegime regime, string gate)
         {

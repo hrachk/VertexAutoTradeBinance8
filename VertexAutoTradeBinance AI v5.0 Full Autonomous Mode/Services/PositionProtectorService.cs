@@ -1,8 +1,4 @@
-﻿using System;
-using System.Linq;
-using Binance.Net.Clients;
-using Binance.Net.Enums;
-using Binance.Net.Objects.Models.Futures;
+﻿using Binance.Net.Enums;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services

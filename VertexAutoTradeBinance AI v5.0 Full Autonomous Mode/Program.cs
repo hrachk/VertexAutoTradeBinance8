@@ -136,9 +136,15 @@ public class Program
                     services.AddSingleton<MarketDataFacade>();
                     services.AddSingleton<MarketStateService>();
                     services.AddSingleton<MarketDataService>();
+                    services.AddSingleton<PositionLifecycleTracker>();
+
+                    services.AddSingleton<BinanceHistoryImporter>();
+                    
+    
+
 
                     // ⚠️ РЕГИСТРИРУЕМ ОДИН РАЗ
-                  
+
                     services.AddSingleton<SymbolLiquidityScanner>();
                     services.AddSingleton<SymbolUniverseBuilder>();
                     services.AddSingleton<SymbolInfoService>(); // ← 🔴 КРИТИЧНО: ДО RiskManager

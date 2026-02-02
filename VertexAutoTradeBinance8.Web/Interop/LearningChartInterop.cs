@@ -13,6 +13,6 @@ public sealed class LearningChartInterop
     [JSInvokable]
     public Task RenderLearningChart(List<AiLearningRecord> points)
     {
-        return _js.InvokeVoidAsync("VertexLearningChart.renderData", points).AsTask();
+        return _js.InvokeVoidAsync("learningTimelineChart.renderData", points).AsTask();
     }
 }

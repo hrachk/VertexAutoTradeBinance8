@@ -4,6 +4,7 @@ using Binance.Net.Objects.Models.Futures;
 using CryptoExchange.Net.Objects;
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using VertexAutoTradeBinance8.Models;
@@ -11,6 +12,22 @@ using VertexAutoTradeBinance8.Strategy;
 
 namespace VertexAutoTradeBinance8.Services
 {
+
+
+    public sealed class PositionLifecycleTracker
+    {
+        // key = symbol_side_entryPrice
+        private readonly ConcurrentDictionary<string, int> _barsInTrade = new();
+
+        public int IncBars(string key)
+            => _barsInTrade.AddOrUpdate(key, 1, (_, v) => v + 1);
+
+        public void Clear(string key)
+            => _barsInTrade.TryRemove(key, out _);
+
+     
+    }
+
     /// <summary>
     /// PositionSupervisorService v8.2 PRO (Production)
     ///
@@ -42,6 +59,8 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ConcurrentDictionary<string, long> _earlyTpDone = new();   // key -> unixMs
         private readonly ConcurrentDictionary<string, long> _beMoved = new();      // key -> unixMs
         private readonly ConcurrentDictionary<string, decimal> _restoredEntries = new();
+        private readonly PositionLifecycleTracker _lifecycle;
+
         // === Harvest block after partial close ===
         private readonly ConcurrentDictionary<string, long> _recentPartialClose = new();
 
@@ -54,7 +73,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ConcurrentDictionary<string, bool> _attached = new();
 
 
-        public PositionSupervisorService(
+        public PositionSupervisorService( 
             ILogger<PositionSupervisorService> logger,
             BinanceClientFactory factory,
             SymbolInfoService symbolInfo,
@@ -68,7 +87,7 @@ namespace VertexAutoTradeBinance8.Services
             LiquidityGuardService liquidityGuard,
             IOrderDispatcher dispatcher, EngineStateSnapshotService stateSvc,
             SmartRegimeService smartRegime,
-            ReverseProbeEngine reverseProbe)
+            ReverseProbeEngine reverseProbe, PositionLifecycleTracker lifecycle)
         {
             _logger = logger;
             _factory = factory;
@@ -87,10 +106,22 @@ namespace VertexAutoTradeBinance8.Services
             _stateSvc = stateSvc;
             _smartRegime = smartRegime;
             _reverseProbe = reverseProbe;
-
+            _lifecycle = lifecycle;
 
         }
+
+        private static string BuildExitKey(
+ string symbol,
+ PositionSide side,
+ decimal entryPrice)
+        {
+            return $"{symbol}|{side}|{entryPrice:F8}";
+        }
+
+
         private EngineState _engineState => _stateSvc.State;
+
+
         // =====================================================================
         // MAIN ENTRY
         // =====================================================================
@@ -118,17 +149,29 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             var positions = posInfo.Data
-    .Where(p => p.Symbol == symbol && p.Quantity != 0m)
+    .Where(p => p.Symbol == symbol)
     .ToList();
 
             var longPos = positions.FirstOrDefault(p => p.PositionSide == PositionSide.Long);
             var shortPos = positions.FirstOrDefault(p => p.PositionSide == PositionSide.Short);
 
 
-            var hasLong = longPos != null && longPos.Quantity != 0m;
-            var hasShort = shortPos != null && shortPos.Quantity != 0m;
+            //var hasLong = longPos != null && longPos.Quantity != 0m;
+            //var hasShort = shortPos != null && shortPos.Quantity != 0m;
 
-            if (!hasLong && !hasShort)
+            //if (!hasLong && !hasShort)
+            //{
+            //    _logger.LogInformation("[SUPERVISOR] {symbol}: no positions", symbol);
+            //    return;
+            //}
+            DetectClose(symbol, longPos, PositionSide.Long);
+            DetectClose(symbol, shortPos, PositionSide.Short);
+
+            // проверяем, остались ли открытые позиции
+            var hasLong = longPos?.Quantity > 0m;
+            var hasShort = shortPos?.Quantity > 0m;
+
+            if ((longPos?.Quantity ?? 0) == 0 && (shortPos?.Quantity ?? 0) == 0)
             {
                 _logger.LogInformation("[SUPERVISOR] {symbol}: no positions", symbol);
                 return;
@@ -180,6 +223,66 @@ namespace VertexAutoTradeBinance8.Services
 
             if (hasShort)
                 await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, openOrders, lastSignal, klines1m, ct);
+        }
+
+        private decimal ResolveExitPrice(string symbol)
+        {
+            // 1) Пытаемся взять свежий стакан
+            var depth = _marketData.GetCachedDepth(symbol);
+
+            if (depth != null && depth.Bids.Count > 0 && depth.Asks.Count > 0)
+            {
+                var bestBid = depth.Bids[0].price;
+                var bestAsk = depth.Asks[0].price;
+
+                if (bestBid > 0 && bestAsk > 0)
+                    return (bestBid + bestAsk) / 2m;
+            }
+
+            return 0m;
+        }
+
+        private void DetectClose(
+    string symbol,
+    BinancePositionDetailsUsdt? pos,
+    PositionSide side)
+        {
+            var key = $"{symbol}_{side}";
+
+            var prevQty = _manualHandler.GetPrevQty(key);
+            var prevEntry = _manualHandler.GetPrevEntry(key);
+
+            var currQty = pos?.Quantity ?? 0m;
+            var currEntry = pos?.EntryPrice ?? 0m;
+
+            // 🔥 CLOSE DETECTED
+            if (prevQty != 0m && currQty == 0m)
+            {
+                var exitPrice = ResolveExitPrice(symbol);
+
+                if (exitPrice <= 0m)
+                {
+                    _logger.LogWarning(
+                        "[CLOSE][{symbol}][{side}] Exit price unresolved, skip record",
+                        symbol, side);
+                }
+                else
+                {
+                    _aiLearning.RecordTrade(
+                        symbol,
+                        side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell,
+                        entry: prevEntry,
+                        exit: exitPrice,
+                        regime: _regimeNow);
+
+                    _logger.LogWarning(
+                        "[CLOSE][{symbol}][{side}] qty={qty} entry={entry} exit={exit}",
+                        symbol, side, prevQty, prevEntry, exitPrice);
+                }
+            }
+
+            // ⚠️ ОБНОВЛЯЕМ СОСТОЯНИЕ ТОЛЬКО ПОСЛЕ ПРОВЕРКИ
+            _manualHandler.SetPrevState(key, currQty, currEntry);
         }
 
 
@@ -511,6 +614,59 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         // HANDLE SIDE  (v8.2 PRO)
         // =====================================================================
+
+
+
+        public async Task ClosePositionMarketAsync(string symbol, BinanceRestClient client, BinancePositionDetailsUsdt position)
+        { 
+            if (position == null) return;
+
+            // 2. Определяем сторону закрытия
+            var closeSide = position.Quantity > 0 ? OrderSide.Sell : OrderSide.Buy;
+            var absQuantity = Math.Abs(position.Quantity);
+
+            // 3. Отправляем рыночный ордер на закрытие
+            await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: symbol,
+                side: closeSide,
+                type: FuturesOrderType.Market,
+                quantity: absQuantity,
+                reduceOnly: true,
+                positionSide: position.PositionSide // Важно для Hedge Mode
+            );
+        }
+        public async Task<int> GetActivePositionsCountAsync(CancellationToken ct = default)
+        {
+            using var client = _factory.CreateRestClient();
+
+            var result = await client
+                .UsdFuturesApi
+                .Trading
+                .GetPositionsAsync(ct: ct)
+                .ConfigureAwait(false);
+
+            if (!result.Success)
+            {
+                _logger.LogError(
+                    "Критическая ошибка API при получении позиций: {code} - {msg}",
+                    result.Error?.Code,
+                    result.Error?.Message);
+
+                // ВАЖНО: не возвращаем 0 как «всё ок»
+                throw new InvalidOperationException(
+                    $"Binance API error: {result.Error?.Code} {result.Error?.Message}");
+            }
+
+            // PositionAmt != 0 — ЕДИНСТВЕННЫЙ надёжный индикатор
+            int activeCount = result.Data.Count(p => p.PositionAmt != 0);
+
+            _logger.LogInformation(
+                "Проверка позиций завершена. Активных: {count}",
+                activeCount);
+
+            return activeCount;
+        }
+         
         private async Task HandleSideAsync(
             BinanceRestClient client,
             string symbol,
@@ -527,7 +683,8 @@ namespace VertexAutoTradeBinance8.Services
             var key = $"{symbol}_{side}";
             var prevQty = _manualHandler.GetPrevQty(key);
             var prevEntry = _manualHandler.GetPrevEntry(key);
-            _manualHandler.SetPrevState(key, pos.Quantity, pos.EntryPrice);
+          
+ 
 
             if (prevQty != 0 && pos.Quantity == 0)
             {
@@ -565,12 +722,75 @@ namespace VertexAutoTradeBinance8.Services
 
                 return;
             }
+            _manualHandler.SetPrevState(key, pos.Quantity, pos.EntryPrice);
 
+            // === no position ===
             if (qtyAbs <= 0)
+                {
+                    // обязательно чистим lifecycle
+                    _lifecycle.Clear(BuildExitKey(symbol, side, prevEntry));
+                    _logger.LogInformation("[SUPERVISOR] {symbol} {side} {prevEntry}: no qty", symbol, side, prevEntry);
+                    return;
+                } 
+
+            // =====================================================
+            // IMPULSE CONTINUATION — FORCE EXIT CONTRACT
+            // =====================================================
+            if (signal != null && signal.ForceFullExit)
             {
-                _logger.LogInformation("[SUPERVISOR] {symbol} {side}: no qty", symbol, side);
+                // key per position lifecycle
+                var posKey = BuildPosGuardKey(symbol, side, pos.EntryPrice, qtyAbs);
+
+                // считаем бары
+                int bars = _lifecycle.IncBars(posKey);
+
+                // --- TIME STOP ---
+                if (signal.TimeStopBars.HasValue && bars >= signal.TimeStopBars.Value)
+                {
+                    _logger.LogWarning(
+                        "[EXIT][{symbol}] IMPULSE_CONTINUATION TimeStop → FULL CLOSE ({bars} bars)",
+                        symbol, bars);
+
+                    return;
+                }
+
+                // --- LOSS OF IMPULSE (optional but recommended) ---
+                if (klines != null && klines.Count >= 3)
+                {
+                    int i = klines.Count - 1;
+                    var c0 = klines[i];
+                    var c1 = klines[i - 1];
+
+                    decimal atr = 0m;
+
+
+                    if (signal?.Atr != null && signal.Atr.Value > 0)
+                      atr = signal.Atr.Value;
+
+                    decimal body0 = Math.Abs(c0.ClosePrice - c0.OpenPrice);
+                    decimal body1 = Math.Abs(c1.ClosePrice - c1.OpenPrice);
+
+                    bool impulseLost =
+                        body0 < atr * 0.2m &&
+                        body1 < atr * 0.2m;
+
+                    if (impulseLost)
+                    {
+                        _logger.LogWarning(
+                            "[EXIT][{symbol}] IMPULSE_CONTINUATION impulse lost → FULL CLOSE",
+                            symbol);
+                         
+                        await ClosePositionMarketAsync(symbol, client, pos);
+
+                        return;
+                    }
+                }
+                // ⛔ ВАЖНО: если ForceFullExit — НИЧЕГО больше не делаем
+                // запрещаем partial / BE / trailing ниже
                 return;
             }
+
+
 
             decimal entry = pos.EntryPrice;
 
@@ -683,46 +903,81 @@ namespace VertexAutoTradeBinance8.Services
 
                 // Если позиция уже в плюсе, а BE ещё не отмечен — двигаем SL в минимальный BE
                 // Порог мягкий (0.30 ATR), чтобы не ждать 1.2 ATR
-                if (sl != null && !_beMoved.ContainsKey(guardKey))
+                //            if (sl != null && !_beMoved.ContainsKey(guardKey))
+                //            {
+
+                //                var slPrice =
+                //sl.StopPrice > 0
+                //    ? sl.StopPrice
+                //    : sl.Price;
+                //                if (slPrice > 0)
+                //                {
+                //                    var last = klines[^1].ClosePrice;
+
+                //                    bool marketInProfit =
+                //                        side == PositionSide.Long
+                //                            ? last > entry
+                //                            : last < entry;
+
+                //                    bool slBelowEntry =
+                //                        side == PositionSide.Long
+                //                            ? slPrice < entry
+                //                            : slPrice > entry;
+
+                //                    bool beEligible =
+                //                        side == PositionSide.Long
+                //                            ? last >= entry + atr14 * 0.30m
+                //                            : last <= entry - atr14 * 0.30m;
+
+                //                    if (marketInProfit && slBelowEntry && beEligible)
+                //                    {
+                //                        decimal minimalBe =
+                //                            side == PositionSide.Long
+                //                                ? entry + entry * 0.0005m
+                //                                : entry - entry * 0.0005m;
+
+                //                        await UpdateSL_ProAsync(client, symbol, side, qtyAbs, sl, entry, minimalBe, signal, ct);
+
+                //                        _beMoved[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+                //                        _logger.LogWarning(
+                //                            "[REHYDRATE-BE][{symbol}][{side}] SL moved to minimal BE (rehydration)",
+                //                            symbol, side);
+                //                    }
+                //                }
+                //            }
+                if (sl != null)
                 {
-                    
-                    var slPrice =
-    sl.StopPrice > 0
-        ? sl.StopPrice
-        : sl.Price;
-                    if (slPrice > 0)
+                    var keey = BuildBeKey(symbol, side, entry);
+                    var stage = _beStage.GetValueOrDefault(keey, BeStage.None);
+
+                    if (stage < BeStage.Rehydrate)
                     {
                         var last = klines[^1].ClosePrice;
 
-                        bool marketInProfit =
-                            side == PositionSide.Long
-                                ? last > entry
-                                : last < entry;
-
-                        bool slBelowEntry =
-                            side == PositionSide.Long
-                                ? slPrice < entry
-                                : slPrice > entry;
-
-                        bool beEligible =
+                        bool eligible =
                             side == PositionSide.Long
                                 ? last >= entry + atr14 * 0.30m
                                 : last <= entry - atr14 * 0.30m;
 
-                        if (marketInProfit && slBelowEntry && beEligible)
+                        if (eligible)
                         {
-                            decimal minimalBe =
+                            decimal rehydrateBe =
                                 side == PositionSide.Long
-                                    ? entry + entry * 0.0005m
-                                    : entry - entry * 0.0005m;
+                                    ? entry + entry * 0.0004m
+                                    : entry - entry * 0.0004m;
 
-                            await UpdateSL_ProAsync(client, symbol, side, qtyAbs, sl, entry, minimalBe, signal, ct);
+                            var ok = await UpdateSL_ProAsync(
+                                client, symbol, side, qtyAbs, sl, entry, rehydrateBe, signal, ct);
 
-                            _beMoved[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                            if (ok)
+                            {
+                                _beStage[keey] = BeStage.Rehydrate;
 
-                            _logger.LogWarning(
-                                "[REHYDRATE-BE][{symbol}][{side}] SL moved to minimal BE (rehydration)",
-                                symbol, side);
+                                _logger.LogWarning(
+                                    "[BE][REHYDRATE][{symbol}][{side}] SL={sl}",
+                                    symbol, side, rehydrateBe);
+                            }
                         }
                     }
                 }
@@ -931,118 +1186,226 @@ namespace VertexAutoTradeBinance8.Services
             catch { }
         }
 
+        enum BeStage
+        {
+            None = 0,
+            Rehydrate = 1,
+            Atr = 2,
+            Trailing = 3
+        }
+
+        private readonly ConcurrentDictionary<string, BeStage> _beStage = new();
+        private string BuildBeKey(string symbol, PositionSide side, decimal entry)
+    => $"{symbol}:{side}:{entry}";
+
 
         // =====================================================================
         // SL → BE (+ buffer, structural-aware, liquidity-safe)
         // =====================================================================
         private async Task TryMoveSlToBeAsync(
-            BinanceRestClient client,
-            string symbol,
-            PositionSide side,
-            decimal qty,
-            decimal entry,
-            decimal atr,
-            BinanceUsdFuturesOrder slOrder,
-            TradeSignal? signal,
-            IReadOnlyList<BinanceFuturesUsdtKline> klines,
-            CancellationToken ct)
+    BinanceRestClient client,
+    string symbol,
+    PositionSide side,
+    decimal qty,
+    decimal entry,
+    decimal atr,
+    BinanceUsdFuturesOrder slOrder,
+    TradeSignal? signal,
+    IReadOnlyList<BinanceFuturesUsdtKline> klines,
+    CancellationToken ct)
         {
             if (klines == null || klines.Count < 10) return;
             if (atr <= 0 || entry <= 0) return;
 
+            var key = BuildBeKey(symbol, side, entry);
+            var stage = _beStage.GetValueOrDefault(key, BeStage.None);
+
+            if (stage >= BeStage.Atr)
+                return;
+
             var last = klines[^1].ClosePrice;
 
-            // ===================================================
-            // LOW-ATR BE MODE (isolated, prop-safe)
-            // ===================================================
-            bool lowAtrMode =
-                atr / entry < 0.004m;   // < 0.4% ATR от цены (DASH, cheap coins)
+            bool lowAtr = atr / entry < 0.004m;
 
-            decimal normalTrigger =
-    atr * 0.30m;
-
-            decimal lowAtrTrigger =
-                Math.Max(
-                    atr * 0.25m,
-                    entry * 0.0006m    // ~0.06% цены
-                );
-
-            decimal trigger = lowAtrMode
-                ? lowAtrTrigger
-                : normalTrigger;
-
-            // === 1) Условие: цена дала минимальный плюс (не ждём TP)
-            // Симметрично для Long / Short
+            decimal trigger = lowAtr
+                ? Math.Max(atr * 0.25m, entry * 0.0006m)
+                : atr * 1.20m;
 
             bool reached =
-    side == PositionSide.Long
-        ? last >= entry + trigger
-        : last <= entry - trigger;
+                side == PositionSide.Long
+                    ? last >= entry + trigger
+                    : last <= entry - trigger;
 
-        
+            if (!reached)
+            {
+                _logger.LogDebug("[BE][ATR][{symbol}] not reached last={last} trigger={trigger}");
+                return;
+            }
 
-            if (!reached) return;
+            decimal buffer = lowAtr
+                ? entry * 0.0005m
+                : atr * 0.15m;
 
-            // === 2) Guard: BE уже двигали для этой позиции
-            var guardKey = BuildPosGuardKey(symbol, side, entry, qty);
-            if (_beMoved.ContainsKey(guardKey)) return;
-
-            // === 3) Буфер BE (чтобы не выбивало комиссией / шумом)
-            decimal buffer = lowAtrMode
-    ? entry * 0.0004m   // ~0.04% (чистый + после комиссий)
-    : atr * 0.10m;
-
-            // если недавно был liquidity danger — уменьшаем агрессию
             if (_liquidityGuard.IsDangerRecent(TimeSpan.FromSeconds(90)))
                 buffer *= 0.5m;
 
-            // === 4) Структурный уровень (антишум, локальный свинг)
             decimal structural =
                 side == PositionSide.Long
-                    ? klines.TakeLast(5).Min(k => k.LowPrice)
-                    : klines.TakeLast(5).Max(k => k.HighPrice);
+                    ? klines.TakeLast(5).Min(x => x.LowPrice)
+                    : klines.TakeLast(5).Max(x => x.HighPrice);
 
-            // === 5) Базовый BE
             decimal beBase =
                 side == PositionSide.Long
                     ? entry + buffer
                     : entry - buffer;
 
-            // === 6) Финальный SL — берём более «дальний» уровень
-            decimal newSl =
+            // ❗ structural НЕ МОЖЕТ УХУДШАТЬ BE
+            decimal finalSl =
                 side == PositionSide.Long
                     ? Math.Max(beBase, structural)
                     : Math.Min(beBase, structural);
 
-            // === 7) Проверка: SL реально улучшается
-            decimal oldSl = slOrder.StopPrice ?? slOrder.Price;
-            if (oldSl <= 0) return;
+            decimal? oldSl =
+                slOrder.StopPrice > 0
+                    ? slOrder.StopPrice
+                    : entry;
 
-            if (side == PositionSide.Long && newSl <= oldSl) return;
-            if (side == PositionSide.Short && newSl >= oldSl) return;
 
-            // === 8) Обновление SL
+            bool improves =
+                side == PositionSide.Long
+                    ? finalSl > oldSl
+                    : finalSl < oldSl;
+
+            if (!improves)
+            {
+                _logger.LogDebug(
+                    "[BE][ATR][{symbol}] no improve old={old} new={new}",
+                    symbol, oldSl, finalSl);
+                return;
+            }
+
             var ok = await UpdateSL_ProAsync(
-                client,
-                symbol,
-                side,
-                qty,
-                slOrder,
-                entry,
-                newSl,
-                signal,
-                ct);
+                client, symbol, side, qty, slOrder, entry, finalSl, signal, ct);
 
             if (!ok) return;
 
-            // === 9) Фиксация защиты
-            _beMoved[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            _beStage[key] = BeStage.Atr;
             MarkProtection(symbol);
 
             _logger.LogWarning(
-                "[BE][{symbol}][{side}] SL moved to BE+buffer newSL={sl}",
-                symbol, side, newSl);
+                "[BE][ATR][{symbol}][{side}] SL={sl}",
+                symbol, side, finalSl);
         }
+
+        /* private async Task TryMoveSlToBeAsync(
+             BinanceRestClient client,
+             string symbol,
+             PositionSide side,
+             decimal qty,
+             decimal entry,
+             decimal atr,
+             BinanceUsdFuturesOrder slOrder,
+             TradeSignal? signal,
+             IReadOnlyList<BinanceFuturesUsdtKline> klines,
+             CancellationToken ct)
+         {
+             if (klines == null || klines.Count < 10) return;
+             if (atr <= 0 || entry <= 0) return;
+
+             var last = klines[^1].ClosePrice;
+
+             // ===================================================
+             // LOW-ATR BE MODE (isolated, prop-safe)
+             // ===================================================
+             bool lowAtrMode =
+                 atr / entry < 0.004m;   // < 0.4% ATR от цены (DASH, cheap coins)
+
+             decimal normalTrigger =
+     atr * 0.30m;
+
+             decimal lowAtrTrigger =
+                 Math.Max(
+                     atr * 0.25m,
+                     entry * 0.0006m    // ~0.06% цены
+                 );
+
+             decimal trigger = lowAtrMode
+                 ? lowAtrTrigger
+                 : normalTrigger;
+
+             // === 1) Условие: цена дала минимальный плюс (не ждём TP)
+             // Симметрично для Long / Short
+
+             bool reached =
+     side == PositionSide.Long
+         ? last >= entry + trigger
+         : last <= entry - trigger;
+
+
+
+             if (!reached) return;
+
+             // === 2) Guard: BE уже двигали для этой позиции
+             var guardKey = BuildPosGuardKey(symbol, side, entry, qty);
+             if (_beMoved.ContainsKey(guardKey)) return;
+
+             // === 3) Буфер BE (чтобы не выбивало комиссией / шумом)
+             decimal buffer = lowAtrMode
+     ? entry * 0.0004m   // ~0.04% (чистый + после комиссий)
+     : atr * 0.10m;
+
+             // если недавно был liquidity danger — уменьшаем агрессию
+             if (_liquidityGuard.IsDangerRecent(TimeSpan.FromSeconds(90)))
+                 buffer *= 0.5m;
+
+             // === 4) Структурный уровень (антишум, локальный свинг)
+             decimal structural =
+                 side == PositionSide.Long
+                     ? klines.TakeLast(5).Min(k => k.LowPrice)
+                     : klines.TakeLast(5).Max(k => k.HighPrice);
+
+             // === 5) Базовый BE
+             decimal beBase =
+                 side == PositionSide.Long
+                     ? entry + buffer
+                     : entry - buffer;
+
+             // === 6) Финальный SL — берём более «дальний» уровень
+             decimal newSl =
+                 side == PositionSide.Long
+                     ? Math.Max(beBase, structural)
+                     : Math.Min(beBase, structural);
+
+             // === 7) Проверка: SL реально улучшается
+             decimal oldSl = slOrder.StopPrice ?? slOrder.Price;
+             if (oldSl <= 0) return;
+
+             if (side == PositionSide.Long && newSl <= oldSl) return;
+             if (side == PositionSide.Short && newSl >= oldSl) return;
+
+             // === 8) Обновление SL
+             var ok = await UpdateSL_ProAsync(
+                 client,
+                 symbol,
+                 side,
+                 qty,
+                 slOrder,
+                 entry,
+                 newSl,
+                 signal,
+                 ct);
+
+             if (!ok) return;
+
+             // === 9) Фиксация защиты
+             _beMoved[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+             MarkProtection(symbol);
+
+             _logger.LogWarning(
+                 "[BE][{symbol}][{side}] SL moved to BE+buffer newSL={sl}",
+                 symbol, side, newSl);
+         }
+         */
 
         private static string BuildPosGuardKey(string symbol, PositionSide side, decimal entry, decimal qty)
         {
@@ -1271,8 +1634,8 @@ namespace VertexAutoTradeBinance8.Services
                     if (atr <= 0) return;
 
                     trigger = side == PositionSide.Long
-                        ? entryPrice + atr * 1.25m
-                        : entryPrice - atr * 1.25m;
+                        ? entryPrice + atr * 1.7m
+                        : entryPrice - atr * 1.7m;
                 }
 
                 // ==========================================================
@@ -1772,7 +2135,7 @@ namespace VertexAutoTradeBinance8.Services
             var st = state.Symbols.GetOrAdd(sKey, _ => new SymbolState());
 
             // throttle
-            if ((DateTime.UtcNow - st.LastHarvestUtc) < TimeSpan.FromMinutes(6))
+            if ((DateTime.UtcNow - st.LastHarvestUtc) < TimeSpan.FromMinutes(3))
                 return;
 
             // ==========================================================
@@ -1854,7 +2217,7 @@ namespace VertexAutoTradeBinance8.Services
             decimal rr = Math.Abs(realPos.MarkPrice - realPos.EntryPrice) / atr;
 
             decimal harvestPct =
-                aiEdgeScore >= 0.80m && rr >= 1.4m ? 0.18m :
+                aiEdgeScore >= 0.80m && rr >= 1.4m ? 0.22m :
                 aiEdgeScore >= 0.70m ? 0.28m :
                 0.45m;
 

@@ -107,9 +107,10 @@ namespace VertexAutoTradeBinance8.Services
                 foreach (var sym in target)
                 {
                     // Keep WS subscriptions alive (best-effort)
-                    _ = EnsureWsSubscribed(sym, KlineInterval.OneMinute, CancellationToken.None);
                     _ = EnsureWsSubscribed(sym, KlineInterval.FiveMinutes, CancellationToken.None);
                     _ = EnsureWsSubscribed(sym, KlineInterval.FifteenMinutes, CancellationToken.None);
+                    _ = EnsureWsSubscribed(sym, KlineInterval.OneHour, CancellationToken.None);
+                    _ = EnsureWsSubscribed(sym, KlineInterval.OneDay, CancellationToken.None);
                 }
 
                 _universe = target;
