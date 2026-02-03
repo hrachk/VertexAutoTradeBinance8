@@ -28,67 +28,91 @@
     </div>
 
     <!-- ================= AI PERFORMANCE ================= -->
-    <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700 mb-8">
+  <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700 mb-8">
 
-        <div class="section-header">
-            <div>
-                <h3 class="font-bold text-xl">AI Performance (Top 12)</h3>
-                <span class="text-xs text-slate-400">By WinRate</span>
-            </div>
-            <div class="chevron @(PerformanceOpen ? "open" : "")"
-                 @onclick="TogglePerformance"></div>
+    <div class="section-header">
+        <div>
+            <h3 class="font-bold text-xl">AI Performance — Best Symbols</h3>
+            <span class="text-xs text-slate-400">
+                Weighted by WinRate & sample size
+            </span>
         </div>
+        <div class="chevron @(PerformanceOpen ? "open" : "")"
+             @onclick="TogglePerformance"></div>
+    </div>
 
-        @if (PerformanceOpen)
-        {
-            <div class="section-body">
-                <div class="wr-grid">
+    @if (PerformanceOpen)
+    {
+        <div class="section-body">
+            <div class="wr-grid">
 
-                    @{
-                        const int TopN = 30;
+                @{
+                    const int TopN = 20;
+                    const int MinTrades = 20;
 
-                        var topSymbols = Stats.Symbols
+                    var leaderboard = Stats.Symbols
                         .Select(s => new
                         {
                             s.Symbol,
-                            Trades = s.Regimes.Sum(x => x.Trades),
-                            Wins = s.Regimes.Sum(x => x.Wins)
+                            Trades = s.Regimes.Sum(r => r.Trades),
+                            Wins   = s.Regimes.Sum(r => r.Wins)
                         })
-                        .Select(x => new
+                        .Where(x => x.Trades >= MinTrades)
+                        .Select(x =>
                         {
-                            x.Symbol,
-                            x.Trades,
-                            WinRate = x.Trades > 0
+                            var winRate = x.Trades > 0
                                 ? (double)x.Wins / x.Trades * 100.0
-                                : 0
+                                : 0;
+
+                            // сглаживание: penalize small samples
+                            var weight = Math.Min(1.0, x.Trades / 20.0);
+
+                            return new
+                            {
+                                x.Symbol,
+                                x.Trades,
+                                WinRate = winRate,
+                                Score = winRate * weight
+                            };
                         })
-                        .OrderByDescending(x => x.WinRate)
+                        .OrderByDescending(x => x.Score)
                         .ThenByDescending(x => x.Trades)
                         .Take(TopN)
                         .ToList();
-                    }
+                }
 
-                    @foreach (var s in topSymbols)
-                    {
-                       <div class="wr-card clickable"
-     @onclick="() => FocusSymbol(s.Symbol)">
+                @foreach (var s in leaderboard)
+                {
+                    <div class="wr-card clickable"
+                         title="Focus symbol in AI Brain"
+                         @onclick="() => FocusSymbol(s.Symbol)">
+
+                        <div class="flex justify-between items-center">
                             <div class="font-bold text-lg">@s.Symbol</div>
-                            <div class="text-sm mt-1">
-                                <span class="font-semibold">WinRate:</span>
-                                <span class="@WinRateColor(s.WinRate)">
-                                    @s.WinRate.ToString("F1")%
-                                </span>
-                            </div>
-                            <div class="text-xs text-slate-400">
-                                Trades: @s.Trades
-                            </div>
+                            <span class="text-xs text-slate-400">
+                                score @s.Score.ToString("F1")
+                            </span>
                         </div>
-                    }
 
-                </div>
+                        <div class="text-sm mt-1">
+                            <span class="font-semibold">WinRate:</span>
+                            <span class="@WinRateColor(s.WinRate)">
+                                @s.WinRate.ToString("F1")%
+                            </span>
+                        </div>
+
+                        <div class="flex justify-between text-xs text-slate-400 mt-1">
+                            <span>Trades: @s.Trades</span>
+                            <span>@WinRateLabel(s.WinRate, s.Trades)</span>
+                        </div>
+                    </div>
+                }
+
             </div>
-        }
-    </div>
+        </div>
+    }
+</div>
+
 
     <!-- ================= AI BRAIN ================= -->
     <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700 mb-8">

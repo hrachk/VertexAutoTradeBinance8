@@ -102,7 +102,19 @@ public class Program
                 {
                     // ===== ТВОЙ СУЩЕСТВУЮЩИЙ DI — БЕЗ ИЗМЕНЕНИЙ =====
                     services.Configure<BinanceOptions>(ctx.Configuration.GetSection("Binance"));
-                    services.Configure<TradingOptions>(ctx.Configuration.GetSection("Trading"));
+                    //services.Configure<TradingOptions>(ctx.Configuration.GetSection("Trading"));
+                    //services.Configure<TradingOptions>(ctx.Configuration.GetSection("Trading:BTC"));
+                    //services.Configure<TradingOptions>(ctx.Configuration.GetSection("Trading:ETH"));
+
+                    services.Configure<TradingOptions>("default",
+                    ctx.Configuration.GetSection("Trading"));
+
+                    services.Configure<TradingOptions>("BTC",
+                        ctx.Configuration.GetSection("Trading:BTC"));
+
+                    services.Configure<TradingOptions>("ETH",
+                        ctx.Configuration.GetSection("Trading:ETH"));
+
                     services.Configure<TestModeOptions>(ctx.Configuration.GetSection("TestMode"));
                     services.Configure<HedgeKillSettings>(ctx.Configuration.GetSection("HedgeKill"));
                     services.Configure<SignalConfidenceSettings>(ctx.Configuration.GetSection("SignalConfidence"));
@@ -139,6 +151,7 @@ public class Program
                     services.AddSingleton<PositionLifecycleTracker>();
 
                     services.AddSingleton<BinanceHistoryImporter>();
+                    services.AddSingleton<TradingOptionsResolver>();
                     
     
 

@@ -227,8 +227,11 @@ namespace VertexAutoTradeBinance8
             var allTrades = new List<BinanceFuturesUsdtUserTrade>();
             var retryDelay = TimeSpan.FromSeconds(3);
             const int maxRetries = 5;
+            var symbols = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync();
+            WebCallResult<BinanceFuturesUsdtTrade[]> res = null!;
 
-            foreach (var symbol in _symbols.ActiveSymbols)
+            foreach (var symbol in symbols.Data.Symbols.Where(s => s.QuoteAsset == "USDT" && s.Status ==  SymbolStatus.Trading &&
+    s.ContractType == ContractType.Perpetual))
             {
                 long? fromId = null;
                 bool finished = false;
@@ -238,7 +241,7 @@ namespace VertexAutoTradeBinance8
                     ct.ThrowIfCancellationRequested();
 
                     int attempt = 0;
-                    WebCallResult<BinanceFuturesUsdtTrade[]> res = null!;
+                   
 
                     // ===== RETRY LOOP =====
                     while (attempt < maxRetries)
@@ -246,13 +249,13 @@ namespace VertexAutoTradeBinance8
                         attempt++;
                         try
                         {
-                            res = await client.UsdFuturesApi.Trading.GetUserTradesAsync(
-                                symbol: symbol,
-                                startTime: fromUtc,
-                                limit: 1000,
-                                fromId: fromId,
-                                ct: ct
-                            ).ConfigureAwait(false);
+                              res = await client.UsdFuturesApi.Trading.GetUserTradesAsync(
+                            symbol: symbol.Pair,
+                            startTime: fromId == null ? fromUtc : null,
+                            fromId: fromId,
+                            limit: 1000,
+                            ct: ct
+                        );
 
                             if (res.Success)
                                 break;
@@ -308,10 +311,17 @@ namespace VertexAutoTradeBinance8
 
                     // ===== PAGINATION =====
                     fromId = res.Data.Max(t => t.Id) + 1;
+                    if (res.Data.Length < 1000)
+                    { finished = true; break; }
+                      
                 }
+               
             }
-
-            return allTrades;
+          
+            return allTrades.GroupBy(t => t.Id)
+    .Select(g => g.First())
+    .OrderBy(t => t.Time)
+    .ToList(); 
         }
 
         protected override async Task ExecuteAsync(CancellationToken ct)

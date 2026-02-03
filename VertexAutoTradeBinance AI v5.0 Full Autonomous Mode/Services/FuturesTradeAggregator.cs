@@ -22,7 +22,7 @@ public class BinanceFuturesUsdtUserTrade
     public decimal RealizedPnl { get; set; }
     public PositionSide PositionSide { get; set; } // "LONG" / "SHORT"
     public long Id { get; set; }           // trade id
-    public long OrderId { get; set; }      // related order
+   
 }
 
 internal static class FuturesTradeAggregator

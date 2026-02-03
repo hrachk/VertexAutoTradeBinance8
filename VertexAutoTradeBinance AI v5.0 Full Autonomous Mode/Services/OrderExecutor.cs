@@ -24,9 +24,10 @@ namespace VertexAutoTradeBinance8.Services
         private readonly SmartRegimeService _smartRegime;
         private readonly LiquidityGuardService _liquidityGuard;
         private readonly AiSelfLearningService _ai;
+        private readonly RiskManager _risk;
 
         // ===== ENTRY EXECUTION TUNING (PRODUCTION) =====
-        private const int ENTRY_WAIT_SECONDS = 18;              // было 30s (60*500ms) в Wait...; здесь логика для fallback
+       
         private const decimal AGGR_LIMIT_OFFSET_PCT = 0.0006m;  // 0.06% агрессивный лимит (тюнится)
         private const decimal MARKET_FALLBACK_MAX_SLIP_PCT = 0.0015m; // 0.15% макс. слип для fallback-market
         private bool? _isHedgeMode;
@@ -40,7 +41,7 @@ namespace VertexAutoTradeBinance8.Services
             MarketDataService marketData,
             AiMarketRegimeService marketRegimeService,
             SmartRegimeService smartRegime,
-            LiquidityGuardService liquidityGuard, AiSelfLearningService ai)
+            LiquidityGuardService liquidityGuard, AiSelfLearningService ai,RiskManager risk)
         {
             _logger = logger;
             _factory = factory;
@@ -52,13 +53,9 @@ namespace VertexAutoTradeBinance8.Services
             _smartRegime = smartRegime;
             _liquidityGuard = liquidityGuard;
             _ai = ai;
+            _risk = risk;
         }
-
-        private static decimal NormalizeToStep(decimal value, decimal step)
-        {
-            if (step <= 0) return value;
-            return Math.Floor(value / step) * step;
-        }
+ 
         private async Task<bool> IsHedgeModeAsync(BinanceRestClient client, CancellationToken ct)
         {
             if (_isHedgeMode.HasValue)
@@ -277,9 +274,10 @@ namespace VertexAutoTradeBinance8.Services
             if (adjustedQty < filters.minQty)
             {
                 await _simulator.SimulateMissedTradeAsync(
-                    signal,
+                    signal, 
                     "ADJUSTED_QTY_TOO_SMALL",
                     note: $"baseQty={quantity}; bias={executionBias:F2}; riskBias={smart.RiskBias:F2}; liqScore={liquidityResult.Score:F2}",
+                    freeBalance: _risk.LastBalanceUsdt,
                     attemptNotional: quantity * entryPrice,
                     requiredMinNotional: filters.minQty * entryPrice);
 
@@ -476,7 +474,7 @@ namespace VertexAutoTradeBinance8.Services
                 quantity,
                 notionalAtCreate);
 
-            await _simulator.AppendLifecycleEventAsync(signal, "ORDER_CREATED");
+            await _simulator.AppendLifecycleEventAsync(signal, "ORDER_CREATED",freeBalance:_risk.LastBalanceUsdt);
 
             // =============================================================
             // WAIT FILL

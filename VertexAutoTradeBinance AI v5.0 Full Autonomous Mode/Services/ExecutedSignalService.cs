@@ -190,10 +190,6 @@ namespace VertexAutoTradeBinance8.Services
             {
                 var list = LoadInternal();
 
-                //var rec = list
-                //              .Where(x => x.Symbol == symbol && x.Time == time)
-                //              .FirstOrDefault();
-
                 var rec = list.FirstOrDefault(x => x.Symbol == symbol && x.Time == time);
 
                 if (rec == null)
@@ -203,7 +199,6 @@ namespace VertexAutoTradeBinance8.Services
                         symbol, time, status);
                     return;
                 }
-
 
                 rec.Status = status;
                 if (qty.HasValue) rec.Qty = qty.Value;

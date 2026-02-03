@@ -1,6 +1,4 @@
 ﻿using Binance.Net.Enums;
-using System.Text.Json;
-using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -9,13 +7,14 @@ namespace VertexAutoTradeBinance8.Services
     {
         private readonly ILogger<RiskManager> _logger;
         private readonly SymbolInfoService _symbolInfo;
-        private readonly TradingOptions _options;
+
         private readonly BinanceClientFactory _factory;
         private readonly MarketDataService _marketData;
         private readonly AiLeverageService _aiLeverage;
         private readonly AiMarketRegimeService _marketRegimeService;
         private readonly SmartRegimeService _smartRegime;
-        // private readonly SimulatedTradeService _simulator;
+
+        private readonly TradingOptionsResolver _tradingResolver;
 
         public string? LastRejectReason { get; private set; }
 
@@ -24,22 +23,24 @@ namespace VertexAutoTradeBinance8.Services
         public RiskManager(
             ILogger<RiskManager> logger,
             SymbolInfoService symbolInfo,
-            TradingOptions options,
+
             BinanceClientFactory factory,
             MarketDataService marketData,
-            AiLeverageService aiLeverage, AiMarketRegimeService marketRegimeService, SmartRegimeService smartRegime 
+            AiLeverageService aiLeverage, AiMarketRegimeService marketRegimeService, SmartRegimeService smartRegime,
+            TradingOptionsResolver tradingResolver
             //SimulatedTradeService simulator
             )
         {
             _logger = logger;
             _symbolInfo = symbolInfo;
-            _options = options;
+
             _factory = factory;
             _marketData = marketData;
             _aiLeverage = aiLeverage;
             _marketRegimeService = marketRegimeService;
             _smartRegime = smartRegime;
-           // _simulator = simulator;
+            // _simulator = simulator;
+            _tradingResolver = tradingResolver;
         }
 
         // ====================================================================
@@ -57,6 +58,21 @@ namespace VertexAutoTradeBinance8.Services
        List<decimal> takeProfits,
        CancellationToken ct)
         {
+            var trading = _tradingResolver.Resolve(symbol);
+
+            _logger.LogInformation(
+    "[CFG] RISK using Trading:{Key} for {Symbol} | lev={Lev} risk={Risk:P2} minNotional={Min}",
+    symbol.StartsWith("BTC") ? "BTC" :
+    symbol.StartsWith("ETH") ? "ETH" : "default",
+    symbol,
+    trading.Leverage,
+    trading.RiskPerTrade,
+    trading.MinNotional
+);
+
+              leverage = trading.Leverage > 0
+    ? trading.Leverage
+    : (signal.Leverage ?? 1m);
             LastRejectReason = null;
 
             if (entryPrice <= 0 || stopLoss <= 0)
@@ -74,14 +90,24 @@ namespace VertexAutoTradeBinance8.Services
 
             decimal minNotional = f.minNotional > 0
                 ? f.minNotional
-                : (_options.MinNotionalGuard > 0 ? _options.MinNotionalGuard : 5m);
+                : (trading.MinNotionalGuard > 0 ? trading.MinNotionalGuard : 5m);
 
             decimal binanceMinNotional = minNotional;
+            if (trading.MinNotional > 0)
+                binanceMinNotional = Math.Max(binanceMinNotional, trading.MinNotional);
 
             // ACCOUNT BALANCE
             using var client = _factory.CreateRestClient();
             var acc = await client.UsdFuturesApi.Account.GetBalancesAsync(null, ct);
             decimal free = acc?.Data?.FirstOrDefault(x => x.Asset == "USDT")?.AvailableBalance ?? 0;
+
+            // === Dynamic MinNotional by capital percent ===
+            if (trading.MinNotionalGuardPercent > 0)
+            {
+                decimal dynMin = free * trading.MinNotionalGuardPercent;
+                if (dynMin > binanceMinNotional)
+                    binanceMinNotional = dynMin;
+            }
 
             // for UI
             LastBalanceUsdt = free;
@@ -164,7 +190,7 @@ namespace VertexAutoTradeBinance8.Services
 
             if (free <= 0)
             {
-                 
+
                 if (free <= 0)
                 {
                     LastRejectReason = "NoBalance";
@@ -174,9 +200,13 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // BASE RISK
-            decimal baseRiskPercent = _options.BaseRiskPercent > 0
-                ? _options.BaseRiskPercent
-                : 0.03m;
+            decimal baseRiskPercent =
+     trading.RiskPerTrade > 0
+         ? (decimal)trading.RiskPerTrade
+         : trading.BaseRiskPercent > 0
+             ? trading.BaseRiskPercent
+             : 0.01m;
+
 
             // AI LEVERAGE FACTOR
             decimal aiLevMult = await GetAiLeverageMultiplierAsync(symbol, ct);
@@ -207,7 +237,7 @@ namespace VertexAutoTradeBinance8.Services
 
             if (weak)
             {
-               
+
                 _logger.LogInformation($"[RISK][{symbol}] Weak signal detected — lowering position size.");
 
                 // уменьшаем риск, но НЕ отбрасываем сделку (фактически maxRisk уже использован,
@@ -256,7 +286,7 @@ namespace VertexAutoTradeBinance8.Services
                     if (notional >= binanceMinNotional)
                         goto BOOST_OK;
                 }
- 
+
                 LastRejectReason = "MinNotionalAfterAdaptiveReduce";
                 signal.RejectReason = LastRejectReason;
                 return 0;
@@ -266,15 +296,16 @@ namespace VertexAutoTradeBinance8.Services
             _logger.LogInformation($"[RISK][{symbol}] Boost/Reduce OK → qty={qty}, notional={notional:F4}");
 
             if (qty <= 0 || notional <= 0)
-            { 
-                LastRejectReason = "QtyZeroAfterAdjust"; 
+            {
+                LastRejectReason = "QtyZeroAfterAdjust";
                 signal.RejectReason = LastRejectReason;
                 return 0;
             }
 
             // 🔥 ДОБАВЛЕНО: ФИНАЛЬНАЯ ПРОВЕРКА МАРЖИ
             if (leverage <= 0)
-                leverage = 1m;
+                leverage = trading.Leverage > 0 ? trading.Leverage : 1m;
+
 
             decimal requiredMargin = notional / leverage;
 
@@ -289,7 +320,7 @@ namespace VertexAutoTradeBinance8.Services
                 decimal maxNotional = free * leverage * 0.97m;
                 if (maxNotional <= 0)
                 {
-                    
+
                     LastRejectReason = "NoMargin";
                     signal.RejectReason = LastRejectReason;
                     return 0;
@@ -305,6 +336,18 @@ namespace VertexAutoTradeBinance8.Services
                     {
                         notional = qty * entryPrice;
                         requiredMargin = notional / leverage;
+
+                        _logger.LogInformation(
+                        "[RISK][FINAL] {Symbol} {Side} | risk={Risk:P2} lev={Lev} | qty={Qty} notional={Notional:F2} margin={Margin:F2} | minNotional={MinNotional:F2}",
+                        symbol,
+                        side,
+                        baseRiskPercent,
+                        leverage,
+                        qty,
+                        notional,
+                        requiredMargin,
+                        binanceMinNotional
+                    );
 
                         if (notional >= binanceMinNotional && requiredMargin <= free)
                         {
@@ -381,6 +424,6 @@ namespace VertexAutoTradeBinance8.Services
         // ====================================================================
         // LOG MISSED TRADES (FULL VERSION WITH ATR / VOL / SLOPE / CONF)
         // ====================================================================
-   
+
     }
 }

@@ -1,7 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-
-namespace VertexAutoTradeBinance8.Models
+﻿namespace VertexAutoTradeBinance8.Models
 {
     public class MissedTradeRecord
     {
@@ -25,12 +22,12 @@ namespace VertexAutoTradeBinance8.Models
         public decimal Slope { get; set; }
         public decimal Vol { get; set; }
         public decimal Deviation { get; set; }
-        public MarketRegime Regime { get; set; } 
+        public MarketRegime Regime { get; set; }
 
         public int Confidence { get; set; }
         public string SmartType { get; set; } = string.Empty;
         public int Score { get; set; }
-        public string Note { get; set; } = ""; 
+        public string Note { get; set; } = "";
 
     }
 }
