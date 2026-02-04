@@ -1,5 +1,6 @@
 ﻿using Binance.Net.Clients;
 using Binance.Net.Enums;
+using Binance.Net.Interfaces.Clients;
 using Binance.Net.Objects.Models.Futures;
 using CryptoExchange.Net.Objects;
 using System.Collections.Concurrent;
@@ -154,16 +155,7 @@ namespace VertexAutoTradeBinance8.Services
 
             var longPos = positions.FirstOrDefault(p => p.PositionSide == PositionSide.Long);
             var shortPos = positions.FirstOrDefault(p => p.PositionSide == PositionSide.Short);
-
-
-            //var hasLong = longPos != null && longPos.Quantity != 0m;
-            //var hasShort = shortPos != null && shortPos.Quantity != 0m;
-
-            //if (!hasLong && !hasShort)
-            //{
-            //    _logger.LogInformation("[SUPERVISOR] {symbol}: no positions", symbol);
-            //    return;
-            //}
+ 
             DetectClose(symbol, longPos, PositionSide.Long);
             DetectClose(symbol, shortPos, PositionSide.Short);
 
@@ -184,7 +176,7 @@ namespace VertexAutoTradeBinance8.Services
             IReadOnlyList<BinanceFuturesUsdtKline>? klines1m = null;
             try
             {
-                klines1m = await _marketData.GetKlines(symbol, KlineInterval.OneMinute, 160);
+                klines1m = await _marketData.GetKlines(symbol, KlineInterval.OneMinute, 200);
                 var rr = _regime.DetectRegime(symbol, KlineInterval.OneMinute, klines1m);
                 if (rr != null) _regimeNow = rr.Regime;
             }
@@ -216,6 +208,81 @@ namespace VertexAutoTradeBinance8.Services
             }
 
 
+            ///////////////////////////////////TEST DIAGNOSTIC SL/BE/MOVE/////////////////////////////////////////////////////////
+            ////////////////////////////////////////////////////////////////////////////////////////////
+
+            // 🔁 PROBE должен быть ОДИН раз на тик supervise, до HandleSideAsync
+            if (atr14_1m > 0 && klines1m != null && klines1m.Count >= 10)
+            {
+                // ===== TEMP BE DIAGNOSTIC (INLINE, REMOVE LATER) =====
+
+                void ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
+                {
+                    if (pos == null || pos.Quantity == 0m)
+                        return;
+
+                    var qty = Math.Abs(pos.Quantity);
+                    var entry = pos.EntryPrice;
+                    var pnlUsd = pos.UnrealizedPnl;
+
+                    if (qty <= 0 || entry <= 0)
+                        return;
+
+                    // --- MIN PROFIT (TEST, FINANCIAL) ---
+                    const decimal TAKER_FEE = 0.0004m;
+
+                    var entryNotional = qty * entry;
+                    var commissionsUsd = entryNotional * TAKER_FEE * 2m;
+
+                    var minProfitUsd = Math.Max(
+                        commissionsUsd + 0.30m,
+                        0.50m
+                    );
+
+                    if (pnlUsd < minProfitUsd)
+                        return;
+
+                    _logger.LogWarning(
+                        "[BE-PROBE][{symbol}][{side}] pnl={pnl:F2}$ >= min={min:F2}$ → TRY BE",
+                        symbol, side, pnlUsd, minProfitUsd);
+
+                    // --- ИЩЕМ СУЩЕСТВУЮЩИЙ SL ---
+                    var slOrder = openOrders.FirstOrDefault(o =>
+                        o.PositionSide == side &&
+                        o.Type == FuturesOrderType.StopMarket);
+
+                    if (slOrder == null)
+                    {
+                        _logger.LogWarning(
+                            "[BE-PROBE][{symbol}][{side}] SL NOT FOUND → SKIP",
+                            symbol, side);
+                         
+                    }
+
+                    // --- ВЫЗОВ БОЕВОГО BE (БЕЗ ИЗМЕНЕНИЙ ЛОГИКИ) ---
+                    _ = TryMoveSlToBeAsync(
+                        client,
+                        symbol,
+                        side,
+                        qty,
+                        entry,
+                        atr14_1m,
+                        slOrder,
+                        lastSignal,
+                        klines1m,
+                        ct);
+                }
+
+                ProbeSide(longPos, PositionSide.Long);
+                ProbeSide(shortPos, PositionSide.Short);
+            }
+
+
+            //                                          /////////////////////////////////////////////////
+            // /////////////////////////////////////////////////
+
+
+
 
             // 4) Обработка сторон
             if (hasLong)
@@ -225,6 +292,8 @@ namespace VertexAutoTradeBinance8.Services
                 await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, openOrders, lastSignal, klines1m, ct);
         }
 
+
+       
         private decimal ResolveExitPrice(string symbol)
         {
             // 1) Пытаемся взять свежий стакан
@@ -820,8 +889,8 @@ namespace VertexAutoTradeBinance8.Services
             decimal atr14 = 0m;
             if (signal?.Atr != null && signal.Atr.Value > 0)
                 atr14 = signal.Atr.Value;
-            else if (klines != null && klines.Count >= 30)
-                atr14 = _marketData.CalculateAtr(klines, 14);
+            else if (klines != null && klines.Count >= 40)
+                atr14 = _marketData.CalculateAtr(klines, 15);
 
             // === Side-specific orders (Hedge) ===
             var orders = allOrders.Where(o => o.PositionSide == side).ToList();
@@ -846,10 +915,10 @@ namespace VertexAutoTradeBinance8.Services
             // =================================================================
             if (sl != null)
             { 
-                var slPrice =
-    sl.StopPrice > 0
-        ? sl.StopPrice
-        : sl.Price;
+                            var slPrice =
+                sl.StopPrice > 0
+                    ? sl.StopPrice
+                    : sl.Price;
 
 
                 if (slPrice > 0)
@@ -903,49 +972,7 @@ namespace VertexAutoTradeBinance8.Services
 
                 // Если позиция уже в плюсе, а BE ещё не отмечен — двигаем SL в минимальный BE
                 // Порог мягкий (0.30 ATR), чтобы не ждать 1.2 ATR
-                //            if (sl != null && !_beMoved.ContainsKey(guardKey))
-                //            {
-
-                //                var slPrice =
-                //sl.StopPrice > 0
-                //    ? sl.StopPrice
-                //    : sl.Price;
-                //                if (slPrice > 0)
-                //                {
-                //                    var last = klines[^1].ClosePrice;
-
-                //                    bool marketInProfit =
-                //                        side == PositionSide.Long
-                //                            ? last > entry
-                //                            : last < entry;
-
-                //                    bool slBelowEntry =
-                //                        side == PositionSide.Long
-                //                            ? slPrice < entry
-                //                            : slPrice > entry;
-
-                //                    bool beEligible =
-                //                        side == PositionSide.Long
-                //                            ? last >= entry + atr14 * 0.30m
-                //                            : last <= entry - atr14 * 0.30m;
-
-                //                    if (marketInProfit && slBelowEntry && beEligible)
-                //                    {
-                //                        decimal minimalBe =
-                //                            side == PositionSide.Long
-                //                                ? entry + entry * 0.0005m
-                //                                : entry - entry * 0.0005m;
-
-                //                        await UpdateSL_ProAsync(client, symbol, side, qtyAbs, sl, entry, minimalBe, signal, ct);
-
-                //                        _beMoved[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-                //                        _logger.LogWarning(
-                //                            "[REHYDRATE-BE][{symbol}][{side}] SL moved to minimal BE (rehydration)",
-                //                            symbol, side);
-                //                    }
-                //                }
-                //            }
+                
                 if (sl != null)
                 {
                     var keey = BuildBeKey(symbol, side, entry);
@@ -1203,209 +1230,100 @@ namespace VertexAutoTradeBinance8.Services
         // SL → BE (+ buffer, structural-aware, liquidity-safe)
         // =====================================================================
         private async Task TryMoveSlToBeAsync(
-    BinanceRestClient client,
-    string symbol,
-    PositionSide side,
-    decimal qty,
-    decimal entry,
-    decimal atr,
-    BinanceUsdFuturesOrder slOrder,
-    TradeSignal? signal,
-    IReadOnlyList<BinanceFuturesUsdtKline> klines,
-    CancellationToken ct)
-        {
-            if (klines == null || klines.Count < 10) return;
-            if (atr <= 0 || entry <= 0) return;
-
-            var key = BuildBeKey(symbol, side, entry);
-            var stage = _beStage.GetValueOrDefault(key, BeStage.None);
-
-            if (stage >= BeStage.Atr)
-                return;
-
-            var last = klines[^1].ClosePrice;
-
-            bool lowAtr = atr / entry < 0.004m;
-
-            decimal trigger = lowAtr
-                ? Math.Max(atr * 0.25m, entry * 0.0006m)
-                : atr * 1.20m;
-
-            bool reached =
-                side == PositionSide.Long
-                    ? last >= entry + trigger
-                    : last <= entry - trigger;
-
-            if (!reached)
+        BinanceRestClient client,
+        string symbol,
+        PositionSide side,
+        decimal qty,
+        decimal entry,
+        decimal atr,
+        BinanceUsdFuturesOrder slOrder,
+        TradeSignal? signal,
+        IReadOnlyList<BinanceFuturesUsdtKline> klines,
+        CancellationToken ct)
             {
-                _logger.LogDebug("[BE][ATR][{symbol}] not reached last={last} trigger={trigger}");
-                return;
+                if (klines == null || klines.Count < 10) return;
+                if (atr <= 0 || entry <= 0) return;
+
+                var key = BuildBeKey(symbol, side, entry);
+                var stage = _beStage.GetValueOrDefault(key, BeStage.None);
+
+                if (stage >= BeStage.Atr)
+                    return;
+
+                var last = klines[^1].ClosePrice;
+
+                bool lowAtr = atr / entry < 0.004m;
+
+                decimal trigger = lowAtr
+                    ? Math.Max(atr * 0.25m, entry * 0.0006m)
+                    : atr * 1.20m;
+
+                bool reached =
+                    side == PositionSide.Long
+                        ? last >= entry + trigger
+                        : last <= entry - trigger;
+
+                if (!reached)
+                {
+                    _logger.LogDebug("[BE][ATR][{symbol}] not reached last={last} trigger={trigger}");
+                    return;
+                }
+
+                decimal buffer = lowAtr
+                    ? entry * 0.0005m
+                    : atr * 0.15m;
+
+                if (_liquidityGuard.IsDangerRecent(TimeSpan.FromSeconds(90)))
+                    buffer *= 0.5m;
+
+                decimal structural =
+                    side == PositionSide.Long
+                        ? klines.TakeLast(5).Min(x => x.LowPrice)
+                        : klines.TakeLast(5).Max(x => x.HighPrice);
+
+                decimal beBase =
+                    side == PositionSide.Long
+                        ? entry + buffer
+                        : entry - buffer;
+
+                // ❗ structural НЕ МОЖЕТ УХУДШАТЬ BE
+                decimal finalSl =
+                    side == PositionSide.Long
+                        ? Math.Max(beBase, structural)
+                        : Math.Min(beBase, structural);
+
+                decimal? oldSl =
+                    slOrder.StopPrice > 0
+                        ? slOrder.StopPrice
+                        : entry;
+
+
+                bool improves =
+                    side == PositionSide.Long
+                        ? finalSl > oldSl
+                        : finalSl < oldSl;
+
+                if (!improves)
+                {
+                    _logger.LogDebug(
+                        "[BE][ATR][{symbol}] no improve old={old} new={new}",
+                        symbol, oldSl, finalSl);
+                    return;
+                }
+
+                var ok = await UpdateSL_ProAsync(
+                    client, symbol, side, qty, slOrder, entry, finalSl, signal, ct);
+
+                if (!ok) return;
+
+                _beStage[key] = BeStage.Atr;
+                MarkProtection(symbol);
+
+                _logger.LogWarning(
+                    "[BE][ATR][{symbol}][{side}] SL={sl}",
+                    symbol, side, finalSl);
             }
-
-            decimal buffer = lowAtr
-                ? entry * 0.0005m
-                : atr * 0.15m;
-
-            if (_liquidityGuard.IsDangerRecent(TimeSpan.FromSeconds(90)))
-                buffer *= 0.5m;
-
-            decimal structural =
-                side == PositionSide.Long
-                    ? klines.TakeLast(5).Min(x => x.LowPrice)
-                    : klines.TakeLast(5).Max(x => x.HighPrice);
-
-            decimal beBase =
-                side == PositionSide.Long
-                    ? entry + buffer
-                    : entry - buffer;
-
-            // ❗ structural НЕ МОЖЕТ УХУДШАТЬ BE
-            decimal finalSl =
-                side == PositionSide.Long
-                    ? Math.Max(beBase, structural)
-                    : Math.Min(beBase, structural);
-
-            decimal? oldSl =
-                slOrder.StopPrice > 0
-                    ? slOrder.StopPrice
-                    : entry;
-
-
-            bool improves =
-                side == PositionSide.Long
-                    ? finalSl > oldSl
-                    : finalSl < oldSl;
-
-            if (!improves)
-            {
-                _logger.LogDebug(
-                    "[BE][ATR][{symbol}] no improve old={old} new={new}",
-                    symbol, oldSl, finalSl);
-                return;
-            }
-
-            var ok = await UpdateSL_ProAsync(
-                client, symbol, side, qty, slOrder, entry, finalSl, signal, ct);
-
-            if (!ok) return;
-
-            _beStage[key] = BeStage.Atr;
-            MarkProtection(symbol);
-
-            _logger.LogWarning(
-                "[BE][ATR][{symbol}][{side}] SL={sl}",
-                symbol, side, finalSl);
-        }
-
-        /* private async Task TryMoveSlToBeAsync(
-             BinanceRestClient client,
-             string symbol,
-             PositionSide side,
-             decimal qty,
-             decimal entry,
-             decimal atr,
-             BinanceUsdFuturesOrder slOrder,
-             TradeSignal? signal,
-             IReadOnlyList<BinanceFuturesUsdtKline> klines,
-             CancellationToken ct)
-         {
-             if (klines == null || klines.Count < 10) return;
-             if (atr <= 0 || entry <= 0) return;
-
-             var last = klines[^1].ClosePrice;
-
-             // ===================================================
-             // LOW-ATR BE MODE (isolated, prop-safe)
-             // ===================================================
-             bool lowAtrMode =
-                 atr / entry < 0.004m;   // < 0.4% ATR от цены (DASH, cheap coins)
-
-             decimal normalTrigger =
-     atr * 0.30m;
-
-             decimal lowAtrTrigger =
-                 Math.Max(
-                     atr * 0.25m,
-                     entry * 0.0006m    // ~0.06% цены
-                 );
-
-             decimal trigger = lowAtrMode
-                 ? lowAtrTrigger
-                 : normalTrigger;
-
-             // === 1) Условие: цена дала минимальный плюс (не ждём TP)
-             // Симметрично для Long / Short
-
-             bool reached =
-     side == PositionSide.Long
-         ? last >= entry + trigger
-         : last <= entry - trigger;
-
-
-
-             if (!reached) return;
-
-             // === 2) Guard: BE уже двигали для этой позиции
-             var guardKey = BuildPosGuardKey(symbol, side, entry, qty);
-             if (_beMoved.ContainsKey(guardKey)) return;
-
-             // === 3) Буфер BE (чтобы не выбивало комиссией / шумом)
-             decimal buffer = lowAtrMode
-     ? entry * 0.0004m   // ~0.04% (чистый + после комиссий)
-     : atr * 0.10m;
-
-             // если недавно был liquidity danger — уменьшаем агрессию
-             if (_liquidityGuard.IsDangerRecent(TimeSpan.FromSeconds(90)))
-                 buffer *= 0.5m;
-
-             // === 4) Структурный уровень (антишум, локальный свинг)
-             decimal structural =
-                 side == PositionSide.Long
-                     ? klines.TakeLast(5).Min(k => k.LowPrice)
-                     : klines.TakeLast(5).Max(k => k.HighPrice);
-
-             // === 5) Базовый BE
-             decimal beBase =
-                 side == PositionSide.Long
-                     ? entry + buffer
-                     : entry - buffer;
-
-             // === 6) Финальный SL — берём более «дальний» уровень
-             decimal newSl =
-                 side == PositionSide.Long
-                     ? Math.Max(beBase, structural)
-                     : Math.Min(beBase, structural);
-
-             // === 7) Проверка: SL реально улучшается
-             decimal oldSl = slOrder.StopPrice ?? slOrder.Price;
-             if (oldSl <= 0) return;
-
-             if (side == PositionSide.Long && newSl <= oldSl) return;
-             if (side == PositionSide.Short && newSl >= oldSl) return;
-
-             // === 8) Обновление SL
-             var ok = await UpdateSL_ProAsync(
-                 client,
-                 symbol,
-                 side,
-                 qty,
-                 slOrder,
-                 entry,
-                 newSl,
-                 signal,
-                 ct);
-
-             if (!ok) return;
-
-             // === 9) Фиксация защиты
-             _beMoved[guardKey] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-             MarkProtection(symbol);
-
-             _logger.LogWarning(
-                 "[BE][{symbol}][{side}] SL moved to BE+buffer newSL={sl}",
-                 symbol, side, newSl);
-         }
-         */
+ 
 
         private static string BuildPosGuardKey(string symbol, PositionSide side, decimal entry, decimal qty)
         {
