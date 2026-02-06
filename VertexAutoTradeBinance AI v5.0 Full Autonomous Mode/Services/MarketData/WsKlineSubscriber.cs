@@ -20,6 +20,7 @@ namespace VertexAutoTradeBinance8.Services
         // symbol:tf → subscription
         private readonly ConcurrentDictionary<string, UpdateSubscription> _subs = new();
         private readonly ConcurrentDictionary<string, Task> _subTasks = new();
+        public event Action<string, decimal>? OnPrice;
 
         public event Action<string, KlineInterval, BinanceFuturesUsdtKline>? OnClosedKline;
 
@@ -54,50 +55,98 @@ namespace VertexAutoTradeBinance8.Services
             _logger.LogInformation(
                 "[WS][KLINES] Subscribing {symbol} {tf}",
                 symbol, interval);
-
             var sub = await _socket.UsdFuturesApi.ExchangeData
-                .SubscribeToKlineUpdatesAsync(
-                    symbol,
-                    interval,
-                    data =>
-                    {
-                        try
-                        {
-                            var k = data.Data;
+    .SubscribeToKlineUpdatesAsync(
+        symbol,
+        interval,
+        data =>
+        {
+            try
+            {
+                var k = data.Data;
+                var price = k.Data.ClosePrice;
 
-                            // ⛔ only CLOSED candles
-                            if (!k.Data.Final)
-                                return;
+                // 🔥 ALWAYS push realtime price
+                OnPrice?.Invoke(symbol, price);
 
-                            var candle = new BinanceFuturesUsdtKline
-                            {
-                                OpenTime = k.Data.OpenTime,
-                                CloseTime = k.Data.CloseTime,
-                                OpenPrice = k.Data.OpenPrice,
-                                HighPrice = k.Data.HighPrice,
-                                LowPrice = k.Data.LowPrice,
-                                ClosePrice = k.Data.ClosePrice,
-                                Volume = k.Data.Volume,
-                                QuoteVolume = k.Data.QuoteVolume,
-                                TradeCount = k.Data.TradeCount,
-                                TakerBuyBaseVolume = k.Data.TakerBuyBaseVolume,
-                                TakerBuyQuoteVolume = k.Data.TakerBuyQuoteVolume
-                            };
+                // only closed candle below
+                if (!k.Data.Final)
+                    return;
 
-                            _buffer.Upsert(symbol, interval, candle);
+                var candle = new BinanceFuturesUsdtKline
+                {
 
-                            // 🔥 reactive push
-                            OnClosedKline?.Invoke(symbol, interval, candle);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(
-                                ex,
-                                "[WS][KLINES][{symbol}][{tf}] handler error",
-                                symbol, interval);
-                        }
-                    },
-                    ct: ct);
+                    OpenTime = k.Data.OpenTime,
+                    CloseTime = k.Data.CloseTime,
+                    OpenPrice = k.Data.OpenPrice,
+                    HighPrice = k.Data.HighPrice,
+                    LowPrice = k.Data.LowPrice,
+                    ClosePrice = k.Data.ClosePrice,
+                    Volume = k.Data.Volume,
+                    QuoteVolume = k.Data.QuoteVolume,
+                    TradeCount = k.Data.TradeCount,
+                    TakerBuyBaseVolume = k.Data.TakerBuyBaseVolume,
+                    TakerBuyQuoteVolume = k.Data.TakerBuyQuoteVolume
+                };
+
+                _buffer.Upsert(symbol, interval, candle);
+
+                // 🔥 closed candle event stays
+                OnClosedKline?.Invoke(symbol, interval, candle);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "[WS][KLINES][{symbol}][{tf}] handler error",
+                    symbol, interval);
+            }
+        },
+        ct: ct);
+
+            //var sub = await _socket.UsdFuturesApi.ExchangeData
+            //    .SubscribeToKlineUpdatesAsync(
+            //        symbol,
+            //        interval,
+            //        data =>
+            //        {
+            //            try
+            //            {
+            //                var k = data.Data;
+
+            //                // ⛔ only CLOSED candles
+            //                if (!k.Data.Final)
+            //                    return;
+
+            //                var candle = new BinanceFuturesUsdtKline
+            //                {
+            //                    OpenTime = k.Data.OpenTime,
+            //                    CloseTime = k.Data.CloseTime,
+            //                    OpenPrice = k.Data.OpenPrice,
+            //                    HighPrice = k.Data.HighPrice,
+            //                    LowPrice = k.Data.LowPrice,
+            //                    ClosePrice = k.Data.ClosePrice,
+            //                    Volume = k.Data.Volume,
+            //                    QuoteVolume = k.Data.QuoteVolume,
+            //                    TradeCount = k.Data.TradeCount,
+            //                    TakerBuyBaseVolume = k.Data.TakerBuyBaseVolume,
+            //                    TakerBuyQuoteVolume = k.Data.TakerBuyQuoteVolume
+            //                };
+
+            //                _buffer.Upsert(symbol, interval, candle);
+
+            //                // 🔥 reactive push
+            //                OnClosedKline?.Invoke(symbol, interval, candle);
+            //            }
+            //            catch (Exception ex)
+            //            {
+            //                _logger.LogError(
+            //                    ex,
+            //                    "[WS][KLINES][{symbol}][{tf}] handler error",
+            //                    symbol, interval);
+            //            }
+            //        },
+            //        ct: ct);
 
             if (!sub.Success)
             {

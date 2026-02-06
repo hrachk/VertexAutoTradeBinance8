@@ -51,12 +51,17 @@ namespace VertexAutoTradeBinance8.Services
         // REST singleflight (per symbol+tf)
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _restLocks = new(StringComparer.OrdinalIgnoreCase);
 
+        private readonly RealtimePriceService _price;
+        public event Action<string, decimal>? RealtimePrice;
+        private readonly ConcurrentDictionary<string, decimal> _lastPrice = new();
+
         public MarketDataFacade(
             MarketDataKlineBuffer buffer,
             WsKlineSubscriber ws,
             BinanceClientFactory factory,
             ILogger<MarketDataFacade> logger,
-            MarketStateService marketState)
+            MarketStateService marketState,
+            RealtimePriceService price)
         {
             _buf = buffer;
             _ws = ws;
@@ -72,8 +77,26 @@ namespace VertexAutoTradeBinance8.Services
                 MarkSnapshotReady();
 
             _marketState.OnRestored += MarkSnapshotReady;
-        }
+            _price = price;
+            _ws.OnPrice += (symbol, price) =>
+            {
+                UpdateRealtimePrice(symbol, price);
 
+                RealtimePrice?.Invoke(symbol, price);
+            };
+
+        }
+        public void UpdateRealtimePrice(string symbol, decimal price)
+        {
+            _lastPrice[symbol] = price;
+        }
+        public decimal GetLastPrice(string symbol)
+        {
+            return _lastPrice.TryGetValue(symbol, out var p)
+                ? p
+                : 0m;
+        }
+ 
         // =====================================================
         // SNAPSHOT READY (authoritative snapshot restored)
         // =====================================================
@@ -107,10 +130,12 @@ namespace VertexAutoTradeBinance8.Services
                 foreach (var sym in target)
                 {
                     // Keep WS subscriptions alive (best-effort)
+                    _ = EnsureWsSubscribed(sym, KlineInterval.OneMinute, CancellationToken.None);
                     _ = EnsureWsSubscribed(sym, KlineInterval.FiveMinutes, CancellationToken.None);
                     _ = EnsureWsSubscribed(sym, KlineInterval.FifteenMinutes, CancellationToken.None);
                     _ = EnsureWsSubscribed(sym, KlineInterval.OneHour, CancellationToken.None);
                     _ = EnsureWsSubscribed(sym, KlineInterval.OneDay, CancellationToken.None);
+
                 }
 
                 _universe = target;

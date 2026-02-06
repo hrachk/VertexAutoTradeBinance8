@@ -25,9 +25,11 @@ namespace VertexAutoTradeBinance8.Services
         private readonly LiquidityGuardService _liquidityGuard;
         private readonly AiSelfLearningService _ai;
         private readonly RiskManager _risk;
+        private readonly MarketDataFacade _marketDataFacade;
+
 
         // ===== ENTRY EXECUTION TUNING (PRODUCTION) =====
-       
+
         private const decimal AGGR_LIMIT_OFFSET_PCT = 0.0006m;  // 0.06% агрессивный лимит (тюнится)
         private const decimal MARKET_FALLBACK_MAX_SLIP_PCT = 0.0015m; // 0.15% макс. слип для fallback-market
         private bool? _isHedgeMode;
@@ -41,7 +43,8 @@ namespace VertexAutoTradeBinance8.Services
             MarketDataService marketData,
             AiMarketRegimeService marketRegimeService,
             SmartRegimeService smartRegime,
-            LiquidityGuardService liquidityGuard, AiSelfLearningService ai,RiskManager risk)
+            LiquidityGuardService liquidityGuard, AiSelfLearningService ai,RiskManager risk,
+            MarketDataFacade marketDataFacade)
         {
             _logger = logger;
             _factory = factory;
@@ -54,6 +57,7 @@ namespace VertexAutoTradeBinance8.Services
             _liquidityGuard = liquidityGuard;
             _ai = ai;
             _risk = risk;
+            _marketDataFacade = marketDataFacade;
         }
  
         private async Task<bool> IsHedgeModeAsync(BinanceRestClient client, CancellationToken ct)
@@ -157,7 +161,11 @@ namespace VertexAutoTradeBinance8.Services
             // =============================================================
             // LAST PRICE (SAFE, RATE-LIMIT AWARE)
             // =============================================================
-            decimal lastPrice = entryPrice;
+            decimal lastPrice = _marketDataFacade.GetLastPrice(signal.Symbol);
+            if (lastPrice <= 0)
+            {
+                lastPrice = entryPrice; // fallback safety
+            }
             try
             {
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -172,9 +180,9 @@ namespace VertexAutoTradeBinance8.Services
             // =============================================================
             // REGIME / SMART REGIME
             // =============================================================
-            var klines = await _marketData.GetKlines(signal.Symbol, KlineInterval.FiveMinutes, 200);
-            var baseReg = _marketRegimeService.DetectRegime(signal.Symbol, KlineInterval.FiveMinutes, klines);
-            var smart = _smartRegime.Evaluate(signal.Symbol, KlineInterval.FiveMinutes, klines);
+            var klines = await _marketDataFacade.GetKlinesAsync(signal.Symbol, KlineInterval.OneMinute, 200);
+            var baseReg = _marketRegimeService.DetectRegime(signal.Symbol, KlineInterval.OneMinute, klines);
+            var smart = _smartRegime.Evaluate(signal.Symbol, KlineInterval.OneMinute, klines);
 
             bool isSmartStrongTrend =
                 smart.BaseRegime == MarketRegime.StrongUpTrend ||
@@ -208,7 +216,7 @@ namespace VertexAutoTradeBinance8.Services
             {
                 liquidityResult = _liquidityGuard.Analyze(
                     signal.Symbol,
-                    KlineInterval.FiveMinutes,
+                    KlineInterval.OneMinute,
                     klines,
                     signal.Side,
                     superSignal: signal.IsSuperSignal);

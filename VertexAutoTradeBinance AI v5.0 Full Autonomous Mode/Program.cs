@@ -142,6 +142,7 @@ public class Program
                     services.AddSingleton<BinanceClientFactory>();
                     services.AddSingleton<MarketDataKlineBuffer>();
                     services.AddSingleton<KlineBufferPersistence>();
+                    services.AddSingleton<RealtimePriceService>();
 
                     services.AddSingleton<MarketContextService>();
                     services.AddSingleton<WsKlineSubscriber>();

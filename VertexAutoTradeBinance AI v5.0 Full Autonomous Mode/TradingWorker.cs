@@ -15,6 +15,29 @@ using static VertexAutoTradeBinance8.Services.AiTimeframeSelectorService;
 
 namespace VertexAutoTradeBinance8
 {
+
+    public sealed class RealtimePriceService
+    {
+        private readonly ConcurrentDictionary<string, decimal> _lastPrice = new();
+
+        public void Update(string symbol, decimal price)
+        {
+            _lastPrice[symbol] = price;
+        }
+
+        public bool TryGet(string symbol, out decimal price)
+        {
+            return _lastPrice.TryGetValue(symbol, out price);
+        }
+
+        public decimal GetOrDefault(string symbol)
+        {
+            return _lastPrice.TryGetValue(symbol, out var p) ? p : 0m;
+        }
+    }
+
+
+
     public class TradingWorker : BackgroundService
     {
         private readonly ILogger<TradingWorker> _logger;
@@ -72,6 +95,8 @@ namespace VertexAutoTradeBinance8
         private static readonly TimeSpan TrackedGrace = TimeSpan.FromMinutes(20);
         private volatile string _currentSymbol = "—";
 
+        private readonly RealtimePriceService _price;
+
         private readonly BinanceHistoryImporter _importer;
 
         // ===============================
@@ -108,7 +133,8 @@ namespace VertexAutoTradeBinance8
             EngineStateBuilder engineStateBuilder,
             EngineStateSnapshotService engineStateSnapshot,
             IBootGate bootGate,
-            IStrategyPreFilter pre, MarketContextService marketContext, SimulatedTradeService sim, AiMarketRegimeService marketRegime, BinanceHistoryImporter importer)
+            IStrategyPreFilter pre, MarketContextService marketContext, SimulatedTradeService sim, AiMarketRegimeService marketRegime, BinanceHistoryImporter importer
+            , RealtimePriceService price)
         {
             _logger = logger;
             _options = options.Value;
@@ -139,6 +165,7 @@ namespace VertexAutoTradeBinance8
             _sim = sim;
             _marketRegime = marketRegime;
             _importer = importer;
+            _price = price;
         }
 
         private int _lastCyclesPerMinute = 0;
@@ -486,7 +513,7 @@ _strategy.OnSignalGenerated += signal =>
                     _currentSymbol = symbol;
 
                     var selectedTf = await ResolveTimeframeSafeAsync(symbol, ct);  // можно для аналитики/логов
-                    var tradeTf = KlineInterval.FifteenMinutes; // жестко   // либо маппинг из _options.TimeframeMinutes -> KlineInterval
+                    var tradeTf = KlineInterval.OneMinute; // жестко   // либо маппинг из _options.TimeframeMinutes -> KlineInterval
 
 
                     var ctx = await _marketContext.GetContextAsync(symbol, ct);
@@ -729,11 +756,19 @@ _strategy.OnSignalGenerated += signal =>
                 // =====================================================
                 // 8) EXECUTION
                 // =====================================================
-                var result = await _executor
-                    .ExecuteAsync(signal, qty, ct)
-                    .ConfigureAwait(false);
+              
 
-                if (!result.Success)
+            // 🔥 realtime price override
+            if (_price.TryGet(symbol, out var realtimePrice) && realtimePrice > 0)
+            {
+                signal.EntryPrice = realtimePrice;
+            }
+
+            var result = await _executor.ExecuteAsync(signal, qty, ct);
+
+
+
+            if (!result.Success)
                 {
                     await RejectAsync(
                         signal, symbol, tf,
