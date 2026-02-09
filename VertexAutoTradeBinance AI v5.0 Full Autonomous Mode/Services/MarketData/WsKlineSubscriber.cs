@@ -56,7 +56,6 @@ namespace VertexAutoTradeBinance8.Services
         // ============================================================
         // CORE SUBSCRIBE
         // ============================================================
-
         private async Task SubscribeCore(
             string symbol,
             KlineInterval interval,
@@ -72,29 +71,58 @@ namespace VertexAutoTradeBinance8.Services
                 symbol,
                 interval);
 
-            var result =
-                await _socket.UsdFuturesApi.ExchangeData
-                    .SubscribeToKlineUpdatesAsync(
+            const int maxRetries = 5;
+
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                try
+                {
+                    var result =
+                        await _socket.UsdFuturesApi.ExchangeData
+                            .SubscribeToKlineUpdatesAsync(
+                                symbol,
+                                interval,
+                                HandleKline(symbol, interval),
+                                ct: ct);
+
+                    if (result.Success)
+                    {
+                        _subs[key] = result.Data;
+
+                        _logger.LogInformation(
+                            "[WS] Subscribe OK {symbol} {tf}",
+                            symbol,
+                            interval);
+
+                        return;
+                    }
+
+                    _logger.LogWarning(
+                        "[WS] Subscribe attempt {attempt}/{max} FAILED {symbol} {tf}: {err}",
+                        attempt,
+                        maxRetries,
                         symbol,
                         interval,
-                        HandleKline(symbol, interval),
-                        ct: ct);
+                        result.Error?.Message);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "[WS] Subscribe attempt {attempt}/{max} EXCEPTION {symbol} {tf}",
+                        attempt,
+                        maxRetries,
+                        symbol,
+                        interval);
+                }
 
-            if (!result.Success)
-            {
-                _logger.LogError(
-                    "[WS] Subscribe FAILED {symbol} {tf}: {err}",
-                    symbol,
-                    interval,
-                    result.Error?.Message);
-
-                return;
+                await Task.Delay(1000 * attempt, ct);
             }
 
-            _subs[key] = result.Data;
-
-            _logger.LogInformation(
-                "[WS] Subscribe OK {symbol} {tf}",
+            _logger.LogError(
+                "[WS] Subscribe PERMANENT FAILED {symbol} {tf}",
                 symbol,
                 interval);
         }
