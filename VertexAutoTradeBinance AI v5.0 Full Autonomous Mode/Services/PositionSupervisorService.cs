@@ -2,6 +2,7 @@
 using Binance.Net.Enums;
 using Binance.Net.Interfaces.Clients;
 using Binance.Net.Objects.Models.Futures;
+using Binance.Net.Objects.Models.Spot;
 using CryptoExchange.Net.Objects;
 using System.Collections.Concurrent;
 using System.Globalization;
@@ -217,10 +218,8 @@ namespace VertexAutoTradeBinance8.Services
             if (atr14_1m > 0 && klines1m != null && klines1m.Count >= 10)
             {
                 // ===== TEMP BE DIAGNOSTIC (INLINE, REMOVE LATER) =====
-
-                void ProbeSide(
-     BinancePositionDetailsUsdt? pos,
-     PositionSide side)
+                // ====================== PROBE SIDE ======================
+                void ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
                 {
                     if (pos == null || pos.Quantity == 0)
                     {
@@ -232,7 +231,6 @@ namespace VertexAutoTradeBinance8.Services
 
                     var qty = Math.Abs(pos.Quantity);
                     var entry = pos.EntryPrice;
-
                     if (qty <= 0 || entry <= 0)
                     {
                         _logger.LogWarning("[BE MOVE][{symbol}][{side}] Invalid position data: qty={qty}, entry={entry}", symbol, side, qty, entry);
@@ -240,26 +238,21 @@ namespace VertexAutoTradeBinance8.Services
                     }
 
                     var markPrice = pos.MarkPrice;
-
-                    var roi = side == PositionSide.Long
-                        ? (markPrice - entry) / entry
-                        : (entry - markPrice) / entry;
+                    var roi = side == PositionSide.Long ? (markPrice - entry) / entry : (entry - markPrice) / entry;
 
                     const decimal PARTIAL_TRIGGER = 0.0015m;
                     const decimal BE_TRIGGER = 0.0010m;
-
                     var partialKey = symbol + "_" + side;
 
                     // ===== PARTIAL CLOSE =====
-                    if (roi >= PARTIAL_TRIGGER &&
-                        !_partialDone.ContainsKey(partialKey))
+                    if (roi >= PARTIAL_TRIGGER && !_partialDone.ContainsKey(partialKey))
                     {
                         var closeQty = qty * 0.50m;
                         _partialDone[partialKey] = true;
 
                         _logger.LogWarning("[PARTIAL CLOSE][{symbol}][{side}] ROI={roi:P2} close={qty}", symbol, side, roi, closeQty);
 
-                        SafeFireAndForget(ClosePartialAsync(client, symbol, side, closeQty, ct));
+                        SafeFireAndForget(ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
                     }
 
                     // ===== BE MOVE =====
@@ -274,14 +267,11 @@ namespace VertexAutoTradeBinance8.Services
 
                         if (slOrder == null)
                         {
-                            // Если SL ещё нет, выставляем BE SL
                             _logger.LogWarning("[BE MOVE][{symbol}][{side}] StopMarket not found, placing BE SL at entry={entry}", symbol, side, entry);
-
-                            SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, qty, entry,  ct));
+                            SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, qty, entry, pos, ct));
                             return;
                         }
 
-                        // Если SL найден, двигаем его в BE
                         _logger.LogInformation("[BE MOVE][{symbol}][{side}] StopMarket found, moving to BE", symbol, side);
                         SafeFireAndForget(TryMoveSlToBeAsync(client, symbol, side, qty, entry, atr14_1m, slOrder, lastSignal, klines1m, ct));
                     }
@@ -290,6 +280,8 @@ namespace VertexAutoTradeBinance8.Services
                         _logger.LogDebug("[BE MOVE][{symbol}][{side}] ROI below BE_TRIGGER: {roi:P2}", symbol, side, roi);
                     }
                 }
+
+
 
 
                 ProbeSide(longPos, PositionSide.Long);
@@ -311,113 +303,136 @@ namespace VertexAutoTradeBinance8.Services
                 await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, openOrders, lastSignal, klines1m, ct);
         }
 
-        // ===== PLACE BE SL (FINAL FIX) =====
+
+        // ===== PLACE BE SL =====
         private async Task PlaceStopLossAtBeAsync(
-            BinanceRestClient client,
+            IBinanceRestClient client,
             string symbol,
             PositionSide side,
             decimal qty,
             decimal entryPrice,
+            BinancePositionDetailsUsdt pos,
             CancellationToken ct)
         {
-            try
+            if (qty <= 0 || pos == null) return;
+
+            var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+            bool reduceOnly = pos.Quantity != 0; // ReduceOnly только если реально есть позиция
+
+            var (qtyPrecision, pricePrecision) = await GetSymbolPrecisionsAsync(client, symbol);
+            qty = RoundQty(qty, qtyPrecision);
+            entryPrice = RoundPrice(entryPrice, pricePrecision);
+
+            await client.UsdFuturesApi.Trading.CancelAllConditionalOrdersAsync(symbol, ct: ct);
+
+            var result = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                symbol: symbol,
+                side: orderSide,
+                type: ConditionalOrderType.StopMarket,
+                quantity: qty,
+                positionSide: side,
+                triggerPrice: entryPrice,
+                workingType: WorkingType.Mark,
+                // reduceOnly: reduceOnly, // в Hedge Mode Binance не требует
+                priceProtect: true,
+                ct: ct
+            );
+
+            if (result.Success)
+                _logger.LogInformation("[BE MOVE][{symbol}][{side}] BE SL placed at {price} qty={qty}", symbol, side, entryPrice, qty);
+            else
+                _logger.LogError("[BE MOVE][{symbol}][{side}] Failed: {msg}", symbol, side, result.Error?.Message);
+        }
+
+        // ===== CLOSE PARTIAL =====
+        private async Task ClosePartialAsync(
+     IBinanceRestClient client,
+     string symbol,
+     PositionSide side,
+     decimal qty,
+     BinancePositionDetailsUsdt pos,
+     CancellationToken ct)
+        {
+            if (qty <= 0 || pos == null)
+                return;
+
+            var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+            var (qtyPrecision, _) = await GetSymbolPrecisionsAsync(client, symbol);
+            qty = RoundQty(qty, qtyPrecision);
+
+            if (qty <= 0)
             {
-                if (qty <= 0)
-                {
-                    _logger.LogWarning(
-                        "[BE MOVE][{symbol}][{side}] qty=0, skipping",
-                        symbol, side);
-                    return;
-                }
-
-                var stopPrice = entryPrice;
-
-                var orderSide =
-                    side == PositionSide.Long
-                    ? OrderSide.Sell
-                    : OrderSide.Buy;
-
-                // IMPORTANT: quantity = null
-                // IMPORTANT: closePosition = true
-
-                var result = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol: symbol,
-                    side: orderSide,
-                    type: FuturesOrderType.StopMarket,
-
-                    quantity: null,                 // FIX
-                    stopPrice: stopPrice,
-
-                    positionSide: side,
-                    workingType: WorkingType.Mark,
-
-                    closePosition: true,           // FIX
-
-                    ct: ct
-                );
-
-                if (result.Success)
-                {
-                    _logger.LogInformation(
-                        "[BE MOVE][{symbol}][{side}] BE SL placed at {price}",
-                        symbol, side, stopPrice);
-                }
-                else
-                {
-                    _logger.LogError(
-                        "[BE MOVE][{symbol}][{side}] Failed: {msg}",
-                        symbol, side, result.Error?.Message);
-                }
+                _logger.LogWarning("[PARTIAL CLOSE SKIPPED][{symbol}][{side}] qty rounded to 0", symbol, side);
+                return;
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "[BE MOVE][{symbol}][{side}] Exception placing BE SL",
-                    symbol, side);
-            }
+
+            var result = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: symbol,
+                side: orderSide,
+                type: FuturesOrderType.Market,
+                quantity: qty,
+                positionSide: side,
+                reduceOnly: null, // ← КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ
+                ct: ct
+            );
+
+            if (result.Success)
+                _logger.LogInformation("[PARTIAL CLOSE OK][{symbol}][{side}] qty={qty}", symbol, side, qty);
+            else
+                _logger.LogError("[PARTIAL CLOSE FAILED][{symbol}][{side}] {err}", symbol, side, result.Error?.Message);
         }
 
 
 
-        //private async Task PlaceStopLossAtBeAsync(
-        //    BinanceRestClient client,
-        //    string symbol,
-        //    PositionSide side,
-        //    decimal qty,
-        //    decimal entryPrice,
-        //    CancellationToken ct)
-        //{
-        //    try
-        //    {
-        //        var stopPrice = entryPrice; // BE уровень = вход
-        //        var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+        // ===== UTILITY: Получение точностей символа =====
+        private async Task<(int qtyPrecision, int pricePrecision)> GetSymbolPrecisionsAsync(
+            IBinanceRestClient client, string symbol)
+        {
+            var infoResult = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync();
+            var sym = infoResult.Data.Symbols.FirstOrDefault(s => s.Name == symbol);
+            if (sym == null)
+                return (0, 0);
 
-        //        var result = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-        //            symbol,
-        //            orderSide,
-        //            FuturesOrderType.StopMarket,
-        //            quantity: qty,
-        //            positionSide: side,
-        //            stopPrice: stopPrice,
-        //            reduceOnly: true,
-        //            ct: ct
-        //        );
+            int qtyPrecision = 0;
+            int pricePrecision = 0;
 
-        //        if (result.Success)
-        //        {
-        //            _logger.LogInformation("[BE MOVE][{symbol}][{side}] BE SL successfully placed at {stopPrice}", symbol, side, stopPrice);
-        //        }
-        //        else
-        //        {
-        //            _logger.LogError("[BE MOVE][{symbol}][{side}] Failed to place BE SL: {msg}", symbol, side, result.Error?.Message);
-        //        }
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        _logger.LogError(ex, "[BE MOVE][{symbol}][{side}] Exception placing BE SL", symbol, side);
-        //    }
-        //}
+            // ===== Количество =====
+            var lot = sym.Filters.FirstOrDefault(f => f.FilterType == SymbolFilterType.LotSize);
+            if (lot != null)
+            {
+                // безопасно приводим к BinanceSymbolLotSizeFilter
+                if (lot is BinanceSymbolLotSizeFilter lotFilter)
+                {
+                    qtyPrecision = (int)Math.Round(Math.Log10((double)(1 / lotFilter.StepSize)));
+                }
+            }
+
+            // ===== Цена =====
+            var priceF = sym.Filters.FirstOrDefault(f => f.FilterType == SymbolFilterType.Price);
+            if (priceF != null)
+            {
+                // безопасно приводим к BinanceSymbolPriceFilter
+                if (priceF is BinanceSymbolPriceFilter priceFilter)
+                {
+                    pricePrecision = (int)Math.Round(Math.Log10((double)(1 / priceFilter.TickSize)));
+                }
+            }
+
+            return (qtyPrecision, pricePrecision);
+        }
+
+
+        private decimal RoundQty(decimal qty, int precision)
+        {
+            return Math.Floor(qty * (decimal)Math.Pow(10, precision)) / (decimal)Math.Pow(10, precision);
+        }
+
+        private decimal RoundPrice(decimal price, int precision)
+        {
+            return Math.Floor(price * (decimal)Math.Pow(10, precision)) / (decimal)Math.Pow(10, precision);
+        }
+
 
         private void SafeFireAndForget(Task task)
         {
@@ -432,36 +447,13 @@ namespace VertexAutoTradeBinance8.Services
             }, TaskContinuationOptions.OnlyOnFaulted);
         }
 
-        private async Task ClosePartialAsync(
-    IBinanceRestClient client,
-    string symbol,
-    PositionSide side,
-    decimal qty,
-    CancellationToken ct)
+        private bool ShouldUseReduceOnly(BinancePositionDetailsUsdt? pos)
         {
-            var orderSide =
-                side == PositionSide.Long
-                ? OrderSide.Sell
-                : OrderSide.Buy;
-
-            var result =
-                await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol,
-                    orderSide,
-                    FuturesOrderType.Market,
-                    quantity: qty,
-                    positionSide: side,
-                    reduceOnly: true,
-                    ct: ct);
-
-            if (!result.Success)
-            {
-                _logger.LogError(
-                    "[PARTIAL CLOSE FAILED] {err}",
-                    result.Error);
-            }
+            // reduceOnly = true только если реально есть позиция на этой стороне
+            return pos != null && pos.Quantity != 0;
         }
 
+       
 
         private decimal ResolveExitPrice(string symbol)
         {
@@ -853,26 +845,35 @@ namespace VertexAutoTradeBinance8.Services
         // HANDLE SIDE  (v8.2 PRO)
         // =====================================================================
 
+        public async Task ClosePositionMarketAsync(
+            string symbol,
+            BinanceRestClient client,
+            BinancePositionDetailsUsdt pos,
+            CancellationToken ct)
+        {
+            if (pos == null || pos.Quantity == 0) return;
 
+            var side = pos.Quantity > 0 ? OrderSide.Sell : OrderSide.Buy;
+            var absQty = Math.Abs(pos.Quantity);
+            bool reduceOnly = ShouldUseReduceOnly(pos); // ✅ универсальный фикс
 
-        public async Task ClosePositionMarketAsync(string symbol, BinanceRestClient client, BinancePositionDetailsUsdt position)
-        { 
-            if (position == null) return;
-
-            // 2. Определяем сторону закрытия
-            var closeSide = position.Quantity > 0 ? OrderSide.Sell : OrderSide.Buy;
-            var absQuantity = Math.Abs(position.Quantity);
-
-            // 3. Отправляем рыночный ордер на закрытие
-            await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+            var result = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: symbol,
-                side: closeSide,
+                side: side,
                 type: FuturesOrderType.Market,
-                quantity: absQuantity,
-                reduceOnly: true,
-                positionSide: position.PositionSide // Важно для Hedge Mode
+                quantity: absQty,
+                positionSide: pos.PositionSide,
+                reduceOnly: reduceOnly,
+                ct: ct
             );
+
+            if (result.Success)
+                _logger.LogInformation("[FULL CLOSE OK][{symbol}][{side}] qty={qty}", symbol, pos.PositionSide, absQty);
+            else
+                _logger.LogError("[FULL CLOSE FAILED][{symbol}][{side}] {err}", symbol, pos.PositionSide, result.Error?.Message);
         }
+
+
         public async Task<int> GetActivePositionsCountAsync(CancellationToken ct = default)
         {
             using var client = _factory.CreateRestClient();
@@ -1018,7 +1019,7 @@ namespace VertexAutoTradeBinance8.Services
                             "[EXIT][{symbol}] IMPULSE_CONTINUATION impulse lost → FULL CLOSE",
                             symbol);
                          
-                        await ClosePositionMarketAsync(symbol, client, pos);
+                        await ClosePositionMarketAsync(symbol, client, pos,ct);
 
                         return;
                     }
@@ -1599,7 +1600,6 @@ namespace VertexAutoTradeBinance8.Services
                 _dispatcher.Enqueue(async ct =>
                 {
                     using var c = _factory.CreateRestClient();
-
                     var res = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
                         symbol: symbol,
                         side: orderSide,
@@ -1607,7 +1607,7 @@ namespace VertexAutoTradeBinance8.Services
                         quantity: closeQty,
                         positionSide: side,
                         stopPrice: sl,
-                        reduceOnly: true,
+                        reduceOnly: null,
                         ct: ct);
 
                     if (res.Success)
@@ -1635,7 +1635,7 @@ namespace VertexAutoTradeBinance8.Services
                             quantity: closeQty,
                             triggerPrice: sl,
                             workingType: "CONTRACT_PRICE",
-                            reduceOnly: true,
+                            reduceOnly: null,
                             ct: ct);
 
                         if (ok)
@@ -1749,7 +1749,6 @@ namespace VertexAutoTradeBinance8.Services
                 _dispatcher.Enqueue(async ct =>
                 {
                     using var c = _factory.CreateRestClient();
-
                     var res = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
                         symbol: symbol,
                         side: orderSide,
@@ -1757,7 +1756,7 @@ namespace VertexAutoTradeBinance8.Services
                         quantity: closeQty,
                         positionSide: side,
                         stopPrice: trigger,
-                        reduceOnly: true,
+                        reduceOnly: null,
                         ct: ct);
 
                     if (res.Success)
@@ -1787,7 +1786,7 @@ namespace VertexAutoTradeBinance8.Services
                                 quantity: closeQty,
                                 triggerPrice: trigger,
                                 workingType: "CONTRACT_PRICE",
-                                reduceOnly: true,
+                                reduceOnly: null,
                                 ct: ct);
 
                             if (ok)
