@@ -78,6 +78,8 @@ namespace VertexAutoTradeBinance8.Services
 
             _marketState.OnRestored += MarkSnapshotReady;
             _price = price;
+
+
             _ws.OnPrice += (symbol, price) =>
             {
                 UpdateRealtimePrice(symbol, price);
@@ -257,6 +259,8 @@ namespace VertexAutoTradeBinance8.Services
         private static string Key(string symbol, KlineInterval tf) =>
             $"{NormalizeSymbol(symbol)}:{tf}";
 
+
+     
         // =====================================================
         // MAIN API
         // =====================================================

@@ -66,7 +66,12 @@ namespace VertexAutoTradeBinance8.Services
        decimal? attemptNotional = null,
        decimal? requiredMinNotional = null)
         {
-            
+            if (signal == null)
+            {
+                _logger.LogError("[SIM] SimulateMissedTradeAsync called with null signal | reason={reason}, note={note}", reason, note);
+                return null;
+            }
+          
             try
             {
                 _logger.LogInformation(
@@ -82,14 +87,10 @@ namespace VertexAutoTradeBinance8.Services
                 if (klines == null || klines.Count == 0)
                     return null;
 
-                decimal entry = signal.EntryPrice;
+                decimal entry = signal.EntryPrice;   // уже безопасно
                 decimal sl = signal.StopLoss;
+                decimal tp = signal.TakeProfit ?? (signal.TakeProfits?.FirstOrDefault() ?? entry * 1.01m);
 
-                decimal tp =
-                    signal.TakeProfit
-                    ?? (signal.TakeProfits.Count > 0
-                        ? signal.TakeProfits[0]
-                        : entry * 1.01m);
 
                 bool hitSL = false;
                 bool hitTP = false;
@@ -122,9 +123,9 @@ namespace VertexAutoTradeBinance8.Services
                     StopLoss = sl,
                     Side = signal.Side.ToString(),
 
-                    TakeProfits = signal.TakeProfits.Count > 0
-                        ? new List<decimal>(signal.TakeProfits)
-                        : new List<decimal> { tp },
+                    TakeProfits = signal.TakeProfits != null && signal.TakeProfits.Count > 0
+    ? new List<decimal>(signal.TakeProfits)
+    : new List<decimal> { tp },
 
                     Event = "SIMULATED_RESULT",
                     Reason = reason,
@@ -138,8 +139,11 @@ namespace VertexAutoTradeBinance8.Services
                     Slope = 0m,
                     Deviation = 0m,
 
+                    
                     Confidence = (int)((signal.Confidence ?? 0m) * 100),
                     Score = (int)((signal.AiQuality ?? 0m) * 100),
+
+                     
 
                     Regime = MarketRegime.Unknown,
                     SmartType = "",
@@ -249,38 +253,42 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
-
         public async Task AppendLifecycleEventAsync(
-    TradeSignal signal,
-    string stage,
-    string reason = "",
-    decimal? freeBalance = null,
-    decimal? attemptNotional = null,
-    decimal? requiredMinNotional = null,
-    string? note = null,
-    MarketRegime? regime = null,
-    string? smartType = null,
-    decimal? vol = null,
-    decimal? slope = null,
-    decimal? deviation = null)
+            TradeSignal signal,
+            string stage,
+            string reason = "",
+            decimal? freeBalance = null,
+            decimal? attemptNotional = null,
+            decimal? requiredMinNotional = null,
+            string? note = null,
+            MarketRegime? regime = null,
+            string? smartType = null,
+            decimal? vol = null,
+            decimal? slope = null,
+            decimal? deviation = null)
         {
             try
             {
+                if (signal == null)
+                    return;
+
                 var record = new MissedTradeRecord
                 {
-                    Symbol = signal.Symbol,
+                    Symbol = signal.Symbol ?? "",
                     Time = DateTime.UtcNow,
 
                     Entry = signal.EntryPrice,
                     StopLoss = signal.StopLoss,
+
                     Side = signal.Side.ToString(),
 
-                    TakeProfits = signal.TakeProfits.Count > 0
+                    // ✅ FIX
+                    TakeProfits = signal.TakeProfits != null && signal.TakeProfits.Count > 0
                         ? new List<decimal>(signal.TakeProfits)
                         : new List<decimal>(),
 
-                    Event = stage,
-                    Reason = reason,
+                    Event = stage ?? "",
+                    Reason = reason ?? "",
 
                     AttemptNotional = attemptNotional ?? 0m,
                     RequiredMinNotional = requiredMinNotional ?? 0m,
@@ -297,7 +305,7 @@ namespace VertexAutoTradeBinance8.Services
                     Slope = slope ?? 0m,
                     Deviation = deviation ?? 0m,
 
-                    Note = note ?? "" // см. пункт 3.2
+                    Note = note ?? ""
                 };
 
                 await AppendRecordAsync(record);
@@ -307,6 +315,7 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogError(ex, "[SIM] Failed to append lifecycle event");
             }
         }
+
 
     }
 }

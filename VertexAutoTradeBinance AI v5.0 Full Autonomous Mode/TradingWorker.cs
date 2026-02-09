@@ -534,10 +534,10 @@ _strategy.OnSignalGenerated += signal =>
 
                     _engineStateSnapshot.Save(state);
 
-                    if (ctx.Allows(SignalSide.Buy))
+                    if (ctx.Allows(SignalSide.Buy,0m))
                         await ProcessSymbolWithUniverseSide(symbol, tradeTf, SignalSide.Buy, ct);
 
-                    if (ctx.Allows(SignalSide.Sell))
+                    if (ctx.Allows(SignalSide.Sell,0m))
                         await ProcessSymbolWithUniverseSide(symbol, tradeTf, SignalSide.Sell, ct);
 
                     ConsoleSymbolTableFormatter.UpdateTf(symbol, tradeTf, $"TF={tradeTf} (sel={selectedTf})", "...");
@@ -590,19 +590,7 @@ _strategy.OnSignalGenerated += signal =>
                 ConsoleSymbolTableFormatter.UpdateTf(
                     symbol, tf, "▶ STRAT", signal.Side.ToString());
 
-                // =====================================================
-                // 1) CONTEXT / UNIVERSE SIDE CHECK
-                // =====================================================
-                var ctx = await _marketContext.GetContextAsync(symbol, ct);
-                if (!ctx.Allows(signal.Side))
-                {
-                    await RejectAsync(
-                        signal, symbol, tf,
-                        "UNIVERSE_SIDE",
-                        "SIDE_NOT_ALLOWED",
-                        ct);
-                    return;
-                }
+                
 
                 // =====================================================
                 // 2) COOLDOWN
@@ -650,11 +638,23 @@ _strategy.OnSignalGenerated += signal =>
                         extra: ai.Reason);
                     return;
                 }
-
-                // =====================================================
-                // 4) RISK SCALING
-                // =====================================================
-                var riskMult = _riskScaler.Scale(ai.Grade);
+            // =====================================================
+            // 3.5) CONTEXT SIDE CHECK (NOW WITH CONFIDENCE)
+            // =====================================================
+            var ctx = await _marketContext.GetContextAsync(symbol, ct);
+            if (!ctx.Allows(signal.Side, ai.Score))
+            {
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "UNIVERSE_SIDE",
+                    "SIDE_NOT_ALLOWED",
+                    ct);
+                return;
+            }
+            // =====================================================
+            // 4) RISK SCALING
+            // =====================================================
+            var riskMult = _riskScaler.Scale(ai.Grade);
                 if (riskMult <= 0)
                 {
                     await RejectAsync(

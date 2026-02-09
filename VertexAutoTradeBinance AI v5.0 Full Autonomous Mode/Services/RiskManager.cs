@@ -97,9 +97,43 @@ namespace VertexAutoTradeBinance8.Services
                 binanceMinNotional = Math.Max(binanceMinNotional, trading.MinNotional);
 
             // ACCOUNT BALANCE
+
+
+            // ACCOUNT BALANCE
             using var client = _factory.CreateRestClient();
-            var acc = await client.UsdFuturesApi.Account.GetBalancesAsync(null, ct);
-            decimal free = acc?.Data?.FirstOrDefault(x => x.Asset == "USDT")?.AvailableBalance ?? 0;
+
+            var account = await client.UsdFuturesApi.Account.GetAccountInfoV3Async(ct:ct);
+
+            if (!account.Success || account.Data == null)
+            {
+                LastRejectReason = "AccountInfoFailed";
+                signal.RejectReason = LastRejectReason;
+
+                _logger.LogError(
+                    "[BALANCE] AccountInfo failed: {Error}",
+                    account.Error?.Message ?? "Data is null");
+
+                return 0;
+            }
+
+            decimal free =
+                account.Data.Assets
+                    .FirstOrDefault(x => x.Asset.Equals("USDT", StringComparison.OrdinalIgnoreCase))?.AvailableBalance ?? 0;
+
+            _logger.LogWarning(
+            "[BALANCE] USDT Available={Free}",
+            free);
+
+            if (free <= 0)
+            {
+                LastRejectReason = "NoBalance";
+                signal.RejectReason = LastRejectReason;
+                return 0;
+            }
+
+
+            // var acc = await client.UsdFuturesApi.Account.GetBalancesAsync(null, ct);
+            //decimal free = acc?.Data?.FirstOrDefault(x => x.Asset == "USDT")?.AvailableBalance ?? 0;
 
             // === Dynamic MinNotional by capital percent ===
             if (trading.MinNotionalGuardPercent > 0)
@@ -113,10 +147,28 @@ namespace VertexAutoTradeBinance8.Services
             LastBalanceUsdt = free;
 
             var klines = await _marketData.GetKlines(symbol, KlineInterval.FiveMinutes, 200);
-            var baseReg = _marketRegimeService.DetectRegime(symbol, KlineInterval.FiveMinutes, klines);
-            var smart = _smartRegime.Evaluate(symbol, KlineInterval.FiveMinutes, klines);
 
-            decimal atr = baseReg.VolatilityPercent * klines.Last().ClosePrice;
+            if (klines == null || klines.Count == 0)
+            {
+                LastRejectReason = "NoKlines";
+                signal.RejectReason = LastRejectReason;
+                return 0;
+            }
+
+
+            var baseReg = _marketRegimeService.DetectRegime(
+                symbol, 
+                KlineInterval.FiveMinutes, 
+                klines);
+
+            var smart = _smartRegime.Evaluate(
+                symbol, 
+                KlineInterval.FiveMinutes, 
+                klines);
+
+            decimal atr =
+     baseReg.VolatilityPercent *
+     klines[^1].ClosePrice;
 
             // ===============================
             //  AI Opportunity Score v2.0
@@ -160,37 +212,29 @@ namespace VertexAutoTradeBinance8.Services
                 case SmartRegimeType.SmartStrongTrend:
                     scoreUi += 18;
                     break;
-
                 case SmartRegimeType.SmartTrend:
                     scoreUi += 8;
                     break;
-
                 case SmartRegimeType.SmartSqueeze:
                     scoreUi += 10;
                     break;
-
                 case SmartRegimeType.SmartRange:
                     scoreUi += 0;
                     break;
-
                 case SmartRegimeType.SmartChop:
                     scoreUi -= 10;
                     break;
             }
-
             // === 6) Take Profit structure ===
             if (takeProfits.Count >= 3) scoreUi += 8;
             else if (takeProfits.Count == 2) scoreUi += 4;
-
             // === 7) AI Confidence ===
             scoreUi += (int)(smart.Confidence * 20); // 0..20
-
             // === 8) Окончательная нормализация ===
             scoreUi = Math.Clamp(scoreUi, 1, 100);
 
             if (free <= 0)
             {
-
                 if (free <= 0)
                 {
                     LastRejectReason = "NoBalance";
@@ -207,30 +251,22 @@ namespace VertexAutoTradeBinance8.Services
              ? trading.BaseRiskPercent
              : 0.01m;
 
-
             // AI LEVERAGE FACTOR
             decimal aiLevMult = await GetAiLeverageMultiplierAsync(symbol, ct);
-
             // FINAL MULTIPLIER
             decimal finalRisk = riskMultiplier * safetyRiskMultiplier * aiLevMult;
             finalRisk = Math.Clamp(finalRisk, 0.3m, 2.7m);
-
             decimal maxRisk = free * baseRiskPercent * finalRisk;
             if (maxRisk < 1m) maxRisk = 1m;
             if (maxRisk > free * 0.20m) maxRisk = free * 0.20m;
-
             decimal qty = maxRisk / slDist;
             if (leverage > 0) qty *= leverage;
-
             qty = Math.Floor(qty / step) * step;
             if (qty < minQty) qty = minQty;
-
             decimal notional = qty * entryPrice;
-
             // =====================
             // SIGNAL STRENGTH LOGIC
             // =====================
-
             decimal score = riskMultiplier * safetyRiskMultiplier;
             bool strong = score >= 1.30m;
             bool weak = score < 0.80m;
@@ -244,7 +280,6 @@ namespace VertexAutoTradeBinance8.Services
                 // строка ниже не влияет на qty/notional, оставляем как комментарий намерения)
                 maxRisk *= 0.35m;
             }
-
             // =============================================================
             //  BOOST + ADAPTIVE REDUCE (v7.5)
             // =============================================================
@@ -306,7 +341,6 @@ namespace VertexAutoTradeBinance8.Services
             if (leverage <= 0)
                 leverage = trading.Leverage > 0 ? trading.Leverage : 1m;
 
-
             decimal requiredMargin = notional / leverage;
 
             // =============================================================
@@ -320,11 +354,9 @@ namespace VertexAutoTradeBinance8.Services
                 decimal maxNotional = free * leverage * 0.97m;
                 if (maxNotional <= 0)
                 {
-
                     LastRejectReason = "NoMargin";
                     signal.RejectReason = LastRejectReason;
                     return 0;
-
                 }
 
                 // 2) Уменьшаем notional пошагово, пока не пройдём фильтры
@@ -368,16 +400,12 @@ namespace VertexAutoTradeBinance8.Services
                     return 0;
                 }
             }
-
             // Для недостаточного баланса ПОСЛЕ всех корректировок — только предупреждение
             if (notional < binanceMinNotional)
             {
                 _logger.LogWarning(
                     $"[RISK][{symbol}] Warning: notional < minNotional AFTER full reduce. " +
-                    $"notional={notional:F4}, required={binanceMinNotional:F4}");
-
-                // НЕ return!!!
-                // Просто позволяем торговать минимально допустимой позицией.
+                    $"notional={notional:F4}, required={binanceMinNotional:F4}"); 
             }
             // ===== FINAL HARD SAFETY =====
             if (qty <= 0)
@@ -385,19 +413,14 @@ namespace VertexAutoTradeBinance8.Services
                 qty = minQty;
                 notional = qty * entryPrice;
             }
-
             // если даже minQty не проходит — честно выходим
             if (notional < binanceMinNotional && free < (binanceMinNotional / Math.Max(leverage, 1)))
             {
                 signal.RejectReason = "FinalSafetyQtyZero";
                 return 0;
             }
-
-
             // 🔥 ВОТ ЗДЕСЬ ДОБАВИТЬ
             signal.RejectReason = "RISK_OK";
-
-
             return qty;
         }
 

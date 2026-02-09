@@ -1,4 +1,7 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using Binance.Net;
+using Binance.Net.Clients;
+using CryptoExchange.Net.Authentication;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using Serilog;
 using Serilog.Events;
@@ -102,12 +105,9 @@ public class Program
                 {
                     // ===== ТВОЙ СУЩЕСТВУЮЩИЙ DI — БЕЗ ИЗМЕНЕНИЙ =====
                     services.Configure<BinanceOptions>(ctx.Configuration.GetSection("Binance"));
-                    //services.Configure<TradingOptions>(ctx.Configuration.GetSection("Trading"));
-                    //services.Configure<TradingOptions>(ctx.Configuration.GetSection("Trading:BTC"));
-                    //services.Configure<TradingOptions>(ctx.Configuration.GetSection("Trading:ETH"));
 
-                    services.Configure<TradingOptions>("default",
-                    ctx.Configuration.GetSection("Trading"));
+                    services.Configure<TradingOptions>(
+     ctx.Configuration.GetSection("Trading")); // TRUE default
 
                     services.Configure<TradingOptions>("BTC",
                         ctx.Configuration.GetSection("Trading:BTC"));
@@ -118,8 +118,7 @@ public class Program
                     services.Configure<TestModeOptions>(ctx.Configuration.GetSection("TestMode"));
                     services.Configure<HedgeKillSettings>(ctx.Configuration.GetSection("HedgeKill"));
                     services.Configure<SignalConfidenceSettings>(ctx.Configuration.GetSection("SignalConfidence"));
-                    
-
+                    services.AddSingleton<ConfidenceResolver>();
 
                     services.AddSingleton(sp =>
                         sp.GetRequiredService<IOptions<TradingOptions>>().Value);
@@ -133,9 +132,48 @@ public class Program
                     services.AddSingleton(sp =>
                         sp.GetRequiredService<IOptions<SignalConfidenceSettings>>().Value);
 
+
+                    services.AddSingleton<BinanceRestClient>(sp =>
+                    {
+                        var cfg = sp.GetRequiredService<IOptions<BinanceOptions>>().Value;
+
+                        return new BinanceRestClient(opt =>
+                        {
+                            opt.Environment = cfg.UseTestnet
+                                ? BinanceEnvironment.Testnet
+                                : BinanceEnvironment.Live;
+
+                            opt.ApiCredentials = new ApiCredentials(
+                                cfg.ApiKey,
+                                cfg.SecretKey);
+
+                            opt.AutoTimestamp = true;
+                            opt.RequestTimeout = TimeSpan.FromSeconds(15);
+                        });
+                    });
+
+
+                    services.AddSingleton<BinanceSocketClient>(sp =>
+                    {
+                        var cfg = sp.GetRequiredService<IOptions<BinanceOptions>>().Value;
+
+                        return new BinanceSocketClient(opt =>
+                        {
+                            opt.Environment = cfg.UseTestnet
+                                ? BinanceEnvironment.Testnet
+                                : BinanceEnvironment.Live;
+
+                            opt.ApiCredentials = new ApiCredentials(
+                                cfg.ApiKey,
+                                cfg.SecretKey);
+                        });
+                    });
+
                     services.AddHttpClient();
 
                  
+
+
 
 
                     // ===== BASE / MARKET =====

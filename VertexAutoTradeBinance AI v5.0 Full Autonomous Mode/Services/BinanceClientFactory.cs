@@ -1,4 +1,5 @@
-﻿using Binance.Net.Clients;
+﻿using Binance.Net;
+using Binance.Net.Clients;
 using CryptoExchange.Net.Authentication;
 using Microsoft.Extensions.Options;
 using VertexAutoTradeBinance8.Configuration;
@@ -23,6 +24,29 @@ public sealed class BinanceClientFactory
     // =====================================================
     // CORE REST (CACHED, PRODUCTION)
     // =====================================================
+    //public BinanceRestClient CreateRestClient()
+    //{
+    //    if (_cachedRest != null)
+    //        return _cachedRest;
+
+    //    if (string.IsNullOrWhiteSpace(_options.ApiKey) ||
+    //        string.IsNullOrWhiteSpace(_options.SecretKey))
+    //        throw new InvalidOperationException("Binance API credentials missing");
+
+    //    _logger.LogInformation("[BINANCE] Creating REST client (cached)");
+
+    //    _cachedRest = new BinanceRestClient(opt =>
+    //    {
+    //        opt.ApiCredentials = new ApiCredentials(
+    //            _options.ApiKey,
+    //            _options.SecretKey);
+
+    //        opt.UsdFuturesOptions.AutoTimestamp = true;
+    //        opt.RequestTimeout = TimeSpan.FromSeconds(15);
+    //    });
+
+    //    return _cachedRest;
+    //}
     public BinanceRestClient CreateRestClient()
     {
         if (_cachedRest != null)
@@ -32,7 +56,9 @@ public sealed class BinanceClientFactory
             string.IsNullOrWhiteSpace(_options.SecretKey))
             throw new InvalidOperationException("Binance API credentials missing");
 
-        _logger.LogInformation("[BINANCE] Creating REST client (cached)");
+        _logger.LogInformation(
+            "[BINANCE] Creating REST client (cached) Mode={Mode}",
+            _options.UseTestnet ? "TESTNET" : "LIVE");
 
         _cachedRest = new BinanceRestClient(opt =>
         {
@@ -40,12 +66,19 @@ public sealed class BinanceClientFactory
                 _options.ApiKey,
                 _options.SecretKey);
 
-            opt.UsdFuturesOptions.AutoTimestamp = true;
+            // ✅ ЕДИНСТВЕННО правильный способ переключения
+            opt.Environment = _options.UseTestnet
+                ? BinanceEnvironment.Testnet
+                : BinanceEnvironment.Live;
+
+            opt.AutoTimestamp = true;
+
             opt.RequestTimeout = TimeSpan.FromSeconds(15);
         });
 
         return _cachedRest;
     }
+
 
 
     // =====================================================
@@ -70,7 +103,9 @@ public sealed class BinanceClientFactory
     {
         try
         {
-            _logger.LogInformation("[BINANCE] Creating REST client");
+            _logger.LogInformation(
+                "[BINANCE] Creating REST client Mode={Mode}",
+                _options.UseTestnet ? "TESTNET" : "LIVE");
 
             return new BinanceRestClient(opt =>
             {
@@ -78,10 +113,14 @@ public sealed class BinanceClientFactory
                     _options.ApiKey,
                     _options.SecretKey);
 
-                // ✅ КОРРЕКТНО ДЛЯ Binance.Net 11.x
-                opt.UsdFuturesOptions.AutoTimestamp = true;
+                // ✅ ЕДИНСТВЕННО правильный способ переключения
+                opt.Environment = _options.UseTestnet
+                    ? BinanceEnvironment.Testnet
+                    : BinanceEnvironment.Live;
 
-                // Safe timeout (не ломает твою архитектуру)
+                // общий AutoTimestamp (правильное место)
+                opt.AutoTimestamp = true;
+
                 opt.RequestTimeout = TimeSpan.FromSeconds(15);
             });
         }
@@ -97,18 +136,38 @@ public sealed class BinanceClientFactory
     }
 
 
+
     // =====================================================
     // WS CLIENT
     // =====================================================
+    //public BinanceSocketClient CreateSocketClient()
+    //{
+    //    _logger.LogInformation("[BINANCE] Creating WS client");
+
+    //    return new BinanceSocketClient(opt =>
+    //    {
+    //        opt.ApiCredentials = new ApiCredentials(
+    //            _options.ApiKey,
+    //            _options.SecretKey);
+    //    });
+    //}
     public BinanceSocketClient CreateSocketClient()
     {
-        _logger.LogInformation("[BINANCE] Creating WS client");
+        _logger.LogInformation(
+            "[BINANCE] Creating WS client Mode={Mode}",
+            _options.UseTestnet ? "TESTNET" : "LIVE");
 
         return new BinanceSocketClient(opt =>
         {
             opt.ApiCredentials = new ApiCredentials(
                 _options.ApiKey,
                 _options.SecretKey);
+
+            // ✅ Правильное переключение Testnet / Live
+            opt.Environment = _options.UseTestnet
+                ? BinanceEnvironment.Testnet
+                : BinanceEnvironment.Live;
         });
     }
+
 }
