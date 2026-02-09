@@ -74,6 +74,12 @@ namespace VertexAutoTradeBinance8.Services
         // === Attach idempotency (existing position attach) ===
         private readonly ConcurrentDictionary<string, bool> _attached = new();
 
+        // ===============================
+// NEW STATE DICTIONARIES
+// ===============================
+        private readonly ConcurrentDictionary<string, int> _partialStage = new();
+
+        private readonly ConcurrentDictionary<string, BeStage> _beStage = new();
 
         public PositionSupervisorService( 
             ILogger<PositionSupervisorService> logger,
@@ -219,12 +225,14 @@ namespace VertexAutoTradeBinance8.Services
             {
                 // ===== TEMP BE DIAGNOSTIC (INLINE, REMOVE LATER) =====
                 // ====================== PROBE SIDE ======================
+                
+
                 void ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
                 {
                     if (pos == null || pos.Quantity == 0)
                     {
                         var key = symbol + "_" + side;
-                        _partialDone.TryRemove(key, out _);
+                        _beStage.TryRemove(key, out _);
                         _logger.LogInformation("[BE MOVE][{symbol}][{side}] Position empty, skipping", symbol, side);
                         return;
                     }
@@ -242,25 +250,21 @@ namespace VertexAutoTradeBinance8.Services
 
                     const decimal PARTIAL_TRIGGER = 0.0015m;
                     const decimal BE_TRIGGER = 0.0010m;
-                    var partialKey = symbol + "_" + side;
+
+                    var keyStage = symbol + "_" + side;
+                    var stage = _beStage.GetOrAdd(keyStage, BeStage.None);
 
                     // ===== PARTIAL CLOSE =====
-                    if (roi >= PARTIAL_TRIGGER && !_partialDone.ContainsKey(partialKey))
+                    if (roi >= PARTIAL_TRIGGER && stage < BeStage.Rehydrate)
                     {
-                        var closeQty = qty * 0.50m;
-                        _partialDone[partialKey] = true;
-
-                        _logger.LogWarning("[PARTIAL CLOSE][{symbol}][{side}] ROI={roi:P2} close={qty}", symbol, side, roi, closeQty);
-
-                        SafeFireAndForget(ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
+                        SafeFireAndForget(ClosePartialAsync(client, symbol, side, qty * 0.5m, pos, ct));
+                        _beStage[keyStage] = BeStage.Rehydrate;
+                        _logger.LogWarning("[PARTIAL CLOSE][{symbol}][{side}] ROI={roi:P2}, close={qty}", symbol, side, roi, qty * 0.5m);
                     }
 
                     // ===== BE MOVE =====
-                    if (roi >= BE_TRIGGER)
+                    if (roi >= BE_TRIGGER && stage < BeStage.Atr)
                     {
-                        _logger.LogInformation("[BE MOVE][{symbol}][{side}] ROI={roi:P2}, checking SL...", symbol, side, roi);
-
-                        // Пытаемся найти SL ордер
                         var slOrder = openOrders.FirstOrDefault(o =>
                             o.PositionSide == side &&
                             o.Type == FuturesOrderType.StopMarket);
@@ -269,18 +273,24 @@ namespace VertexAutoTradeBinance8.Services
                         {
                             _logger.LogWarning("[BE MOVE][{symbol}][{side}] StopMarket not found, placing BE SL at entry={entry}", symbol, side, entry);
                             SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, qty, entry, pos, ct));
-                            return;
+                        }
+                        else
+                        {
+                            SafeFireAndForget(TryMoveSlToBeAsync(client, symbol, side, qty, entry, atr14_1m, slOrder, lastSignal, klines1m, ct));
                         }
 
-                        _logger.LogInformation("[BE MOVE][{symbol}][{side}] StopMarket found, moving to BE", symbol, side);
-                        SafeFireAndForget(TryMoveSlToBeAsync(client, symbol, side, qty, entry, atr14_1m, slOrder, lastSignal, klines1m, ct));
+                        _beStage[keyStage] = BeStage.Atr;
+                        _logger.LogInformation("[BE MOVE][{symbol}][{side}] ROI={roi:P2}, BE stage updated", symbol, side, roi);
                     }
-                    else
+
+                    // ===== TRAILING / FINAL =====
+                    if (roi >= 0 && stage < BeStage.Trailing)
                     {
-                        _logger.LogDebug("[BE MOVE][{symbol}][{side}] ROI below BE_TRIGGER: {roi:P2}", symbol, side, roi);
+                        // Тут можно делать финальный трейлинг или закрытие после всех BE/Partial
+                        _beStage[keyStage] = BeStage.Trailing;
+                        _logger.LogInformation("[TRAILING][{symbol}][{side}] ROI={roi:P2}, stage set to TRAILING", symbol, side, roi);
                     }
                 }
-
 
 
 
@@ -1391,7 +1401,6 @@ namespace VertexAutoTradeBinance8.Services
             Trailing = 3
         }
 
-        private readonly ConcurrentDictionary<string, BeStage> _beStage = new();
         private string BuildBeKey(string symbol, PositionSide side, decimal entry)
     => $"{symbol}:{side}:{entry}";
 
