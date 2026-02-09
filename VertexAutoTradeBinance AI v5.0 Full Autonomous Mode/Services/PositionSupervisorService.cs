@@ -311,20 +311,22 @@ namespace VertexAutoTradeBinance8.Services
                 await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, openOrders, lastSignal, klines1m, ct);
         }
 
-        // ===== PLACE BE SL =====
+        // ===== PLACE BE SL (FINAL FIX) =====
         private async Task PlaceStopLossAtBeAsync(
-        BinanceRestClient client,
-        string symbol,
-        PositionSide side,
-        decimal qty,
-        decimal entryPrice,
-        CancellationToken ct)
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            decimal entryPrice,
+            CancellationToken ct)
         {
             try
             {
                 if (qty <= 0)
                 {
-                    _logger.LogWarning("[BE MOVE][{symbol}][{side}] qty=0, skipping", symbol, side);
+                    _logger.LogWarning(
+                        "[BE MOVE][{symbol}][{side}] qty=0, skipping",
+                        symbol, side);
                     return;
                 }
 
@@ -335,15 +337,22 @@ namespace VertexAutoTradeBinance8.Services
                     ? OrderSide.Sell
                     : OrderSide.Buy;
 
+                // IMPORTANT: quantity = null
+                // IMPORTANT: closePosition = true
+
                 var result = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: symbol,
                     side: orderSide,
                     type: FuturesOrderType.StopMarket,
-                    quantity: qty,
-                    positionSide: side,
+
+                    quantity: null,                 // FIX
                     stopPrice: stopPrice,
+
+                    positionSide: side,
                     workingType: WorkingType.Mark,
-                    closePosition: false,
+
+                    closePosition: true,           // FIX
+
                     ct: ct
                 );
 
@@ -362,7 +371,8 @@ namespace VertexAutoTradeBinance8.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex,
+                _logger.LogError(
+                    ex,
                     "[BE MOVE][{symbol}][{side}] Exception placing BE SL",
                     symbol, side);
             }
