@@ -276,74 +276,7 @@ namespace VertexAutoTradeBinance8.Services
             {
                 // ===== TEMP BE DIAGNOSTIC (INLINE, REMOVE LATER) =====
                 // ====================== PROBE SIDE ======================
-
-                /*
-                void ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
-                {
-                    if (pos == null || pos.Quantity == 0)
-                    {
-                        var key = symbol + "_" + side;
-                        _beStage.TryRemove(key, out _);
-                        _logger.LogInformation("[BE MOVE][{symbol}][{side}] Position empty, skipping", symbol, side);
-                        return;
-                    }
-
-                    var qty = Math.Abs(pos.Quantity);
-                    var entry = pos.EntryPrice;
-                    if (qty <= 0 || entry <= 0)
-                    {
-                        _logger.LogWarning("[BE MOVE][{symbol}][{side}] Invalid position data: qty={qty}, entry={entry}", symbol, side, qty, entry);
-                        return;
-                    }
-
-                    var markPrice = pos.MarkPrice;
-                    var roi = side == PositionSide.Long ? (markPrice - entry) / entry : (entry - markPrice) / entry;
-
-                    const decimal PARTIAL_TRIGGER = 0.0015m;
-                    const decimal BE_TRIGGER = 0.0010m;
-
-                    var keyStage = symbol + "_" + side;
-                    var stage = _beStage.GetOrAdd(keyStage, BeStage.None);
-
-                    // ===== PARTIAL CLOSE =====
-                    if (roi >= PARTIAL_TRIGGER && stage < BeStage.Rehydrate)
-                    {
-                        SafeFireAndForget(ClosePartialAsync(client, symbol, side, qty * 0.5m, pos, ct));
-                        _beStage[keyStage] = BeStage.Rehydrate;
-                        _logger.LogWarning("[PARTIAL CLOSE][{symbol}][{side}] ROI={roi:P2}, close={qty}", symbol, side, roi, qty * 0.5m);
-                    }
-
-                    // ===== BE MOVE =====
-                    if (roi >= BE_TRIGGER && stage < BeStage.Atr)
-                    {
-                        var slOrder = openOrders.FirstOrDefault(o =>
-                            o.PositionSide == side &&
-                            o.Type == FuturesOrderType.StopMarket);
-
-                        if (slOrder == null)
-                        {
-                            _logger.LogWarning("[BE MOVE][{symbol}][{side}] StopMarket not found, placing BE SL at entry={entry}", symbol, side, entry);
-                            SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, qty, entry, pos, ct));
-                        }
-                        else
-                        {
-                            SafeFireAndForget(TryMoveSlToBeAsync(client, symbol, side, qty, entry, atr14_1m, slOrder, lastSignal, klines1m, ct));
-                        }
-
-                        _beStage[keyStage] = BeStage.Atr;
-                        _logger.LogInformation("[BE MOVE][{symbol}][{side}] ROI={roi:P2}, BE stage updated", symbol, side, roi);
-                    }
-
-                    // ===== TRAILING / FINAL =====
-                    if (roi >= 0 && stage < BeStage.Trailing)
-                    {
-                        // Тут можно делать финальный трейлинг или закрытие после всех BE/Partial
-                        _beStage[keyStage] = BeStage.Trailing;
-                        _logger.LogInformation("[TRAILING][{symbol}][{side}] ROI={roi:P2}, stage set to TRAILING", symbol, side, roi);
-                    }
-                }
-                */
-
+             
                 void ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
                 {
                     var key = symbol + "_" + side;
@@ -507,8 +440,23 @@ namespace VertexAutoTradeBinance8.Services
 
             // --- нормализация ---
             var (qtyPrecision, pricePrecision) = await GetSymbolPrecisionsAsync(client, symbol);
-            qty = NormalizeQuantity(symbol, qty, pos, qtyPrecision);   // ✅ здесь нормализуем по MaxNotional
+            qty = await NormalizeQuantityAsync(symbol,side, qty, client, ct);   // ✅ здесь нормализуем по MaxNotional
+
+
             entryPrice = RoundPrice(entryPrice, pricePrecision);
+
+            // получить filters
+            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+
+            // КРИТИЧЕСКИЙ ФИКС — normalize trigger
+            entryPrice = await NormalizeTriggerPriceAsync(
+     client,
+     symbol,
+     side,
+     entryPrice,
+     filters.tickSize,
+     true,
+     ct);
 
             await client.UsdFuturesApi.Trading.CancelAllConditionalOrdersAsync(symbol, ct: ct);
 
@@ -531,6 +479,72 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogError("[BE MOVE][{symbol}][{side}] Failed: {msg}", symbol, side, result.Error?.Message);
         }
 
+
+        private async Task ClosePartialChunkedAsync(
+    IBinanceRestClient client,
+    string symbol,
+    PositionSide side,
+    decimal totalQty,
+    CancellationToken ct)
+        {
+            const decimal CHUNK_USDT = 5000m;
+
+            var mark = await client.UsdFuturesApi.ExchangeData.GetMarkPriceAsync(symbol, ct);
+
+            if (!mark.Success)
+                return;
+
+            var markPrice = mark.Data.MarkPrice;
+
+            var chunkQty = CHUNK_USDT / markPrice;
+
+            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol, ct: ct);
+
+            chunkQty = Math.Floor(chunkQty / filters.step) * filters.step;
+
+            if (chunkQty <= 0)
+                return;
+
+            var remaining = totalQty;
+
+            while (remaining > 0)
+            {
+                var qty = Math.Min(chunkQty, remaining);
+
+                var orderSide = side == PositionSide.Long
+                    ? OrderSide.Sell
+                    : OrderSide.Buy;
+
+                var result = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol: symbol,
+                    side: orderSide,
+                    type: FuturesOrderType.Market,
+                    quantity: qty,
+                    positionSide: side,
+                    ct: ct);
+
+                if (!result.Success)
+                {
+                    _logger.LogError(
+                        "[PARTIAL CLOSE CHUNK FAILED][{symbol}] {err}",
+                        symbol,
+                        result.Error?.Message);
+
+                    return;
+                }
+
+                remaining -= qty;
+
+                await Task.Delay(50, ct);
+            }
+
+            _logger.LogInformation(
+                "[PARTIAL CLOSE OK][{symbol}] totalQty={qty}",
+                symbol,
+                totalQty);
+        }
+
+
         // ===== CLOSE PARTIAL =====
         private async Task ClosePartialAsync(
          IBinanceRestClient client,
@@ -546,70 +560,131 @@ namespace VertexAutoTradeBinance8.Services
             var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
             var (qtyPrecision, _) = await GetSymbolPrecisionsAsync(client, symbol);
-            qty = NormalizeQuantity(symbol, qty, pos, qtyPrecision);
+            qty = await NormalizeQuantityAsync(symbol,side, qty, client, ct);
+            var positionQty = Math.Abs(pos.Quantity);
 
+            if (qty > positionQty)
+                qty = positionQty * 0.98m;
             if (qty <= 0)
             {
                 _logger.LogWarning("[PARTIAL CLOSE SKIPPED][{symbol}][{side}] qty rounded to 0", symbol, side);
                 return;
             }
 
-            var result = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol: symbol,
-                side: orderSide,
-                type: FuturesOrderType.Market,
-                quantity: qty,
-                positionSide: side,
-                reduceOnly: null, // ← КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ
-                ct: ct
-            );
-
-            if (result.Success)
-                _logger.LogInformation("[PARTIAL CLOSE OK][{symbol}][{side}] qty={qty}", symbol, side, qty);
-            else
-                _logger.LogError("[PARTIAL CLOSE FAILED][{symbol}][{side}] {err}", symbol, side, result.Error?.Message);
+            //var result = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+            //    symbol: symbol,
+            //    side: orderSide,
+            //    type: FuturesOrderType.Market,
+            //    quantity: qty,
+            //    positionSide: side,
+            //    reduceOnly: null, // ← КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ
+            //    ct: ct
+            //);
+            await ClosePartialChunkedAsync(
+    client,
+    symbol,
+    side,
+    qty,
+    ct);
+            //if (result.Success)
+            //    _logger.LogInformation("[PARTIAL CLOSE OK][{symbol}][{side}] qty={qty}", symbol, side, qty);
+            //else
+            //    _logger.LogError("[PARTIAL CLOSE FAILED][{symbol}][{side}] {err}", symbol, side, result.Error?.Message);
         }
-        private decimal NormalizeQuantity(string symbol, decimal qty, BinancePositionDetailsUsdt pos, int qtyPrecision)
+        private async Task<decimal> NormalizeQuantityAsync(
+    string symbol,
+    PositionSide side,
+    decimal requestedQty,
+    IBinanceRestClient client,
+    CancellationToken ct)
         {
-            if (pos == null || qty <= 0)
-                return 0m;
+            // 1) получить реальную позицию
+            var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: ct);
 
-            // Ограничиваем по MaxNotional (USDT позиция)
-            if (pos.MaxNotional > 0)
-            {
-                var maxQtyByNotional = pos.MaxNotional / pos.MarkPrice; // актуальная цена
-                if (qty > maxQtyByNotional)
-                    qty = maxQtyByNotional;
-            }
+            if (!posInfo.Success)
+                return 0;
 
-            // Приводим к шагу Binance
-            var factor = (decimal)Math.Pow(10, qtyPrecision);
-            qty = Math.Floor(qty * factor) / factor;
+            var pos = posInfo.Data.FirstOrDefault(p =>
+                p.PositionSide == side &&
+                Math.Abs(p.Quantity) > 0);
+
+            if (pos == null)
+                return 0;
+
+            var positionQty = Math.Abs(pos.Quantity);
+
+            // 2) symbol filters
+            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+
+            var maxQty = filters.maxQty;
+            var step = filters.step;
+            var minQty = filters.minQty;
+
+            // 3) clamp
+            var qty = Math.Min(requestedQty, positionQty);
+            if (maxQty > 0)
+                qty = Math.Min(qty, maxQty);
+
+            // 4) round to stepSize
+            qty = Math.Floor(qty / step) * step;
+
+            // 5) validate
+            if (qty < minQty)
+                return 0;
 
             return qty;
         }
 
-        //    private async Task MoveStopAsync(
-        //IBinanceRestClient client,
-        //string symbol,
-        //PositionSide side,
-        //decimal stopPrice,
-        //BinancePositionDetailsUsdt pos,
-        //CancellationToken ct)
-        //    {
-        //        var qty = Math.Abs(pos.Quantity);
+        private async Task<decimal> NormalizeTriggerPriceAsync(
+     IBinanceRestClient client,
+     string symbol,
+     PositionSide side,
+     decimal trigger,
+     decimal tick,
+     bool isStopLoss,
+     CancellationToken ct)
+        {
+            
+            var mark = await client
+                .UsdFuturesApi
+                .ExchangeData
+                .GetMarkPriceAsync(symbol, ct);
 
-        //        await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-        //            symbol,
-        //            side == PositionSide.Long
-        //                ? OrderSide.Sell
-        //                : OrderSide.Buy,
-        //            FuturesOrderType.StopMarket,
-        //            quantity: qty,
-        //            stopPrice: stopPrice,
-        //            positionSide: side,
-        //            ct: ct);
-        //    }
+            if (!mark.Success)
+                return trigger;
+
+            var price = mark.Data.MarkPrice;
+
+            if (side == PositionSide.Long)
+            {
+                if (isStopLoss)
+                {
+                    if (trigger >= price)
+                        trigger = price - tick * 3;
+                }
+                else
+                {
+                    if (trigger <= price)
+                        trigger = price + tick * 3;
+                }
+            }
+            else
+            {
+                if (isStopLoss)
+                {
+                    if (trigger <= price)
+                        trigger = price + tick * 3;
+                }
+                else
+                {
+                    if (trigger >= price)
+                        trigger = price - tick * 3;
+                }
+            }
+
+            return Math.Round(trigger / tick) * tick;
+        }
+
 
 
         // ===== UTILITY: Получение точностей символа =====
@@ -1912,29 +1987,37 @@ namespace VertexAutoTradeBinance8.Services
                 // ==========================================================
                 // 1) ЖЁСТКАЯ ПРОВЕРКА ФАКТИЧЕСКОЙ ПОЗИЦИИ (ОБЯЗАТЕЛЬНО)
                 // ==========================================================
-                var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: ct);
-                if (!posInfo.Success || posInfo.Data == null)
-                    return;
+                //var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: ct);
+                //if (!posInfo.Success || posInfo.Data == null)
+                //    return;
 
-                var pos = posInfo.Data.FirstOrDefault(p =>
-                    p.PositionSide == side &&
-                    Math.Abs(p.Quantity) > 0);
+                //var pos = posInfo.Data.FirstOrDefault(p =>
+                //    p.PositionSide == side &&
+                //    Math.Abs(p.Quantity) > 0);
 
-                if (pos == null)
-                {
-                    _logger.LogWarning(
-                        "[SUPERVISOR][{symbol}][{side}] SKIP TP → no open position",
-                        symbol, side);
-                    return;
-                }
+                //if (pos == null)
+                //{
+                //    _logger.LogWarning(
+                //        "[SUPERVISOR][{symbol}][{side}] SKIP TP → no open position",
+                //        symbol, side);
+                //    return;
+                //}
 
                 // ==========================================================
                 // 2) КОЛИЧЕСТВО ЗАКРЫТИЯ (НЕ БОЛЬШЕ ЧЕМ ФАКТИЧЕСКАЯ ПОЗИЦИЯ)
                 // ==========================================================
-                var closeQty = Math.Min(Math.Abs(pos.Quantity), qty);
-                if (closeQty <= 0)
-                    return;
+                //var closeQty = Math.Min(Math.Abs(pos.Quantity), qty);
+                //if (closeQty <= 0)
+                //    return;
+                qty = Math.Abs(qty);
 
+                if (qty == 0)
+                {
+                    _logger.LogWarning(
+                        "[SUPERVISOR][{symbol}][{side}] SKIP TP → qty=0",
+                        symbol, side);
+                    return;
+                }
                 // ==========================================================
                 // 3) РАСЧЁТ TP
                 // ==========================================================
@@ -1961,15 +2044,35 @@ namespace VertexAutoTradeBinance8.Services
                 // 4) ПРИВЯЗКА К TICK SIZE
                 // ==========================================================
                 var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+
                 var tick = filters.tickSize > 0 ? filters.tickSize : 0.0001m;
+                var step = filters.step > 0 ? filters.step : 0.0001m;
 
-                trigger = Math.Round(trigger / tick) * tick;
+                // normalize qty
+                qty = Math.Floor(qty / step) * step;
+                if (qty <= 0)
+                {
+                    _logger.LogWarning(
+                        "[SUPERVISOR][{symbol}] TP qty normalized to 0",
+                        symbol);
+                    return;
+                }
+ 
 
-                if (side == PositionSide.Long && trigger <= entryPrice)
-                    trigger = entryPrice + tick * 3;
+                trigger = await NormalizeTriggerPriceAsync(
+    client,
+    symbol,
+    side,
+    entryPrice,
+    filters.tickSize,
+    true,
+    ct);
 
-                if (side == PositionSide.Short && trigger >= entryPrice)
-                    trigger = entryPrice - tick * 3;
+                //if (side == PositionSide.Long && trigger <= entryPrice)
+                //    trigger = entryPrice + tick * 3;
+
+                //if (side == PositionSide.Short && trigger >= entryPrice)
+                //    trigger = entryPrice - tick * 3;
 
                 var orderSide = side == PositionSide.Long
                     ? OrderSide.Sell
@@ -1978,18 +2081,18 @@ namespace VertexAutoTradeBinance8.Services
                 // ==========================================================
                 // 5) ОТПРАВКА ЧЕРЕЗ ДИСПЕТЧЕР (NORMAL → ALGO RAW)
                 // ==========================================================
-                _dispatcher.Enqueue(async ct =>
+                _dispatcher.Enqueue(async _ =>
                 {
                     using var c = _factory.CreateRestClient();
                     var res = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
                         symbol: symbol,
                         side: orderSide,
                         type: FuturesOrderType.TakeProfitMarket,
-                        quantity: closeQty,
+                        quantity: qty,
                         positionSide: side,
                         stopPrice: trigger,
                         reduceOnly: null,
-                        ct: ct);
+                        ct: CancellationToken.None);
 
                     if (res.Success)
                     {
@@ -2008,38 +2111,39 @@ namespace VertexAutoTradeBinance8.Services
                             "[SUPERVISOR] TP requires ALGO endpoint (-4120) → RAW ALGO {symbol} {side}",
                             symbol, side);
 
-                        _dispatcher.Enqueue(async ct =>
+                        _dispatcher.Enqueue(async _ =>
                         {
                             var ok = await _algoRaw.PlaceConditionalAsync(
                                 symbol: symbol,
                                 side: orderSide,
                                 positionSide: side,
                                 type: "TAKE_PROFIT_MARKET",
-                                quantity: closeQty,
+                                quantity: qty,
                                 triggerPrice: trigger,
                                 workingType: "CONTRACT_PRICE",
                                 reduceOnly: null,
-                                ct: ct);
+                                ct: CancellationToken.None);
 
                             if (ok)
                             {
                                 _logger.LogInformation(
-                                    "[SUPERVISOR] TP CREATED (ALGO-RAW) {symbol} {side} tp={tp}",
-                                    symbol, side, trigger);
+                     "[SUPERVISOR] TP CREATED (ALGO) {symbol} {side}",
+                     symbol, side);
                                 return;
                             }
 
                             _logger.LogError(
-                                "[SUPERVISOR] TP ALGO-RAW FAILED {symbol} {side}",
-                                symbol, side);
+                  "[SUPERVISOR] TP ALGO FAILED {symbol} {side}",
+                  symbol, side);
                         });
 
                         return;
                     }
 
+
                     _logger.LogError(
-                        "[SUPERVISOR] ERROR create TP (NORMAL) {symbol}: {err}",
-                        symbol, res.Error);
+                        "[SUPERVISOR] TP FAILED {symbol} {side} {err}",
+                        symbol, side, res.Error?.Message);
                 });
             }
             catch (Exception ex)
