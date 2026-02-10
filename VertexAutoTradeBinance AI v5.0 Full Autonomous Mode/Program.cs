@@ -17,6 +17,7 @@ using VertexAutoTradeBinance8.Services.Interface;
 using VertexAutoTradeBinance8.Services.MarketState;
 using VertexAutoTradeBinance8.Services.Recovery;
 using VertexAutoTradeBinance8.Services.State;
+using VertexAutoTradeBinance8.Services.Trading;
 using VertexAutoTradeBinance8.Services.Ws;
 using VertexAutoTradeBinance8.Strategy;
 // остальные using как у тебя
@@ -107,7 +108,7 @@ public class Program
                     services.Configure<BinanceOptions>(ctx.Configuration.GetSection("Binance"));
 
                     services.Configure<TradingOptions>(
-     ctx.Configuration.GetSection("Trading")); // TRUE default
+                      ctx.Configuration.GetSection("Trading")); // TRUE default
 
                     services.Configure<TradingOptions>("BTC",
                         ctx.Configuration.GetSection("Trading:BTC"));
@@ -191,6 +192,7 @@ public class Program
 
                     services.AddSingleton<BinanceHistoryImporter>();
                     services.AddSingleton<TradingOptionsResolver>();
+                    //services.AddSingleton<AtrAdaptiveProfitLockManager>();
                     
     
 
