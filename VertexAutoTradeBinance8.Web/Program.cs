@@ -44,8 +44,7 @@ builder.Services.AddHostedService<AiPulseBackgroundUpdater>();
 builder.Services.AddHostedService<AiPulseUiFeeder>();
 builder.Services.AddScoped<AiPulseUiState>();
 
-
-
+ 
 // ============= DEPENDENCY INJECTION =============
 builder.Services.Configure<TradingOptions>(
     builder.Configuration.GetSection("TradingOptions"));

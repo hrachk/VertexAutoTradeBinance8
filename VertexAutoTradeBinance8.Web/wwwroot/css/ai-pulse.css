@@ -60,3 +60,25 @@
     font-weight: 600;
     color: white;
 }
+.ai-pulse-dot.aggressive {
+    background-color: #ff9f00;
+}
+
+.ai-pulse-dot.alert {
+    background-color: #ffd54f;
+}
+
+.ai-pulse-dot.normal {
+    background-color: #4dd0ff;
+}
+
+.ai-pulse-title {
+    font-weight: bold;
+    font-size: 1.2rem;
+    color: #fff;
+}
+
+.ai-pulse-status {
+    color: #fff;
+    font-size: 1rem;
+}

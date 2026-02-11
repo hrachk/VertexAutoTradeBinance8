@@ -32,6 +32,22 @@ namespace VertexAutoTradeBinance8.Services
     {
         private DateTime? _lastImportedTradeCloseUtc;
         public DateTime? LastImportedTradeCloseUtc => _lastImportedTradeCloseUtc;
+        public event Action<MarketState>? MarketStateCreated;
+
+        private void AddMarketState(MarketState state)
+        {
+            lock (_lock)
+            {
+                _marketStates.Add(state);
+
+                if (_marketStates.Count > 5000)
+                    _marketStates.RemoveRange(0, 2500);
+            }
+
+            // CRITICAL: notify pulse engine
+            MarketStateCreated?.Invoke(state);
+        }
+
 
         public void UpdateLastImportedTradeCloseUtc(DateTime time)
         {
@@ -346,75 +362,165 @@ namespace VertexAutoTradeBinance8.Services
         }
 
 
+        //      public void RecordMarketStateTriggered(
+        //    string reason,
+        //    string symbol,
+        //    string timeframe,
+        //    MarketRegime regime,
+        //    decimal slope,
+        //    decimal volatility,
+        //    decimal atr,
+        //    decimal confidence,
+        //    bool skipSnapshot = true
+        //)
+        //      {
+        //          lock (_lock)
+        //          {
+        //              var state = new MarketState
+        //              {
+        //                  Symbol = symbol,
+        //                  Timeframe = timeframe,
+        //                  Regime = regime,
+        //                  TrendSlopePercent = slope,
+        //                  VolatilityPercent = volatility,
+        //                  Atr = atr,
+        //                  Confidence = confidence,
+        //                  Time = DateTime.UtcNow,
+        //                  Reason = reason
+        //              };
+
+        //              AddMarketState(state);
+
+        //              // =====================================================
+        //              // 🔥 BOOTSTRAP STATS (SAFE, NON-DESTRUCTIVE)
+        //              // =====================================================
+        //              if (!_stats.ContainsKey(symbol))
+        //              {
+        //                  _stats[symbol] = new Dictionary<MarketRegime, RegimeStats>
+        //                  {
+        //                      [regime] = new RegimeStats
+        //                      {
+        //                          Regime = regime,
+        //                          Count = 0,
+        //                          Wins = 0,
+        //                          Losses = 0,
+        //                          AvgPnl = 0,
+        //                          RiskWeight = 1.0m
+        //                      }
+        //                  };
+        //              }
+        //              else if (!_stats[symbol].ContainsKey(regime))
+        //              {
+        //                  _stats[symbol][regime] = new RegimeStats
+        //                  {
+        //                      Regime = regime,
+        //                      Count = 0,
+        //                      Wins = 0,
+        //                      Losses = 0,
+        //                      AvgPnl = 0,
+        //                      RiskWeight = 1.0m
+        //                  };
+        //              }
+
+        //              if (_marketStates.Count > 5000)
+        //                  _marketStates.RemoveRange(0, 2500);
+
+        //              _logger.LogDebug(
+        //                  "[HYBRID][{Symbol}] MarketState logged ({Reason}) slope={Slope} vol={Vol} atr={Atr} conf={Conf}",
+        //                  symbol, reason, slope, volatility, atr, confidence);
+        //          }
+
+        //          if (!skipSnapshot)
+        //              TrySnapshot();
+        //      }
         public void RecordMarketStateTriggered(
-      string reason,
-      string symbol,
-      string timeframe,
-      MarketRegime regime,
-      decimal slope,
-      decimal volatility,
-      decimal atr,
-      decimal confidence,
-      bool skipSnapshot = true
-  )
+          string reason,
+          string symbol,
+          string timeframe,
+          MarketRegime regime,
+          decimal slope,
+          decimal volatility,
+          decimal atr,
+          decimal confidence,
+          bool skipSnapshot = true)
         {
+            var state = new MarketState
+            {
+                Symbol = symbol,
+                Timeframe = timeframe,
+                Regime = regime,
+                TrendSlopePercent = slope,
+                VolatilityPercent = volatility,
+                Atr = atr,
+                Confidence = confidence,
+                Time = DateTime.UtcNow,
+                Reason = reason
+            };
+
+            AddMarketState(state);
+
             lock (_lock)
             {
-                _marketStates.Add(new MarketState
-                {
-                    Symbol = symbol,
-                    Timeframe = timeframe,
-                    Regime = regime,
-                    TrendSlopePercent = slope,
-                    VolatilityPercent = volatility,
-                    Atr = atr,
-                    Confidence = confidence,
-                    Time = DateTime.UtcNow,
-                    Reason = reason
-                });
-
-                // =====================================================
-                // 🔥 BOOTSTRAP STATS (SAFE, NON-DESTRUCTIVE)
-                // =====================================================
                 if (!_stats.ContainsKey(symbol))
                 {
-                    _stats[symbol] = new Dictionary<MarketRegime, RegimeStats>
-                    {
-                        [regime] = new RegimeStats
-                        {
-                            Regime = regime,
-                            Count = 0,
-                            Wins = 0,
-                            Losses = 0,
-                            AvgPnl = 0,
-                            RiskWeight = 1.0m
-                        }
-                    };
+                    _stats[symbol] = new Dictionary<MarketRegime, RegimeStats>();
                 }
-                else if (!_stats[symbol].ContainsKey(regime))
+
+                if (!_stats[symbol].ContainsKey(regime))
                 {
                     _stats[symbol][regime] = new RegimeStats
                     {
                         Regime = regime,
-                        Count = 0,
-                        Wins = 0,
-                        Losses = 0,
-                        AvgPnl = 0,
                         RiskWeight = 1.0m
                     };
                 }
-
-                if (_marketStates.Count > 5000)
-                    _marketStates.RemoveRange(0, 2500);
-
-                _logger.LogDebug(
-                    "[HYBRID][{Symbol}] MarketState logged ({Reason}) slope={Slope} vol={Vol} atr={Atr} conf={Conf}",
-                    symbol, reason, slope, volatility, atr, confidence);
             }
 
             if (!skipSnapshot)
                 TrySnapshot();
         }
+
+        // =====================================================================
+        // BASE MARKET STATE (SmartRegimeService → StrategyEngine)
+        // =====================================================================
+        public void RecordMarketState(
+           string symbol,
+           string timeframe,
+           MarketRegime regime,
+           decimal trendSlopePercent,
+           decimal volatilityPercent,
+           decimal atr,
+           decimal confidence)
+        {
+            var state = new MarketState
+            {
+                Symbol = symbol,
+                Timeframe = timeframe,
+                Regime = regime,
+                TrendSlopePercent = trendSlopePercent,
+                VolatilityPercent = volatilityPercent,
+                Atr = atr,
+                Confidence = confidence,
+                Time = DateTime.UtcNow,
+                Reason = "BASE_REGIME"
+            };
+
+            AddMarketState(state);
+
+            _logger.LogInformation(
+                "[HYBRID] MarketState tick {symbol} {tf} {regime}",
+                symbol, timeframe, regime);
+
+            TryHybridPeriodicSnapshot(
+                symbol,
+                timeframe,
+                regime,
+                trendSlopePercent,
+                volatilityPercent,
+                atr,
+                confidence);
+        }
+
 
 
         // 3) BACKGROUND MARKET LEARNING – глобальный 30s snapshot по режиму
@@ -450,52 +556,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
 
-        // =====================================================================
-        // BASE MARKET STATE (SmartRegimeService → StrategyEngine)
-        // =====================================================================
-        public void RecordMarketState(
-         string symbol,
-         string timeframe,
-         MarketRegime regime,
-         decimal trendSlopePercent,
-         decimal volatilityPercent,
-         decimal atr,
-         decimal confidence)
-        {
-            lock (_lock)
-            {
-                _marketStates.Add(new MarketState
-                {
-                    Symbol = symbol,
-                    Timeframe = timeframe,
-                    Regime = regime,
-                    TrendSlopePercent = trendSlopePercent,
-                    VolatilityPercent = volatilityPercent,
-                    Atr = atr,
-                    Confidence = confidence,
-                    Time = DateTime.UtcNow,
-                    Reason = "BASE_REGIME"
-                });
-                if (_marketStates.Count > 5000)
-                    _marketStates.RemoveRange(0, 2500);
-
-                _logger.LogInformation(
-                "[HYBRID] MarketState tick {symbol} {tf} {regime}",
-                symbol, timeframe, regime);
-            }
-
-            // 🔥 ВАЖНО: именно здесь
-            TryHybridPeriodicSnapshot(
-                symbol,
-                timeframe,
-                regime,
-                trendSlopePercent,
-                volatilityPercent,
-                atr,
-                confidence
-            );
-        }
-
+       
 
         private readonly HashSet<string> _learnedTrades = new();
 

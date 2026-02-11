@@ -1,20 +1,45 @@
 ﻿public sealed class AiPulseUiState
 {
     private readonly object _lock = new();
+    private MarketPulseSnapshot _market = new();
 
-    public decimal MarketPulse { get; private set; }
-    public decimal MarketPulseSmooth { get; private set; }
-    public PulseMode Mode { get; private set; }
-    public DateTime Time { get; private set; }
+    public MarketPulseSnapshot Get()
+    {
+        lock (_lock)
+            return _market;
+    }
 
     public void Update(MarketPulseSnapshot snap)
     {
         lock (_lock)
+            _market = snap;
+    }
+
+    // Для Razor страницы
+    public PulseMode Mode
+    {
+        get
         {
-            MarketPulse = snap.Pulse;
-            MarketPulseSmooth = snap.SmoothedPulse;
-            Mode = snap.Mode;
-            Time = snap.Time;
+            lock (_lock)
+                return _market.Mode;
+        }
+    }
+
+    public decimal MarketPulse
+    {
+        get
+        {
+            lock (_lock)
+                return _market.Pulse;
+        }
+    }
+
+    public decimal MarketPulseSmooth
+    {
+        get
+        {
+            lock (_lock)
+                return _market.SmoothedPulse;
         }
     }
 }
