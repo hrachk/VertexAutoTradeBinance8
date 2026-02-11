@@ -242,6 +242,12 @@ namespace VertexAutoTradeBinance8.Services
             public decimal Confidence { get; set; }
             public DateTime Time { get; set; }
             public string? Reason { get; set; }   // MICRO_SIGNAL / SOFT_ENTRY / PERIODIC_30s / ...
+ 
+            public decimal Price { get; set; }
+
+            // вот то, что будет рисоваться в UI
+            public double PulseValue { get; set; }
+            public string Mode { get; set; }
         }
 
         public class TradeHistoryEntry
