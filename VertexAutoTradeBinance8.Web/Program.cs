@@ -37,6 +37,15 @@ builder.Services.AddSingleton<SymbolRegistryService>();
 builder.Services.AddSingleton<TradePermissionFileService>();
 builder.Services.AddSingleton<MarketSnapshotFileService>();
 builder.Services.AddSingleton<DecisionMarkersFileService>();
+
+builder.Services.AddSingleton<IAiPulseEngine, AiPulseEngine>();
+builder.Services.AddSingleton<AiSelfLearningService>();
+builder.Services.AddHostedService<AiPulseBackgroundUpdater>();
+builder.Services.AddHostedService<AiPulseUiFeeder>();
+builder.Services.AddScoped<AiPulseUiState>();
+
+
+
 // ============= DEPENDENCY INJECTION =============
 builder.Services.Configure<TradingOptions>(
     builder.Configuration.GetSection("TradingOptions"));
@@ -73,7 +82,6 @@ builder.Services.AddSingleton<SymbolInfoService>();
 builder.Services.AddSingleton<AiCorrelationService>();
 
 // Учебный модуль
-builder.Services.AddSingleton<AiSelfLearningService>();
 builder.Services.AddSingleton<AiLearningFileService>();
 builder.Services.AddSingleton<MissedTradeFileService>();
 builder.Services.AddSingleton<EngineStateService>();

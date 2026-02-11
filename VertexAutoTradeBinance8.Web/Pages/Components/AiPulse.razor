@@ -1,0 +1,67 @@
+﻿@page "/ai-pulse"
+
+@inject IJSRuntime JS
+@inject AiPulseUiState Pulse
+
+<PageTitle>AI Pulse Engine</PageTitle>
+
+<div class="ai-pulse-root">
+
+    <canvas id="aiPulseCanvasV1"></canvas>
+
+    <div class="ai-pulse-overlay">
+
+        <div class="ai-pulse-title">
+            AI Pulse Engine v1
+        </div>
+
+        <div class="ai-pulse-status">
+
+            <span class="ai-pulse-dot @Pulse.Mode.ToString().ToLower()"></span>
+
+            <span class="ai-pulse-mode">
+                @Pulse.Mode
+            </span>
+
+            <span class="ai-pulse-value">
+                @(Pulse.MarketPulseSmooth.ToString("0.000"))
+            </span>
+
+        </div>
+
+    </div>
+
+</div>
+
+@code {
+
+    private DotNetObjectReference<AiPulse>? _ref;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _ref = DotNetObjectReference.Create(this);
+
+            await JS.InvokeVoidAsync(
+                "AiPulseV1.start",
+                _ref);
+        }
+    }
+
+    [JSInvokable]
+    public object GetPulse()
+    {
+        return new
+        {
+            value = (double)Pulse.MarketPulseSmooth,
+            raw = (double)Pulse.MarketPulse,
+            mode = Pulse.Mode.ToString()
+        };
+    }
+
+    public void Dispose()
+    {
+        _ref?.Dispose();
+    }
+}
