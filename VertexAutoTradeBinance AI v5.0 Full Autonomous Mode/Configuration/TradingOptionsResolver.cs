@@ -33,7 +33,11 @@ public sealed class TradingOptionsResolver
                 "[TRADING CONFIG] {symbol} → PROFILE=DEFAULT",
                 symbol);
         }
-
+        _logger.LogWarning(
+    "[TRADING CONFIG] {symbol} → PROFILE={profile} LEVERAGE={lev}",
+    symbol,
+    baseAsset,
+    result.Leverage);
         return result;
     }
 

@@ -116,13 +116,15 @@ public class Program
                     services.Configure<TradingOptions>("ETH",
                         ctx.Configuration.GetSection("Trading:ETH"));
 
+                    services.AddSingleton<TradingOptionsResolver>();
+
                     services.Configure<TestModeOptions>(ctx.Configuration.GetSection("TestMode"));
                     services.Configure<HedgeKillSettings>(ctx.Configuration.GetSection("HedgeKill"));
                     services.Configure<SignalConfidenceSettings>(ctx.Configuration.GetSection("SignalConfidence"));
                     services.AddSingleton<ConfidenceResolver>();
 
-                    services.AddSingleton(sp =>
-                        sp.GetRequiredService<IOptions<TradingOptions>>().Value);
+                   services.AddSingleton(sp =>
+                       sp.GetRequiredService<IOptions<TradingOptions>>().Value);
 
                     services.AddSingleton(sp =>
                         sp.GetRequiredService<IOptions<TestModeOptions>>().Value);
@@ -191,7 +193,6 @@ public class Program
                     services.AddSingleton<PositionLifecycleTracker>();
 
                     services.AddSingleton<BinanceHistoryImporter>();
-                    services.AddSingleton<TradingOptionsResolver>();
                     //services.AddSingleton<AtrAdaptiveProfitLockManager>();
                     
     

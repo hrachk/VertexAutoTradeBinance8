@@ -102,13 +102,21 @@ namespace VertexAutoTradeBinance8
         // ===============================
         // STRATEGY SIGNAL QUEUE (PRO)
         // ===============================
+        //private readonly Channel<TradeSignal> _signalChannel =
+        //    Channel.CreateUnbounded<TradeSignal>(
+        //        new UnboundedChannelOptions
+        //        {
+        //            SingleReader = true,
+        //            SingleWriter = false
+        //        });
         private readonly Channel<TradeSignal> _signalChannel =
-            Channel.CreateUnbounded<TradeSignal>(
-                new UnboundedChannelOptions
-                {
-                    SingleReader = true,
-                    SingleWriter = false
-                });
+    Channel.CreateBounded<TradeSignal>(
+        new BoundedChannelOptions(2000)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = true,
+            SingleWriter = false
+        });
 
         public int StartupSubscriptionCap { get; set; } = 8;
         public TradingWorker(

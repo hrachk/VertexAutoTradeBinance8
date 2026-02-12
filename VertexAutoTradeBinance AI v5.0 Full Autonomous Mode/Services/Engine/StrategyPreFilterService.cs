@@ -1,6 +1,4 @@
 ﻿using Binance.Net.Enums;
-using Microsoft.Extensions.Options;
-using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services.Engine
@@ -8,7 +6,8 @@ namespace VertexAutoTradeBinance8.Services.Engine
     public sealed class StrategyPreFilterService : IStrategyPreFilter
     {
         private readonly ILogger<StrategyPreFilterService> _logger;
-        private readonly TradingOptions _opt;
+        // private readonly TradingOptions _opt;
+        private readonly TradingOptionsResolver _resolver;
         private readonly MarketDataService _market;
         private readonly EngineStateSnapshotService _stateSvc;
 
@@ -19,18 +18,21 @@ namespace VertexAutoTradeBinance8.Services.Engine
 
         public StrategyPreFilterService(
             ILogger<StrategyPreFilterService> logger,
-            IOptions<TradingOptions> opt,
+            // TradingOptions opt,
             MarketDataService market,
-            EngineStateSnapshotService stateSvc)
+            EngineStateSnapshotService stateSvc,
+            TradingOptionsResolver resolver)
         {
             _logger = logger;
-            _opt = opt.Value;
+
             _market = market;
             _stateSvc = stateSvc;
+            _resolver = resolver;
         }
 
         public async Task<PreFilterResult> EvaluateAsync(string symbol, KlineInterval tf, CancellationToken ct)
         {
+            var _opt = _resolver.Resolve(symbol);
             // 1) COOL DOWN (глобальный, если включён в TradingOptions)
             // TradingWorker уже делает InCooldown(symbol) после signal,
             // но здесь — PRE: чтобы не грузить систему.
