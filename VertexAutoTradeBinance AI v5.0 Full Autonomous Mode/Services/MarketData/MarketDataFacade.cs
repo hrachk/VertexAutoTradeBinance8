@@ -22,9 +22,7 @@ namespace VertexAutoTradeBinance8.Services
         // Global REST limiter (hard cap)
         private static readonly SemaphoreSlim _globalRestLimiter = new(3, 3);
 
-        // Warmup accounting (used as "availability bars" — snapshot counts too)
-        private readonly ConcurrentDictionary<string, int> _barsAvailable = new(StringComparer.OrdinalIgnoreCase);
-
+       
         // Snapshot flags:
         //  - _restoreAttempted: RestoreSnapshotStateAsync already executed (cold-start allowed)
         //  - _readyBySnapshot: snapshot existed/restored => REST backfill disabled (your policy)
@@ -45,23 +43,26 @@ namespace VertexAutoTradeBinance8.Services
         private readonly object _universeLock = new();
         private HashSet<string> _universe = new(StringComparer.OrdinalIgnoreCase);
 
+        // Warmup accounting (used as "availability bars" — snapshot counts too)
+        private readonly ConcurrentDictionary<string, int> _barsAvailable = new(StringComparer.OrdinalIgnoreCase);
+
         // WS subscribe singleflight
         private readonly ConcurrentDictionary<string, Task> _subTasks = new(StringComparer.OrdinalIgnoreCase);
 
         // REST singleflight (per symbol+tf)
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _restLocks = new(StringComparer.OrdinalIgnoreCase);
-
-        private readonly RealtimePriceService _price;
-        public event Action<string, decimal>? RealtimePrice;
         private readonly ConcurrentDictionary<string, decimal> _lastPrice = new();
+
+       
+        public event Action<string, decimal>? RealtimePrice;
 
         public MarketDataFacade(
             MarketDataKlineBuffer buffer,
             WsKlineSubscriber ws,
             BinanceClientFactory factory,
             ILogger<MarketDataFacade> logger,
-            MarketStateService marketState,
-            RealtimePriceService price)
+            MarketStateService marketState 
+             )
         {
             _buf = buffer;
             _ws = ws;
@@ -77,8 +78,6 @@ namespace VertexAutoTradeBinance8.Services
                 MarkSnapshotReady();
 
             _marketState.OnRestored += MarkSnapshotReady;
-            _price = price;
-
 
             _ws.OnPrice += (symbol, price) =>
             {
@@ -86,8 +85,89 @@ namespace VertexAutoTradeBinance8.Services
 
                 RealtimePrice?.Invoke(symbol, price);
             };
-
+            // ✅ START CLEANUP LOOP (fire and forget)
+            _ = Task.Run(CleanupLoop);
         }
+
+        public void CleanupUnavailableSymbols(IReadOnlyCollection<string> activeSymbols)
+        {
+            var active = new HashSet<string>(
+                activeSymbols.Select(NormalizeSymbol),
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var key in _barsAvailable.Keys)
+            {
+                var symbol = key.Split(':')[0];
+
+                if (!active.Contains(symbol))
+                    _barsAvailable.TryRemove(key, out _);
+            }
+
+            foreach (var key in _restBackfilled.Keys)
+            {
+                var symbol = key.Split(':')[0];
+
+                if (!active.Contains(symbol))
+                    _restBackfilled.TryRemove(key, out _);
+            }
+
+            foreach (var key in _lastRestFetchUtc.Keys)
+            {
+                var symbol = key.Split(':')[0];
+
+                if (!active.Contains(symbol))
+                    _lastRestFetchUtc.TryRemove(key, out _);
+            }
+
+            foreach (var key in _subTasks.Keys)
+            {
+                var symbol = key.Split(':')[0];
+
+                if (!active.Contains(symbol))
+                    _subTasks.TryRemove(key, out _);
+            }
+
+            foreach (var key in _restLocks.Keys)
+            {
+                var symbol = key.Split(':')[0];
+
+                if (!active.Contains(symbol))
+                    _restLocks.TryRemove(key, out _);
+            }
+
+            foreach (var key in _lastPrice.Keys)
+            {
+                if (!active.Contains(key))
+                    _lastPrice.TryRemove(key, out _);
+            }
+        }
+        private async Task CleanupLoop()
+        {
+            while (true)
+            {
+                await Task.Delay(TimeSpan.FromMinutes(10));
+
+                try
+                {
+                    HashSet<string> universe;
+
+                    lock (_universeLock)
+                        universe = new HashSet<string>(_universe);
+
+                    CleanupUnavailableSymbols(universe);
+
+                    _logger.LogInformation(
+                        "[MD][CLEANUP] symbols={count} bars={bars}",
+                        universe.Count,
+                        _barsAvailable.Count);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[MD][CLEANUP] failed");
+                }
+            }
+        }
+
         public void UpdateRealtimePrice(string symbol, decimal price)
         {
             _lastPrice[symbol] = price;
