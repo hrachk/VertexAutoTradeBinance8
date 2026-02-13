@@ -213,65 +213,7 @@ namespace VertexAutoTradeBinance8.Services
 
             ///////////////////////////////////TEST DIAGNOSTIC SL/BE/MOVE/////////////////////////////////////////////////////////
             ////////////////////////////////////////////////////////////////////////////////////////////
-/*
-            if (longPos != null && atr14_1m > 0)
-            {
-                await _atrLock.ProcessAsync(
-                    client,
-                    symbol,
-                    longPos,
-                    atr14_1m,
-                    openOrders,
-
-                    closeQty => ClosePartialAsync(
-                        client,
-                        symbol,
-                        PositionSide.Long,
-                        closeQty,
-                        longPos,
-                        ct),
-
-                    newSl => MoveStopAsync(
-                        client,
-                        symbol,
-                        PositionSide.Long,
-                        newSl,
-                        longPos,
-                        ct),
-
-                    ct);
-            }
-
-            if (shortPos != null && atr14_1m > 0)
-            {
-                await _atrLock.ProcessAsync(
-                    client,
-                    symbol,
-                    shortPos,
-                    atr14_1m,
-                    openOrders,
-
-                    closeQty => ClosePartialAsync(
-                        client,
-                        symbol,
-                        PositionSide.Short,
-                        closeQty,
-                        shortPos,
-                        ct),
-
-                    newSl => MoveStopAsync(
-                        client,
-                        symbol,
-                        PositionSide.Short,
-                        newSl,
-                        shortPos,
-                        ct),
-
-                    ct);
-            }
-            */
-
-             
+   
             if (atr14_1m > 0 && klines1m != null && klines1m.Count >= 10)
             {
                 // ===== TEMP BE DIAGNOSTIC (INLINE, REMOVE LATER) =====
@@ -489,8 +431,23 @@ namespace VertexAutoTradeBinance8.Services
      true,
      ct);
 
-            await client.UsdFuturesApi.Trading.CancelAllConditionalOrdersAsync(symbol, ct: ct);
+            //await client.UsdFuturesApi.Trading.CancelAllConditionalOrdersAsync(symbol, ct: ct);
+            var open = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
 
+            if (open.Success)
+            {
+                foreach (var o in open.Data)
+                {
+                    if (o.Type == FuturesOrderType.StopMarket &&
+                        o.PositionSide == side)
+                    {
+                        await client.UsdFuturesApi.Trading.CancelOrderAsync(
+                            symbol,
+                            orderId: o.Id,
+                            ct: ct);
+                    }
+                }
+            }
             var result = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
                 symbol: symbol,
                 side: orderSide,
@@ -602,25 +559,14 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-            //var result = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-            //    symbol: symbol,
-            //    side: orderSide,
-            //    type: FuturesOrderType.Market,
-            //    quantity: qty,
-            //    positionSide: side,
-            //    reduceOnly: null, // ← КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ
-            //    ct: ct
-            //);
+         
             await ClosePartialChunkedAsync(
-    client,
-    symbol,
-    side,
-    qty,
-    ct);
-            //if (result.Success)
-            //    _logger.LogInformation("[PARTIAL CLOSE OK][{symbol}][{side}] qty={qty}", symbol, side, qty);
-            //else
-            //    _logger.LogError("[PARTIAL CLOSE FAILED][{symbol}][{side}] {err}", symbol, side, result.Error?.Message);
+            client,
+            symbol,
+            side,
+            qty,
+            ct);
+             
         }
         private async Task<decimal> NormalizeQuantityAsync(
     string symbol,
