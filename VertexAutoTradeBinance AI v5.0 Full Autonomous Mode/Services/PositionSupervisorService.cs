@@ -82,7 +82,7 @@ namespace VertexAutoTradeBinance8.Services
        // private readonly AtrAdaptiveProfitLockManager _atrLock;
         // tracks staircase level after each partial / BE move
         private readonly ConcurrentDictionary<string, int> _beLevel = new();
-
+        private readonly ConcurrentDictionary<string, DateTime> _pendingReset = new();
 
         public PositionSupervisorService( 
             ILogger<PositionSupervisorService> logger,
@@ -281,13 +281,44 @@ namespace VertexAutoTradeBinance8.Services
                 {
                     var key = symbol + "_" + side;
 
+                    //if (pos == null || pos.Quantity == 0)
+                    //{
+                    //    _beStage.TryRemove(key, out _);
+                    //    _beLevel.TryRemove(key, out _);
+                    //    _logger.LogInformation("[BE RESET][{symbol}][{side}] Position empty", symbol, side);
+                    //    return;
+                    //}
                     if (pos == null || pos.Quantity == 0)
                     {
+                        if (!_pendingReset.ContainsKey(key))
+                        {
+                            _pendingReset[key] = DateTime.UtcNow;
+
+                            _logger.LogDebug(
+                                "[BE RESET PENDING][{symbol}][{side}] waiting confirmation",
+                                symbol, side);
+
+                            return;
+                        }
+
+                        if (DateTime.UtcNow - _pendingReset[key] < TimeSpan.FromSeconds(45))
+                            return;
+
+                        _pendingReset.TryRemove(key, out _);
+
                         _beStage.TryRemove(key, out _);
                         _beLevel.TryRemove(key, out _);
-                        _logger.LogInformation("[BE RESET][{symbol}][{side}] Position empty", symbol, side);
+
+                        _logger.LogInformation(
+                            "[BE RESET CONFIRMED][{symbol}][{side}] Position confirmed closed",
+                            symbol, side);
+
                         return;
                     }
+
+                    // position exists → cancel pending reset
+                    _pendingReset.TryRemove(key, out _);
+
 
                     var qty = Math.Abs(pos.Quantity);
                     var entry = pos.EntryPrice;
