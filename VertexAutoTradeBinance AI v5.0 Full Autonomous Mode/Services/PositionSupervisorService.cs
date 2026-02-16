@@ -274,22 +274,25 @@ namespace VertexAutoTradeBinance8.Services
 
 
             ///////////////////////////////////TEST DIAGNOSTIC SL/BE/MOVE/////////////////////////////////////////////////////////
-            ////////////////////////////////////////////////////////////////////////////////////////////
             if (atr14_1m > 0 && klines1m != null && klines1m.Count >= 10)
             {
-                const decimal MIN_BE_BUFFER = 0.0015m; // минимальный ROI для активации BE move/Partial
-
                 void ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
                 {
                     var key = symbol + "_" + side;
 
-                    // ===== RESET HANDLING =====
+                    // =====================================================
+                    // RESET HANDLING (position fully closed confirmation)
+                    // =====================================================
                     if (pos == null || pos.Quantity == 0)
                     {
                         if (!_pendingReset.ContainsKey(key))
                         {
                             _pendingReset[key] = DateTime.UtcNow;
-                            _logger.LogDebug("[BE RESET PENDING][{symbol}][{side}] waiting confirmation", symbol, side);
+
+                            _logger.LogDebug(
+                                "[BE RESET PENDING][{symbol}][{side}] waiting confirmation",
+                                symbol, side);
+
                             return;
                         }
 
@@ -300,7 +303,10 @@ namespace VertexAutoTradeBinance8.Services
                         _beStage.TryRemove(key, out _);
                         _beLevel.TryRemove(key, out _);
 
-                        _logger.LogInformation("[BE RESET CONFIRMED][{symbol}][{side}] Position confirmed closed", symbol, side);
+                        _logger.LogInformation(
+                            "[BE RESET CONFIRMED][{symbol}][{side}] Position confirmed closed",
+                            symbol, side);
+
                         return;
                     }
 
@@ -313,58 +319,128 @@ namespace VertexAutoTradeBinance8.Services
                     if (qty <= 0 || entry <= 0 || mark <= 0)
                         return;
 
+                    // =====================================================
+                    // ROI CALCULATION
+                    // =====================================================
                     var roi = side == PositionSide.Long
                         ? (mark - entry) / entry
                         : (entry - mark) / entry;
 
-                    // ===== MIN ROI CHECK =====
+                    // =====================================================
+                    // GOLDEN-MIDDLE CONFIG (symbol adaptive)
+                    // =====================================================
+                    decimal STEP;
+                    decimal PARTIAL_STEP;
+                    decimal TRUE_BE_BUFFER;
+                    decimal MIN_BE_BUFFER;
+                    decimal PARTIAL_SIZE;
+
+                    if (symbol == "BTCUSDT")
+                    {
+                        STEP = 0.0040m;           // 0.40%
+                        PARTIAL_STEP = 0.0100m;   // 1.00%
+                        TRUE_BE_BUFFER = 0.0022m; // 0.22%
+                        MIN_BE_BUFFER = 0.0030m;  // 0.30%
+                        PARTIAL_SIZE = 0.18m;     // close 18%
+                    }
+                    else if (symbol == "ETHUSDT")
+                    {
+                        STEP = 0.0045m;
+                        PARTIAL_STEP = 0.0120m;
+                        TRUE_BE_BUFFER = 0.0025m;
+                        MIN_BE_BUFFER = 0.0035m;
+                        PARTIAL_SIZE = 0.18m;
+                    }
+                    else
+                    {
+                        STEP = 0.0060m;
+                        PARTIAL_STEP = 0.0160m;
+                        TRUE_BE_BUFFER = 0.0035m;
+                        MIN_BE_BUFFER = 0.0045m;
+                        PARTIAL_SIZE = 0.15m;
+                    }
+
+                    // =====================================================
+                    // MIN ROI FILTER (ignore noise)
+                    // =====================================================
                     if (Math.Abs(roi) < MIN_BE_BUFFER)
-                        return; // позиция ещё не «дышит», не двигаем SL и не делаем partial
+                        return;
 
-                    // ===== STEP CONFIG =====
-                    decimal STEP, PARTIAL_STEP, TRUE_BE_BUFFER;
-                    if (symbol == "BTCUSDT")      { STEP = 0.0025m; PARTIAL_STEP = 0.0050m; TRUE_BE_BUFFER = 0.0017m; }
-                    else if (symbol == "ETHUSDT") { STEP = 0.0021m; PARTIAL_STEP = 0.0045m; TRUE_BE_BUFFER = 0.0014m; }
-                    else                          { STEP = 0.0015m; PARTIAL_STEP = 0.0020m; TRUE_BE_BUFFER = 0.0012m; }
-
-                    // ===== BE LEVEL =====
+                    // =====================================================
+                    // BE LEVEL TRACKING
+                    // =====================================================
                     var level = (int)(roi / STEP);
+
                     var prevLevel = _beLevel.GetOrAdd(key, 0);
-                    if (level <= prevLevel) return;
+
+                    if (level <= prevLevel)
+                        return;
+
                     _beLevel[key] = level;
 
-                    _logger.LogInformation("[BE LEVEL][{symbol}][{side}] level {old} → {new} roi={roi:P2}",
+                    _logger.LogInformation(
+                        "[BE LEVEL][{symbol}][{side}] level {old} → {new} roi={roi:P2}",
                         symbol, side, prevLevel, level, roi);
 
-                    // ===== PARTIAL CLOSE =====
+                    // =====================================================
+                    // PARTIAL CLOSE
+                    // =====================================================
                     var partialLevel = (int)(roi / PARTIAL_STEP);
+
                     var prevPartial = (int)_beStage.GetOrAdd(key, BeStage.None);
 
                     if (partialLevel > prevPartial && partialLevel >= 1)
                     {
                         _beStage[key] = (BeStage)partialLevel;
-                        var closeQty = qty * 0.25m;
 
-                        _logger.LogWarning("[PARTIAL CLOSE][{symbol}][{side}] stage={stage} closeQty={qty}",
-                            symbol, side, partialLevel, closeQty);
+                        var closeQty = Math.Round(qty * PARTIAL_SIZE, 8);
 
-                        SafeFireAndForget(ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
+                        if (closeQty > 0)
+                        {
+                            _logger.LogWarning(
+                                "[PARTIAL CLOSE][{symbol}][{side}] stage={stage} closeQty={qty}",
+                                symbol, side, partialLevel, closeQty);
+
+                            SafeFireAndForget(
+                                ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
+                        }
                     }
 
-                    // ===== MOVE SL =====
-                    var slOrder = openOrders.FirstOrDefault(o => o.PositionSide == side && o.Type == FuturesOrderType.StopMarket);
+                    // =====================================================
+                    // MOVE STOP LOSS (progressive BE lock)
+                    // =====================================================
+                    var slOrder = openOrders.FirstOrDefault(o =>
+                        o.PositionSide == side &&
+                        o.Type == FuturesOrderType.StopMarket);
 
-                    decimal newSl = side == PositionSide.Long
-                        ? entry * (1m + (level - 1) * STEP + TRUE_BE_BUFFER)
-                        : entry * (1m - (level - 1) * STEP - TRUE_BE_BUFFER);
+                    decimal newSl =
+                        side == PositionSide.Long
+                            ? entry * (1m + (level - 1) * STEP + TRUE_BE_BUFFER)
+                            : entry * (1m - (level - 1) * STEP - TRUE_BE_BUFFER);
 
-                    if (slOrder == null ||
-                        (side == PositionSide.Long ? newSl > (slOrder.StopPrice ?? 0) : newSl < (slOrder.StopPrice ?? 0)))
+                    bool shouldMove =
+                        slOrder == null ||
+                        (side == PositionSide.Long
+                            ? newSl > (slOrder.StopPrice ?? 0)
+                            : newSl < (slOrder.StopPrice ?? 0));
+
+                    if (shouldMove)
                     {
-                        _logger.LogWarning("[BE MOVE][{symbol}][{side}] SL {old} → {new}",
-                            symbol, side, slOrder?.StopPrice ?? 0, newSl);
+                        _logger.LogWarning(
+                            "[BE MOVE][{symbol}][{side}] SL {old} → {new}",
+                            symbol, side,
+                            slOrder?.StopPrice ?? 0,
+                            newSl);
 
-                        SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, qty, newSl, pos, ct));
+                        SafeFireAndForget(
+                            PlaceStopLossAtBeAsync(
+                                client,
+                                symbol,
+                                side,
+                                qty,
+                                newSl,
+                                pos,
+                                ct));
                     }
                 }
 
@@ -372,8 +448,6 @@ namespace VertexAutoTradeBinance8.Services
                 ProbeSide(shortPos, PositionSide.Short);
             }
 
-        
-            //                                          /////////////////////////////////////////////////
             // /////////////////////////////////////////////////
 
 
