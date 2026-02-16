@@ -275,100 +275,104 @@ namespace VertexAutoTradeBinance8.Services
 
             ///////////////////////////////////TEST DIAGNOSTIC SL/BE/MOVE/////////////////////////////////////////////////////////
             ////////////////////////////////////////////////////////////////////////////////////////////
-
-            void ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
+            if (atr14_1m > 0 && klines1m != null && klines1m.Count >= 10)
             {
-                var key = symbol + "_" + side;
+                const decimal MIN_BE_BUFFER = 0.0015m; // минимальный ROI для активации BE move/Partial
 
-                // ===== RESET HANDLING =====
-                if (pos == null || pos.Quantity == 0)
+                void ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
                 {
-                    if (!_pendingReset.ContainsKey(key))
+                    var key = symbol + "_" + side;
+
+                    // ===== RESET HANDLING =====
+                    if (pos == null || pos.Quantity == 0)
                     {
-                        _pendingReset[key] = DateTime.UtcNow;
-                        _logger.LogDebug("[BE RESET PENDING][{symbol}][{side}] waiting confirmation", symbol, side);
+                        if (!_pendingReset.ContainsKey(key))
+                        {
+                            _pendingReset[key] = DateTime.UtcNow;
+                            _logger.LogDebug("[BE RESET PENDING][{symbol}][{side}] waiting confirmation", symbol, side);
+                            return;
+                        }
+
+                        if (DateTime.UtcNow - _pendingReset[key] < TimeSpan.FromSeconds(45))
+                            return;
+
+                        _pendingReset.TryRemove(key, out _);
+                        _beStage.TryRemove(key, out _);
+                        _beLevel.TryRemove(key, out _);
+
+                        _logger.LogInformation("[BE RESET CONFIRMED][{symbol}][{side}] Position confirmed closed", symbol, side);
                         return;
                     }
-
-                    if (DateTime.UtcNow - _pendingReset[key] < TimeSpan.FromSeconds(45))
-                        return;
 
                     _pendingReset.TryRemove(key, out _);
-                    _beStage.TryRemove(key, out _);
-                    _beLevel.TryRemove(key, out _);
 
-                    _logger.LogInformation("[BE RESET CONFIRMED][{symbol}][{side}] Position confirmed closed", symbol, side);
-                    return;
-                }
+                    var qty = Math.Abs(pos.Quantity);
+                    var entry = pos.EntryPrice;
+                    var mark = pos.MarkPrice;
 
-                // cancel pending reset if position exists
-                _pendingReset.TryRemove(key, out _);
+                    if (qty <= 0 || entry <= 0 || mark <= 0)
+                        return;
 
-                var qty = Math.Abs(pos.Quantity);
-                var entry = pos.EntryPrice;
-                var mark = pos.MarkPrice;
+                    var roi = side == PositionSide.Long
+                        ? (mark - entry) / entry
+                        : (entry - mark) / entry;
 
-                if (qty <= 0 || entry <= 0 || mark <= 0)
-                    return;
+                    // ===== MIN ROI CHECK =====
+                    if (Math.Abs(roi) < MIN_BE_BUFFER)
+                        return; // позиция ещё не «дышит», не двигаем SL и не делаем partial
 
-                var roi = side == PositionSide.Long ? (mark - entry) / entry : (entry - mark) / entry;
+                    // ===== STEP CONFIG =====
+                    decimal STEP, PARTIAL_STEP, TRUE_BE_BUFFER;
+                    if (symbol == "BTCUSDT")      { STEP = 0.0025m; PARTIAL_STEP = 0.0050m; TRUE_BE_BUFFER = 0.0017m; }
+                    else if (symbol == "ETHUSDT") { STEP = 0.0021m; PARTIAL_STEP = 0.0045m; TRUE_BE_BUFFER = 0.0014m; }
+                    else                          { STEP = 0.0015m; PARTIAL_STEP = 0.0020m; TRUE_BE_BUFFER = 0.0012m; }
 
-                // ===== STEP CONFIG =====
-                decimal STEP, PARTIAL_STEP, TRUE_BE_BUFFER;
-                if (symbol == "BTCUSDT") { STEP = 0.0027m; PARTIAL_STEP = 0.0055m; TRUE_BE_BUFFER = 0.0015m; }
-                else if (symbol == "ETHUSDT") { STEP = 0.0022m; PARTIAL_STEP = 0.0050m; TRUE_BE_BUFFER = 0.0013m; }
-                else { STEP = 0.0010m; PARTIAL_STEP = 0.0020m; TRUE_BE_BUFFER = 0.0011m; }
+                    // ===== BE LEVEL =====
+                    var level = (int)(roi / STEP);
+                    var prevLevel = _beLevel.GetOrAdd(key, 0);
+                    if (level <= prevLevel) return;
+                    _beLevel[key] = level;
 
-                var level = (int)(roi / STEP);
-                var prevLevel = _beLevel.GetOrAdd(key, 0);
-                if (level > prevLevel) _beLevel[key] = level;
+                    _logger.LogInformation("[BE LEVEL][{symbol}][{side}] level {old} → {new} roi={roi:P2}",
+                        symbol, side, prevLevel, level, roi);
 
-                _logger.LogInformation("[BE LEVEL][{symbol}][{side}] level {old} → {new} roi={roi:P2}", symbol, side, prevLevel, level, roi);
+                    // ===== PARTIAL CLOSE =====
+                    var partialLevel = (int)(roi / PARTIAL_STEP);
+                    var prevPartial = (int)_beStage.GetOrAdd(key, BeStage.None);
 
-                // ===== PARTIAL CLOSE =====
-                var partialLevel = (int)(roi / PARTIAL_STEP);
-                var prevPartial = (int)_beStage.GetOrAdd(key, BeStage.None);
-
-                if (partialLevel > prevPartial && partialLevel >= 1)
-                {
-                    _beStage[key] = (BeStage)partialLevel;
-                    var closeQty = qty * 0.25m;
-
-                    _logger.LogWarning("[PARTIAL CLOSE][{symbol}][{side}] stage={stage} closeQty={qty}", symbol, side, partialLevel, closeQty);
-                    SafeFireAndForget(ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
-                }
-
-                // ===== DYNAMIC SL MOVE (только в плюс) =====
-                var slOrder = openOrders.FirstOrDefault(o => o.PositionSide == side && o.Type == FuturesOrderType.StopMarket);
-
-                // динамический буфер: ATR или фикс TRUE_BE_BUFFER, whichever больше
-                decimal dynamicBuffer = Math.Max(TRUE_BE_BUFFER, atr14_1m * 0.2m);
-
-                decimal targetSl = side == PositionSide.Long
-                    ? Math.Max(entry, mark - dynamicBuffer)   // never below entry
-                    : Math.Min(entry, mark + dynamicBuffer);  // never above entry
-
-                if (slOrder == null)
-                {
-                    _logger.LogWarning("[BE MOVE][{symbol}][{side}] placing SL={sl}", symbol, side, targetSl);
-                    SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, qty, targetSl, pos, ct));
-                }
-                else
-                {
-                    var existingSl = slOrder.StopPrice ?? 0m;
-                    bool improve = side == PositionSide.Long ? targetSl > existingSl : targetSl < existingSl;
-
-                    if (improve)
+                    if (partialLevel > prevPartial && partialLevel >= 1)
                     {
-                        _logger.LogWarning("[BE MOVE][{symbol}][{side}] SL {old} → {new}", symbol, side, existingSl, targetSl);
-                        SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, qty, targetSl, pos, ct));
+                        _beStage[key] = (BeStage)partialLevel;
+                        var closeQty = qty * 0.25m;
+
+                        _logger.LogWarning("[PARTIAL CLOSE][{symbol}][{side}] stage={stage} closeQty={qty}",
+                            symbol, side, partialLevel, closeQty);
+
+                        SafeFireAndForget(ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
+                    }
+
+                    // ===== MOVE SL =====
+                    var slOrder = openOrders.FirstOrDefault(o => o.PositionSide == side && o.Type == FuturesOrderType.StopMarket);
+
+                    decimal newSl = side == PositionSide.Long
+                        ? entry * (1m + (level - 1) * STEP + TRUE_BE_BUFFER)
+                        : entry * (1m - (level - 1) * STEP - TRUE_BE_BUFFER);
+
+                    if (slOrder == null ||
+                        (side == PositionSide.Long ? newSl > (slOrder.StopPrice ?? 0) : newSl < (slOrder.StopPrice ?? 0)))
+                    {
+                        _logger.LogWarning("[BE MOVE][{symbol}][{side}] SL {old} → {new}",
+                            symbol, side, slOrder?.StopPrice ?? 0, newSl);
+
+                        SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, qty, newSl, pos, ct));
                     }
                 }
+
+                ProbeSide(longPos, PositionSide.Long);
+                ProbeSide(shortPos, PositionSide.Short);
             }
 
-
-
-
+        
             //                                          /////////////////////////////////////////////////
             // /////////////////////////////////////////////////
 

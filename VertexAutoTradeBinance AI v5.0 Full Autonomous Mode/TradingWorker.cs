@@ -42,6 +42,7 @@ namespace VertexAutoTradeBinance8
     {
         private readonly ILogger<TradingWorker> _logger;
         private readonly TradingOptions _options;
+        private readonly TradingOptionsResolver _resolver;
 
         private readonly MarketDataService _market;
         private readonly MarketDataFacade _marketDataFacade;
@@ -141,6 +142,7 @@ namespace VertexAutoTradeBinance8
             EngineStateBuilder engineStateBuilder,
             EngineStateSnapshotService engineStateSnapshot,
             IBootGate bootGate,
+            TradingOptionsResolver resolver,
             IStrategyPreFilter pre, MarketContextService marketContext, SimulatedTradeService sim, AiMarketRegimeService marketRegime, BinanceHistoryImporter importer
             , RealtimePriceService price)
         {
@@ -174,6 +176,7 @@ namespace VertexAutoTradeBinance8
             _marketRegime = marketRegime;
             _importer = importer;
             _price = price;
+           _resolver = resolver;
         }
 
         private int _lastCyclesPerMinute = 0;
@@ -709,17 +712,21 @@ _strategy.OnSignalGenerated += signal =>
                     return;
                 }
 
-                // =====================================================
-                // 6) QTY
-                // =====================================================
-                var qty = await _risk.CalculateSafeQty(
+            var trading = _resolver.Resolve(symbol);
+            var Level = trading.Leverage > 0
+                ? trading.Leverage
+                : (signal.Leverage ?? 1m); 
+            // =====================================================
+            // 6) QTY
+            // =====================================================
+            var qty = await _risk.CalculateSafeQty(
                     signal,
                     symbol,
                     signal.EntryPrice,
                     signal.StopLoss,
                     riskMult,
                     signal.SafetyRiskMultiplier,
-                    signal.Leverage ?? 1m,
+                    Level,
                     signal.Side,
                     signal.TakeProfits,
                     ct).ConfigureAwait(false);
