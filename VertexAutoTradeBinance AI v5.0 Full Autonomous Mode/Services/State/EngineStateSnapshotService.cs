@@ -49,14 +49,7 @@ namespace VertexAutoTradeBinance8.Services
             State.RealizedPnlUsd = 0m;
             State.EngineEquityUsd = baseDepositUsd;
         }
-        public void AddRealizedPnl(decimal pnlUsd)
-        {
-            if (pnlUsd <= 0m) return;
-
-            State.RealizedPnlUsd += pnlUsd;
-            State.EngineEquityUsd = State.BaseDepositUsd + State.RealizedPnlUsd;
-        }
-
+      
 
         private readonly JsonSerializerOptions _jsonOptions = new()
         {

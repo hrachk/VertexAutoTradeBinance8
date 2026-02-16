@@ -14,7 +14,7 @@ namespace VertexAutoTradeBinance8.Services
 
         // авто-коррекция от AI (накопленная)
         public Dictionary<string, decimal> AdaptiveBias { get; } = new();
-      
+
 
         public decimal GetWeight(string gate)
         {
@@ -33,6 +33,7 @@ namespace VertexAutoTradeBinance8.Services
         private DateTime? _lastImportedTradeCloseUtc;
         public DateTime? LastImportedTradeCloseUtc => _lastImportedTradeCloseUtc;
         public event Action<MarketState>? MarketStateCreated;
+        private readonly HashSet<string> _learnedTrades = new();
 
         private void AddMarketState(MarketState state)
         {
@@ -260,6 +261,9 @@ namespace VertexAutoTradeBinance8.Services
             public decimal PnlPct { get; set; }
             public MarketRegime Regime { get; set; }
             public DateTime Time { get; set; }
+
+            public decimal Quantity { get; set; }
+            public decimal RealPnl => Pnl; // если уже исправишь расчёт
         }
 
         public class RegimeStats
@@ -560,38 +564,31 @@ namespace VertexAutoTradeBinance8.Services
     skipSnapshot: false   // ✅ ВАЖНО
 );
         }
-
-
-       
-
-        private readonly HashSet<string> _learnedTrades = new();
-
-
+          
         // =====================================================================
         // 2) TRADE ENTRY (вызывается из PositionSupervisor / TradeResultMonitor)
         // =====================================================================
         public void RecordTrade(
-      string symbol,
-      SignalSide side,
-      decimal entry,
-      decimal exit,
-      MarketRegime regime)
+            string symbol,
+            SignalSide side,
+            decimal entry,
+            decimal exit,
+            MarketRegime regime)
         {
-            if (entry <= 0)
+            if (entry <= 0 || exit <= 0)
                 return;
 
             // ===========================
-            // 0) PnL calculation
+            // 0) PnL calculation (PERCENT-BASED CORE)
             // ===========================
-            decimal pnl =
-                side == SignalSide.Buy
-                    ? exit - entry
-                    : entry - exit;
-
             decimal pnlPct =
                 side == SignalSide.Buy
                     ? (exit - entry) / entry
                     : (entry - exit) / entry;
+
+            // ВАЖНО:
+            // Pnl теперь = процент, а не price delta
+            decimal pnl = pnlPct;
 
             // ===========================
             // 1) Idempotency guard
@@ -613,8 +610,8 @@ namespace VertexAutoTradeBinance8.Services
                     Entry = entry,
                     Exit = exit,
                     Regime = regime,
-                    Pnl = pnl,
-                    PnlPct = pnlPct,
+                    Pnl = pnl,          // <-- теперь процент
+                    PnlPct = pnlPct,    // дублирование допустимо
                     Time = DateTime.UtcNow
                 });
 
@@ -633,8 +630,6 @@ namespace VertexAutoTradeBinance8.Services
             Save(force: true);
             _lastSnapshot = DateTime.UtcNow;
         }
-
-
 
 
         private void UpdateStats(string symbol, MarketRegime regime, decimal pnl)

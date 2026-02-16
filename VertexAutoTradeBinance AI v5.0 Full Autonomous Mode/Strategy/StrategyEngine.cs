@@ -8,6 +8,7 @@
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Models.DTO.Debug;
@@ -74,6 +75,7 @@ namespace VertexAutoTradeBinance8.Strategy
         {
             public readonly SemaphoreSlim Gate = new(1, 1);
             public DateTime LastUsedUtc;
+            public bool Pending;
         }
 
         private readonly SignalConfidenceAggregator _confidenceAgg;
@@ -311,7 +313,7 @@ namespace VertexAutoTradeBinance8.Strategy
             marketData.WsClosedKline += (symbol, tf, candle) =>
             {
                 if (ReactiveTf.Contains(tf))
-                    RunReactive(symbol, tf, "CLOSE");
+                    _ = RunReactive(symbol, tf, "CLOSE");
             };
 
             // 🔥 REALTIME trigger
@@ -320,7 +322,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 if (!ShouldRunRealtime(symbol))
                     return;
 
-                RunReactive(symbol, KlineInterval.FiveMinutes, "REALTIME");
+                _ = RunReactive(symbol, KlineInterval.FiveMinutes, "REALTIME");
             };
 
             _logger.LogInformation(
@@ -328,7 +330,7 @@ namespace VertexAutoTradeBinance8.Strategy
         }
 
         private readonly ConcurrentDictionary<string, DateTime> _lastSignalCandle = new();
-        private void RunReactive(string symbol, KlineInterval interval, string reason)
+        private async Task RunReactive(string symbol, KlineInterval interval, string reason)
         {
             var md = _marketData;
             if (md == null) return;
@@ -359,7 +361,10 @@ namespace VertexAutoTradeBinance8.Strategy
             _ = Task.Run(async () =>
             {
                 if (!await le.Gate.WaitAsync(0))
+                {
+                    le.Pending = true;
                     return;
+                }
 
                 try
                 {
@@ -472,6 +477,12 @@ namespace VertexAutoTradeBinance8.Strategy
                     _lastSignalUtc[sigKey] = nowUtc;
                     _lastSignalCandle[candleKey] = candleTime;
 
+                    var sw = Stopwatch.StartNew();
+                    _logger.LogInformation(
+    "[LATENCY] {symbol} {reason} eval {ms}ms",
+    symbol,
+    reason,
+    sw.ElapsedMilliseconds);
                     OnSignalGenerated?.Invoke(signal);
 
 
@@ -487,283 +498,18 @@ namespace VertexAutoTradeBinance8.Strategy
                 }
                 finally
                 {
+
                     le.Gate.Release();
+
+                    if (le.Pending)
+                    {
+                        le.Pending = false;
+                        _ = RunReactive(symbol, interval, "PENDING");
+                    }
                 }
             });
         }
-
-
-        //public void BindReactive(MarketDataFacade marketData)
-        //{
-        //    _marketData = marketData;
-
-        //    marketData.OnWarm += (symbol, tf) =>
-        //    {
-        //        _logger.LogInformation("[STRAT][WARM] market warm confirmed {symbol} {tf}", symbol, tf);
-        //    };
-
-        //    marketData.WsClosedKline += (symbol, tf, candle) =>
-        //    {
-        //        if (ReactiveTf.Contains(tf))
-        //            RunReactive(symbol, tf, "CLOSE");
-        //    };
-
-        //    _logger.LogInformation("[STRAT][PUSH] Reactive entry-point bound");
-        //}
-
-        // ----------------------------- REACTIVE (PRODUCTION) -----------------------------
-        //private void RunReactive(string symbol, KlineInterval interval, string reason)
-        //{
-        //    var md = _marketData;
-        //    if (md == null) return;
-
-        //    var key = $"{symbol}:{interval}";
-        //    var now = DateTime.UtcNow;
-
-        //    // Warmup gate (snapshot overrides)
-        //    if (!md.HasSnapshotState && md.IsInWarmup(symbol, interval))
-        //    {
-        //        _logger.LogDebug("[STRAT][PUSH][{symbol}][{tf}] skip — market warmup", symbol, interval);
-        //        return;
-        //    }
-
-        //    // Anti-spam (CLOSE always allowed)
-        //    if (reason != "CLOSE")
-        //    {
-        //        if (_lastReactiveRun.TryGetValue(key, out var last) &&
-        //            (now - last).TotalMilliseconds < 300)
-        //            return;
-        //    }
-
-        //    _lastReactiveRun[key] = now;
-
-        //    // per-key singleflight
-        //    var le = _reactiveLocks.GetOrAdd(key, _ => new LockEntry { LastUsedUtc = now });
-        //    le.LastUsedUtc = now;
-
-        //    // opportunistic cleanup (every ~60 sec)
-        //    TryCleanupReactiveLocks(now);
-
-        //    _ = Task.Run(async () =>
-        //    {
-        //        // 0ms wait = drop if already running same key
-        //        if (!await le.Gate.WaitAsync(0).ConfigureAwait(false))
-        //            return;
-
-        //        try
-        //        {
-        //            var klines = await md.GetKlinesAsync(symbol, interval, need: 120).ConfigureAwait(false);
-        //            if (klines == null || klines.Count < 30)
-        //                return;
-
-        //            _logger.LogDebug(
-        //                "[STRAT][PUSH][{symbol}][{tf}] run reason={reason} bars={bars}",
-        //                symbol, interval, reason, klines.Count);
-
-        //            var decision = await EvaluateSignalAsync(symbol, interval, klines, CancellationToken.None)
-        //                .ConfigureAwait(false);
-
-        //            // DecisionTrace ALWAYS
-        //            SafeRecordDecisionTrace(symbol, interval, decision);
-
-        //            if (!decision.Allow)
-        //            {
-        //                var fail = decision.FailedGate;
-        //                if (fail != null)
-        //                {
-        //                    _logger.LogInformation(
-        //                        "[DECISION][{symbol}][{tf}] BLOCK gate={gate} reason={reason}",
-        //                        symbol, interval, fail.Gate, fail.Reason);
-        //                }
-        //                return;
-        //            }
-
-        //            var signal = decision.Signal;
-        //            if (signal == null) return;
-
-        //            try
-        //            {
-        //                OnSignalGenerated?.Invoke(signal);
-        //            }
-        //            catch (Exception ex)
-        //            {
-        //                _logger.LogError(ex,
-        //                    "[STRAT][PUSH][{symbol}][{tf}] OnSignalGenerated handler failed",
-        //                    symbol, interval);
-        //            }
-        //        }
-        //        catch (Exception ex)
-        //        {
-        //            _logger.LogError(ex,
-        //                "[STRAT][PUSH][{symbol}][{tf}] reactive error",
-        //                symbol, interval);
-        //        }
-        //        finally
-        //        {
-        //            le.Gate.Release();
-        //        }
-        //    });
-        //}
-        //private void RunReactive(string symbol, KlineInterval interval, string reason)
-        //{
-        //    var md = _marketData;
-        //    if (md == null)
-        //        return;
-
-        //    var key = $"{symbol}:{interval}";
-        //    var now = DateTime.UtcNow;
-
-        //    // ============================================
-        //    // 1. WARMUP GATE
-        //    // ============================================
-
-        //    if (!md.HasSnapshotState && md.IsInWarmup(symbol, interval))
-        //    {
-        //        _logger.LogDebug(
-        //            "[STRAT][PUSH][{symbol}][{tf}] skip — warmup",
-        //            symbol, interval);
-        //        return;
-        //    }
-
-        //    // ============================================
-        //    // 2. ANTI-SPAM CONTROL
-        //    // ============================================
-
-        //    int minIntervalMs =
-        //        reason == "REALTIME"
-        //        ? 150      // realtime throttle
-        //        : 0;       // CLOSE always allowed
-
-        //    if (minIntervalMs > 0)
-        //    {
-        //        if (_lastReactiveRun.TryGetValue(key, out var last))
-        //        {
-        //            if ((now - last).TotalMilliseconds < minIntervalMs)
-        //                return;
-        //        }
-        //    }
-
-        //    _lastReactiveRun[key] = now;
-
-        //    // ============================================
-        //    // 3. SINGLEFLIGHT LOCK
-        //    // ============================================
-
-        //    var le = _reactiveLocks.GetOrAdd(
-        //        key,
-        //        _ => new LockEntry { LastUsedUtc = now });
-
-        //    le.LastUsedUtc = now;
-
-        //    TryCleanupReactiveLocks(now);
-
-        //    // ============================================
-        //    // 4. RUN ASYNC
-        //    // ============================================
-
-        //    _ = Task.Run(async () =>
-        //    {
-        //        if (!await le.Gate.WaitAsync(0).ConfigureAwait(false))
-        //            return;
-
-        //        try
-        //        {
-        //            // ============================================
-        //            // 5. READ BUFFER (NO REST, NO WS WAIT)
-        //            // ============================================
-
-        //            var klines = await md
-        //                .GetKlinesAsync(symbol, interval, need: 120)
-        //                .ConfigureAwait(false);
-
-        //            if (klines == null || klines.Count < 30)
-        //                return;
-
-        //            // ============================================
-        //            // 6. OPTIONAL: REALTIME PRICE ATTACH
-        //            // ============================================
-
-        //            decimal? realtimePrice = null;
-
-        //            if (reason == "REALTIME")
-        //            {
-        //                realtimePrice = md.GetLastPrice(symbol);
-        //            }
-
-        //            // ============================================
-        //            // 7. EVALUATE SIGNAL
-        //            // ============================================
-
-        //            var decision = await EvaluateSignalAsync(
-        //                symbol,
-        //                interval,
-        //                klines,
-        //                CancellationToken.None)
-        //                .ConfigureAwait(false);
-
-        //            // ALWAYS TRACE
-        //            SafeRecordDecisionTrace(symbol, interval, decision);
-
-        //            if (!decision.Allow)
-        //                return;
-
-        //            var signal = decision.Signal;
-
-        //            if (signal == null)
-        //                return;
-
-        //            // ============================================
-        //            // 8. REALTIME PRICE OVERRIDE (CRITICAL)
-        //            // ============================================
-
-        //            if (realtimePrice.HasValue && realtimePrice.Value > 0)
-        //            {
-        //                signal.EntryPrice = realtimePrice.Value;
-        //            }
-
-        //            // ============================================
-        //            // 9. EMIT SIGNAL
-        //            // ============================================
-
-        //            OnSignalGenerated?.Invoke(signal);
-        //        }
-        //        catch (Exception ex)
-        //        {
-        //            _logger.LogError(ex,
-        //                "[STRAT][PUSH][{symbol}][{tf}] reactive error",
-        //                symbol, interval);
-        //        }
-        //        finally
-        //        {
-        //            le.Gate.Release();
-        //        }
-
-        //    });
-        //}
-
-
-        private void TryCleanupReactiveLocks(DateTime nowUtc)
-        {
-            // Cleanup at most once per ~60 seconds
-            var tick = nowUtc.Ticks;
-            var prev = Interlocked.Read(ref _lockCleanupTick);
-            if (prev != 0 && (tick - prev) < TimeSpan.FromSeconds(60).Ticks)
-                return;
-
-            if (Interlocked.CompareExchange(ref _lockCleanupTick, tick, prev) != prev)
-                return;
-
-            var cutoff = nowUtc.AddMinutes(-15); // TTL: 15 minutes idle => cleanup
-            foreach (var kv in _reactiveLocks)
-            {
-                if (kv.Value.LastUsedUtc < cutoff)
-                {
-                    // remove only if same instance (avoid races)
-                    _reactiveLocks.TryRemove(kv.Key, out _);
-                }
-            }
-        }
-
+         
         private void SafeRecordDecisionTrace(string symbol, KlineInterval tf, SignalDecisionTrace decision)
         {
             try

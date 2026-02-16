@@ -230,14 +230,13 @@ public class Program
                     services.AddSingleton<StrategyEngine>();
                     services.AddSingleton<SmartRegimeService>();
                     services.AddSingleton<ReverseProbeEngine>();
+                    services.AddSingleton<IAccountStateService, AccountStateService>();
 
 
                     // ===== SUPERVISOR / STATE =====
                     services.AddSingleton<PositionSupervisorService>();
                     services.AddSingleton<PositionGuardService>();
                     services.AddSingleton<PositionProtectorService>();
-
-                    services.AddSingleton<IAccountStateService, AccountStateService>();
                     services.AddSingleton<TradeStateManager>();
                     services.AddSingleton<EngineStateBuilder>();
                     services.AddSingleton<EngineStateSnapshotService>();

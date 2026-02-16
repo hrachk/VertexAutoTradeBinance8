@@ -144,12 +144,33 @@ namespace VertexAutoTradeBinance8.Services
                     var price = k.ClosePrice;
 
                     // 🔥 ALWAYS publish realtime price
+                    //OnPrice?.Invoke(symbol, price);
+
+                    //// only closed candle below
+                    //if (!k.Final)
+                    //    return;
+
+                    //var candle = new BinanceFuturesUsdtKline
+                    //{
+                    //    OpenTime = k.OpenTime,
+                    //    CloseTime = k.CloseTime,
+                    //    OpenPrice = k.OpenPrice,
+                    //    HighPrice = k.HighPrice,
+                    //    LowPrice = k.LowPrice,
+                    //    ClosePrice = k.ClosePrice,
+                    //    Volume = k.Volume,
+                    //    QuoteVolume = k.QuoteVolume,
+                    //    TradeCount = k.TradeCount,
+                    //    TakerBuyBaseVolume = k.TakerBuyBaseVolume,
+                    //    TakerBuyQuoteVolume = k.TakerBuyQuoteVolume
+                    //};
+
+                    //_buffer.Upsert(symbol, interval, candle);
+
+                    //OnClosedKline?.Invoke(symbol, interval, candle);
                     OnPrice?.Invoke(symbol, price);
 
-                    // only closed candle below
-                    if (!k.Final)
-                        return;
-
+                    // 🔥 ALWAYS update buffer (live candle)
                     var candle = new BinanceFuturesUsdtKline
                     {
                         OpenTime = k.OpenTime,
@@ -167,7 +188,11 @@ namespace VertexAutoTradeBinance8.Services
 
                     _buffer.Upsert(symbol, interval, candle);
 
-                    OnClosedKline?.Invoke(symbol, interval, candle);
+                    // closed candle event separately
+                    if (k.Final)
+                    {
+                        OnClosedKline?.Invoke(symbol, interval, candle);
+                    }
                 }
                 catch (Exception ex)
                 {

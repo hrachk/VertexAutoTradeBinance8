@@ -289,7 +289,12 @@ namespace VertexAutoTradeBinance8.Services
                     attemptNotional: quantity * entryPrice,
                     requiredMinNotional: filters.minQty * entryPrice);
 
-                return OrderResult.Fail("ADJUSTED_QTY_TOO_SMALL");
+                // если чуть меньше minQty, округляем вверх до minQty
+                if (adjustedQty >= filters.minQty * 0.85m) // 85% порога считаем допустимым
+                    adjustedQty = filters.minQty;
+                else
+                    return OrderResult.Fail("ADJUSTED_QTY_TOO_SMALL");
+              
             }
 
             quantity = adjustedQty;
@@ -378,15 +383,26 @@ namespace VertexAutoTradeBinance8.Services
                 priceDriftPct <= 0.0150m;               // но не runaway
 
             // join pct: use your constant (0.06%) but cap hard for safety
-            decimal joinPct = silentTrendJoin ? Math.Min(AGGR_LIMIT_OFFSET_PCT, 0.0010m) : 0m;
+            //decimal joinPct = silentTrendJoin ? Math.Min(AGGR_LIMIT_OFFSET_PCT, 0.0010m) : 0m;
 
-            decimal joinLimit =
+            //decimal joinLimit =
+            //    side == OrderSide.Buy
+            //        ? lastPrice * (1m + joinPct)
+            //        : lastPrice * (1m - joinPct);
+
+            //decimal finalLimitRaw = silentTrendJoin ? joinLimit : passiveLimit;
+            //decimal aggrLimitPrice = Quantize(finalLimitRaw, tick);
+            // допустимый дрейф для LIMIT
+            decimal safeDriftPct = signal.IsSuperSignal ? 0.0015m : AGGR_LIMIT_OFFSET_PCT;
+
+            decimal joinLimitAdjusted =
                 side == OrderSide.Buy
-                    ? lastPrice * (1m + joinPct)
-                    : lastPrice * (1m - joinPct);
+                    ? lastPrice * (1m + safeDriftPct)
+                    : lastPrice * (1m - safeDriftPct);
 
-            decimal finalLimitRaw = silentTrendJoin ? joinLimit : passiveLimit;
+            decimal finalLimitRaw = silentTrendJoin || signal.IsSuperSignal ? joinLimitAdjusted : passiveLimit;
             decimal aggrLimitPrice = Quantize(finalLimitRaw, tick);
+
 
             decimal? orderPrice = entryType == FuturesOrderType.Market ? null : aggrLimitPrice;
             TimeInForce? tif = entryType == FuturesOrderType.Market ? null : TimeInForce.GoodTillCanceled;
@@ -518,10 +534,14 @@ namespace VertexAutoTradeBinance8.Services
                 }
                 catch { }
 
+                //  decimal atrSlipCap =
+                //(signal.Atr ?? 0m) > 0 && entryPrice > 0
+                //? Math.Min((signal.Atr.Value / entryPrice) * 1.2m, MARKET_FALLBACK_MAX_SLIP_PCT)
+                //: MARKET_FALLBACK_MAX_SLIP_PCT; 
                 decimal atrSlipCap =
-              (signal.Atr ?? 0m) > 0 && entryPrice > 0
-              ? Math.Min((signal.Atr.Value / entryPrice) * 1.2m, MARKET_FALLBACK_MAX_SLIP_PCT)
-              : MARKET_FALLBACK_MAX_SLIP_PCT; 
+      (signal.Atr ?? 0m) > 0 && entryPrice > 0
+          ? Math.Min((signal.Atr.Value / entryPrice) * 1.4m, MARKET_FALLBACK_MAX_SLIP_PCT * (signal.IsSuperSignal ? 1.4m : 1m))
+          : MARKET_FALLBACK_MAX_SLIP_PCT;
 
                 decimal driftNowPct =
                     entryPrice > 0 ? Math.Abs(markNow - entryPrice) / entryPrice : 0m;
@@ -803,11 +823,11 @@ namespace VertexAutoTradeBinance8.Services
                             {
                                 var mark = priceRes.Data.Price;
                                 decimal diffPct;
-
+                                decimal runawayThreshold = signal.IsSuperSignal ? maxSlipPct * 2m : maxSlipPct;
                                 if (posSide == PositionSide.Long)
                                 {
                                     diffPct = (mark - fallbackEntry) / fallbackEntry;
-                                    if (diffPct >= maxSlipPct && !runawayLogged)
+                                    if (diffPct >= runawayThreshold && !runawayLogged)
                                     {
                                         runawayLogged = true;
                                         _logger.LogWarning(
@@ -818,7 +838,7 @@ namespace VertexAutoTradeBinance8.Services
                                 else
                                 {
                                     diffPct = (fallbackEntry - mark) / fallbackEntry;
-                                    if (diffPct >= maxSlipPct && !runawayLogged)
+                                    if (diffPct >= runawayThreshold && !runawayLogged)
                                     {
                                         runawayLogged = true;
                                         _logger.LogWarning(

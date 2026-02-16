@@ -16,5 +16,6 @@ namespace VertexAutoTradeBinance8.Services.Interface
         void UpdateBalance(AccountBalanceState b);
 
         event Action? Updated;
+        void AddRealizedPnl(decimal pnl);
     }
 }
