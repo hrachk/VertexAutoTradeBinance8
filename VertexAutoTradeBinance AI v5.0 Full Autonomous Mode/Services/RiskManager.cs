@@ -138,9 +138,13 @@ namespace VertexAutoTradeBinance8.Services
             // === Dynamic MinNotional by capital percent ===
             if (trading.MinNotionalGuardPercent > 0)
             {
-                decimal dynMin = free * trading.MinNotionalGuardPercent;
-                if (dynMin > binanceMinNotional)
-                    binanceMinNotional = dynMin;
+                //decimal dynMin = free * trading.MinNotionalGuardPercent;
+                //if (dynMin > binanceMinNotional)
+                //    binanceMinNotional = dynMin;
+
+                decimal dynMin = Math.Max(
+    trading.MinNotionalGuard,
+    free * trading.MinNotionalGuardPercent);
             }
 
             // for UI
@@ -244,31 +248,28 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // BASE RISK
-            decimal baseRiskPercent =
-     trading.RiskPerTrade > 0
-         ? (decimal)trading.RiskPerTrade
-         : trading.BaseRiskPercent > 0
-             ? trading.BaseRiskPercent
-             : 0.01m;
+            //       decimal baseRiskPercent =
+            //trading.RiskPerTrade > 0
+            //    ? (decimal)trading.RiskPerTrade
+            //    : trading.BaseRiskPercent > 0
+            //        ? trading.BaseRiskPercent
+            //        : 0.01m;
 
+            decimal baseRiskPercent =
+    trading.RiskPerTrade > 0
+        ? (decimal)trading.RiskPerTrade 
+        : trading.BaseRiskPercent > 0
+            ? trading.BaseRiskPercent / 100m
+            : 0.01m;
+
+            decimal score = riskMultiplier * safetyRiskMultiplier;
+            bool strong = score >= 1.30m;
             // AI LEVERAGE FACTOR
             decimal aiLevMult = await GetAiLeverageMultiplierAsync(symbol, ct);
             // FINAL MULTIPLIER
             decimal finalRisk = riskMultiplier * safetyRiskMultiplier * aiLevMult;
             finalRisk = Math.Clamp(finalRisk, 0.3m, 2.7m);
             decimal maxRisk = free * baseRiskPercent * finalRisk;
-            if (maxRisk < 1m) maxRisk = 1m;
-            if (maxRisk > free * 0.20m) maxRisk = free * 0.20m;
-            decimal qty = maxRisk / slDist;
-            if (leverage > 0) qty *= leverage;
-            qty = Math.Floor(qty / step) * step;
-            if (qty < minQty) qty = minQty;
-            decimal notional = qty * entryPrice;
-            // =====================
-            // SIGNAL STRENGTH LOGIC
-            // =====================
-            decimal score = riskMultiplier * safetyRiskMultiplier;
-            bool strong = score >= 1.30m;
             bool weak = score < 0.80m;
 
             if (weak)
@@ -280,6 +281,23 @@ namespace VertexAutoTradeBinance8.Services
                 // строка ниже не влияет на qty/notional, оставляем как комментарий намерения)
                 maxRisk *= 0.35m;
             }
+            //if (maxRisk < 1m)
+            //    maxRisk = 1m;
+            if (maxRisk < free * 0.005m)
+                maxRisk = free * 0.005m;
+            if (maxRisk > free * 0.20m)
+                maxRisk = free * 0.20m;
+
+            decimal qty = maxRisk / slDist;
+            if (leverage > 0) qty *= leverage;
+            qty = Math.Floor(qty / step) * step;
+            if (qty < minQty) qty = minQty;
+            decimal notional = qty * entryPrice;
+            // =====================
+            // SIGNAL STRENGTH LOGIC
+            // =====================
+         
+           
             // =============================================================
             //  BOOST + ADAPTIVE REDUCE (v7.5)
             // =============================================================
