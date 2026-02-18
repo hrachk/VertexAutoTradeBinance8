@@ -57,7 +57,7 @@ namespace VertexAutoTradeBinance8.Services
         // =========================================================
         // PUBLIC API
         // =========================================================
-
+        /*
         public async Task<MissedTradeRecord?> SimulateMissedTradeAsync(
        TradeSignal signal,
        string reason,
@@ -188,7 +188,113 @@ namespace VertexAutoTradeBinance8.Services
                 return null;
             }
         }
+        */
+        // =========================================================
+        // 1️⃣ Метод SimulateMissedTradeAsync — финальный фикс
+        // =========================================================
+        public async Task<MissedTradeRecord?> SimulateMissedTradeAsync(
+            TradeSignal signal,
+            string reason,
+            string? note = null,
+            decimal? freeBalance = null,
+            decimal? attemptNotional = null,
+            decimal? requiredMinNotional = null)
+        {
+            if (signal == null)
+            {
+                _logger.LogError("[SIM] SimulateMissedTradeAsync called with null signal | reason={reason}, note={note}", reason, note);
+                return null;
+            }
 
+            try
+            {
+                var klines = await _marketData.GetFuturesKlinesAsync(signal.Symbol, KlineInterval.FiveMinutes, 30);
+                if (klines == null || klines.Count == 0) return null;
+
+                decimal entry = signal.EntryPrice;
+                decimal sl = signal.StopLoss;
+                decimal tp = signal.TakeProfit ?? signal.TakeProfits?.FirstOrDefault() ?? entry * 1.01m;
+
+                // ✅ FIX: StopLoss не может быть равен Entry
+                if (sl == entry)
+                {
+                    if (signal.Side == SignalSide.Sell) sl = entry + (signal.Atr ?? 1m) * 0.5m;
+                    else sl = entry - (signal.Atr ?? 1m) * 0.5m;
+                }
+
+                // ✅ FIX: TakeProfits не может быть пустым
+                List<decimal> tps;
+                if (signal.TakeProfits != null && signal.TakeProfits.Count > 0)
+                    tps = new List<decimal>(signal.TakeProfits);
+                else
+                {
+                    if (signal.Side == SignalSide.Sell)
+                        tps = new List<decimal> { entry - (signal.Atr ?? 1m) * 1m };
+                    else
+                        tps = new List<decimal> { entry + (signal.Atr ?? 1m) * 1m };
+                }
+
+                bool hitSL = false, hitTP = false;
+                foreach (var candle in klines)
+                {
+                    if (signal.Side == SignalSide.Buy)
+                    {
+                        if (candle.LowPrice <= sl) { hitSL = true; break; }
+                        if (candle.HighPrice >= tps[0]) { hitTP = true; break; }
+                    }
+                    else
+                    {
+                        if (candle.HighPrice >= sl) { hitSL = true; break; }
+                        if (candle.LowPrice <= tps[0]) { hitTP = true; break; }
+                    }
+                }
+
+                decimal result = hitSL ? -Math.Abs(entry - sl) : hitTP ? Math.Abs(tps[0] - entry) : 0m;
+
+                var record = new MissedTradeRecord
+                {
+                    Symbol = signal.Symbol,
+                    Time = DateTime.UtcNow,
+                    Entry = entry,
+                    StopLoss = sl,
+                    Side = signal.Side.ToString(),
+                    TakeProfits = tps,
+                    Event = "SIMULATED_RESULT",
+                    Reason = reason,
+                    AttemptNotional = attemptNotional ?? 0m,
+                    RequiredMinNotional = requiredMinNotional ?? 0m,
+                    FreeBalance = freeBalance ?? 0m,
+                    Atr = signal.Atr ?? 0m,
+                    Vol = 0m,
+                    Slope = 0m,
+                    Deviation = 0m,
+                    Confidence = (int)((signal.Confidence ?? 0m) * 100),
+                    Score = (int)((signal.AiQuality ?? 0m) * 100),
+                    Regime = MarketRegime.Unknown,
+                    SmartType = "",
+                    Note = note ?? ""
+                };
+
+                await AppendRecordAsync(record);
+
+                // AI learning
+                bool isExecutionPolicy =
+                    reason.StartsWith("FALLBACK_MKT_BLOCKED", StringComparison.OrdinalIgnoreCase) ||
+                    reason.StartsWith("EXECUTION_POLICY", StringComparison.OrdinalIgnoreCase);
+
+                if (!isExecutionPolicy)
+                {
+                    _learningService.RecordSimulatedTrade(signal.Symbol, signal.Side.ToString(), entry, sl, tps[0], result, reason);
+                }
+
+                return record;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SIM] Simulation failed");
+                return null;
+            }
+        }
 
         // =========================================================
         // INTERNAL IO
