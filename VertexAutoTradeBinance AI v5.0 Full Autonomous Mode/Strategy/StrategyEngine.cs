@@ -512,9 +512,16 @@ namespace VertexAutoTradeBinance8.Strategy
 
         private void SafeRecordDecisionTrace(string symbol, KlineInterval tf, SignalDecisionTrace decision)
         {
+            if (decision == null) return;
+
             try
             {
-                _decisionTrace.Record(new DecisionTraceSnapshot
+                // Проверяем Signal и Confidence
+                decimal confidence = 0m;
+                if (decision.Signal?.Confidence != null)
+                    confidence = decision.Signal.Confidence.Value;
+
+                _decisionTrace?.Record(new DecisionTraceSnapshot
                 {
                     Symbol = symbol,
                     Timeframe = tf.ToString(),
@@ -522,12 +529,13 @@ namespace VertexAutoTradeBinance8.Strategy
                     FailedGate = decision.FailedGate?.Gate,
                     Reason = decision.FailedGate?.Reason,
                     Time = DateTime.UtcNow,
-                    Confidence = decision.Signal.Confidence.Value
+                    Confidence = confidence
                 });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[DECISION][{symbol}][{tf}] DecisionTrace.Record failed", symbol, tf);
+                // Логируем, но не ломаем цепочку
+                _logger.LogError(ex, "[DECISION][{symbol}][{tf}] DecisionTrace.Record failed (Safe)", symbol, tf);
             }
         }
 
