@@ -49,7 +49,7 @@ namespace VertexAutoTradeBinance8.Services
 
                 Mode = _strategy.CurrentMode ?? "Detecting",
                 BalanceUsdt = _risk.LastBalanceUsdt,
-
+                BaseDepositUsd = s.BaseDepositUsd,
                 Symbol = symbol,
                 Timeframe = timeframe,
 
@@ -73,7 +73,8 @@ namespace VertexAutoTradeBinance8.Services
                 LastSupervisorMessage = s.LastSupervisorMessage,
                 LastUpdate = DateTime.UtcNow,
                  OpenPositions = s.OpenPositions,
-                  RealizedPnlUsd = s.RealizedPnlUsd,
+                  RealizedPnlUsd = s.BaseDepositUsd
+
             };
 
             

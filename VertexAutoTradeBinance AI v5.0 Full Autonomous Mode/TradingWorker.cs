@@ -460,8 +460,19 @@ _strategy.OnSignalGenerated += signal =>
             // =======================================================
             // 🔒 INIT BASE DEPOSIT (ONCE, HARD ANCHOR)
             // =======================================================
-            _engineStateSnapshot.EnsureDepositInitialized(_options.Deposit);
+           // _engineStateSnapshot.EnsureDepositInitialized(_options.Deposit);
+            var realBalance = await TryGetRealBalanceSafeAsync(ct);
 
+            decimal depositForCalc = realBalance > 0
+            ? realBalance
+            : _options.Deposit;
+
+            // инициализация состояния движка (однократно)
+            _engineStateSnapshot.EnsureDepositInitialized(depositForCalc);
+
+            _logger.LogInformation(
+    "[TRADING INIT] Deposit initialized → RealBalance={realBalance}, UsedDeposit={depositForCalc}",
+    realBalance, depositForCalc);
 
             _logger.LogWarning("TradingWorker QUANT-REALTIME STARTED");
 
@@ -541,7 +552,7 @@ _strategy.OnSignalGenerated += signal =>
                     state.TrackedSymbols = trackedSymbols.Count;
                     state.Timeframe = selectedTf.ToString();
                      state.OpenPositions = await _supervisor.GetActivePositionsCountAsync(ct);
-                   
+                   state.BalanceUsdt = await TryGetRealBalanceSafeAsync(ct);
 
                     _engineStateSnapshot.Save(state);
 
@@ -564,6 +575,27 @@ _strategy.OnSignalGenerated += signal =>
                 await Task.Delay(80, ct);
             }
         }
+
+
+        public async Task<decimal> TryGetRealBalanceSafeAsync(CancellationToken ct)
+        {
+            try
+            {
+                var acc = await _factory.CreateRestClient().UsdFuturesApi.Account.GetAccountInfoV3Async(ct:ct); 
+                
+
+                if (!acc.Success || acc.Data == null)
+                    return 0m;
+
+                return acc.Data.TotalWalletBalance;
+            }
+            catch
+            {
+                return 0m;
+            }
+        }
+
+
 
         private async Task HandleStrategySignalAsync(
         TradeSignal signal,
