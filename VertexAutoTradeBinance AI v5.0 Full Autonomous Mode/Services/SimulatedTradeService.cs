@@ -193,98 +193,236 @@ namespace VertexAutoTradeBinance8.Services
         // 1️⃣ Метод SimulateMissedTradeAsync — финальный фикс
         // =========================================================
         public async Task<MissedTradeRecord?> SimulateMissedTradeAsync(
-            TradeSignal signal,
-            string reason,
-            string? note = null,
-            decimal? freeBalance = null,
-            decimal? attemptNotional = null,
-            decimal? requiredMinNotional = null)
+      TradeSignal signal,
+      string reason,
+      string? note = null,
+      decimal? freeBalance = null,
+      decimal? attemptNotional = null,
+      decimal? requiredMinNotional = null)
         {
             if (signal == null)
             {
-                _logger.LogError("[SIM] SimulateMissedTradeAsync called with null signal | reason={reason}, note={note}", reason, note);
+                _logger.LogError("[SIM] Signal is null | reason={reason}", reason);
                 return null;
             }
 
             try
             {
-                var klines = await _marketData.GetFuturesKlinesAsync(signal.Symbol, KlineInterval.FiveMinutes, 30);
-                if (klines == null || klines.Count == 0) return null;
+                var klines = await _marketData.GetFuturesKlinesAsync(
+                    signal.Symbol,
+                    KlineInterval.FiveMinutes,
+                    30);
+
+                if (klines == null || klines.Count == 0)
+                {
+                    _logger.LogWarning("[SIM] No klines for simulation {symbol}", signal.Symbol);
+                    return null;
+                }
+
+                // =====================================================
+                // 1️⃣ BASE VALUES
+                // =====================================================
 
                 decimal entry = signal.EntryPrice;
+
+                if (entry <= 0)
+                {
+                    _logger.LogWarning("[SIM] Invalid entry price {entry}", entry);
+                    return null;
+                }
+
+                decimal atr = Math.Abs(signal.Atr ?? 0m);
+
+                if (atr <= 0)
+                    atr = entry * 0.002m; // fallback 0.2%
+
+                // PROFESSIONAL ATR RISK MODEL
+                decimal slAtrMultiplier = 2.21m;   // ← увеличивает SL distance
+                decimal tpAtrMultiplier = 3.0m;   // ← правильный RR model
+
+                decimal minDistance =
+                    Math.Max(
+                        atr * slAtrMultiplier,
+                        entry * 0.002m); // safety floor 0.2%
+
                 decimal sl = signal.StopLoss;
-                decimal tp = signal.TakeProfit ?? signal.TakeProfits?.FirstOrDefault() ?? entry * 1.01m;
+                List<decimal> tps =
+                    signal.TakeProfits != null && signal.TakeProfits.Count > 0
+                    ? new List<decimal>(signal.TakeProfits)
+                    : new List<decimal>();
 
-                // ✅ FIX: StopLoss не может быть равен Entry
-                if (sl == entry)
-                {
-                    if (signal.Side == SignalSide.Sell) sl = entry + (signal.Atr ?? 1m) * 0.5m;
-                    else sl = entry - (signal.Atr ?? 1m) * 0.5m;
-                }
+                // =====================================================
+                // 2️⃣ STOP LOSS NORMALIZATION
+                // =====================================================
 
-                // ✅ FIX: TakeProfits не может быть пустым
-                List<decimal> tps;
-                if (signal.TakeProfits != null && signal.TakeProfits.Count > 0)
-                    tps = new List<decimal>(signal.TakeProfits);
-                else
+                bool slInvalid = false;
+
+                if (sl <= 0)
+                    slInvalid = true;
+
+                if (Math.Abs(sl - entry) < minDistance)
+                    slInvalid = true;
+
+                if (signal.Side == SignalSide.Buy && sl >= entry)
+                    slInvalid = true;
+
+                if (signal.Side == SignalSide.Sell && sl <= entry)
+                    slInvalid = true;
+
+                if (slInvalid)
                 {
-                    if (signal.Side == SignalSide.Sell)
-                        tps = new List<decimal> { entry - (signal.Atr ?? 1m) * 1m };
+                    if (signal.Side == SignalSide.Buy)
+                        sl = entry - minDistance;
                     else
-                        tps = new List<decimal> { entry + (signal.Atr ?? 1m) * 1m };
+                        sl = entry + minDistance;
                 }
 
-                bool hitSL = false, hitTP = false;
+                // final safety clamp
+                if (signal.Side == SignalSide.Buy)
+                    sl = Math.Min(sl, entry - minDistance);
+
+                if (signal.Side == SignalSide.Sell)
+                    sl = Math.Max(sl, entry + minDistance);
+
+                // =====================================================
+                // 3️⃣ TAKE PROFIT NORMALIZATION
+                // =====================================================
+
+                if (tps.Count == 0)
+                {
+                    if (signal.Side == SignalSide.Buy)
+                        tps.Add(entry + atr * tpAtrMultiplier);
+                    else
+                        tps.Add(entry - atr * tpAtrMultiplier);
+                }
+
+                decimal tp = tps[0];
+
+                bool tpInvalid = false;
+
+                if (signal.Side == SignalSide.Buy && tp <= entry)
+                    tpInvalid = true;
+
+                if (signal.Side == SignalSide.Sell && tp >= entry)
+                    tpInvalid = true;
+
+                if (Math.Abs(tp - entry) < minDistance)
+                    tpInvalid = true;
+
+                if (tpInvalid)
+                {
+                    if (signal.Side == SignalSide.Buy)
+                        tp = entry + atr * tpAtrMultiplier;
+                    else
+                        tp = entry - atr * tpAtrMultiplier;
+
+                    tps[0] = tp;
+                }
+
+                // =====================================================
+                // 4️⃣ SIMULATION ENGINE
+                // realistic execution model
+                // =====================================================
+
+                bool hitSL = false;
+                bool hitTP = false;
+
                 foreach (var candle in klines)
                 {
                     if (signal.Side == SignalSide.Buy)
                     {
-                        if (candle.LowPrice <= sl) { hitSL = true; break; }
-                        if (candle.HighPrice >= tps[0]) { hitTP = true; break; }
+                        if (candle.LowPrice <= sl)
+                        {
+                            hitSL = true;
+                            break;
+                        }
+
+                        if (candle.HighPrice >= tp)
+                        {
+                            hitTP = true;
+                            break;
+                        }
                     }
                     else
                     {
-                        if (candle.HighPrice >= sl) { hitSL = true; break; }
-                        if (candle.LowPrice <= tps[0]) { hitTP = true; break; }
+                        if (candle.HighPrice >= sl)
+                        {
+                            hitSL = true;
+                            break;
+                        }
+
+                        if (candle.LowPrice <= tp)
+                        {
+                            hitTP = true;
+                            break;
+                        }
                     }
                 }
 
-                decimal result = hitSL ? -Math.Abs(entry - sl) : hitTP ? Math.Abs(tps[0] - entry) : 0m;
+                decimal result = 0m;
+
+                if (hitSL)
+                    result = -Math.Abs(entry - sl);
+                else if (hitTP)
+                    result = Math.Abs(tp - entry);
+
+                // =====================================================
+                // 5️⃣ BUILD RECORD
+                // =====================================================
 
                 var record = new MissedTradeRecord
                 {
                     Symbol = signal.Symbol,
                     Time = DateTime.UtcNow,
+
                     Entry = entry,
                     StopLoss = sl,
+
                     Side = signal.Side.ToString(),
                     TakeProfits = tps,
+
                     Event = "SIMULATED_RESULT",
+
                     Reason = reason,
+                    Note = note ?? "",
+
                     AttemptNotional = attemptNotional ?? 0m,
                     RequiredMinNotional = requiredMinNotional ?? 0m,
                     FreeBalance = freeBalance ?? 0m,
-                    Atr = signal.Atr ?? 0m,
+
+                    Atr = atr,
+
                     Vol = 0m,
                     Slope = 0m,
                     Deviation = 0m,
+
                     Confidence = (int)((signal.Confidence ?? 0m) * 100),
                     Score = (int)((signal.AiQuality ?? 0m) * 100),
+
                     Regime = MarketRegime.Unknown,
-                    SmartType = "",
-                    Note = note ?? ""
+                    SmartType = ""
                 };
 
                 await AppendRecordAsync(record);
 
-                // AI learning
+                // =====================================================
+                // 6️⃣ AI LEARNING
+                // =====================================================
+
                 bool isExecutionPolicy =
                     reason.StartsWith("FALLBACK_MKT_BLOCKED", StringComparison.OrdinalIgnoreCase) ||
                     reason.StartsWith("EXECUTION_POLICY", StringComparison.OrdinalIgnoreCase);
 
                 if (!isExecutionPolicy)
                 {
-                    _learningService.RecordSimulatedTrade(signal.Symbol, signal.Side.ToString(), entry, sl, tps[0], result, reason);
+                    _learningService.RecordSimulatedTrade(
+                        signal.Symbol,
+                        signal.Side.ToString(),
+                        entry,
+                        sl,
+                        tp,
+                        result,
+                        reason);
                 }
 
                 return record;
@@ -295,6 +433,7 @@ namespace VertexAutoTradeBinance8.Services
                 return null;
             }
         }
+
 
         // =========================================================
         // INTERNAL IO
