@@ -1199,7 +1199,46 @@ namespace VertexAutoTradeBinance8.Strategy
         }
 
         // ----------------------------- REGIME/CONF HELPERS -----------------------------
-        private static int GetAdaptiveThreshold(MarketRegime baseRegime, SmartRegimeType smartType, decimal volatility, decimal slope)
+        //private static int GetAdaptiveThreshold(MarketRegime baseRegime, SmartRegimeType smartType, decimal volatility, decimal slope)
+        //{
+        //    int threshold;
+
+        //    bool isRangeLike =
+        //        baseRegime == MarketRegime.Range ||
+        //        smartType == SmartRegimeType.SmartRange ||
+        //        smartType == SmartRegimeType.SmartSqueeze;
+
+        //    bool isStrongTrendLike =
+        //        baseRegime == MarketRegime.StrongUpTrend ||
+        //        baseRegime == MarketRegime.StrongDownTrend ||
+        //        smartType == SmartRegimeType.SmartStrongTrend;
+
+        //    bool isTrendLike =
+        //        baseRegime == MarketRegime.StrongUpTrend ||
+        //        baseRegime == MarketRegime.StrongDownTrend ||
+        //        smartType == SmartRegimeType.SmartTrend;
+
+        //    if (isRangeLike) threshold = 35;
+        //    else if (isStrongTrendLike) threshold = 60;
+        //    else if (isTrendLike) threshold = 45;
+        //    else threshold = 45;
+
+        //    if (volatility < 0.10m) threshold -= 10;
+        //    else if (volatility > 0.30m) threshold += 10;
+
+        //    if (Math.Abs(slope) > 0.7m) threshold += 5;
+
+        //    if (threshold < 25) threshold = 25;
+        //    if (threshold > 80) threshold = 80;
+
+        //    return threshold;
+        //}
+
+        private static int GetAdaptiveThreshold(
+    MarketRegime baseRegime,
+    SmartRegimeType smartType,
+    decimal volatility,      // 0.02 = 2%
+    decimal slope)           // 0.01 = 1%
         {
             int threshold;
 
@@ -1214,24 +1253,28 @@ namespace VertexAutoTradeBinance8.Strategy
                 smartType == SmartRegimeType.SmartStrongTrend;
 
             bool isTrendLike =
-                baseRegime == MarketRegime.StrongUpTrend ||
-                baseRegime == MarketRegime.StrongDownTrend ||
                 smartType == SmartRegimeType.SmartTrend;
 
+            // --- 1️⃣ Base ---
             if (isRangeLike) threshold = 35;
             else if (isStrongTrendLike) threshold = 60;
             else if (isTrendLike) threshold = 45;
             else threshold = 45;
 
-            if (volatility < 0.10m) threshold -= 10;
-            else if (volatility > 0.30m) threshold += 10;
+            // --- 2️⃣ Volatility adjustment ---
+            // реальный intraday диапазон 0.005 – 0.05
+            if (volatility < 0.015m)         // <1.5% — спокойный рынок
+                threshold -= 5;
+            else if (volatility > 0.05m)     // >5% — хаос
+                threshold += 10;
 
-            if (Math.Abs(slope) > 0.7m) threshold += 5;
+            // --- 3️⃣ Slope adjustment ---
+            // нормальный тренд 0.005 – 0.03
+            if (Math.Abs(slope) > 0.02m)     // >2% slope — ускорение
+                threshold += 5;
 
-            if (threshold < 25) threshold = 25;
-            if (threshold > 80) threshold = 80;
-
-            return threshold;
+            // --- 4️⃣ Clamp ---
+            return Math.Clamp(threshold, 25, 80);
         }
 
         private static bool IsFastTrendOverride(SmartRegimeInfo smart)
@@ -1390,7 +1433,15 @@ namespace VertexAutoTradeBinance8.Strategy
                 // Sanity checks (defensive)
                 // ------------------------------------------------------------
                 if (evaluated.Confidence < 0m || evaluated.Confidence > 1.0m)
-                    return FastFailResult.Fail("SMART", "Invalid confidence");
+                {
+                    _logger.LogWarning(
+                        "[SMART] Confidence out of range {value} for {symbol} {tf}. Clamped.",
+                        evaluated.Confidence,
+                        symbol,
+                        tf);
+
+                    evaluated.Confidence = Math.Clamp(evaluated.Confidence, 0m, 1m);
+                }
 
                 if (Math.Abs(evaluated.TrendSlopePercent) > 5.0m)   // >500% slope — абсурд
                     return FastFailResult.Fail("SMART", "Invalid slope");
@@ -1531,31 +1582,113 @@ namespace VertexAutoTradeBinance8.Strategy
             return FastFailResult.Ok();
         }
 
+        //    private FastFailResult Gate2_ConfidenceHybrid(
+        //decimal finalConfidence,          // 🔥 ИТОГОВЫЙ confidence (aggregated)
+        //SmartRegimeInfo smart,
+        //bool lowerRegimeThreshold, string symbol)
+        //    {
+        //        var cfg = _confidenceCfg.Resolve(symbol);
+        //        // ============================================================
+        //        // 0️⃣ HARD ABSOLUTE BLOCK — НЕ ТОРГУЕМ
+        //        // ============================================================
+
+        //        if (smart.IsDangerChopZone)
+        //            return FastFailResult.Fail("CONF", "DangerChopZone");
+
+        //        // ============================================================
+        //        // 1️⃣ BASE MIN ENTRY (ABSOLUTE FLOOR)
+        //        // ============================================================
+
+        //        if (finalConfidence < cfg.MinEntry)
+        //            return FastFailResult.Fail(
+        //                "CONF",
+        //                $"confidence={finalConfidence:P0}<min={cfg.MinEntry:P0}"
+        //            );
+
+        //        // ============================================================
+        //        // 2️⃣ ADAPTIVE THRESHOLD (ИЗ СТАРОГО GATE2 — ЦЕННОЕ)
+        //        // ============================================================
+
+        //        int adaptiveThreshold = GetAdaptiveThreshold(
+        //            smart.BaseRegime,
+        //            smart.SmartType,
+        //            smart.VolatilityPercent,
+        //            smart.TrendSlopePercent);
+
+        //        decimal thrFrac = adaptiveThreshold / 100m;
+        //        decimal safetyBuffer = 0.10m;
+
+        //        // ------------------------------------------------------------
+        //        // Soft-entry (test / relax)
+        //        // ------------------------------------------------------------
+        //        if (lowerRegimeThreshold)
+        //        {
+        //            adaptiveThreshold = Math.Max(20, (int)(adaptiveThreshold * 0.8));
+        //            thrFrac = adaptiveThreshold / 100m;
+        //            safetyBuffer = 0.20m;
+
+        //            LastSoftEntry = true;
+        //            _engineState.SoftEntry = true;
+        //        }
+
+        //        bool fastTrendOverride = IsFastTrendOverride(smart);
+
+        //        // ============================================================
+        //        // 3️⃣ EFFECTIVE THRESHOLD (SMART + VOL + SLOPE)
+        //        // ============================================================
+
+        //        decimal effectiveThreshold = thrFrac - safetyBuffer;
+
+        //        // sane bounds
+        //        effectiveThreshold = Math.Clamp(effectiveThreshold, 0.10m, 0.80m);
+
+        //        // Fast trend override → смягчаем, но НЕ отключаем
+        //        if (fastTrendOverride)
+        //            effectiveThreshold *= 0.85m;
+
+        //        if (finalConfidence < effectiveThreshold)
+        //            return FastFailResult.Fail(
+        //                "CONF",
+        //                $"confidence={finalConfidence:P0}<thr={effectiveThreshold:P0} (fastTrend={fastTrendOverride})"
+        //            );
+
+        //        // ============================================================
+        //        // 4️⃣ UI / ENGINE STATE (НО ТЕПЕРЬ ПО FINAL)
+        //        // ============================================================
+
+        //        _engineState.LastEntryDecision = "CONF_CHECK";
+
+        //        _engineState.ConfidenceRaw = finalConfidence;
+        //        _engineState.ConfidencePercent = (int)(finalConfidence * 100);
+
+        //        _engineState.ConfidenceLevel =
+        //            finalConfidence >= cfg.Bands.HighFrom ? "HIGH" :
+        //            finalConfidence >= cfg.MinEntry ? "MEDIUM" :
+        //            "LOW";
+
+        //        Confidence = finalConfidence;
+
+        //        return FastFailResult.Ok();
+        //    }
+
+
         private FastFailResult Gate2_ConfidenceHybrid(
-    decimal finalConfidence,          // 🔥 ИТОГОВЫЙ confidence (aggregated)
+    decimal finalConfidence,
     SmartRegimeInfo smart,
-    bool lowerRegimeThreshold, string symbol)
+    bool lowerRegimeThreshold,
+    string symbol)
         {
             var cfg = _confidenceCfg.Resolve(symbol);
+
             // ============================================================
-            // 0️⃣ HARD ABSOLUTE BLOCK — НЕ ТОРГУЕМ
+            // 0️⃣ HARD BLOCK
             // ============================================================
 
             if (smart.IsDangerChopZone)
                 return FastFailResult.Fail("CONF", "DangerChopZone");
 
             // ============================================================
-            // 1️⃣ BASE MIN ENTRY (ABSOLUTE FLOOR)
-            // ============================================================
-
-            if (finalConfidence < cfg.MinEntry)
-                return FastFailResult.Fail(
-                    "CONF",
-                    $"confidence={finalConfidence:P0}<min={cfg.MinEntry:P0}"
-                );
-
-            // ============================================================
-            // 2️⃣ ADAPTIVE THRESHOLD (ИЗ СТАРОГО GATE2 — ЦЕННОЕ)
+            // 1️⃣ Adaptive Threshold
             // ============================================================
 
             int adaptiveThreshold = GetAdaptiveThreshold(
@@ -1564,49 +1697,46 @@ namespace VertexAutoTradeBinance8.Strategy
                 smart.VolatilityPercent,
                 smart.TrendSlopePercent);
 
-            decimal thrFrac = adaptiveThreshold / 100m;
-            decimal safetyBuffer = 0.10m;
-
-            // ------------------------------------------------------------
-            // Soft-entry (test / relax)
-            // ------------------------------------------------------------
             if (lowerRegimeThreshold)
             {
-                adaptiveThreshold = Math.Max(20, (int)(adaptiveThreshold * 0.8));
-                thrFrac = adaptiveThreshold / 100m;
-                safetyBuffer = 0.20m;
-
+                adaptiveThreshold = (int)(adaptiveThreshold * 0.85m);
                 LastSoftEntry = true;
                 _engineState.SoftEntry = true;
             }
 
-            bool fastTrendOverride = IsFastTrendOverride(smart);
+            decimal adaptiveFloor = adaptiveThreshold / 100m;
+
+            // Fast trend override
+            if (IsFastTrendOverride(smart))
+                adaptiveFloor *= 0.85m;
 
             // ============================================================
-            // 3️⃣ EFFECTIVE THRESHOLD (SMART + VOL + SLOPE)
+            // 2️⃣ Absolute floor (минимальный порог стратегии)
             // ============================================================
 
-            decimal effectiveThreshold = thrFrac - safetyBuffer;
+            decimal absoluteFloor = cfg.MinEntry;
 
-            // sane bounds
-            effectiveThreshold = Math.Clamp(effectiveThreshold, 0.10m, 0.80m);
+            // ============================================================
+            // 3️⃣ Final effective floor
+            // ============================================================
 
-            // Fast trend override → смягчаем, но НЕ отключаем
-            if (fastTrendOverride)
-                effectiveThreshold *= 0.85m;
+            decimal finalFloor = Math.Max(absoluteFloor, adaptiveFloor);
 
-            if (finalConfidence < effectiveThreshold)
+            finalFloor = Math.Clamp(finalFloor, 0.10m, 0.85m);
+
+            if (finalConfidence < finalFloor)
+            {
                 return FastFailResult.Fail(
                     "CONF",
-                    $"confidence={finalConfidence:P0}<thr={effectiveThreshold:P0} (fastTrend={fastTrendOverride})"
+                    $"conf={finalConfidence:P0}<floor={finalFloor:P0}"
                 );
+            }
 
             // ============================================================
-            // 4️⃣ UI / ENGINE STATE (НО ТЕПЕРЬ ПО FINAL)
+            // 4️⃣ State update
             // ============================================================
 
-            _engineState.LastEntryDecision = "CONF_CHECK";
-
+            _engineState.LastEntryDecision = "CONF_OK";
             _engineState.ConfidenceRaw = finalConfidence;
             _engineState.ConfidencePercent = (int)(finalConfidence * 100);
 
@@ -1619,6 +1749,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return FastFailResult.Ok();
         }
+
 
         private FastFailResult Gate2_5_TrendPhaseLock(
     IReadOnlyList<BinanceFuturesUsdtKline> klines,

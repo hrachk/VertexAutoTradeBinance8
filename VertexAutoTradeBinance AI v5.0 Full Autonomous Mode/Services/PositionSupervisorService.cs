@@ -84,6 +84,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ConcurrentDictionary<string, int> _beLevel = new();
         private readonly ConcurrentDictionary<string, DateTime> _pendingReset = new();
         private readonly ConcurrentDictionary<string, bool> _finalCleanupDone = new();
+        private readonly ConcurrentDictionary<string, bool> _probeExecuted = new();
 
 
         public PositionSupervisorService(
@@ -125,61 +126,61 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         private async Task HandleFinalCloseAsync(
-    BinanceRestClient client,
-    string symbol,
-    PositionSide side,
-    CancellationToken ct)
-        {
-            var key = $"{symbol}_{side}";
-
-            if (!_finalCleanupDone.TryAdd(key, true))
-                return;
-
-            try
+        BinanceRestClient client,
+        string symbol,
+        PositionSide side,
+        CancellationToken ct)
             {
-                _logger.LogWarning(
-                    "[FINAL CLEANUP][{symbol}][{side}] start",
-                    symbol, side);
+                var key = $"{symbol}_{side}";
 
-                // 1️⃣ Отменяем все ордера по символу
-                var cancel = await client
-                    .UsdFuturesApi
-                    .Trading
-                    .CancelAllOrdersAsync(symbol, ct:ct);
+                if (!_finalCleanupDone.TryAdd(key, true))
+                    return;
 
-                if (!cancel.Success)
+                try
                 {
                     _logger.LogWarning(
-                        "[FINAL CLEANUP][{symbol}] CancelAllOrders failed: {err}",
-                        symbol, cancel.Error?.Message);
+                        "[FINAL CLEANUP][{symbol}][{side}] start",
+                        symbol, side);
+
+                    // 1️⃣ Отменяем все ордера по символу
+                    var cancel = await client
+                        .UsdFuturesApi
+                        .Trading
+                        .CancelAllOrdersAsync(symbol, ct:ct);
+
+                    if (!cancel.Success)
+                    {
+                        _logger.LogWarning(
+                            "[FINAL CLEANUP][{symbol}] CancelAllOrders failed: {err}",
+                            symbol, cancel.Error?.Message);
+                    }
+
+                    // 2️⃣ Сбрасываем BE состояние
+                    _beStage.TryRemove(key, out _);
+                    _beLevel.TryRemove(key, out _);
+                    _pendingReset.TryRemove(key, out _);
+
+                    _logger.LogWarning(
+                        "[FINAL CLEANUP][{symbol}][{side}] done",
+                        symbol, side);
                 }
-
-                // 2️⃣ Сбрасываем BE состояние
-                _beStage.TryRemove(key, out _);
-                _beLevel.TryRemove(key, out _);
-                _pendingReset.TryRemove(key, out _);
-
-                _logger.LogWarning(
-                    "[FINAL CLEANUP][{symbol}][{side}] done",
-                    symbol, side);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex,
-                    "[FINAL CLEANUP FAILED][{symbol}][{side}]",
-                    symbol, side);
-
-                _finalCleanupDone.TryRemove(key, out _);
-            }
-            finally
-            {
-                _ = Task.Run(async () =>
+                catch (Exception ex)
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(15));
+                    _logger.LogError(ex,
+                        "[FINAL CLEANUP FAILED][{symbol}][{side}]",
+                        symbol, side);
+
                     _finalCleanupDone.TryRemove(key, out _);
-                });
+                }
+                finally
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(15));
+                        _finalCleanupDone.TryRemove(key, out _);
+                    });
+                }
             }
-        }
 
         private static string BuildExitKey(string symbol, PositionSide side, decimal entryPrice)
         {
@@ -191,6 +192,9 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         public async Task SuperviseAsync(string symbol, TradeSignal? lastSignal, CancellationToken ct)
         {
+            _probeExecuted[symbol + "_Long"] = false;
+            _probeExecuted[symbol + "_Short"] = false;
+
             using var client = _factory.CreateRestClient();
 
             // 0) MANUAL → виртуальный сигнал
@@ -269,7 +273,6 @@ namespace VertexAutoTradeBinance8.Services
             {
                 await TryReverseProbeAsync(client, symbol, longPos, shortPos, smart1m, atr14_1m, ct);
             }
-
 
             ///////////////////////////////////TEST DIAGNOSTIC SL/BE/MOVE/////////////////////////////////////////////////////////
             if (atr14_1m > 0 && klines1m != null && klines1m.Count >= 21)
@@ -365,17 +368,11 @@ namespace VertexAutoTradeBinance8.Services
                     // =====================================================
                     // MOVE STOP LOSS
                     // =====================================================
-
-
                     decimal stageFrac = R; // дробная часть для плавного SL
                     decimal newSl = side == PositionSide.Long
-                        ? entry + atr14_1m * (stageFrac - 0.1m)   // небольшая страховка -0.1 ATR
-                        : entry - atr14_1m * (stageFrac - 0.1m);
-                    //decimal newSl =
-                    //    side == PositionSide.Long
-                    //        ? entry + (atr14_1m * (stage - 0.3m))
-                    //        : entry - (atr14_1m * (stage - 0.3m));
-
+                        ? entry + atr14_1m * (stageFrac - 0.15m)   // небольшая страховка -0.1 ATR
+                        : entry - atr14_1m * (stageFrac - 0.15m);
+                   
                     var slOrder = openOrders.FirstOrDefault(o =>
                         o.PositionSide == side &&
                         o.Type == FuturesOrderType.StopMarket);
@@ -405,14 +402,16 @@ namespace VertexAutoTradeBinance8.Services
                 }
 
                 ProbeSide(longPos, PositionSide.Long);
+                _probeExecuted[symbol + "_Long"] = true;
+
+
                 ProbeSide(shortPos, PositionSide.Short);
+                _probeExecuted[symbol + "_Short"] = true;
             }
+            ///////////////////////////////////////////////////
 
 
-            // /////////////////////////////////////////////////
-
-         
-            // 4) Обработка сторон
+            //   HandleSideAsync вызывается как обычно
             if (hasLong)
                 await HandleSideAsync(client, symbol, PositionSide.Long, longPos!, openOrders, lastSignal, klines1m, ct);
 
@@ -495,11 +494,11 @@ namespace VertexAutoTradeBinance8.Services
 
 
         private async Task ClosePartialChunkedAsync(
-    IBinanceRestClient client,
-    string symbol,
-    PositionSide side,
-    decimal totalQty,
-    CancellationToken ct)
+            IBinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal totalQty,
+            CancellationToken ct)
         {
             const decimal CHUNK_USDT = 5000m;
 
@@ -1282,14 +1281,13 @@ namespace VertexAutoTradeBinance8.Services
             IReadOnlyList<BinanceFuturesUsdtKline>? klines,
             CancellationToken ct)
         {
+
             decimal qtyAbs = Math.Abs(pos.Quantity);
 
             // ---------- CLOSE DETECTOR ----------
             var key = $"{symbol}_{side}";
             var prevQty = _manualHandler.GetPrevQty(key);
             var prevEntry = _manualHandler.GetPrevEntry(key);
-
-
 
             if (prevQty != 0 && pos.Quantity == 0)
             {
@@ -1304,14 +1302,10 @@ namespace VertexAutoTradeBinance8.Services
                     "[AI][{symbol}] POSITION CLOSED → saved to ai_learning.json | entry={entry} exit={exit}",
                     symbol, prevEntry, exitPrice);
 
-
                 // =======================================
                 // STOP LOSS DETECT → STRATEGY COOLDOWN
                 // =======================================
-                bool isStopLoss =
-     side == PositionSide.Long
-         ? exitPrice < prevEntry
-         : exitPrice > prevEntry;
+                bool isStopLoss = side == PositionSide.Long ? exitPrice < prevEntry : exitPrice > prevEntry;
 
                 if (isStopLoss)
                 {
@@ -1365,28 +1359,15 @@ namespace VertexAutoTradeBinance8.Services
                     int i = klines.Count - 1;
                     var c0 = klines[i];
                     var c1 = klines[i - 1];
+                    decimal atr = signal?.Atr != null && signal.Atr.Value > 0 ? signal.Atr.Value : 0m;
 
-                    decimal atr = 0m;
-
-
-                    if (signal?.Atr != null && signal.Atr.Value > 0)
-                        atr = signal.Atr.Value;
-
-                    decimal body0 = Math.Abs(c0.ClosePrice - c0.OpenPrice);
-                    decimal body1 = Math.Abs(c1.ClosePrice - c1.OpenPrice);
-
-                    bool impulseLost =
-                        body0 < atr * 0.2m &&
-                        body1 < atr * 0.2m;
+                    bool impulseLost = Math.Abs(c0.ClosePrice - c0.OpenPrice) < atr * 0.2m &&
+                                       Math.Abs(c1.ClosePrice - c1.OpenPrice) < atr * 0.2m;
 
                     if (impulseLost)
                     {
-                        _logger.LogWarning(
-                            "[EXIT][{symbol}] IMPULSE_CONTINUATION impulse lost → FULL CLOSE",
-                            symbol);
-
+                        _logger.LogWarning("[EXIT][{symbol}] IMPULSE_CONTINUATION impulse lost → FULL CLOSE", symbol);
                         await ClosePositionMarketAsync(symbol, client, pos, ct);
-
                         return;
                     }
                 }
@@ -1394,8 +1375,6 @@ namespace VertexAutoTradeBinance8.Services
                 // запрещаем partial / BE / trailing ниже
                 return;
             }
-
-
 
             decimal entry = pos.EntryPrice;
 
@@ -1415,27 +1394,21 @@ namespace VertexAutoTradeBinance8.Services
                     entry = restored.Value;
                     _restoredEntries[key] = entry;
 
-                    _logger.LogWarning(
-                        "[SUPERVISOR][{symbol}] Entry restored from exchange = {entry}",
-                        symbol, entry);
+                    _logger.LogWarning("[SUPERVISOR][{symbol}] Entry restored from exchange = {entry}", symbol, entry);
                 }
             }
 
             // In case signal missing ATR in supervisor context, try compute
-            decimal atr14 = 0m;
-            if (signal?.Atr != null && signal.Atr.Value > 0)
-                atr14 = signal.Atr.Value;
-            else if (klines != null && klines.Count >= 40)
-                atr14 = _marketData.CalculateAtr(klines, 15);
+            decimal atr14 = signal?.Atr != null && signal.Atr.Value > 0
+       ? signal.Atr.Value
+       : (klines != null && klines.Count >= 40 ? _marketData.CalculateAtr(klines, 15) : 0m);
 
-            // === Side-specific orders (Hedge) ===
             var orders = allOrders.Where(o => o.PositionSide == side).ToList();
-
-            // === Find SL/TP ===
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
             bool hasMultipleSL = orders.Count(o => o.Type == FuturesOrderType.StopMarket) > 1;
             bool hasMultipleTP = orders.Count(o => o.Type == FuturesOrderType.TakeProfitMarket) > 1;
+
 
             if (hasMultipleSL)
                 _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] Multiple SL detected → skip SL create", symbol, side);
@@ -1447,15 +1420,31 @@ namespace VertexAutoTradeBinance8.Services
             var tp = orders.FirstOrDefault(o => o.Side == closeSide && o.Type == FuturesOrderType.TakeProfitMarket);
 
             // =================================================================
+            // 🔹 BE/MOVE SL / Early Partial
+            // =================================================================
+            var keyProbe = $"{symbol}_{side}";
+            if (!_probeExecuted.GetValueOrDefault(keyProbe))
+            {
+                // Если ProbeSide не сработал — выполняем стандартный BE/MOVE SL/Partial
+                if (klines != null && klines.Count >= 50 && atr14 > 0 && entry > 0)
+                {
+                    await TryEarlyPartialTakeAsync(client, symbol, side, qtyAbs, entry, atr14, signal, klines, ct);
+
+                    if (sl != null)
+                        await TryMoveSlToBeAsync(client, symbol, side, qtyAbs, entry, atr14, sl, signal, klines, ct);
+                }
+            }
+            else
+            {
+                _logger.LogInformation("[HANDLE SIDE] ProbeSide already executed, skipping standard BE/MOVE SL");
+            }
+
+            // =================================================================
             // 🔁 RESTART PROTECTION (NO KLINES / NO MEMORY)
             // =================================================================
             if (sl != null)
             {
-                var slPrice =
-    sl.StopPrice > 0
-        ? sl.StopPrice
-        : sl.Price;
-
+                var slPrice = sl.StopPrice > 0 ? sl.StopPrice : sl.Price;
 
                 if (slPrice > 0)
                 {
@@ -1558,31 +1547,11 @@ namespace VertexAutoTradeBinance8.Services
             // =================================================================
             if (klines != null && klines.Count >= 50)
             {
-                decimal aiEdgeScore =
-                    _regimeNow is MarketRegime.StrongUpTrend or MarketRegime.StrongDownTrend
-                        ? 0.82m
-                        : 0.62m;
+                decimal aiEdgeScore = _regimeNow is MarketRegime.StrongUpTrend or MarketRegime.StrongDownTrend
+                    ? 0.82m
+                    : 0.62m;
 
-                await TryHarvestProfitAsync(
-                    client,
-                    _engineState,
-                    symbol,
-                    side,
-                    pos,
-                    klines,
-                    aiEdgeScore,
-                    minUsd: 4m,
-                    ct);
-            }
-
-
-
-            // 1) SL отсутствует → аварийный SL (если нет дублей)
-            if (sl == null && !hasMultipleSL)
-            {
-                await CreateEmergencySLAsync(client, symbol, side, qtyAbs, entry, signal, ct);
-                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] SL restored", symbol, side);
-                //return;
+                await TryHarvestProfitAsync(client, _engineState, symbol, side, pos, klines, aiEdgeScore, minUsd: 4m, ct);
             }
 
             // 2) TP отсутствует → аварийный TP (если нет дублей)
@@ -1590,7 +1559,6 @@ namespace VertexAutoTradeBinance8.Services
             {
                 await CreateEmergencyTPAsync(client, symbol, side, qtyAbs, entry, signal, ct);
                 _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] TP restored", symbol, side);
-                // return;
             }
 
             // 3) Трейлинг + раннер

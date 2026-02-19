@@ -68,6 +68,7 @@ namespace VertexAutoTradeBinance8
         private readonly IStrategyPreFilter _pre;
         private readonly MarketContextService _marketContext;
         private readonly SimulatedTradeService _sim;
+        private readonly SymbolInfoService _symbolInfo;
 
         private DateTime _lastQuantTick = DateTime.UtcNow;
 
@@ -144,7 +145,7 @@ namespace VertexAutoTradeBinance8
             IBootGate bootGate,
             TradingOptionsResolver resolver,
             IStrategyPreFilter pre, MarketContextService marketContext, SimulatedTradeService sim, AiMarketRegimeService marketRegime, BinanceHistoryImporter importer
-            , RealtimePriceService price)
+            , RealtimePriceService price, SymbolInfoService symbolInfo)
         {
             _logger = logger;
             _options = options.Value;
@@ -176,7 +177,8 @@ namespace VertexAutoTradeBinance8
             _marketRegime = marketRegime;
             _importer = importer;
             _price = price;
-           _resolver = resolver;
+            _resolver = resolver;
+            _symbolInfo = symbolInfo;
         }
 
         private int _lastCyclesPerMinute = 0;
@@ -747,37 +749,71 @@ _strategy.OnSignalGenerated += signal =>
             var trading = _resolver.Resolve(symbol);
             var Level = trading.Leverage > 0
                 ? trading.Leverage
-                : (signal.Leverage ?? 1m); 
-            // =====================================================
-            // 6) QTY
-            // =====================================================
-            var qty = await _risk.CalculateSafeQty(
-                    signal,
-                    symbol,
-                    signal.EntryPrice,
-                    signal.StopLoss,
-                    riskMult,
-                    signal.SafetyRiskMultiplier,
-                    Level,
-                    signal.Side,
-                    signal.TakeProfits,
-                    ct).ConfigureAwait(false);
+                : (signal.Leverage ?? 1m);
+            //// =====================================================
+            //// 6) QTY
+            //// =====================================================
+            //var qty = await _risk.CalculateSafeQty(
+            //        signal,
+            //        symbol,
+            //        signal.EntryPrice,
+            //        signal.StopLoss,
+            //        riskMult,
+            //        signal.SafetyRiskMultiplier,
+            //        Level,
+            //        signal.Side,
+            //        signal.TakeProfits,
+            //        ct).ConfigureAwait(false);
 
-                if (qty <= 0)
-                {
-                    await RejectAsync(
-                        signal, symbol, tf,
-                        "RISK",
-                        "NO_BALANCE_OR_MIN_NOTIONAL",
-                        ct);
-                    return;
-                }
+            //    if (qty <= 0)
+            //    {
+            //        await RejectAsync(
+            //            signal, symbol, tf,
+            //            "RISK",
+            //            "NO_BALANCE_OR_MIN_NOTIONAL",
+            //            ct);
+            //        return;
+            //    }
+            // =====================================================
+            // 6) QTY — PropDesk version
+            // =====================================================
+           
+            // Получаем Binance фильтры
+            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+            decimal step = filters.step > 0 ? filters.step : 0.001m;
+            decimal minQty = filters.minQty > 0 ? filters.minQty : step;
 
-                // =====================================================
-                // 7) SL / TP OPTIMIZATION
-                // =====================================================
-                try
-                {
+            // Считаем динамический minNotional
+            decimal minNotional = filters.minNotional > 0 ? filters.minNotional : ((decimal?)trading.MinNotionalGuard ?? 5m);
+            if (trading.MinNotional > 0)
+                minNotional = Math.Max(minNotional, trading.MinNotional);
+
+            if (trading.MinNotionalGuardPercent > 0)
+            {
+                decimal guardValue = (decimal?)trading.MinNotionalGuard ?? 0m;
+                decimal dynMin = Math.Max(guardValue, _risk.LastBalanceUsdt * trading.MinNotionalGuardPercent);
+                minNotional = Math.Max(minNotional, dynMin);
+            }
+
+            // Считаем qty через PropDesk engine
+            var qty = _risk.GetPropDeskQty(signal, _risk.LastBalanceUsdt, minNotional, step, minQty, riskMult, trading);
+
+
+            if (qty <= 0)
+            {
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "RISK",
+                    "NO_BALANCE_OR_MIN_NOTIONAL",
+                    ct);
+                return;
+            }
+
+            // =====================================================
+            // 7) SL / TP OPTIMIZATION
+            // =====================================================
+            try
+            {
                     var klines = await _marketDataFacade
                         .GetKlinesAsync(symbol, tf, 120, ct)
                         .ConfigureAwait(false);

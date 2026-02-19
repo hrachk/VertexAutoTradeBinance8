@@ -1,4 +1,5 @@
 ﻿using Binance.Net.Enums;
+using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -42,6 +43,94 @@ namespace VertexAutoTradeBinance8.Services
             // _simulator = simulator;
             _tradingResolver = tradingResolver;
         }
+
+        private decimal CalculatePropDeskQty(
+    decimal balance,
+    decimal entry,
+    decimal stop,
+    decimal leverage,
+    decimal baseRiskPercent,
+    decimal signalMultiplier,
+    decimal binanceMinNotional,
+    decimal step,
+    decimal minQty)
+        {
+            if (balance <= 0 || entry <= 0 || stop <= 0)
+                return 0;
+
+            decimal slPct = Math.Abs(entry - stop) / entry;
+            if (slPct <= 0)
+                return 0;
+
+            // =========================
+            // 1️⃣ Risk Budget
+            // =========================
+            decimal riskBudget = balance * baseRiskPercent * signalMultiplier;
+
+            // hard caps
+            riskBudget = Math.Clamp(riskBudget, balance * 0.005m, balance * 0.20m);
+
+            // =========================
+            // 2️⃣ Raw Notional
+            // =========================
+            decimal rawNotional = riskBudget / slPct;
+
+            // =========================
+            // 3️⃣ Exchange Constraints
+            // =========================
+            decimal maxNotional = balance * leverage * 0.98m;
+
+            decimal finalNotional = Math.Max(rawNotional, binanceMinNotional);
+            finalNotional = Math.Min(finalNotional, maxNotional);
+
+            if (finalNotional <= 0)
+                return 0;
+
+            // =========================
+            // 4️⃣ Convert to Qty
+            // =========================
+            decimal qty = Math.Floor((finalNotional / entry) / step) * step;
+
+            if (qty < minQty)
+                return 0;
+
+            decimal adjustedNotional = qty * entry;
+            decimal requiredMargin = adjustedNotional / leverage;
+
+            if (requiredMargin > balance)
+                return 0;
+
+            return qty;
+        }
+
+        public decimal GetPropDeskQty(
+     TradeSignal signal,
+     decimal balance,
+     decimal minNotional,
+     decimal step,
+     decimal minQty,
+     decimal riskMult,
+     TradingOptions trading)
+        {
+            decimal riskPerTrade = (decimal?)trading.RiskPerTrade ?? 0m;
+            decimal baseRisk = ((decimal?)trading.RiskPerTrade ?? 0m) > 0
+                ? riskPerTrade
+                : trading.BaseRiskPercent / 100m;
+
+            return CalculatePropDeskQty(
+                balance,
+                signal.EntryPrice,
+                signal.StopLoss,
+                trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m),
+                baseRisk,
+                riskMult * (signal.SafetyRiskMultiplier > 0 ? signal.SafetyRiskMultiplier : 1m),
+                minNotional,
+                step,
+                minQty
+            );
+        }
+
+
 
         // ====================================================================
         // SAFE QTY v7.7 (QUANT-REALTIME FINAL)
@@ -92,11 +181,11 @@ namespace VertexAutoTradeBinance8.Services
                 ? f.minNotional
                 : (trading.MinNotionalGuard > 0 ? trading.MinNotionalGuard : 5m);
 
-            decimal binanceMinNotional = minNotional;
-            if (trading.MinNotional > 0)
-                binanceMinNotional = Math.Max(binanceMinNotional, trading.MinNotional);
-
-            // ACCOUNT BALANCE
+            //decimal binanceMinNotional = minNotional;
+            //if (trading.MinNotional > 0)
+            //    binanceMinNotional = Math.Max(binanceMinNotional, trading.MinNotional);
+          
+          
 
 
             // ACCOUNT BALANCE
@@ -130,22 +219,34 @@ namespace VertexAutoTradeBinance8.Services
                 signal.RejectReason = LastRejectReason;
                 return 0;
             }
+            decimal binanceMinNotional = minNotional;
 
+            if (trading.MinNotional > 0)
+                binanceMinNotional = Math.Max(binanceMinNotional, trading.MinNotional);
+
+            // 🔥 применяем dynMin
+            if (trading.MinNotionalGuardPercent > 0)
+            {
+                decimal guardValue = (decimal?)trading.MinNotionalGuard ?? 0m;
+
+                decimal dynMin = Math.Max(
+                    guardValue,
+                    free * trading.MinNotionalGuardPercent);
+
+                binanceMinNotional = Math.Max(binanceMinNotional, dynMin);
+            }
 
             // var acc = await client.UsdFuturesApi.Account.GetBalancesAsync(null, ct);
             //decimal free = acc?.Data?.FirstOrDefault(x => x.Asset == "USDT")?.AvailableBalance ?? 0;
 
             // === Dynamic MinNotional by capital percent ===
-            if (trading.MinNotionalGuardPercent > 0)
-            {
-                //decimal dynMin = free * trading.MinNotionalGuardPercent;
-                //if (dynMin > binanceMinNotional)
-                //    binanceMinNotional = dynMin;
+            //   if (trading.MinNotionalGuardPercent > 0)
+            //     {
+            //decimal dynMin = free * trading.MinNotionalGuardPercent;
+            //if (dynMin > binanceMinNotional)
+            //    binanceMinNotional = dynMin;
 
-                decimal dynMin = Math.Max(
-    trading.MinNotionalGuard,
-    free * trading.MinNotionalGuardPercent);
-            }
+            //   }
 
             // for UI
             LastBalanceUsdt = free;
@@ -447,8 +548,8 @@ namespace VertexAutoTradeBinance8.Services
                 signal.RejectReason = "FinalSafetyQtyTooLow";
                 return 0; // честно не хватает маржи, оставляем reject
             }
-            qty = maxPossibleQty;
-            notional = qty * entryPrice;
+           // qty = maxPossibleQty;
+          //  notional = qty * entryPrice;
             signal.RejectReason = "RISK_OK";
             return qty;
         }
