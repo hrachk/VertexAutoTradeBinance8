@@ -260,9 +260,7 @@ namespace VertexAutoTradeBinance8.Services
                     isSmartStrongTrend &&
                     rrOk &&
                     liquiditySafe;
-            }
-
-
+            } 
             // =============================================================
             // APPLY SOFT LIQUIDITY SIZE MULTIPLIER (EARLY EXPANSION FIX)
             // =============================================================
@@ -364,11 +362,16 @@ namespace VertexAutoTradeBinance8.Services
                     ? Math.Min(entryPrice, lastPrice)
                     : Math.Max(entryPrice, lastPrice);
 
-            // CONTROLLED JOIN: catch “silent trend” without impulse
+            // =====================================================
+            // CONTROLLED JOIN: catch “silent trend” safely
             // uses ONLY existing signals: strong trend + slope + drift + liq safe
-            decimal tickRel = lastPrice > 0 ? (tick / lastPrice) : 0m;
-            bool spreadOk = tickRel <= 0.00050m; // rough proxy; conservative
+            // =====================================================
 
+            // spread proxy через tick
+            decimal tickRel = lastPrice > 0 ? (tick / lastPrice) : 0m;
+            bool spreadOk = tickRel <= 0.00050m; // <= 0.05%
+
+            // silent trend detection
             bool silentTrendJoin =
                 entryType == FuturesOrderType.Limit &&
                 allowMarketEntry &&
@@ -378,47 +381,86 @@ namespace VertexAutoTradeBinance8.Services
                 liquiditySafe &&
                 !liquidityResult.IsExtreme &&
                 spreadOk &&
-                baseReg.TrendSlopePercent >= 0.25m &&   // “тихий” наклон
-                priceDriftPct >= 0.0025m &&             // цена уже поехала
-                priceDriftPct <= 0.0150m;               // но не runaway
+                baseReg.TrendSlopePercent >= 0.25m &&   // устойчивый наклон
+                priceDriftPct >= 0.0025m &&             // уже движется
+                priceDriftPct <= 0.0150m;               // но не runaway (>1.5%)
 
-            // join pct: use your constant (0.06%) but cap hard for safety
-            //decimal joinPct = silentTrendJoin ? Math.Min(AGGR_LIMIT_OFFSET_PCT, 0.0010m) : 0m;
+            // =====================================================
+            // ADAPTIVE SAFE DRIFT
+            // =====================================================
 
-            //decimal joinLimit =
-            //    side == OrderSide.Buy
-            //        ? lastPrice * (1m + joinPct)
-            //        : lastPrice * (1m - joinPct);
+            // базовый offset (например 0.0006m = 0.06%)
+            decimal baseDriftPct = AGGR_LIMIT_OFFSET_PCT;
 
-            //decimal finalLimitRaw = silentTrendJoin ? joinLimit : passiveLimit;
-            //decimal aggrLimitPrice = Quantize(finalLimitRaw, tick);
-            // допустимый дрейф для LIMIT
-            decimal safeDriftPct = signal.IsSuperSignal ? 0.0015m : AGGR_LIMIT_OFFSET_PCT;
+            // усиленный offset только для super signal
+            decimal superDriftPct = 0.0015m; // 0.15%
 
-            decimal joinLimitAdjusted =
+            // hard cap для защиты от плохого fill
+            decimal hardCapPct = 0.0018m; // 0.18% абсолютный максимум
+
+            // финальный drift
+            decimal safeDriftPct =
+                signal.IsSuperSignal
+                    ? Math.Min(superDriftPct, hardCapPct)
+                    : Math.Min(baseDriftPct, hardCapPct);
+
+            // =====================================================
+            // CALCULATE JOIN LIMIT
+            // =====================================================
+
+            decimal joinLimitRaw =
                 side == OrderSide.Buy
                     ? lastPrice * (1m + safeDriftPct)
                     : lastPrice * (1m - safeDriftPct);
 
-            decimal finalLimitRaw = silentTrendJoin || signal.IsSuperSignal ? joinLimitAdjusted : passiveLimit;
+            // passive vs join selection
+            decimal finalLimitRaw =
+                (silentTrendJoin || signal.IsSuperSignal)
+                    ? joinLimitRaw
+                    : passiveLimit;
+
+            // quantize to tick
             decimal aggrLimitPrice = Quantize(finalLimitRaw, tick);
 
+            // =====================================================
+            // FINAL ORDER PARAMS
+            // =====================================================
 
-            decimal? orderPrice = entryType == FuturesOrderType.Market ? null : aggrLimitPrice;
-            TimeInForce? tif = entryType == FuturesOrderType.Market ? null : TimeInForce.GoodTillCanceled;
+            decimal? orderPrice =
+                entryType == FuturesOrderType.Market
+                    ? null
+                    : aggrLimitPrice;
+
+            TimeInForce? tif =
+                entryType == FuturesOrderType.Market
+                    ? null
+                    : TimeInForce.GoodTillCanceled;
+
+            // =====================================================
+            // LOG
+            // =====================================================
 
             _logger.LogInformation(
-                "[ORDER][{symbol}] ENTRY={type} mode={mode} entry={entry} last={last} drift={drift:P2} slope={slope:F3}% impulse={imp} liqExt={ext} liqScore={score:F2}",
+                "[ORDER][{symbol}] ENTRY={type} mode={mode} orderPrice={orderPrice} last={last} " +
+                "driftPct={driftPct:P3} priceDrift={priceDrift:P2} slope={slope:F3}% " +
+                "impulse={imp} silentJoin={silent} super={super} liqExt={ext} liqScore={score:F2}",
                 signal.Symbol,
                 entryType,
-                entryType == FuturesOrderType.Market ? "MARKET" : (silentTrendJoin ? "JOIN_LIMIT" : "PASSIVE_LIMIT"),
-                entryPrice,
+                entryType == FuturesOrderType.Market
+                    ? "MARKET"
+                    : (silentTrendJoin ? "JOIN_LIMIT" : "PASSIVE_LIMIT"),
+                orderPrice,
                 lastPrice,
+                safeDriftPct,
                 priceDriftPct,
                 baseReg.TrendSlopePercent,
                 hasImpulse,
+                silentTrendJoin,
+                signal.IsSuperSignal,
                 liquidityResult.IsExtreme,
-                liquidityResult.Score);
+                liquidityResult.Score
+            );
+
 
             // =============================================================
             // FIX: APPLY CORRECT QTY RULE PER ORDER TYPE (MARKET vs LIMIT)

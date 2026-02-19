@@ -291,13 +291,19 @@ namespace VertexAutoTradeBinance8.Services
             decimal qty = maxRisk / slDist;
             if (leverage > 0) qty *= leverage;
             qty = Math.Floor(qty / step) * step;
+
+            if (qty * entryPrice > free * leverage)
+                qty = Math.Floor((free * leverage / entryPrice) / step) * step;
+
             if (qty < minQty) qty = minQty;
             decimal notional = qty * entryPrice;
+
+           
             // =====================
             // SIGNAL STRENGTH LOGIC
             // =====================
-         
-           
+
+
             // =============================================================
             //  BOOST + ADAPTIVE REDUCE (v7.5)
             // =============================================================
@@ -326,18 +332,21 @@ namespace VertexAutoTradeBinance8.Services
                     goto BOOST_OK;
 
                 // иначе → уменьшаем позицию до допустимых значений
-                for (int i = 0; i < 12; i++)   // до 12 попыток
+                decimal maxAllowedNotional = free * leverage;
+                for (int i = 0; i < 12; i++)
                 {
-                    targetNotional *= 0.85m;  // уменьшаем на 15%
+                    if (targetNotional > maxAllowedNotional)
+                        targetNotional = maxAllowedNotional;
 
                     qty = Math.Floor((targetNotional / entryPrice) / step) * step;
-                    if (qty < minQty)
-                        qty = minQty;
+                    if (qty < minQty) qty = minQty;
 
                     notional = qty * entryPrice;
 
-                    if (notional >= binanceMinNotional)
+                    if (notional >= binanceMinNotional && notional <= maxAllowedNotional)
                         goto BOOST_OK;
+
+                    targetNotional *= 0.85m;
                 }
 
                 LastRejectReason = "MinNotionalAfterAdaptiveReduce";
@@ -432,12 +441,14 @@ namespace VertexAutoTradeBinance8.Services
                 notional = qty * entryPrice;
             }
             // если даже minQty не проходит — честно выходим
-            if (notional < binanceMinNotional && free < (binanceMinNotional / Math.Max(leverage, 1)))
+            decimal maxPossibleQty = Math.Floor((free * leverage / entryPrice) / step) * step;
+            if (maxPossibleQty < minQty)
             {
-                signal.RejectReason = "FinalSafetyQtyZero";
-                return 0;
+                signal.RejectReason = "FinalSafetyQtyTooLow";
+                return 0; // честно не хватает маржи, оставляем reject
             }
-            // 🔥 ВОТ ЗДЕСЬ ДОБАВИТЬ
+            qty = maxPossibleQty;
+            notional = qty * entryPrice;
             signal.RejectReason = "RISK_OK";
             return qty;
         }

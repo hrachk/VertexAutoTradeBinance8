@@ -3110,7 +3110,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 if (!trace.Allow) return Finalize(trace, smart);
 
                 // CRITICAL: bind confidence at entry
-                baseSignal.Confidence = smart.Confidence;
+              //  baseSignal.Confidence = smart.Confidence;
 
                 // канон:
                 trace.Add(Gate3_5_DirectionLock(symbol, tf, klines, baseSignal, smart, allowCounterTrendInRangeLike: true));

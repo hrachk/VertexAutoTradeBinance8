@@ -305,16 +305,26 @@ namespace VertexAutoTradeBinance8.Services
                     if (distance <= 0)
                         return;
 
-                    decimal R = distance / atr14_1m;
-
                     // =====================================================
-                    // STAGE TRACKING
+                    // STAGE TRACKING + PARTIAL CLOSE (HIGH WINRATE)
                     // =====================================================
 
+                    // adaptive ATR scale для более раннего триггера
+                    decimal triggerAtr = atr14_1m * 0.8m;
+
+                    // дробный R для smooth SL
+                    decimal R = distance / triggerAtr;
+
+                    // минимальный R для активации BE/partial
+                    decimal minR_BE = 0.2m;
+                    if (R < minR_BE)
+                        return;
+
+                    // целый stage для partial close
                     int stage = (int)Math.Floor(R);
 
+                    // предыдущий stage (для контроля прогрессии)
                     int prevStage = _beLevel.GetOrAdd(key, 0);
-
                     if (stage <= prevStage)
                         return;
 
@@ -356,10 +366,15 @@ namespace VertexAutoTradeBinance8.Services
                     // MOVE STOP LOSS
                     // =====================================================
 
-                    decimal newSl =
-                        side == PositionSide.Long
-                            ? entry + (atr14_1m * (stage - 0.3m))
-                            : entry - (atr14_1m * (stage - 0.3m));
+
+                    decimal stageFrac = R; // дробная часть для плавного SL
+                    decimal newSl = side == PositionSide.Long
+                        ? entry + atr14_1m * (stageFrac - 0.1m)   // небольшая страховка -0.1 ATR
+                        : entry - atr14_1m * (stageFrac - 0.1m);
+                    //decimal newSl =
+                    //    side == PositionSide.Long
+                    //        ? entry + (atr14_1m * (stage - 0.3m))
+                    //        : entry - (atr14_1m * (stage - 0.3m));
 
                     var slOrder = openOrders.FirstOrDefault(o =>
                         o.PositionSide == side &&
@@ -396,197 +411,7 @@ namespace VertexAutoTradeBinance8.Services
 
             // /////////////////////////////////////////////////
 
-            /* #region TESTING ZONE FULL BLOCK — ATR ADAPTIVE VERSION 
-            if (atr14_1m > 0 && klines1m != null && klines1m.Count >= 21)
-            {
-                void ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
-                {
-                    var key = symbol + "_" + side;
-
-                    // =====================================================
-                    // RESET HANDLING
-                    // =====================================================
-                    if (pos == null || pos.Quantity == 0)
-                    {
-                        if (!_pendingReset.ContainsKey(key))
-                        {
-                            _pendingReset[key] = DateTime.UtcNow;
-                            _logger.LogDebug("[BE RESET PENDING][{symbol}][{side}] waiting confirmation", symbol, side);
-                            return;
-                        }
-
-                        if (DateTime.UtcNow - _pendingReset[key] < TimeSpan.FromSeconds(45))
-                            return;
-
-                        _pendingReset.TryRemove(key, out _);
-                        _beStage.TryRemove(key, out _);
-                        _beLevel.TryRemove(key, out _);
-
-                        _logger.LogInformation("[BE RESET CONFIRMED][{symbol}][{side}] Position confirmed closed", symbol, side);
-                        return;
-                    }
-
-                    _pendingReset.TryRemove(key, out _);
-
-                    var qty = Math.Abs(pos.Quantity);
-                    var entry = pos.EntryPrice;
-                    var mark = pos.MarkPrice;
-
-                    if (qty <= 0 || entry <= 0 || mark <= 0)
-                        return;
-
-                    // =====================================================
-                    // ROI
-                    // =====================================================
-                    var roi = side == PositionSide.Long
-                        ? (mark - entry) / entry
-                        : (entry - mark) / entry;
-
-                    // =====================================================
-                    // ATR VOLATILITY SCALING
-                    // =====================================================
-                    var volRatio = atr14_1m / mark; // relative volatility
-
-                    decimal baseVol;
-
-                    if (symbol == "BTCUSDT")      baseVol = 0.0025m;
-                    else if (symbol == "ETHUSDT") baseVol = 0.0035m;
-                    else                          baseVol = 0.0050m;
-
-                    var volMultiplier = baseVol > 0
-                        ? volRatio / baseVol
-                        : 1m;
-
-                    // clamp multiplier
-                    volMultiplier = Math.Max(0.7m, Math.Min(1.8m, volMultiplier));
-
-                    // =====================================================
-                    // BASE CONFIG
-                    // =====================================================
-                    decimal BASE_STEP;
-                    decimal BASE_PARTIAL_STEP;
-                    decimal BASE_TRUE_BE_BUFFER;
-                    decimal BASE_MIN_BE_BUFFER;
-                    decimal PARTIAL_SIZE;
-
-                    if (symbol == "BTCUSDT")
-                    {
-                        BASE_STEP = 0.0040m;
-                        BASE_PARTIAL_STEP = 0.0100m;
-                        BASE_TRUE_BE_BUFFER = 0.0022m;
-                        BASE_MIN_BE_BUFFER = 0.0030m;
-                        PARTIAL_SIZE = 0.18m;
-                    }
-                    else if (symbol == "ETHUSDT")
-                    {
-                        BASE_STEP = 0.0045m;
-                        BASE_PARTIAL_STEP = 0.0120m;
-                        BASE_TRUE_BE_BUFFER = 0.0025m;
-                        BASE_MIN_BE_BUFFER = 0.0035m;
-                        PARTIAL_SIZE = 0.18m;
-                    }
-                    else
-                    {
-                        BASE_STEP = 0.0060m;
-                        BASE_PARTIAL_STEP = 0.0160m;
-                        BASE_TRUE_BE_BUFFER = 0.0035m;
-                        BASE_MIN_BE_BUFFER = 0.0045m;
-                        PARTIAL_SIZE = 0.15m;
-                    }
-
-                    // =====================================================
-                    // ADAPTIVE THRESHOLDS
-                    // =====================================================
-                    var STEP = BASE_STEP * volMultiplier;
-                    var PARTIAL_STEP = BASE_PARTIAL_STEP * volMultiplier;
-                    var TRUE_BE_BUFFER = BASE_TRUE_BE_BUFFER * volMultiplier;
-                    var MIN_BE_BUFFER = BASE_MIN_BE_BUFFER * volMultiplier;
-
-                    if (Math.Abs(roi) < MIN_BE_BUFFER)
-                        return;
-
-                    // =====================================================
-                    // BE LEVEL
-                    // =====================================================
-                    var level = (int)(roi / STEP);
-                    var prevLevel = _beLevel.GetOrAdd(key, 0);
-
-                    if (level <= prevLevel)
-                        return;
-
-                    _beLevel[key] = level;
-
-                    _logger.LogInformation(
-                        "[BE LEVEL][{symbol}][{side}] {old}→{new} roi={roi:P2} volMul={vm:F2}",
-                        symbol, side, prevLevel, level, roi, volMultiplier);
-
-                    // =====================================================
-                    // PARTIAL CLOSE
-                    // =====================================================
-                    var partialLevel = (int)(roi / PARTIAL_STEP);
-                    var prevPartial = (int)_beStage.GetOrAdd(key, BeStage.None);
-
-                    if (partialLevel > prevPartial && partialLevel >= 1)
-                    {
-                        _beStage[key] = (BeStage)partialLevel;
-
-                        var closeQty = Math.Round(qty * PARTIAL_SIZE, 8);
-
-                        if (closeQty > 0)
-                        {
-                            _logger.LogWarning(
-                                "[PARTIAL CLOSE][{symbol}][{side}] stage={stage} qty={qty}",
-                                symbol, side, partialLevel, closeQty);
-
-                            SafeFireAndForget(
-                                ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
-                        }
-                    }
-
-                    // =====================================================
-                    // MOVE STOP LOSS
-                    // =====================================================
-                    var slOrder = openOrders.FirstOrDefault(o =>
-                        o.PositionSide == side &&
-                        o.Type == FuturesOrderType.StopMarket);
-
-                    decimal newSl = side == PositionSide.Long
-                        ? entry * (1m + (level - 1) * STEP + TRUE_BE_BUFFER)
-                        : entry * (1m - (level - 1) * STEP - TRUE_BE_BUFFER);
-
-                    bool shouldMove =
-                        slOrder == null ||
-                        (side == PositionSide.Long
-                            ? newSl > (slOrder.StopPrice ?? 0)
-                            : newSl < (slOrder.StopPrice ?? 0));
-
-                    if (shouldMove)
-                    {
-                        _logger.LogWarning(
-                            "[BE MOVE][{symbol}][{side}] SL {old}→{new}",
-                            symbol, side,
-                            slOrder?.StopPrice ?? 0,
-                            newSl);
-
-                        SafeFireAndForget(
-                            PlaceStopLossAtBeAsync(
-                                client,
-                                symbol,
-                                side,
-                                qty,
-                                newSl,
-                                pos,
-                                ct));
-                    }
-                }
-
-                ProbeSide(longPos, PositionSide.Long);
-                ProbeSide(shortPos, PositionSide.Short);
-            }
-
-            #endregion  
-            */
-
+         
             // 4) Обработка сторон
             if (hasLong)
                 await HandleSideAsync(client, symbol, PositionSide.Long, longPos!, openOrders, lastSignal, klines1m, ct);
