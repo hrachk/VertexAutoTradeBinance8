@@ -187,6 +187,7 @@ namespace VertexAutoTradeBinance8.Services
             return $"{symbol}|{side}|{entryPrice:F8}";
         }
 
+
         // =====================================================================
         // MAIN ENTRY
         // =====================================================================
@@ -319,7 +320,7 @@ namespace VertexAutoTradeBinance8.Services
                     decimal R = distance / triggerAtr;
 
                     // минимальный R для активации BE/partial
-                    decimal minR_BE = 0.2m;
+                    decimal minR_BE = 0.35m;  // decimal minR_BE = 0.5m;  // bilo (decimal minR_BE = 0.2m;) -  eto malo 
                     if (R < minR_BE)
                         return;
 
@@ -346,10 +347,10 @@ namespace VertexAutoTradeBinance8.Services
                         decimal closePercent =
                             stage switch
                             {
-                                1 => 0.25m,
+                                1 => 0.35m,
                                 2 => 0.25m,
                                 3 => 0.20m,
-                                _ => 0.15m
+                                _ => 0.10m
                             };
 
                         decimal closeQty = Math.Round(qty * closePercent, 8);
@@ -370,8 +371,8 @@ namespace VertexAutoTradeBinance8.Services
                     // =====================================================
                     decimal stageFrac = R; // дробная часть для плавного SL
                     decimal newSl = side == PositionSide.Long
-                        ? entry + atr14_1m * (stageFrac - 0.15m)   // небольшая страховка -0.1 ATR
-                        : entry - atr14_1m * (stageFrac - 0.15m);
+                        ? entry + atr14_1m * (stageFrac - 0.35m)   // небольшая страховка -0.1 ATR
+                        : entry - atr14_1m * (stageFrac - 0.35m);
                    
                     var slOrder = openOrders.FirstOrDefault(o =>
                         o.PositionSide == side &&
