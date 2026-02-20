@@ -130,6 +130,24 @@ namespace VertexAutoTradeBinance8.Services
             );
         }
 
+        public async Task<decimal> GetRealtimeBalanceAsync(CancellationToken ct)
+        {
+            var account = await _factory
+                .CreateRestClient()
+                .UsdFuturesApi.Account
+                .GetAccountInfoV3Async(ct: ct);
+
+            if (!account.Success || account.Data == null)
+                return 0m;
+
+            var free = account.Data.Assets
+                .FirstOrDefault(a => a.Asset == "USDT")?
+                .AvailableBalance ?? 0m;
+
+            LastBalanceUsdt = free; // обновляем кэш корректно
+
+            return free;
+        }
 
 
         // ====================================================================

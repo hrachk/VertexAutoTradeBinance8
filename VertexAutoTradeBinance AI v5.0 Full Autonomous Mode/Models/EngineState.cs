@@ -1,4 +1,5 @@
-﻿using System.Collections.Concurrent;
+﻿using Binance.Net.Enums;
+using System.Collections.Concurrent;
 
 namespace VertexAutoTradeBinance8.Models
 {
@@ -9,7 +10,7 @@ namespace VertexAutoTradeBinance8.Models
         public decimal BalanceUsdt { get; set; }
 
         public string Symbol { get; set; } = "";
-        public string Timeframe { get; set; } = "";
+        public KlineInterval Timeframe { get; set; }
 
         public string MarketRegime { get; set; } = "";
         public string SmartRegime { get; set; } = "";

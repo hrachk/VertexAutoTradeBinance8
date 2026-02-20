@@ -1,6 +1,7 @@
-﻿using VertexAutoTradeBinance8.Models;
-using VertexAutoTradeBinance8.Strategy;
+﻿using Binance.Net.Enums;
+using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
+using VertexAutoTradeBinance8.Strategy;
 
 namespace VertexAutoTradeBinance8.Services
 {
@@ -30,7 +31,7 @@ namespace VertexAutoTradeBinance8.Services
             _stateSvc = stateSvc;
         }
 
-        public EngineState Build(string symbol, string timeframe)
+        public EngineState Build(string symbol, KlineInterval timeframe)
         {
             var s = _stateSvc.State;
 

@@ -537,14 +537,14 @@ _strategy.OnSignalGenerated += signal =>
                     _currentSymbol = symbol;
 
                     var selectedTf = await ResolveTimeframeSafeAsync(symbol, ct);  // можно для аналитики/логов
-                    var tradeTf = KlineInterval.OneMinute; // жестко   // либо маппинг из _options.TimeframeMinutes -> KlineInterval
+                    var tradeTf = KlineInterval.FiveMinutes; // жестко   // либо маппинг из _options.TimeframeMinutes -> KlineInterval
 
 
                     var ctx = await _marketContext.GetContextAsync(symbol, ct);
 
                     var state = _engineStateBuilder.Build(
                         symbol: symbol,
-                        timeframe: selectedTf.ToString()
+                        timeframe: selectedTf
                     );
 
                     state.LastEngineTick = DateTime.UtcNow;
@@ -552,7 +552,7 @@ _strategy.OnSignalGenerated += signal =>
                     state.CyclesPerMinute = _lastCyclesPerMinute;
                     state.UniverseSize = _symbols.ActiveSymbols.Count;
                     state.TrackedSymbols = trackedSymbols.Count;
-                    state.Timeframe = selectedTf.ToString();
+                    state.Timeframe = selectedTf;
                      state.OpenPositions = await _supervisor.GetActivePositionsCountAsync(ct);
                    state.BalanceUsdt = await TryGetRealBalanceSafeAsync(ct);
 
@@ -578,21 +578,45 @@ _strategy.OnSignalGenerated += signal =>
             }
         }
 
-
         public async Task<decimal> TryGetRealBalanceSafeAsync(CancellationToken ct)
         {
             try
             {
-                var acc = await _factory.CreateRestClient().UsdFuturesApi.Account.GetAccountInfoV3Async(ct:ct); 
-                
+                _logger.LogInformation("[BALANCE] Requesting USDT Futures account info...");
 
-                if (!acc.Success || acc.Data == null)
+                var acc = await _factory
+                    .CreateRestClient()
+                    .UsdFuturesApi
+                    .Account
+                    .GetAccountInfoV3Async(ct: ct);
+
+                if (!acc.Success)
+                {
+                    _logger.LogWarning(
+                        "[BALANCE] Request failed. Error: {Error}",
+                        acc.Error?.Message ?? "unknown");
                     return 0m;
+                }
 
-                return acc.Data.TotalWalletBalance;
+                if (acc.Data == null)
+                {
+                    _logger.LogWarning("[BALANCE] Response success but Data is NULL.");
+                    return 0m;
+                }
+
+                var wallet = acc.Data.TotalWalletBalance;
+                var available = acc.Data.AvailableBalance;
+                var unrealized = acc.Data.TotalUnrealizedProfit;
+
+                _logger.LogInformation(
+                    "[BALANCE] Wallet={Wallet} Available={Available} UnrealizedPnL={Unrealized}",
+                    wallet, available, unrealized);
+
+                return wallet;
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogError(ex, "[BALANCE] Exception while requesting balance");
                 return 0m;
             }
         }
@@ -796,19 +820,36 @@ _strategy.OnSignalGenerated += signal =>
             }
 
             // Считаем qty через PropDesk engine
-            var qty = _risk.GetPropDeskQty(signal, _risk.LastBalanceUsdt, minNotional, step, minQty, riskMult, trading);
+            //var qty = _risk.GetPropDeskQty(signal, _risk.LastBalanceUsdt, minNotional, step, minQty, riskMult, trading);
 
 
-            if (qty <= 0)
+            //if (qty <= 0)
+            //{
+            //    await RejectAsync(
+            //        signal, symbol, tf,
+            //        "RISK",
+            //        "NO_BALANCE_OR_MIN_NOTIONAL",
+            //        ct);
+            //    return;
+            //}
+
+
+            var balance = await _risk.GetRealtimeBalanceAsync(ct);
+
+            if (balance <= 0)
             {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "RISK",
-                    "NO_BALANCE_OR_MIN_NOTIONAL",
-                    ct);
+                await RejectAsync(signal, symbol, tf, "NO_BALANCE", "Balance is zero",ct);
                 return;
             }
 
+            var qty = _risk.GetPropDeskQty(
+                signal,
+                balance,
+                minNotional,
+                step,
+                minQty,
+                riskMult,
+                trading);
             // =====================================================
             // 7) SL / TP OPTIMIZATION
             // =====================================================
@@ -846,8 +887,9 @@ _strategy.OnSignalGenerated += signal =>
             {
                 signal.EntryPrice = realtimePrice;
             }
-
-            var result = await _executor.ExecuteAsync(signal, qty, ct);
+            
+            var leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
+            var result = await _executor.ExecuteAsync(signal, qty, ct, leverage);
 
 
 

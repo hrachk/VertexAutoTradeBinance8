@@ -13,33 +13,34 @@ public sealed class TradingOptionsResolver
 
     public TradingOptions Resolve(string symbol)
     {
-        var baseAsset = ExtractBaseAsset(symbol);
+        var baseAsset = ExtractBaseAsset(symbol).ToUpperInvariant();
 
         TradingOptions result;
 
-        try
+        switch (baseAsset)
         {
-            result = _options.Get(baseAsset);
+            case "BTC":
+                result = _options.Get("BTC");
+                break;
 
-            _logger.LogInformation(
-                "[TRADING CONFIG] {symbol} → PROFILE={profile}",
-                symbol, baseAsset);
-        }
-        catch
-        {
-            result = _options.CurrentValue;
+            case "ETH":
+                result = _options.Get("ETH");
+                break;
 
-            _logger.LogInformation(
-                "[TRADING CONFIG] {symbol} → PROFILE=DEFAULT",
-                symbol);
+            default:
+                result = _options.CurrentValue; // БАЗОВЫЙ Trading
+                break;
         }
-        _logger.LogWarning(
-    "[TRADING CONFIG] {symbol} → PROFILE={profile} LEVERAGE={lev}",
-    symbol,
-    baseAsset,
-    result.Leverage);
+
+        _logger.LogInformation(
+            "[TRADING CONFIG] {symbol} → PROFILE={profile} LEVERAGE={lev}",
+            symbol,
+            baseAsset == "BTC" || baseAsset == "ETH" ? baseAsset : "BASE",
+            result.Leverage);
+
         return result;
     }
+
 
 
     private static string ExtractBaseAsset(string symbol)

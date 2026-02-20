@@ -104,7 +104,7 @@ namespace VertexAutoTradeBinance8.Services
         public async Task<OrderResult> ExecuteAsync(
         TradeSignal signal,
         decimal quantity,
-        CancellationToken ct = default)
+        CancellationToken ct = default, decimal leverage = 1m)
         {
             using var client = _factory.CreateRestClient();
             var isHedge = await IsHedgeModeAsync(client, ct);
@@ -293,6 +293,28 @@ namespace VertexAutoTradeBinance8.Services
                 else
                     return OrderResult.Fail("ADJUSTED_QTY_TOO_SMALL");
               
+            }
+
+            if (adjustedQty < filters.minQty)
+            {
+                decimal potentialNotional = filters.minQty * entryPrice;
+                if (potentialNotional <= _risk.LastBalanceUsdt * leverage) // safe buy
+                {
+                    adjustedQty = filters.minQty;
+                    _logger.LogInformation("[EXEC][{symbol}] AdjustedQty increased to minQty={minQty}", signal.Symbol, filters.minQty);
+                }
+                else
+                {
+                    await _simulator.SimulateMissedTradeAsync(
+                        signal,
+                        "ADJUSTED_QTY_TOO_SMALL",
+                        note: $"baseQty={quantity}; bias={executionBias:F2}; riskBias={smart.RiskBias:F2}; liqScore={liquidityResult.Score:F2}",
+                        freeBalance: _risk.LastBalanceUsdt,
+                        attemptNotional: quantity * entryPrice,
+                        requiredMinNotional: filters.minQty * entryPrice);
+
+                    return OrderResult.Fail("ADJUSTED_QTY_TOO_SMALL");
+                }
             }
 
             quantity = adjustedQty;
