@@ -275,6 +275,7 @@ namespace VertexAutoTradeBinance8.Services
                 await TryReverseProbeAsync(client, symbol, longPos, shortPos, smart1m, atr14_1m, ct);
             }
 
+          
             ///////////////////////////////////TEST DIAGNOSTIC SL/BE/MOVE/////////////////////////////////////////////////////////
             if (atr14_1m > 0 && klines1m != null && klines1m.Count >= 21)
             {
@@ -297,119 +298,113 @@ namespace VertexAutoTradeBinance8.Services
                     if (qty <= 0 || entry <= 0 || mark <= 0)
                         return;
 
-                    // =====================================================
-                    // ATR DISTANCE MODEL (PROFESSIONAL)
-                    // =====================================================
-
-                    decimal distance =
-                        side == PositionSide.Long
-                            ? mark - entry
-                            : entry - mark;
-
-                    if (distance <= 0)
-                        return;
-
-                    // =====================================================
-                    // STAGE TRACKING + PARTIAL CLOSE (HIGH WINRATE)
-                    // =====================================================
-
-                    // adaptive ATR scale для более раннего триггера
-                    decimal triggerAtr = atr14_1m * 0.8m;
+                    decimal distance = side == PositionSide.Long ? mark - entry : entry - mark;
+                    if (distance <= 0) return;
 
                     // дробный R для smooth SL
-                    decimal R = distance / triggerAtr;
+                    decimal R = distance / atr14_1m;
+
+                    // =======================
+                    // VOLATILITY ADAPTIVE PARAMETERS
+                    // =======================
+                    SmartRegimeInfo smart = smart1m ?? new SmartRegimeInfo
+                    {
+                        VolRegime = VolatilityRegime.Normal,
+                        Confidence = 0.5m,
+                        RiskBias = 1.0m,
+                        EntryProfile = "STD",
+                        IsControlledTrend = false,
+                        IsVolCompression = false
+                    };
+
+                    var volRegime = smart.VolRegime;
+
+                    decimal beTriggerR, beBufferAtr, trailAtrBase;
+                    switch (volRegime)
+                    {
+                        case VolatilityRegime.High:
+                            beTriggerR = 1.4m;
+                            beBufferAtr = 0.35m;
+                            trailAtrBase = 1.6m;
+                            break;
+                        case VolatilityRegime.Low:
+                            beTriggerR = 1.2m;
+                            beBufferAtr = 0.18m;
+                            trailAtrBase = 1.0m;
+                            break;
+                        default:
+                            beTriggerR = 1.3m;
+                            beBufferAtr = 0.25m;
+                            trailAtrBase = 1.3m;
+                            break;
+                    }
 
                     // минимальный R для активации BE/partial
-                    decimal minR_BE = 0.35m;  // decimal minR_BE = 0.5m;  // bilo (decimal minR_BE = 0.2m;) -  eto malo 
+                    decimal minR_BE = beTriggerR;
                     if (R < minR_BE)
                         return;
 
-                    // целый stage для partial close
+                    // Stage
                     int stage = (int)Math.Floor(R);
-
-                    // предыдущий stage (для контроля прогрессии)
                     int prevStage = _beLevel.GetOrAdd(key, 0);
-                    if (stage <= prevStage)
-                        return;
-
+                    if (stage <= prevStage) return;
                     _beLevel[key] = stage;
 
-                    _logger.LogInformation(
-                        "[ATR STAGE][{symbol}][{side}] {prev} → {stage}  R={R:F2}",
-                        symbol, side, prevStage, stage, R);
+                    _logger.LogInformation("[ATR STAGE][{symbol}][{side}] {prev} → {stage}  R={R:F2}", symbol, side, prevStage, stage, R);
 
-                    // =====================================================
+                    // =======================
                     // PARTIAL CLOSE LOGIC
-                    // =====================================================
-
+                    // =======================
                     if (stage >= 1)
                     {
-                        decimal closePercent =
-                            stage switch
-                            {
-                                1 => 0.35m,
-                                2 => 0.25m,
-                                3 => 0.20m,
-                                _ => 0.10m
-                            };
+                        decimal closePercent = stage switch
+                        {
+                            1 => 0.15m,
+                            2 => 0.20m,
+                            3 => 0.20m,
+                            _ => 0.10m
+                        };
 
                         decimal closeQty = Math.Round(qty * closePercent, 8);
-
                         if (closeQty > 0)
                         {
-                            _logger.LogWarning(
-                                "[PARTIAL][{symbol}][{side}] stage={stage} qty={qty}",
-                                symbol, side, stage, closeQty);
-
-                            SafeFireAndForget(
-                                ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
+                            _logger.LogWarning("[PARTIAL][{symbol}][{side}] stage={stage} qty={qty}", symbol, side, stage, closeQty);
+                            SafeFireAndForget(ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
                         }
                     }
+                 
+                    // =======================
+                    // MOVE STOP LOSS WITH MIN MOVE
+                    // =======================
+                    decimal stageFrac = R;
+                    decimal minSlMove = 0.5m * atr14_1m; // минимальный сдвиг SL для мелких монет
+                    decimal targetSl = side == PositionSide.Long
+                        ? entry + atr14_1m * (stageFrac - beBufferAtr)
+                        : entry - atr14_1m * (stageFrac - beBufferAtr);
 
-                    // =====================================================
-                    // MOVE STOP LOSS
-                    // =====================================================
-                    decimal stageFrac = R; // дробная часть для плавного SL
+                    // применяем минимальный шаг
                     decimal newSl = side == PositionSide.Long
-                        ? entry + atr14_1m * (stageFrac - 0.35m)   // небольшая страховка -0.1 ATR
-                        : entry - atr14_1m * (stageFrac - 0.35m);
-                   
-                    var slOrder = openOrders.FirstOrDefault(o =>
-                        o.PositionSide == side &&
-                        o.Type == FuturesOrderType.StopMarket);
+                        ? Math.Max(targetSl, entry + minSlMove)
+                        : Math.Min(targetSl, entry - minSlMove);
 
-                    bool shouldMove =
-                        slOrder == null ||
-                        (side == PositionSide.Long
-                            ? newSl > (slOrder.StopPrice ?? 0)
-                            : newSl < (slOrder.StopPrice ?? 0));
+                    var slOrder = openOrders.FirstOrDefault(o => o.PositionSide == side && o.Type == FuturesOrderType.StopMarket);
+                    bool shouldMove = slOrder == null || (side == PositionSide.Long ? newSl > (slOrder.StopPrice ?? 0) : newSl < (slOrder.StopPrice ?? 0));
 
                     if (shouldMove)
                     {
-                        _logger.LogWarning(
-                            "[SL MOVE][{symbol}][{side}] → {sl}",
-                            symbol, side, newSl);
-
-                        SafeFireAndForget(
-                            PlaceStopLossAtBeAsync(
-                                client,
-                                symbol,
-                                side,
-                                qty,
-                                newSl,
-                                pos,
-                                ct));
+                        _logger.LogWarning("[SL MOVE][{symbol}][{side}] → {sl}", symbol, side, newSl);
+                        SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, qty, newSl, pos, ct));
                     }
                 }
 
                 ProbeSide(longPos, PositionSide.Long);
                 _probeExecuted[symbol + "_Long"] = true;
 
-
                 ProbeSide(shortPos, PositionSide.Short);
                 _probeExecuted[symbol + "_Short"] = true;
             }
             ///////////////////////////////////////////////////
+        
 
 
             //   HandleSideAsync вызывается как обычно

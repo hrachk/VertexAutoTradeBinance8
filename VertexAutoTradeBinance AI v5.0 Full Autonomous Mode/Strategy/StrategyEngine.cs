@@ -1464,14 +1464,29 @@ namespace VertexAutoTradeBinance8.Strategy
                 // ------------------------------------------------------------
                 // BASE market state (fail-safe)
                 // ------------------------------------------------------------
+                //try
+                //{
+                //    _aiLearning.RecordMarketState(
+                //        symbol: symbol,
+                //        timeframe: tf.ToString(),
+                //        regime: smart.BaseRegime,
+                //        trendSlopePercent: smart.TrendSlopePercent,
+                //        volatilityPercent: smart.VolatilityPercent,
+                //        atr: atr14,
+                //        confidence: smart.Confidence
+                //    );
+                //}
+                //catch { /* non-critical */ }
+
                 try
                 {
-                    _aiLearning.RecordMarketState(
+                    _aiLearning.RecordMarketStateTriggered(
+                        reason: "BASE_REGIME",
                         symbol: symbol,
                         timeframe: tf.ToString(),
                         regime: smart.BaseRegime,
-                        trendSlopePercent: smart.TrendSlopePercent,
-                        volatilityPercent: smart.VolatilityPercent,
+                        slope: smart.TrendSlopePercent,
+                        volatility: smart.VolatilityPercent,
                         atr: atr14,
                         confidence: smart.Confidence
                     );
@@ -2190,6 +2205,22 @@ namespace VertexAutoTradeBinance8.Strategy
             // ------------------------------------------------------------------
             // 2) END-OF-TREND REVERSAL OVERRIDE
             // ------------------------------------------------------------------
+     
+
+
+            if (klines == null || klines.Count < 15)
+            {
+                _logger.LogWarning(
+"[ATR CHECK] {symbol} tf={tf} klines={count} lastIndex={last}",
+signal.Symbol,
+tf,
+klines?.Count ?? 0,
+klines?.Count > 0 ? klines.Count - 1 : -1
+);
+                return FastFailResult.Fail("gATE_3_5_DirectionLock", "ATR_NOT_READY");
+            }
+                
+
             decimal atr = signal.Atr ?? Atr(klines, 14, klines.Count - 1);
             var phase = DetectTrendPhase(klines, atr, smart.TrendSlopePercent);
 

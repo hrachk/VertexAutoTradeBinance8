@@ -109,6 +109,21 @@ namespace VertexAutoTradeBinance8.Services
                 || (isStrongTrend && absSlope >= 0.008m && absVol <= 0.010m);
 
 
+            VolatilityRegime volRegime;
+
+            if (isVolCompression)
+            {
+                volRegime = VolatilityRegime.Low;
+            }
+            else if (absVol > 0.015m)   // ~1.5%
+            {
+                volRegime = VolatilityRegime.High;
+            }
+            else
+            {
+                volRegime = VolatilityRegime.Normal;
+            }
+
 
             if (isVolCompression)
             {
@@ -191,6 +206,7 @@ namespace VertexAutoTradeBinance8.Services
                 IsControlledTrend = isControlledTrend,
                 EntryProfile = entryProfile,
                 RiskBias = riskBias,
+                VolRegime = volRegime
             };
 
             _logger.LogInformation(

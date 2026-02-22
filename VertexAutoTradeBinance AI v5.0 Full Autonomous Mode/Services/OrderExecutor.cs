@@ -279,32 +279,24 @@ namespace VertexAutoTradeBinance8.Services
 
             if (adjustedQty < filters.minQty)
             {
-                await _simulator.SimulateMissedTradeAsync(
-                    signal, 
-                    "ADJUSTED_QTY_TOO_SMALL",
-                    note: $"baseQty={quantity}; bias={executionBias:F2}; riskBias={smart.RiskBias:F2}; liqScore={liquidityResult.Score:F2}",
-                    freeBalance: _risk.LastBalanceUsdt,
-                    attemptNotional: quantity * entryPrice,
-                    requiredMinNotional: filters.minQty * entryPrice);
-
-                // если чуть меньше minQty, округляем вверх до minQty
-                if (adjustedQty >= filters.minQty * 0.85m) // 85% порога считаем допустимым
-                    adjustedQty = filters.minQty;
-                else
-                    return OrderResult.Fail("ADJUSTED_QTY_TOO_SMALL");
-              
-            }
-
-            if (adjustedQty < filters.minQty)
-            {
                 decimal potentialNotional = filters.minQty * entryPrice;
-                if (potentialNotional <= _risk.LastBalanceUsdt * leverage) // safe buy
+
+                // Если qty чуть меньше minQty (>=85%), поднимаем до minQty
+                if (adjustedQty >= filters.minQty * 0.85m)
                 {
                     adjustedQty = filters.minQty;
-                    _logger.LogInformation("[EXEC][{symbol}] AdjustedQty increased to minQty={minQty}", signal.Symbol, filters.minQty);
+                }
+                // Иначе — если баланс позволяет, поднимаем для мелких альтов
+                else if (_risk.LastBalanceUsdt * leverage >= potentialNotional)
+                {
+                    adjustedQty = filters.minQty;
+                    _logger.LogInformation(
+                        "[EXEC][{symbol}] AdjustedQty bumped up to minQty={minQty} due to small alt",
+                        signal.Symbol, filters.minQty);
                 }
                 else
                 {
+                    // Всё равно не хватает → отказ
                     await _simulator.SimulateMissedTradeAsync(
                         signal,
                         "ADJUSTED_QTY_TOO_SMALL",
@@ -342,7 +334,7 @@ namespace VertexAutoTradeBinance8.Services
                     $"LiquidityGuard:{liquidityResult.Reason}",
                     note: $"details={liquidityResult.Details}; extreme={liquidityResult.IsExtreme}; profile={smart.EntryProfile}; liqScore={liquidityResult.Score:F2}",
                     attemptNotional: notional,
-                    requiredMinNotional: 0m);
+                    requiredMinNotional: filters.minQty * entryPrice);
 
                 return OrderResult.Fail($"LiquidityGuard:{liquidityResult.Reason}");
             }
@@ -687,6 +679,14 @@ namespace VertexAutoTradeBinance8.Services
                 var mktQty = Math.Floor(quantity / fMkt.step) * fMkt.step;
 
                 if (mktQty < fMkt.minQty)
+                {
+                    mktQty = fMkt.minQty;
+                    _logger.LogInformation("[FALLBACK MARKET][{symbol}] qty bumped to minQty={minQty}", signal.Symbol, fMkt.minQty);
+                }
+
+
+
+                if (mktQty < fMkt.minQty)
                     return OrderResult.Fail("FALLBACK_MKT_QTY_TOO_SMALL");
 
               
@@ -697,6 +697,7 @@ namespace VertexAutoTradeBinance8.Services
                     quantity: mktQty,
                     positionSide: isHedge ? posSide : null,
                     ct: ct);
+
 
                 if (mktRes.Success && mktRes.Data != null)
                 {

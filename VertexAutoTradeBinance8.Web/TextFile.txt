@@ -47,7 +47,8 @@ echo Service %SERVICE% installed and started
 pause
 
 ==============================================
-C:\Tools\nssm.exe remove Engine_Client_001 confirm
+C:\Tools\nssm.exe remove Engine_Client_02 confirm
+C:\Tools\nssm.exe remove Engine_Client_Web_02 confirm
 
 C:\Tools\nssm.exe remove Engine_Client_001 confirm
 
