@@ -329,14 +329,29 @@ namespace VertexAutoTradeBinance8.Strategy
                 "[STRAT][PUSH] Reactive entry-point bound (REALTIME ENABLED)");
         }
 
+        private static readonly HashSet<string> _htfSymbols =
+    new(StringComparer.OrdinalIgnoreCase)
+    {
+        "BTCUSDT",
+        "ETHUSDT",
+        "SOLUSDT",
+        "XRPUSDT",
+        "BNBUSDT"
+    };
+
+
         private readonly ConcurrentDictionary<string, DateTime> _lastSignalCandle = new();
         private async Task RunReactive(string symbol, KlineInterval interval, string reason)
         {
             var md = _marketData;
             if (md == null) return;
 
+
             // 🔥 Decision timeframe всегда FiveMinutes
-            const KlineInterval decisionTf = KlineInterval.FiveMinutes;
+            KlineInterval decisionTf = KlineInterval.FiveMinutes;
+
+            if (_htfSymbols.Contains(symbol))
+                decisionTf = KlineInterval.FifteenMinutes;
 
             var key = $"{symbol}:{decisionTf}";
             var now = DateTime.UtcNow;
@@ -2900,8 +2915,8 @@ klines?.Count > 0 ? klines.Count - 1 : -1
                 return null;
 
             // Entry TF allowed
-            if (tf != KlineInterval.FifteenMinutes && tf != KlineInterval.OneHour)
-                return null;
+          //  if (tf != KlineInterval.FifteenMinutes && tf != KlineInterval.OneHour)  //TODO:   
+           //     return null;
 
             if (klines == null || klines.Count < 80)
                 return null;

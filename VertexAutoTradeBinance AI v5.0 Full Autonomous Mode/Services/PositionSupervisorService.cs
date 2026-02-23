@@ -10,11 +10,23 @@ using System.Security.Cryptography;
 using System.Text;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services.Interface;
-using VertexAutoTradeBinance8.Services.State;
 using VertexAutoTradeBinance8.Strategy;
 
+/// <summary>
+/// PositionSupervisorService v8.2 PRO (Production)
+///
+/// v8.2 FIXES (раз и навсегда):
+/// 0) EARLY TP (Partial close) 35% на +0.9 ATR → чтобы прибыль фиксировалась ДО откатов
+/// 1) SL -> BE (безубыток + буфер) на +1.2 ATR → чтобы после ранней прибыли не ловить минус
+/// 2) Анти-спам: partial/BE выполняются один раз на "позицию" (entry+qty+side)
+/// 3) UpdateSL: без reduceOnly (и без зависания на -1106), WorkingType.Mark используем осторожно
+/// 4) Если Binance вернёт -4120 → ставим/обновляем через RAW /fapi/v1/algoOrder (CONDITIONAL)
+/// 5) NEW 15-15-12-2025 -КОНЦЕПЦИЯ: PROTECT → PROBE → CONFIRM → SCALE PROBE — умный тест обратного движения(ключ)
+
+/// </summary>
 namespace VertexAutoTradeBinance8.Services
 {
+
     public sealed class PositionLifecycleTracker
     {
         // key = symbol_side_entryPrice
@@ -28,19 +40,6 @@ namespace VertexAutoTradeBinance8.Services
 
 
     }
-
-    /// <summary>
-    /// PositionSupervisorService v8.2 PRO (Production)
-    ///
-    /// v8.2 FIXES (раз и навсегда):
-    /// 0) EARLY TP (Partial close) 35% на +0.9 ATR → чтобы прибыль фиксировалась ДО откатов
-    /// 1) SL -> BE (безубыток + буфер) на +1.2 ATR → чтобы после ранней прибыли не ловить минус
-    /// 2) Анти-спам: partial/BE выполняются один раз на "позицию" (entry+qty+side)
-    /// 3) UpdateSL: без reduceOnly (и без зависания на -1106), WorkingType.Mark используем осторожно
-    /// 4) Если Binance вернёт -4120 → ставим/обновляем через RAW /fapi/v1/algoOrder (CONDITIONAL)
-    /// 5) NEW 15-15-12-2025 -КОНЦЕПЦИЯ: PROTECT → PROBE → CONFIRM → SCALE PROBE — умный тест обратного движения(ключ)
-
-    /// </summary>
     public class PositionSupervisorService
     {
         private readonly ILogger<PositionSupervisorService> _logger;
@@ -130,57 +129,57 @@ namespace VertexAutoTradeBinance8.Services
         string symbol,
         PositionSide side,
         CancellationToken ct)
+        {
+            var key = $"{symbol}_{side}";
+
+            if (!_finalCleanupDone.TryAdd(key, true))
+                return;
+
+            try
             {
-                var key = $"{symbol}_{side}";
+                _logger.LogWarning(
+                    "[FINAL CLEANUP][{symbol}][{side}] start",
+                    symbol, side);
 
-                if (!_finalCleanupDone.TryAdd(key, true))
-                    return;
+                // 1️⃣ Отменяем все ордера по символу
+                var cancel = await client
+                    .UsdFuturesApi
+                    .Trading
+                    .CancelAllOrdersAsync(symbol, ct: ct);
 
-                try
+                if (!cancel.Success)
                 {
                     _logger.LogWarning(
-                        "[FINAL CLEANUP][{symbol}][{side}] start",
-                        symbol, side);
-
-                    // 1️⃣ Отменяем все ордера по символу
-                    var cancel = await client
-                        .UsdFuturesApi
-                        .Trading
-                        .CancelAllOrdersAsync(symbol, ct:ct);
-
-                    if (!cancel.Success)
-                    {
-                        _logger.LogWarning(
-                            "[FINAL CLEANUP][{symbol}] CancelAllOrders failed: {err}",
-                            symbol, cancel.Error?.Message);
-                    }
-
-                    // 2️⃣ Сбрасываем BE состояние
-                    _beStage.TryRemove(key, out _);
-                    _beLevel.TryRemove(key, out _);
-                    _pendingReset.TryRemove(key, out _);
-
-                    _logger.LogWarning(
-                        "[FINAL CLEANUP][{symbol}][{side}] done",
-                        symbol, side);
+                        "[FINAL CLEANUP][{symbol}] CancelAllOrders failed: {err}",
+                        symbol, cancel.Error?.Message);
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex,
-                        "[FINAL CLEANUP FAILED][{symbol}][{side}]",
-                        symbol, side);
 
-                    _finalCleanupDone.TryRemove(key, out _);
-                }
-                finally
-                {
-                    _ = Task.Run(async () =>
-                    {
-                        await Task.Delay(TimeSpan.FromSeconds(15));
-                        _finalCleanupDone.TryRemove(key, out _);
-                    });
-                }
+                // 2️⃣ Сбрасываем BE состояние
+                _beStage.TryRemove(key, out _);
+                _beLevel.TryRemove(key, out _);
+                _pendingReset.TryRemove(key, out _);
+
+                _logger.LogWarning(
+                    "[FINAL CLEANUP][{symbol}][{side}] done",
+                    symbol, side);
             }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[FINAL CLEANUP FAILED][{symbol}][{side}]",
+                    symbol, side);
+
+                _finalCleanupDone.TryRemove(key, out _);
+            }
+            finally
+            {
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(15));
+                    _finalCleanupDone.TryRemove(key, out _);
+                });
+            }
+        }
 
         private static string BuildExitKey(string symbol, PositionSide side, decimal entryPrice)
         {
@@ -275,7 +274,7 @@ namespace VertexAutoTradeBinance8.Services
                 await TryReverseProbeAsync(client, symbol, longPos, shortPos, smart1m, atr14_1m, ct);
             }
 
-          
+
             ///////////////////////////////////TEST DIAGNOSTIC SL/BE/MOVE/////////////////////////////////////////////////////////
             if (atr14_1m > 0 && klines1m != null && klines1m.Count >= 21)
             {
@@ -372,7 +371,7 @@ namespace VertexAutoTradeBinance8.Services
                             SafeFireAndForget(ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
                         }
                     }
-                 
+
                     // =======================
                     // MOVE STOP LOSS WITH MIN MOVE
                     // =======================
@@ -404,7 +403,7 @@ namespace VertexAutoTradeBinance8.Services
                 _probeExecuted[symbol + "_Short"] = true;
             }
             ///////////////////////////////////////////////////
-        
+
 
 
             //   HandleSideAsync вызывается как обычно
