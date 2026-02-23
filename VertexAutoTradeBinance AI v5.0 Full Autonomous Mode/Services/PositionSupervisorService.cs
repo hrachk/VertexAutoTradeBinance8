@@ -275,7 +275,7 @@ namespace VertexAutoTradeBinance8.Services
             }
 
 
-            ///////////////////////////////////TEST DIAGNOSTIC SL/BE/MOVE/////////////////////////////////////////////////////////
+            ///////////////////////////////////SMART SL/BE/MOVE WITH REGIME/////////////////////////////////////////////////////////
             if (atr14_1m > 0 && klines1m != null && klines1m.Count >= 21)
             {
                 void ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
@@ -304,7 +304,7 @@ namespace VertexAutoTradeBinance8.Services
                     decimal R = distance / atr14_1m;
 
                     // =======================
-                    // VOLATILITY ADAPTIVE PARAMETERS
+                    // SMART REGIME PARAMETERS
                     // =======================
                     SmartRegimeInfo smart = smart1m ?? new SmartRegimeInfo
                     {
@@ -316,10 +316,14 @@ namespace VertexAutoTradeBinance8.Services
                         IsVolCompression = false
                     };
 
-                    var volRegime = smart.VolRegime;
+                    // адаптируем R под RiskBias и Confidence
+                    decimal adjR = R * smart.RiskBias * smart.Confidence;
 
+                    // =======================
+                    // VOLATILITY BASED PARAMETERS
+                    // =======================
                     decimal beTriggerR, beBufferAtr, trailAtrBase;
-                    switch (volRegime)
+                    switch (smart.VolRegime)
                     {
                         case VolatilityRegime.High:
                             beTriggerR = 1.4m;
@@ -339,29 +343,30 @@ namespace VertexAutoTradeBinance8.Services
                     }
 
                     // минимальный R для активации BE/partial
-                    decimal minR_BE = beTriggerR;
-                    if (R < minR_BE)
+                    if (adjR < beTriggerR)
                         return;
 
                     // Stage
-                    int stage = (int)Math.Floor(R);
+                    int stage = (int)Math.Floor(adjR);
                     int prevStage = _beLevel.GetOrAdd(key, 0);
                     if (stage <= prevStage) return;
                     _beLevel[key] = stage;
 
-                    _logger.LogInformation("[ATR STAGE][{symbol}][{side}] {prev} → {stage}  R={R:F2}", symbol, side, prevStage, stage, R);
+                    _logger.LogInformation("[ATR STAGE][{symbol}][{side}] {prev} → {stage}  R={R:F2} adjR={adjR:F2}",
+                        symbol, side, prevStage, stage, R, adjR);
 
                     // =======================
                     // PARTIAL CLOSE LOGIC
                     // =======================
                     if (stage >= 1)
                     {
+                        // адаптируем qty под RiskBias и Confidence
                         decimal closePercent = stage switch
                         {
-                            1 => 0.15m,
-                            2 => 0.20m,
-                            3 => 0.20m,
-                            _ => 0.10m
+                            1 => 0.15m * smart.RiskBias * smart.Confidence,
+                            2 => 0.20m * smart.RiskBias * smart.Confidence,
+                            3 => 0.20m * smart.RiskBias * smart.Confidence,
+                            _ => 0.10m * smart.RiskBias * smart.Confidence
                         };
 
                         decimal closeQty = Math.Round(qty * closePercent, 8);
@@ -373,15 +378,20 @@ namespace VertexAutoTradeBinance8.Services
                     }
 
                     // =======================
-                    // MOVE STOP LOSS WITH MIN MOVE
+                    // TIGHT / SMART STOP LOSS
                     // =======================
-                    decimal stageFrac = R;
-                    decimal minSlMove = 0.5m * atr14_1m; // минимальный сдвиг SL для мелких монет
-                    decimal targetSl = side == PositionSide.Long
-                        ? entry + atr14_1m * (stageFrac - beBufferAtr)
-                        : entry - atr14_1m * (stageFrac - beBufferAtr);
+                    bool isWeakMarket = smart.SmartType == SmartRegimeType.SmartChop
+                                        || smart.SmartType == SmartRegimeType.SmartSqueeze
+                                        || smart.Confidence < 0.5m;
 
-                    // применяем минимальный шаг
+                    decimal stageFrac = adjR;
+                    decimal minSlMove = 0.5m * atr14_1m; // минимальный сдвиг SL
+                    decimal bufferAdj = isWeakMarket ? beBufferAtr * 0.6m : beBufferAtr; // tighter SL для слабого рынка
+
+                    decimal targetSl = side == PositionSide.Long
+                        ? entry + atr14_1m * (stageFrac - bufferAdj)
+                        : entry - atr14_1m * (stageFrac - bufferAdj);
+
                     decimal newSl = side == PositionSide.Long
                         ? Math.Max(targetSl, entry + minSlMove)
                         : Math.Min(targetSl, entry - minSlMove);
@@ -391,7 +401,7 @@ namespace VertexAutoTradeBinance8.Services
 
                     if (shouldMove)
                     {
-                        _logger.LogWarning("[SL MOVE][{symbol}][{side}] → {sl}", symbol, side, newSl);
+                        _logger.LogWarning("[SL MOVE][{symbol}][{side}] → {sl} weakMarket={weak}", symbol, side, newSl, isWeakMarket);
                         SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, qty, newSl, pos, ct));
                     }
                 }
@@ -402,9 +412,7 @@ namespace VertexAutoTradeBinance8.Services
                 ProbeSide(shortPos, PositionSide.Short);
                 _probeExecuted[symbol + "_Short"] = true;
             }
-            ///////////////////////////////////////////////////
-
-
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
             //   HandleSideAsync вызывается как обычно
             if (hasLong)
