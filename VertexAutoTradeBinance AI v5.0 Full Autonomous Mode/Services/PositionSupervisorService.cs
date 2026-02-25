@@ -284,125 +284,186 @@ namespace VertexAutoTradeBinance8.Services
 
                     if (pos == null || pos.Quantity == 0)
                     {
-                        _pendingReset.TryRemove(key, out _);
-                        _beStage.TryRemove(key, out _);
                         _beLevel.TryRemove(key, out _);
                         return;
                     }
 
-                    var qty = Math.Abs(pos.Quantity);
-                    var entry = pos.EntryPrice;
-                    var mark = pos.MarkPrice;
+                    decimal qty = Math.Abs(pos.Quantity);
+                    decimal entry = pos.EntryPrice;
+                    decimal mark = pos.MarkPrice;
 
                     if (qty <= 0 || entry <= 0 || mark <= 0)
                         return;
 
-                    decimal distance = side == PositionSide.Long ? mark - entry : entry - mark;
-                    if (distance <= 0) return;
+                    decimal distance = side == PositionSide.Long
+                        ? mark - entry
+                        : entry - mark;
 
-                    // дробный R для smooth SL
+                    if (distance <= 0)
+                        return;
+
                     decimal R = distance / atr14_1m;
 
-                    // =======================
-                    // SMART REGIME PARAMETERS
-                    // =======================
                     SmartRegimeInfo smart = smart1m ?? new SmartRegimeInfo
                     {
                         VolRegime = VolatilityRegime.Normal,
                         Confidence = 0.5m,
-                        RiskBias = 1.0m,
-                        EntryProfile = "STD",
-                        IsControlledTrend = false,
-                        IsVolCompression = false
+                        RiskBias = 1.0m
                     };
 
-                    // адаптируем R под RiskBias и Confidence
                     decimal adjR = R * smart.RiskBias * smart.Confidence;
 
-                    // =======================
-                    // VOLATILITY BASED PARAMETERS
-                    // =======================
-                    decimal beTriggerR, beBufferAtr, trailAtrBase;
-                    switch (smart.VolRegime)
-                    {
-                        case VolatilityRegime.High:
-                            beTriggerR = 1.4m;
-                            beBufferAtr = 0.35m;
-                            trailAtrBase = 1.6m;
-                            break;
-                        case VolatilityRegime.Low:
-                            beTriggerR = 1.2m;
-                            beBufferAtr = 0.18m;
-                            trailAtrBase = 1.0m;
-                            break;
-                        default:
-                            beTriggerR = 1.3m;
-                            beBufferAtr = 0.25m;
-                            trailAtrBase = 1.3m;
-                            break;
-                    }
+                    bool isMajor =
+    symbol.StartsWith("BTC") ||
+    symbol.StartsWith("ETH");
 
-                    // минимальный R для активации BE/partial
+
+
+                    // ---- BE TRIGGER ----
+                    decimal beTriggerR = isMajor ? 1.6m : 1.3m;
                     if (adjR < beTriggerR)
                         return;
 
-                    // Stage
                     int stage = (int)Math.Floor(adjR);
                     int prevStage = _beLevel.GetOrAdd(key, 0);
-                    if (stage <= prevStage) return;
+
+                    if (stage <= prevStage)
+                        return;
+
                     _beLevel[key] = stage;
 
-                    _logger.LogInformation("[ATR STAGE][{symbol}][{side}] {prev} → {stage}  R={R:F2} adjR={adjR:F2}",
+                    _logger.LogInformation(
+                        "[ATR STAGE][{symbol}][{side}] {prev} → {stage} R={R:F2} adjR={adjR:F2}",
                         symbol, side, prevStage, stage, R, adjR);
 
-                    // =======================
-                    // PARTIAL CLOSE LOGIC
-                    // =======================
-                    if (stage >= 1)
+                    // =====================================================
+                    // STAGE 1 → PARTIAL + BE
+                    // =====================================================
+                    decimal closePercent;
+                    //if (stage == 1)
+                    //{
+                    //    closePercent = 0.28m; // стабильный первый фикс
+                    //    decimal closeQty = Math.Round(qty * closePercent, 8);
+
+                    //    if (closeQty > 0)
+                    //    {
+                    //        SafeFireAndForget(
+                    //            ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
+                    //    }
+
+                    //    decimal remainingQty = Math.Abs(pos.Quantity);
+
+                    //    decimal bePrice = side == PositionSide.Long
+                    //        ? entry + atr14_1m * 0.1m
+                    //        : entry - atr14_1m * 0.1m;
+
+                    //    SafeFireAndForget(
+                    //        PlaceStopLossAtBeAsync(
+                    //            client,
+                    //            symbol,
+                    //            side,
+                    //            remainingQty,
+                    //            bePrice,
+                    //            pos,
+                    //            ct));
+
+                    //    return; // НЕ ТРЕЙЛИМ НА ЭТОМ ШАГЕ
+                    //}
+                    if (stage == 1)
                     {
-                        // адаптируем qty под RiskBias и Confidence
-                        decimal closePercent = stage switch
-                        {
-                            1 => 0.15m * smart.RiskBias * smart.Confidence,
-                            2 => 0.20m * smart.RiskBias * smart.Confidence,
-                            3 => 0.20m * smart.RiskBias * smart.Confidence,
-                            _ => 0.10m * smart.RiskBias * smart.Confidence
-                        };
+                       
+                        if (isMajor)
+                            closePercent = 0.38m;   // 35-40% фикс
+                        else
+                            closePercent = 0.28m;
 
                         decimal closeQty = Math.Round(qty * closePercent, 8);
+
                         if (closeQty > 0)
                         {
-                            _logger.LogWarning("[PARTIAL][{symbol}][{side}] stage={stage} qty={qty}", symbol, side, stage, closeQty);
-                            SafeFireAndForget(ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
+                            SafeFireAndForget(
+                                ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
                         }
+
+                        decimal remainingQty = Math.Abs(pos.Quantity);
+
+                        decimal bePrice;
+
+                        if (isMajor)
+                        {
+                            // BE только в реальном плюсе
+                            bePrice = side == PositionSide.Long
+                                ? entry + atr14_1m * 0.4m   // +0.4 ATR
+                                : entry - atr14_1m * 0.4m;
+                        }
+                        else
+                        {
+                            bePrice = side == PositionSide.Long
+                                ? entry + atr14_1m * 0.1m
+                                : entry - atr14_1m * 0.1m;
+                        }
+
+                        SafeFireAndForget(
+                            PlaceStopLossAtBeAsync(
+                                client,
+                                symbol,
+                                side,
+                                remainingQty,
+                                bePrice,
+                                pos,
+                                ct));
+
+                        return;
+                    }
+                    // =====================================================
+                    // STAGE 2+ → PARTIAL + TRAIL
+                    // =====================================================
+                    closePercent = stage switch
+                    {
+                        2 => 0.20m,
+                        3 => 0.15m,
+                        _ => 0.10m
+                    };
+
+                    decimal stageCloseQty = Math.Round(qty * closePercent, 8);
+
+                    if (stageCloseQty > 0)
+                    {
+                        SafeFireAndForget(
+                            ClosePartialAsync(client, symbol, side, stageCloseQty, pos, ct));
                     }
 
-                    // =======================
-                    // TIGHT / SMART STOP LOSS
-                    // =======================
-                    bool isWeakMarket = smart.SmartType == SmartRegimeType.SmartChop
-                                        || smart.SmartType == SmartRegimeType.SmartSqueeze
-                                        || smart.Confidence < 0.5m;
+                    // ---- TRAILING LOGIC ----
 
-                    decimal stageFrac = adjR;
-                    decimal minSlMove = 0.5m * atr14_1m; // минимальный сдвиг SL
-                    decimal bufferAdj = isWeakMarket ? beBufferAtr * 0.6m : beBufferAtr; // tighter SL для слабого рынка
+                    decimal trailAtr = stage >= 3 ? 1.1m : 1.4m;
 
                     decimal targetSl = side == PositionSide.Long
-                        ? entry + atr14_1m * (stageFrac - bufferAdj)
-                        : entry - atr14_1m * (stageFrac - bufferAdj);
+                        ? mark - atr14_1m * trailAtr
+                        : mark + atr14_1m * trailAtr;
 
-                    decimal newSl = side == PositionSide.Long
-                        ? Math.Max(targetSl, entry + minSlMove)
-                        : Math.Min(targetSl, entry - minSlMove);
+                    var slOrder = openOrders
+                        .FirstOrDefault(o =>
+                            o.PositionSide == side &&
+                            o.Type == FuturesOrderType.StopMarket);
 
-                    var slOrder = openOrders.FirstOrDefault(o => o.PositionSide == side && o.Type == FuturesOrderType.StopMarket);
-                    bool shouldMove = slOrder == null || (side == PositionSide.Long ? newSl > (slOrder.StopPrice ?? 0) : newSl < (slOrder.StopPrice ?? 0));
+                    bool shouldMove = slOrder == null ||
+                        (side == PositionSide.Long
+                            ? targetSl > (slOrder.StopPrice ?? 0)
+                            : targetSl < (slOrder.StopPrice ?? 0));
 
                     if (shouldMove)
                     {
-                        _logger.LogWarning("[SL MOVE][{symbol}][{side}] → {sl} weakMarket={weak}", symbol, side, newSl, isWeakMarket);
-                        SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, qty, newSl, pos, ct));
+                        decimal remainingQty = Math.Abs(pos.Quantity);
+
+                        SafeFireAndForget(
+                            PlaceStopLossAtBeAsync(
+                                client,
+                                symbol,
+                                side,
+                                remainingQty,
+                                targetSl,
+                                pos,
+                                ct));
                     }
                 }
 
