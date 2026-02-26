@@ -59,8 +59,11 @@ public sealed class KlineBufferPersistence
                     continue;
 
                 var symbol = parts[0];
-                if (!Enum.TryParse<KlineInterval>(parts[1], out var tf))
+                if (!Enum.TryParse<KlineInterval>(parts[1], ignoreCase: true, out var tf))
+                {
+                    _logger.LogWarning("[BOOT] Unknown timeframe in snapshot: {tf}", parts[1]);
                     continue;
+                }
 
                 if (stream.Value.ValueKind != JsonValueKind.Array)
                     continue;
@@ -94,9 +97,12 @@ public sealed class KlineBufferPersistence
                             _buffer.Upsert(symbol, tf, k);
                         }
                     }
-                    catch
+                    catch (Exception ex)
                     {
                         skippedItems++;
+                        _logger.LogWarning(ex,
+                            "[BOOT] Failed to deserialize kline item in {stream}",
+                            key);
                     }
                 }
 
@@ -122,7 +128,10 @@ public sealed class KlineBufferPersistence
     {
         try
         {
-            var dump = _buffer.DumpAll();
+            var dump = _buffer.DumpAll()
+    .ToDictionary(
+        kv => kv.Key,
+        kv => kv.Value.ToList());
 
             var dtoDump = new Dictionary<string, List<KlineSnapshotDto>>(dump.Count);
 
@@ -149,8 +158,11 @@ public sealed class KlineBufferPersistence
             var json = JsonSerializer.Serialize(dtoDump, JsonOpts);
 
             var tmp = _path + ".tmp";
+
             await File.WriteAllTextAsync(tmp, json, ct);
-            File.Move(tmp, _path, overwrite: true);
+
+            // атомарная замена
+            File.Replace(tmp, _path, null);
 
             _logger.LogInformation(
                 "[BOOT] Kline buffer saved: {cnt} streams",
