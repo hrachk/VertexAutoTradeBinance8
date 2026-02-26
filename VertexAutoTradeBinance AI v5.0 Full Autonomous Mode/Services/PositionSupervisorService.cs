@@ -320,11 +320,16 @@ namespace VertexAutoTradeBinance8.Services
 
 
                     // ---- BE TRIGGER ----
-                    decimal beTriggerR = isMajor ? 1.6m : 1.3m;
+                    decimal beTriggerR = isMajor ? 1.35m : 1.1m;
                     if (adjR < beTriggerR)
                         return;
 
-                    int stage = (int)Math.Floor(adjR);
+                    int stage;
+
+                    if (adjR >= 0.9m && adjR < 1m)
+                        stage = 1;
+                    else
+                        stage = (int)Math.Floor(adjR);
                     int prevStage = _beLevel.GetOrAdd(key, 0);
 
                     if (stage <= prevStage)
@@ -373,9 +378,9 @@ namespace VertexAutoTradeBinance8.Services
                     {
                        
                         if (isMajor)
-                            closePercent = 0.38m;   // 35-40% фикс
+                            closePercent = 0.42m;   // 35-40% фикс
                         else
-                            closePercent = 0.28m;
+                            closePercent = 0.32m;
 
                         decimal closeQty = Math.Round(qty * closePercent, 8);
 
@@ -393,14 +398,14 @@ namespace VertexAutoTradeBinance8.Services
                         {
                             // BE только в реальном плюсе
                             bePrice = side == PositionSide.Long
-                                ? entry + atr14_1m * 0.4m   // +0.4 ATR
-                                : entry - atr14_1m * 0.4m;
+                                ? entry + atr14_1m * 0.25m   // +0.4 ATR
+                                : entry - atr14_1m * 0.25m;
                         }
                         else
                         {
                             bePrice = side == PositionSide.Long
-                                ? entry + atr14_1m * 0.1m
-                                : entry - atr14_1m * 0.1m;
+                                ? entry + atr14_1m * 0.13m
+                                : entry - atr14_1m * 0.13m;
                         }
 
                         SafeFireAndForget(
