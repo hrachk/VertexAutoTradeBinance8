@@ -318,69 +318,41 @@ namespace VertexAutoTradeBinance8.Services
     symbol.StartsWith("ETH");
 
 
-
-                    // ---- BE TRIGGER ----
-                    decimal beTriggerR = isMajor ? 1.35m : 1.1m;
+                    // ---- SMART BE TRIGGER ----
+                    decimal beTriggerR = isMajor ? 1.3m : 0.75m;
                     if (adjR < beTriggerR)
                         return;
 
-                    int stage;
+                    // ---- DYNAMIC STEP SIZE ----
+                    decimal step = isMajor ? 0.75m : 0.4m;
 
-                    if (adjR >= 0.9m && adjR < 1m)
-                        stage = 1;
-                    else
-                        stage = (int)Math.Floor(adjR);
+                    // Stage рассчитываем от триггера
+                    int stage = (int)Math.Floor((adjR - beTriggerR) / step) + 1;
+
                     int prevStage = _beLevel.GetOrAdd(key, 0);
 
+                    // защита от отката или повторов
                     if (stage <= prevStage)
                         return;
 
                     _beLevel[key] = stage;
 
                     _logger.LogInformation(
-                        "[ATR STAGE][{symbol}][{side}] {prev} → {stage} R={R:F2} adjR={adjR:F2}",
+                        "[SMART BE STAGE][{symbol}][{side}] {prev} → {stage} | R={R:F2} adjR={adjR:F2}",
                         symbol, side, prevStage, stage, R, adjR);
 
                     // =====================================================
                     // STAGE 1 → PARTIAL + BE
                     // =====================================================
                     decimal closePercent;
-                    //if (stage == 1)
-                    //{
-                    //    closePercent = 0.28m; // стабильный первый фикс
-                    //    decimal closeQty = Math.Round(qty * closePercent, 8);
-
-                    //    if (closeQty > 0)
-                    //    {
-                    //        SafeFireAndForget(
-                    //            ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
-                    //    }
-
-                    //    decimal remainingQty = Math.Abs(pos.Quantity);
-
-                    //    decimal bePrice = side == PositionSide.Long
-                    //        ? entry + atr14_1m * 0.1m
-                    //        : entry - atr14_1m * 0.1m;
-
-                    //    SafeFireAndForget(
-                    //        PlaceStopLossAtBeAsync(
-                    //            client,
-                    //            symbol,
-                    //            side,
-                    //            remainingQty,
-                    //            bePrice,
-                    //            pos,
-                    //            ct));
-
-                    //    return; // НЕ ТРЕЙЛИМ НА ЭТОМ ШАГЕ
-                    //}
+                   
                     if (stage == 1)
                     {
                        
                         if (isMajor)
-                            closePercent = 0.42m;   // 35-40% фикс
+                            closePercent = 0.45m;   // 35-40% фикс
                         else
-                            closePercent = 0.32m;
+                            closePercent = 0.35m;
 
                         decimal closeQty = Math.Round(qty * closePercent, 8);
 
@@ -398,14 +370,14 @@ namespace VertexAutoTradeBinance8.Services
                         {
                             // BE только в реальном плюсе
                             bePrice = side == PositionSide.Long
-                                ? entry + atr14_1m * 0.25m   // +0.4 ATR
-                                : entry - atr14_1m * 0.25m;
+                                ? entry + atr14_1m * 0.18m   // +0.4 ATR
+                                : entry - atr14_1m * 0.18m;
                         }
                         else
                         {
                             bePrice = side == PositionSide.Long
-                                ? entry + atr14_1m * 0.13m
-                                : entry - atr14_1m * 0.13m;
+                                ? entry + atr14_1m * 0.1m
+                                : entry - atr14_1m * 0.1m;
                         }
 
                         SafeFireAndForget(
