@@ -9,6 +9,7 @@ public sealed class KlineBufferPersistence
     private readonly MarketDataKlineBuffer _buffer;
     private readonly string _path;
     private readonly ILogger<KlineBufferPersistence> _logger;
+    private readonly SemaphoreSlim _ioLock = new(1, 1);
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -126,12 +127,14 @@ public sealed class KlineBufferPersistence
     // =====================================================================
     public async Task SaveAsync(CancellationToken ct)
     {
+        await _ioLock.WaitAsync(ct);
+
         try
         {
             var dump = _buffer.DumpAll()
-    .ToDictionary(
-        kv => kv.Key,
-        kv => kv.Value.ToList());
+                .ToDictionary(
+                    kv => kv.Key,
+                    kv => kv.Value.ToList());
 
             var dtoDump = new Dictionary<string, List<KlineSnapshotDto>>(dump.Count);
 
@@ -161,8 +164,33 @@ public sealed class KlineBufferPersistence
 
             await File.WriteAllTextAsync(tmp, json, ct);
 
-            // атомарная замена
-            File.Replace(tmp, _path, null);
+            // снимаем readonly если вдруг стоит
+            if (File.Exists(_path))
+            {
+                var attr = File.GetAttributes(_path);
+                if (attr.HasFlag(FileAttributes.ReadOnly))
+                    File.SetAttributes(_path, attr & ~FileAttributes.ReadOnly);
+            }
+
+            try
+            {
+                // попытка атомарной замены
+                if (File.Exists(_path))
+                    File.Replace(tmp, _path, null);
+                else
+                    File.Move(tmp, _path);
+            }
+            catch (IOException ioEx)
+            {
+                _logger.LogWarning(ioEx,
+                    "[BOOT] Replace failed → fallback delete+move");
+
+                // fallback
+                if (File.Exists(_path))
+                    File.Delete(_path);
+
+                File.Move(tmp, _path);
+            }
 
             _logger.LogInformation(
                 "[BOOT] Kline buffer saved: {cnt} streams",
@@ -171,6 +199,10 @@ public sealed class KlineBufferPersistence
         catch (Exception ex)
         {
             _logger.LogError(ex, "[BOOT] Failed to save kline buffer");
+        }
+        finally
+        {
+            _ioLock.Release();
         }
     }
 }

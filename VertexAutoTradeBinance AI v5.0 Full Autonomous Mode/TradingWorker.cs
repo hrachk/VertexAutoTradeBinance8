@@ -115,7 +115,8 @@ namespace VertexAutoTradeBinance8
     Channel.CreateBounded<TradeSignal>(
         new BoundedChannelOptions(2000)
         {
-            FullMode = BoundedChannelFullMode.DropOldest,
+            //FullMode = BoundedChannelFullMode.DropOldest,
+            FullMode = BoundedChannelFullMode.Wait,
             SingleReader = true,
             SingleWriter = false
         });
@@ -254,9 +255,9 @@ namespace VertexAutoTradeBinance8
                 await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneHour, 60, ct);
                 await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FourHour, 60, ct);
                 await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneDay, 60, ct);
-                await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneHour, 60, ct);
+                await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneWeek, 60, ct);
 
-                _logger.LogInformation("[MD][HTF] warmup {symbol} 1H/4H/1D/1H", s);
+                _logger.LogInformation("[MD][HTF] warmup {symbol} 1H/4H/1D/1W", s);
             }
         }
 
@@ -463,7 +464,7 @@ _strategy.OnSignalGenerated += signal =>
             // 🔒 INIT BASE DEPOSIT (ONCE, HARD ANCHOR)
             // =======================================================
            // _engineStateSnapshot.EnsureDepositInitialized(_options.Deposit);
-            var realBalance = await TryGetRealBalanceSafeAsync(ct);
+            var realBalance = await GetBalanceCachedAsync(ct);
 
             decimal depositForCalc = realBalance > 0
             ? realBalance
@@ -531,6 +532,12 @@ _strategy.OnSignalGenerated += signal =>
                     }
                 }
 
+                var activePositionsTask = _supervisor.GetActivePositionsCountAsync(ct);
+                var balanceTask = GetBalanceCachedAsync(ct);
+                await Task.WhenAll(activePositionsTask, balanceTask);
+                var activePositions = activePositionsTask.Result;
+                var balance = balanceTask.Result;
+
                 // ===== ROTATION: ПО КАЖДОМУ СИМВОЛУ =====
                 foreach (var symbol in trackedSymbols)
                 {
@@ -553,8 +560,8 @@ _strategy.OnSignalGenerated += signal =>
                     state.UniverseSize = _symbols.ActiveSymbols.Count;
                     state.TrackedSymbols = trackedSymbols.Count;
                     state.Timeframe = selectedTf;
-                     state.OpenPositions = await _supervisor.GetActivePositionsCountAsync(ct);
-                   state.BalanceUsdt = await TryGetRealBalanceSafeAsync(ct);
+                    state.OpenPositions = activePositions;
+                    state.BalanceUsdt = balance;
 
                     _engineStateSnapshot.Save(state);
 
@@ -577,12 +584,22 @@ _strategy.OnSignalGenerated += signal =>
                 await Task.Delay(80, ct);
             }
         }
+ 
+        private decimal _cachedBalance;
+        private DateTime _lastBalanceFetchUtc = DateTime.MinValue;
+        private static readonly TimeSpan BalanceTtl = TimeSpan.FromSeconds(15);
+        private readonly SemaphoreSlim _balanceLock = new(1, 1);
 
-        public async Task<decimal> TryGetRealBalanceSafeAsync(CancellationToken ct)
+        public async Task<decimal> GetBalanceCachedAsync(CancellationToken ct)
         {
+            if (DateTime.UtcNow - _lastBalanceFetchUtc < BalanceTtl)
+                return _cachedBalance;
+
+            await _balanceLock.WaitAsync(ct);
             try
             {
-                _logger.LogInformation("[BALANCE] Requesting USDT Futures account info...");
+                if (DateTime.UtcNow - _lastBalanceFetchUtc < BalanceTtl)
+                    return _cachedBalance;
 
                 var acc = await _factory
                     .CreateRestClient()
@@ -590,37 +607,19 @@ _strategy.OnSignalGenerated += signal =>
                     .Account
                     .GetAccountInfoV3Async(ct: ct);
 
-                if (!acc.Success)
+                if (acc.Success && acc.Data != null)
                 {
-                    _logger.LogWarning(
-                        "[BALANCE] Request failed. Error: {Error}",
-                        acc.Error?.Message ?? "unknown");
-                    return 0m;
+                    _cachedBalance = acc.Data.TotalWalletBalance;
+                    _lastBalanceFetchUtc = DateTime.UtcNow;
                 }
 
-                if (acc.Data == null)
-                {
-                    _logger.LogWarning("[BALANCE] Response success but Data is NULL.");
-                    return 0m;
-                }
-
-                var wallet = acc.Data.TotalWalletBalance;
-                var available = acc.Data.AvailableBalance;
-                var unrealized = acc.Data.TotalUnrealizedProfit;
-
-                _logger.LogInformation(
-                    "[BALANCE] Wallet={Wallet} Available={Available} UnrealizedPnL={Unrealized}",
-                    wallet, available, unrealized);
-
-                return wallet;
+                return _cachedBalance;
             }
-            catch (Exception ex)
+            finally
             {
-                _logger.LogError(ex, "[BALANCE] Exception while requesting balance");
-                return 0m;
+                _balanceLock.Release();
             }
         }
-
 
 
         private async Task HandleStrategySignalAsync(
@@ -659,8 +658,6 @@ _strategy.OnSignalGenerated += signal =>
                 ConsoleSymbolTableFormatter.UpdateTf(
                     symbol, tf, "▶ STRAT", signal.Side.ToString());
 
-                
-
                 // =====================================================
                 // 2) COOLDOWN
                 // =====================================================
@@ -673,17 +670,15 @@ _strategy.OnSignalGenerated += signal =>
                         ct);
                     return;
                 }
-
-                // =====================================================
-                // 3) AI CONFIRMATION
-                // =====================================================
-                AiDecision ai;
+            var klines = await _marketDataFacade
+            .GetKlinesAsync(symbol, tf, 200, ct)
+            .ConfigureAwait(false);
+            // =====================================================
+            // 3) AI CONFIRMATION
+            // =====================================================
+            AiDecision ai;
                 try
                 {
-                    var klines = await _marketDataFacade
-                        .GetKlinesAsync(symbol, tf, 200, ct)
-                        .ConfigureAwait(false);
-
                     ai = _predict.Decide(symbol, tf, klines, signal);
                 }
                 catch (Exception ex)
@@ -740,9 +735,7 @@ _strategy.OnSignalGenerated += signal =>
                 LiquidityGuardResult liq;
                 try
                 {
-                    var klines = await _marketDataFacade
-                        .GetKlinesAsync(symbol, tf, 120, ct)
-                        .ConfigureAwait(false);
+                    
 
                     liq = _liq.Analyze(
                         symbol, tf, klines,
@@ -774,30 +767,7 @@ _strategy.OnSignalGenerated += signal =>
             var Level = trading.Leverage > 0
                 ? trading.Leverage
                 : (signal.Leverage ?? 1m);
-            //// =====================================================
-            //// 6) QTY
-            //// =====================================================
-            //var qty = await _risk.CalculateSafeQty(
-            //        signal,
-            //        symbol,
-            //        signal.EntryPrice,
-            //        signal.StopLoss,
-            //        riskMult,
-            //        signal.SafetyRiskMultiplier,
-            //        Level,
-            //        signal.Side,
-            //        signal.TakeProfits,
-            //        ct).ConfigureAwait(false);
-
-            //    if (qty <= 0)
-            //    {
-            //        await RejectAsync(
-            //            signal, symbol, tf,
-            //            "RISK",
-            //            "NO_BALANCE_OR_MIN_NOTIONAL",
-            //            ct);
-            //        return;
-            //    }
+           
             // =====================================================
             // 6) QTY — PropDesk version
             // =====================================================
@@ -818,21 +788,7 @@ _strategy.OnSignalGenerated += signal =>
                 decimal dynMin = Math.Max(guardValue, _risk.LastBalanceUsdt * trading.MinNotionalGuardPercent);
                 minNotional = Math.Max(minNotional, dynMin);
             }
-
-            // Считаем qty через PropDesk engine
-            //var qty = _risk.GetPropDeskQty(signal, _risk.LastBalanceUsdt, minNotional, step, minQty, riskMult, trading);
-
-
-            //if (qty <= 0)
-            //{
-            //    await RejectAsync(
-            //        signal, symbol, tf,
-            //        "RISK",
-            //        "NO_BALANCE_OR_MIN_NOTIONAL",
-            //        ct);
-            //    return;
-            //}
-
+ 
 
             var balance = await _risk.GetRealtimeBalanceAsync(ct);
 
@@ -855,10 +811,6 @@ _strategy.OnSignalGenerated += signal =>
             // =====================================================
             try
             {
-                    var klines = await _marketDataFacade
-                        .GetKlinesAsync(symbol, tf, 120, ct)
-                        .ConfigureAwait(false);
-
                     signal.StopLoss =
                         _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
 
