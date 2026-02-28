@@ -319,12 +319,12 @@ namespace VertexAutoTradeBinance8.Services
 
 
                     // ---- SMART BE TRIGGER ----
-                    decimal beTriggerR = isMajor ? 1.3m : 0.75m;
+                    decimal beTriggerR = isMajor ? 1.3m : 0.55m;
                     if (adjR < beTriggerR)
                         return;
 
                     // ---- DYNAMIC STEP SIZE ----
-                    decimal step = isMajor ? 0.75m : 0.4m;
+                    decimal step = isMajor ? 0.75m : 0.35m;
 
                     // Stage рассчитываем от триггера
                     int stage = (int)Math.Floor((adjR - beTriggerR) / step) + 1;
