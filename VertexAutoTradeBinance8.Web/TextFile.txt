@@ -56,6 +56,9 @@ C:\Tools\nssm.exe stop Engine_Client_001
 C:\Tools\nssm.exe start Engine_Client_001
 
 
+C:\Tools\nssm.exe remove Engine_RIVERUSDT confirm
+C:\Tools\nssm.exe remove Engine_Web_RIVERUSDT confirm
+
 C:\Tools\nssm.exe install Engine_Client_001 C:\Vertex\Engines\client_001\VertexAutoTradeBinance8.exe
 
 

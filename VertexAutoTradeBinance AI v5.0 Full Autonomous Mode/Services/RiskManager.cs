@@ -82,6 +82,11 @@ namespace VertexAutoTradeBinance8.Services
                 return 0;
 
             decimal qty = Math.Floor((finalNotional / entry) / step) * step;
+
+            if (qty * entry < minNotional)
+            {
+                qty = Math.Ceiling((minNotional / entry) / step) * step;
+            }
             if (qty < minQty) return 0;
 
             decimal requiredMargin = (qty * entry) / leverage;
@@ -172,12 +177,14 @@ namespace VertexAutoTradeBinance8.Services
             maxRisk = Math.Clamp(maxRisk, free * 0.005m, free * 0.20m);
 
             // 🔹 6️⃣ Расчет qty через универсальный метод
+            decimal trueRiskPercent = baseRiskPercent * finalRisk;
+
             decimal qty = CalculateUniversalQty(
                 free,
                 entryPrice,
                 stopLoss,
                 leverage,
-                finalRisk,
+                trueRiskPercent,
                 binanceMinNotional,
                 step,
                 minQty
@@ -195,7 +202,11 @@ namespace VertexAutoTradeBinance8.Services
                 for (int i = 0; i < 12; i++)
                 {
                     qty = Math.Floor((targetNotional / entryPrice) / step) * step;
-                    if (qty < minQty) qty = minQty;
+
+                    if (qty * entryPrice < binanceMinNotional)
+                    {
+                        qty = Math.Ceiling((binanceMinNotional / entryPrice) / step) * step;
+                    }
 
                     notional = qty * entryPrice;
                     requiredMargin = notional / leverage;
