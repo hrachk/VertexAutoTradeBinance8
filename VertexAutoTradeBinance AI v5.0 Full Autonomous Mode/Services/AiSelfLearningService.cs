@@ -1201,7 +1201,7 @@ namespace VertexAutoTradeBinance8.Services
             lock (_lock)
             {
                 return _tradeHistory
-                    .OrderByDescending(t => t.Time)
+                    .OrderBy(t => t.Time)
                     .Take(maxCount)
                     .ToList();
             }
