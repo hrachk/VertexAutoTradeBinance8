@@ -815,24 +815,25 @@ namespace VertexAutoTradeBinance8.Strategy
         /// // ----------------------------- SIGNAL PATTERNS -----------------------------
 
         bool HasImpulseBefore(
-    IReadOnlyList<BinanceFuturesUsdtKline> klines,
-    int last,
-    decimal atr)
-        {
-            // ищем импульс в 3–6 свечах ДО
-            for (int i = last - 6; i < last - 1; i++)
+        IReadOnlyList<BinanceFuturesUsdtKline> klines,
+        int last,
+        decimal atr)
             {
-                if (i < 1) continue;
+                // ищем импульс в 3–6 свечах ДО
+                for (int i = last - 6; i < last - 1; i++)
+                {
+                    if (i < 1) continue;
 
-                var k = klines[i];
-                var body = Math.Abs(k.ClosePrice - k.OpenPrice);
+                    var k = klines[i];
+                    var body = Math.Abs(k.ClosePrice - k.OpenPrice);
 
-                if (body >= atr * 0.8m)
-                    return true;
+                    if (body >= atr * 0.8m)
+                        return true;
+                }
+
+                return false;
             }
 
-            return false;
-        }
         private TradeSignal? TryLiquidityGrab(
             string symbol,
             KlineInterval interval,
@@ -1157,6 +1158,10 @@ namespace VertexAutoTradeBinance8.Strategy
             if (!volumeExpansion)
                 return null;
 
+
+            // запрещаем если объём уже падает
+            if (klines[last].Volume < klines[last - 1].Volume)
+                return null;
             // ============================================================
             // 4️⃣ IMPULSE QUALITY
             // ============================================================
@@ -1287,7 +1292,21 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return false;
         }
+        private static bool TooManyImpulseBars(IReadOnlyList<BinanceFuturesUsdtKline> klines, int last, decimal atr)
+        {
+            int count = 0;
 
+            for (int i = last; i > last - 8 && i > 0; i--)
+            {
+                var body = Math.Abs(klines[i].ClosePrice - klines[i].OpenPrice);
+                if (body > atr * 0.9m)
+                    count++;
+                else
+                    break;
+            }
+
+            return count >= 4;
+        }
         // ----------------------------- REGIME/CONF HELPERS -----------------------------
         //private static int GetAdaptiveThreshold(MarketRegime baseRegime, SmartRegimeType smartType, decimal volatility, decimal slope)
         //{
@@ -1530,6 +1549,10 @@ namespace VertexAutoTradeBinance8.Strategy
                 (body0 + body1) <= atr * 2.2m; // anti-climax
 
             if (!impulseOk)
+                return null;
+
+            // ===== ANTI OVER-EXTENSION FILTER =====
+            if (TooManyImpulseBars(klines, i, atr))
                 return null;
 
             // --- direction ---

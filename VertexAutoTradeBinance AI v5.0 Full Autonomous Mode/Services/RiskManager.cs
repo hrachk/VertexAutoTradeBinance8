@@ -1,4 +1,5 @@
 ﻿using Binance.Net.Enums;
+using CryptoExchange.Net;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 
@@ -51,7 +52,51 @@ namespace VertexAutoTradeBinance8.Services
             return 0.007m;
         }
 
-        // 🔹 Универсальный расчет qty
+        public int GetPrecision(decimal step)
+        {
+            step = step.Normalize(); // убираем хвосты типа 0.0100000
+
+            int[] bits = decimal.GetBits(step);
+            int scale = (bits[3] >> 16) & 0x7F;
+            return scale;
+        }
+
+        public decimal GetPropDeskQty(
+           TradeSignal signal,
+           decimal balance,
+           decimal minNotional,
+           decimal step,
+           decimal minQty,
+           decimal riskMult,
+           TradingOptions trading)
+        {
+            if (signal == null || balance <= 0 || step <= 0)
+                return 0;
+
+            decimal leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
+
+            // 🔹 динамический риск на баланс
+            decimal dynamicRisk = GetDynamicBaseRisk(balance);
+            decimal finalRisk = dynamicRisk * riskMult * (signal.SafetyRiskMultiplier > 0 ? signal.SafetyRiskMultiplier : 1m);
+
+            // 🔹 1️⃣ Расчёт qty через улучшенный CalculateUniversalQty
+            decimal qty = CalculateUniversalQty(balance, signal.EntryPrice, signal.StopLoss, leverage, finalRisk, minNotional, step);
+
+            // 🔹 2️⃣ Гарантия minQty
+            if (qty < minQty)
+                qty = minQty;
+
+            // 🔹 3️⃣ Поднимаем qty, если notional < minNotional
+            decimal notional = qty * signal.EntryPrice;
+            if (notional < minNotional)
+                qty = minNotional / signal.EntryPrice;
+
+            // 🔹 4️⃣ Итоговое округление по step
+            qty = Math.Ceiling(qty / step) * step;
+
+            return qty > 0 ? qty : 0;
+        }
+
         private decimal CalculateUniversalQty(
             decimal balance,
             decimal entry,
@@ -59,213 +104,47 @@ namespace VertexAutoTradeBinance8.Services
             decimal leverage,
             decimal riskPercent,
             decimal minNotional,
-            decimal step,
-            decimal minQty)
+            decimal step)
         {
-            if (balance <= 0 || entry <= 0 || stop <= 0 || leverage <= 0)
+            if (balance <= 0 || entry <= 0 || stop <= 0 || leverage <= 0 || step <= 0)
                 return 0;
 
             decimal slPercent = Math.Abs(entry - stop) / entry;
             if (slPercent <= 0)
                 return 0;
 
+            // 🔹 Risk budget
             decimal riskBudget = balance * riskPercent;
             riskBudget = Math.Clamp(riskBudget, balance * 0.005m, balance * 0.20m);
 
-            decimal rawNotional = riskBudget / slPercent;
+            // 🔹 Ограничение по плечу
             decimal maxNotional = balance * leverage * 0.98m;
 
-            decimal finalNotional = Math.Max(rawNotional, minNotional);
-            finalNotional = Math.Min(finalNotional, maxNotional);
+            // 🔹 Выбираем минимальный notional
+            decimal finalNotional = Math.Min(riskBudget / slPercent, maxNotional);
+            finalNotional = Math.Max(finalNotional, minNotional);
 
-            if (finalNotional <= 0)
-                return 0;
+            // 🔥 Boost для дешёвых монет
+            decimal priceBoost = 1m;
 
-            decimal qty = Math.Floor((finalNotional / entry) / step) * step;
+            if (entry < 0.05m)
+                priceBoost = 3m;
+            else if (entry < 0.50m)
+                priceBoost = 2m;
+            else if (entry < 5m)
+                priceBoost = 1.5m;
 
-            if (qty * entry < minNotional)
-            {
-                qty = Math.Ceiling((minNotional / entry) / step) * step;
-            }
-            if (qty < minQty) return 0;
+            finalNotional *= priceBoost;
 
-            decimal requiredMargin = (qty * entry) / leverage;
-            if (requiredMargin > balance) return 0;
+            decimal qty = finalNotional / entry;
 
-            return qty;
+            // 🔹 Расчёт qty
+              qty = finalNotional / entry;
+
+            return qty > 0 ? qty : 0;
         }
-
-        // 🔹 Основной метод расчета безопасного qty
-        public async Task<decimal> CalculateSafeQty(
-            TradeSignal signal,
-            string symbol,
-            decimal entryPrice,
-            decimal stopLoss,
-            decimal riskMultiplier,
-            decimal safetyRiskMultiplier,
-            decimal leverage,
-            SignalSide side,
-            List<decimal> takeProfits,
-            CancellationToken ct)
-        {
-            var trading = _tradingResolver.Resolve(symbol);
-            leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
-            LastRejectReason = null;
-
-            if (entryPrice <= 0 || stopLoss <= 0)
-            {
-                LastRejectReason = "InvalidEntryOrStop";
-                signal.RejectReason = LastRejectReason;
-                _logger.LogWarning("[RISK][{Symbol}] Entry or Stop invalid: entry={Entry} stop={Stop}", symbol, entryPrice, stopLoss);
-                return 0;
-            }
-
-            var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-            decimal step = f.step > 0 ? f.step : 0.001m;
-            decimal minQty = f.minQty > 0 ? f.minQty : step;
-            decimal minNotional = f.minNotional > 0 ? f.minNotional : (trading.MinNotionalGuard > 0 ? trading.MinNotionalGuard : 5m);
-
-            decimal free = await GetRealtimeBalanceAsync(ct);
-            if (free <= 0)
-            {
-                LastRejectReason = "NoBalance";
-                signal.RejectReason = LastRejectReason;
-                _logger.LogWarning("[RISK][{Symbol}] Free balance 0", symbol);
-                return 0;
-            }
-
-            decimal binanceMinNotional = minNotional;
-            if (trading.MinNotional > 0)
-                binanceMinNotional = Math.Max(binanceMinNotional, trading.MinNotional);
-
-            if (trading.MinNotionalGuardPercent > 0)
-            {
-                decimal guardValue = (decimal?)trading.MinNotionalGuard ?? 0m;
-                decimal dynMin = Math.Max(guardValue, free * trading.MinNotionalGuardPercent);
-                binanceMinNotional = Math.Max(binanceMinNotional, dynMin);
-            }
-
-            // 🔹 1️⃣ Базовый риск
-            decimal baseRiskPercent =
-                trading.RiskPerTrade > 0
-                    ? (decimal)trading.RiskPerTrade
-                    : trading.BaseRiskPercent > 0
-                        ? trading.BaseRiskPercent / 100m
-                        : 0.01m;
-
-            // 🔹 2️⃣ Сигнальная сила
-            decimal score = riskMultiplier * safetyRiskMultiplier;
-            bool strong = score >= 1.30m;
-            bool weak = score < 0.80m;
-
-            // 🔹 3️⃣ AI leverage multiplier
-            decimal aiLevMult = await GetAiLeverageMultiplierAsync(symbol, ct);
-
-            // 🔹 4️⃣ Финальный риск с учетом AI
-            decimal finalRisk = riskMultiplier * safetyRiskMultiplier * aiLevMult;
-            finalRisk = Math.Clamp(finalRisk, 0.3m, 2.7m);
-
-            // 🔹 5️⃣ Максимальный риск позиции
-            decimal maxRisk = free * baseRiskPercent * finalRisk;
-
-            if (weak)
-            {
-                _logger.LogInformation($"[RISK][{symbol}] Weak signal detected — lowering position size.");
-                maxRisk *= 0.35m;
-            }
-
-            maxRisk = Math.Clamp(maxRisk, free * 0.005m, free * 0.20m);
-
-            // 🔹 6️⃣ Расчет qty через универсальный метод
-            decimal trueRiskPercent = baseRiskPercent * finalRisk;
-
-            decimal qty = CalculateUniversalQty(
-                free,
-                entryPrice,
-                stopLoss,
-                leverage,
-                trueRiskPercent,
-                binanceMinNotional,
-                step,
-                minQty
-            );
-
-            decimal notional = qty * entryPrice;
-            decimal requiredMargin = notional / leverage;
-
-            // 🔹 7️⃣ Adaptive adjustment
-            if (notional < binanceMinNotional || requiredMargin > free)
-            {
-                decimal maxAllowedNotional = free * leverage * 0.97m;
-                decimal targetNotional = Math.Max(binanceMinNotional, Math.Min(notional * 1.4m, maxAllowedNotional));
-
-                for (int i = 0; i < 12; i++)
-                {
-                    qty = Math.Floor((targetNotional / entryPrice) / step) * step;
-
-                    if (qty * entryPrice < binanceMinNotional)
-                    {
-                        qty = Math.Ceiling((binanceMinNotional / entryPrice) / step) * step;
-                    }
-
-                    notional = qty * entryPrice;
-                    requiredMargin = notional / leverage;
-
-                    if (notional >= binanceMinNotional && requiredMargin <= free) break;
-
-                    targetNotional *= 0.85m;
-                }
-
-                if (notional < binanceMinNotional || requiredMargin > free || qty < minQty)
-                {
-                    LastRejectReason = "MinNotionalAfterAdaptiveReduce";
-                    signal.RejectReason = LastRejectReason;
-                    return 0;
-                }
-            }
-
-            // 🔹 8️⃣ Финальная safety проверка
-            decimal maxPossibleQty = Math.Floor((free * leverage / entryPrice) / step) * step;
-            if (maxPossibleQty < minQty)
-            {
-                LastRejectReason = "FinalSafetyQtyTooLow";
-                signal.RejectReason = LastRejectReason;
-                return 0;
-            }
-
-            _logger.LogInformation(
-                "[RISK][FINAL] {Symbol} {Side} | risk={Risk:P2} lev={Lev} | qty={Qty} notional={Notional:F2} margin={Margin:F2} | minNotional={MinNotional:F2}",
-                symbol,
-                side,
-                finalRisk,
-                leverage,
-                qty,
-                notional,
-                requiredMargin,
-                binanceMinNotional
-            );
-
-            signal.RejectReason = "RISK_OK";
-            return qty;
-        }
-
-        // 🔹 AI Leverage Multiplier
-        private async Task<decimal> GetAiLeverageMultiplierAsync(string symbol, CancellationToken ct)
-        {
-            try
-            {
-                var klines = await _marketData.GetKlines(symbol, KlineInterval.FifteenMinutes, 200);
-                if (klines == null || klines.Count < 30) return 1.0m;
-                decimal m = _aiLeverage.Calculate(symbol, KlineInterval.FifteenMinutes, klines);
-                return m > 0 ? m : 1.0m;
-            }
-            catch
-            {
-                _logger.LogWarning("[RISK][AI] Failed to get AI leverage for {Symbol}", symbol);
-                return 1.0m;
-            }
-        }
-
+ 
+ 
         // 🔹 Получение актуального баланса
         public async Task<decimal> GetRealtimeBalanceAsync(CancellationToken ct)
         {
@@ -284,30 +163,6 @@ namespace VertexAutoTradeBinance8.Services
             return free;
         }
 
-        // 🔹 Получение qty через propDesk (обертка над universal)
-        public decimal GetPropDeskQty(
-            TradeSignal signal,
-            decimal balance,
-            decimal minNotional,
-            decimal step,
-            decimal minQty,
-            decimal riskMult,
-            TradingOptions trading)
-        {
-            decimal leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
-            decimal dynamicRisk = GetDynamicBaseRisk(balance);
-            decimal finalRisk = dynamicRisk * riskMult * (signal.SafetyRiskMultiplier > 0 ? signal.SafetyRiskMultiplier : 1m);
-
-            return CalculateUniversalQty(
-                balance,
-                signal.EntryPrice,
-                signal.StopLoss,
-                leverage,
-                finalRisk,
-                minNotional,
-                step,
-                minQty
-            );
-        }
+       
     }
 }

@@ -311,10 +311,15 @@ namespace VertexAutoTradeBinance8.Services
                         RiskBias = 1.0m
                     };
 
-                    decimal adjR = R * smart.RiskBias * smart.Confidence;
+                    decimal adjR = R * smart.RiskBias;
 
                     bool isMajor =
     symbol.StartsWith("BTC") ||
+    symbol.StartsWith("SOL") ||
+    symbol.StartsWith("LINK") ||
+    symbol.StartsWith("LTC") ||
+    symbol.StartsWith("XRP") ||
+    symbol.StartsWith("BNB") ||
     symbol.StartsWith("ETH");
 
 
@@ -362,7 +367,7 @@ namespace VertexAutoTradeBinance8.Services
                                 ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
                         }
 
-                        decimal remainingQty = Math.Abs(pos.Quantity);
+                        decimal remainingQty = qty - closeQty;
 
                         decimal bePrice;
 
@@ -431,6 +436,15 @@ namespace VertexAutoTradeBinance8.Services
                     if (shouldMove)
                     {
                         decimal remainingQty = Math.Abs(pos.Quantity);
+
+                        if (slOrder != null)
+                        {
+                            SafeFireAndForget(
+                                client.UsdFuturesApi.Trading.CancelOrderAsync(
+                                    symbol,
+                                    slOrder.Id,
+                                    ct:ct));
+                        }
 
                         SafeFireAndForget(
                             PlaceStopLossAtBeAsync(

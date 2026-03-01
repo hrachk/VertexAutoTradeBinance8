@@ -117,38 +117,69 @@ namespace VertexAutoTradeBinance8.Services
             // SYMBOL FILTERS
             // =============================================================
             var filters = await _symbolInfo.GetFuturesFiltersAsync(signal.Symbol);
+
             var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
             var step = filters.step <= 0 ? 0.0001m : filters.step;
+            var minQty = filters.minQty;
+            var minNotional = filters.minNotional;
 
-            quantity = Quantize(quantity, step);
+            quantity = Math.Ceiling(quantity / step) * step;
+            quantity = Math.Round(quantity, _risk.GetPrecision(step), MidpointRounding.AwayFromZero);
 
-            if (quantity <= 0 || quantity < filters.minQty)
+            decimal notional = quantity * signal.EntryPrice;
+
+            // ========================
+            // VALIDATIONS
+            // ========================
+
+            if (quantity < minQty || notional < minNotional)
             {
-                var reason = "QTY_TOO_SMALL";
+                decimal potentialNotional = minQty * signal.EntryPrice;
+
+                if (_risk.LastBalanceUsdt * leverage >= potentialNotional)
+                {
+                    // баланс позволяет — поднимаем qty
+                    quantity = Math.Max(quantity, minQty);
+                    notional = quantity * signal.EntryPrice;
+
+                    // проверяем minNotional после bump
+                    if (notional < minNotional)
+                    {
+                        var reason = $"QTY_TOO_SMALL_AFTER_BUMP | qty={quantity} notional={notional} minNotional={minNotional}";
+                        await _simulator.AppendLifecycleEventAsync(
+                            signal,
+                            stage: "PREFILTER_REJECT",
+                            reason: reason,
+                            attemptNotional: notional,
+                            requiredMinNotional: minNotional);
+                        return OrderResult.Fail(reason);
+                    }
+
+                    _logger.LogInformation("[EXEC][{symbol}] Quantity bumped up to minQty due to small order", signal.Symbol);
+                }
+                else
+                {
+                    // баланс не позволяет — отказ
+                    var reason = $"QTY_TOO_SMALL | qty={quantity} minQty={minQty} notional={notional} minNotional={minNotional}";
+                    await _simulator.AppendLifecycleEventAsync(
+                        signal,
+                        stage: "PREFILTER_REJECT",
+                        reason: reason,
+                        attemptNotional: notional,
+                        requiredMinNotional: minNotional);
+                    return OrderResult.Fail(reason);
+                }
+            }
+            if (notional < minNotional)
+            {
+                var reason = $"MIN_NOTIONAL | notional={notional} minNotional={minNotional}";
 
                 await _simulator.AppendLifecycleEventAsync(
                     signal,
                     stage: "PREFILTER_REJECT",
                     reason: reason,
-                    attemptNotional: 0m,
-                    requiredMinNotional: 0m);
-
-                var rec = _executedSignalService.AddSignalCreated(
-                    signal,
-                    opportunityScore: 0,
-                    atr: signal.Atr ?? 0m,
-                    volatility: 0m,
-                    slope: 0m,
-                    qty: 0m,
-                    notional: 0m,
-                    tags: reason);
-
-                _executedSignalService.UpdateStatus(
-                    signal.Symbol,
-                    rec.Time,
-                    TradeExecutionStatus.Blocked,
-                    0,
-                    0);
+                    attemptNotional: notional,
+                    requiredMinNotional: minNotional);
 
                 return OrderResult.Fail(reason);
             }
@@ -310,7 +341,7 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             quantity = adjustedQty;
-            decimal notional = quantity * entryPrice;
+              notional = quantity * entryPrice;
 
             var execRec = _executedSignalService.AddSignalCreated(
                 signal,

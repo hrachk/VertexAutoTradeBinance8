@@ -790,8 +790,10 @@ _strategy.OnSignalGenerated += signal =>
             }
  
 
+            
             var balance = await _risk.GetRealtimeBalanceAsync(ct);
-
+            // Использовать финальный баланс после всех адаптивных расчетов
+            balance = _risk.LastBalanceUsdt;
             if (balance <= 0)
             {
                 await RejectAsync(signal, symbol, tf, "NO_BALANCE", "Balance is zero",ct);
