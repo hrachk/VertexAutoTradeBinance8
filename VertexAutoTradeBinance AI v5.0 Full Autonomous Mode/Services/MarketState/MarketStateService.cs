@@ -34,7 +34,7 @@ namespace VertexAutoTradeBinance8.Services.MarketState
                 ?? throw new InvalidOperationException("SharedData:Root not configured");
 
             Directory.CreateDirectory(root);
-            _path = Path.Combine(root, "market_state_snapshot.json");
+            _path = Path.Combine(AppContext.BaseDirectory, "market_state_snapshot.json");
 
             try
             {

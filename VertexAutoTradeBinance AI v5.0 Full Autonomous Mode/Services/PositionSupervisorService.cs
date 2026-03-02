@@ -281,7 +281,6 @@ namespace VertexAutoTradeBinance8.Services
                 void ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
                 {
                     var key = symbol + "_" + side;
-
                     if (pos == null || pos.Quantity == 0)
                     {
                         _beLevel.TryRemove(key, out _);
@@ -292,170 +291,76 @@ namespace VertexAutoTradeBinance8.Services
                     decimal entry = pos.EntryPrice;
                     decimal mark = pos.MarkPrice;
 
-                    if (qty <= 0 || entry <= 0 || mark <= 0)
-                        return;
+                    if (qty <= 0 || entry <= 0 || mark <= 0) return;
 
-                    decimal distance = side == PositionSide.Long
-                        ? mark - entry
-                        : entry - mark;
-
-                    if (distance <= 0)
-                        return;
+                    decimal distance = side == PositionSide.Long ? mark - entry : entry - mark;
+                    if (distance <= 0) return;
 
                     decimal R = distance / atr14_1m;
+                    decimal adjR = R * (smart1m?.RiskBias ?? 1.0m);
 
-                    SmartRegimeInfo smart = smart1m ?? new SmartRegimeInfo
-                    {
-                        VolRegime = VolatilityRegime.Normal,
-                        Confidence = 0.5m,
-                        RiskBias = 1.0m
-                    };
+                    bool isMajor = symbol.StartsWith("BTC") || symbol.StartsWith("ETH") || symbol.StartsWith("SOL")
+                                   || symbol.StartsWith("LINK") || symbol.StartsWith("LTC") || symbol.StartsWith("XRP") || symbol.StartsWith("BNB");
 
-                    decimal adjR = R * smart.RiskBias;
-
-                    bool isMajor =
-    symbol.StartsWith("BTC") ||
-    symbol.StartsWith("SOL") ||
-    symbol.StartsWith("LINK") ||
-    symbol.StartsWith("LTC") ||
-    symbol.StartsWith("XRP") ||
-    symbol.StartsWith("BNB") ||
-    symbol.StartsWith("ETH");
-
-
-                    // ---- SMART BE TRIGGER ----
                     decimal beTriggerR = isMajor ? 1.3m : 0.55m;
-                    if (adjR < beTriggerR)
-                        return;
+                    if (adjR < beTriggerR) return;
 
-                    // ---- DYNAMIC STEP SIZE ----
                     decimal step = isMajor ? 0.75m : 0.35m;
-
-                    // Stage рассчитываем от триггера
                     int stage = (int)Math.Floor((adjR - beTriggerR) / step) + 1;
-
                     int prevStage = _beLevel.GetOrAdd(key, 0);
-
-                    // защита от отката или повторов
-                    if (stage <= prevStage)
-                        return;
-
+                    if (stage <= prevStage) return;
                     _beLevel[key] = stage;
 
-                    _logger.LogInformation(
-                        "[SMART BE STAGE][{symbol}][{side}] {prev} → {stage} | R={R:F2} adjR={adjR:F2}",
-                        symbol, side, prevStage, stage, R, adjR);
+                    _logger.LogInformation("[SMART BE STAGE][{symbol}][{side}] {prev} → {stage} | R={R:F2} adjR={adjR:F2}", symbol, side, prevStage, stage, R, adjR);
 
-                    // =====================================================
-                    // STAGE 1 → PARTIAL + BE
-                    // =====================================================
+                    // ---- CANCEL ALL PREVIOUS SL FOR THIS POSITION ----
+                    var currentSlOrders = openOrders
+                        .Where(o => o.Type == FuturesOrderType.StopMarket && o.PositionSide == side)
+                        .ToList();
+
+                    foreach (var o in currentSlOrders)
+                    {
+                        SafeFireAndForget(client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, o.Id, ct: ct));
+                    }
+
                     decimal closePercent;
-                   
+                    decimal remainingQty;
+
                     if (stage == 1)
                     {
-                       
-                        if (isMajor)
-                            closePercent = 0.45m;   // 35-40% фикс
-                        else
-                            closePercent = 0.35m;
-
+                        closePercent = isMajor ? 0.45m : 0.35m;
                         decimal closeQty = Math.Round(qty * closePercent, 8);
 
                         if (closeQty > 0)
-                        {
-                            SafeFireAndForget(
-                                ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
-                        }
+                            SafeFireAndForget(ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
 
-                        decimal remainingQty = qty - closeQty;
+                        remainingQty = qty - closeQty;
 
-                        decimal bePrice;
+                        decimal bePrice = side == PositionSide.Long
+                            ? entry + atr14_1m * (isMajor ? 0.18m : 0.10m)
+                            : entry - atr14_1m * (isMajor ? 0.18m : 0.10m);
 
-                        if (isMajor)
-                        {
-                            // BE только в реальном плюсе
-                            bePrice = side == PositionSide.Long
-                                ? entry + atr14_1m * 0.18m   // +0.4 ATR
-                                : entry - atr14_1m * 0.18m;
-                        }
-                        else
-                        {
-                            bePrice = side == PositionSide.Long
-                                ? entry + atr14_1m * 0.1m
-                                : entry - atr14_1m * 0.1m;
-                        }
-
-                        SafeFireAndForget(
-                            PlaceStopLossAtBeAsync(
-                                client,
-                                symbol,
-                                side,
-                                remainingQty,
-                                bePrice,
-                                pos,
-                                ct));
-
+                        SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, remainingQty, bePrice, pos, ct));
                         return;
                     }
-                    // =====================================================
-                    // STAGE 2+ → PARTIAL + TRAIL
-                    // =====================================================
+
+                    // STAGE 2+
                     closePercent = stage switch
                     {
                         2 => 0.20m,
                         3 => 0.15m,
                         _ => 0.10m
                     };
-
                     decimal stageCloseQty = Math.Round(qty * closePercent, 8);
-
                     if (stageCloseQty > 0)
-                    {
-                        SafeFireAndForget(
-                            ClosePartialAsync(client, symbol, side, stageCloseQty, pos, ct));
-                    }
+                        SafeFireAndForget(ClosePartialAsync(client, symbol, side, stageCloseQty, pos, ct));
 
-                    // ---- TRAILING LOGIC ----
+                    remainingQty = qty - stageCloseQty; // 🔹 корректировка qty для SL
 
                     decimal trailAtr = stage >= 3 ? 1.1m : 1.4m;
+                    decimal targetSl = side == PositionSide.Long ? mark - atr14_1m * trailAtr : mark + atr14_1m * trailAtr;
 
-                    decimal targetSl = side == PositionSide.Long
-                        ? mark - atr14_1m * trailAtr
-                        : mark + atr14_1m * trailAtr;
-
-                    var slOrder = openOrders
-                        .FirstOrDefault(o =>
-                            o.PositionSide == side &&
-                            o.Type == FuturesOrderType.StopMarket);
-
-                    bool shouldMove = slOrder == null ||
-                        (side == PositionSide.Long
-                            ? targetSl > (slOrder.StopPrice ?? 0)
-                            : targetSl < (slOrder.StopPrice ?? 0));
-
-                    if (shouldMove)
-                    {
-                        decimal remainingQty = Math.Abs(pos.Quantity);
-
-                        if (slOrder != null)
-                        {
-                            SafeFireAndForget(
-                                client.UsdFuturesApi.Trading.CancelOrderAsync(
-                                    symbol,
-                                    slOrder.Id,
-                                    ct:ct));
-                        }
-
-                        SafeFireAndForget(
-                            PlaceStopLossAtBeAsync(
-                                client,
-                                symbol,
-                                side,
-                                remainingQty,
-                                targetSl,
-                                pos,
-                                ct));
-                    }
+                    SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, remainingQty, targetSl, pos, ct));
                 }
 
                 ProbeSide(longPos, PositionSide.Long);

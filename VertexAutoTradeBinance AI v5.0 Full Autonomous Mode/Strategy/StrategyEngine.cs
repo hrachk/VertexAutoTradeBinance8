@@ -2649,41 +2649,28 @@ klines?.Count > 0 ? klines.Count - 1 : -1
 
 
         private FastFailResult Gate7_Exposure(
-          string symbol,
-          KlineInterval tf,
-          TradeSignal signal,
-          SmartRegimeInfo smart)
+      string symbol,
+      KlineInterval tf,
+      TradeSignal signal,
+      SmartRegimeInfo smart)
         {
             var es = _engineState;
             if (es == null || es.EquityUsd <= 0)
                 return FastFailResult.Ok();
 
-            // ------------------------------------------------------------------
-            // 1) AI multiplier (defensive)
-            // ------------------------------------------------------------------
+            // 🔹 AI multiplier
             var w = 1.0m;
-            try
-            {
-                w = _aiLearning.GetGateMultiplier(symbol, smart.BaseRegime, "EXPO");
-            }
-            catch { /* non-critical */ }
-
-            // Clamp AI influence to sane bounds
+            try { w = _aiLearning.GetGateMultiplier(symbol, smart.BaseRegime, "EXPO"); } catch { }
             w = Math.Clamp(w, 0.7m, 1.3m);
 
-            // ------------------------------------------------------------------
-            // 2) Edge score normalization (CRITICAL)
-            // ------------------------------------------------------------------
-            var aiEdgeScore = smart.Confidence * w;
-            aiEdgeScore = Math.Clamp(aiEdgeScore, 0.0m, 1.0m);
+            // 🔹 Edge score
+            var aiEdgeScore = Math.Clamp(smart.Confidence * w, 0.0m, 1.0m);
 
-            // ------------------------------------------------------------------
-            // 3) Exposure decision
-            // ------------------------------------------------------------------
+            // 🔹 Exposure decision
             var res = CanIncreaseExposure(
                 state: es,
                 symbol: symbol,
-                symbolNotionalUsd: 0m, // intentionally 0; executor/supervisor checks real notional
+                symbolNotionalUsd: 0m,
                 equityUsd: es.EquityUsd,
                 usedMarginUsd: es.UsedMarginUsd,
                 aiEdgeScore: aiEdgeScore,
@@ -2692,16 +2679,12 @@ klines?.Count > 0 ? klines.Count - 1 : -1
                 isLowEquityMode: es.EquityUsd < 500m
             );
 
-            // ------------------------------------------------------------------
-            // 4) BLOCK handling
-            // ------------------------------------------------------------------
+            // 🔹 BLOCK handling
             if (!res.AllowAdd)
             {
-                // UI / EngineState
                 _engineState.LastEntryDecision = "BLOCKED_EXPOSURE";
                 CurrentMode = "Blocked:EXPO";
 
-                // AI trace (fail-safe)
                 try
                 {
                     _aiLearning.RecordMarketStateTriggered(
@@ -2715,7 +2698,7 @@ klines?.Count > 0 ? klines.Count - 1 : -1
                         confidence: smart.Confidence
                     );
                 }
-                catch { /* non-critical */ }
+                catch { }
 
                 return FastFailResult.Fail("EXPO", res.Reason);
             }
@@ -2853,7 +2836,7 @@ klines?.Count > 0 ? klines.Count - 1 : -1
 
                 // avg range 20 bars
                 decimal avgRange20 = 0m;
-                int rStart = Math.Max(1, last - 20);
+                int rStart = Math.Max(0, last - 19); // включаем last 20 свечей
                 int rBars = 0;
                 for (int i = rStart; i <= last; i++)
                 {
@@ -2865,12 +2848,23 @@ klines?.Count > 0 ? klines.Count - 1 : -1
                 // squeeze score: tighter => closer to 1
                 // score based on (avgRange20 / atr) and atrPct
                 decimal rOverAtr = (atr > 0) ? (avgRange20 / atr) : 99m;
-                decimal s1 = 1m - Math.Clamp((rOverAtr - 0.70m) / 0.60m, 0m, 1m);     // <~0.7atr => high
-                decimal s2 = 1m - Math.Clamp((atrPct - 0.010m) / 0.010m, 0m, 1m);     // <1% => high
-                decimal squeezeScore = Math.Clamp(0.60m * s1 + 0.40m * s2, 0m, 1m);
+
+                decimal atrOverRangeThreshold = 0.7m;
+                decimal atrPctThreshold = 0.01m;
+
+                decimal s1 = 1m - Math.Clamp((rOverAtr - atrOverRangeThreshold) / 0.60m, 0m, 1m);
+                decimal s2 = 1m - Math.Clamp((atrPct - atrPctThreshold) / atrPctThreshold, 0m, 1m);
+                decimal squeezeScore = Math.Clamp(0.6m * s1 + 0.4m * s2, 0m, 1m);
 
                 // bias dir
-                int dir = slope >= 0.0012m ? +1 : slope <= -0.0012m ? -1 : 0;
+                decimal emaSlopeThreshold = tf switch
+                {
+                    KlineInterval.OneDay => 0.0008m,
+                    KlineInterval.FourHour => 0.0012m,
+                    _ => 0.001m
+                };
+
+                int dir = slope >= emaSlopeThreshold ? +1 : slope <= -emaSlopeThreshold ? -1 : 0;
 
                 var st = new BtcHtfState
                 {
@@ -2973,7 +2967,9 @@ klines?.Count > 0 ? klines.Count - 1 : -1
             avgVol20 = vb > 0 ? avgVol20 / vb : 0m;
             if (avgVol20 <= 0) return null;
 
-            decimal volMult = h4.SqueezeScore >= 0.75m ? 1.85m : 2.0m;
+            decimal volMultiplierStrongSqueeze = 1.85m;
+            decimal volMultiplierNormal = 1.95m;
+            decimal volMult = h4.SqueezeScore >= 0.75m ? volMultiplierStrongSqueeze : volMultiplierNormal;
 
             if (c.Volume < avgVol20 * volMult)
                 return null;
@@ -2993,14 +2989,16 @@ klines?.Count > 0 ? klines.Count - 1 : -1
 
             var period = klines.Skip(from).Take(count);
 
-            decimal hi20 = klines[Math.Max(1, last - 20)].HighPrice;
-            decimal lo20 = klines[Math.Max(1, last - 20)].LowPrice;
+            int hiLoStart = Math.Max(0, last - 20);
+            decimal hi20 = klines[hiLoStart].HighPrice;
+            decimal lo20 = klines[hiLoStart].LowPrice;
 
-            for (int i = Math.Max(1, last - 20); i < last; i++)
+            for (int i = hiLoStart + 1; i <= last - 1; i++)
             {
                 hi20 = Math.Max(hi20, klines[i].HighPrice);
                 lo20 = Math.Min(lo20, klines[i].LowPrice);
             }
+
             decimal breakoutBuffer = h4.SqueezeScore >= 0.75m
                 ? atr * 0.08m
                 : atr * 0.12m;
@@ -3014,16 +3012,17 @@ klines?.Count > 0 ? klines.Count - 1 : -1
             // ===================== OVEREXTENSION FILTER =====================
             // не входим если уже слишком далеко от диапазона
 
-            if (bias > 0)
+            decimal overextensionThreshold = tf switch
             {
-                if (c.ClosePrice - hi20 > atr * 0.6m)
-                    return null;
-            }
-            else
-            {
-                if (lo20 - c.ClosePrice > atr * 0.6m)
-                    return null;
-            }
+                KlineInterval.FiveMinutes => 0.4m,
+                KlineInterval.FifteenMinutes => 0.5m,
+                KlineInterval.OneHour => 0.6m,
+                KlineInterval.FourHour => 0.7m,
+                _ => 0.6m
+            };
+
+            if (bias > 0 && c.ClosePrice - hi20 > atr * overextensionThreshold) return null;
+            if (bias < 0 && lo20 - c.ClosePrice > atr * overextensionThreshold) return null;
             // ===================== BUILD SIGNAL (BTC profile) =====================
             // BTC stops are wider. Use tf-aware multipliers.
             var (slMult, tp1Mult, tp2Mult, tp3Mult) = tf switch
@@ -3092,41 +3091,44 @@ klines?.Count > 0 ? klines.Count - 1 : -1
             return null;
         }
         private async Task<SignalDecisionTrace> AllowImmediatelyAsync(
-        SignalDecisionTrace trace,
-        TradeSignal signal,
-        SmartRegimeInfo smart,
-        string reason,
-        string symbol,
-        KlineInterval tf,
-        IReadOnlyList<BinanceFuturesUsdtKline> klines,
-        bool relaxRr,
-        bool relaxLiquidity,
-        CancellationToken ct)
-            {
-                var cfg = _confidenceCfg.Resolve(symbol);
-                // bind confidence
-                signal.Confidence = Math.Max(smart.Confidence, cfg.MinEntry + 0.05m);
+     SignalDecisionTrace trace,
+     TradeSignal signal,
+     SmartRegimeInfo smart,
+     string reason,
+     string symbol,
+     KlineInterval tf,
+     IReadOnlyList<BinanceFuturesUsdtKline> klines,
+     bool relaxRr,
+     bool relaxLiquidity,
+     CancellationToken ct)
+        {
+            var cfg = _confidenceCfg.Resolve(symbol);
 
-                _engineState.LastEntryDecision = reason;
-                CurrentMode = reason;
+            // 🔹 Привязываем confidence один раз
+            signal.Confidence = Math.Max(smart.Confidence, cfg.MinEntry + 0.05m);
 
-                // RR
-                trace.Add(Gate4_RR(symbol, tf, signal, smart, relaxRr));
-                if (!trace.Allow) return Finalize(trace, smart);
+            _engineState.LastEntryDecision = reason;
+            CurrentMode = reason;
 
-                // Liquidity (guard + cluster)
-                var g6 = await Gate6_LiquidityAsync(signal, smart, klines, tf, relaxLiquidity, ct).ConfigureAwait(false);
-                trace.Add(g6);
-                if (!trace.Allow) return Finalize(trace, smart);
+            // --- RR gate
+            trace.Add(Gate4_RR(symbol, tf, signal, smart, relaxRr));
+            if (!trace.Allow) return Finalize(trace, smart);
 
-                // Exposure
-                trace.Add(Gate7_Exposure(symbol, tf, signal, smart));
-                if (!trace.Allow) return Finalize(trace, smart);
+            // --- Liquidity gate
+            var g6 = await Gate6_LiquidityAsync(signal, smart, klines, tf, relaxLiquidity, ct).ConfigureAwait(false);
+            trace.Add(g6);
+            if (!trace.Allow) return Finalize(trace, smart);
 
-                trace.Allow = true;
-                trace.Signal = signal;
-                return Finalize(trace, smart);
-            }
+            // --- Exposure gate
+            trace.Add(Gate7_Exposure(symbol, tf, signal, smart));
+            if (!trace.Allow) return Finalize(trace, smart);
+
+            // ✅ Всё ок, разрешаем вход
+            trace.Allow = true;
+            trace.Signal = signal;
+
+            return Finalize(trace, smart);
+        }
 
         //===========================================================================END BTC HTF BLOCK
 
@@ -3189,22 +3191,7 @@ klines?.Count > 0 ? klines.Count - 1 : -1
                 trace.Add(g1);
                 if (!g1.Allow) return Finalize(trace, smart);
 
-                // =========================
-                // 1m IS NOT A DECISION TF
-                // =========================
-                //if (tf == KlineInterval.OneMinute)
-                //{
-                //    _engineState.LastEntryDecision = "SKIP_1M_DECISION";
-                //    CurrentMode = tf.ToString()  + " Skip";
-
-                //    trace.Add(FastFailResult.Fail(
-                //        "TF",
-                //        "1m excluded from decision logic"
-                //    ));
-
-                //    return Finalize(trace, smart);
-                //}
-
+               
 
                 // ---------------- BTC MACRO PROFILE (independent) ----------------
                 if (GetProfile(symbol) == MarketProfileType.BtcMacro)
@@ -3267,21 +3254,33 @@ klines?.Count > 0 ? klines.Count - 1 : -1
                     }
                 }
 
-                //✅ Gate3 — РОЖДАЕТСЯ СИГНАЛ
+                // ✅ Gate3 — генерируем базовый сигнал
                 var g3 = Gate3_BaseSignal(symbol, tf, klines, smart, out baseSignal);
                 trace.Add(g3);
                 if (!g3.Allow || baseSignal == null)
                     return Finalize(trace, smart);
 
-                // 🔥 ВОТ ЗДЕСЬ
+                // --- исключаем 1m
+                if (tf == KlineInterval.OneMinute)
+                {
+                    _engineState.LastEntryDecision = "SKIP_1M_DECISION";
+                    CurrentMode = "1M Skip";
+                    trace.Add(FastFailResult.Fail("TF", "1m excluded from decision logic"));
+                    trace.Signal = null;
+                    trace.Allow = false;
+                    return Finalize(trace, smart);
+                }
+
+                // --- теперь baseSignal точно не null, вычисляем confidence
                 var conf = _confidenceAgg.Evaluate(smart, baseSignal, tf);
 
-                // bind FINAL confidence
-                baseSignal.Confidence = conf.Final;
+                // --- привязываем финальный confidence один раз
+                baseSignal.Confidence = Math.Max(conf.Final, smart.Confidence);
+                _engineState.ConfidenceRaw = (decimal)baseSignal.Confidence;
+                _engineState.ConfidencePercent = (int)(baseSignal.Confidence * 100);
 
-                Confidence = conf.Final;
-                _engineState.ConfidenceRaw = conf.Final;
-                _engineState.ConfidencePercent = (int)(conf.Final * 100);
+                // обновляем глобальный Confidence
+                Confidence = baseSignal.Confidence;
 
 
 
@@ -3433,27 +3432,18 @@ klines?.Count > 0 ? klines.Count - 1 : -1
 
         // ----------------------------- EXPOSURE DECISION (UNCHANGED LOGIC) -----------------------------
         private ExposureDecision CanIncreaseExposure(
-            EngineState state,
-            string symbol,
-            decimal symbolNotionalUsd,
-            decimal equityUsd,
-            decimal usedMarginUsd,
-            decimal aiEdgeScore,
-            bool isSpecialSetup,
-            bool isHighVolatility,
-            bool isLowEquityMode)
+      EngineState state,
+      string symbol,
+      decimal symbolNotionalUsd,
+      decimal equityUsd,
+      decimal usedMarginUsd,
+      decimal aiEdgeScore,
+      bool isSpecialSetup,
+      bool isHighVolatility,
+      bool isLowEquityMode)
         {
             if (equityUsd <= 0m)
-            {
-                return new ExposureDecision
-                {
-                    AllowAdd = true,
-                    UseProfitBucket = false,
-                    AllowedAddUsd = 0m,
-                    Reason = "ALLOW: exposure-skip (equity handled downstream)",
-                    SymbolCapPct = 0m
-                };
-            }
+                return new ExposureDecision { AllowAdd = true, UseProfitBucket = false, AllowedAddUsd = 0m, Reason = "ALLOW: exposure-skip", SymbolCapPct = 0m };
 
             var sKey = EngineState.Key(symbol);
             var st = state.Symbols.GetOrAdd(sKey, _ => new SymbolState());
@@ -3467,101 +3457,40 @@ klines?.Count > 0 ? klines.Count - 1 : -1
             }
 
             decimal baseCap = st.DefaultSymbolCapPct;
+            if (isLowEquityMode) baseCap = Math.Min(0.35m, baseCap + 0.10m);
+            if (isHighVolatility) baseCap = Math.Max(0.10m, baseCap - 0.06m);
 
-            if (isLowEquityMode)
-                baseCap = Math.Min(0.35m, baseCap + 0.10m);
-
-            if (isHighVolatility)
-                baseCap = Math.Max(0.10m, baseCap - 0.06m);
-
-            decimal cap = baseCap;
-            if (st.CapBoostUntilUtc > DateTime.UtcNow)
-                cap = Math.Max(cap, st.CurrentSymbolCapPct);
+            decimal cap = st.CapBoostUntilUtc > DateTime.UtcNow ? Math.Max(baseCap, st.CurrentSymbolCapPct) : baseCap;
 
             decimal maxUsedMarginPct = isLowEquityMode ? 0.70m : 0.55m;
             if (isHighVolatility) maxUsedMarginPct -= 0.08m;
 
-            decimal usedPct = usedMarginUsd / equityUsd;
-            if (usedPct >= maxUsedMarginPct)
-            {
-                return new ExposureDecision
-                {
-                    AllowAdd = false,
-                    UseProfitBucket = false,
-                    AllowedAddUsd = 0m,
-                    Reason = $"BLOCK: usedMarginPct={usedPct:P0} >= {maxUsedMarginPct:P0}",
-                    SymbolCapPct = cap
-                };
-            }
+            if (usedMarginUsd / equityUsd >= maxUsedMarginPct)
+                return new ExposureDecision { AllowAdd = false, UseProfitBucket = false, AllowedAddUsd = 0m, Reason = $"BLOCK: usedMarginPct={usedMarginUsd / equityUsd:P0} >= {maxUsedMarginPct:P0}", SymbolCapPct = cap };
 
-            decimal symbolPct = symbolNotionalUsd / equityUsd;
-            bool capHit = symbolPct >= cap;
-
+            bool capHit = (symbolNotionalUsd / equityUsd) >= cap;
             bool allowNoProfitAveraging = isSpecialSetup && aiEdgeScore >= 0.78m;
+            decimal fromBucketUsd = Math.Max(0m, st.RealizedPnlBucketUsd * 0.55m);
+            decimal maxAddUsd = 0m;
 
-            decimal bucket = st.RealizedPnlBucketUsd;
-            decimal reinvestRate = 0.55m;
-            decimal fromBucketUsd = Math.Max(0m, bucket * reinvestRate);
+            if (capHit && !allowNoProfitAveraging)
+                return new ExposureDecision { AllowAdd = false, UseProfitBucket = false, AllowedAddUsd = 0m, Reason = $"BLOCK: symbolCapHit {symbolNotionalUsd / equityUsd:P0} >= {cap:P0}", SymbolCapPct = cap };
 
-            decimal maxAddUsd;
-
-            if (capHit)
-            {
-                if (!allowNoProfitAveraging)
-                {
-                    return new ExposureDecision
-                    {
-                        AllowAdd = false,
-                        UseProfitBucket = false,
-                        AllowedAddUsd = 0m,
-                        Reason = $"BLOCK: symbolCapHit {symbolPct:P0} >= {cap:P0}",
-                        SymbolCapPct = cap
-                    };
-                }
-
+            if (capHit && allowNoProfitAveraging)
                 maxAddUsd = isHighVolatility ? equityUsd * 0.015m : equityUsd * 0.025m;
-                return new ExposureDecision
-                {
-                    AllowAdd = true,
-                    UseProfitBucket = false,
-                    AllowedAddUsd = Math.Max(0m, maxAddUsd),
-                    Reason = $"ALLOW: special-setup no-profit add (capHit) edge={aiEdgeScore:F2}",
-                    SymbolCapPct = cap
-                };
-            }
-
-            if (fromBucketUsd >= 5m)
-            {
+            else if (fromBucketUsd >= 5m)
                 maxAddUsd = Math.Min(fromBucketUsd, equityUsd * (isHighVolatility ? 0.02m : 0.04m));
-                return new ExposureDecision
-                {
-                    AllowAdd = true,
-                    UseProfitBucket = true,
-                    AllowedAddUsd = Math.Max(0m, maxAddUsd),
-                    Reason = $"ALLOW: add from profit bucket={bucket:F2} edge={aiEdgeScore:F2}",
-                    SymbolCapPct = cap
-                };
-            }
-
-            if (allowNoProfitAveraging)
-            {
+            else if (allowNoProfitAveraging)
                 maxAddUsd = equityUsd * (isHighVolatility ? 0.015m : 0.03m);
-                return new ExposureDecision
-                {
-                    AllowAdd = true,
-                    UseProfitBucket = false,
-                    AllowedAddUsd = Math.Max(0m, maxAddUsd),
-                    Reason = $"ALLOW: special-setup no-profit add edge={aiEdgeScore:F2}",
-                    SymbolCapPct = cap
-                };
-            }
+            else
+                return new ExposureDecision { AllowAdd = false, UseProfitBucket = false, AllowedAddUsd = 0m, Reason = "BLOCK: no bucket and not special-setup", SymbolCapPct = cap };
 
             return new ExposureDecision
             {
-                AllowAdd = false,
-                UseProfitBucket = false,
-                AllowedAddUsd = 0m,
-                Reason = "BLOCK: no bucket and not special-setup",
+                AllowAdd = true,
+                UseProfitBucket = fromBucketUsd >= 5m,
+                AllowedAddUsd = Math.Max(0m, maxAddUsd),
+                Reason = capHit ? $"ALLOW: special-setup no-profit add (capHit) edge={aiEdgeScore:F2}" : $"ALLOW: add from profit bucket/edge={aiEdgeScore:F2}",
                 SymbolCapPct = cap
             };
         }
@@ -3572,10 +3501,10 @@ klines?.Count > 0 ? klines.Count - 1 : -1
             _lastStopTime[(symbol, side)] = DateTime.UtcNow;
 
             var cutoff = DateTime.UtcNow.AddHours(-6);
-            foreach (var kv in _lastStopTime.ToArray())
+            foreach (var kv in _lastStopTime.Keys)
             {
-                if (kv.Value < cutoff)
-                    _lastStopTime.TryRemove(kv.Key, out _);
+                if (_lastStopTime[kv] < cutoff)
+                    _lastStopTime.TryRemove(kv, out _);
             }
         }
 
