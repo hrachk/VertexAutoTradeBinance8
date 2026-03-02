@@ -65,14 +65,12 @@ namespace VertexAutoTradeBinance8.Services
         // 🔹 Динамический базовый риск по балансу (адаптивно)
         private decimal GetDynamicBaseRisk(decimal balance)
         {
-            if (balance <= 100m) return 0.025m;
-            if (balance <= 200m) return 0.020m;
-            if (balance <= 500m) return 0.0175m;
-            if (balance <= 1000m) return 0.015m;
-            if (balance <= 2000m) return 0.0125m;
-            if (balance <= 3000m) return 0.010m;
-            if (balance <= 5000m) return 0.008m;
-            return 0.007m;
+            if (balance <= 100m) return 0.025m;   // 2.5% для мелких депозитов
+            if (balance <= 500m) return 0.02m;    // 2%
+            if (balance <= 1000m) return 0.015m;  // 1.5%
+            if (balance <= 5000m) return 0.012m;  // 1.2%
+            if (balance <= 10000m) return 0.01m;  // 1%
+            return 0.0075m;                        // 0.75% для очень больших депозитов
         }
 
         // 🔹 Основной метод расчёта qty
@@ -118,40 +116,49 @@ namespace VertexAutoTradeBinance8.Services
 
         // 🔹 Универсальный расчёт qty
         private decimal CalculateUniversalQty(
-            decimal balance,
-            decimal entry,
-            decimal stop,
-            decimal leverage,
-            decimal riskPercent,
-            decimal minNotional,
-            decimal step)
+     decimal balance,
+     decimal entry,
+     decimal stop,
+     decimal leverage,
+     decimal riskPercent,
+     decimal minNotional,
+     decimal step)
         {
             if (balance <= 0 || entry <= 0 || stop <= 0 || leverage <= 0 || step <= 0)
                 return 0;
 
+            // 🔹 1. Процент потери на стоп
             decimal slPercent = Math.Abs(entry - stop) / entry;
             if (slPercent <= 0) return 0;
 
-            // 🔹 Risk budget
+            // 🔹 2. Динамический riskBudget: минимум 0.5%, максимум 20% от баланса
             decimal riskBudget = balance * riskPercent;
-            riskBudget = Math.Clamp(riskBudget, balance * 0.005m, balance * 0.20m); // минимум 0.5%, максимум 20% депо
+            riskBudget = Math.Clamp(riskBudget, balance * 0.005m, balance * 0.20m);
 
-            // 🔹 Максимальный notional с плечом
-            decimal maxNotional = balance * leverage * 0.98m; // safety margin 2%
+            // 🔹 3. Максимальный notional с плечом
+            decimal maxNotional = balance * leverage * 0.98m;
 
-            // 🔹 Выбираем минимальный notional
-            decimal finalNotional = Math.Min(riskBudget / slPercent, maxNotional);
+            // 🔹 4. Основной notional через риск и стоп
+            decimal finalNotional = riskBudget / slPercent;
+
+            // 🔹 5. Не превышаем плечо
+            finalNotional = Math.Min(finalNotional, maxNotional);
+
+            // 🔹 6. Обеспечиваем минимальный notional биржи
             finalNotional = Math.Max(finalNotional, minNotional);
 
-            // 🔹 Boost для дешевых монет
-            decimal priceBoost = 1m;
-            if (entry < 0.05m) priceBoost = 3m;
-            else if (entry < 0.50m) priceBoost = 2m;
-            else if (entry < 5m) priceBoost = 1.5m;
+            // 🔹 7. Scaling для дешёвых монет, чтобы позиции были реальными
+            // (чем дешевле монета, тем чуть больше позиция, но без перебора)
+            if (entry < 0.05m) finalNotional *= 2m;        // очень дешёвые монеты
+            else if (entry < 0.5m) finalNotional *= 1.5m;  // дешёвые монеты
+            else if (entry < 5m) finalNotional *= 1.2m;    // средние монеты
+                                                           // для дорогих монет (>5$) boost не нужен
 
-            finalNotional *= priceBoost;
-
+            // 🔹 8. Рассчитываем qty
             decimal qty = finalNotional / entry;
+
+            // 🔹 9. Округляем по шагу
+            qty = Math.Floor(qty / step) * step;
 
             return qty > 0 ? qty : 0;
         }
