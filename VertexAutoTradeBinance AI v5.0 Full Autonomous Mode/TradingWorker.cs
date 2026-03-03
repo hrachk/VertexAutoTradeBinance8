@@ -764,15 +764,14 @@ _strategy.OnSignalGenerated += signal =>
                 }
 
             var trading = _resolver.Resolve(symbol);
-             
-            
+
+
             // =====================================================
-            // 6) QTY — Clean PropDesk version
+            // 6) QTY — Clean PropDesk version (с временным hardcode SL)
             // =====================================================
 
-            // 1️⃣ Binance реальные фильтры
+            // 1️⃣ Получаем Binance реальные фильтры
             var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-
             decimal step = filters.step > 0 ? filters.step : 0.001m;
             decimal minQty = filters.minQty > 0 ? filters.minQty : step;
             decimal exchangeMinNotional = filters.minNotional > 0
@@ -783,18 +782,20 @@ _strategy.OnSignalGenerated += signal =>
             var balance = await _risk.GetRealtimeBalanceAsync(ct);
             balance = Math.Max(balance, 0.01m);
 
-            // 3️⃣ Вызов RiskManager (НОВАЯ сигнатура)
+            // 3️⃣ Вызов RiskManager (новая сигнатура с hardcode SL)
+            // =========================
+            // 3️⃣ Вызов RiskManager (настоящая логика)
+            // =========================
             var qty = _risk.GetPropDeskQtyFinal(
-                signal,
-                balance,
-                step,
-                minQty,
-                exchangeMinNotional,   // <-- ВАЖНО
-                riskMult,
-                trading
-            );
+      signal,
+      balance,
+      step,
+      minQty,
+      riskMult,
+      trading
+  );
 
-            // 4️⃣ Проверка результата
+            // Проверка результата
             if (qty <= 0)
             {
                 await RejectAsync(
@@ -803,8 +804,8 @@ _strategy.OnSignalGenerated += signal =>
                     tf,
                     "RISK",
                     _risk.LastRejectReason ?? "POSITION_REJECTED",
-                    ct);
-
+                    ct
+                );
                 return;
             }
             // =====================================================

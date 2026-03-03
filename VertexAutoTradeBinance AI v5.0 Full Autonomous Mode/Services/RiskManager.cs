@@ -9,64 +9,64 @@ namespace VertexAutoTradeBinance8.Services
     {
         private readonly ILogger<RiskManager> _logger;
         private readonly SymbolInfoService _symbolInfo;
+
         private readonly BinanceClientFactory _factory;
+        private readonly MarketDataService _marketData;
+        private readonly AiLeverageService _aiLeverage;
+        private readonly AiMarketRegimeService _marketRegimeService;
+        private readonly SmartRegimeService _smartRegime;
+
+        private readonly TradingOptionsResolver _tradingResolver;
 
         public string? LastRejectReason { get; private set; }
         public decimal LastBalanceUsdt { get; private set; }
-
-        private const decimal MaxMarginPercent = 0.12m; // максимум 12% баланса в марже
-        private const decimal HardRiskCap = 0.05m;      // максимум 5% риска на сделку
-
+        private const decimal MaxMarginPercent = 0.12m; // 12% жёсткий лимит маржи
         public RiskManager(
             ILogger<RiskManager> logger,
             SymbolInfoService symbolInfo,
-            BinanceClientFactory factory)
+            BinanceClientFactory factory,
+            MarketDataService marketData,
+            AiLeverageService aiLeverage,
+            AiMarketRegimeService marketRegimeService,
+            SmartRegimeService smartRegime,
+            TradingOptionsResolver tradingResolver
+        )
         {
             _logger = logger;
             _symbolInfo = symbolInfo;
             _factory = factory;
+            _marketData = marketData;
+            _aiLeverage = aiLeverage;
+            _marketRegimeService = marketRegimeService;
+            _smartRegime = smartRegime;
+            _tradingResolver = tradingResolver;
         }
 
-        // ============================================
-        // Dynamic base risk (адаптивно от баланса)
-        // ============================================
-        private decimal GetDynamicBaseRisk(decimal balance)
-        {
-            if (balance <= 100m) return 0.025m;
-            if (balance <= 500m) return 0.02m;
-            if (balance <= 1000m) return 0.015m;
-            if (balance <= 5000m) return 0.012m;
-            if (balance <= 10000m) return 0.01m;
-            return 0.0075m;
-        }
-
-        // ============================================
-        // Precision helper
-        // ============================================
+   
         public int GetPrecision(decimal step)
         {
-            step = step.Normalize();
-            int[] bits = decimal.GetBits(step);
-            return (bits[3] >> 16) & 0x7F;
-        }
+            step = step.Normalize(); // убираем хвосты типа 0.0100000
 
-        // ============================================
-        // MAIN PROP DESK QTY CALC
-        // ============================================
+            int[] bits = decimal.GetBits(step);
+            int scale = (bits[3] >> 16) & 0x7F;
+            return scale;
+        }
         public decimal GetPropDeskQtyFinal(
-            TradeSignal signal,
-            decimal balance,
-            decimal step,
-            decimal minQty,
-            decimal exchangeMinNotional,
-            decimal riskMult,
-            TradingOptions trading)
+        TradeSignal signal,
+        decimal balance,
+        decimal step,
+        decimal minQty,
+        decimal riskMult,
+        TradingOptions trading)
         {
             LastRejectReason = null;
 
+            // -----------------------------
+            // BASIC VALIDATION
+            // -----------------------------
             if (signal == null || balance <= 0 || step <= 0)
             {
-                LastRejectReason = "Invalid input";
+                LastRejectReason = "Invalid input params";
                 return 0;
             }
 
@@ -79,30 +79,31 @@ namespace VertexAutoTradeBinance8.Services
                 return 0;
             }
 
-            decimal leverage = trading.Leverage > 0
-                ? trading.Leverage
-                : (signal.Leverage ?? 1m);
-
+            decimal leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
             if (leverage <= 0)
             {
                 LastRejectReason = "Invalid leverage";
                 return 0;
             }
 
-            // ============================================
-            // SL distance
-            // ============================================
-            decimal slPercent = Math.Abs(entry - stop) / entry;
+            // -----------------------------
+            // STOP % и базовый риск (фикс SL too close)
+            // -----------------------------
+            decimal slDistance = entry - stop; // long или short не важно, берём модуль
+            slDistance = Math.Abs(slDistance);
 
-            if (slPercent <= 0)
+            const decimal MinSlPercent = 0.002m; // минимальный SL 0.2%
+            decimal slPercent = slDistance / entry;
+
+            if (slPercent < MinSlPercent)
             {
-                LastRejectReason = "SL too close";
-                return 0;
+                slPercent = MinSlPercent;
+                _logger.LogWarning("[RISK] SL too close, forced min SL percent for {symbol}: {MinSlPercent:P2}", signal.Symbol, MinSlPercent);
             }
 
-            // ============================================
-            // Risk calculation
-            // ============================================
+            // -----------------------------
+            // Базовый риск + Safety Multiplier
+            // -----------------------------
             decimal baseRisk = trading.RiskPerTrade > 0
                 ? (decimal)trading.RiskPerTrade
                 : GetDynamicBaseRisk(balance);
@@ -111,8 +112,7 @@ namespace VertexAutoTradeBinance8.Services
                 ? signal.SafetyRiskMultiplier
                 : 1m;
 
-            decimal finalRisk = Math.Min(baseRisk * riskMult * safetyMult, HardRiskCap);
-
+            decimal finalRisk = Math.Min(baseRisk * riskMult * safetyMult, 0.05m); // 5% hard cap
             if (finalRisk <= 0)
             {
                 LastRejectReason = "Final risk <= 0";
@@ -121,70 +121,86 @@ namespace VertexAutoTradeBinance8.Services
 
             decimal riskBudget = balance * finalRisk;
 
-            // ============================================
-            // Position notional from SL model
-            // ============================================
-            decimal positionNotional = riskBudget / slPercent;
+            // -----------------------------
+            // Notional с учетом SL, плеча и маржи
+            // -----------------------------
+            decimal riskNotional = riskBudget / slPercent;
+            decimal leverageCapNotional = balance * leverage * 0.98m;
+            decimal marginCapNotional = balance * MaxMarginPercent * leverage;
 
-            // Ограничение по плечу
-            decimal leverageCap = balance * leverage * 0.98m;
-
-            // Ограничение по марже
-            decimal marginCap = balance * MaxMarginPercent * leverage;
-
-            decimal finalNotional = Math.Min(positionNotional,
-                                    Math.Min(leverageCap, marginCap));
-
+            decimal finalNotional = Math.Min(riskNotional, Math.Min(leverageCapNotional, marginCapNotional));
             if (finalNotional <= 0)
             {
                 LastRejectReason = "Final notional <= 0";
                 return 0;
             }
 
-            // ============================================
-            // Convert to qty
-            // ============================================
-            decimal rawQty = finalNotional / entry;
+            // -----------------------------
+            // Адаптивный minNotional под цену актива
+            // -----------------------------
+            decimal minNotional = trading.MinNotional > 0 ? trading.MinNotional : 10m;
+            decimal minNotionalAdaptive = Math.Min(minNotional, Math.Max(0.01m, entry * minQty)); // никогда не меньше 0.01
+            decimal effectiveNotional = Math.Max(finalNotional, minNotionalAdaptive);
+
+            // -----------------------------
+            // CONVERT TO QTY
+            // -----------------------------
+            decimal rawQty = effectiveNotional / entry;
+
+            // дробные шаги для дешёвых токенов
+            if (step > 1 && entry < minNotionalAdaptive)
+                step = Math.Max(0.00001m, entry / 10m);
 
             decimal qty = Math.Floor(rawQty / step) * step;
 
+            // -----------------------------
+            // Проверка minQty
+            // -----------------------------
             if (qty < minQty)
-            {
-                LastRejectReason =
-                    $"QTY_TOO_SMALL | step={step} minQty={minQty}";
-                return 0;
-            }
+                qty = minQty;
 
-            // ============================================
-            // Exchange minNotional check (REAL FILTER)
-            // ============================================
-            decimal checkNotional = qty * entry;
-
-            if (checkNotional < exchangeMinNotional)
+            // -----------------------------
+            // Проверка minNotional после расчёта
+            // -----------------------------
+            decimal finalNotionalCheck = qty * entry;
+            if (finalNotionalCheck < minNotionalAdaptive)
             {
-                LastRejectReason =
-                    $"MIN_NOTIONAL_TOO_HIGH_FOR_MODEL | required={exchangeMinNotional:F2} actual={checkNotional:F2}";
-                return 0;
+                qty = Math.Ceiling(minNotionalAdaptive / entry / step) * step;
+                finalNotionalCheck = qty * entry;
+
+                if (finalNotionalCheck < minNotionalAdaptive)
+                {
+                    LastRejectReason = $"Qty too small even after adaptive minNotional: qty={qty} notional={finalNotionalCheck:F8} minNotional={minNotionalAdaptive}";
+                    return 0;
+                }
             }
 
             return qty;
         }
 
-        // ============================================
-        // Real balance
-        // ============================================
+        // 🔹 Динамический базовый риск (адаптивно под баланс)
+        private decimal GetDynamicBaseRisk(decimal balance)
+        {
+            if (balance <= 100m) return 0.025m;   // 2.5% для мелких депозитов
+            if (balance <= 500m) return 0.02m;    // 2%
+            if (balance <= 1000m) return 0.015m;  // 1.5%
+            if (balance <= 5000m) return 0.012m;  // 1.2%
+            if (balance <= 10000m) return 0.01m;  // 1%
+            return 0.0075m;                        // 0.75% для больших депозитов
+        }
+
+        // 🔹 Получение актуального баланса
         public async Task<decimal> GetRealtimeBalanceAsync(CancellationToken ct)
         {
             try
             {
                 var client = _factory.CreateRestClient();
-                var account = await client.UsdFuturesApi.Account
-                    .GetAccountInfoV3Async(ct: ct)
+                var account = await client.UsdFuturesApi.Account.GetAccountInfoV3Async(ct: ct)
                     .ConfigureAwait(false);
 
                 if (!account.Success || account.Data == null)
                 {
-                    _logger.LogWarning("Failed to fetch balance");
+                    _logger.LogWarning("GetRealtimeBalanceAsync: Failed to fetch account info. Success={Success}", account.Success);
                     return 0m;
                 }
 
@@ -192,14 +208,18 @@ namespace VertexAutoTradeBinance8.Services
                     .FirstOrDefault(a => a.Asset == "USDT")?
                     .AvailableBalance ?? 0m;
 
-                LastBalanceUsdt = Math.Max(free, 0m);
-                return LastBalanceUsdt;
+                // Safety clamp
+                free = Math.Max(free, 0m);
+
+                LastBalanceUsdt = free;
+                return free;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Balance fetch exception");
+                _logger.LogError(ex, "GetRealtimeBalanceAsync: Exception while fetching balance");
                 return 0m;
             }
         }
+       
     }
 }
