@@ -800,14 +800,15 @@ _strategy.OnSignalGenerated += signal =>
                 return;
             }
 
-            var qty = _risk.GetPropDeskQty(
-                signal,
-                balance,
-                minNotional,
-                step,
-                minQty,
-                riskMult,
-                trading);
+            // 🔹   вызов RiskManager
+            var qty = _risk.GetPropDeskQtyFinal(
+                signal,      // TradeSignal для символа
+                balance,     // текущий баланс
+                step,        // шаг лота по символу (например, 0.001)
+                minQty,      // минимальный qty по конфигу
+                riskMult,    // множитель риска (обычно 1)
+                trading      // TradingOptions для символа (из конфига)
+            );
             // =====================================================
             // 7) SL / TP OPTIMIZATION
             // =====================================================

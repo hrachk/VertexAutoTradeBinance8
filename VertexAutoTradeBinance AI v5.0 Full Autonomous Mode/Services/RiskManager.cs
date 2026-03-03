@@ -62,7 +62,117 @@ namespace VertexAutoTradeBinance8.Services
             return scale;
         }
 
-        // 🔹 Динамический базовый риск по балансу (адаптивно)
+        // 🔹 Финальный метод расчёта qty
+        public decimal GetPropDeskQtyFinal(
+        TradeSignal signal,
+        decimal balance,
+        decimal step,
+        decimal minQty,
+        decimal riskMult,
+        TradingOptions trading)
+        {
+            if (signal == null || balance <= 0 || step <= 0)
+                return 0;
+
+            // Плечо
+            decimal leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
+
+            // Динамический базовый риск
+            decimal dynamicRisk = GetDynamicBaseRisk(balance);
+            decimal finalRisk = dynamicRisk * riskMult * (signal.SafetyRiskMultiplier > 0 ? signal.SafetyRiskMultiplier : 1m);
+
+            // Symbol-specific minNotional (с safety минимальным $1)
+            decimal minNotional = _symbolMinNotional.TryGetValue(signal.Symbol, out var sMin)
+                ? Math.Max(1m, sMin)
+                : 5m;
+
+            // Max notional по плечу
+            decimal maxNotional = balance * leverage * 0.98m;
+
+            // 1️⃣ Risk-based notional
+            decimal riskBudget = balance * finalRisk;
+            decimal riskNotional = riskBudget / Math.Max(Math.Abs(signal.EntryPrice - signal.StopLoss), 0.00001m);
+
+            // 2️⃣ Сразу учитываем minNotional
+            decimal finalNotional = Math.Max(riskNotional, minNotional);
+
+            // 3️⃣ Boost для дешёвых монет
+            if (signal.EntryPrice < 0.05m)
+                finalNotional = Math.Min(finalNotional * 2m, maxNotional);
+            else if (signal.EntryPrice < 0.5m)
+                finalNotional = Math.Min(finalNotional * 1.5m, maxNotional);
+            else if (signal.EntryPrice < 5m)
+                finalNotional = Math.Min(finalNotional * 1.2m, maxNotional);
+
+            // 4️⃣ Ограничение плечом
+            finalNotional = Math.Min(finalNotional, maxNotional);
+
+            // 5️⃣ Переводим в qty и округляем вверх
+            decimal qty = Math.Ceiling(finalNotional / signal.EntryPrice / step) * step;
+
+            // 6️⃣ Гарантия minQty
+            qty = Math.Max(qty, Math.Ceiling(minQty / step) * step);
+
+            // 7️⃣ Финальная проверка notional
+            decimal finalCheckNotional = qty * signal.EntryPrice;
+            if (finalCheckNotional < minNotional)
+                return 0;
+
+            return qty;
+        }
+
+        // 🔹 Универсальный расчёт qty
+        private decimal CalculateUniversalQtyFinal(
+            decimal balance,
+            decimal entry,
+            decimal stop,
+            decimal leverage,
+            decimal riskPercent,
+            decimal minNotional,
+            decimal step,
+            decimal minQty)
+        {
+            if (balance <= 0 || entry <= 0 || stop <= 0 || leverage <= 0 || step <= 0)
+                return 0;
+
+            // 1️⃣ Процент до стопа
+            decimal slPercent = Math.Abs(entry - stop) / entry;
+            if (slPercent <= 0) return 0;
+
+            // 2️⃣ Risk-based notional
+            decimal riskBudget = balance * riskPercent;
+            decimal riskNotional = riskBudget / slPercent;
+
+            // 3️⃣ Max notional по плечу
+            decimal maxNotional = balance * leverage * 0.98m;
+
+            // 4️⃣ Итоговый notional = min(riskNotional, maxNotional)
+            decimal finalNotional = Math.Min(riskNotional, maxNotional);
+
+            // 5️⃣ Boost для дешёвых монет
+            if (entry < 0.05m) finalNotional = Math.Min(finalNotional * 2m, maxNotional);
+            else if (entry < 0.5m) finalNotional = Math.Min(finalNotional * 1.5m, maxNotional);
+            else if (entry < 5m) finalNotional = Math.Min(finalNotional * 1.2m, maxNotional);
+
+            // 6️⃣ Проверка minNotional
+            if (finalNotional < minNotional)
+                return 0; // физически невозможно открыть позицию
+
+            // 7️⃣ Перевод в qty и округление вверх
+            decimal qty = Math.Ceiling(finalNotional / entry / step) * step;
+
+            // 8️⃣ Гарантия minQty
+            qty = Math.Max(qty, Math.Ceiling(minQty / step) * step);
+
+            // 9️⃣ Финальная проверка notional
+            decimal finalCheckNotional = qty * entry;
+            if (finalCheckNotional < minNotional)
+                return 0;
+
+            return qty;
+        }
+
+        // 🔹 Динамический базовый риск (адаптивно под баланс)
         private decimal GetDynamicBaseRisk(decimal balance)
         {
             if (balance <= 100m) return 0.025m;   // 2.5% для мелких депозитов
@@ -70,97 +180,7 @@ namespace VertexAutoTradeBinance8.Services
             if (balance <= 1000m) return 0.015m;  // 1.5%
             if (balance <= 5000m) return 0.012m;  // 1.2%
             if (balance <= 10000m) return 0.01m;  // 1%
-            return 0.0075m;                        // 0.75% для очень больших депозитов
-        }
-
-        // 🔹 Основной метод расчёта qty
-        public decimal GetPropDeskQty(
-      TradeSignal signal,
-      decimal balance,
-      decimal minNotional,
-      decimal step,
-      decimal minQty,
-      decimal riskMult,
-      TradingOptions trading)
-        {
-            if (signal == null || balance <= 0 || step <= 0)
-                return 0;
-
-            // ✅ используем плечо из config, если оно больше 0, иначе берем из сигнала
-            decimal leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
-
-            // 🔹 динамический риск
-            decimal dynamicRisk = GetDynamicBaseRisk(balance);
-            decimal finalRisk = dynamicRisk * riskMult * (signal.SafetyRiskMultiplier > 0 ? signal.SafetyRiskMultiplier : 1m);
-
-            // 🔹 расчёт qty через универсальный метод
-            decimal qty = CalculateUniversalQty(balance, signal.EntryPrice, signal.StopLoss, leverage, finalRisk, minNotional, step);
-
-            // 🔹 гарантия минимального qty
-            if (qty < minQty) qty = minQty;
-
-            // 🔹 определяем symbol-specific минимальный notional
-            decimal symbolMinNotional = minNotional;
-            if (_symbolMinNotional.TryGetValue(signal.Symbol, out var specificMin))
-                symbolMinNotional = Math.Max(minNotional, specificMin);
-
-            // 🔹 гарантируем, что notional >= minNotional для конкретного символа
-            decimal notional = qty * signal.EntryPrice;
-            if (notional < symbolMinNotional) qty = symbolMinNotional / signal.EntryPrice;
-
-            // 🔹 итоговое округление по step
-            qty = Math.Floor(qty / step) * step;
-
-            return qty > 0 ? qty : 0;
-        }
-
-        // 🔹 Универсальный расчёт qty
-        private decimal CalculateUniversalQty(
-     decimal balance,
-     decimal entry,
-     decimal stop,
-     decimal leverage,
-     decimal riskPercent,
-     decimal minNotional,
-     decimal step)
-        {
-            if (balance <= 0 || entry <= 0 || stop <= 0 || leverage <= 0 || step <= 0)
-                return 0;
-
-            // 🔹 1. Процент потери на стоп
-            decimal slPercent = Math.Abs(entry - stop) / entry;
-            if (slPercent <= 0) return 0;
-
-            // 🔹 2. Динамический riskBudget: минимум 0.5%, максимум 20% от баланса
-            decimal riskBudget = balance * riskPercent;
-            riskBudget = Math.Clamp(riskBudget, balance * 0.005m, balance * 0.20m);
-
-            // 🔹 3. Максимальный notional с плечом
-            decimal maxNotional = balance * leverage * 0.98m;
-
-            // 🔹 4. Основной notional через риск и стоп
-            decimal finalNotional = riskBudget / slPercent;
-
-            // 🔹 5. Не превышаем плечо
-            finalNotional = Math.Min(finalNotional, maxNotional);
-
-            // 🔹 6. Обеспечиваем минимальный notional биржи
-            finalNotional = Math.Max(finalNotional, minNotional);
-
-            // 🔹 7. Scaling для дешёвых монет, чтобы позиции были реальными
-            // (чем дешевле монета, тем чуть больше позиция, но без перебора)
-            if (entry < 0.05m) finalNotional *= 2m;        // очень дешёвые монеты
-            else if (entry < 0.5m) finalNotional *= 1.5m;  // дешёвые монеты
-            else if (entry < 5m) finalNotional *= 1.2m;    // средние монеты
-                                                           // для дорогих монет (>5$) boost не нужен
-
-            // 🔹 8. Рассчитываем qty
-            decimal qty = finalNotional / entry;
-
-            // 🔹 9. Округляем по шагу
-            qty = Math.Floor(qty / step) * step;
-
-            return qty > 0 ? qty : 0;
+            return 0.0075m;                        // 0.75% для больших депозитов
         }
 
         // 🔹 Получение актуального баланса
@@ -194,29 +214,6 @@ namespace VertexAutoTradeBinance8.Services
                 return 0m;
             }
         }
-        // 🔹 Получение актуального плеча для конкретного символа
-        private async Task<decimal> GetSymbolLeverageAsync(string symbol, decimal configLeverage, CancellationToken ct)
-        {
-            try
-            {
-                var client = _factory.CreateRestClient();
-                var info = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct:ct);
-
-                if (info.Success && info.Data != null && info.Data.Any())
-                {
-                    var position = info.Data.FirstOrDefault();
-                    if (position != null && position.Leverage > 0)
-                        return position.Leverage; // динамическое плечо с биржи
-                }
-            }
-            catch
-            {
-                // fallback
-            }
-
-            return configLeverage; // плечо из конфига если API не доступен
-        }
-
-
+       
     }
 }

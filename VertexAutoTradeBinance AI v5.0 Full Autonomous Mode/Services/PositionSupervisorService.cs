@@ -185,15 +185,149 @@ namespace VertexAutoTradeBinance8.Services
         {
             return $"{symbol}|{side}|{entryPrice:F8}";
         }
+        private readonly ConcurrentDictionary<string, BeState> _beStates = new();
 
+        private sealed class BeState
+        {
+            public int Stage { get; set; }
+        }
+        private async Task ProbeSideAsync(
+    BinanceRestClient client,
+    string symbol,
+    BinancePositionDetailsUsdt pos,
+    PositionSide side,
+    decimal atr,
+    SmartRegimeInfo smart,
+    CancellationToken ct)
+        {
+            string key = symbol + "_" + side;
+
+            if (pos == null || pos.Quantity == 0)
+            {
+                _beStates.TryRemove(key, out _);
+                return;
+            }
+
+            decimal qty = Math.Abs(pos.Quantity);
+            decimal entry = pos.EntryPrice;
+            decimal mark = pos.MarkPrice;
+
+            if (qty <= 0 || entry <= 0 || mark <= 0)
+                return;
+
+            decimal distance = side == PositionSide.Long
+                ? mark - entry
+                : entry - mark;
+
+            if (distance <= 0)
+                return;
+
+            decimal R = distance / atr;
+            decimal adjR = R * (smart?.RiskBias ?? 1m);
+
+            bool isMajor =
+                symbol.StartsWith("BTC") ||
+                symbol.StartsWith("ETH") ||
+                symbol.StartsWith("SOL") ||
+                symbol.StartsWith("BNB");
+
+            decimal beTriggerR = isMajor ? 1.3m : 0.55m;
+            if (adjR < beTriggerR)
+                return;
+
+            decimal stepR = isMajor ? 0.75m : 0.35m;
+
+            int calculatedStage = (int)Math.Floor((adjR - beTriggerR) / stepR) + 1;
+
+            var state = _beStates.GetOrAdd(key, _ => new BeState());
+
+            // 🔹 запрещаем перепрыгивать стадии
+            if (calculatedStage > state.Stage + 1)
+                calculatedStage = state.Stage + 1;
+
+            if (calculatedStage <= state.Stage)
+                return;
+
+            state.Stage = calculatedStage;
+
+            _logger.LogInformation(
+                "[SMART STAGE][{symbol}][{side}] -> {stage} | R={R:F2} adjR={adjR:F2}",
+                symbol, side, state.Stage, R, adjR);
+
+            // 1️⃣ Отменяем текущий SL
+            var openOrders = await LoadOrdersAsync(client, symbol);
+            var slOrders = openOrders
+                .Where(o => o.Type == FuturesOrderType.StopMarket &&
+                            o.PositionSide == side)
+                .ToList();
+
+            foreach (var o in slOrders)
+                await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, o.Id, ct: ct);
+
+            // 2️⃣ Частичное закрытие
+            decimal closePercent = state.Stage switch
+            {
+                1 => isMajor ? 0.45m : 0.35m,
+                2 => 0.20m,
+                3 => 0.15m,
+                _ => 0.10m
+            };
+
+            decimal closeQty = Math.Round(qty * closePercent, 8);
+
+            if (closeQty > 0 && closeQty < qty)
+            {
+                await ClosePartialAsync(client, symbol, side, closeQty, pos, ct);
+            }
+
+            // 3️⃣ Получаем обновлённую позицию после частичного
+            var refreshed = await GetPositionsWithRetryAsync(client, symbol, ct);
+            var newPos = refreshed.Data?
+                .FirstOrDefault(p => p.Symbol == symbol && p.PositionSide == side);
+
+            if (newPos == null || newPos.Quantity == 0)
+            {
+                _beStates.TryRemove(key, out _);
+                return;
+            }
+
+            decimal remainingQty = Math.Abs(newPos.Quantity);
+
+            // 4️⃣ Новый SL
+            decimal newSl;
+
+            if (state.Stage == 1)
+            {
+                newSl = side == PositionSide.Long
+                    ? entry + atr * (isMajor ? 0.18m : 0.10m)
+                    : entry - atr * (isMajor ? 0.18m : 0.10m);
+            }
+            else
+            {
+                decimal trailAtr = state.Stage >= 3 ? 1.1m : 1.4m;
+
+                newSl = side == PositionSide.Long
+                    ? mark - atr * trailAtr
+                    : mark + atr * trailAtr;
+            }
+
+            await PlaceStopLossAtBeAsync(
+                client,
+                symbol,
+                side,
+                remainingQty,
+                newSl,
+                newPos,
+                ct);
+        }
 
         // =====================================================================
         // MAIN ENTRY
         // =====================================================================
         public async Task SuperviseAsync(string symbol, TradeSignal? lastSignal, CancellationToken ct)
         {
-            _probeExecuted[symbol + "_Long"] = false;
-            _probeExecuted[symbol + "_Short"] = false;
+            //_probeExecuted[symbol + "_Long"] = false;
+            //_probeExecuted[symbol + "_Short"] = false;
 
             using var client = _factory.CreateRestClient();
 
@@ -273,104 +407,128 @@ namespace VertexAutoTradeBinance8.Services
             {
                 await TryReverseProbeAsync(client, symbol, longPos, shortPos, smart1m, atr14_1m, ct);
             }
+            /*
+         ///////////////////////////////////SMART SL/BE/MOVE WITH REGIME/////////////////////////////////////////////////////////
+         if (atr14_1m > 0 && klines1m != null && klines1m.Count >= 21)
+         {
+             void ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
+             {
+                 var key = symbol + "_" + side;
+                 if (pos == null || pos.Quantity == 0)
+                 {
+                     _beLevel.TryRemove(key, out _);
+                     return;
+                 }
 
+                 decimal qty = Math.Abs(pos.Quantity);
+                 decimal entry = pos.EntryPrice;
+                 decimal mark = pos.MarkPrice;
 
-            ///////////////////////////////////SMART SL/BE/MOVE WITH REGIME/////////////////////////////////////////////////////////
-            if (atr14_1m > 0 && klines1m != null && klines1m.Count >= 21)
+                 if (qty <= 0 || entry <= 0 || mark <= 0) return;
+
+                 decimal distance = side == PositionSide.Long ? mark - entry : entry - mark;
+                 if (distance <= 0) return;
+
+                 decimal R = distance / atr14_1m;
+                 decimal adjR = R * (smart1m?.RiskBias ?? 1.0m);
+
+                 bool isMajor = symbol.StartsWith("BTC") || symbol.StartsWith("ETH") || symbol.StartsWith("SOL")
+                                || symbol.StartsWith("LINK") || symbol.StartsWith("LTC") || symbol.StartsWith("XRP") || symbol.StartsWith("BNB");
+
+                 decimal beTriggerR = isMajor ? 1.3m : 0.55m;
+                 if (adjR < beTriggerR) return;
+
+                 decimal step = isMajor ? 0.75m : 0.35m;
+                 int stage = (int)Math.Floor((adjR - beTriggerR) / step) + 1;
+                 int prevStage = _beLevel.GetOrAdd(key, 0);
+                 if (stage <= prevStage) return;
+                 _beLevel[key] = stage;
+
+                 _logger.LogInformation("[SMART BE STAGE][{symbol}][{side}] {prev} → {stage} | R={R:F2} adjR={adjR:F2}", symbol, side, prevStage, stage, R, adjR);
+
+                 // ---- CANCEL ALL PREVIOUS SL FOR THIS POSITION ----
+                 var currentSlOrders = openOrders
+                     .Where(o => o.Type == FuturesOrderType.StopMarket && o.PositionSide == side)
+                     .ToList();
+
+                 foreach (var o in currentSlOrders)
+                 {
+                     SafeFireAndForget(client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, o.Id, ct: ct));
+                 }
+
+                 decimal closePercent;
+                 decimal remainingQty;
+
+                 if (stage == 1)
+                 {
+                     closePercent = isMajor ? 0.45m : 0.35m;
+                     decimal closeQty = Math.Round(qty * closePercent, 8);
+
+                     if (closeQty > 0)
+                         SafeFireAndForget(ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
+
+                     remainingQty = qty - closeQty;
+
+                     decimal bePrice = side == PositionSide.Long
+                         ? entry + atr14_1m * (isMajor ? 0.18m : 0.10m)
+                         : entry - atr14_1m * (isMajor ? 0.18m : 0.10m);
+
+                     SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, remainingQty, bePrice, pos, ct));
+                     return;
+                 }
+
+                 // STAGE 2+
+                 closePercent = stage switch
+                 {
+                     2 => 0.20m,
+                     3 => 0.15m,
+                     _ => 0.10m
+                 };
+                 decimal stageCloseQty = Math.Round(qty * closePercent, 8);
+                 if (stageCloseQty > 0)
+                     SafeFireAndForget(ClosePartialAsync(client, symbol, side, stageCloseQty, pos, ct));
+
+                 remainingQty = qty - stageCloseQty; // 🔹 корректировка qty для SL
+
+                 decimal trailAtr = stage >= 3 ? 1.1m : 1.4m;
+                 decimal targetSl = side == PositionSide.Long ? mark - atr14_1m * trailAtr : mark + atr14_1m * trailAtr;
+
+                 SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, remainingQty, targetSl, pos, ct));
+             }
+
+             ProbeSide(longPos, PositionSide.Long);
+             _probeExecuted[symbol + "_Long"] = true;
+
+             ProbeSide(shortPos, PositionSide.Short);
+             _probeExecuted[symbol + "_Short"] = true;
+         }
+         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+         */
+            // 🔹 Новый безопасный BE/Trail
+            if (smart1m != null && atr14_1m > 0)
             {
-                void ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
-                {
-                    var key = symbol + "_" + side;
-                    if (pos == null || pos.Quantity == 0)
-                    {
-                        _beLevel.TryRemove(key, out _);
-                        return;
-                    }
+                if (hasLong && longPos != null)
+                    await ProbeSideAsync(
+                        client,
+                        symbol,
+                        longPos,
+                        PositionSide.Long,
+                        atr14_1m,
+                        smart1m,
+                        ct);
 
-                    decimal qty = Math.Abs(pos.Quantity);
-                    decimal entry = pos.EntryPrice;
-                    decimal mark = pos.MarkPrice;
-
-                    if (qty <= 0 || entry <= 0 || mark <= 0) return;
-
-                    decimal distance = side == PositionSide.Long ? mark - entry : entry - mark;
-                    if (distance <= 0) return;
-
-                    decimal R = distance / atr14_1m;
-                    decimal adjR = R * (smart1m?.RiskBias ?? 1.0m);
-
-                    bool isMajor = symbol.StartsWith("BTC") || symbol.StartsWith("ETH") || symbol.StartsWith("SOL")
-                                   || symbol.StartsWith("LINK") || symbol.StartsWith("LTC") || symbol.StartsWith("XRP") || symbol.StartsWith("BNB");
-
-                    decimal beTriggerR = isMajor ? 1.3m : 0.55m;
-                    if (adjR < beTriggerR) return;
-
-                    decimal step = isMajor ? 0.75m : 0.35m;
-                    int stage = (int)Math.Floor((adjR - beTriggerR) / step) + 1;
-                    int prevStage = _beLevel.GetOrAdd(key, 0);
-                    if (stage <= prevStage) return;
-                    _beLevel[key] = stage;
-
-                    _logger.LogInformation("[SMART BE STAGE][{symbol}][{side}] {prev} → {stage} | R={R:F2} adjR={adjR:F2}", symbol, side, prevStage, stage, R, adjR);
-
-                    // ---- CANCEL ALL PREVIOUS SL FOR THIS POSITION ----
-                    var currentSlOrders = openOrders
-                        .Where(o => o.Type == FuturesOrderType.StopMarket && o.PositionSide == side)
-                        .ToList();
-
-                    foreach (var o in currentSlOrders)
-                    {
-                        SafeFireAndForget(client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, o.Id, ct: ct));
-                    }
-
-                    decimal closePercent;
-                    decimal remainingQty;
-
-                    if (stage == 1)
-                    {
-                        closePercent = isMajor ? 0.45m : 0.35m;
-                        decimal closeQty = Math.Round(qty * closePercent, 8);
-
-                        if (closeQty > 0)
-                            SafeFireAndForget(ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
-
-                        remainingQty = qty - closeQty;
-
-                        decimal bePrice = side == PositionSide.Long
-                            ? entry + atr14_1m * (isMajor ? 0.18m : 0.10m)
-                            : entry - atr14_1m * (isMajor ? 0.18m : 0.10m);
-
-                        SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, remainingQty, bePrice, pos, ct));
-                        return;
-                    }
-
-                    // STAGE 2+
-                    closePercent = stage switch
-                    {
-                        2 => 0.20m,
-                        3 => 0.15m,
-                        _ => 0.10m
-                    };
-                    decimal stageCloseQty = Math.Round(qty * closePercent, 8);
-                    if (stageCloseQty > 0)
-                        SafeFireAndForget(ClosePartialAsync(client, symbol, side, stageCloseQty, pos, ct));
-
-                    remainingQty = qty - stageCloseQty; // 🔹 корректировка qty для SL
-
-                    decimal trailAtr = stage >= 3 ? 1.1m : 1.4m;
-                    decimal targetSl = side == PositionSide.Long ? mark - atr14_1m * trailAtr : mark + atr14_1m * trailAtr;
-
-                    SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, remainingQty, targetSl, pos, ct));
-                }
-
-                ProbeSide(longPos, PositionSide.Long);
-                _probeExecuted[symbol + "_Long"] = true;
-
-                ProbeSide(shortPos, PositionSide.Short);
-                _probeExecuted[symbol + "_Short"] = true;
+                if (hasShort && shortPos != null)
+                    await ProbeSideAsync(
+                        client,
+                        symbol,
+                        shortPos,
+                        PositionSide.Short,
+                        atr14_1m,
+                        smart1m,
+                        ct);
             }
-            ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
+            openOrders = await LoadOrdersAsync(client, symbol);
+         
             //   HandleSideAsync вызывается как обычно
             if (hasLong)
                 await HandleSideAsync(client, symbol, PositionSide.Long, longPos!, openOrders, lastSignal, klines1m, ct);
