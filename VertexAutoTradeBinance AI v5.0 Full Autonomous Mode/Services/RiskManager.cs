@@ -52,14 +52,13 @@ namespace VertexAutoTradeBinance8.Services
             return scale;
         }
 
-        // 🔹  метод расчёта qty
         public decimal GetPropDeskQtyFinal(
-         TradeSignal signal,
-         decimal balance,
-         decimal step,
-         decimal minQty,
-         decimal riskMult,
-         TradingOptions trading)
+       TradeSignal signal,
+       decimal balance,
+       decimal step,
+       decimal minQty,
+       decimal riskMult,
+       TradingOptions trading)
         {
             LastRejectReason = null;
 
@@ -81,10 +80,7 @@ namespace VertexAutoTradeBinance8.Services
                 return 0;
             }
 
-            decimal leverage = trading.Leverage > 0
-                ? trading.Leverage
-                : (signal.Leverage ?? 1m);
-
+            decimal leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
             if (leverage <= 0)
             {
                 LastRejectReason = "Invalid leverage";
@@ -92,7 +88,7 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // -----------------------------
-            // STOP %
+            // STOP % и базовый риск
             // -----------------------------
             decimal slPercent = Math.Abs(entry - stop) / entry;
             if (slPercent <= 0)
@@ -101,9 +97,6 @@ namespace VertexAutoTradeBinance8.Services
                 return 0;
             }
 
-            // -----------------------------
-            // BASE RISK (CONFIG FIRST)
-            // -----------------------------
             decimal baseRisk = trading.RiskPerTrade > 0
                 ? (decimal)trading.RiskPerTrade
                 : GetDynamicBaseRisk(balance);
@@ -112,11 +105,7 @@ namespace VertexAutoTradeBinance8.Services
                 ? signal.SafetyRiskMultiplier
                 : 1m;
 
-            decimal finalRisk = baseRisk * riskMult * safetyMult;
-
-            // 🔒 HARD CLAMP (never allow >5% risk)
-            finalRisk = Math.Min(finalRisk, 0.05m);
-
+            decimal finalRisk = Math.Min(baseRisk * riskMult * safetyMult, 0.05m); // 5% hard cap
             if (finalRisk <= 0)
             {
                 LastRejectReason = "Final risk <= 0";
@@ -124,99 +113,69 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // -----------------------------
-            // RISK NOTIONAL
+            // RISK NOTIONAL + LEVERAGE + MARGIN
             // -----------------------------
             decimal riskBudget = balance * finalRisk;
             decimal riskNotional = riskBudget / slPercent;
 
-            // -----------------------------
-            // LEVERAGE CAP
-            // -----------------------------
             decimal leverageCapNotional = balance * leverage * 0.98m;
-
-            // -----------------------------
-            // MARGIN CAP (12% HARD LIMIT)
-            // -----------------------------
             decimal marginCapNotional = balance * MaxMarginPercent * leverage;
 
-            // -----------------------------
-            // FINAL NOTIONAL
-            // -----------------------------
-            decimal finalNotional = Math.Min(riskNotional, leverageCapNotional);
-            finalNotional = Math.Min(finalNotional, marginCapNotional);
+            decimal finalNotional = Math.Min(riskNotional, Math.Min(leverageCapNotional, marginCapNotional));
 
             // -----------------------------
-            // MIN NOTIONAL CHECK
+            // MinNotional
             // -----------------------------
-            decimal minNotional = trading.MinNotional > 0
-                ? trading.MinNotional
-                : 10m;
+            decimal minNotional = trading.MinNotional > 0 ? trading.MinNotional : 10m;
 
-            // -----------------------------
-            // ENSURE MIN NOTIONAL (ADAPTIVE)
-            // -----------------------------
             decimal effectiveNotional = finalNotional;
 
             if (effectiveNotional < minNotional)
             {
-                // Разрешаем минимальный вход,
-                // если реальный риск не превысит 5% баланса
-
-                decimal minRiskNotional = minNotional;
-                decimal requiredRisk = (minRiskNotional * slPercent) / balance;
-
-                if (requiredRisk <= 0.05m) // 5% hard cap
-                {
-                    effectiveNotional = minNotional;
-                }
-                else
-                {
-                    LastRejectReason =
-                        $"MinNotional requires too much risk: requiredRisk={requiredRisk:P2}";
-                    return 0;
-                }
+                // Если баланс/риск не позволяет, отказываемся
+                LastRejectReason = $"Effective notional too small: {effectiveNotional:F8} < minNotional={minNotional}";
+                return 0;
             }
 
             // -----------------------------
-            // CONVERT TO QTY (STRICT FLOOR + DYNAMIC MIN NOTIONAL ADJUSTMENT)
+            // CONVERT TO QTY
             // -----------------------------
             decimal rawQty = effectiveNotional / entry;
             decimal qty = Math.Floor(rawQty / step) * step;
 
-            // Проверка минимального шага биржи
+            // Проверка minQty
             if (qty < minQty)
             {
-                LastRejectReason = $"Qty below min step: qty={qty} minQty={minQty}";
-                return 0;
-            }
-
-            // Финальная проверка minNotional
-            if (qty * entry < minNotional)
-            {
-                // Попробуем поднять qty до минимального шага, чтобы пройти minNotional
-                decimal minStepQty = Math.Ceiling(minNotional / entry / step) * step;
-
-                // Используем effectiveNotional как верхнюю границу
-                if (minStepQty * entry <= effectiveNotional)
-                    qty = minStepQty;
+                // Попробуем поднять до minQty
+                decimal bumpQty = Math.Max(minQty, qty);
+                if (bumpQty * entry <= effectiveNotional)
+                {
+                    qty = bumpQty;
+                }
                 else
                 {
-                    LastRejectReason = $"Final qty too small even after bump: qty={qty} notional={qty * entry:F8} minNotional={minNotional}";
+                    LastRejectReason = $"Qty below min step after bump: qty={qty} minQty={minQty}";
                     return 0;
                 }
             }
 
-            // Дополнительно проверка минимального шага биржи
-            if (qty < minQty)
+            // Проверка minNotional после bump
+            if (qty * entry < minNotional)
             {
-                LastRejectReason = $"Qty below min step: qty={qty} minQty={minQty}";
-                return 0;
+                decimal minStepQty = Math.Ceiling(minNotional / entry / step) * step;
+                if (minStepQty * entry <= effectiveNotional)
+                {
+                    qty = minStepQty;
+                }
+                else
+                {
+                    LastRejectReason = $"Final qty too small for minNotional: qty={qty} notional={qty * entry:F8} minNotional={minNotional}";
+                    return 0;
+                }
             }
 
             return qty;
         }
-
-
 
         // 🔹 Динамический базовый риск (адаптивно под баланс)
         private decimal GetDynamicBaseRisk(decimal balance)
