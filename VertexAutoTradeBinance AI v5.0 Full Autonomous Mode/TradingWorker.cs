@@ -764,51 +764,49 @@ _strategy.OnSignalGenerated += signal =>
                 }
 
             var trading = _resolver.Resolve(symbol);
-            var Level = trading.Leverage > 0
-                ? trading.Leverage
-                : (signal.Leverage ?? 1m);
-           
+             
+            
             // =====================================================
-            // 6) QTY — PropDesk version
+            // 6) QTY — Clean PropDesk version
             // =====================================================
-           
-            // Получаем Binance фильтры
+
+            // 1️⃣ Binance реальные фильтры
             var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+
             decimal step = filters.step > 0 ? filters.step : 0.001m;
             decimal minQty = filters.minQty > 0 ? filters.minQty : step;
+            decimal exchangeMinNotional = filters.minNotional > 0
+                ? filters.minNotional
+                : 5m; // safety fallback
 
-            // Считаем динамический minNotional
-            decimal minNotional = filters.minNotional > 0 ? filters.minNotional : ((decimal?)trading.MinNotionalGuard ?? 5m);
-            if (trading.MinNotional > 0)
-                minNotional = Math.Max(minNotional, trading.MinNotional);
-
-            if (trading.MinNotionalGuardPercent > 0)
-            {
-                decimal guardValue = (decimal?)trading.MinNotionalGuard ?? 0m;
-                decimal dynMin = Math.Max(guardValue, _risk.LastBalanceUsdt * trading.MinNotionalGuardPercent);
-                minNotional = Math.Max(minNotional, dynMin);
-            }
- 
-
-            
+            // 2️⃣ Баланс
             var balance = await _risk.GetRealtimeBalanceAsync(ct);
-            // Использовать финальный баланс после всех адаптивных расчетов
-            balance = _risk.LastBalanceUsdt;
-            if (balance <= 0)
+            balance = Math.Max(balance, 0.01m);
+
+            // 3️⃣ Вызов RiskManager (НОВАЯ сигнатура)
+            var qty = _risk.GetPropDeskQtyFinal(
+                signal,
+                balance,
+                step,
+                minQty,
+                exchangeMinNotional,   // <-- ВАЖНО
+                riskMult,
+                trading
+            );
+
+            // 4️⃣ Проверка результата
+            if (qty <= 0)
             {
-                await RejectAsync(signal, symbol, tf, "NO_BALANCE", "Balance is zero",ct);
+                await RejectAsync(
+                    signal,
+                    symbol,
+                    tf,
+                    "RISK",
+                    _risk.LastRejectReason ?? "POSITION_REJECTED",
+                    ct);
+
                 return;
             }
-
-            // 🔹   вызов RiskManager
-            var qty = _risk.GetPropDeskQtyFinal(
-                signal,      // TradeSignal для символа
-                balance,     // текущий баланс
-                step,        // шаг лота по символу (например, 0.001)
-                minQty,      // минимальный qty по конфигу
-                riskMult,    // множитель риска (обычно 1)
-                trading      // TradingOptions для символа (из конфига)
-            );
             // =====================================================
             // 7) SL / TP OPTIMIZATION
             // =====================================================

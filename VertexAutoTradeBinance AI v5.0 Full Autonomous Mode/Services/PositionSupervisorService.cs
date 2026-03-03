@@ -298,9 +298,12 @@ namespace VertexAutoTradeBinance8.Services
                     decimal R = distance / atr14_1m;
                     decimal adjR = R * (smart1m?.RiskBias ?? 1.0m);
 
-                    bool isMajor = symbol.StartsWith("BTC") || symbol.StartsWith("ETH") || symbol.StartsWith("SOL")
-                                   || symbol.StartsWith("LINK") || symbol.StartsWith("LTC") || symbol.StartsWith("XRP") || symbol.StartsWith("BNB");
+                    bool isMajor = symbol.StartsWith("BTC") || symbol.StartsWith("ETH") ||
+                                   symbol.StartsWith("SOL") || symbol.StartsWith("LINK") ||
+                                   symbol.StartsWith("LTC") || symbol.StartsWith("XRP") ||
+                                   symbol.StartsWith("BNB");
 
+                    // Определяем триггер первого stage
                     decimal beTriggerR = isMajor ? 1.3m : 0.55m;
                     if (adjR < beTriggerR) return;
 
@@ -310,7 +313,8 @@ namespace VertexAutoTradeBinance8.Services
                     if (stage <= prevStage) return;
                     _beLevel[key] = stage;
 
-                    _logger.LogInformation("[SMART BE STAGE][{symbol}][{side}] {prev} → {stage} | R={R:F2} adjR={adjR:F2}", symbol, side, prevStage, stage, R, adjR);
+                    _logger.LogInformation("[SMART BE STAGE][{symbol}][{side}] {prev} → {stage} | R={R:F2} adjR={adjR:F2}",
+                                            symbol, side, prevStage, stage, R, adjR);
 
                     // ---- CANCEL ALL PREVIOUS SL FOR THIS POSITION ----
                     var currentSlOrders = openOrders
@@ -325,66 +329,57 @@ namespace VertexAutoTradeBinance8.Services
                     decimal trailAtr;
                     decimal targetSl;
 
-                    // Stage 1 → первый фикс, минимальная дистанция
                     if (stage == 1)
                     {
-                        closePercent = 0.28m;
+                        // Stage 1 → ранний фикс 50% на +0.1–0.15 ATR
+                        closePercent = 0.5m;
                         decimal closeQty = Math.Round(qty * closePercent, 8);
 
                         if (closeQty > 0)
                             SafeFireAndForget(ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
 
                         remainingQty = qty - closeQty;
-                        if (remainingQty <= 0) return; // 🔹 защита от нуля
+                        if (remainingQty <= 0) return;
 
                         decimal beDistance = side == PositionSide.Long
-                            ? atr14_1m * (isMajor ? 0.12m : 0.08m)
-                            : -atr14_1m * (isMajor ? 0.12m : 0.08m);
+                            ? atr14_1m * (isMajor ? 0.12m : 0.10m)
+                            : -atr14_1m * (isMajor ? 0.12m : 0.10m);
 
                         decimal bePrice = entry + beDistance;
-
                         SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, remainingQty, bePrice, pos, ct));
                         return;
                     }
 
-                    // Stage 2 → второй фикс
                     if (stage == 2)
                     {
-                        closePercent = 0.25m;
+                        // Stage 2 → второй фикс 50% оставшегося, SL trail
+                        closePercent = 0.5m;
                         decimal closeQty = Math.Round(qty * closePercent, 8);
 
                         if (closeQty > 0)
                             SafeFireAndForget(ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
 
                         remainingQty = qty - closeQty;
-                        if (remainingQty <= 0) return; // 🔹 защита от нуля
+                        if (remainingQty <= 0) return;
 
                         trailAtr = side == PositionSide.Long
-                            ? atr14_1m * (isMajor ? 0.18m : 0.12m)
-                            : atr14_1m * (isMajor ? 0.18m : 0.12m);
+                            ? atr14_1m * (isMajor ? 0.20m : 0.18m)
+                            : atr14_1m * (isMajor ? 0.20m : 0.18m);
 
-                        targetSl = side == PositionSide.Long
-                            ? mark - trailAtr
-                            : mark + trailAtr;
-
-                        SafeFireAndForget(RemoveOldSlOrdersAsync(client, symbol, side, ct));
+                        targetSl = side == PositionSide.Long ? mark - trailAtr : mark + trailAtr;
                         SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, remainingQty, targetSl, pos, ct));
                         return;
                     }
 
-                    // Stage 3+ → стандартный trailing, 10–15%, ATR 1.2–1.8
-                    closePercent = stage switch
-                    {
-                        3 => 0.15m,
-                        _ => 0.10m
-                    };
+                    // Stage 3+ → trailing, фиксы 10–15%
+                    closePercent = stage == 3 ? 0.15m : 0.10m;
                     decimal stageCloseQty = Math.Round(qty * closePercent, 8);
 
                     if (stageCloseQty > 0)
                         SafeFireAndForget(ClosePartialAsync(client, symbol, side, stageCloseQty, pos, ct));
 
                     remainingQty = qty - stageCloseQty;
-                    if (remainingQty <= 0) return; // 🔹 защита от нуля
+                    if (remainingQty <= 0) return;
 
                     trailAtr = side == PositionSide.Long
                         ? atr14_1m * (isMajor ? 1.2m : 1.4m)
@@ -393,11 +388,7 @@ namespace VertexAutoTradeBinance8.Services
                     if (stage >= 4)
                         trailAtr = atr14_1m * (isMajor ? 1.8m : 1.8m);
 
-                    targetSl = side == PositionSide.Long
-                        ? mark - trailAtr
-                        : mark + trailAtr;
-
-                    SafeFireAndForget(RemoveOldSlOrdersAsync(client, symbol, side, ct));
+                    targetSl = side == PositionSide.Long ? mark - trailAtr : mark + trailAtr;
                     SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, remainingQty, targetSl, pos, ct));
                 }
 
