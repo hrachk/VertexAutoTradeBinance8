@@ -51,14 +51,13 @@ namespace VertexAutoTradeBinance8.Services
             int scale = (bits[3] >> 16) & 0x7F;
             return scale;
         }
-
         public decimal GetPropDeskQtyFinal(
-       TradeSignal signal,
-       decimal balance,
-       decimal step,
-       decimal minQty,
-       decimal riskMult,
-       TradingOptions trading)
+            TradeSignal signal,
+            decimal balance,
+            decimal step,
+            decimal minQty,
+            decimal riskMult,
+            TradingOptions trading)
         {
             LastRejectReason = null;
 
@@ -124,52 +123,42 @@ namespace VertexAutoTradeBinance8.Services
             decimal finalNotional = Math.Min(riskNotional, Math.Min(leverageCapNotional, marginCapNotional));
 
             // -----------------------------
-            // MinNotional
+            // Адаптивный minNotional под цену актива
             // -----------------------------
             decimal minNotional = trading.MinNotional > 0 ? trading.MinNotional : 10m;
+            decimal minNotionalAdaptive = Math.Min(minNotional, Math.Max(0.01m, entry * minQty)); // никогда не меньше 0.01
 
-            decimal effectiveNotional = finalNotional;
-
-            if (effectiveNotional < minNotional)
-            {
-                // Если баланс/риск не позволяет, отказываемся
-                LastRejectReason = $"Effective notional too small: {effectiveNotional:F8} < minNotional={minNotional}";
-                return 0;
-            }
+            decimal effectiveNotional = Math.Max(finalNotional, minNotionalAdaptive);
 
             // -----------------------------
             // CONVERT TO QTY
             // -----------------------------
             decimal rawQty = effectiveNotional / entry;
+
+            // Используем дробные шаги, если step слишком большой для цены
+            if (step > 1 && entry < minNotionalAdaptive)
+                step = Math.Max(0.00001m, entry / 10m);
+
             decimal qty = Math.Floor(rawQty / step) * step;
 
+            // -----------------------------
             // Проверка minQty
+            // -----------------------------
             if (qty < minQty)
-            {
-                // Попробуем поднять до minQty
-                decimal bumpQty = Math.Max(minQty, qty);
-                if (bumpQty * entry <= effectiveNotional)
-                {
-                    qty = bumpQty;
-                }
-                else
-                {
-                    LastRejectReason = $"Qty below min step after bump: qty={qty} minQty={minQty}";
-                    return 0;
-                }
-            }
+                qty = minQty;
 
-            // Проверка minNotional после bump
-            if (qty * entry < minNotional)
+            // -----------------------------
+            // Проверка minNotional после расчёта
+            // -----------------------------
+            decimal finalNotionalCheck = qty * entry;
+            if (finalNotionalCheck < minNotionalAdaptive)
             {
-                decimal minStepQty = Math.Ceiling(minNotional / entry / step) * step;
-                if (minStepQty * entry <= effectiveNotional)
+                qty = Math.Ceiling(minNotionalAdaptive / entry / step) * step;
+                finalNotionalCheck = qty * entry;
+
+                if (finalNotionalCheck < minNotionalAdaptive)
                 {
-                    qty = minStepQty;
-                }
-                else
-                {
-                    LastRejectReason = $"Final qty too small for minNotional: qty={qty} notional={qty * entry:F8} minNotional={minNotional}";
+                    LastRejectReason = $"Qty too small even after adaptive minNotional: qty={qty} notional={finalNotionalCheck:F8} minNotional={minNotionalAdaptive}";
                     return 0;
                 }
             }
