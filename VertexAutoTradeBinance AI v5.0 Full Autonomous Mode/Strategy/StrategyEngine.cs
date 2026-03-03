@@ -624,6 +624,71 @@ namespace VertexAutoTradeBinance8.Strategy
             return body < atr * 0.08m;
         }
 
+        private static void NormalizeEntryAndSl(TradeSignal s)
+        {
+            if (s == null)
+                return;
+
+            if (s.EntryPrice <= 0 || s.StopLoss <= 0)
+                return;
+
+            decimal dist = Math.Abs(s.EntryPrice - s.StopLoss);
+
+            // ----------------------------------------------------------
+            // Determine minimum stop distance
+            // ----------------------------------------------------------
+
+            decimal minDist;
+
+            if (s.Atr.HasValue && s.Atr.Value > 0)
+            {
+                decimal atr = s.Atr.Value;
+
+                // adaptive multiplier based on signal type
+                decimal atrMult = s.Reason switch
+                {
+                    // pullbacks require tighter stops
+                    "PULLBACK_EMA21_LONG" => 0.55m,
+                    "PULLBACK_EMA21_SHORT" => 0.55m,
+
+                    // liquidity grabs moderate
+                    "LIQUIDITY_GRAB_CONTINUATION_LONG" => 0.65m,
+                    "LIQUIDITY_GRAB_CONTINUATION_SHORT" => 0.65m,
+
+                    // volatility expansion needs wider stop
+                    "VOLATILITY_EXPANSION_BREAKOUT_LONG" => 0.85m,
+                    "VOLATILITY_EXPANSION_BREAKOUT_SHORT" => 0.85m,
+
+                    // default safe baseline
+                    _ => 0.60m
+                };
+
+                minDist = atr * atrMult;
+
+                // absolute floor protection (exchange precision, micro-ATR assets)
+                decimal hardFloor = s.EntryPrice * 0.0015m;
+
+                if (minDist < hardFloor)
+                    minDist = hardFloor;
+            }
+            else
+            {
+                // fallback when ATR unavailable
+                minDist = s.EntryPrice * 0.0025m;
+            }
+
+            // ----------------------------------------------------------
+            // Apply clamp only if needed
+            // ----------------------------------------------------------
+
+            if (dist >= minDist)
+                return;
+
+            if (s.Side == SignalSide.Buy)
+                s.StopLoss = s.EntryPrice - minDist;
+            else
+                s.StopLoss = s.EntryPrice + minDist;
+        }
 
 
         //private TradeSignal? TryLiquidityGrab(string symbol, KlineInterval interval, IReadOnlyList<BinanceFuturesUsdtKline> klines)
@@ -746,71 +811,7 @@ namespace VertexAutoTradeBinance8.Strategy
         //    else if (s.Side == SignalSide.Sell) s.StopLoss = s.EntryPrice + minDist;
         //}
 
-        private static void NormalizeEntryAndSl(TradeSignal s)
-        {
-            if (s == null)
-                return;
 
-            if (s.EntryPrice <= 0 || s.StopLoss <= 0)
-                return;
-
-            decimal dist = Math.Abs(s.EntryPrice - s.StopLoss);
-
-            // ----------------------------------------------------------
-            // Determine minimum stop distance
-            // ----------------------------------------------------------
-
-            decimal minDist;
-
-            if (s.Atr.HasValue && s.Atr.Value > 0)
-            {
-                decimal atr = s.Atr.Value;
-
-                // adaptive multiplier based on signal type
-                decimal atrMult = s.Reason switch
-                {
-                    // pullbacks require tighter stops
-                    "PULLBACK_EMA21_LONG" => 0.55m,
-                    "PULLBACK_EMA21_SHORT" => 0.55m,
-
-                    // liquidity grabs moderate
-                    "LIQUIDITY_GRAB_CONTINUATION_LONG" => 0.65m,
-                    "LIQUIDITY_GRAB_CONTINUATION_SHORT" => 0.65m,
-
-                    // volatility expansion needs wider stop
-                    "VOLATILITY_EXPANSION_BREAKOUT_LONG" => 0.85m,
-                    "VOLATILITY_EXPANSION_BREAKOUT_SHORT" => 0.85m,
-
-                    // default safe baseline
-                    _ => 0.60m
-                };
-
-                minDist = atr * atrMult;
-
-                // absolute floor protection (exchange precision, micro-ATR assets)
-                decimal hardFloor = s.EntryPrice * 0.0015m;
-
-                if (minDist < hardFloor)
-                    minDist = hardFloor;
-            }
-            else
-            {
-                // fallback when ATR unavailable
-                minDist = s.EntryPrice * 0.0025m;
-            }
-
-            // ----------------------------------------------------------
-            // Apply clamp only if needed
-            // ----------------------------------------------------------
-
-            if (dist >= minDist)
-                return;
-
-            if (s.Side == SignalSide.Buy)
-                s.StopLoss = s.EntryPrice - minDist;
-            else
-                s.StopLoss = s.EntryPrice + minDist;
-        }
 
         /// // ----------------------------- SIGNAL PATTERNS -----------------------------
 
@@ -854,6 +855,10 @@ namespace VertexAutoTradeBinance8.Strategy
             // ============================================================
             decimal atr = Atr(klines, 14, last);
             if (atr <= 0m)
+                return null;
+
+            // Reject late-trend exhaustion (too many impulse bars)
+            if (TooManyImpulseBars(klines, last, atr))
                 return null;
 
             // Reject abnormal candles
@@ -997,6 +1002,8 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return null;
         }
+
+
         TradeSignal? impulseContinuation = null;
         private TradeSignal? TryPullbackEma21(string symbol, KlineInterval interval, IReadOnlyList<BinanceFuturesUsdtKline> klines)
         {
@@ -1016,8 +1023,8 @@ namespace VertexAutoTradeBinance8.Strategy
                 return null;
 
             decimal emaPrev = Ema(klines, 21, last - 5);
-            decimal emaSlope = (ema - emaPrev) / emaPrev;
-            if (Math.Abs(emaSlope) < 0.0015m)
+            decimal emaSlope = (ema - emaPrev) / atr;
+            if (Math.Abs(emaSlope) < 0.20m)
                 return null;
 
             decimal maxDistanceFromEma = 0m;
@@ -1292,20 +1299,44 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return false;
         }
-        private static bool TooManyImpulseBars(IReadOnlyList<BinanceFuturesUsdtKline> klines, int last, decimal atr)
-        {
-            int count = 0;
+        //private static bool TooManyImpulseBars(IReadOnlyList<BinanceFuturesUsdtKline> klines, int last, decimal atr)
+        //{
+        //    int count = 0;
 
-            for (int i = last; i > last - 8 && i > 0; i--)
+        //    for (int i = last; i > last - 8 && i > 0; i--)
+        //    {
+        //        var body = Math.Abs(klines[i].ClosePrice - klines[i].OpenPrice);
+        //        if (body > atr * 0.9m)
+        //            count++;
+        //        else
+        //            break;
+        //    }
+
+        //    return count >= 4;
+        //}
+        private static bool TooManyImpulseBars(
+     IReadOnlyList<BinanceFuturesUsdtKline> klines,
+     int lastIndex,
+     decimal atr)
+        {
+            int impulseCount = 0;
+
+            for (int i = lastIndex - 4; i <= lastIndex; i++)
             {
-                var body = Math.Abs(klines[i].ClosePrice - klines[i].OpenPrice);
-                if (body > atr * 0.9m)
-                    count++;
-                else
-                    break;
+                if (i <= 0) continue;
+
+                decimal tr = Math.Max(
+                    klines[i].HighPrice - klines[i].LowPrice,
+                    Math.Max(
+                        Math.Abs(klines[i].HighPrice - klines[i - 1].ClosePrice),
+                        Math.Abs(klines[i].LowPrice - klines[i - 1].ClosePrice)
+                    ));
+
+                if (tr >= atr * 1.6m)
+                    impulseCount++;
             }
 
-            return count >= 4;
+            return impulseCount >= 3;
         }
         // ----------------------------- REGIME/CONF HELPERS -----------------------------
         //private static int GetAdaptiveThreshold(MarketRegime baseRegime, SmartRegimeType smartType, decimal volatility, decimal slope)
@@ -1343,11 +1374,54 @@ namespace VertexAutoTradeBinance8.Strategy
         //    return threshold;
         //}
 
+        //    private static int GetAdaptiveThreshold(
+        //MarketRegime baseRegime,
+        //SmartRegimeType smartType,
+        //decimal volatility,      // 0.02 = 2%
+        //decimal slope)           // 0.01 = 1%
+        //    {
+        //        int threshold;
+
+        //        bool isRangeLike =
+        //            baseRegime == MarketRegime.Range ||
+        //            smartType == SmartRegimeType.SmartRange ||
+        //            smartType == SmartRegimeType.SmartSqueeze;
+
+        //        bool isStrongTrendLike =
+        //            baseRegime == MarketRegime.StrongUpTrend ||
+        //            baseRegime == MarketRegime.StrongDownTrend ||
+        //            smartType == SmartRegimeType.SmartStrongTrend;
+
+        //        bool isTrendLike =
+        //            smartType == SmartRegimeType.SmartTrend;
+
+        //        // --- 1️⃣ Base ---
+        //        if (isRangeLike) threshold = 35;
+        //        else if (isStrongTrendLike) threshold = 60;
+        //        else if (isTrendLike) threshold = 45;
+        //        else threshold = 45;
+
+        //        // --- 2️⃣ Volatility adjustment ---
+        //        // реальный intraday диапазон 0.005 – 0.05
+        //        if (volatility < 0.015m)         // <1.5% — спокойный рынок
+        //            threshold -= 5;
+        //        else if (volatility > 0.05m)     // >5% — хаос
+        //            threshold += 10;
+
+        //        // --- 3️⃣ Slope adjustment ---
+        //        // нормальный тренд 0.005 – 0.03
+        //        if (Math.Abs(slope) > 0.02m)     // >2% slope — ускорение
+        //            threshold += 5;
+
+        //        // --- 4️⃣ Clamp ---
+        //        return Math.Clamp(threshold, 25, 80);
+        //    }
+
         private static int GetAdaptiveThreshold(
     MarketRegime baseRegime,
     SmartRegimeType smartType,
-    decimal volatility,      // 0.02 = 2%
-    decimal slope)           // 0.01 = 1%
+    decimal volatility,   // 0.02 = 2%
+    decimal slope)        // 0.01 = 1%
         {
             int threshold;
 
@@ -1365,27 +1439,28 @@ namespace VertexAutoTradeBinance8.Strategy
                 smartType == SmartRegimeType.SmartTrend;
 
             // --- 1️⃣ Base ---
-            if (isRangeLike) threshold = 35;
-            else if (isStrongTrendLike) threshold = 60;
-            else if (isTrendLike) threshold = 45;
+            if (isRangeLike) threshold = 42;          // немного сложнее
+            else if (isStrongTrendLike) threshold = 50; // чуть легче чем раньше
+            else if (isTrendLike) threshold = 46;
             else threshold = 45;
 
-            // --- 2️⃣ Volatility adjustment ---
-            // реальный intraday диапазон 0.005 – 0.05
-            if (volatility < 0.015m)         // <1.5% — спокойный рынок
-                threshold -= 5;
-            else if (volatility > 0.05m)     // >5% — хаос
-                threshold += 10;
+            // --- 2️⃣ Volatility ---
+            if (volatility < 0.015m)          // спокойный рынок
+                threshold -= 4;
+            else if (volatility > 0.05m)      // хаос
+                threshold += 6;
 
-            // --- 3️⃣ Slope adjustment ---
-            // нормальный тренд 0.005 – 0.03
-            if (Math.Abs(slope) > 0.02m)     // >2% slope — ускорение
-                threshold += 5;
+            // --- 3️⃣ Slope ---
+            decimal absSlope = Math.Abs(slope);
+
+            if (absSlope > 0.02m)             // ускорение >2%
+                threshold -= 3;               // немного легче
+            else if (absSlope < 0.005m)       // плоский рынок
+                threshold += 4;               // сложнее
 
             // --- 4️⃣ Clamp ---
-            return Math.Clamp(threshold, 25, 80);
+            return Math.Clamp(threshold, 30, 70);
         }
-
         private static bool IsFastTrendOverride(SmartRegimeInfo smart)
         {
             bool strongTrend =
@@ -2154,6 +2229,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
             _engineState.LastEntryDecision = baseSignal == pullback ? "BASE_PULLBACK" :
                                              baseSignal == earlyTrend ? "BASE_EARLY_TREND" :
+                                             baseSignal == continuation ? "BASE_CONTINUATION" :
                                              "BASE_LIQUIDITY";
 
             try
