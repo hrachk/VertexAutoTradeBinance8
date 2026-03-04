@@ -9,18 +9,18 @@ namespace VertexAutoTradeBinance8.Services
     {
         private readonly ILogger<RiskManager> _logger;
         private readonly SymbolInfoService _symbolInfo;
-
         private readonly BinanceClientFactory _factory;
         private readonly MarketDataService _marketData;
         private readonly AiLeverageService _aiLeverage;
         private readonly AiMarketRegimeService _marketRegimeService;
         private readonly SmartRegimeService _smartRegime;
-
         private readonly TradingOptionsResolver _tradingResolver;
+
+        private const decimal MaxMarginPercent = 0.12m; // 12% hard cap margin
 
         public string? LastRejectReason { get; private set; }
         public decimal LastBalanceUsdt { get; private set; }
-        private const decimal MaxMarginPercent = 0.12m; // 12% жёсткий лимит маржи
+
         public RiskManager(
             ILogger<RiskManager> logger,
             SymbolInfoService symbolInfo,
@@ -42,27 +42,26 @@ namespace VertexAutoTradeBinance8.Services
             _tradingResolver = tradingResolver;
         }
 
-   
         public int GetPrecision(decimal step)
         {
-            step = step.Normalize(); // убираем хвосты типа 0.0100000
-
+            step = step.Normalize();
             int[] bits = decimal.GetBits(step);
             int scale = (bits[3] >> 16) & 0x7F;
             return scale;
         }
+
         public decimal GetPropDeskQtyFinal(
-        TradeSignal signal,
-        decimal balance,
-        decimal step,
-        decimal minQty,
-        decimal riskMult,
-        TradingOptions trading)
+            TradeSignal signal,
+            decimal balance,
+            decimal step,
+            decimal minQty,
+            decimal riskMult,
+            TradingOptions trading)
         {
             LastRejectReason = null;
 
             // -----------------------------
-            // BASIC VALIDATION
+            // VALIDATION
             // -----------------------------
             if (signal == null || balance <= 0 || step <= 0)
             {
@@ -87,32 +86,25 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // -----------------------------
-            // STOP % и базовый риск (фикс SL too close)
+            // STOP % и базовый риск
             // -----------------------------
-            decimal slDistance = entry - stop; // long или short не важно, берём модуль
-            slDistance = Math.Abs(slDistance);
+            decimal slDistance = Math.Abs(entry - stop);
+            const decimal MinSlPercent = 0.002m; // 0.2%
+            decimal slPercent = Math.Max(slDistance / entry, MinSlPercent);
 
-            const decimal MinSlPercent = 0.002m; // минимальный SL 0.2%
-            decimal slPercent = slDistance / entry;
-
-            if (slPercent < MinSlPercent)
-            {
-                slPercent = MinSlPercent;
-                _logger.LogWarning("[RISK] SL too close, forced min SL percent for {symbol}: {MinSlPercent:P2}", signal.Symbol, MinSlPercent);
-            }
+            if (slDistance / entry < MinSlPercent)
+                _logger.LogWarning("[RISK] SL too close for {symbol}, forcing min {MinSlPercent:P2}", signal.Symbol, MinSlPercent);
 
             // -----------------------------
-            // Базовый риск + Safety Multiplier
+            // BASE RISK + Safety Multiplier
             // -----------------------------
             decimal baseRisk = trading.RiskPerTrade > 0
                 ? (decimal)trading.RiskPerTrade
                 : GetDynamicBaseRisk(balance);
 
-            decimal safetyMult = signal.SafetyRiskMultiplier > 0
-                ? signal.SafetyRiskMultiplier
-                : 1m;
+            decimal safetyMult = signal.SafetyRiskMultiplier > 0 ? signal.SafetyRiskMultiplier : 1m;
+            decimal finalRisk = Math.Min(baseRisk * riskMult * safetyMult, 0.05m); // hard cap 5%
 
-            decimal finalRisk = Math.Min(baseRisk * riskMult * safetyMult, 0.05m); // 5% hard cap
             if (finalRisk <= 0)
             {
                 LastRejectReason = "Final risk <= 0";
@@ -122,7 +114,7 @@ namespace VertexAutoTradeBinance8.Services
             decimal riskBudget = balance * finalRisk;
 
             // -----------------------------
-            // Notional с учетом SL, плеча и маржи
+            // Notional calculation
             // -----------------------------
             decimal riskNotional = riskBudget / slPercent;
             decimal leverageCapNotional = balance * leverage * 0.98m;
@@ -136,31 +128,29 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // -----------------------------
-            // Адаптивный minNotional под цену актива
+            // Adaptive minNotional
             // -----------------------------
             decimal minNotional = trading.MinNotional > 0 ? trading.MinNotional : 10m;
-            decimal minNotionalAdaptive = Math.Min(minNotional, Math.Max(0.01m, entry * minQty)); // никогда не меньше 0.01
+            decimal minNotionalAdaptive = Math.Min(minNotional, Math.Max(0.01m, entry * minQty));
             decimal effectiveNotional = Math.Max(finalNotional, minNotionalAdaptive);
 
             // -----------------------------
-            // CONVERT TO QTY
+            // Convert to qty
             // -----------------------------
             decimal rawQty = effectiveNotional / entry;
 
-            // дробные шаги для дешёвых токенов
             if (step > 1 && entry < minNotionalAdaptive)
                 step = Math.Max(0.00001m, entry / 10m);
 
             decimal qty = Math.Floor(rawQty / step) * step;
 
             // -----------------------------
-            // Проверка minQty
+            // Check minQty
             // -----------------------------
-            if (qty < minQty)
-                qty = minQty;
+            if (qty < minQty) qty = minQty;
 
             // -----------------------------
-            // Проверка minNotional после расчёта
+            // Check minNotional again
             // -----------------------------
             decimal finalNotionalCheck = qty * entry;
             if (finalNotionalCheck < minNotionalAdaptive)
@@ -178,25 +168,22 @@ namespace VertexAutoTradeBinance8.Services
             return qty;
         }
 
-        // 🔹 Динамический базовый риск (адаптивно под баланс)
         private decimal GetDynamicBaseRisk(decimal balance)
         {
-            if (balance <= 100m) return 0.025m;   // 2.5% для мелких депозитов
-            if (balance <= 500m) return 0.02m;    // 2%
-            if (balance <= 1000m) return 0.015m;  // 1.5%
-            if (balance <= 5000m) return 0.012m;  // 1.2%
-            if (balance <= 10000m) return 0.01m;  // 1%
-            return 0.0075m;                        // 0.75% для больших депозитов
+            if (balance <= 100m) return 0.025m;
+            if (balance <= 500m) return 0.02m;
+            if (balance <= 1000m) return 0.015m;
+            if (balance <= 5000m) return 0.012m;
+            if (balance <= 10000m) return 0.01m;
+            return 0.0075m;
         }
 
-        // 🔹 Получение актуального баланса
         public async Task<decimal> GetRealtimeBalanceAsync(CancellationToken ct)
         {
             try
             {
                 var client = _factory.CreateRestClient();
-                var account = await client.UsdFuturesApi.Account.GetAccountInfoV3Async(ct: ct)
-                    .ConfigureAwait(false);
+                var account = await client.UsdFuturesApi.Account.GetAccountInfoV3Async(ct: ct).ConfigureAwait(false);
 
                 if (!account.Success || account.Data == null)
                 {
@@ -204,13 +191,8 @@ namespace VertexAutoTradeBinance8.Services
                     return 0m;
                 }
 
-                var free = account.Data.Assets
-                    .FirstOrDefault(a => a.Asset == "USDT")?
-                    .AvailableBalance ?? 0m;
-
-                // Safety clamp
+                var free = account.Data.Assets.FirstOrDefault(a => a.Asset == "USDT")?.AvailableBalance ?? 0m;
                 free = Math.Max(free, 0m);
-
                 LastBalanceUsdt = free;
                 return free;
             }
@@ -220,6 +202,5 @@ namespace VertexAutoTradeBinance8.Services
                 return 0m;
             }
         }
-       
     }
 }

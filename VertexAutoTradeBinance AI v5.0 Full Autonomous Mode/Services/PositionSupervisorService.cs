@@ -125,10 +125,10 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         private async Task HandleFinalCloseAsync(
-        BinanceRestClient client,
-        string symbol,
-        PositionSide side,
-        CancellationToken ct)
+      BinanceRestClient client,
+      string symbol,
+      PositionSide side,
+      CancellationToken ct)
         {
             var key = $"{symbol}_{side}";
 
@@ -141,20 +141,41 @@ namespace VertexAutoTradeBinance8.Services
                     "[FINAL CLEANUP][{symbol}][{side}] start",
                     symbol, side);
 
-                // 1️⃣ Отменяем все ордера по символу
-                var cancel = await client
+                // 1️⃣ Загружаем активные ордера
+                var ordersResult = await client
                     .UsdFuturesApi
                     .Trading
-                    .CancelAllOrdersAsync(symbol, ct: ct);
+                    .GetOpenOrdersAsync(symbol, ct:ct);
 
-                if (!cancel.Success)
+                if (!ordersResult.Success || ordersResult.Data == null)
                 {
                     _logger.LogWarning(
-                        "[FINAL CLEANUP][{symbol}] CancelAllOrders failed: {err}",
-                        symbol, cancel.Error?.Message);
+                        "[FINAL CLEANUP][{symbol}] Failed load open orders",
+                        symbol);
+                    return;
                 }
 
-                // 2️⃣ Сбрасываем BE состояние
+                var exitOrders = ordersResult.Data
+                    .Where(o =>
+                        o.PositionSide == side &&
+                        (o.Type == FuturesOrderType.StopMarket ||
+                         o.Type == FuturesOrderType.TakeProfitMarket ||
+                         o.Type == FuturesOrderType.TrailingStopMarket))
+                    .ToList();
+
+                foreach (var order in exitOrders)
+                {
+                    await client
+                        .UsdFuturesApi
+                        .Trading
+                        .CancelOrderAsync(symbol, order.Id, ct: ct);
+
+                    _logger.LogInformation(
+                        "[FINAL CLEANUP][{symbol}][{side}] Cancelled {id}",
+                        symbol, side, order.Id);
+                }
+
+                // 2️⃣ Сброс состояния
                 _beStage.TryRemove(key, out _);
                 _beLevel.TryRemove(key, out _);
                 _pendingReset.TryRemove(key, out _);
@@ -184,6 +205,43 @@ namespace VertexAutoTradeBinance8.Services
         private static string BuildExitKey(string symbol, PositionSide side, decimal entryPrice)
         {
             return $"{symbol}|{side}|{entryPrice:F8}";
+        }
+
+
+
+        private async Task CleanupExitOrdersAsync(
+IBinanceRestClient client,
+string symbol,
+PositionSide side,
+IEnumerable<BinanceFuturesOrder> openOrders,
+CancellationToken ct)
+        {
+            var exitOrders = openOrders
+                .Where(o =>
+                    o.PositionSide == side &&
+                    (o.Type == FuturesOrderType.StopMarket ||
+                     o.Type == FuturesOrderType.TakeProfitMarket ||
+                     o.Type == FuturesOrderType.TrailingStopMarket))
+                .ToList();
+
+            foreach (var order in exitOrders)
+            {
+                try
+                {
+                    await client.UsdFuturesApi.Trading
+                        .CancelOrderAsync(symbol, order.Id, ct: ct);
+
+                    _logger.LogInformation(
+                        "[CLEANUP EXIT ORDER][{symbol}][{side}] Cancelled {orderId}",
+                        symbol, side, order.Id);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "[CLEANUP FAILED][{symbol}][{side}] {orderId}",
+                        symbol, side, order.Id);
+                }
+            }
         }
 
 
@@ -223,8 +281,8 @@ namespace VertexAutoTradeBinance8.Services
             var longPos = positions.FirstOrDefault(p => p.PositionSide == PositionSide.Long);
             var shortPos = positions.FirstOrDefault(p => p.PositionSide == PositionSide.Short);
 
-            DetectClose(symbol, longPos, PositionSide.Long);
-            DetectClose(symbol, shortPos, PositionSide.Short);
+            await DetectClose(symbol, longPos, PositionSide.Long, ct);
+            await DetectClose(symbol, shortPos, PositionSide.Short, ct);
 
             // проверяем, остались ли открытые позиции
             var hasLong = longPos?.Quantity > 0m;
@@ -303,8 +361,7 @@ namespace VertexAutoTradeBinance8.Services
                                    symbol.StartsWith("LTC") || symbol.StartsWith("XRP") ||
                                    symbol.StartsWith("BNB");
 
-                    // Определяем триггер первого stage
-                    decimal beTriggerR = isMajor ? 1.3m : 0.55m;
+                    decimal beTriggerR = isMajor ? 1.41m : 0.6m;
                     if (adjR < beTriggerR) return;
 
                     decimal step = isMajor ? 0.75m : 0.35m;
@@ -316,7 +373,7 @@ namespace VertexAutoTradeBinance8.Services
                     _logger.LogInformation("[SMART BE STAGE][{symbol}][{side}] {prev} → {stage} | R={R:F2} adjR={adjR:F2}",
                                             symbol, side, prevStage, stage, R, adjR);
 
-                    // ---- CANCEL ALL PREVIOUS SL FOR THIS POSITION ----
+                    // Cancel previous SL
                     var currentSlOrders = openOrders
                         .Where(o => o.Type == FuturesOrderType.StopMarket && o.PositionSide == side)
                         .ToList();
@@ -331,8 +388,8 @@ namespace VertexAutoTradeBinance8.Services
 
                     if (stage == 1)
                     {
-                        // Stage 1 → ранний фикс 50% на +0.1–0.15 ATR
-                        closePercent = 0.5m;
+                        // Stage 1 → фиксим 35%
+                        closePercent = 0.30m;
                         decimal closeQty = Math.Round(qty * closePercent, 8);
 
                         if (closeQty > 0)
@@ -352,8 +409,8 @@ namespace VertexAutoTradeBinance8.Services
 
                     if (stage == 2)
                     {
-                        // Stage 2 → второй фикс 50% оставшегося, SL trail
-                        closePercent = 0.5m;
+                        // Stage 2 → фиксим 35% оставшейся позиции
+                        closePercent = 0.25m;
                         decimal closeQty = Math.Round(qty * closePercent, 8);
 
                         if (closeQty > 0)
@@ -362,25 +419,18 @@ namespace VertexAutoTradeBinance8.Services
                         remainingQty = qty - closeQty;
                         if (remainingQty <= 0) return;
 
+                        // SL почти на текущей цене, даем позиции шанс
                         trailAtr = side == PositionSide.Long
-                            ? atr14_1m * (isMajor ? 0.20m : 0.18m)
-                            : atr14_1m * (isMajor ? 0.20m : 0.18m);
+                            ? atr14_1m * (isMajor ? 0.15m : 0.12m)
+                            : atr14_1m * (isMajor ? 0.15m : 0.12m);
 
                         targetSl = side == PositionSide.Long ? mark - trailAtr : mark + trailAtr;
                         SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, remainingQty, targetSl, pos, ct));
                         return;
                     }
 
-                    // Stage 3+ → trailing, фиксы 10–15%
-                    closePercent = stage == 3 ? 0.15m : 0.10m;
-                    decimal stageCloseQty = Math.Round(qty * closePercent, 8);
-
-                    if (stageCloseQty > 0)
-                        SafeFireAndForget(ClosePartialAsync(client, symbol, side, stageCloseQty, pos, ct));
-
-                    remainingQty = qty - stageCloseQty;
-                    if (remainingQty <= 0) return;
-
+                    // Stage 3+ → только trailing SL
+                    remainingQty = qty;
                     trailAtr = side == PositionSide.Long
                         ? atr14_1m * (isMajor ? 1.2m : 1.4m)
                         : atr14_1m * (isMajor ? 1.2m : 1.4m);
@@ -597,40 +647,35 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // ===== CLOSE PARTIAL =====
+        // Для частичных закрытий тоже используем тот же принцип
         private async Task ClosePartialAsync(
-         IBinanceRestClient client,
-         string symbol,
-         PositionSide side,
-         decimal qty,
-         BinancePositionDetailsUsdt pos,
-         CancellationToken ct)
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            BinancePositionDetailsUsdt pos,
+            CancellationToken ct)
         {
-            if (qty <= 0 || pos == null)
-                return;
+            if (pos == null || qty <= 0) return;
 
             var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
-            var (qtyPrecision, _) = await GetSymbolPrecisionsAsync(client, symbol);
-            qty = await NormalizeQuantityAsync(symbol, side, qty, client, ct);
-            var positionQty = Math.Abs(pos.Quantity);
+            var result = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: symbol,
+                side: orderSide,
+                type: FuturesOrderType.Market,
+                quantity: qty,
+                positionSide: pos.PositionSide,
+               // reduceOnly: qty > 0 ? (bool?)true : null, // null если qty = 0
+                ct: ct
+            );
 
-            if (qty > positionQty)
-                qty = positionQty * 0.98m;
-            if (qty <= 0)
-            {
-                _logger.LogWarning("[PARTIAL CLOSE SKIPPED][{symbol}][{side}] qty rounded to 0", symbol, side);
-                return;
-            }
-
-
-            await ClosePartialChunkedAsync(
-            client,
-            symbol,
-            side,
-            qty,
-            ct);
-
+            if (result.Success)
+                _logger.LogInformation("[PARTIAL CLOSE OK][{symbol}][{side}] qty={qty}", symbol, side, qty);
+            else
+                _logger.LogError("[PARTIAL CLOSE FAILED][{symbol}][{side}] {err}", symbol, side, result.Error?.Message);
         }
+
         private async Task<decimal> NormalizeQuantityAsync(
     string symbol,
     PositionSide side,
@@ -785,8 +830,13 @@ namespace VertexAutoTradeBinance8.Services
 
         private bool ShouldUseReduceOnly(BinancePositionDetailsUsdt? pos)
         {
-            // reduceOnly = true только если реально есть позиция на этой стороне
-            return pos != null && pos.Quantity != 0;
+            if (pos == null) return false;
+
+            // безопасный порог, чтобы избежать tiny qty
+            decimal absQty = Math.Abs(pos.Quantity);
+            const decimal epsilon = 0.0000001m;
+
+            return absQty > epsilon;
         }
 
 
@@ -808,10 +858,11 @@ namespace VertexAutoTradeBinance8.Services
             return 0m;
         }
 
-        private void DetectClose(
-     string symbol,
-     BinancePositionDetailsUsdt? pos,
-     PositionSide side)
+        private async Task DetectClose(
+      string symbol,
+      BinancePositionDetailsUsdt? pos,
+      PositionSide side,
+      CancellationToken ct)
         {
             var key = $"{symbol}_{side}";
 
@@ -821,20 +872,17 @@ namespace VertexAutoTradeBinance8.Services
             var currQty = pos?.Quantity ?? 0m;
             var currEntry = pos?.EntryPrice ?? 0m;
 
-            // 🔥 CLOSE DETECTED
+            // 🔥 FINAL CLOSE DETECTED
             if (prevQty != 0m && currQty == 0m)
             {
+                _logger.LogInformation(
+                    "[FINAL CLOSE DETECTED][{symbol}][{side}]",
+                    symbol, side);
+
                 var exitPrice = ResolveExitPrice(symbol);
 
-                if (exitPrice <= 0m)
+                if (exitPrice > 0m)
                 {
-                    _logger.LogWarning(
-                        "[CLOSE][{symbol}][{side}] Exit price unresolved, skip record",
-                        symbol, side);
-                }
-                else
-                {
-                    // ✅ REALIZED PNL (добавлено)
                     var qty = Math.Abs(prevQty);
 
                     decimal realizedPnl =
@@ -844,7 +892,6 @@ namespace VertexAutoTradeBinance8.Services
 
                     _accountState.AddRealizedPnl(realizedPnl);
 
-                    // AI learning остаётся как есть
                     _aiLearning.RecordTrade(
                         symbol,
                         side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell,
@@ -856,21 +903,23 @@ namespace VertexAutoTradeBinance8.Services
                         "[CLOSE][{symbol}][{side}] qty={qty} entry={entry} exit={exit} pnl={pnl}",
                         symbol, side, prevQty, prevEntry, exitPrice, realizedPnl);
                 }
+                else
+                {
+                    _logger.LogWarning(
+                        "[CLOSE][{symbol}][{side}] Exit price unresolved",
+                        symbol, side);
+                }
 
-                var client = _factory.CreateRestClient();
-
-                SafeFireAndForget(
-                    HandleFinalCloseAsync(
-                        client,
-                        symbol,
-                        side,
-                        CancellationToken.None));
-
-                // ⚠️ ОБНОВЛЯЕМ СОСТОЯНИЕ ТОЛЬКО ПОСЛЕ ПРОВЕРКИ
-                _manualHandler.SetPrevState(key, currQty, currEntry);
+                await HandleFinalCloseAsync(
+                    _factory.CreateRestClient(),
+                    symbol,
+                    side,
+                    ct);
             }
-        }
 
+            // ⚠️ ВАЖНО: обновляем состояние ВСЕГДА
+            _manualHandler.SetPrevState(key, currQty, currEntry);
+        }
 
 
         // =====================================================================
@@ -996,7 +1045,7 @@ namespace VertexAutoTradeBinance8.Services
                 stopPrice: slPrice,
                 positionSide: side,
                 workingType: WorkingType.Mark,
-                reduceOnly: null,
+                //reduceOnly: null,
                 ct: ct);
 
             if (sl.Success)
@@ -1203,16 +1252,18 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
 
         public async Task ClosePositionMarketAsync(
-            string symbol,
-            BinanceRestClient client,
-            BinancePositionDetailsUsdt pos,
-            CancellationToken ct)
+     string symbol,
+     BinanceRestClient client,
+     BinancePositionDetailsUsdt pos,
+     CancellationToken ct)
         {
-            if (pos == null || pos.Quantity == 0) return;
+            if (pos == null || Math.Abs(pos.Quantity) < 0.0000001m)
+                return;
 
             var side = pos.Quantity > 0 ? OrderSide.Sell : OrderSide.Buy;
             var absQty = Math.Abs(pos.Quantity);
-            bool reduceOnly = ShouldUseReduceOnly(pos); // ✅ универсальный фикс
+
+            bool reduceOnly = ShouldUseReduceOnly(pos);
 
             var result = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: symbol,
@@ -1220,7 +1271,7 @@ namespace VertexAutoTradeBinance8.Services
                 type: FuturesOrderType.Market,
                 quantity: absQty,
                 positionSide: pos.PositionSide,
-                reduceOnly: reduceOnly,
+               // reduceOnly: reduceOnly ? (bool?)true : null, // null если не нужно
                 ct: ct
             );
 
@@ -1938,7 +1989,7 @@ namespace VertexAutoTradeBinance8.Services
                         quantity: closeQty,
                         positionSide: side,
                         stopPrice: sl,
-                        reduceOnly: null,
+                       // reduceOnly: null,
                         ct: ct);
 
                     if (res.Success)
@@ -2115,7 +2166,7 @@ namespace VertexAutoTradeBinance8.Services
                         quantity: qty,
                         positionSide: side,
                         stopPrice: trigger,
-                        reduceOnly: null,
+                       // reduceOnly: null,
                         ct: CancellationToken.None);
 
                     if (res.Success)
@@ -2445,6 +2496,8 @@ namespace VertexAutoTradeBinance8.Services
                 _http = httpFactory.CreateClient("BinanceAlgoRaw");
                 _http.Timeout = TimeSpan.FromSeconds(8);
             }
+
+
             public async Task<bool> PlaceConditionalAsync(
                 string symbol,
                 OrderSide side,
