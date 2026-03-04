@@ -2496,6 +2496,70 @@ klines?.Count > 0 ? klines.Count - 1 : -1
                 return FastFailResult.Fail("LATE", "late chase");
             }
 
+        private FastFailResult Gate3_3_OverExtensionGuard(
+      string symbol,
+      KlineInterval tf,
+      IReadOnlyList<BinanceFuturesUsdtKline> klines,
+      TradeSignal signal,
+      SmartRegimeInfo smart)
+        {
+            if (klines == null || klines.Count < 120)
+                return FastFailResult.Ok();
+
+            int i = klines.Count - 1;
+
+            decimal atr = signal.Atr ?? Atr(klines, 14, i);
+            if (atr <= 0m)
+                return FastFailResult.Ok();
+
+            decimal emaNow = EmaClose(klines, 21, i);
+            decimal distAtr = Math.Abs(klines[i].ClosePrice - emaNow) / atr;
+
+            // === 1️⃣ текущий slope ===
+            decimal slopeNow = Math.Abs(smart.TrendSlopePercent);
+
+            // === 2️⃣ средний slope за 50 баров ===
+            int lookback = 50;
+            decimal slopeSum = 0m;
+            int count = 0;
+
+            for (int k = 1; k <= lookback && i - k - 5 > 0; k++)
+            {
+                decimal ema1 = EmaClose(klines, 21, i - k);
+                decimal ema0 = EmaClose(klines, 21, i - k - 5);
+
+                if (ema0 == 0m) continue;
+
+                decimal s = Math.Abs((ema1 - ema0) / ema0);
+                slopeSum += s;
+                count++;
+            }
+
+            if (count == 0)
+                return FastFailResult.Ok();
+
+            decimal slopeAvg = slopeSum / count;
+
+            if (slopeAvg == 0m)
+                return FastFailResult.Ok();
+
+            // === 3️⃣ относительная сила тренда ===
+            decimal trendStrength = slopeNow / slopeAvg;
+
+            // === 4️⃣ динамический предел (логарифмический рост) ===
+            // базовый предел 2 ATR — нормальный импульс
+            decimal allowedDist = 2.0m + (decimal)Math.Log(1.0 + (double)trendStrength);
+
+            if (distAtr > allowedDist)
+            {
+                return FastFailResult.Fail(
+                    "OVEREXT_NORM",
+                    $"dist={distAtr:F2} limit={allowedDist:F2}");
+            }
+
+            return FastFailResult.Ok();
+        }
+
         private FastFailResult Gate4_RR(
           string symbol,
           KlineInterval tf,
@@ -3381,6 +3445,8 @@ klines?.Count > 0 ? klines.Count - 1 : -1
                 trace.Add(Gate3_2_LateEntryFilter(symbol, tf, klines, baseSignal, smart));
                 if (!trace.Allow) return Finalize(trace, smart);
 
+                trace.Add(Gate3_3_OverExtensionGuard(symbol, tf, klines, baseSignal, smart));
+                if (!trace.Allow) return Finalize(trace, smart);
 
                 // Gate4..5
                 trace.Add(Gate4_RR(symbol, tf, baseSignal, smart, relaxRr));
