@@ -27,6 +27,23 @@ public class SymbolUniverseBuilder
         _logger = logger;
     }
 
+    private static readonly HashSet<string> _blacklist = new(StringComparer.OrdinalIgnoreCase)
+{
+    "POWERUSDT",
+    "QUSDT",
+    "RIVERUSDT",
+    "ARCUSDT",
+    "BEATUSDT",
+    "TANSSIUSDT",
+    "OPUSDT",
+    "ROBOUSDT",
+    "MYXUSDT",
+        "AIAUSDT",
+        "FIOUSDT",
+        "SAHARAUSDT",
+        "DENTUSDT"
+};
+
     public List<string> Build(
         List<SymbolMarketSnapshot> data,
         string[] pinned,
@@ -37,16 +54,16 @@ public class SymbolUniverseBuilder
         pinned ??= Array.Empty<string>();
 
         var pinnedNorm = pinned
-            .Where(s => !string.IsNullOrWhiteSpace(s))
-            .Select(s => s.Trim().ToUpperInvariant())
-            .Where(s => s != "TANSSIUSDT") // 🚫 forever 
-            .ToList();
+     .Where(s => !string.IsNullOrWhiteSpace(s))
+     .Select(s => s.Trim().ToUpperInvariant())
+     .Where(s => !_blacklist.Contains(s))
+     .ToList();
 
         // === CORE LIQUIDITY (base filter) ===
         var core = data
-            .Where(x => x.QuoteVolume24h >= min24hVolume && x.LastPrice >= minPrice)
-            .Where(x => !string.Equals(x.Symbol, "TANSSIUSDT", StringComparison.OrdinalIgnoreCase)) // 🚫 forever 
-            .OrderByDescending(x => x.QuoteVolume24h)
+     .Where(x => x.QuoteVolume24h >= min24hVolume && x.LastPrice >= minPrice)
+     .Where(x => !_blacklist.Contains(x.Symbol))
+             .OrderByDescending(x => x.QuoteVolume24h)
             .Take(80) // widen funnel a bit (safe)
             .ToList();
 
@@ -66,10 +83,15 @@ public class SymbolUniverseBuilder
 
         // FINAL: candidates (do NOT hard-cap here)
         var final = pinnedNorm
-            .Concat(momentum)
-            .Concat(liquidity)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+     .Concat(momentum)
+     .Concat(liquidity)
+     .Distinct(StringComparer.OrdinalIgnoreCase)
+     .Where(s => !_blacklist.Contains(s))
+     .ToList();
+
+        _logger.LogInformation(
+    "[SYMBOL] Blacklist active: {count} symbols",
+    _blacklist.Count);
 
         _logger.LogInformation(
             "[SYMBOL] Universe candidates built: pinned={Pinned}, momentum={Momentum}, liquidity={Liquidity}, total={Total}",
