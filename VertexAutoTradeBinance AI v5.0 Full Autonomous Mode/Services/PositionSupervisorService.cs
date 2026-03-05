@@ -11,6 +11,7 @@ using System.Text;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services.Interface;
 using VertexAutoTradeBinance8.Strategy;
+using static VertexAutoTradeBinance8.Services.SymbolInfoService;
 
 /// <summary>
 /// PositionSupervisorService v8.2 PRO (Production)
@@ -210,39 +211,39 @@ namespace VertexAutoTradeBinance8.Services
 
 
         private async Task CleanupExitOrdersAsync(
-IBinanceRestClient client,
-string symbol,
-PositionSide side,
-IEnumerable<BinanceFuturesOrder> openOrders,
-CancellationToken ct)
-        {
-            var exitOrders = openOrders
-                .Where(o =>
-                    o.PositionSide == side &&
-                    (o.Type == FuturesOrderType.StopMarket ||
-                     o.Type == FuturesOrderType.TakeProfitMarket ||
-                     o.Type == FuturesOrderType.TrailingStopMarket))
-                .ToList();
-
-            foreach (var order in exitOrders)
-            {
-                try
+        IBinanceRestClient client,
+        string symbol,
+        PositionSide side,
+        IEnumerable<BinanceFuturesOrder> openOrders,
+        CancellationToken ct)
                 {
-                    await client.UsdFuturesApi.Trading
-                        .CancelOrderAsync(symbol, order.Id, ct: ct);
+                    var exitOrders = openOrders
+                        .Where(o =>
+                            o.PositionSide == side &&
+                            (o.Type == FuturesOrderType.StopMarket ||
+                             o.Type == FuturesOrderType.TakeProfitMarket ||
+                             o.Type == FuturesOrderType.TrailingStopMarket))
+                        .ToList();
 
-                    _logger.LogInformation(
-                        "[CLEANUP EXIT ORDER][{symbol}][{side}] Cancelled {orderId}",
-                        symbol, side, order.Id);
+                    foreach (var order in exitOrders)
+                    {
+                        try
+                        {
+                            await client.UsdFuturesApi.Trading
+                                .CancelOrderAsync(symbol, order.Id, ct: ct);
+
+                            _logger.LogInformation(
+                                "[CLEANUP EXIT ORDER][{symbol}][{side}] Cancelled {orderId}",
+                                symbol, side, order.Id);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex,
+                                "[CLEANUP FAILED][{symbol}][{side}] {orderId}",
+                                symbol, side, order.Id);
+                        }
+                    }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex,
-                        "[CLEANUP FAILED][{symbol}][{side}] {orderId}",
-                        symbol, side, order.Id);
-                }
-            }
-        }
 
 
         // =====================================================================
@@ -274,40 +275,55 @@ CancellationToken ct)
                 return;
             }
 
+            // 1️⃣ позиции
             var positions = posInfo.Data
-    .Where(p => p.Symbol == symbol)
-    .ToList();
+                .Where(p => p.Symbol == symbol)
+                .ToList();
 
             var longPos = positions.FirstOrDefault(p => p.PositionSide == PositionSide.Long);
             var shortPos = positions.FirstOrDefault(p => p.PositionSide == PositionSide.Short);
 
-            await DetectClose(symbol, longPos, PositionSide.Long, ct);
-            await DetectClose(symbol, shortPos, PositionSide.Short, ct);
+            // 2️⃣ ордера (нужно ДО DetectClose)
+            var openOrders = await LoadOrdersAsync(client, symbol);
 
-            // проверяем, остались ли открытые позиции
+            // 3️⃣ detect final close
+            await DetectClose(client, symbol, longPos, PositionSide.Long, openOrders, ct);
+            await DetectClose(client, symbol, shortPos, PositionSide.Short, openOrders, ct);
+
+            // 4️⃣ проверяем позиции
             var hasLong = longPos?.Quantity > 0m;
             var hasShort = shortPos?.Quantity > 0m;
 
-            if ((longPos?.Quantity ?? 0) == 0 && (shortPos?.Quantity ?? 0) == 0)
+            if (!hasLong && !hasShort)
             {
                 _logger.LogInformation("[SUPERVISOR] {symbol}: no positions", symbol);
                 return;
             }
 
-            // 2) Ордера
-            var openOrders = await LoadOrdersAsync(client, symbol);
-
-            // 3) Режим + klines (1m)
+            // 5️⃣ режим + klines
             IReadOnlyList<BinanceFuturesUsdtKline>? klines1m = null;
+
             try
             {
-                klines1m = await _marketData.GetKlines(symbol, KlineInterval.OneMinute, 200);
-                var rr = _regime.DetectRegime(symbol, KlineInterval.OneMinute, klines1m);
-                if (rr != null) _regimeNow = rr.Regime;
+                klines1m = await _marketData.GetKlines(
+                    symbol,
+                    KlineInterval.OneMinute,
+                    200);
+
+                var rr = _regime.DetectRegime(
+                    symbol,
+                    KlineInterval.OneMinute,
+                    klines1m);
+
+                if (rr != null)
+                    _regimeNow = rr.Regime;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "[SUPERVISOR] Klines load error {symbol}", symbol);
+                _logger.LogWarning(
+                    ex,
+                    "[SUPERVISOR] Klines load error {symbol}",
+                    symbol);
             }
 
             SmartRegimeInfo? smart1m = null;
@@ -390,19 +406,26 @@ CancellationToken ct)
                     {
                         // Stage 1 → фиксим 35%
                         closePercent = 0.30m;
-                        decimal closeQty = Math.Round(qty * closePercent, 8);
 
-                        if (closeQty > 0)
+                        decimal closeQty = await _symbolInfo.NormalizeQtyAsync(
+                                symbol,
+                                qty * closePercent,
+                                ct);
+
+                       if (closeQty > 0)
                             SafeFireAndForget(ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
 
                         remainingQty = qty - closeQty;
                         if (remainingQty <= 0) return;
 
-                        decimal beDistance = side == PositionSide.Long
-                            ? atr14_1m * (isMajor ? 0.12m : 0.10m)
-                            : -atr14_1m * (isMajor ? 0.12m : 0.10m);
+                        decimal beDistance = atr14_1m * 0.12m;
 
-                        decimal bePrice = entry + beDistance;
+                        decimal bePrice =
+                            side == PositionSide.Long
+                                ? entry + beDistance
+                                : entry - beDistance;
+
+                       
                         SafeFireAndForget(PlaceStopLossAtBeAsync(client, symbol, side, remainingQty, bePrice, pos, ct));
                         return;
                     }
@@ -411,7 +434,13 @@ CancellationToken ct)
                     {
                         // Stage 2 → фиксим 35% оставшейся позиции
                         closePercent = 0.25m;
+
                         decimal closeQty = Math.Round(qty * closePercent, 8);
+
+                          closeQty = await _symbolInfo.NormalizeQtyAsync(
+                           symbol,
+                           qty * closePercent,
+                           ct);
 
                         if (closeQty > 0)
                             SafeFireAndForget(ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
@@ -458,69 +487,118 @@ CancellationToken ct)
                 await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, openOrders, lastSignal, klines1m, ct);
         }
 
-        private async Task RemoveOldSlOrdersAsync(IBinanceRestClient client, string symbol, PositionSide side, CancellationToken ct)
+        private async Task RemoveOldSlOrdersAsync(
+       IBinanceRestClient client,
+       string symbol,
+       PositionSide side,
+       CancellationToken ct)
         {
-            var openOrders = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
-            if (!openOrders.Success) return;
+            var openOrders = await client
+                .UsdFuturesApi
+                .Trading
+                .GetOpenOrdersAsync(symbol, ct: ct);
 
-            foreach (var o in openOrders.Data.Where(o => o.Type == FuturesOrderType.StopMarket && o.PositionSide == side))
+            if (!openOrders.Success)
+                return;
+
+            foreach (var o in openOrders.Data.Where(o =>
+                o.Type == FuturesOrderType.StopMarket &&
+                o.PositionSide == side))
             {
-                await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, o.Id, ct: ct);
+                await client.UsdFuturesApi.Trading.CancelOrderAsync(
+                    symbol,
+                    o.Id,
+                    ct: ct);
             }
         }
+
+
+        public class SymbolFilters
+        {
+            public decimal StepSize { get; set; }
+            public decimal MinQty { get; set; }
+            public decimal MaxQty { get; set; }
+            public decimal TickSize { get; set; }
+            public decimal MinNotional { get; set; }
+            public int PricePrecision { get; set; }
+            public int QtyPrecision { get; set; }
+        }
+        public async Task<SymbolFilters> GetFuturesFiltersDetailedAsync(
+        string symbol,
+        QtyRule rule,
+        CancellationToken ct)
+        {
+            var client = _factory.CreateRestClient();
+            var info = await client.UsdFuturesApi.ExchangeData
+                .GetExchangeInfoAsync(ct);
+
+            var s = info.Data.Symbols.First(x => x.Name == symbol);
+
+            var lot = s.LotSizeFilter;
+            var marketLot = s.MarketLotSizeFilter;
+            var price = s.PriceFilter;
+            var notional = s.MinNotionalFilter;
+
+            decimal step =
+                rule == QtyRule.Market
+                ? marketLot?.StepSize ?? lot.StepSize
+                : lot.StepSize;
+
+            decimal minQty =
+                rule == QtyRule.Market
+                ? marketLot?.MinQuantity ?? lot.MinQuantity
+                : lot.MinQuantity;
+
+            return new SymbolFilters
+            {
+                StepSize = step,
+                MinQty = minQty,
+                MaxQty = lot.MaxQuantity,
+                TickSize = price.TickSize,
+                MinNotional = notional?.MinNotional ?? 5m,
+                PricePrecision = s.PricePrecision,
+                QtyPrecision = s.QuantityPrecision
+            };
+        }
+
         // ===== PLACE BE SL =====
         private async Task PlaceStopLossAtBeAsync(
-            IBinanceRestClient client,
-            string symbol,
-            PositionSide side,
-            decimal qty,
-            decimal entryPrice,
-            BinancePositionDetailsUsdt pos,
-            CancellationToken ct)
+       IBinanceRestClient client,
+       string symbol,
+       PositionSide side,
+       decimal qty,
+       decimal entryPrice,
+       BinancePositionDetailsUsdt pos,
+       CancellationToken ct)
         {
-            if (qty <= 0 || pos == null) return;
+            if (qty <= 0 || pos == null)
+                return;
 
-            var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-            bool reduceOnly = pos.Quantity != 0; // ReduceOnly только если реально есть позиция
+            var orderSide = side == PositionSide.Long
+                ? OrderSide.Sell
+                : OrderSide.Buy;
 
+            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol, ct:ct);
 
-            // --- нормализация ---
-            var (qtyPrecision, pricePrecision) = await GetSymbolPrecisionsAsync(client, symbol);
-            qty = await NormalizeQuantityAsync(symbol, side, qty, client, ct);   // ✅ здесь нормализуем по MaxNotional
+            // normalize qty
+            qty = Math.Floor(qty / filters.step) * filters.step;
 
+            if (qty < filters.minQty)
+                return;
 
-            entryPrice = RoundPrice(entryPrice, pricePrecision);
-
-            // получить filters
-            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-
-            // КРИТИЧЕСКИЙ ФИКС — normalize trigger
+            // normalize price
             entryPrice = await NormalizeTriggerPriceAsync(
-     client,
-     symbol,
-     side,
-     entryPrice,
-     filters.tickSize,
-     true,
-     ct);
+                client,
+                symbol,
+                side,
+                entryPrice,
+                filters.tickSize,
+                true,
+                ct);
 
-            //await client.UsdFuturesApi.Trading.CancelAllConditionalOrdersAsync(symbol, ct: ct);
-            var open = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
+            // remove old SL
+            await RemoveOldSlOrdersAsync(client, symbol, side, ct);
 
-            if (open.Success)
-            {
-                foreach (var o in open.Data)
-                {
-                    if (o.Type == FuturesOrderType.StopMarket &&
-                        o.PositionSide == side)
-                    {
-                        await client.UsdFuturesApi.Trading.CancelOrderAsync(
-                            symbol,
-                            orderId: o.Id,
-                            ct: ct);
-                    }
-                }
-            }
             var result = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
                 symbol: symbol,
                 side: orderSide,
@@ -529,39 +607,45 @@ CancellationToken ct)
                 positionSide: side,
                 triggerPrice: entryPrice,
                 workingType: WorkingType.Mark,
-                // reduceOnly: reduceOnly, // в Hedge Mode Binance не требует
                 priceProtect: true,
                 ct: ct
             );
 
             if (result.Success)
-                _logger.LogInformation("[BE MOVE][{symbol}][{side}] BE SL placed at {price} qty={qty}", symbol, side, entryPrice, qty);
+            {
+                _logger.LogInformation(
+                    "[BE MOVE][{symbol}][{side}] BE SL placed at {price} qty={qty}",
+                    symbol, side, entryPrice, qty);
+            }
             else
-                _logger.LogError("[BE MOVE][{symbol}][{side}] Failed: {msg}", symbol, side, result.Error?.Message);
+            {
+                _logger.LogError(
+                    "[BE MOVE][{symbol}][{side}] Failed: {msg}",
+                    symbol, side, result.Error?.Message);
+            }
         }
 
 
         private async Task ClosePartialChunkedAsync(
-            IBinanceRestClient client,
-            string symbol,
-            PositionSide side,
-            decimal totalQty,
-            CancellationToken ct)
+        IBinanceRestClient client,
+        string symbol,
+        PositionSide side,
+        decimal totalQty,
+        CancellationToken ct)
         {
             const decimal CHUNK_USDT = 5000m;
 
             var mark = await client.UsdFuturesApi.ExchangeData.GetMarkPriceAsync(symbol, ct);
-
-            if (!mark.Success)
-                return;
+            if (!mark.Success) return;
 
             var markPrice = mark.Data.MarkPrice;
 
+            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol, ct:ct);
+
+            var step = filters.step;
+
             var chunkQty = CHUNK_USDT / markPrice;
-
-            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol, ct: ct);
-
-            chunkQty = Math.Floor(chunkQty / filters.step) * filters.step;
+            chunkQty = Math.Floor(chunkQty / step) * step;
 
             if (chunkQty <= 0)
                 return;
@@ -571,6 +655,12 @@ CancellationToken ct)
             while (remaining > 0)
             {
                 var qty = Math.Min(chunkQty, remaining);
+
+                // FIX precision
+                qty = Math.Floor(qty / step) * step;
+
+                if (qty <= 0)
+                    break;
 
                 var orderSide = side == PositionSide.Long
                     ? OrderSide.Sell
@@ -592,26 +682,6 @@ CancellationToken ct)
                         result.Error?.Message);
 
                     return;
-                }
-                if (result.Success)
-                {
-                    // ===== REALIZED PNL CALC =====
-
-                    var entry = await GetEntryPriceSafeAsync(client, symbol, side, ct);
-
-                    if (entry > 0)
-                    {
-                        decimal realizedPnl =
-                            side == PositionSide.Long
-                            ? (markPrice - entry) * qty
-                            : (entry - markPrice) * qty;
-
-                        _accountState.AddRealizedPnl(realizedPnl);
-
-                        _logger.LogInformation(
-                            "[REALIZED PNL][PARTIAL][{symbol}][{side}] pnl={pnl}",
-                            symbol, side, realizedPnl);
-                    }
                 }
 
                 remaining -= qty;
@@ -721,15 +791,14 @@ CancellationToken ct)
         }
 
         private async Task<decimal> NormalizeTriggerPriceAsync(
-     IBinanceRestClient client,
-     string symbol,
-     PositionSide side,
-     decimal trigger,
-     decimal tick,
-     bool isStopLoss,
-     CancellationToken ct)
+       IBinanceRestClient client,
+       string symbol,
+       PositionSide side,
+       decimal trigger,
+       decimal tick,
+       bool isStopLoss,
+       CancellationToken ct)
         {
-
             var mark = await client
                 .UsdFuturesApi
                 .ExchangeData
@@ -742,32 +811,25 @@ CancellationToken ct)
 
             if (side == PositionSide.Long)
             {
-                if (isStopLoss)
-                {
-                    if (trigger >= price)
-                        trigger = price - tick * 3;
-                }
-                else
-                {
-                    if (trigger <= price)
-                        trigger = price + tick * 3;
-                }
+                if (isStopLoss && trigger >= price)
+                    trigger = price - tick * 3;
+
+                if (!isStopLoss && trigger <= price)
+                    trigger = price + tick * 3;
             }
             else
             {
-                if (isStopLoss)
-                {
-                    if (trigger <= price)
-                        trigger = price + tick * 3;
-                }
-                else
-                {
-                    if (trigger >= price)
-                        trigger = price - tick * 3;
-                }
+                if (isStopLoss && trigger <= price)
+                    trigger = price + tick * 3;
+
+                if (!isStopLoss && trigger >= price)
+                    trigger = price - tick * 3;
             }
 
-            return Math.Round(trigger / tick) * tick;
+            // FIX
+            trigger = Math.Floor(trigger / tick) * tick;
+
+            return trigger;
         }
 
 
@@ -859,10 +921,12 @@ CancellationToken ct)
         }
 
         private async Task DetectClose(
-      string symbol,
-      BinancePositionDetailsUsdt? pos,
-      PositionSide side,
-      CancellationToken ct)
+    IBinanceRestClient client,
+    string symbol,
+    BinancePositionDetailsUsdt? pos,
+    PositionSide side,
+    IEnumerable<BinanceFuturesOrder> openOrders,
+    CancellationToken ct)
         {
             var key = $"{symbol}_{side}";
 
@@ -872,7 +936,7 @@ CancellationToken ct)
             var currQty = pos?.Quantity ?? 0m;
             var currEntry = pos?.EntryPrice ?? 0m;
 
-            // 🔥 FINAL CLOSE DETECTED
+            // ===== FINAL CLOSE =====
             if (prevQty != 0m && currQty == 0m)
             {
                 _logger.LogInformation(
@@ -903,25 +967,22 @@ CancellationToken ct)
                         "[CLOSE][{symbol}][{side}] qty={qty} entry={entry} exit={exit} pnl={pnl}",
                         symbol, side, prevQty, prevEntry, exitPrice, realizedPnl);
                 }
-                else
-                {
-                    _logger.LogWarning(
-                        "[CLOSE][{symbol}][{side}] Exit price unresolved",
-                        symbol, side);
-                }
 
-                await HandleFinalCloseAsync(
-                    _factory.CreateRestClient(),
+                // ===== УДАЛЯЕМ ОСТАВШИЕСЯ EXIT ОРДЕРА =====
+                await CleanupExitOrdersAsync(
+                    client,
                     symbol,
                     side,
+                    openOrders,
                     ct);
+
+                // ===== RESET BE STATE =====
+                _beLevel.TryRemove(key, out _);
+
+                // ===== SAVE STATE =====
+                _manualHandler.SetPrevState(key, currQty, currEntry);
             }
-
-            // ⚠️ ВАЖНО: обновляем состояние ВСЕГДА
-            _manualHandler.SetPrevState(key, currQty, currEntry);
         }
-
-
         // =====================================================================
         // RETRY POSITIONS
         // =====================================================================

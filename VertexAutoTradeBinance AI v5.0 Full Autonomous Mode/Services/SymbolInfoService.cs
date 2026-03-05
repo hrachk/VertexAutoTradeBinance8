@@ -263,4 +263,35 @@ public sealed class SymbolInfoService
             _refreshGate.Release();
         }
     }
+
+    public async Task<bool> SymbolExistsAsync(string symbol, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(symbol))
+            return false;
+
+        await EnsureExchangeInfoCachedAsync(ct).ConfigureAwait(false);
+
+        var info = _cachedExchangeInfo;
+
+        if (info?.Symbols == null)
+            return false;
+
+        return info.Symbols.Any(s =>
+            s.Name.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public async Task<decimal> NormalizeQtyAsync(
+    string symbol,
+    decimal qty,
+    CancellationToken ct = default)
+    {
+        var filters = await GetFuturesFiltersDetailedAsync(symbol, QtyRule.Market, ct);
+
+        var step = filters.StepSize;
+
+        if (step <= 0)
+            return qty;
+
+        return Math.Floor(qty / step) * step;
+    }
 }
