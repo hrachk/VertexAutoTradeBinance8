@@ -371,13 +371,14 @@ public class SymbolRegistryService
         // ============================================================
         // UNIVERSE BUILD (AI CAP = 60)
         // ============================================================
+        var momentumCapPercent = 100m; // или из конфига
         var longs = BlacklistFilter(
             NormalizeSymbols(
-                _universeBuilder.Build(longSnaps, pinnedCfg.ToArray(), 60, 0m, 0m)));
+                _universeBuilder.Build(longSnaps, pinnedCfg.ToArray(), 60, 0m, 0m, momentumCapPercent)));
 
         var shorts = BlacklistFilter(
             NormalizeSymbols(
-                _universeBuilder.Build(shortSnaps, pinnedCfg.ToArray(), 60, 0m, 0m)));
+                _universeBuilder.Build(shortSnaps, pinnedCfg.ToArray(), 60, 0m, 0m, momentumCapPercent)));
 
         // ============================================================
         // FINAL UNION (PINNED FIRST, HARD CAP)

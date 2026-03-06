@@ -271,8 +271,7 @@ namespace VertexAutoTradeBinance8.Services
             {
                 await TryReverseProbeAsync(client, symbol, longPos, shortPos, smart1m, atr14_1m, ct);
             }
-
-
+             
             ///////////////////////////////////TEST DIAGNOSTIC SL/BE/MOVE/////////////////////////////////////////////////////////
             if (atr14_1m > 0 && klines1m != null && klines1m.Count >= 10)
             {
@@ -335,30 +334,13 @@ namespace VertexAutoTradeBinance8.Services
                     decimal MIN_BE_BUFFER;
                     decimal PARTIAL_SIZE;
 
-                    if (symbol == "BTCUSDT")
-                    {
+                   
                         STEP = 0.0040m;           // 0.20%
-                        PARTIAL_STEP = 0.0100m;   // 1.00%
-                        TRUE_BE_BUFFER = 0.0022m; // 0.22%
+                        PARTIAL_STEP = 0.0150m;   // 1.5%
+                        TRUE_BE_BUFFER = 0.0026m; // 0.22%
                         MIN_BE_BUFFER = 0.0030m;  // 0.30%
-                        PARTIAL_SIZE = 0.18m;     // close 18%
-                    }
-                    else if (symbol == "ETHUSDT")
-                    {
-                        STEP = 0.0020m;
-                        PARTIAL_STEP = 0.0120m;
-                        TRUE_BE_BUFFER = 0.0025m;
-                        MIN_BE_BUFFER = 0.0035m;
-                        PARTIAL_SIZE = 0.18m;
-                    }
-                    else
-                    {
-                        STEP = 0.0060m;
-                        PARTIAL_STEP = 0.0160m;
-                        TRUE_BE_BUFFER = 0.0035m;
-                        MIN_BE_BUFFER = 0.0045m;
-                        PARTIAL_SIZE = 0.15m;
-                    }
+                        PARTIAL_SIZE = 0.22m;     // close 18%
+                    
 
                     // =====================================================
                     // MIN ROI FILTER (ignore noise)
@@ -449,10 +431,7 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // /////////////////////////////////////////////////
-
-
-
-
+             
             // 4) Обработка сторон
             if (hasLong)
                 await HandleSideAsync(client, symbol, PositionSide.Long, longPos!, openOrders, lastSignal, klines1m, ct);

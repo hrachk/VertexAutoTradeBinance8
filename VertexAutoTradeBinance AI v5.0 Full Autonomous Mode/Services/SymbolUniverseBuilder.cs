@@ -1,23 +1,7 @@
-﻿using Microsoft.Win32;
-using System.Runtime.CompilerServices;
-using VertexAutoTradeBinance8.Models;
+﻿using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services;
 
-
-/// <summary>
-/// 
-/// Builder не режет финальный список до 20 “втихаря”
-
-//Builder строит кандидатов, а лимит/side-policy решает Registry
-
-//topVolumeCount реально используется
-
-//pinned нормализуются
-
-//AIAUSDT фильтр — “навсегда” здесь тоже можно поставить
- 
-/// </summary>
 public class SymbolUniverseBuilder
 {
     private readonly ILogger<SymbolUniverseBuilder> _logger;
@@ -27,78 +11,116 @@ public class SymbolUniverseBuilder
         _logger = logger;
     }
 
-    private static readonly HashSet<string> _blacklist = new(StringComparer.OrdinalIgnoreCase)
-{
-    "POWERUSDT",
-    "QUSDT",
-    "RIVERUSDT",
-    "ARCUSDT",
-    "BEATUSDT",
-    "TANSSIUSDT",
-    "OPUSDT",
-    "ROBOUSDT",
-    "MYXUSDT",
+    private static readonly HashSet<string> _blacklist =
+        new(StringComparer.OrdinalIgnoreCase)
+    {
+        "POWERUSDT",
+        "QUSDT",
+        "RIVERUSDT",
+        "ARCUSDT",
+        "BEATUSDT",
+        "TANSSIUSDT",
+        "OPUSDT",
+        "ROBOUSDT",
+        "MYXUSDT",
         "AIAUSDT",
         "FIOUSDT",
         "SAHARAUSDT",
         "HUMAUSDT",
-        "SIRENUSDT"
-};
+        "SIRENUSDT",
+        "DENTUSDT"
+    };
 
     public List<string> Build(
         List<SymbolMarketSnapshot> data,
         string[] pinned,
         int topVolumeCount,
         decimal min24hVolume,
-        decimal minPrice)
+        decimal minPrice,
+        decimal momentumCapPercent)
     {
+        if (data == null || data.Count == 0)
+        {
+            _logger.LogWarning("[SYMBOL] Market snapshot empty");
+            return new List<string>();
+        }
+
         pinned ??= Array.Empty<string>();
 
+        // ------------------------------------------------
+        // PINNED NORMALIZATION
+        // ------------------------------------------------
         var pinnedNorm = pinned
-     .Where(s => !string.IsNullOrWhiteSpace(s))
-     .Select(s => s.Trim().ToUpperInvariant())
-     .Where(s => !_blacklist.Contains(s))
-     .ToList();
-
-        // === CORE LIQUIDITY (base filter) ===
-        var core = data
-     .Where(x => x.QuoteVolume24h >= min24hVolume && x.LastPrice >= minPrice)
-     .Where(x => !_blacklist.Contains(x.Symbol))
-             .OrderByDescending(x => x.QuoteVolume24h)
-            .Take(80) // widen funnel a bit (safe)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim().ToUpperInvariant())
+            .Where(s => !_blacklist.Contains(s))
+            .Distinct()
             .ToList();
 
-        // === MOMENTUM (up+down) ===
-        var momentum = core
-            .OrderByDescending(x => Math.Abs(x.PriceChangePercent))
-            .Take(30)
-            .Select(x => x.Symbol)
+        // ------------------------------------------------
+        // CORE MARKET FILTER
+        // ------------------------------------------------
+        var filteredMarket = data
+            .Where(x => x.QuoteVolume24h >= min24hVolume)
+            .Where(x => x.LastPrice >= minPrice)
+            .Where(x => !_blacklist.Contains(x.Symbol))
             .ToList();
 
-        // === LIQUIDITY top N ===
+        // ------------------------------------------------
+        // CORE LIQUIDITY FUNNEL
+        // ------------------------------------------------
+        var core = filteredMarket
+            .OrderByDescending(x => x.QuoteVolume24h)
+            .Take(80)
+            .ToList();
+
+        // ------------------------------------------------
+        // LIQUIDITY SELECTION
+        // ------------------------------------------------
         var liquidity = core
             .OrderByDescending(x => x.QuoteVolume24h)
             .Take(Math.Max(1, topVolumeCount))
             .Select(x => x.Symbol)
             .ToList();
 
-        // FINAL: candidates (do NOT hard-cap here)
+        // ------------------------------------------------
+        // MOMENTUM SELECTION (FULL MARKET)
+        // ------------------------------------------------
+        var momentumRaw = filteredMarket
+            .OrderByDescending(x => Math.Abs(x.PriceChangePercent))
+            .Select(x => x.Symbol)
+            .ToList();
+
+        int momentumCap = (int)Math.Ceiling(topVolumeCount * (momentumCapPercent / 100m));
+
+        if (momentumCap < 1)
+            momentumCap = 1;
+
+        var momentum = momentumRaw
+            .Take(momentumCap)
+            .ToList();
+
+        // ------------------------------------------------
+        // FINAL LIST
+        // ------------------------------------------------
         var final = pinnedNorm
-     .Concat(momentum)
-     .Concat(liquidity)
-     .Distinct(StringComparer.OrdinalIgnoreCase)
-     .Where(s => !_blacklist.Contains(s))
-     .ToList();
+            .Concat(liquidity)
+            .Concat(momentum)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // ------------------------------------------------
+        // LOGGING
+        // ------------------------------------------------
+        _logger.LogInformation(
+            "[SYMBOL] Blacklist active: {count}",
+            _blacklist.Count);
 
         _logger.LogInformation(
-    "[SYMBOL] Blacklist active: {count} symbols",
-    _blacklist.Count);
-
-        _logger.LogInformation(
-            "[SYMBOL] Universe candidates built: pinned={Pinned}, momentum={Momentum}, liquidity={Liquidity}, total={Total}",
+            "[SYMBOL] Universe built pinned={Pinned} liquidity={Liquidity} momentum={Momentum} total={Total}",
             pinnedNorm.Count,
-            momentum.Count,
             liquidity.Count,
+            momentum.Count,
             final.Count);
 
         return final;

@@ -1617,7 +1617,6 @@ namespace VertexAutoTradeBinance8.Strategy
             }
         }
 
-
         private FastFailResult Gate2_Confidence(SmartRegimeInfo smart, bool lowerRegimeThreshold, string symbol)
         {
             // HARD BLOCK: chop is forbidden
@@ -1686,97 +1685,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return FastFailResult.Ok();
         }
-
-        //    private FastFailResult Gate2_ConfidenceHybrid(
-        //decimal finalConfidence,          // 🔥 ИТОГОВЫЙ confidence (aggregated)
-        //SmartRegimeInfo smart,
-        //bool lowerRegimeThreshold, string symbol)
-        //    {
-        //        var cfg = _confidenceCfg.Resolve(symbol);
-        //        // ============================================================
-        //        // 0️⃣ HARD ABSOLUTE BLOCK — НЕ ТОРГУЕМ
-        //        // ============================================================
-
-        //        if (smart.IsDangerChopZone)
-        //            return FastFailResult.Fail("CONF", "DangerChopZone");
-
-        //        // ============================================================
-        //        // 1️⃣ BASE MIN ENTRY (ABSOLUTE FLOOR)
-        //        // ============================================================
-
-        //        if (finalConfidence < cfg.MinEntry)
-        //            return FastFailResult.Fail(
-        //                "CONF",
-        //                $"confidence={finalConfidence:P0}<min={cfg.MinEntry:P0}"
-        //            );
-
-        //        // ============================================================
-        //        // 2️⃣ ADAPTIVE THRESHOLD (ИЗ СТАРОГО GATE2 — ЦЕННОЕ)
-        //        // ============================================================
-
-        //        int adaptiveThreshold = GetAdaptiveThreshold(
-        //            smart.BaseRegime,
-        //            smart.SmartType,
-        //            smart.VolatilityPercent,
-        //            smart.TrendSlopePercent);
-
-        //        decimal thrFrac = adaptiveThreshold / 100m;
-        //        decimal safetyBuffer = 0.10m;
-
-        //        // ------------------------------------------------------------
-        //        // Soft-entry (test / relax)
-        //        // ------------------------------------------------------------
-        //        if (lowerRegimeThreshold)
-        //        {
-        //            adaptiveThreshold = Math.Max(20, (int)(adaptiveThreshold * 0.8));
-        //            thrFrac = adaptiveThreshold / 100m;
-        //            safetyBuffer = 0.20m;
-
-        //            LastSoftEntry = true;
-        //            _engineState.SoftEntry = true;
-        //        }
-
-        //        bool fastTrendOverride = IsFastTrendOverride(smart);
-
-        //        // ============================================================
-        //        // 3️⃣ EFFECTIVE THRESHOLD (SMART + VOL + SLOPE)
-        //        // ============================================================
-
-        //        decimal effectiveThreshold = thrFrac - safetyBuffer;
-
-        //        // sane bounds
-        //        effectiveThreshold = Math.Clamp(effectiveThreshold, 0.10m, 0.80m);
-
-        //        // Fast trend override → смягчаем, но НЕ отключаем
-        //        if (fastTrendOverride)
-        //            effectiveThreshold *= 0.85m;
-
-        //        if (finalConfidence < effectiveThreshold)
-        //            return FastFailResult.Fail(
-        //                "CONF",
-        //                $"confidence={finalConfidence:P0}<thr={effectiveThreshold:P0} (fastTrend={fastTrendOverride})"
-        //            );
-
-        //        // ============================================================
-        //        // 4️⃣ UI / ENGINE STATE (НО ТЕПЕРЬ ПО FINAL)
-        //        // ============================================================
-
-        //        _engineState.LastEntryDecision = "CONF_CHECK";
-
-        //        _engineState.ConfidenceRaw = finalConfidence;
-        //        _engineState.ConfidencePercent = (int)(finalConfidence * 100);
-
-        //        _engineState.ConfidenceLevel =
-        //            finalConfidence >= cfg.Bands.HighFrom ? "HIGH" :
-        //            finalConfidence >= cfg.MinEntry ? "MEDIUM" :
-        //            "LOW";
-
-        //        Confidence = finalConfidence;
-
-        //        return FastFailResult.Ok();
-        //    }
-
-
+     
         private FastFailResult Gate2_ConfidenceHybrid(
     decimal finalConfidence,
     SmartRegimeInfo smart,
@@ -1854,8 +1763,6 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return FastFailResult.Ok();
         }
-
-
         private FastFailResult Gate2_5_TrendPhaseLock(
     IReadOnlyList<BinanceFuturesUsdtKline> klines,
     SmartRegimeInfo smart,
@@ -1877,7 +1784,6 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return FastFailResult.Ok();
         }
-
         private FastFailResult Gate3_BaseSignal(
     string symbol,
     KlineInterval tf,
@@ -2048,8 +1954,6 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return FastFailResult.Ok();
         }
-
-
         private TradeSignal? TryImpulseContinuation(
     string symbol,
     KlineInterval tf,
@@ -2139,7 +2043,6 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return null;
         }
-
 
         /// <summary>
         /// EarlyTrendJoin — универсальный вход на старте импульса/пробоя, чтобы не пропускать фазу "поехали".
@@ -2507,7 +2410,6 @@ klines?.Count > 0 ? klines.Count - 1 : -1
 
             return FastFailResult.Fail("LATE", "late chase");
         }
-
         private FastFailResult Gate4_RR(
       string symbol,
       KlineInterval tf,
@@ -2574,8 +2476,7 @@ klines?.Count > 0 ? klines.Count - 1 : -1
 
             return FastFailResult.Ok();
         }
-
-
+        
         private FastFailResult Gate5_Pattern(string symbol, KlineInterval tf, IReadOnlyList<BinanceFuturesUsdtKline> klines, TradeSignal signal, bool relaxPatternBlock)
         {
             try
@@ -2734,8 +2635,7 @@ klines?.Count > 0 ? klines.Count - 1 : -1
 
             return FastFailResult.Ok();
         }
-
-
+        
         private FastFailResult Gate7_Exposure(
       string symbol,
       KlineInterval tf,
