@@ -41,7 +41,8 @@ public class SymbolUniverseBuilder
         "AIAUSDT",
         "FIOUSDT",
         "SAHARAUSDT",
-        "DENTUSDT"
+        "HUMAUSDT",
+        "SIRENUSDT"
 };
 
     public List<string> Build(
