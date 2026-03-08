@@ -49,15 +49,28 @@ namespace VertexAutoTradeBinance8.Strategy.Confidence
             decimal riskClamp = GetRiskClamp(smart, signal);
 
             // ===============================
-            // 5) FINAL AGGREGATION
+            // 5) FINAL AGGREGATION (enhanced)
             // ===============================
-            decimal final =
-                regimeConf * 0.45m +
-                patternConf * 0.35m +
+
+            decimal baseScore =
+                regimeConf * 0.40m +
+                patternConf * 0.40m +
                 tfConf * 0.20m;
 
+            // --- synergy bonus ---
+            decimal synergy = 0m;
+
+            if (patternConf >= 0.75m && regimeConf >= 0.50m)
+                synergy = 0.10m;
+            else if (patternConf >= 0.65m)
+                synergy = 0.05m;
+
+            decimal final = baseScore + synergy;
+
+            // apply risk
             final *= riskClamp;
 
+            // final clamp
             final = Clamp01(final);
 
             return new ConfidenceResult(

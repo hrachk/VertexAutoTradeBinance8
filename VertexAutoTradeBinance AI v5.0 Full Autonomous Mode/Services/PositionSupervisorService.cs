@@ -228,9 +228,13 @@ namespace VertexAutoTradeBinance8.Services
             var hasLong = longPos?.Quantity > 0m;
             var hasShort = shortPos?.Quantity > 0m;
 
+
             if ((longPos?.Quantity ?? 0) == 0 && (shortPos?.Quantity ?? 0) == 0)
             {
                 _logger.LogInformation("[SUPERVISOR] {symbol}: no positions", symbol);
+
+                await HandleFinalCloseAsync(client, symbol, PositionSide.Both, ct);
+
                 return;
             }
 
@@ -275,10 +279,11 @@ namespace VertexAutoTradeBinance8.Services
             ///////////////////////////////////TEST DIAGNOSTIC SL/BE/MOVE/////////////////////////////////////////////////////////
             if (atr14_1m > 0 && klines1m != null && klines1m.Count >= 10)
             {
-                void ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
+                async Task ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
                 {
-                    var key = symbol + "_" + side;
-
+                    //var key = symbol + "_" + side;
+                    var entryPrice = pos?.EntryPrice ?? 0m;
+                    var key = BuildExitKey(symbol, side, entryPrice);
                     // =====================================================
                     // RESET HANDLING (position fully closed confirmation)
                     // =====================================================
@@ -335,12 +340,17 @@ namespace VertexAutoTradeBinance8.Services
                     decimal PARTIAL_SIZE;
 
                    
-                        STEP = 0.0040m;           // 0.20%
-                        PARTIAL_STEP = 0.0150m;   // 1.5%
-                        TRUE_BE_BUFFER = 0.0026m; // 0.22%
-                        MIN_BE_BUFFER = 0.0030m;  // 0.30%
-                        PARTIAL_SIZE = 0.22m;     // close 18%
-                    
+                        //STEP = 0.0040m;           // 0.20%
+                        //PARTIAL_STEP = 0.0150m;   // 1.5%
+                        //TRUE_BE_BUFFER = 0.0026m; // 0.22%
+                        //MIN_BE_BUFFER = 0.0030m;  // 0.30%
+                        //PARTIAL_SIZE = 0.22m;     // close 18%
+
+                    STEP = 0.0053m;           // 0.6%
+                    PARTIAL_STEP = 0.0220m;   // 3%
+                    TRUE_BE_BUFFER = 0.0035m; // 0.35%
+                    MIN_BE_BUFFER = 0.0036m;  // 0.4%
+                    PARTIAL_SIZE = 0.33m;     // close 33%
 
                     // =====================================================
                     // MIN ROI FILTER (ignore noise)
@@ -377,23 +387,49 @@ namespace VertexAutoTradeBinance8.Services
 
                         var closeQty = Math.Round(qty * PARTIAL_SIZE, 8);
 
+                        // защита от случайного полного закрытия
+                        if (closeQty >= qty)
+                            closeQty = Math.Round(qty * 0.9m, 8);
+
                         if (closeQty > 0)
                         {
                             _logger.LogWarning(
                                 "[PARTIAL CLOSE][{symbol}][{side}] stage={stage} closeQty={qty}",
                                 symbol, side, partialLevel, closeQty);
 
-                            SafeFireAndForget(
-                                ClosePartialAsync(client, symbol, side, closeQty, pos, ct));
+                            await ClosePartialAsync(client, symbol, side, closeQty, pos, ct);
                         }
                     }
 
                     // =====================================================
                     // MOVE STOP LOSS (progressive BE lock)
                     // =====================================================
-                    var slOrder = openOrders.FirstOrDefault(o =>
-                        o.PositionSide == side &&
+                    var exitOrders = openOrders
+                     .Where(o =>
+                         o.PositionSide == side &&
+                         (
+                             o.Type == FuturesOrderType.StopMarket ||
+                             o.Type == FuturesOrderType.TakeProfitMarket ||
+                             o.Type == FuturesOrderType.TrailingStopMarket
+                         ))
+                     .ToList();
+
+                    var slOrder = exitOrders.FirstOrDefault(o =>
                         o.Type == FuturesOrderType.StopMarket);
+
+                    if (slOrder != null && slOrder.PositionSide != side)
+                    {
+                        _logger.LogWarning(
+                            "[SL INVALID][{symbol}] order side mismatch -> cancel",
+                            symbol);
+
+                        await client.UsdFuturesApi.Trading.CancelOrderAsync(
+                            symbol,
+                            orderId: slOrder.Id,
+                            ct: ct);
+
+                        slOrder = null;
+                    }
 
                     decimal newSl =
                         side == PositionSide.Long
@@ -406,28 +442,41 @@ namespace VertexAutoTradeBinance8.Services
                             ? newSl > (slOrder.StopPrice ?? 0)
                             : newSl < (slOrder.StopPrice ?? 0));
 
+                   
+
                     if (shouldMove)
                     {
+                        foreach (var o in exitOrders)
+                        {
+                            try
+                            {
+                                await client.UsdFuturesApi.Trading.CancelOrderAsync(
+                                    symbol,
+                                    orderId: o.Id,
+                                    ct: ct);
+                            }
+                            catch { }
+                        }
                         _logger.LogWarning(
                             "[BE MOVE][{symbol}][{side}] SL {old} → {new}",
                             symbol, side,
                             slOrder?.StopPrice ?? 0,
                             newSl);
 
-                        SafeFireAndForget(
-                            PlaceStopLossAtBeAsync(
-                                client,
-                                symbol,
-                                side,
-                                qty,
-                                newSl,
-                                pos,
-                                ct));
+                        //SafeFireAndForget(
+                       await PlaceStopLossAtBeAsync(
+                            client,
+                            symbol,
+                            side,
+                            qty,
+                            newSl,
+                            pos,
+                            ct);//);
                     }
                 }
 
-                ProbeSide(longPos, PositionSide.Long);
-                ProbeSide(shortPos, PositionSide.Short);
+                await ProbeSide(longPos, PositionSide.Long);
+                await ProbeSide(shortPos, PositionSide.Short);
             }
 
             // /////////////////////////////////////////////////

@@ -28,7 +28,9 @@ public class SymbolUniverseBuilder
         "SAHARAUSDT",
         "HUMAUSDT",
         "SIRENUSDT",
-        "DENTUSDT"
+        "DENTUSDT",
+        "SIGNUSDT",
+        "BANANAS31USDT"
     };
 
     public List<string> Build(

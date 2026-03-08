@@ -1763,6 +1763,8 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return FastFailResult.Ok();
         }
+
+
         private FastFailResult Gate2_5_TrendPhaseLock(
     IReadOnlyList<BinanceFuturesUsdtKline> klines,
     SmartRegimeInfo smart,
