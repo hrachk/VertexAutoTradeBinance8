@@ -73,7 +73,7 @@ public class SymbolUniverseBuilder
         // ------------------------------------------------
         var core = filteredMarket
             .OrderByDescending(x => x.QuoteVolume24h)
-            .Take(80)
+            .Take(25)
             .ToList();
 
         // ------------------------------------------------

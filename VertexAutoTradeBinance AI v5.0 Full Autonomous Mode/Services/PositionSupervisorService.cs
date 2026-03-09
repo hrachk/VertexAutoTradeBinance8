@@ -300,8 +300,11 @@ namespace VertexAutoTradeBinance8.Services
                             return;
                         }
 
-                        if (DateTime.UtcNow - _pendingReset[key] < TimeSpan.FromSeconds(45))
-                            return;
+                        if (_pendingReset.TryGetValue(key, out var resetTs))
+                        {
+                            if (DateTime.UtcNow - resetTs < TimeSpan.FromSeconds(45))
+                                return;
+                        }
 
                         _pendingReset.TryRemove(key, out _);
                         _beStage.TryRemove(key, out _);
@@ -379,7 +382,8 @@ namespace VertexAutoTradeBinance8.Services
                     // =====================================================
                     var partialLevel = (int)(roi / PARTIAL_STEP);
 
-                    var prevPartial = (int)_beStage.GetOrAdd(key, BeStage.None);
+                    // var prevPartial = (int)_beStage.GetOrAdd(key, BeStage.None);
+                    var prevPartial = (int)_beStage.AddOrUpdate(key, BeStage.None, (_, v) => v);
 
                     if (partialLevel > prevPartial && partialLevel >= 1)
                     {
@@ -398,6 +402,19 @@ namespace VertexAutoTradeBinance8.Services
                                 symbol, side, partialLevel, closeQty);
 
                             await ClosePartialAsync(client, symbol, side, closeQty, pos, ct);
+
+                            // refresh position qty после partial
+                            var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: ct);
+
+                            pos = posInfo.Data.FirstOrDefault(p =>
+                                p.PositionSide == side &&
+                                Math.Abs(p.Quantity) > 0);
+
+                            if (pos == null)
+                                return;
+
+                            qty = Math.Abs(pos.Quantity);
+
                         }
                     }
 
@@ -435,6 +452,17 @@ namespace VertexAutoTradeBinance8.Services
                         side == PositionSide.Long
                             ? entry * (1m + (level - 1) * STEP + TRUE_BE_BUFFER)
                             : entry * (1m - (level - 1) * STEP - TRUE_BE_BUFFER);
+ 
+                    var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+                    if (_beMoved.TryGetValue(key, out var lastMove))
+                    {
+                        if (now - lastMove < 350)
+                            return;
+                    }
+
+                    _beMoved[key] = now;
+
 
                     bool shouldMove =
                         slOrder == null ||
@@ -446,17 +474,28 @@ namespace VertexAutoTradeBinance8.Services
 
                     if (shouldMove)
                     {
-                        foreach (var o in exitOrders)
+                        if (slOrder != null)
                         {
-                            try
+                            foreach (var o in exitOrders.Where(o => o.Type == FuturesOrderType.StopMarket))
                             {
                                 await client.UsdFuturesApi.Trading.CancelOrderAsync(
                                     symbol,
                                     orderId: o.Id,
                                     ct: ct);
                             }
-                            catch { }
                         }
+                           
+                        //foreach (var o in exitOrders)
+                        //{
+                        //    try
+                        //    {
+                        //        await client.UsdFuturesApi.Trading.CancelOrderAsync(
+                        //            symbol,
+                        //            orderId: o.Id,
+                        //            ct: ct);
+                        //    }
+                        //    catch { }
+                        //}
                         _logger.LogWarning(
                             "[BE MOVE][{symbol}][{side}] SL {old} → {new}",
                             symbol, side,
@@ -504,19 +543,14 @@ namespace VertexAutoTradeBinance8.Services
 
             var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
             bool reduceOnly = pos.Quantity != 0; // ReduceOnly только если реально есть позиция
+                                                 // получить filters
+            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
 
 
             // --- нормализация ---
             var (qtyPrecision, pricePrecision) = await GetSymbolPrecisionsAsync(client, symbol);
             qty = await NormalizeQuantityAsync(symbol, side, qty, client, ct);   // ✅ здесь нормализуем по MaxNotional
-
-
-            entryPrice = RoundPrice(entryPrice, pricePrecision);
-
-            // получить filters
-            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-
-            // КРИТИЧЕСКИЙ ФИКС — normalize trigger
+                                                                                 // КРИТИЧЕСКИЙ ФИКС — normalize trigger
             entryPrice = await NormalizeTriggerPriceAsync(
      client,
      symbol,
@@ -526,23 +560,39 @@ namespace VertexAutoTradeBinance8.Services
      true,
      ct);
 
-            //await client.UsdFuturesApi.Trading.CancelAllConditionalOrdersAsync(symbol, ct: ct);
+            entryPrice = RoundPrice(entryPrice, pricePrecision);
+
+
             var open = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
+
+            BinanceFuturesOrder? currentSl = null;
 
             if (open.Success)
             {
-                foreach (var o in open.Data)
-                {
-                    if (o.Type == FuturesOrderType.StopMarket &&
-                        o.PositionSide == side)
-                    {
-                        await client.UsdFuturesApi.Trading.CancelOrderAsync(
-                            symbol,
-                            orderId: o.Id,
-                            ct: ct);
-                    }
-                }
+                currentSl = open.Data.FirstOrDefault(o =>
+                    o.Type == FuturesOrderType.StopMarket &&
+                    o.PositionSide == side);
             }
+
+            if (currentSl != null)
+            {
+                bool better =
+                    side == PositionSide.Long
+                    ? entryPrice > currentSl.StopPrice
+                    : entryPrice < currentSl.StopPrice;
+
+                if (!better)
+                    return;
+
+                await client.UsdFuturesApi.Trading.CancelOrderAsync(
+                    symbol,
+                    orderId: currentSl.Id,
+                    ct: ct);
+            }
+
+            await Task.Delay(80, ct);
+
+
             var result = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
                 symbol: symbol,
                 side: orderSide,
@@ -570,7 +620,10 @@ namespace VertexAutoTradeBinance8.Services
     decimal totalQty,
     CancellationToken ct)
         {
-            const decimal CHUNK_USDT = 5000m;
+            decimal CHUNK_USDT =
+     symbol == "BTCUSDT" ? 15000m :
+     symbol == "ETHUSDT" ? 8000m :
+     1500m;
 
             var mark = await client.UsdFuturesApi.ExchangeData.GetMarkPriceAsync(symbol, ct);
 
@@ -598,13 +651,29 @@ namespace VertexAutoTradeBinance8.Services
                     ? OrderSide.Sell
                     : OrderSide.Buy;
 
+
+                var book = await client
+    .UsdFuturesApi
+    .ExchangeData
+    .GetOrderBookAsync(symbol, limit: 5, ct);
+
+                if (!book.Success)
+                    return;
+                decimal price;
+                if (side == PositionSide.Long)
+                    price = book.Data.Bids.First().Price;   // закрываем LONG
+                else
+                    price = book.Data.Asks.First().Price;   // закрываем SHORT
+
                 var result = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol: symbol,
-                    side: orderSide,
-                    type: FuturesOrderType.Market,
-                    quantity: qty,
-                    positionSide: side,
-                    ct: ct);
+     symbol: symbol,
+     side: orderSide,
+     type: FuturesOrderType.Limit,
+     quantity: qty,
+     price: price,
+     timeInForce: TimeInForce.ImmediateOrCancel,
+     positionSide: side,
+     ct: ct);
 
                 if (!result.Success)
                 {
@@ -613,7 +682,8 @@ namespace VertexAutoTradeBinance8.Services
                         symbol,
                         result.Error?.Message);
 
-                    return;
+                    await Task.Delay(120, ct);
+                    continue;
                 }
                 if (result.Success)
                 {
@@ -682,12 +752,13 @@ namespace VertexAutoTradeBinance8.Services
 
             var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
-            var (qtyPrecision, _) = await GetSymbolPrecisionsAsync(client, symbol);
+         //   var (qtyPrecision, _) = await GetSymbolPrecisionsAsync(client, symbol);
             qty = await NormalizeQuantityAsync(symbol, side, qty, client, ct);
-            var positionQty = Math.Abs(pos.Quantity);
+            //var positionQty = Math.Abs(pos.Quantity);
 
-            if (qty > positionQty)
-                qty = positionQty * 0.98m;
+            //if (qty > positionQty)
+            //    qty = positionQty;
+
             if (qty <= 0)
             {
                 _logger.LogWarning("[PARTIAL CLOSE SKIPPED][{symbol}][{side}] qty rounded to 0", symbol, side);
@@ -703,13 +774,15 @@ namespace VertexAutoTradeBinance8.Services
             ct);
 
         }
+
         private async Task<decimal> NormalizeQuantityAsync(
-    string symbol,
-    PositionSide side,
-    decimal requestedQty,
-    IBinanceRestClient client,
-    CancellationToken ct)
+      string symbol,
+      PositionSide side,
+      decimal requestedQty,
+      IBinanceRestClient client,
+      CancellationToken ct)
         {
+            requestedQty = Math.Abs(requestedQty);
             // 1) получить реальную позицию
             var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: ct);
 
@@ -740,7 +813,11 @@ namespace VertexAutoTradeBinance8.Services
             // 4) round to stepSize
             qty = Math.Floor(qty / step) * step;
 
-            // 5) validate
+            // 5) защита от dust (когда после floor qty становится 0)
+            if (qty == 0 && positionQty >= minQty)
+                qty = minQty;
+
+            // 6) validate
             if (qty < minQty)
                 return 0;
 
@@ -855,14 +932,7 @@ namespace VertexAutoTradeBinance8.Services
             }, TaskContinuationOptions.OnlyOnFaulted);
         }
 
-        private bool ShouldUseReduceOnly(BinancePositionDetailsUsdt? pos)
-        {
-            // reduceOnly = true только если реально есть позиция на этой стороне
-            return pos != null && pos.Quantity != 0;
-        }
-
-
-
+      
         private decimal ResolveExitPrice(string symbol)
         {
             // 1) Пытаемся взять свежий стакан
@@ -1283,8 +1353,9 @@ namespace VertexAutoTradeBinance8.Services
             if (pos == null || pos.Quantity == 0) return;
 
             var side = pos.Quantity > 0 ? OrderSide.Sell : OrderSide.Buy;
-            var absQty = Math.Abs(pos.Quantity);
-            bool reduceOnly = ShouldUseReduceOnly(pos); // ✅ универсальный фикс
+            var absQty = Math.Abs(pos.Quantity); 
+
+            absQty = await NormalizeQuantityAsync(symbol, pos.PositionSide, absQty, client, ct);   // ✅ здесь нормализуем по MaxNotional
 
             var result = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: symbol,
@@ -1292,7 +1363,7 @@ namespace VertexAutoTradeBinance8.Services
                 type: FuturesOrderType.Market,
                 quantity: absQty,
                 positionSide: pos.PositionSide,
-                reduceOnly: reduceOnly,
+                reduceOnly: null,
                 ct: ct
             );
 
