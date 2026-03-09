@@ -1325,10 +1325,10 @@ namespace VertexAutoTradeBinance8.Strategy
         //}
 
         private static int GetAdaptiveThreshold(
-    MarketRegime baseRegime,
-    SmartRegimeType smartType,
-    decimal volatility,      // 0.02 = 2%
-    decimal slope)           // 0.01 = 1%
+        MarketRegime baseRegime,
+        SmartRegimeType smartType,
+        decimal volatility,
+        decimal slope)
         {
             int threshold;
 
@@ -1346,40 +1346,43 @@ namespace VertexAutoTradeBinance8.Strategy
                 smartType == SmartRegimeType.SmartTrend;
 
             // --- 1️⃣ Base ---
-            if (isRangeLike) threshold = 35;
-            else if (isStrongTrendLike) threshold = 60;
+            if (isRangeLike) threshold = 38;
+            else if (isStrongTrendLike) threshold = 48;
             else if (isTrendLike) threshold = 45;
             else threshold = 45;
 
             // --- 2️⃣ Volatility adjustment ---
-            // реальный intraday диапазон 0.005 – 0.05
-            if (volatility < 0.015m)         // <1.5% — спокойный рынок
+            if (volatility < 0.008m)          // очень спокойный рынок
                 threshold -= 5;
-            else if (volatility > 0.05m)     // >5% — хаос
-                threshold += 10;
+            else if (volatility > 0.030m)     // сильная турбулентность
+                threshold += 6;
 
             // --- 3️⃣ Slope adjustment ---
-            // нормальный тренд 0.005 – 0.03
-            if (Math.Abs(slope) > 0.02m)     // >2% slope — ускорение
-                threshold += 5;
+            if (Math.Abs(slope) > volatility * 0.9m)   // ускорение тренда
+                threshold -= 4;
 
             // --- 4️⃣ Clamp ---
-            return Math.Clamp(threshold, 25, 80);
+            return Math.Clamp(threshold, 30, 75);
         }
 
         private static bool IsFastTrendOverride(SmartRegimeInfo smart)
         {
             bool strongTrend =
                 smart.BaseRegime == MarketRegime.StrongUpTrend ||
-                smart.BaseRegime == MarketRegime.StrongDownTrend;
+                smart.BaseRegime == MarketRegime.StrongDownTrend ||
+                smart.SmartType == SmartRegimeType.SmartStrongTrend;
 
-            bool smartStrong = smart.SmartType == SmartRegimeType.SmartStrongTrend;
+            bool slopeOk =
+                smart.VolatilityPercent > 0 &&
+                Math.Abs(smart.TrendSlopePercent) >= smart.VolatilityPercent * 0.8m;
 
-            bool slopeOk = Math.Abs(smart.TrendSlopePercent) >= 0.018m;
-            bool volOk = smart.VolatilityPercent > 0m && smart.VolatilityPercent <= 0.010m;
+            bool volOk =
+                smart.VolatilityPercent >= 0.006m &&
+                smart.VolatilityPercent <= 0.030m;
+
             bool confOk = smart.Confidence >= 0.35m;
 
-            return strongTrend && smartStrong && slopeOk && volOk && confOk;
+            return strongTrend && slopeOk && volOk && confOk;
         }
 
         private decimal GetDynamicMinRr(string symbol, KlineInterval interval, SmartRegimeInfo smart, TradeSignal signal)
@@ -1741,9 +1744,8 @@ namespace VertexAutoTradeBinance8.Strategy
             if (finalConfidence < finalFloor)
             {
                 return FastFailResult.Fail(
-                    "CONF",
-                    $"conf={finalConfidence:P0}<floor={finalFloor:P0}"
-                );
+                 "CONF",
+                 $"conf={finalConfidence:P0}<thr={finalFloor:P0} (fastTrend={IsFastTrendOverride(smart)})");
             }
 
             // ============================================================
