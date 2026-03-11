@@ -21,14 +21,7 @@ namespace VertexAutoTradeBinance8.Services
             _regime = regime;
 
         }
-
-        public HighTimeframeSafetyFilter()
-        {
-        }
-
-        public static HighTimeframeSafetyFilter Instance { get; } = new();
-
-
+ 
         /// <summary>
         /// Проверяем 1H и 1D режимы.
         /// Если оба сильные — включается Swing-режим.
@@ -38,8 +31,13 @@ namespace VertexAutoTradeBinance8.Services
             CancellationToken ct)
         {
             // 1) Загружаем 1H и 1D
-            var klines1h = await _regime.LoadKlinesSafe(symbol, KlineInterval.OneHour, 200);
-            var klines1d = await _regime.LoadKlinesSafe(symbol, KlineInterval.OneDay, 200);
+            var task1h = _regime.LoadKlinesSafe(symbol, KlineInterval.OneHour, 200);
+            var task1d = _regime.LoadKlinesSafe(symbol, KlineInterval.OneDay, 200);
+
+            await Task.WhenAll(task1h, task1d);
+
+            var klines1h = task1h.Result;
+            var klines1d = task1d.Result;
 
             var r1h = _regime.DetectRegime(symbol, KlineInterval.OneHour, klines1h);
             var r1d = _regime.DetectRegime(symbol, KlineInterval.OneDay, klines1d);

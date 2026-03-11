@@ -23,10 +23,12 @@ namespace VertexAutoTradeBinance8.Services
 
         // Порог "почти без тренда" — для флета/пилы.
         private const decimal FlatSlopePct = 0.0015m; // 0.15%
-
+        private readonly Binance.Net.Clients.BinanceRestClient _client;
         public AiMarketRegimeService(ILogger<AiMarketRegimeService> logger)
         {
             _logger = logger;
+            // один клиент на весь сервис
+            _client = new Binance.Net.Clients.BinanceRestClient();
         }
 
         // =====================================================================
@@ -38,13 +40,8 @@ namespace VertexAutoTradeBinance8.Services
             int limit)
         {
             try
-            {
-                // Твой MarketDataService уже делает все правильно,
-                // но мы не можем использовать его здесь — поэтому
-                // тянем свечи через BinanceClientFactory (упрощённый вариант).
-                using var client = new Binance.Net.Clients.BinanceRestClient();
-
-                var res = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
+            { 
+                var res = await _client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
                     symbol,
                     interval,
                     limit: limit);
