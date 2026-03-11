@@ -5,34 +5,34 @@ using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
 {
-    /// <summary>
-    /// AI-детектор режима рынка: тренд / диапазон / пила.
-    /// Работает по klines текущего таймфрейма.
-    /// </summary>
     public class AiMarketRegimeService
     {
         private readonly ILogger<AiMarketRegimeService> _logger;
 
-        // Сколько последних свечей анализируем для тренда.
         private const int TrendLookback = 40;
 
-        // Минимальный наклон тренда, чтобы считать его "сильным".
-        private const decimal StrongTrendSlopePct = 0.004m; // 0.4%
+        private const decimal StrongTrendSlopePct = 0.004m;
+        private const decimal WeakTrendSlopePct = 0.002m;
 
-        // Минимальная волатильность (ATR/price), чтобы считать рынок "шумным".
-        private const decimal HighVolatilityPct = 0.012m; // 1.2%
+        private const decimal HighVolatilityPct = 0.012m;
+        private const decimal FlatSlopePct = 0.0015m;
 
-        // Порог "почти без тренда" — для флета/пилы.
-        private const decimal FlatSlopePct = 0.0015m; // 0.15%
         private readonly ConcurrentDictionary<string, MarketRegime> _regimes = new();
+
+        private readonly Binance.Net.Clients.BinanceRestClient _client;
+
         public AiMarketRegimeService(ILogger<AiMarketRegimeService> logger)
         {
             _logger = logger;
+
+            // один клиент на весь сервис
+            _client = new Binance.Net.Clients.BinanceRestClient();
         }
 
-        // =====================================================================
-        // SAFE KLINES LOADER (ДЛЯ HighTimeframeSafetyFilter)
-        // =====================================================================
+        // ======================================================
+        // SAFE KLINES LOADER
+        // ======================================================
+
         public async Task<IReadOnlyList<BinanceFuturesUsdtKline>> LoadKlinesSafe(
             string symbol,
             KlineInterval interval,
@@ -40,30 +40,24 @@ namespace VertexAutoTradeBinance8.Services
         {
             try
             {
-                // Твой MarketDataService уже делает все правильно,
-                // но мы не можем использовать его здесь — поэтому
-                // тянем свечи через BinanceClientFactory (упрощённый вариант).
-                using var client = new Binance.Net.Clients.BinanceRestClient();
-
-                var res = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
+                var res = await _client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
                     symbol,
                     interval,
-                    limit: limit);
+                    limit: limit
+                ).ConfigureAwait(false);
 
                 if (!res.Success || res.Data == null)
                 {
-
                     _logger.LogWarning(
                         "[REGIME] LoadKlinesSafe FAIL {symbol} {tf}: {err}",
                         symbol,
                         interval,
                         res.Error);
+
                     return Array.Empty<BinanceFuturesUsdtKline>();
                 }
-                   
 
-                // === КОНВЕРТАЦИЯ В BinanceFuturesUsdtKline ===
-                var list = res.Data
+                return res.Data
                     .Select(k => new BinanceFuturesUsdtKline
                     {
                         OpenTime = k.OpenTime,
@@ -76,25 +70,25 @@ namespace VertexAutoTradeBinance8.Services
                         QuoteVolume = k.QuoteVolume,
                         TakerBuyBaseVolume = k.TakerBuyBaseVolume,
                         TakerBuyQuoteVolume = k.TakerBuyQuoteVolume,
-                         TradeCount = k.TradeCount
+                        TradeCount = k.TradeCount
                     })
                     .ToList();
-
-                return list;
-
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex,
+                _logger.LogError(
+                    ex,
                     "[REGIME] LoadKlinesSafe EX {symbol} {tf}",
                     symbol,
                     interval);
 
-
-
                 return Array.Empty<BinanceFuturesUsdtKline>();
             }
         }
+
+        // ======================================================
+        // REGIME DETECTION
+        // ======================================================
 
         public MarketRegimeResult DetectRegime(
             string symbol,
@@ -113,9 +107,7 @@ namespace VertexAutoTradeBinance8.Services
 
             int last = klines.Count - 1;
             int start = last - TrendLookback;
-            if (start < 0) start = 0;
 
-            // --- базовые метрики ---
             decimal firstClose = klines[start].ClosePrice;
             decimal lastClose = klines[last].ClosePrice;
 
@@ -125,56 +117,63 @@ namespace VertexAutoTradeBinance8.Services
             decimal priceChangePct = (lastClose - firstClose) / firstClose;
             result.TrendSlopePercent = priceChangePct;
 
-            // ATR как волатильность
             decimal atr = CalculateAtr(klines, 14, last);
-            result.VolatilityPercent = atr / lastClose;
 
-            // Простая оценка отклонения от средней
+            if (lastClose > 0)
+                result.VolatilityPercent = atr / lastClose;
+
+            // === deviation ===
+
             decimal mean = 0;
+
             for (int i = start; i <= last; i++)
                 mean += klines[i].ClosePrice;
+
             mean /= (last - start + 1);
 
             decimal variance = 0;
+
             for (int i = start; i <= last; i++)
             {
                 decimal d = klines[i].ClosePrice - mean;
                 variance += d * d;
             }
+
             variance /= Math.Max(1, last - start);
+
             decimal std = (decimal)Math.Sqrt((double)variance);
 
-            result.DeviationScore = std > 0 ? (lastClose - mean) / std : 0;
+            result.DeviationScore =
+                std > 0 ? (lastClose - mean) / std : 0;
 
-            // --- классификация режима ---
+            // ======================================================
+            // CLASSIFICATION
+            // ======================================================
 
-            if (priceChangePct >= StrongTrendSlopePct && result.VolatilityPercent >= FlatSlopePct)
+            if (priceChangePct >= StrongTrendSlopePct)
             {
                 result.Regime = MarketRegime.StrongUpTrend;
             }
-            else if (priceChangePct <= -StrongTrendSlopePct && result.VolatilityPercent >= FlatSlopePct)
+            else if (priceChangePct <= -StrongTrendSlopePct)
             {
                 result.Regime = MarketRegime.StrongDownTrend;
             }
+            else if (priceChangePct >= WeakTrendSlopePct)
+            {
+                result.Regime = MarketRegime.UpTrend;
+            }
+            else if (priceChangePct <= -WeakTrendSlopePct)
+            {
+                result.Regime = MarketRegime.DownTrend;
+            }
             else
             {
-                if (Math.Abs(priceChangePct) <= FlatSlopePct)
-                {
-                    if (result.VolatilityPercent >= HighVolatilityPct)
-                        result.Regime = MarketRegime.VolatileChop;
-                    else
-                        result.Regime = MarketRegime.Range;
-                }
+                if (result.VolatilityPercent >= HighVolatilityPct)
+                    result.Regime = MarketRegime.VolatileChop;
                 else
-                {
-                    if (result.VolatilityPercent >= HighVolatilityPct)
-                        result.Regime = MarketRegime.VolatileChop;
-                    else
-                        result.Regime = MarketRegime.Range;
-                }
+                    result.Regime = MarketRegime.Range;
             }
 
-            // 🔥 Красивый отчёт вместо сырого ToString()
             ConsoleReportFormatter.MarketRegimeReport(
                 _logger,
                 symbol,
@@ -182,17 +181,21 @@ namespace VertexAutoTradeBinance8.Services
                 result);
 
             _regimes[symbol] = result.Regime;
+
             return result;
- 
         }
+
+        // ======================================================
+        // API
+        // ======================================================
 
         public bool IsStrongTrend(string symbol)
         {
             if (!_regimes.TryGetValue(symbol, out var r))
                 return false;
 
-            return r == MarketRegime.StrongUpTrend
-                || r == MarketRegime.StrongDownTrend;
+            return r == MarketRegime.StrongUpTrend ||
+                   r == MarketRegime.StrongDownTrend;
         }
 
         public bool IsRange(string symbol)
@@ -202,20 +205,19 @@ namespace VertexAutoTradeBinance8.Services
 
             return r == MarketRegime.Range;
         }
+
         public bool IsTradable(string symbol)
         {
-            // если пока нет данных по режиму — НЕ БЛОКИРУЕМ
             if (!_regimes.TryGetValue(symbol, out var regime))
                 return true;
 
-            return regime switch
-            {
-                MarketRegime.VolatileChop => false, // ❌ пила / хаос
-                _ => true
-            };
+            return regime != MarketRegime.VolatileChop;
         }
 
-        // Локальный ATR, чтобы не тянуть MarketDataService
+        // ======================================================
+        // ATR
+        // ======================================================
+
         private static decimal CalculateAtr(
             IReadOnlyList<BinanceFuturesUsdtKline> klines,
             int period,
@@ -240,6 +242,7 @@ namespace VertexAutoTradeBinance8.Services
                 decimal tr3 = Math.Abs(cur.LowPrice - prev.ClosePrice);
 
                 decimal tr = Math.Max(tr1, Math.Max(tr2, tr3));
+
                 sum += tr;
                 count++;
             }
