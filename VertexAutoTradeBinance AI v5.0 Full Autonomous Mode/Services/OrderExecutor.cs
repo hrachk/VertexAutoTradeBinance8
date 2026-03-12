@@ -123,7 +123,7 @@ namespace VertexAutoTradeBinance8.Services
             var minQty = filters.minQty;
             var minNotional = filters.minNotional;
 
-            quantity = Math.Ceiling(quantity / step) * step;
+            quantity = Math.Floor(quantity / step) * step;
             quantity = Math.Round(quantity, _risk.GetPrecision(step), MidpointRounding.AwayFromZero);
 
             decimal notional = quantity * signal.EntryPrice;
@@ -400,23 +400,30 @@ namespace VertexAutoTradeBinance8.Services
 
             FuturesOrderType entryType = useMarket ? FuturesOrderType.Market : FuturesOrderType.Limit;
 
-            // B) LIMIT pricing
-            // PASSIVE anchor: do not worsen price (default)
-            decimal passiveLimit =
-                side == OrderSide.Buy
-                    ? Math.Min(entryPrice, lastPrice)
-                    : Math.Max(entryPrice, lastPrice);
+            // =====================================================
+            // B) LIMIT PRICING
+            // =====================================================
+
+            // PASSIVE price must stay outside market
+            decimal passiveLimit;
+
+            if (side == OrderSide.Buy)
+            {
+                passiveLimit = lastPrice - tick;
+            }
+            else
+            {
+                passiveLimit = lastPrice + tick;
+            }
 
             // =====================================================
             // CONTROLLED JOIN: catch “silent trend” safely
-            // uses ONLY existing signals: strong trend + slope + drift + liq safe
             // =====================================================
 
             // spread proxy через tick
             decimal tickRel = lastPrice > 0 ? (tick / lastPrice) : 0m;
             bool spreadOk = tickRel <= 0.00050m; // <= 0.05%
 
-            // silent trend detection
             bool silentTrendJoin =
                 entryType == FuturesOrderType.Limit &&
                 allowMarketEntry &&
@@ -426,31 +433,25 @@ namespace VertexAutoTradeBinance8.Services
                 liquiditySafe &&
                 !liquidityResult.IsExtreme &&
                 spreadOk &&
-                baseReg.TrendSlopePercent >= 0.25m &&   // устойчивый наклон
-                priceDriftPct >= 0.0025m &&             // уже движется
-                priceDriftPct <= 0.0150m;               // но не runaway (>1.5%)
+                baseReg.TrendSlopePercent >= 0.25m &&
+                priceDriftPct >= 0.0025m &&
+                priceDriftPct <= 0.0150m;
 
             // =====================================================
             // ADAPTIVE SAFE DRIFT
             // =====================================================
 
-            // базовый offset (например 0.0006m = 0.06%)
-            decimal baseDriftPct = AGGR_LIMIT_OFFSET_PCT;
+            decimal baseDriftPct = AGGR_LIMIT_OFFSET_PCT; // ~0.06%
+            decimal superDriftPct = 0.0015m;               // 0.15%
+            decimal hardCapPct = 0.0018m;                  // 0.18%
 
-            // усиленный offset только для super signal
-            decimal superDriftPct = 0.0015m; // 0.15%
-
-            // hard cap для защиты от плохого fill
-            decimal hardCapPct = 0.0018m; // 0.18% абсолютный максимум
-
-            // финальный drift
             decimal safeDriftPct =
                 signal.IsSuperSignal
                     ? Math.Min(superDriftPct, hardCapPct)
                     : Math.Min(baseDriftPct, hardCapPct);
 
             // =====================================================
-            // CALCULATE JOIN LIMIT
+            // JOIN LIMIT CALCULATION
             // =====================================================
 
             decimal joinLimitRaw =
@@ -458,13 +459,34 @@ namespace VertexAutoTradeBinance8.Services
                     ? lastPrice * (1m + safeDriftPct)
                     : lastPrice * (1m - safeDriftPct);
 
-            // passive vs join selection
+            // anti-chase guard
+            decimal maxJoinDrift = 0.002m; // 0.2%
+
+            if (entryPrice > 0)
+            {
+                if (side == OrderSide.Buy)
+                    joinLimitRaw = Math.Min(joinLimitRaw, entryPrice * (1m + maxJoinDrift));
+                else
+                    joinLimitRaw = Math.Max(joinLimitRaw, entryPrice * (1m - maxJoinDrift));
+            }
+
+            // =====================================================
+            // FINAL LIMIT SELECTION
+            // =====================================================
+
             decimal finalLimitRaw =
                 (silentTrendJoin || signal.IsSuperSignal)
                     ? joinLimitRaw
                     : passiveLimit;
 
-            // quantize to tick
+            // safety guard vs zero / negative price
+            if (finalLimitRaw <= 0)
+                finalLimitRaw = lastPrice;
+
+            // =====================================================
+            // TICK QUANTIZATION (ONLY ONCE)
+            // =====================================================
+
             decimal aggrLimitPrice = Quantize(finalLimitRaw, tick);
 
             // =====================================================
@@ -516,7 +538,7 @@ namespace VertexAutoTradeBinance8.Services
 
             var fQty = await _symbolInfo.GetFuturesFiltersAsync(signal.Symbol, qtyRule);
 
-            quantity = Math.Floor(quantity / fQty.step) * fQty.step;
+            quantity = Quantize(quantity, step);
 
             if (quantity <= 0m || quantity < fQty.minQty)
             {
@@ -549,15 +571,78 @@ namespace VertexAutoTradeBinance8.Services
             // =============================================================
 
             var entryRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-              symbol: signal.Symbol,
-              side: side,
-              type: entryType,
-              quantity: quantity,
-              price: orderPrice,
-              positionSide: isHedge ? posSide : null,   // ✅ ВАЖНО
-              timeInForce: tif,
-              reduceOnly: null,
-              ct: ct);
+                symbol: signal.Symbol,
+                side: side,
+                type: entryType,
+                quantity: quantity,
+                price: orderPrice,
+                positionSide: isHedge ? posSide : null,
+                timeInForce: tif,
+                reduceOnly: null,
+                ct: ct);
+
+            // =============================================================
+            // SAFE RETRY (LIMIT ONLY)
+            // =============================================================
+
+            if (!entryRes.Success && entryType == FuturesOrderType.Limit)
+            {
+                var errCode = entryRes.Error?.Code;
+
+                bool retryable =
+                    errCode == -2010 ||   // order rejected
+                    errCode == -2021 ||   // immediate trigger
+                    errCode == -4164;     // price filter
+
+                if (retryable)
+                {
+                    try
+                    {
+                        var px = await client.UsdFuturesApi.ExchangeData.GetPriceAsync(signal.Symbol, ct: ct);
+
+                        if (px.Success && px.Data?.Price > 0)
+                        {
+                            var last = px.Data.Price;
+
+                            var retryPrice = side == OrderSide.Buy
+                                ? last - tick
+                                : last + tick;
+
+                            retryPrice = Quantize(retryPrice, tick);
+
+                            // anti-chase protection
+                            decimal maxDrift = 0.002m; // 0.2%
+
+                            if (entryPrice > 0)
+                            {
+                                if (side == OrderSide.Buy)
+                                    retryPrice = Math.Min(retryPrice, entryPrice * (1m + maxDrift));
+                                else
+                                    retryPrice = Math.Max(retryPrice, entryPrice * (1m - maxDrift));
+                            }
+
+                            _logger.LogWarning(
+                                "[ORDER][{symbol}] Retry LIMIT after reject. newPrice={price}",
+                                signal.Symbol,
+                                retryPrice);
+
+                            entryRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                                symbol: signal.Symbol,
+                                side: side,
+                                type: FuturesOrderType.Limit,
+                                quantity: quantity,
+                                price: retryPrice,
+                                positionSide: isHedge ? posSide : null,
+                                timeInForce: TimeInForce.GoodTillCanceled,
+                                ct: ct);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "[ORDER][{symbol}] Retry attempt failed", signal.Symbol);
+                    }
+                }
+            }
 
             if (!entryRes.Success || entryRes.Data == null)
             {
@@ -572,7 +657,13 @@ namespace VertexAutoTradeBinance8.Services
                     attemptNotional: notionalAtCreate > 0 ? notionalAtCreate : notional,
                     requiredMinNotional: 0m);
 
-                _executedSignalService.UpdateStatus(signal.Symbol, execTime, TradeExecutionStatus.Blocked, 0, 0);
+                _executedSignalService.UpdateStatus(
+                    signal.Symbol,
+                    execTime,
+                    TradeExecutionStatus.Blocked,
+                    0,
+                    0);
+
                 return OrderResult.Fail("ENTRY_FAILED");
             }
 

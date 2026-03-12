@@ -21,6 +21,23 @@ WztkkdMs7ykcnEZ8bpQgcbz8Po19E5XQkP0131vkNgZjSx3rDaQ7sTxzqgkR7hEp
 lAyOcVCw4ohWkRvBZdYZscmF2Ps7GR5f0q8BJnAzz8ya8Vvw7KcSJtsYWrGLadsE
  
 
+ Hrach test trading ==================
+ 
+Ключ API
+jBDWw7FcPMAYl1jDijxV2x8vAZI0DRdSDFy3eIGk6PTh8hqNJk0IKGKwQk5pvTjn
+Секретный ключ:
+HW4pnenXtkDhV99zHSIhDydrQcufiHXy94Ge6j7s21WiDESsQ7XflKnbsH5CbjOh
+
+ ================================
+
+ ==HRACH REAL TRADING========================
+ 
+Ключ API
+LNyF6rRHWQsAIZ5DlNeZutO46rury5RMrGC06YNXev4bCEsoO6OFXeB2z2w1G0TH
+Секретный ключ:
+r6tpGT7KCm5aqLUsTzZZ5kCKe7rhVcUqldIEY4v25HkrZIt8jFV95OdZa4kthXsl
+ =====--------------=============================
+
 install_service_client_001.bat   1 client
 
 @echo off
