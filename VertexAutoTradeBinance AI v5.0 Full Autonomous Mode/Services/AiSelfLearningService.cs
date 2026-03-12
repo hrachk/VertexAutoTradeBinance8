@@ -39,20 +39,20 @@ namespace VertexAutoTradeBinance8.Services
         private readonly object _lock = new();
 
         private static readonly string FilePath =
-      Path.Combine(AppContext.BaseDirectory, "ai-models/ai_learning.json");
+      Path.Combine(AppContext.BaseDirectory, "ai-models","ai_learning.json");
 
         private static readonly string BackupPath =
-            Path.Combine(AppContext.BaseDirectory, "ai-models/ai_learning_backup.json");
+            Path.Combine(AppContext.BaseDirectory, "ai-models", "ai_learning_backup.json");
 
         // Снимок статистики каждые N минут (для trade-based / signal-based)
         private DateTime _lastSnapshot = DateTime.MinValue;
-        private readonly TimeSpan SnapshotInterval = TimeSpan.FromMinutes(5);
+        private readonly TimeSpan SnapshotInterval = TimeSpan.FromMinutes(2);
 
         // Глобальный HYBRID snapshot раз в N секунд (background learning)
         private DateTime _lastHybridSnapshot = DateTime.MinValue;
 
         // Было 60s, делаю более «квантовым» — 30s (в твои 15–30s)
-        private readonly TimeSpan HybridInterval = TimeSpan.FromSeconds(30);
+        private readonly TimeSpan HybridInterval = TimeSpan.FromSeconds(20);
 
         // =====================================================================
         // CORE STORAGE v7
