@@ -381,7 +381,7 @@ namespace VertexAutoTradeBinance8
                 _logger.LogInformation("[AI-BOOT] Importing Binance Futures history from {From}", from);
 
                 var fills = await LoadFromBinanceAsync(from.AddMilliseconds(1), ct);
-                _importer.ImportClosedTrades(fills);
+               // _importer.ImportClosedTrades(fills);
 
                 _learn.ForceSnapshot();
 

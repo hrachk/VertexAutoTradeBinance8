@@ -103,7 +103,8 @@ namespace VertexAutoTradeBinance8.Services
                 : GetDynamicBaseRisk(balance);
 
             decimal safetyMult = signal.SafetyRiskMultiplier > 0 ? signal.SafetyRiskMultiplier : 1m;
-            decimal finalRisk = Math.Min(baseRisk * riskMult * safetyMult, 0.05m); // hard cap 5%
+            decimal finalRisk =
+     CalculateAdaptiveRisk(signal, baseRisk, riskMult);
 
             if (finalRisk <= 0)
             {
@@ -201,6 +202,88 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogError(ex, "GetRealtimeBalanceAsync: Exception while fetching balance");
                 return 0m;
             }
+        }
+
+        private decimal CalculateAdaptiveRisk(
+    TradeSignal signal,
+    decimal baseRisk,
+    decimal riskMult)
+        {
+            decimal confidence = signal.Confidence ?? 0.6m;
+            decimal liquidity = signal.LiquidityScore ?? 0.8m;
+            decimal aiQuality = signal.AiQuality ?? 0.6m;
+
+            decimal atr = signal.Atr ?? 0m;
+            decimal price = signal.EntryPrice;
+
+            decimal volatility =
+                price > 0 && atr > 0
+                ? atr / price
+                : 0.01m;
+
+            // -------------------------
+            // CONFIDENCE
+            // -------------------------
+
+            decimal confMult =
+                confidence < 0.4m ? 0.7m :
+                confidence < 0.6m ? 0.9m :
+                confidence < 0.8m ? 1.0m :
+                1.15m;
+
+            // -------------------------
+            // LIQUIDITY
+            // -------------------------
+
+            decimal liqMult =
+                liquidity < 0.4m ? 0.6m :
+                liquidity < 0.7m ? 0.8m :
+                1.0m;
+
+            // -------------------------
+            // VOLATILITY
+            // -------------------------
+
+            decimal volMult =
+                volatility > 0.035m ? 0.6m :
+                volatility > 0.02m ? 0.8m :
+                volatility < 0.005m ? 1.1m :
+                1m;
+
+            // -------------------------
+            // AI QUALITY
+            // -------------------------
+
+            decimal aiMult =
+                aiQuality < 0.4m ? 0.8m :
+                aiQuality > 0.7m ? 1.1m :
+                1m;
+
+            // -------------------------
+            // SAFETY
+            // -------------------------
+
+            decimal safety =
+                signal.SafetyRiskMultiplier > 0
+                ? signal.SafetyRiskMultiplier
+                : 1m;
+
+            if (signal.HighTfSafetyMode)
+                safety *= 0.7m;
+
+            if (signal.LiquiditySoftWarning)
+                safety *= 0.75m;
+
+            decimal risk =
+                baseRisk
+                * riskMult
+                * confMult
+                * liqMult
+                * volMult
+                * aiMult
+                * safety;
+
+            return Math.Clamp(risk, 0.002m, 0.05m);
         }
     }
 }

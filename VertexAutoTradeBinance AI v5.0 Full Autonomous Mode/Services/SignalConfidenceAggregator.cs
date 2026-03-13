@@ -6,13 +6,6 @@ namespace VertexAutoTradeBinance8.Strategy.Confidence
 {
     /// <summary>
     /// Aggregates FINAL confidence for a concrete trade signal.
-    /// Philosophy:
-    /// - SmartRegime gives MARKET confidence
-    /// - Pattern gives ENTRY confidence
-    /// - TF alignment gives STRUCTURAL confidence
-    /// - Risk clamps prevent casino behavior
-    /// 
-    /// Output is used by Gate2_Confidence WITHOUT changing gate semantics.
     /// </summary>
     public sealed class SignalConfidenceAggregator
     {
@@ -28,49 +21,35 @@ namespace VertexAutoTradeBinance8.Strategy.Confidence
             TradeSignal signal,
             KlineInterval tf)
         {
-            // ===============================
+            if (smart == null)
+                throw new ArgumentNullException(nameof(smart));
+
             // 1) BASE: Market regime confidence
-            // ===============================
             decimal regimeConf = Clamp01(smart.Confidence);
 
-            // ===============================
             // 2) PATTERN QUALITY
-            // ===============================
             decimal patternConf = GetPatternConfidence(signal);
 
-            // ===============================
             // 3) TF STRUCTURAL ALIGNMENT
-            // ===============================
             decimal tfConf = GetTfAlignmentConfidence(smart, tf);
 
-            // ===============================
-            // 4) RISK CLAMPS (ANTI-CASINO)
-            // ===============================
+            // 4) RISK CLAMPS
             decimal riskClamp = GetRiskClamp(smart, signal);
 
-            // ===============================
-            // 5) FINAL AGGREGATION (enhanced)
-            // ===============================
+            // 5) FINAL AGGREGATION
+            decimal baseScore = regimeConf * 0.40m + patternConf * 0.40m + tfConf * 0.20m;
 
-            decimal baseScore =
-                regimeConf * 0.40m +
-                patternConf * 0.40m +
-                tfConf * 0.20m;
-
-            // --- synergy bonus ---
+            // synergy bonus
             decimal synergy = 0m;
-
             if (patternConf >= 0.75m && regimeConf >= 0.50m)
                 synergy = 0.10m;
             else if (patternConf >= 0.65m)
                 synergy = 0.05m;
 
-            decimal final = baseScore + synergy;
+            decimal final = Clamp01(baseScore + synergy);
 
             // apply risk
             final *= riskClamp;
-
-            // final clamp
             final = Clamp01(final);
 
             return new ConfidenceResult(
@@ -82,41 +61,29 @@ namespace VertexAutoTradeBinance8.Strategy.Confidence
             );
         }
 
-        // ============================================================
-        // -------------------- COMPONENTS ----------------------------
-        // ============================================================
+        // ================= COMPONENTS =================
 
         private static decimal GetPatternConfidence(TradeSignal s)
         {
-            // Base default
             decimal conf = 0.50m;
+            if (s?.Reason == null) return conf;
 
-            if (s == null) return conf;
+            string reason = s.Reason.ToUpperInvariant();
 
-            // Strongest: structured pullback
-            if (s.Reason.Contains("PULLBACK"))
+            if (reason.Contains("PULLBACK"))
                 conf = 0.80m;
-
-            // Early trend join (start of impulse)
-            else if (s.Reason.Contains("EARLY_TREND"))
+            else if (reason.Contains("EARLY_TREND"))
                 conf = 0.65m;
-
-            // Liquidity grab continuation
-            else if (s.Reason.Contains("LIQUIDITY"))
+            else if (reason.Contains("LIQUIDITY"))
                 conf = 0.60m;
-
-            // Volatility breakout (riskier)
-            else if (s.Reason.Contains("VOLATILITY"))
+            else if (reason.Contains("VOLATILITY"))
                 conf = 0.55m;
 
             return Clamp01(conf);
         }
 
-        private static decimal GetTfAlignmentConfidence(
-            SmartRegimeInfo smart,
-            KlineInterval tf)
+        private static decimal GetTfAlignmentConfidence(SmartRegimeInfo smart, KlineInterval tf)
         {
-            // Base
             decimal conf = 0.50m;
 
             bool trendLike =
@@ -131,22 +98,13 @@ namespace VertexAutoTradeBinance8.Strategy.Confidence
                 smart.SmartType == SmartRegimeType.SmartSqueeze;
 
             if (tf == KlineInterval.OneMinute)
-            {
-                // 1m needs confirmation
-                conf = trendLike ? 0.55m : 0.45m;
-            }
+                conf = trendLike ? 0.52m : 0.44m;
             else if (tf == KlineInterval.FiveMinutes)
-            {
-                conf = trendLike ? 0.70m : 0.55m;
-            }
+                conf = trendLike ? 0.69m : 0.54m;
             else if (tf == KlineInterval.FifteenMinutes)
-            {
-                conf = 0.75m;
-            }
+                conf = 0.72m;
             else if (tf >= KlineInterval.OneHour)
-            {
-                conf = 0.80m;
-            }
+                conf = 0.75m;
 
             if (rangeLike && tf <= KlineInterval.FiveMinutes)
                 conf -= 0.10m;
@@ -154,13 +112,10 @@ namespace VertexAutoTradeBinance8.Strategy.Confidence
             return Clamp01(conf);
         }
 
-        private static decimal GetRiskClamp(
-            SmartRegimeInfo smart,
-            TradeSignal signal)
+        private static decimal GetRiskClamp(SmartRegimeInfo smart, TradeSignal signal)
         {
-            decimal clamp = 1.00m;
+            decimal clamp = 1.0m;
 
-            // Counter-trend penalty
             if (signal != null)
             {
                 bool againstTrend =
@@ -171,24 +126,18 @@ namespace VertexAutoTradeBinance8.Strategy.Confidence
                     clamp *= 0.70m;
             }
 
-            // Chop / danger zones
             if (smart.IsDangerChopZone)
                 clamp *= 0.60m;
 
-            // Weak confidence regime
             if (smart.Confidence < 0.40m)
                 clamp *= 0.85m;
 
-            return Math.Clamp(clamp, 0.50m, 1.00m);
+            return Math.Clamp(clamp, 0.50m, 1.0m);
         }
 
-        private static decimal Clamp01(decimal v)
-            => Math.Clamp(v, 0m, 1m);
+        private static decimal Clamp01(decimal v) => Math.Clamp(v, 0m, 1m);
     }
 
-    // ============================================================
-    // DTO
-    // ============================================================
     public sealed record ConfidenceResult(
         decimal Final,
         decimal Regime,
