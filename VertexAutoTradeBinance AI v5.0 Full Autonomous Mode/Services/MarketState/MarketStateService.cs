@@ -107,14 +107,19 @@ namespace VertexAutoTradeBinance8.Services.MarketState
         // =====================================================
         // UPDATE (WS CLOSE SAFE)
         // =====================================================
+        private volatile bool _dirty;
         public void Update(MarketStateSnapshot snap)
         {
+             
             _states[Key(snap.Symbol, snap.Timeframe)] = snap;
+            _dirty = true;
+            if (!_dirty)
+                return;
 
-            // fire-and-forget, non-blocking
             _ = PersistAsync();
+            _dirty = false;
         }
-
+      
         // =====================================================
         // ASYNC PERSIST (THROTTLED + CHANGE AWARE)
         // =====================================================
@@ -128,6 +133,7 @@ namespace VertexAutoTradeBinance8.Services.MarketState
 
             if (!await _persistGate.WaitAsync(0))
                 return;
+             
 
             try
             {
@@ -193,7 +199,7 @@ namespace VertexAutoTradeBinance8.Services.MarketState
 
                     hash = hash * 31 + s.Ema21.GetHashCode();
                     hash = hash * 31 + s.Ema55.GetHashCode();
-                    hash = hash * 31 + s.Atr14.GetHashCode();
+                    hash = hash * 31 + Decimal.ToInt32(s.Atr14 * 1000);
 
                     hash = hash * 31 + s.LastPrice.GetHashCode();
                     hash = hash * 31 + s.LastCloseTimeUtc.GetHashCode();
