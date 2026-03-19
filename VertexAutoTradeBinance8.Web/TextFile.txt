@@ -5,7 +5,7 @@ RiskManager			- BaseDirectory, "missed_trades.json");
 ExecutedSignalService		- BaseDirectory, "executed_signals.json");
 
 
-Armen Gevorgyan- test
+Armen Gevorgyan-  
 Ключ API
 mmsfbBOxHuy62Lo3xLIpt9sA0bwvId8njz4OGmYTYzmejz7VqRLOLyamQNds86eZ
 Секретный ключ:
@@ -22,11 +22,17 @@ lAyOcVCw4ohWkRvBZdYZscmF2Ps7GR5f0q8BJnAzz8ya8Vvw7KcSJtsYWrGLadsE
  
 
  Hrach test trading ==================
- 
-Ключ API
-jBDWw7FcPMAYl1jDijxV2x8vAZI0DRdSDFy3eIGk6PTh8hqNJk0IKGKwQk5pvTjn
-Секретный ключ:
-HW4pnenXtkDhV99zHSIhDydrQcufiHXy94Ge6j7s21WiDESsQ7XflKnbsH5CbjOh
+
+
+API Key
+QJ4Fqi000ZkasafssArOq3Df1EnBEYnhL4K0ICGmZNNQhrz7MpwHNW69xlAcMz3B
+Secret Key
+VzPlLCNinewk6bcVMFPlHYvo5TFJCIx7iJOuZpHSAFvD8rthGHzcoocFYlXELs0S
+
+SPOT
+API Key: WP5j2ywxnX0KpaBzFhGULIjTfqG4NyRXsCFsIUEOLlZ8XmhBqVThSBLfZ2TIa1Jv
+Secret Key: A7EpnSuY7LTQgdXAoUuBXJ7wxmOmJMgnYlSVOXhJMKcjsz5jKLcx0uwDjuThVPiv
+
 
  ================================
 
@@ -37,6 +43,16 @@ LNyF6rRHWQsAIZ5DlNeZutO46rury5RMrGC06YNXev4bCEsoO6OFXeB2z2w1G0TH
 Секретный ключ:
 r6tpGT7KCm5aqLUsTzZZ5kCKe7rhVcUqldIEY4v25HkrZIt8jFV95OdZa4kthXsl
  =====--------------=============================
+
+
+ ==Inna test trading keys
+ 
+Ключ API
+N4iXAHxPIkI2s1psz0MoZlxYvuJ9OFgrajh01pqO8qqjLSSfJUUXFfk0xkNhE7r5
+Секретный ключ:
+NeDqpYLccfBacvbxw1K0Cq714RxGLLJHyMCHkuDqortnytjCuanwh3JcJfV823b0
+
+===================================================================
 
 install_service_client_001.bat   1 client
 
