@@ -228,8 +228,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return TrendPhase.Unknown;
         }
-
-
+        
         private static bool IsConfirmedReversal(
        IReadOnlyList<BinanceFuturesUsdtKline> klines,
        int last,
@@ -331,7 +330,7 @@ namespace VertexAutoTradeBinance8.Strategy
         }
 
         private static readonly HashSet<string> _htfSymbols =
-    new(StringComparer.OrdinalIgnoreCase)
+        new(StringComparer.OrdinalIgnoreCase)
     {
         "BTCUSDT",
         "ETHUSDT",
@@ -339,7 +338,6 @@ namespace VertexAutoTradeBinance8.Strategy
         "XRPUSDT",
         "BNBUSDT"
     };
-
 
         private readonly ConcurrentDictionary<string, DateTime> _lastSignalCandle = new();
         private async Task RunReactive(string symbol, KlineInterval interval, string reason)
@@ -549,7 +547,6 @@ namespace VertexAutoTradeBinance8.Strategy
                 }
             }
         }
-
         private void SafeRecordDecisionTrace(string symbol, KlineInterval tf, SignalDecisionTrace decision)
         {
             if (decision == null) return;
@@ -626,7 +623,6 @@ namespace VertexAutoTradeBinance8.Strategy
             int bars = lastIndex - start + 1;
             return bars <= 0 ? 0 : sumTr / bars;
         }
-
         private static decimal GetTrueRange(BinanceFuturesUsdtKline current, BinanceFuturesUsdtKline prev)
         {
             var tr1 = current.HighPrice - current.LowPrice;
@@ -648,7 +644,6 @@ namespace VertexAutoTradeBinance8.Strategy
             var body = Math.Abs(current.ClosePrice - current.OpenPrice);
             return body < atr * 0.08m;
         }
-
         private static void NormalizeEntryAndSl(TradeSignal s)
         {
             if (s == null)
@@ -718,28 +713,29 @@ namespace VertexAutoTradeBinance8.Strategy
         /// // ----------------------------- SIGNAL PATTERNS -----------------------------
 
         bool HasImpulseBefore(
-    IReadOnlyList<BinanceFuturesUsdtKline> klines,
-    int last,
-    decimal atr)
-        {
-            // ищем импульс в 3–6 свечах ДО
-            for (int i = last - 6; i < last - 1; i++)
+        IReadOnlyList<BinanceFuturesUsdtKline> klines,
+        int last,
+        decimal atr)
             {
-                if (i < 1) continue;
+                // ищем импульс в 3–6 свечах ДО
+                for (int i = last - 6; i < last - 1; i++)
+                {
+                    if (i < 1) continue;
 
-                var k = klines[i];
-                var body = Math.Abs(k.ClosePrice - k.OpenPrice);
+                    var k = klines[i];
+                    var body = Math.Abs(k.ClosePrice - k.OpenPrice);
 
-                if (body >= atr * 0.8m)
-                    return true;
+                    if (body >= atr * 0.8m)
+                        return true;
+                }
+
+                return false;
             }
 
-            return false;
-        }
         private TradeSignal? TryLiquidityGrab(
-     string symbol,
-     KlineInterval interval,
-     IReadOnlyList<BinanceFuturesUsdtKline> klines)
+         string symbol,
+         KlineInterval interval,
+         IReadOnlyList<BinanceFuturesUsdtKline> klines)
         {
             if (klines == null || klines.Count < 40)
                 return null;
@@ -903,12 +899,11 @@ namespace VertexAutoTradeBinance8.Strategy
             return null;
         }
 
-
         TradeSignal? impulseContinuation = null;
-        private TradeSignal? TryPullbackEma21(
-      string symbol,
-      KlineInterval interval,
-      IReadOnlyList<BinanceFuturesUsdtKline> klines)
+         private TradeSignal? TryPullbackEma21(
+          string symbol,
+          KlineInterval interval,
+          IReadOnlyList<BinanceFuturesUsdtKline> klines)
         {
             if (klines == null || klines.Count < 35)
                 return null; // защита от выхода за границы
@@ -1608,12 +1603,11 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return FastFailResult.Ok();
         }
-
         private FastFailResult Gate2_ConfidenceHybrid(
-    decimal finalConfidence,
-    SmartRegimeInfo smart,
-    bool lowerRegimeThreshold,
-    string symbol)
+        decimal finalConfidence,
+        SmartRegimeInfo smart,
+        bool lowerRegimeThreshold,
+        string symbol)
         {
             var cfg = _confidenceCfg.Resolve(symbol);
 
@@ -1686,11 +1680,10 @@ namespace VertexAutoTradeBinance8.Strategy
             return FastFailResult.Ok();
         }
 
-
         private FastFailResult Gate2_5_TrendPhaseLock(
-    IReadOnlyList<BinanceFuturesUsdtKline> klines,
-    SmartRegimeInfo smart,
-    TradeSignal? candidate)
+        IReadOnlyList<BinanceFuturesUsdtKline> klines,
+        SmartRegimeInfo smart,
+        TradeSignal? candidate)
         {
             if (candidate == null) return FastFailResult.Ok();
 
@@ -1708,12 +1701,13 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return FastFailResult.Ok();
         }
+
         private FastFailResult Gate3_BaseSignal(
-     string symbol,
-     KlineInterval tf,
-     IReadOnlyList<BinanceFuturesUsdtKline> klines,
-     SmartRegimeInfo smart,
-     out TradeSignal? baseSignal)
+         string symbol,
+         KlineInterval tf,
+         IReadOnlyList<BinanceFuturesUsdtKline> klines,
+         SmartRegimeInfo smart,
+         out TradeSignal? baseSignal)
         {
             baseSignal = null;
 
@@ -1737,7 +1731,7 @@ namespace VertexAutoTradeBinance8.Strategy
             if (atr <= 0 || last.ClosePrice <= 0)
                 return FastFailResult.Fail("ATR", "invalid ATR");
 
-            if (atr / last.ClosePrice < 0.0012m)
+            if (atr / last.ClosePrice < 0.0008m)
                 return FastFailResult.Fail("ATR", "volatility too low");
 
             // =========================
@@ -1796,14 +1790,70 @@ namespace VertexAutoTradeBinance8.Strategy
                 if (pullback == null)
                     earlyTrend = TryEarlyTrendJoin(symbol, tf, klines, smart);
 
-                if (pullback == null && earlyTrend == null)
+                // 🔴 NEW: impulse size check
+                decimal moveAtr = 0m;
+                {
+                    int lookback = 6;
+                    int start = Math.Max(1, klines.Count - lookback);
+
+                    decimal hi = klines[start].HighPrice;
+                    decimal lo = klines[start].LowPrice;
+
+                    for (int ii = start; ii < klines.Count; ii++)
+                    {
+                        hi = Math.Max(hi, klines[ii].HighPrice);
+                        lo = Math.Min(lo, klines[ii].LowPrice);
+                    }
+
+                    moveAtr = (hi - lo) / atr;
+                }
+                // 🔴 FIX: DO NOT CHASE BIG IMPULSE
+                decimal maxImpulse =
+                 trendLike ? 1.52m :
+                 rangeLike ? 1.08m :
+                 1.34m;
+
+                if (moveAtr < maxImpulse && pullback == null && earlyTrend == null)
+                {
                     continuation = TryImpulseContinuation(symbol, tf, klines, smart);
+                }
 
                 if (pullback == null && earlyTrend == null && continuation == null)
                     liquidity = TryLiquidityGrab(symbol, tf, klines);
             }
 
-            baseSignal = pullback ?? earlyTrend ?? continuation ?? liquidity;
+            // 🔴 NEW: STRUCTURE POSITION CHECK
+            int structureLb = 40;
+            int sStart = Math.Max(1, klines.Count - structureLb);
+
+            decimal sHi = klines[sStart].HighPrice;
+            decimal sLo = klines[sStart].LowPrice;
+
+            for (int ii = sStart; ii < klines.Count; ii++)
+            {
+                sHi = Math.Max(sHi, klines[ii].HighPrice);
+                sLo = Math.Min(sLo, klines[ii].LowPrice);
+            }
+
+            decimal pos = (last.ClosePrice - sLo) / (sHi - sLo);
+
+            // ❌ запрещаем continuation в конце движения
+            if (pos > 0.75m && smart.TrendSlopePercent > 0)
+            {
+                continuation = null;
+            }
+
+            // ❌ запрещаем continuation внизу даун-тренда
+            if (pos < 0.25m && smart.TrendSlopePercent < 0)
+            {
+                continuation = null;
+            }
+
+            baseSignal =
+    pullback ??
+    earlyTrend ??
+    continuation ??
+    (trendLike ? null : liquidity);
 
             if (baseSignal == null)
             {
@@ -1824,6 +1874,15 @@ namespace VertexAutoTradeBinance8.Strategy
                 smart.BaseRegime == MarketRegime.StrongUpTrend ||
                 smart.BaseRegime == MarketRegime.StrongDownTrend ||
                 smart.SmartType == SmartRegimeType.SmartStrongTrend;
+
+            if (useSlopeLock)
+            {
+                if (slopeUp && baseSignal.Side == SignalSide.Sell)
+                    return FastFailResult.Fail("DIR", "counter trend blocked");
+
+                if (slopeDown && baseSignal.Side == SignalSide.Buy)
+                    return FastFailResult.Fail("DIR", "counter trend blocked");
+            }
 
             // block counter-trend liquidity
             if (liquidity != null && baseSignal == liquidity)
@@ -1872,6 +1931,666 @@ namespace VertexAutoTradeBinance8.Strategy
             return FastFailResult.Ok();
         }
 
+        private FastFailResult Gate_TrapFilter(
+    IReadOnlyList<BinanceFuturesUsdtKline> klines,
+    TradeSignal signal)
+        {
+            int n = klines.Count;
+
+            var last = klines[n - 1];
+            var prev = klines[n - 2];
+
+            var range = prev.HighPrice - prev.LowPrice;
+
+            bool fakeBreakUp =
+                last.HighPrice > prev.HighPrice &&
+                last.ClosePrice < prev.HighPrice;
+
+            bool fakeBreakDown =
+                last.LowPrice < prev.LowPrice &&
+                last.ClosePrice > prev.LowPrice;
+
+            // 🔴 NEW: REQUIRE SWEEP CONFIRMATION (OPTIONAL HARD FILTER)
+            bool validLongSweep =
+                last.LowPrice < prev.LowPrice &&
+                last.ClosePrice > prev.LowPrice;
+
+            bool validShortSweep =
+                last.HighPrice > prev.HighPrice &&
+                last.ClosePrice < prev.HighPrice;
+
+            // если это liquidity сигнал — требуем подтверждение
+            if (signal.Reason == "LIQUIDITY")
+            {
+                if (signal.Side == SignalSide.Buy && !validLongSweep)
+                    signal.Confidence *= 0.8m;
+
+                if (signal.Side == SignalSide.Sell && !validShortSweep)
+                    signal.Confidence *= 0.8m;
+            }
+
+            if (signal.Side == SignalSide.Sell && fakeBreakUp)
+                return FastFailResult.Fail("TRAP", "short trap detected");
+
+            if (signal.Side == SignalSide.Buy && fakeBreakDown)
+                return FastFailResult.Fail("TRAP", "long trap detected");
+
+            return FastFailResult.Ok();
+        }
+         
+        private FastFailResult Gate3_5_DirectionLock(
+        string symbol,
+        KlineInterval tf,
+        IReadOnlyList<BinanceFuturesUsdtKline> klines,
+        TradeSignal signal,
+        SmartRegimeInfo smart,
+        bool allowCounterTrendInRangeLike)
+        {
+            _logger.LogDebug(
+                "[DIR][{sym}][{tf}] base={base} smart={smart} slope={slope:F4} side={side}",
+                symbol, tf, smart.BaseRegime, smart.SmartType, smart.TrendSlopePercent, signal.Side
+            );
+
+            bool rangeLike =
+                smart.BaseRegime == MarketRegime.Range ||
+                smart.SmartType == SmartRegimeType.SmartRange;
+
+            bool squeezeLike =
+                smart.SmartType == SmartRegimeType.SmartSqueeze;
+
+            // ------------------------------------------------------------------
+            // 1) RANGE / SMART-RANGE → DirectionLock НЕ применяется
+            // ------------------------------------------------------------------
+            if (rangeLike && allowCounterTrendInRangeLike && !squeezeLike)
+                return FastFailResult.Ok();
+
+            // ------------------------------------------------------------------
+            // 2) END-OF-TREND REVERSAL OVERRIDE
+            // ------------------------------------------------------------------
+
+
+
+            if (klines == null || klines.Count < 15)
+            {
+                _logger.LogWarning(
+                "[ATR CHECK] {symbol} tf={tf} klines={count} lastIndex={last}",
+                signal.Symbol,
+                tf,
+                klines?.Count ?? 0,
+                klines?.Count > 0 ? klines.Count - 1 : -1
+                );
+                return FastFailResult.Fail("gATE_3_5_DirectionLock", "ATR_NOT_READY");
+            }
+
+
+            decimal atr = signal.Atr ?? Atr(klines, 14, klines.Count - 1);
+            var phase = DetectTrendPhase(klines, atr, smart.TrendSlopePercent);
+
+            bool endPhase =
+                phase == TrendPhase.Distribution ||
+                phase == TrendPhase.Exhaustion;
+
+            if (endPhase)
+            {
+                // конец ап-тренда → разрешаем SHORT ТОЛЬКО при подтверждении
+                if (smart.TrendSlopePercent > 0m && signal.Side == SignalSide.Sell)
+                {
+                    if (IsConfirmedReversal(klines, klines.Count - 1, atr, smart, SignalSide.Sell))
+                        return FastFailResult.Ok();
+                }
+
+                // конец даун-тренда → разрешаем LONG ТОЛЬКО при подтверждении
+                if (smart.TrendSlopePercent < 0m && signal.Side == SignalSide.Buy)
+                {
+                    if (IsConfirmedReversal(klines, klines.Count - 1, atr, smart, SignalSide.Buy))
+                        return FastFailResult.Ok();
+                }
+            }
+
+            // ------------------------------------------------------------------
+            // 3) UNIVERSAL SLOPE LOCK (PRO SCALE)
+            // ------------------------------------------------------------------
+            var slopeLock = 0.008m + smart.VolatilityPercent * 1.2m;
+            slopeLock = Math.Clamp(slopeLock, 0.006m, 0.025m);
+
+            bool slopeUp = smart.TrendSlopePercent > slopeLock;
+            bool slopeDown = smart.TrendSlopePercent < -slopeLock;
+
+            bool trendLocked =
+                smart.BaseRegime == MarketRegime.StrongUpTrend ||
+                smart.BaseRegime == MarketRegime.StrongDownTrend ||
+                smart.SmartType == SmartRegimeType.SmartStrongTrend;
+
+            if (trendLocked)
+            {
+                if (slopeUp && signal.Side == SignalSide.Sell)
+                    return FastFailResult.Fail(
+                        "DIR",
+                        $"BLOCK SHORT by slope slope={smart.TrendSlopePercent:F4}"
+                    );
+
+                if (slopeDown && signal.Side == SignalSide.Buy)
+                    return FastFailResult.Fail(
+                        "DIR",
+                        $"BLOCK LONG by slope slope={smart.TrendSlopePercent:F4}"
+                    );
+            }
+
+            return FastFailResult.Ok();
+        }
+
+        private FastFailResult Gate3_2_LateEntryFilter(
+        string symbol,
+        KlineInterval tf,
+        IReadOnlyList<BinanceFuturesUsdtKline> klines,
+        TradeSignal signal,
+        SmartRegimeInfo smart)
+        {
+            if (klines == null || klines.Count < 40)
+                return FastFailResult.Ok();
+
+            int last = klines.Count - 1;
+            var c = klines[last];
+            var prev = klines[last - 1];
+
+            decimal atr = signal.Atr ?? Atr(klines, 14, last);
+            if (atr <= 0m) return FastFailResult.Ok();
+
+            decimal ema21 = Ema(klines, 21, last);
+            decimal distFromEmaAtr = Math.Abs(c.ClosePrice - ema21) / atr;
+
+            // 🔴 NEW: NO PULLBACK FILTER (ANTI-FOMO CORE)
+            if (signal.Side == SignalSide.Buy)
+            {
+                if (c.ClosePrice > ema21 + atr * 1.1m)
+                {
+                    _engineState.LastEntryDecision = "BLOCKED_NO_PULLBACK";
+                    return FastFailResult.Fail("NO_PULLBACK", "price too far above EMA");
+                }
+            }
+
+            if (signal.Side == SignalSide.Sell)
+            {
+                if (c.ClosePrice < ema21 - atr * 0.6m)
+                {
+                    _engineState.LastEntryDecision = "BLOCKED_NO_PULLBACK";
+                    return FastFailResult.Fail("NO_PULLBACK", "price too far below EMA");
+                }
+            }
+
+            // =========================
+            // EARLY TREND OVERRIDE (CRITICAL)
+            // =========================
+            bool earlyTrend =
+                smart.BaseRegime == MarketRegime.StrongUpTrend ||
+                smart.BaseRegime == MarketRegime.StrongDownTrend;
+
+            if (earlyTrend)
+            {
+                // slope ещё НЕ перегрет
+                decimal slopeLock = 0.012m + smart.VolatilityPercent * 1.2m;
+                slopeLock = Math.Clamp(slopeLock, 0.01m, 0.03m);
+
+                bool slopeOk =
+                    (smart.TrendSlopePercent > 0 && smart.TrendSlopePercent < slopeLock) ||
+                    (smart.TrendSlopePercent < 0 && smart.TrendSlopePercent > -slopeLock);
+
+                // цена не улетела от EMA
+                if (slopeOk && distFromEmaAtr <= 0.9m)
+                    return FastFailResult.Ok();
+            }
+
+            // =========================
+            // MICRO IMPULSE (ANTI-CHASE)
+            // =========================
+            int lookback = 6;
+            int start = Math.Max(1, last - lookback + 1);
+
+            decimal hi = klines[start].HighPrice;
+            decimal lo = klines[start].LowPrice;
+            for (int i = start; i <= last; i++)
+            {
+                hi = Math.Max(hi, klines[i].HighPrice);
+                lo = Math.Min(lo, klines[i].LowPrice);
+            }
+
+            decimal moveAtr = (hi - lo) / atr;
+            bool hugeBarNow = IsTooBigImpulseBar(c, prev, atr);
+
+            int sameDirBars = 0;
+            for (int i = Math.Max(1, last - 4); i <= last; i++)
+            {
+                bool up = klines[i].ClosePrice > klines[i].OpenPrice;
+                if (signal.Side == SignalSide.Buy && up) sameDirBars++;
+                if (signal.Side == SignalSide.Sell && !up) sameDirBars++;
+            }
+            bool overheatByFlow = sameDirBars >= 4;
+
+            bool rangeLike =
+                smart.BaseRegime == MarketRegime.Range ||
+                smart.SmartType == SmartRegimeType.SmartRange ||
+                smart.SmartType == SmartRegimeType.SmartSqueeze;
+
+            bool strongTrendLike =
+                smart.BaseRegime == MarketRegime.StrongUpTrend ||
+                smart.BaseRegime == MarketRegime.StrongDownTrend ||
+                smart.SmartType == SmartRegimeType.SmartStrongTrend;
+
+            decimal maxEmaDistAtr = rangeLike ? 0.75m : (strongTrendLike ? 1.35m : 1.05m);
+            decimal impulseAtrThr = rangeLike ? 1.25m : (strongTrendLike ? 1.90m : 1.55m);
+
+            // =========================
+            // LATE TREND CYCLE (M5)
+            // =========================
+            int cycleLb = tf == KlineInterval.FiveMinutes ? 48 : 36;
+            cycleLb = Math.Min(cycleLb, klines.Count - 1);
+            int cStart = Math.Max(1, last - cycleLb + 1);
+
+            decimal cycleHi = klines[cStart].HighPrice;
+            decimal cycleLo = klines[cStart].LowPrice;
+            for (int i = cStart; i <= last; i++)
+            {
+                cycleHi = Math.Max(cycleHi, klines[i].HighPrice);
+                cycleLo = Math.Min(cycleLo, klines[i].LowPrice);
+            }
+
+            decimal cycleMoveAtr = (cycleHi - cycleLo) / atr;
+            // 🔴 NEW: STRUCTURE OVEREXTENSION BLOCK
+            decimal structureMove = (cycleHi - cycleLo) / atr;
+
+            if (structureMove > 3.5m)
+            {
+                if (signal.Side == SignalSide.Buy && c.ClosePrice > ema21)
+                {
+                    _engineState.LastEntryDecision = "BLOCKED_LATE_STRUCTURE";
+                    return FastFailResult.Fail("LATE_STRUCTURE", "too high in range");
+                }
+
+                if (signal.Side == SignalSide.Sell && c.ClosePrice < ema21)
+                {
+                    _engineState.LastEntryDecision = "BLOCKED_LATE_STRUCTURE";
+                    return FastFailResult.Fail("LATE_STRUCTURE", "too low in range");
+                }
+            }
+
+            decimal maxCycleAtr =
+                rangeLike ? 1.6m :
+                strongTrendLike ? 3.0m :
+                2.3m;
+
+            decimal maxEmaExt =
+                rangeLike ? 0.85m :
+                strongTrendLike ? 1.4m :
+                1.1m;
+
+            if (cycleMoveAtr >= maxCycleAtr && distFromEmaAtr >= maxEmaExt)
+            {
+                _engineState.LastEntryDecision = "BLOCKED_LATE_CYCLE";
+                CurrentMode = "Blocked:LATE_CYCLE";
+                return FastFailResult.Fail("LATE_CYCLE", "trend cycle exhausted");
+            }
+
+            bool lateChase =
+     moveAtr >= impulseAtrThr &&
+     distFromEmaAtr >= maxEmaDistAtr;
+
+            if (hugeBarNow && distFromEmaAtr >= maxEmaDistAtr * 0.9m)
+                lateChase = true;
+
+            if (overheatByFlow && distFromEmaAtr >= maxEmaDistAtr)
+                lateChase = true;
+
+            if (lateChase)
+            {
+                bool looksLikeRetest =
+                    Math.Abs(signal.EntryPrice - ema21) <= atr * 0.25m;
+
+                if (!looksLikeRetest)
+                {
+                    signal.Confidence *= 0.8m;
+                    _engineState.LastEntryDecision = "WARN_LATE_ENTRY";
+                }
+
+                return FastFailResult.Ok(); // всегда пропускаем
+            }
+
+            
+
+            _engineState.LastEntryDecision = "BLOCKED_LATE_ENTRY";
+            CurrentMode = "Blocked:LATE";
+
+            return FastFailResult.Fail("LATE", "late chase");
+        }
+
+        private FastFailResult Gate4_RR(
+          string symbol,
+          KlineInterval tf,
+          TradeSignal signal,
+          SmartRegimeInfo smart,
+          bool relaxRr)
+        {
+            if (signal.TakeProfits == null || signal.TakeProfits.Count == 0)
+                return FastFailResult.Ok();
+
+            var slDist = Math.Abs(signal.EntryPrice - signal.StopLoss);
+
+            if (slDist <= 0)
+                return FastFailResult.Fail("RR", "slDist<=0");
+
+            // =========================
+            // ATR sanity
+            // =========================
+            var atr = signal.Atr ?? 0m;
+
+            if (atr > 0 && slDist < atr * 0.35m)
+                return FastFailResult.Fail("RR", "SL too tight vs ATR");
+
+            // =========================
+            // Use realistic TP (median)
+            // =========================
+            var tpDistances = signal.TakeProfits
+                .Select(tp => Math.Abs(tp - signal.EntryPrice))
+                .Where(d => d > 0)
+                .OrderBy(d => d)
+                .ToList();
+
+            if (tpDistances.Count == 0)
+                return FastFailResult.Fail("RR", "tpDist<=0");
+
+            decimal tpDist;
+
+            if (tpDistances.Count == 1)
+                tpDist = tpDistances[0];
+            else
+                tpDist = tpDistances[tpDistances.Count / 2]; // median TP
+
+            var rr = tpDist / slDist;
+
+            if (rr <= 0.6m)
+                return FastFailResult.Fail("RR", $"rr={rr:F2} too low");
+
+            // =========================
+            // relax mode
+            // =========================
+            if (relaxRr)
+            {
+                if (rr < 1.0m)
+                    return FastFailResult.Fail("RR", "relaxRR floor");
+
+                return FastFailResult.Ok();
+            }
+
+            var minRr = GetDynamicMinRr(symbol, tf, smart, signal);
+
+            // =========================
+            // AI multiplier
+            // =========================
+            var w = 1.0m;
+
+            try
+            {
+                w = _aiLearning.GetGateMultiplier(symbol, smart.BaseRegime, "RR");
+            }
+            catch { }
+
+            w = Math.Clamp(w, 0.7m, 1.3m);
+
+            minRr *= w;
+
+            minRr = Math.Clamp(minRr, 1.2m, 3.0m);
+
+            // =========================
+            // Fast trend override
+            // =========================
+            bool fastTrendOverride = IsFastTrendOverride(smart);
+
+            if (fastTrendOverride)
+                minRr *= 0.85m;
+
+            if (rr < minRr)
+            {
+                return FastFailResult.Fail(
+                    "RR",
+                    $"rr={rr:F2}<min={minRr:F2} (w={w:F2}, fastTrend={fastTrendOverride})"
+                );
+            }
+
+            return FastFailResult.Ok();
+        }
+
+        private FastFailResult Gate5_Pattern(string symbol, KlineInterval tf, IReadOnlyList<BinanceFuturesUsdtKline> klines, TradeSignal signal, bool relaxPatternBlock)
+        {
+            try
+            {
+                var pattern = _patternEngineService.Analyze(symbol, tf, klines);
+                if (pattern == null) return FastFailResult.Ok();
+
+                bool sameDir =
+                    (pattern.Direction == 1 && signal.Side == SignalSide.Buy) ||
+                    (pattern.Direction == -1 && signal.Side == SignalSide.Sell);
+
+                decimal thr = relaxPatternBlock ? 0.85m : 0.60m;
+
+                if (!sameDir && pattern.Score >= thr)
+                    return FastFailResult.Fail("PATTERN", $"dir={pattern.Direction} score={pattern.Score:F2}");
+
+                return FastFailResult.Ok();
+            }
+            catch
+            {
+                return FastFailResult.Ok(); // pattern errors are non-critical
+            }
+        }
+        private async Task<FastFailResult> Gate6_LiquidityAsync(
+      TradeSignal signal,
+      SmartRegimeInfo smart,
+      IReadOnlyList<BinanceFuturesUsdtKline> klines,
+      KlineInterval tf,
+      bool relaxLiquidity,
+      CancellationToken ct)
+        {
+            // Pre-cancel guard (never treat cancel as hard fail in reactive path)
+            if (ct.IsCancellationRequested)
+                return FastFailResult.Fail("CANCELLED", "liquidity cancelled");
+
+            // 1) LiquidityGuard — HARD structural block (top priority)
+            var lg = _liquidityGuardService.Analyze(
+                symbol: signal.Symbol,
+                interval: tf,
+                klines: klines,
+                side: signal.Side,
+                superSignal: signal.IsSuperSignal);
+
+            // ALWAYS attach context (even if not blocking)
+            signal.LiquidityScore = lg.Score;
+            signal.LiquiditySoftWarning = lg.SoftWarning;
+            signal.LiquidityDetails = lg.Details;
+
+            // HARD block stays HARD
+            if (lg.Block && !relaxLiquidity)
+            {
+                _engineState.LastEntryDecision = "BLOCKED_LIQ_GUARD";
+                _engineState.BlockedByLiquidity = true;
+                _engineState.LiquidityReason = lg.Reason.ToString();
+                LastBlockedByLiquidity = true;
+
+                return FastFailResult.Fail("LIQ_GUARD", lg.Reason.ToString());
+            }
+
+            // SOFT warning: DO NOT BLOCK — reduce size (executor will use it)
+            if (lg.SoftWarning && !relaxLiquidity && !signal.IsSuperSignal)
+            {
+                // clamp 0.35..0.85 typical; tune as you like
+                var m = 0.55m + 0.35m * Math.Clamp(lg.Score, 0m, 1m);
+                signal.SizeMultiplier = Math.Clamp(m, 0.35m, 0.85m);
+
+                // Optional: write marker "LIQ_SOFT" (not blocking)
+                try
+                {
+                    var c = klines[^1];
+                    _decisionMarkers.Add(new DecisionMarkerDto
+                    {
+                        Symbol = signal.Symbol,
+                        Timeframe = tf.ToString(),
+                        CandleTimeUtc = c.CloseTime,
+                        Type = DecisionMarkerType.LowVolume,
+                        Code = "LIQ_SOFT",
+                        Details = $"soft {lg.Reason} score={lg.Score:F2} sizeMul={signal.SizeMultiplier:F2}",
+                        Metrics = new Dictionary<string, decimal>
+                        {
+                            ["liqScore"] = lg.Score,
+                            ["sizeMul"] = signal.SizeMultiplier
+                        }
+                    });
+                }
+                catch { }
+            }
+            // ------------------------------------------------------------------
+            // 2) LiquidityCluster — async refinement / adjustment
+            // ------------------------------------------------------------------
+            TradeSignal? after;
+            try
+            {
+                after = await _liquidityClusterService
+                    .FilterAndAdjustAsync(signal, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // cancellation is NOT a trading decision
+                return FastFailResult.Fail("CANCELLED", "liquidity cancelled");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "[STRAT][{symbol}][{tf}] LiquidityCluster ERROR → soft-pass",
+                    signal.Symbol,
+                    tf);
+
+                // fail-safe: never block on cluster exception
+                LastBlockedByLiquidity = false;
+                return FastFailResult.Ok();
+            }
+
+            // ------------------------------------------------------------------
+            // 3) Cluster returned NULL → assess risk via AI strictness
+            // ------------------------------------------------------------------
+            if (after == null)
+            {
+                var w = 1.0m;
+                try
+                {
+                    w = _aiLearning.GetGateMultiplier(signal.Symbol, smart.BaseRegime, "LIQ");
+                }
+                catch { /* non-critical */ }
+
+                // Clamp AI multiplier to sane range
+                w = Math.Clamp(w, 0.7m, 1.5m);
+
+                // Block ONLY if:
+                // - not relaxed
+                // - not super-signal
+                // - AI says "strict"
+                if (!relaxLiquidity && !signal.IsSuperSignal && w >= 1.0m)
+                {
+                    _engineState.LastEntryDecision = "BLOCKED_LIQ_CLUSTER";
+                    _engineState.BlockedByLiquidity = true;
+                    _engineState.LiquidityReason = "ClusterDanger";
+                    LastBlockedByLiquidity = true;
+
+                    return FastFailResult.Fail("LIQ", "Liquidity cluster block");
+                }
+
+                // Otherwise allow (soft-pass)
+                LastBlockedByLiquidity = false;
+                return FastFailResult.Ok();
+            }
+
+            // ------------------------------------------------------------------
+            // 4) Cluster adjusted signal → accept mutation
+            // ------------------------------------------------------------------
+            signal.CopyFrom(after);
+            LastBlockedByLiquidity = false;
+
+            return FastFailResult.Ok();
+        }
+        
+        private FastFailResult Gate7_Exposure(
+      string symbol,
+      KlineInterval tf,
+      TradeSignal signal,
+      SmartRegimeInfo smart)
+        {
+            var es = _engineState;
+            if (es == null || es.EquityUsd <= 0)
+                return FastFailResult.Ok();
+
+            // ------------------------------------------------------------------
+            // 1) AI multiplier (defensive)
+            // ------------------------------------------------------------------
+            var w = 1.0m;
+            try
+            {
+                w = _aiLearning.GetGateMultiplier(symbol, smart.BaseRegime, "EXPO");
+            }
+            catch { /* non-critical */ }
+
+            // Clamp AI influence to sane bounds
+            w = Math.Clamp(w, 0.7m, 1.3m);
+
+            // ------------------------------------------------------------------
+            // 2) Edge score normalization (CRITICAL)
+            // ------------------------------------------------------------------
+            var aiEdgeScore = smart.Confidence * w;
+            aiEdgeScore = Math.Clamp(aiEdgeScore, 0.0m, 1.0m);
+
+            // ------------------------------------------------------------------
+            // 3) Exposure decision
+            // ------------------------------------------------------------------
+            var res = CanIncreaseExposure(
+                state: es,
+                symbol: symbol,
+                symbolNotionalUsd: 0m, // intentionally 0; executor/supervisor checks real notional
+                equityUsd: es.EquityUsd,
+                usedMarginUsd: es.UsedMarginUsd,
+                aiEdgeScore: aiEdgeScore,
+                isSpecialSetup: signal.IsSuperSignal,
+                isHighVolatility: smart.VolatilityPercent >= 0.015m,
+                isLowEquityMode: es.EquityUsd < 500m
+            );
+
+            // ------------------------------------------------------------------
+            // 4) BLOCK handling
+            // ------------------------------------------------------------------
+            if (!res.AllowAdd)
+            {
+                // UI / EngineState
+                _engineState.LastEntryDecision = "BLOCKED_EXPOSURE";
+                CurrentMode = "Blocked:EXPO";
+
+                // AI trace (fail-safe)
+                try
+                {
+                    _aiLearning.RecordMarketStateTriggered(
+                        reason: "EXPOSURE_BLOCK",
+                        symbol: symbol,
+                        timeframe: tf.ToString(),
+                        regime: smart.BaseRegime,
+                        slope: smart.TrendSlopePercent,
+                        volatility: smart.VolatilityPercent,
+                        atr: signal.Atr ?? 0,
+                        confidence: smart.Confidence
+                    );
+                }
+                catch { /* non-critical */ }
+
+                return FastFailResult.Fail("EXPO", res.Reason);
+            }
+
+            return FastFailResult.Ok();
+        }
+        //==============================================BTC HTF BLOCK
 
         bool VolumeSpike(IReadOnlyList<BinanceFuturesUsdtKline> klines, int i)
         {
@@ -1886,9 +2605,9 @@ namespace VertexAutoTradeBinance8.Strategy
         }
 
         bool IsExhaustion(
-    IReadOnlyList<BinanceFuturesUsdtKline> klines,
-    int i,
-    decimal atr)
+        IReadOnlyList<BinanceFuturesUsdtKline> klines,
+        int i,
+        decimal atr)
         {
             int bullish = 0;
 
@@ -1908,10 +2627,10 @@ namespace VertexAutoTradeBinance8.Strategy
         }
 
         private TradeSignal? TryImpulseContinuation(
-    string symbol,
-    KlineInterval tf,
-    IReadOnlyList<BinanceFuturesUsdtKline> klines,
-    SmartRegimeInfo smart)
+        string symbol,
+        KlineInterval tf,
+        IReadOnlyList<BinanceFuturesUsdtKline> klines,
+        SmartRegimeInfo smart)
         {
             if (klines == null || klines.Count < 120)
                 return null;
@@ -2145,576 +2864,7 @@ namespace VertexAutoTradeBinance8.Strategy
             return ema;
         }
 
-        private FastFailResult Gate3_5_DirectionLock(
-        string symbol,
-        KlineInterval tf,
-        IReadOnlyList<BinanceFuturesUsdtKline> klines,
-        TradeSignal signal,
-        SmartRegimeInfo smart,
-        bool allowCounterTrendInRangeLike)
-        {
-            _logger.LogDebug(
-                "[DIR][{sym}][{tf}] base={base} smart={smart} slope={slope:F4} side={side}",
-                symbol, tf, smart.BaseRegime, smart.SmartType, smart.TrendSlopePercent, signal.Side
-            );
 
-            bool rangeLike =
-                smart.BaseRegime == MarketRegime.Range ||
-                smart.SmartType == SmartRegimeType.SmartRange;
-
-            bool squeezeLike =
-                smart.SmartType == SmartRegimeType.SmartSqueeze;
-
-            // ------------------------------------------------------------------
-            // 1) RANGE / SMART-RANGE → DirectionLock НЕ применяется
-            // ------------------------------------------------------------------
-            if (rangeLike && allowCounterTrendInRangeLike && !squeezeLike)
-                return FastFailResult.Ok();
-
-            // ------------------------------------------------------------------
-            // 2) END-OF-TREND REVERSAL OVERRIDE
-            // ------------------------------------------------------------------
-
-
-
-            if (klines == null || klines.Count < 15)
-            {
-                _logger.LogWarning(
-                "[ATR CHECK] {symbol} tf={tf} klines={count} lastIndex={last}",
-                signal.Symbol,
-                tf,
-                klines?.Count ?? 0,
-                klines?.Count > 0 ? klines.Count - 1 : -1
-                );
-                return FastFailResult.Fail("gATE_3_5_DirectionLock", "ATR_NOT_READY");
-            }
-
-
-            decimal atr = signal.Atr ?? Atr(klines, 14, klines.Count - 1);
-            var phase = DetectTrendPhase(klines, atr, smart.TrendSlopePercent);
-
-            bool endPhase =
-                phase == TrendPhase.Distribution ||
-                phase == TrendPhase.Exhaustion;
-
-            if (endPhase)
-            {
-                // конец ап-тренда → разрешаем SHORT ТОЛЬКО при подтверждении
-                if (smart.TrendSlopePercent > 0m && signal.Side == SignalSide.Sell)
-                {
-                    if (IsConfirmedReversal(klines, klines.Count - 1, atr, smart, SignalSide.Sell))
-                        return FastFailResult.Ok();
-                }
-
-                // конец даун-тренда → разрешаем LONG ТОЛЬКО при подтверждении
-                if (smart.TrendSlopePercent < 0m && signal.Side == SignalSide.Buy)
-                {
-                    if (IsConfirmedReversal(klines, klines.Count - 1, atr, smart, SignalSide.Buy))
-                        return FastFailResult.Ok();
-                }
-            }
-
-            // ------------------------------------------------------------------
-            // 3) UNIVERSAL SLOPE LOCK (PRO SCALE)
-            // ------------------------------------------------------------------
-            var slopeLock = 0.008m + smart.VolatilityPercent * 1.2m;
-            slopeLock = Math.Clamp(slopeLock, 0.006m, 0.025m);
-
-            bool slopeUp = smart.TrendSlopePercent > slopeLock;
-            bool slopeDown = smart.TrendSlopePercent < -slopeLock;
-
-            bool trendLocked =
-                smart.BaseRegime == MarketRegime.StrongUpTrend ||
-                smart.BaseRegime == MarketRegime.StrongDownTrend ||
-                smart.SmartType == SmartRegimeType.SmartStrongTrend;
-
-            if (trendLocked)
-            {
-                if (slopeUp && signal.Side == SignalSide.Sell)
-                    return FastFailResult.Fail(
-                        "DIR",
-                        $"BLOCK SHORT by slope slope={smart.TrendSlopePercent:F4}"
-                    );
-
-                if (slopeDown && signal.Side == SignalSide.Buy)
-                    return FastFailResult.Fail(
-                        "DIR",
-                        $"BLOCK LONG by slope slope={smart.TrendSlopePercent:F4}"
-                    );
-            }
-
-            return FastFailResult.Ok();
-        }
-
-        private FastFailResult Gate3_2_LateEntryFilter(
-    string symbol,
-    KlineInterval tf,
-    IReadOnlyList<BinanceFuturesUsdtKline> klines,
-    TradeSignal signal,
-    SmartRegimeInfo smart)
-        {
-            if (klines == null || klines.Count < 40)
-                return FastFailResult.Ok();
-
-            int last = klines.Count - 1;
-            var c = klines[last];
-            var prev = klines[last - 1];
-
-            decimal atr = signal.Atr ?? Atr(klines, 14, last);
-            if (atr <= 0m) return FastFailResult.Ok();
-
-            decimal ema21 = Ema(klines, 21, last);
-            decimal distFromEmaAtr = Math.Abs(c.ClosePrice - ema21) / atr;
-
-            // =========================
-            // EARLY TREND OVERRIDE (CRITICAL)
-            // =========================
-            bool earlyTrend =
-                smart.BaseRegime == MarketRegime.StrongUpTrend ||
-                smart.BaseRegime == MarketRegime.StrongDownTrend;
-
-            if (earlyTrend)
-            {
-                // slope ещё НЕ перегрет
-                decimal slopeLock = 0.012m + smart.VolatilityPercent * 1.2m;
-                slopeLock = Math.Clamp(slopeLock, 0.01m, 0.03m);
-
-                bool slopeOk =
-                    (smart.TrendSlopePercent > 0 && smart.TrendSlopePercent < slopeLock) ||
-                    (smart.TrendSlopePercent < 0 && smart.TrendSlopePercent > -slopeLock);
-
-                // цена не улетела от EMA
-                if (slopeOk && distFromEmaAtr <= 0.9m)
-                    return FastFailResult.Ok();
-            }
-
-            // =========================
-            // MICRO IMPULSE (ANTI-CHASE)
-            // =========================
-            int lookback = 6;
-            int start = Math.Max(1, last - lookback + 1);
-
-            decimal hi = klines[start].HighPrice;
-            decimal lo = klines[start].LowPrice;
-            for (int i = start; i <= last; i++)
-            {
-                hi = Math.Max(hi, klines[i].HighPrice);
-                lo = Math.Min(lo, klines[i].LowPrice);
-            }
-
-            decimal moveAtr = (hi - lo) / atr;
-            bool hugeBarNow = IsTooBigImpulseBar(c, prev, atr);
-
-            int sameDirBars = 0;
-            for (int i = Math.Max(1, last - 4); i <= last; i++)
-            {
-                bool up = klines[i].ClosePrice > klines[i].OpenPrice;
-                if (signal.Side == SignalSide.Buy && up) sameDirBars++;
-                if (signal.Side == SignalSide.Sell && !up) sameDirBars++;
-            }
-            bool overheatByFlow = sameDirBars >= 4;
-
-            bool rangeLike =
-                smart.BaseRegime == MarketRegime.Range ||
-                smart.SmartType == SmartRegimeType.SmartRange ||
-                smart.SmartType == SmartRegimeType.SmartSqueeze;
-
-            bool strongTrendLike =
-                smart.BaseRegime == MarketRegime.StrongUpTrend ||
-                smart.BaseRegime == MarketRegime.StrongDownTrend ||
-                smart.SmartType == SmartRegimeType.SmartStrongTrend;
-
-            decimal maxEmaDistAtr = rangeLike ? 0.75m : (strongTrendLike ? 1.35m : 1.05m);
-            decimal impulseAtrThr = rangeLike ? 1.25m : (strongTrendLike ? 1.90m : 1.55m);
-
-            // =========================
-            // LATE TREND CYCLE (M5)
-            // =========================
-            int cycleLb = tf == KlineInterval.FiveMinutes ? 48 : 36;
-            cycleLb = Math.Min(cycleLb, klines.Count - 1);
-            int cStart = Math.Max(1, last - cycleLb + 1);
-
-            decimal cycleHi = klines[cStart].HighPrice;
-            decimal cycleLo = klines[cStart].LowPrice;
-            for (int i = cStart; i <= last; i++)
-            {
-                cycleHi = Math.Max(cycleHi, klines[i].HighPrice);
-                cycleLo = Math.Min(cycleLo, klines[i].LowPrice);
-            }
-
-            decimal cycleMoveAtr = (cycleHi - cycleLo) / atr;
-
-            decimal maxCycleAtr =
-                rangeLike ? 1.6m :
-                strongTrendLike ? 3.0m :
-                2.3m;
-
-            decimal maxEmaExt =
-                rangeLike ? 0.85m :
-                strongTrendLike ? 1.4m :
-                1.1m;
-
-            if (cycleMoveAtr >= maxCycleAtr && distFromEmaAtr >= maxEmaExt)
-            {
-                _engineState.LastEntryDecision = "BLOCKED_LATE_CYCLE";
-                CurrentMode = "Blocked:LATE_CYCLE";
-                return FastFailResult.Fail("LATE_CYCLE", "trend cycle exhausted");
-            }
-
-            bool lateChase =
-                moveAtr >= impulseAtrThr &&
-                distFromEmaAtr >= maxEmaDistAtr;
-
-            if (hugeBarNow && distFromEmaAtr >= maxEmaDistAtr * 0.9m)
-                lateChase = true;
-
-            if (overheatByFlow && distFromEmaAtr >= maxEmaDistAtr)
-                lateChase = true;
-
-            if (!lateChase)
-                return FastFailResult.Ok();
-
-            bool looksLikeRetest =
-                Math.Abs(signal.EntryPrice - ema21) <= atr * 0.25m;
-
-            if (looksLikeRetest)
-                return FastFailResult.Ok();
-
-            _engineState.LastEntryDecision = "BLOCKED_LATE_ENTRY";
-            CurrentMode = "Blocked:LATE";
-
-            return FastFailResult.Fail("LATE", "late chase");
-        }
-        private FastFailResult Gate4_RR(
-      string symbol,
-      KlineInterval tf,
-      TradeSignal signal,
-      SmartRegimeInfo smart,
-      bool relaxRr)
-        {
-            if (signal.TakeProfits == null || signal.TakeProfits.Count == 0)
-                return FastFailResult.Ok();
-
-            var slDist = Math.Abs(signal.EntryPrice - signal.StopLoss);
-
-            if (slDist <= 0)
-                return FastFailResult.Fail("RR", "slDist<=0");
-
-            // =========================
-            // ATR sanity
-            // =========================
-            var atr = signal.Atr ?? 0m;
-
-            if (atr > 0 && slDist < atr * 0.35m)
-                return FastFailResult.Fail("RR", "SL too tight vs ATR");
-
-            // =========================
-            // Use realistic TP (median)
-            // =========================
-            var tpDistances = signal.TakeProfits
-                .Select(tp => Math.Abs(tp - signal.EntryPrice))
-                .Where(d => d > 0)
-                .OrderBy(d => d)
-                .ToList();
-
-            if (tpDistances.Count == 0)
-                return FastFailResult.Fail("RR", "tpDist<=0");
-
-            decimal tpDist;
-
-            if (tpDistances.Count == 1)
-                tpDist = tpDistances[0];
-            else
-                tpDist = tpDistances[tpDistances.Count / 2]; // median TP
-
-            var rr = tpDist / slDist;
-
-            if (rr <= 0.6m)
-                return FastFailResult.Fail("RR", $"rr={rr:F2} too low");
-
-            // =========================
-            // relax mode
-            // =========================
-            if (relaxRr)
-            {
-                if (rr < 1.0m)
-                    return FastFailResult.Fail("RR", "relaxRR floor");
-
-                return FastFailResult.Ok();
-            }
-
-            var minRr = GetDynamicMinRr(symbol, tf, smart, signal);
-
-            // =========================
-            // AI multiplier
-            // =========================
-            var w = 1.0m;
-
-            try
-            {
-                w = _aiLearning.GetGateMultiplier(symbol, smart.BaseRegime, "RR");
-            }
-            catch { }
-
-            w = Math.Clamp(w, 0.7m, 1.3m);
-
-            minRr *= w;
-
-            minRr = Math.Clamp(minRr, 1.2m, 3.0m);
-
-            // =========================
-            // Fast trend override
-            // =========================
-            bool fastTrendOverride = IsFastTrendOverride(smart);
-
-            if (fastTrendOverride)
-                minRr *= 0.85m;
-
-            if (rr < minRr)
-            {
-                return FastFailResult.Fail(
-                    "RR",
-                    $"rr={rr:F2}<min={minRr:F2} (w={w:F2}, fastTrend={fastTrendOverride})"
-                );
-            }
-
-            return FastFailResult.Ok();
-        }
-
-        private FastFailResult Gate5_Pattern(string symbol, KlineInterval tf, IReadOnlyList<BinanceFuturesUsdtKline> klines, TradeSignal signal, bool relaxPatternBlock)
-        {
-            try
-            {
-                var pattern = _patternEngineService.Analyze(symbol, tf, klines);
-                if (pattern == null) return FastFailResult.Ok();
-
-                bool sameDir =
-                    (pattern.Direction == 1 && signal.Side == SignalSide.Buy) ||
-                    (pattern.Direction == -1 && signal.Side == SignalSide.Sell);
-
-                decimal thr = relaxPatternBlock ? 0.85m : 0.60m;
-
-                if (!sameDir && pattern.Score >= thr)
-                    return FastFailResult.Fail("PATTERN", $"dir={pattern.Direction} score={pattern.Score:F2}");
-
-                return FastFailResult.Ok();
-            }
-            catch
-            {
-                return FastFailResult.Ok(); // pattern errors are non-critical
-            }
-        }
-
-        private async Task<FastFailResult> Gate6_LiquidityAsync(
-      TradeSignal signal,
-      SmartRegimeInfo smart,
-      IReadOnlyList<BinanceFuturesUsdtKline> klines,
-      KlineInterval tf,
-      bool relaxLiquidity,
-      CancellationToken ct)
-        {
-            // Pre-cancel guard (never treat cancel as hard fail in reactive path)
-            if (ct.IsCancellationRequested)
-                return FastFailResult.Fail("CANCELLED", "liquidity cancelled");
-
-            // 1) LiquidityGuard — HARD structural block (top priority)
-            var lg = _liquidityGuardService.Analyze(
-                symbol: signal.Symbol,
-                interval: tf,
-                klines: klines,
-                side: signal.Side,
-                superSignal: signal.IsSuperSignal);
-
-            // ALWAYS attach context (even if not blocking)
-            signal.LiquidityScore = lg.Score;
-            signal.LiquiditySoftWarning = lg.SoftWarning;
-            signal.LiquidityDetails = lg.Details;
-
-            // HARD block stays HARD
-            if (lg.Block && !relaxLiquidity)
-            {
-                _engineState.LastEntryDecision = "BLOCKED_LIQ_GUARD";
-                _engineState.BlockedByLiquidity = true;
-                _engineState.LiquidityReason = lg.Reason.ToString();
-                LastBlockedByLiquidity = true;
-
-                return FastFailResult.Fail("LIQ_GUARD", lg.Reason.ToString());
-            }
-
-            // SOFT warning: DO NOT BLOCK — reduce size (executor will use it)
-            if (lg.SoftWarning && !relaxLiquidity && !signal.IsSuperSignal)
-            {
-                // clamp 0.35..0.85 typical; tune as you like
-                var m = 0.55m + 0.35m * Math.Clamp(lg.Score, 0m, 1m);
-                signal.SizeMultiplier = Math.Clamp(m, 0.35m, 0.85m);
-
-                // Optional: write marker "LIQ_SOFT" (not blocking)
-                try
-                {
-                    var c = klines[^1];
-                    _decisionMarkers.Add(new DecisionMarkerDto
-                    {
-                        Symbol = signal.Symbol,
-                        Timeframe = tf.ToString(),
-                        CandleTimeUtc = c.CloseTime,
-                        Type = DecisionMarkerType.LowVolume,
-                        Code = "LIQ_SOFT",
-                        Details = $"soft {lg.Reason} score={lg.Score:F2} sizeMul={signal.SizeMultiplier:F2}",
-                        Metrics = new Dictionary<string, decimal>
-                        {
-                            ["liqScore"] = lg.Score,
-                            ["sizeMul"] = signal.SizeMultiplier
-                        }
-                    });
-                }
-                catch { }
-            }
-            // ------------------------------------------------------------------
-            // 2) LiquidityCluster — async refinement / adjustment
-            // ------------------------------------------------------------------
-            TradeSignal? after;
-            try
-            {
-                after = await _liquidityClusterService
-                    .FilterAndAdjustAsync(signal, ct)
-                    .ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // cancellation is NOT a trading decision
-                return FastFailResult.Fail("CANCELLED", "liquidity cancelled");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "[STRAT][{symbol}][{tf}] LiquidityCluster ERROR → soft-pass",
-                    signal.Symbol,
-                    tf);
-
-                // fail-safe: never block on cluster exception
-                LastBlockedByLiquidity = false;
-                return FastFailResult.Ok();
-            }
-
-            // ------------------------------------------------------------------
-            // 3) Cluster returned NULL → assess risk via AI strictness
-            // ------------------------------------------------------------------
-            if (after == null)
-            {
-                var w = 1.0m;
-                try
-                {
-                    w = _aiLearning.GetGateMultiplier(signal.Symbol, smart.BaseRegime, "LIQ");
-                }
-                catch { /* non-critical */ }
-
-                // Clamp AI multiplier to sane range
-                w = Math.Clamp(w, 0.7m, 1.5m);
-
-                // Block ONLY if:
-                // - not relaxed
-                // - not super-signal
-                // - AI says "strict"
-                if (!relaxLiquidity && !signal.IsSuperSignal && w >= 1.0m)
-                {
-                    _engineState.LastEntryDecision = "BLOCKED_LIQ_CLUSTER";
-                    _engineState.BlockedByLiquidity = true;
-                    _engineState.LiquidityReason = "ClusterDanger";
-                    LastBlockedByLiquidity = true;
-
-                    return FastFailResult.Fail("LIQ", "Liquidity cluster block");
-                }
-
-                // Otherwise allow (soft-pass)
-                LastBlockedByLiquidity = false;
-                return FastFailResult.Ok();
-            }
-
-            // ------------------------------------------------------------------
-            // 4) Cluster adjusted signal → accept mutation
-            // ------------------------------------------------------------------
-            signal.CopyFrom(after);
-            LastBlockedByLiquidity = false;
-
-            return FastFailResult.Ok();
-        }
-
-        private FastFailResult Gate7_Exposure(
-      string symbol,
-      KlineInterval tf,
-      TradeSignal signal,
-      SmartRegimeInfo smart)
-        {
-            var es = _engineState;
-            if (es == null || es.EquityUsd <= 0)
-                return FastFailResult.Ok();
-
-            // ------------------------------------------------------------------
-            // 1) AI multiplier (defensive)
-            // ------------------------------------------------------------------
-            var w = 1.0m;
-            try
-            {
-                w = _aiLearning.GetGateMultiplier(symbol, smart.BaseRegime, "EXPO");
-            }
-            catch { /* non-critical */ }
-
-            // Clamp AI influence to sane bounds
-            w = Math.Clamp(w, 0.7m, 1.3m);
-
-            // ------------------------------------------------------------------
-            // 2) Edge score normalization (CRITICAL)
-            // ------------------------------------------------------------------
-            var aiEdgeScore = smart.Confidence * w;
-            aiEdgeScore = Math.Clamp(aiEdgeScore, 0.0m, 1.0m);
-
-            // ------------------------------------------------------------------
-            // 3) Exposure decision
-            // ------------------------------------------------------------------
-            var res = CanIncreaseExposure(
-                state: es,
-                symbol: symbol,
-                symbolNotionalUsd: 0m, // intentionally 0; executor/supervisor checks real notional
-                equityUsd: es.EquityUsd,
-                usedMarginUsd: es.UsedMarginUsd,
-                aiEdgeScore: aiEdgeScore,
-                isSpecialSetup: signal.IsSuperSignal,
-                isHighVolatility: smart.VolatilityPercent >= 0.015m,
-                isLowEquityMode: es.EquityUsd < 500m
-            );
-
-            // ------------------------------------------------------------------
-            // 4) BLOCK handling
-            // ------------------------------------------------------------------
-            if (!res.AllowAdd)
-            {
-                // UI / EngineState
-                _engineState.LastEntryDecision = "BLOCKED_EXPOSURE";
-                CurrentMode = "Blocked:EXPO";
-
-                // AI trace (fail-safe)
-                try
-                {
-                    _aiLearning.RecordMarketStateTriggered(
-                        reason: "EXPOSURE_BLOCK",
-                        symbol: symbol,
-                        timeframe: tf.ToString(),
-                        regime: smart.BaseRegime,
-                        slope: smart.TrendSlopePercent,
-                        volatility: smart.VolatilityPercent,
-                        atr: signal.Atr ?? 0,
-                        confidence: smart.Confidence
-                    );
-                }
-                catch { /* non-critical */ }
-
-                return FastFailResult.Fail("EXPO", res.Reason);
-            }
-
-            return FastFailResult.Ok();
-        }
-        //==============================================BTC HTF BLOCK
         public enum MarketProfileType
         {
             Default = 0,
@@ -2750,6 +2900,7 @@ namespace VertexAutoTradeBinance8.Strategy
             public bool Valid { get; init; }
             public string Note { get; init; } = "";
         }
+
         private readonly ConcurrentDictionary<(string symbol, KlineInterval tf), BtcHtfState> _btcHtfCache = new();
         private readonly ConcurrentDictionary<(string symbol, KlineInterval tf), SemaphoreSlim> _btcHtfLocks = new();
 
@@ -3105,7 +3256,44 @@ namespace VertexAutoTradeBinance8.Strategy
 
         //===========================================================================END BTC HTF BLOCK
 
+        private bool IsLateEntry(IReadOnlyList<BinanceFuturesUsdtKline> klines)
+        {
+            int n = klines.Count;
+            var last = klines[n - 1];
+            var move = Math.Abs(last.ClosePrice - klines[n - 5].ClosePrice);
 
+            return move / last.ClosePrice > 0.004m; // 0.4% already moved
+        }
+
+        private bool IsParabolicMove(IReadOnlyList<BinanceFuturesUsdtKline> klines)
+        {
+            int n = klines.Count;
+
+            var c1 = klines[n - 1].ClosePrice;
+            var c2 = klines[n - 2].ClosePrice;
+            var c3 = klines[n - 3].ClosePrice;
+
+            return (c1 > c2 && c2 > c3) &&
+                   (c1 - c3) / c3 > 0.006m;
+        }
+
+        private bool IsAgainstMicroMomentum(
+        IReadOnlyList<BinanceFuturesUsdtKline> klines,
+        SignalSide side)
+        {
+            int n = klines.Count;
+
+            var last = klines[n - 1];
+            var prev = klines[n - 2];
+
+            if (side == SignalSide.Buy)
+                return last.ClosePrice < prev.ClosePrice;
+
+            if (side == SignalSide.Sell)
+                return last.ClosePrice > prev.ClosePrice;
+
+            return false;
+        }
         // ----------------------------- MAIN EVALUATOR (ASYNC FINAL) -----------------------------
         internal async Task<SignalDecisionTrace> EvaluateSignalAsync(
             string symbol,
@@ -3171,21 +3359,18 @@ namespace VertexAutoTradeBinance8.Strategy
                 // Gate1
                 SmartRegimeInfo s;
                 var g1 = Gate1_SmartRegime(symbol, tf, klines, out s);
-                smart = s;
+             
+               smart = s;
                 trace.Add(g1);
                 if (!g1.Allow) return Finalize(trace, smart);
 
-                // =========================
-                // 1m IS NOT A DECISION TF
-                // =========================
-                // if (tf == KlineInterval.OneMinute)
-                // {
-                //     _engineState.LastEntryDecision = "SKIP_1M_DECISION";
-                //     CurrentMode = tf.ToString()  + " Skip";
-                //     trace.Add(FastFailResult.Fail("TF", "1m excluded from decision logic"));
-                //     return Finalize(trace, smart);
-                // }
-
+                
+                if (tf == KlineInterval.OneMinute)
+                {
+                    trace.Allow = false;
+                    trace.Gates.Add(FastFailResult.Fail("TF", "1m blocked for signal"));
+                    return Finalize(trace, smart);
+                }
                 // BTC MACRO PROFILE
                 if (GetProfile(symbol) == MarketProfileType.BtcMacro)
                 {
@@ -3206,8 +3391,8 @@ namespace VertexAutoTradeBinance8.Strategy
                 var cfg = _confidenceCfg.Resolve(symbol);
 
                 // Gate2 pre-check / telemetry
-                var g2Pre = Gate2_Confidence(smart, lowerRegimeThreshold, symbol);
-                trace.Add(g2Pre);
+                //var g2Pre = Gate2_Confidence(smart, lowerRegimeThreshold, symbol);
+                //trace.Add(g2Pre);
 
                 // Volatility Expansion
                 if (IsVolatilityExpansionAllowed(smart))
@@ -3216,8 +3401,11 @@ namespace VertexAutoTradeBinance8.Strategy
                     if (veSignal != null)
                     {
                         veSignal.IsSuperSignal = true;
-                        veSignal.Confidence = Math.Max(smart.Confidence, cfg.MinEntry + 0.05m);
-
+                        
+                        if (veSignal.IsSuperSignal)
+                        {
+                            veSignal.Confidence = Math.Min(veSignal.Confidence ?? 0, 0.75m);
+                        }
                         _engineState.LastEntryDecision = "VOLATILITY_EXPANSION";
                         CurrentMode = "VolatilityExpansion";
 
@@ -3241,13 +3429,28 @@ namespace VertexAutoTradeBinance8.Strategy
                 var g3 = Gate3_BaseSignal(symbol, tf, klines, smart, out baseSignal);
                 trace.Add(g3);
                 if (!g3.Allow || baseSignal == null)
-                    return Finalize(trace, smart);
+                    return Finalize(trace, smart); 
+ 
 
-                // Confidence
+                // Confidence FIRST
                 var conf = _confidenceAgg.Evaluate(smart, baseSignal, tf);
                 decimal finalConfidence = conf?.Final ?? smart.Confidence;
+
+                // penalties
+                if (IsLateEntry(klines))
+                    finalConfidence -= 0.08m;
+
+                if (IsParabolicMove(klines))
+                    finalConfidence -= 0.12m;
+
+                if (IsAgainstMicroMomentum(klines, baseSignal.Side))
+                    finalConfidence -= 0.06m;
+
+                finalConfidence = Math.Clamp(finalConfidence, 0m, 1m);
+
                 baseSignal.Confidence = finalConfidence;
 
+               
                 Confidence = finalConfidence;
                 _engineState.ConfidenceRaw = finalConfidence;
                 _engineState.ConfidencePercent = (int)(finalConfidence * 100);
@@ -3260,6 +3463,29 @@ namespace VertexAutoTradeBinance8.Strategy
                 trace.Add(Gate2_ConfidenceHybrid(finalConfidence, smart, lowerRegimeThreshold, symbol));
                 if (!trace.Allow) return Finalize(trace, smart);
 
+
+                var trap = Gate_TrapFilter(klines, baseSignal);
+
+                if (!trap.Allow)
+                {
+                    baseSignal.Confidence = (baseSignal.Confidence ?? finalConfidence) * 0.7m;
+                    _engineState.LastEntryDecision = "WARN_TRAP";
+                }
+                else
+                {
+                    trace.Add(trap);
+                }
+
+                finalConfidence = baseSignal.Confidence ?? finalConfidence;
+
+ 
+                if (IsBadEntryLocation(klines, baseSignal))
+                {
+                    baseSignal.Confidence *= 0.7m;
+                    _engineState.LastEntryDecision = "WARN_BAD_LOCATION";
+                }
+               
+
                 trace.Add(Gate2_5_TrendPhaseLock(klines, smart, baseSignal));
                 if (!trace.Allow) return Finalize(trace, smart);
 
@@ -3268,6 +3494,8 @@ namespace VertexAutoTradeBinance8.Strategy
 
                 trace.Add(Gate3_2_LateEntryFilter(symbol, tf, klines, baseSignal, smart));
                 if (!trace.Allow) return Finalize(trace, smart);
+
+                finalConfidence = baseSignal.Confidence ?? finalConfidence;
 
                 trace.Add(Gate4_RR(symbol, tf, baseSignal, smart, relaxRr));
                 if (!trace.Allow) return Finalize(trace, smart);
@@ -3314,7 +3542,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
                 trace.Allow = true;
                 trace.Signal = baseSignal;
-                _engineState.LastEntryDecision = "ENTER_ALLOWED";
+                _engineState.LastEntryDecision = "SIGNAL_READY";
 
                 try
                 {
@@ -3377,6 +3605,29 @@ namespace VertexAutoTradeBinance8.Strategy
             }
 
             return trace;
+        }
+
+        private bool IsBadEntryLocation(IReadOnlyList<BinanceFuturesUsdtKline> klines, TradeSignal signal)
+        {
+            int lookback = 50;
+            int last = klines.Count - 1;
+
+            decimal hi = klines.Skip(last - lookback).Max(x => x.HighPrice);
+            decimal lo = klines.Skip(last - lookback).Min(x => x.LowPrice);
+
+            decimal price = klines[last].ClosePrice;
+
+            decimal pos = (price - lo) / (hi - lo);
+
+            // ❌ ЛОНГ ВВЕРХУ ДИАПАЗОНА — ЗАПРЕЩЕН
+            if (signal.Side == SignalSide.Buy && pos > 0.85m)
+                return true;
+
+            // ❌ ШОРТ ВНИЗУ — ЗАПРЕЩЕН
+            if (signal.Side == SignalSide.Sell && pos < 0.27m)
+                return true;
+
+            return false;
         }
 
         // ----------------------------- EXPOSURE DECISION (UNCHANGED LOGIC) -----------------------------

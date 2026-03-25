@@ -21,7 +21,16 @@ public class SymbolUniverseBuilder
         "BEATUSDT",
         "TANSSIUSDT",
         "OPUSDT",
+        "OPNUSDT",
+        "CFGUSDT",
+        "NIGHTUSDT",
         "ROBOUSDT",
+        "KATUSDT",
+        "ESPUSDT",
+        "SENTUSDT",
+        "ZAMAUSDT",
+        "RLUSDUSDT",
+        "FOGOUSDT",
         "MYXUSDT",
         "AIAUSDT",
         "FIOUSDT",
@@ -30,6 +39,8 @@ public class SymbolUniverseBuilder
         "SIRENUSDT",
         "DENTUSDT",
         "SIGNUSDT",
+        "BANANAS31USDT",
+        "PIPPINUSDT",
         "BANANAS31USDT"
     };
 

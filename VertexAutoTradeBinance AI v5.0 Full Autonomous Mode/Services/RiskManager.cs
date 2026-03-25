@@ -15,6 +15,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly AiMarketRegimeService _marketRegimeService;
         private readonly SmartRegimeService _smartRegime;
         private readonly TradingOptionsResolver _tradingResolver;
+        private readonly AiSelfLearningService _ai;
 
         private const decimal MaxMarginPercent = 0.12m; // 12% hard cap margin
 
@@ -29,7 +30,8 @@ namespace VertexAutoTradeBinance8.Services
             AiLeverageService aiLeverage,
             AiMarketRegimeService marketRegimeService,
             SmartRegimeService smartRegime,
-            TradingOptionsResolver tradingResolver
+            TradingOptionsResolver tradingResolver,
+            AiSelfLearningService ai
         )
         {
             _logger = logger;
@@ -40,6 +42,7 @@ namespace VertexAutoTradeBinance8.Services
             _marketRegimeService = marketRegimeService;
             _smartRegime = smartRegime;
             _tradingResolver = tradingResolver;
+            _ai = ai;
         }
 
         public int GetPrecision(decimal step)
@@ -106,6 +109,17 @@ namespace VertexAutoTradeBinance8.Services
             decimal finalRisk =
      CalculateAdaptiveRisk(signal, baseRisk, riskMult);
 
+            // =============================================================
+            // AI WINRATE ADJUSTMENT
+            // =============================================================
+            var winRate = _ai.GetWinRate(signal.Side);
+
+            if (winRate < 0.45m)
+                finalRisk *= 0.7m;
+            else if (winRate > 0.60m)
+                finalRisk *= 1.2m;
+
+
             if (finalRisk <= 0)
             {
                 LastRejectReason = "Final risk <= 0";
@@ -119,9 +133,14 @@ namespace VertexAutoTradeBinance8.Services
             // -----------------------------
             decimal riskNotional = riskBudget / slPercent;
             decimal leverageCapNotional = balance * leverage * 0.98m;
-            decimal marginCapNotional = balance * MaxMarginPercent * leverage;
+            
+            decimal marginCapNotional =
+    balance < 50
+        ? balance * leverage   // 🔥 отключаем ограничение
+        : balance * MaxMarginPercent * leverage;
 
             decimal finalNotional = Math.Min(riskNotional, Math.Min(leverageCapNotional, marginCapNotional));
+            
             if (finalNotional <= 0)
             {
                 LastRejectReason = "Final notional <= 0";

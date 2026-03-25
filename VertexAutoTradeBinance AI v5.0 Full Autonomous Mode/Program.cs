@@ -20,6 +20,7 @@ using VertexAutoTradeBinance8.Services.State;
 using VertexAutoTradeBinance8.Services.Trading;
 using VertexAutoTradeBinance8.Services.Ws;
 using VertexAutoTradeBinance8.Strategy;
+using static VertexAutoTradeBinance8.Services.OrderExecutor;
 // остальные using как у тебя
 
 namespace VertexAutoTradeBinance8;
@@ -118,12 +119,21 @@ public class Program
 
                     services.AddSingleton<TradingOptionsResolver>();
 
-                    services.Configure<TestModeOptions>(ctx.Configuration.GetSection("TestMode"));
-                    services.Configure<HedgeKillSettings>(ctx.Configuration.GetSection("HedgeKill"));
-                    services.Configure<SignalConfidenceSettings>(ctx.Configuration.GetSection("SignalConfidence"));
+                    services.Configure<TestModeOptions>(
+     ctx.Configuration.GetSection("TestMode"));
+
+                    services.Configure<HedgeKillSettings>(
+                        ctx.Configuration.GetSection("HedgeKill"));
+
+                    services.Configure<SignalConfidenceSettings>(
+                        ctx.Configuration.GetSection("SignalConfidence"));
+
+                    services.Configure<TradingSettings>(
+                        ctx.Configuration.GetSection("TradingSettings"));
+
                     services.AddSingleton<ConfidenceResolver>();
 
-                   services.AddSingleton(sp =>
+                    services.AddSingleton(sp =>
                        sp.GetRequiredService<IOptions<TradingOptions>>().Value);
 
                     services.AddSingleton(sp =>
@@ -134,8 +144,7 @@ public class Program
 
                     services.AddSingleton(sp =>
                         sp.GetRequiredService<IOptions<SignalConfidenceSettings>>().Value);
-
-
+                 
                     services.AddSingleton<BinanceRestClient>(sp =>
                     {
                         var cfg = sp.GetRequiredService<IOptions<BinanceOptions>>().Value;
@@ -210,7 +219,12 @@ public class Program
 
                     // ===== AI / CORE =====
                     services.AddSingleton<AiSelfLearningService>();
-                    services.AddSingleton<AiMarketRegimeService>();
+                   
+                  services.AddSingleton<AiMarketRegimeService>();
+                    services.AddSingleton<Lazy<MarketDataService>>(sp => new Lazy<MarketDataService>(() => sp.GetRequiredService<MarketDataService>()));
+                    services.AddSingleton<EntryTracker>();
+                    services.AddSingleton<CooldownGuard>();
+
                     services.AddSingleton<AiPatternEngineService>();
                     services.AddSingleton<AiCorrelationService>();
                     services.AddSingleton<AiLiquidityClusterService>();

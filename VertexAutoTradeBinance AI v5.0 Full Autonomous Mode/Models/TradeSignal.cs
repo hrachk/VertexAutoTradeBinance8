@@ -11,11 +11,10 @@ public enum SignalSide
 
 public class TradeSignal
 {
-    public decimal? LiquidityScore { get; set; }      // 0..1
+    public decimal? LiquidityScore { get; set; }
     public bool LiquiditySoftWarning { get; set; }
+    public decimal SizeMultiplier { get; set; } = 1m;
     public string? LiquidityDetails { get; set; }
-    public decimal SizeMultiplier { get; set; } = 1.0m;  // 0.2..1.0
-
 
     public string Symbol { get; set; } = string.Empty;
     public SignalSide Side { get; set; }

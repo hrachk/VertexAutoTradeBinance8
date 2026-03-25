@@ -41,21 +41,17 @@ public sealed class SymbolLiquidityScanner
             using var client = _factory.CreateRestClient();
 
             // =========================
-            // 1) TRY TICKERS (3 RETRIES)
+            // 1) TRY TICKERS (3 RETRIES с безопасной обработкой ошибок)
             // =========================
             for (int attempt = 1; attempt <= 3; attempt++)
             {
                 try
                 {
                     var res = await client.UsdFuturesApi.ExchangeData.GetTickersAsync(ct);
-                    if (res.Success && res.Data != null)
+                    if (res.Success && res.Data != null && res.Data.Count() > 0)
                     {
                         var topVolumeCount = _cfg.GetValue<int?>("SymbolSelection:Auto:TopVolumeCount") ?? 60;
-
-                        // scanner должен иметь запас, иначе universe будет "липнуть" к pinned
                         var cap = Math.Clamp(Math.Max(topVolumeCount * 2, 60), 40, 200);
-
-                       
 
                         var list = res.Data
                             .Where(t =>
@@ -79,30 +75,34 @@ public sealed class SymbolLiquidityScanner
                             _cachedAtUtc = DateTime.UtcNow;
 
                             _logger.LogInformation(
-                                "[SYMBOL] Tickes OK: {cnt} symbols (attempt {a})",
+                                "[SYMBOL] Tickers OK: {cnt} symbols (attempt {a})",
                                 list.Count, attempt);
 
                             return _cache;
                         }
                     }
 
-                    _logger.LogWarning(
-                        "[SYMBOL] GetTickers empty (attempt {a})",
-                        attempt);
+                    _logger.LogWarning("[SYMBOL] GetTickers empty (attempt {a})", attempt);
+                }
+                catch (OperationCanceledException)
+                {
+                    _logger.LogWarning("[SYMBOL] GetTickers TIMEOUT (attempt {a})", attempt);
+                }
+                catch (Exception ex) when (ex.Message.Contains("HTTP/2") || ex.Message.Contains("PROTOCOL_ERROR"))
+                {
+                    _logger.LogWarning(ex, "[SYMBOL] GetTickers HTTP/2 PROTOCOL_ERROR (attempt {a})", attempt);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(
-                        ex,
-                        "[SYMBOL] GetTickers error (attempt {a})",
-                        attempt);
+                    _logger.LogWarning(ex, "[SYMBOL] GetTickers OTHER ERROR (attempt {a})", attempt);
                 }
 
-                await Task.Delay(400 * attempt, ct);
+                // exponential backoff (умеренный, чтобы не перегружать Binance)
+                await Task.Delay(1000 * attempt, ct);
             }
 
             // ======================================================
-            // 2) FALLBACK: ExchangeInfo (НЕ ТИКЕРЫ, НО ЖИВОЙ UNIVERSE)
+            // 2) FALLBACK: ExchangeInfo (не трогаем логику, просто безопасно)
             // ======================================================
             _logger.LogError("[SYMBOL] GetTickers FAILED → FALLBACK ExchangeInfo");
 
@@ -127,28 +127,21 @@ public sealed class SymbolLiquidityScanner
                     _cache = list;
                     _cachedAtUtc = DateTime.UtcNow;
 
-                    _logger.LogWarning(
-                        "[SYMBOL] ExchangeInfo fallback used: {cnt} symbols",
-                        list.Count);
-
+                    _logger.LogWarning("[SYMBOL] ExchangeInfo fallback used: {cnt} symbols", list.Count);
                     return _cache;
                 }
             }
 
             // ==========================================
-            // 3) LAST RESORT: NEVER EMPTY (KEEP OLD CACHE)
+            // 3) LAST RESORT: KEEP OLD CACHE
             // ==========================================
             if (_cache.Count > 0)
             {
-                _logger.LogCritical(
-                    "[SYMBOL] REST DEAD → using LAST KNOWN GOOD cache size={cnt}",
-                    _cache.Count);
-
+                _logger.LogCritical("[SYMBOL] REST DEAD → using LAST KNOWN GOOD cache size={cnt}", _cache.Count);
                 return _cache;
             }
 
-            throw new InvalidOperationException(
-                "SymbolLiquidityScanner: no market data available at all");
+            throw new InvalidOperationException("SymbolLiquidityScanner: no market data available at all");
         }
         finally
         {

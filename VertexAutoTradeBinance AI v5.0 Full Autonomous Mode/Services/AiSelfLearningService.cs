@@ -288,7 +288,6 @@ namespace VertexAutoTradeBinance8.Services
                 : 1.0m;
         }
 
-
         // =====================================================================
         // DECISION TRACE LEARNING (NEW LAYER)
         // =====================================================================
@@ -370,79 +369,7 @@ namespace VertexAutoTradeBinance8.Services
                 }
             }
         }
-
-
-        //      public void RecordMarketStateTriggered(
-        //    string reason,
-        //    string symbol,
-        //    string timeframe,
-        //    MarketRegime regime,
-        //    decimal slope,
-        //    decimal volatility,
-        //    decimal atr,
-        //    decimal confidence,
-        //    bool skipSnapshot = true
-        //)
-        //      {
-        //          lock (_lock)
-        //          {
-        //              var state = new MarketState
-        //              {
-        //                  Symbol = symbol,
-        //                  Timeframe = timeframe,
-        //                  Regime = regime,
-        //                  TrendSlopePercent = slope,
-        //                  VolatilityPercent = volatility,
-        //                  Atr = atr,
-        //                  Confidence = confidence,
-        //                  Time = DateTime.UtcNow,
-        //                  Reason = reason
-        //              };
-
-        //              AddMarketState(state);
-
-        //              // =====================================================
-        //              // 🔥 BOOTSTRAP STATS (SAFE, NON-DESTRUCTIVE)
-        //              // =====================================================
-        //              if (!_stats.ContainsKey(symbol))
-        //              {
-        //                  _stats[symbol] = new Dictionary<MarketRegime, RegimeStats>
-        //                  {
-        //                      [regime] = new RegimeStats
-        //                      {
-        //                          Regime = regime,
-        //                          Count = 0,
-        //                          Wins = 0,
-        //                          Losses = 0,
-        //                          AvgPnl = 0,
-        //                          RiskWeight = 1.0m
-        //                      }
-        //                  };
-        //              }
-        //              else if (!_stats[symbol].ContainsKey(regime))
-        //              {
-        //                  _stats[symbol][regime] = new RegimeStats
-        //                  {
-        //                      Regime = regime,
-        //                      Count = 0,
-        //                      Wins = 0,
-        //                      Losses = 0,
-        //                      AvgPnl = 0,
-        //                      RiskWeight = 1.0m
-        //                  };
-        //              }
-
-        //              if (_marketStates.Count > 5000)
-        //                  _marketStates.RemoveRange(0, 2500);
-
-        //              _logger.LogDebug(
-        //                  "[HYBRID][{Symbol}] MarketState logged ({Reason}) slope={Slope} vol={Vol} atr={Atr} conf={Conf}",
-        //                  symbol, reason, slope, volatility, atr, confidence);
-        //          }
-
-        //          if (!skipSnapshot)
-        //              TrySnapshot();
-        //      }
+ 
         public void RecordMarketStateTriggered(
           string reason,
           string symbol,
@@ -490,80 +417,38 @@ namespace VertexAutoTradeBinance8.Services
                 TrySnapshot();
         }
 
-        // =====================================================================
-        // BASE MARKET STATE (SmartRegimeService → StrategyEngine)
-        // =====================================================================
-        public void RecordMarketState(
-           string symbol,
-           string timeframe,
-           MarketRegime regime,
-           decimal trendSlopePercent,
-           decimal volatilityPercent,
-           decimal atr,
-           decimal confidence)
-        {
-            var state = new MarketState
-            {
-                Symbol = symbol,
-                Timeframe = timeframe,
-                Regime = regime,
-                TrendSlopePercent = trendSlopePercent,
-                VolatilityPercent = volatilityPercent,
-                Atr = atr,
-                Confidence = confidence,
-                Time = DateTime.UtcNow,
-                Reason = "BASE_REGIME"
-            };
-
-            AddMarketState(state);
-
-            _logger.LogInformation(
-                "[HYBRID] MarketState tick {symbol} {tf} {regime}",
-                symbol, timeframe, regime);
-
-            TryHybridPeriodicSnapshot(
-                symbol,
-                timeframe,
-                regime,
-                trendSlopePercent,
-                volatilityPercent,
-                atr,
-                confidence);
-        }
-
-
-
+     
         // 3) BACKGROUND MARKET LEARNING – глобальный 30s snapshot по режиму
         public void TryHybridPeriodicSnapshot(
     string symbol,
-    string timeframe,
-    MarketRegime regime,
-    decimal slope,
-    decimal volatility,
-    decimal atr,
-    decimal confidence)
-        {
-            if (DateTime.UtcNow - _lastHybridSnapshot < HybridInterval)
-                return;
+        string timeframe,
+        MarketRegime regime,
+        decimal slope,
+        decimal volatility,
+        decimal atr,
+        decimal confidence)
+            {
+                if (DateTime.UtcNow - _lastHybridSnapshot < HybridInterval)
+                    return;
 
-            _lastHybridSnapshot = DateTime.UtcNow;
+                _lastHybridSnapshot = DateTime.UtcNow;
 
-            // 🔥 hybrid snapshot — это фон, но он ВАЖЕН
-            Save(force: true);
-            _lastSnapshot = DateTime.UtcNow;
+                // 🔥 hybrid snapshot — это фон, но он ВАЖЕН
+                Save(force: true);
+                _lastSnapshot = DateTime.UtcNow;
 
-            RecordMarketStateTriggered(
-    reason: "PERIODIC_30s",
-    symbol: symbol,
-    timeframe: timeframe,
-    regime: regime,
-    slope: slope,
-    volatility: volatility,
-    atr: atr,
-    confidence: confidence,
-    skipSnapshot: false   // ✅ ВАЖНО
-);
-        }
+                RecordMarketStateTriggered(
+                    reason: "PERIODIC_30s",
+                    symbol: symbol,
+                    timeframe: timeframe,
+                    regime: regime,
+                    slope: slope,
+                    volatility: volatility,
+                    atr: atr,
+                    confidence: confidence,
+                    skipSnapshot: false   // ✅ ВАЖНО
+                );
+            }
           
         // =====================================================================
         // 2) TRADE ENTRY (вызывается из PositionSupervisor / TradeResultMonitor)
@@ -630,7 +515,6 @@ namespace VertexAutoTradeBinance8.Services
             Save(force: true);
             _lastSnapshot = DateTime.UtcNow;
         }
-
 
         private void UpdateStats(string symbol, MarketRegime regime, decimal pnl)
         {
@@ -703,7 +587,6 @@ namespace VertexAutoTradeBinance8.Services
             s.RiskWeight = Math.Clamp(s.RiskWeight, 0.65m, 1.35m);
         }
 
-
         public decimal GetGateStrictness(
             string symbol,
             MarketRegime regime,
@@ -727,7 +610,6 @@ namespace VertexAutoTradeBinance8.Services
             return 1.0m;
         }
 
-
         // =====================================================================
         // AI RISK (для StrategyEngine / AiLeverage / RiskManager)
         // =====================================================================
@@ -749,52 +631,52 @@ namespace VertexAutoTradeBinance8.Services
         // AI TREND PREDICTOR (QUANT-REALTIME MAX)
         // =====================================================================
         public AiTrendPrediction PredictTrend(
-      string symbol,
-      MarketRegime regime,
-      decimal slope,
-      decimal volatility)
-        {
-            List<MarketState> recent;
-
-            lock (_lock)
+          string symbol,
+          MarketRegime regime,
+          decimal slope,
+          decimal volatility)
             {
-                recent = _marketStates
-                    .Where(x => x.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
-                    .OrderByDescending(x => x.Time)
-                    .Take(80)  // Чуть больше истории для сглаживания
-                    .ToList();
-            }
+                List<MarketState> recent;
 
-            if (recent.Count < 10)
-                return new AiTrendPrediction(0, 0.20m, 1.00m);
+                lock (_lock)
+                {
+                    recent = _marketStates
+                        .Where(x => x.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
+                        .OrderByDescending(x => x.Time)
+                        .Take(80)  // Чуть больше истории для сглаживания
+                        .ToList();
+                }
 
-            decimal avgSlope = recent.Average(x => x.TrendSlopePercent);
-            decimal avgConf = recent.Average(x => x.Confidence);
-            decimal avgVol = recent.Average(x => x.VolatilityPercent);
+                if (recent.Count < 10)
+                    return new AiTrendPrediction(0, 0.20m, 1.00m);
 
-            int dir = avgSlope > 0.001m ? 1 : avgSlope < -0.001m ? -1 : 0;
+                decimal avgSlope = recent.Average(x => x.TrendSlopePercent);
+                decimal avgConf = recent.Average(x => x.Confidence);
+                decimal avgVol = recent.Average(x => x.VolatilityPercent);
+
+                int dir = avgSlope > 0.001m ? 1 : avgSlope < -0.001m ? -1 : 0;
        
-            decimal rawConfidence =
-            Math.Clamp(
-            Math.Abs(avgSlope) * 25m + avgConf,
-            0.05m,
-            0.85m);
+                decimal rawConfidence =
+                Math.Clamp(
+                Math.Abs(avgSlope) * 25m + avgConf,
+                0.05m,
+                0.85m);
 
-            decimal confidence = ApplyConfidenceDecay(
-            rawConfidence,
-            recent[0].Time   // последнее состояние рынка
-            );
+                decimal confidence = ApplyConfidenceDecay(
+                rawConfidence,
+                recent[0].Time   // последнее состояние рынка
+                );
 
 
-            if (avgVol < 0.005m)
-                confidence += 0.10m;
+                if (avgVol < 0.005m)
+                    confidence += 0.10m;
 
-            confidence = Math.Min(confidence, 0.85m);
+                confidence = Math.Min(confidence, 0.85m);
 
-            decimal rrBias = dir == 0 ? 1.00m : 0.90m;
+                decimal rrBias = dir == 0 ? 1.00m : 0.90m;
 
-            return new AiTrendPrediction(dir, confidence, rrBias);
-        }
+                return new AiTrendPrediction(dir, confidence, rrBias);
+            }
          
         public AiLearningSnapshot ExportState()
         {
@@ -841,7 +723,6 @@ namespace VertexAutoTradeBinance8.Services
                 }
             }
         }
-
 
         // =====================================================================
         // SAVE / LOAD (v7 – с Meta-блоком, но совместимо со старым форматом)
@@ -914,7 +795,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         private static readonly Mutex _saveMutex =
-    new(false, "Global\\VERTEX_AI_LEARNING_SAVE");
+         new(false, "Global\\VERTEX_AI_LEARNING_SAVE");
 
         private void SaveSnapshotAtomic(string json)
         {
@@ -945,7 +826,6 @@ namespace VertexAutoTradeBinance8.Services
                 _saveMutex.ReleaseMutex();
             }
         }
-
 
         private void Load()
         {
@@ -1178,7 +1058,6 @@ namespace VertexAutoTradeBinance8.Services
                 );
             return snap;
         } 
-
         // ---------------------------------------------------------------------
         // DASHBOARD EXPORT: MarketStates (фоновые данные)
         // ---------------------------------------------------------------------
@@ -1192,7 +1071,6 @@ namespace VertexAutoTradeBinance8.Services
                     .ToList();
             }
         }
-
         // ---------------------------------------------------------------------
         // DASHBOARD EXPORT: Trades (сделки для обучения)
         // ---------------------------------------------------------------------
@@ -1210,27 +1088,7 @@ namespace VertexAutoTradeBinance8.Services
         // ---------------------------------------------------------------------
         // AI META: WinRate (for SymbolRegistry dynamic cap)
         // ---------------------------------------------------------------------
-   
-        public decimal GetWinRate(
-    SignalSide side,
-    int lastN = 30,
-    int minTrades = 10)
-        {
-            lock (_lock)
-            {
-                var trades = _tradeHistory
-                    .Where(t => t.Side == side)
-                    .OrderByDescending(t => t.Time)
-                    .Take(lastN)
-                    .ToList();
-
-                if (trades.Count < minTrades)
-                    return 0.55m; // neutral bootstrap
-
-                var wins = trades.Count(t => t.Pnl > 0);
-                return (decimal)wins / trades.Count;
-            }
-        }
+  
         public void RecordSimulatedTrade(
         string symbol,
         string side,
@@ -1285,6 +1143,48 @@ namespace VertexAutoTradeBinance8.Services
             TrySnapshot();
         }
 
+        // =====================================================================
+        // BASE MARKET STATE (SmartRegimeService → StrategyEngine)
+        // =====================================================================
+        public void RecordMarketState(
+           string symbol,
+           string timeframe,
+           MarketRegime regime,
+           decimal trendSlopePercent,
+           decimal volatilityPercent,
+           decimal atr,
+           decimal confidence)
+        {
+            var state = new MarketState
+            {
+                Symbol = symbol,
+                Timeframe = timeframe,
+                Regime = regime,
+                TrendSlopePercent = trendSlopePercent,
+                VolatilityPercent = volatilityPercent,
+                Atr = atr,
+                Confidence = confidence,
+                Time = DateTime.UtcNow,
+                Reason = "BASE_REGIME"
+            };
+
+            AddMarketState(state);
+
+            _logger.LogInformation(
+                "[HYBRID] MarketState tick {symbol} {tf} {regime}",
+                symbol, timeframe, regime);
+
+            TryHybridPeriodicSnapshot(
+                symbol,
+                timeframe,
+                regime,
+                trendSlopePercent,
+                volatilityPercent,
+                atr,
+                confidence);
+        }
+
+
         public decimal GetRecentPnL(
         string symbol,
         SignalSide side,
@@ -1314,6 +1214,28 @@ namespace VertexAutoTradeBinance8.Services
                 return sum;
             }
         }
+
+
+        public decimal GetWinRate(
+        SignalSide side,
+        int lastN = 30,
+        int minTrades = 10)
+            {
+                lock (_lock)
+                {
+                    var trades = _tradeHistory
+                        .Where(t => t.Side == side)
+                        .OrderByDescending(t => t.Time)
+                        .Take(lastN)
+                        .ToList();
+
+                    if (trades.Count < minTrades)
+                        return 0.55m; // neutral bootstrap
+
+                    var wins = trades.Count(t => t.Pnl > 0);
+                    return (decimal)wins / trades.Count;
+                }
+            }
 
         public decimal GetSymbolScore(string symbol, SignalSide side)
         {
