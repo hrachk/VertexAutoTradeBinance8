@@ -1809,9 +1809,9 @@ namespace VertexAutoTradeBinance8.Strategy
                 }
                 // 🔴 FIX: DO NOT CHASE BIG IMPULSE
                 decimal maxImpulse =
-                 trendLike ? 1.52m :
-                 rangeLike ? 1.08m :
-                 1.34m;
+                 trendLike ? 2.2m :
+                 rangeLike ? 1.4m :
+                 1.8m;
 
                 if (moveAtr < maxImpulse && pullback == null && earlyTrend == null)
                 {
@@ -1838,22 +1838,17 @@ namespace VertexAutoTradeBinance8.Strategy
             decimal pos = (last.ClosePrice - sLo) / (sHi - sLo);
 
             // ❌ запрещаем continuation в конце движения
-            if (pos > 0.75m && smart.TrendSlopePercent > 0)
-            {
+            if (pos > 0.85m && smart.TrendSlopePercent > 0)
                 continuation = null;
-            }
 
-            // ❌ запрещаем continuation внизу даун-тренда
-            if (pos < 0.25m && smart.TrendSlopePercent < 0)
-            {
+            if (pos < 0.15m && smart.TrendSlopePercent < 0)
                 continuation = null;
-            }
 
             baseSignal =
-    pullback ??
-    earlyTrend ??
-    continuation ??
-    (trendLike ? null : liquidity);
+     pullback ??
+     earlyTrend ??
+     continuation ??
+     liquidity; // 🔥 ВСЕГДА fallback
 
             if (baseSignal == null)
             {
@@ -3468,7 +3463,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
                 if (!trap.Allow)
                 {
-                    baseSignal.Confidence = (baseSignal.Confidence ?? finalConfidence) * 0.7m;
+                    baseSignal.Confidence = (baseSignal.Confidence ?? finalConfidence) * 0.85m;
                     _engineState.LastEntryDecision = "WARN_TRAP";
                 }
                 else
@@ -3477,8 +3472,14 @@ namespace VertexAutoTradeBinance8.Strategy
                 }
 
                 finalConfidence = baseSignal.Confidence ?? finalConfidence;
+                _engineState.ConfidenceRaw = finalConfidence;
+                _engineState.ConfidencePercent = (int)(finalConfidence * 100);
+                _engineState.ConfidenceLevel =
+                   finalConfidence >= cfg.Bands.HighFrom ? "HIGH" :
+                   finalConfidence >= cfg.Bands.MediumFrom ? "MEDIUM" :
+                   finalConfidence >= cfg.MinEntry ? "LOW" :
+                   "BELOW_ENTRY";
 
- 
                 if (IsBadEntryLocation(klines, baseSignal))
                 {
                     baseSignal.Confidence *= 0.7m;
