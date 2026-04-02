@@ -22,18 +22,10 @@ lAyOcVCw4ohWkRvBZdYZscmF2Ps7GR5f0q8BJnAzz8ya8Vvw7KcSJtsYWrGLadsE
  
 
  Hrach test trading ==================
-
-
 API Key
-QJ4Fqi000ZkasafssArOq3Df1EnBEYnhL4K0ICGmZNNQhrz7MpwHNW69xlAcMz3B
+3dykCG2p5eTnJjpQkifdmpRL19c5h85DOgC1qezVReMpVP1KfUfxzhg2etBOItfX
 Secret Key
-VzPlLCNinewk6bcVMFPlHYvo5TFJCIx7iJOuZpHSAFvD8rthGHzcoocFYlXELs0S
-
-SPOT
-API Key: WP5j2ywxnX0KpaBzFhGULIjTfqG4NyRXsCFsIUEOLlZ8XmhBqVThSBLfZ2TIa1Jv
-Secret Key: A7EpnSuY7LTQgdXAoUuBXJ7wxmOmJMgnYlSVOXhJMKcjsz5jKLcx0uwDjuThVPiv
-
-
+ZrQZlCeLL2TLICUGJgx2O5gyHAVpj50Wn5Tk0n2ieli4NLT80A0TTLvfWJsndvPB
  ================================
 
  ==HRACH REAL TRADING========================

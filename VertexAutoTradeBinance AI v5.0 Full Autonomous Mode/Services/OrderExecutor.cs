@@ -37,7 +37,7 @@ namespace VertexAutoTradeBinance8.Services
         private const decimal AGGR_LIMIT_OFFSET_PCT = 0.0006m;  // 0.06% агрессивный лимит (тюнится)
         private const decimal MARKET_FALLBACK_MAX_SLIP_PCT = 0.0015m; // 0.15% макс. слип для fallback-market
         private bool? _isHedgeMode;
-        private const int MAX_ENTRIES_PER_SYMBOL = 2;
+        private const int MAX_ENTRIES_PER_SYMBOL = 4;
         private const decimal MAX_LIMIT_STALE_DRIFT = 0.0047m; // 0.45%
         private readonly IOptionsMonitor<TradingSettings> _tradingSettings;
 
@@ -413,8 +413,8 @@ namespace VertexAutoTradeBinance8.Services
          ? (last.ClosePrice - signalKlines[^3].ClosePrice) / signalKlines[^3].ClosePrice
          : 0m;
 
-                bool bigDump = move <= -0.025m; // было -5%
-                bool bigPump = move >= 0.03m;
+                bool bigDump = move <= -0.030m; // было -5%
+                bool bigPump = move >= 0.035m;
                 // 🚫 BLOCK SHORT IF 2 RED CANDLES IN A ROW (classic trap)
                 if (signal.Side == SignalSide.Sell && signalKlines.Count >= 3)
                 {
@@ -557,8 +557,6 @@ namespace VertexAutoTradeBinance8.Services
 
                 decimal atr = signal.Atr.Value;
 
-                
-
                 decimal microPullback;
 
                 if (smart.EntryProfile == "CT")
@@ -570,12 +568,9 @@ namespace VertexAutoTradeBinance8.Services
                 else
                     microPullback = atr * 0.31m;
 
-                 
-
                 // safety clamp
                 decimal maxPullback = entryPrice * 0.0045m; // 0.45%
                 microPullback = Math.Min(microPullback, maxPullback);
-
 
                 decimal finalEntryPrice = entryPrice;
 
@@ -584,7 +579,6 @@ namespace VertexAutoTradeBinance8.Services
                 else
                     finalEntryPrice += microPullback;
 
-               // finalEntryPrice = Math.Max(finalEntryPrice, tick); // защита от <=0
                 finalEntryPrice = Quantize(finalEntryPrice, tick); // Quantize только один раз
 
                 entryPrice = finalEntryPrice;
@@ -642,6 +636,7 @@ namespace VertexAutoTradeBinance8.Services
                 }
 
                 signal.CopyFrom(adjusted);
+
             }
             catch (Exception ex)
             {
