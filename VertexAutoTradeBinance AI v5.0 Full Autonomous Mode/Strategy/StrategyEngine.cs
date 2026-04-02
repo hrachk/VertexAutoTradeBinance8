@@ -3520,7 +3520,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 Confidence = finalConfidence;
                 _engineState.ConfidenceRaw = finalConfidence;
                 _engineState.ConfidencePercent = (int)(finalConfidence * 100);
-                var cfg = _confidenceCfg.Resolve(symbol);
+                 cfg = _confidenceCfg.Resolve(symbol);
                 _engineState.ConfidenceLevel =
                     finalConfidence >= cfg.Bands.HighFrom ? "HIGH" :
                     finalConfidence >= cfg.Bands.MediumFrom ? "MEDIUM" :

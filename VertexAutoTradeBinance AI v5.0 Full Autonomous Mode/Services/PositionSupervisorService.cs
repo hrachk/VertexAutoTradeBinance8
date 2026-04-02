@@ -78,6 +78,8 @@ namespace VertexAutoTradeBinance8.Services
         private const string BE_PREFIX = "BE_";
         private const string SL_PREFIX = "SL_";
         private const string TR_PREFIX = "TR_";
+        // 🔹 Для отслеживания сильных сигналов, чтобы пропускать мягкие фильтры
+        private readonly HashSet<string> _beOverrideForStrongTrend = new();
 
         public PositionSupervisorService(
             ILogger<PositionSupervisorService> logger,
@@ -221,15 +223,11 @@ namespace VertexAutoTradeBinance8.Services
             TakeProfit,
             ReverseSignal
         }
-
-
         public async Task SuperviseAsync(string symbol, TradeSignal? lastSignal, CancellationToken ct)
         {
             using var client = _factory.CreateRestClient();
 
-            // =========================
-            // 0) MANUAL SIGNAL
-            // =========================
+            // 0) MANUAL SIGNAL INJECTION
             if (lastSignal == null)
             {
                 var manualSignal = await _manualHandler.DetectManualAsync(client, symbol, ct);
@@ -240,15 +238,9 @@ namespace VertexAutoTradeBinance8.Services
                 }
             }
 
-            // =========================
             // 1) LOAD POSITIONS
-            // =========================
             var posInfo = await GetPositionsWithRetryAsync(client, symbol, ct);
-            if (!posInfo.Success || posInfo.Data == null)
-            {
-                _logger.LogWarning("[SUPERVISOR] No positions {symbol}", symbol);
-                return;
-            }
+            if (!posInfo.Success || posInfo.Data == null) return;
 
             var positions = posInfo.Data.Where(p => p.Symbol == symbol).ToList();
             var longPos = positions.FirstOrDefault(p => p.PositionSide == PositionSide.Long);
@@ -260,12 +252,9 @@ namespace VertexAutoTradeBinance8.Services
             bool hasLong = Math.Abs(longPos?.Quantity ?? 0m) > POSITION_EPS;
             bool hasShort = Math.Abs(shortPos?.Quantity ?? 0m) > POSITION_EPS;
 
-            // =========================
-            // 2) RESET / CLEANUP LIFECYCLE
-            // =========================
+            // 2) LIFECYCLE CLEANUP IF FLAT
             if (!hasLong && !hasShort)
             {
-                _logger.LogInformation("[LIFECYCLE] {symbol} fully flat → cleaning all orders & states", symbol);
                 await CleanupProtectiveOrdersAsync(client, symbol, PositionSide.Long, ct);
                 await CleanupProtectiveOrdersAsync(client, symbol, PositionSide.Short, ct);
 
@@ -273,14 +262,11 @@ namespace VertexAutoTradeBinance8.Services
                 _beStage.Clear();
                 _beMoved.Clear();
                 _pendingReset.Clear();
+                _beOverrideForStrongTrend.Clear();
                 return;
             }
 
-            // =========================
-            // 3) LOAD ORDERS & MARKET DATA
-            // =========================
-            var openOrders = await LoadOrdersAsync(client, symbol);
-
+            // 3) LOAD MARKET DATA
             IReadOnlyList<BinanceFuturesUsdtKline>? klines1m = null;
             SmartRegimeInfo? smart1m = null;
             decimal atr14_1m = 0m;
@@ -302,51 +288,64 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogWarning(ex, "[SUPERVISOR] Klines/SmartRegime load error {symbol}", symbol);
             }
 
-            // =========================
-            // 4) SMART TRAILING / BE / PARTIAL CLOSE PROBE
-            // =========================
-            if (smart1m != null && atr14_1m > 0)
+            // 3.5) SMART TREND OVERRIDE
+            if (smart1m != null && lastSignal != null)
             {
-                async Task ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
+                decimal dynamicThreshold = 0.4m + smart1m.VolatilityPercent / 2;
+                bool strongTrend = smart1m.SmartType == SmartRegimeType.SmartStrongTrend &&
+                                   smart1m.Confidence >= dynamicThreshold &&
+                                   smart1m.AllowAggressiveTrendEntries;
+                if (strongTrend)
                 {
-                    if (pos == null || Math.Abs(pos.Quantity) < POSITION_EPS)
-                    {
-                        // reset lifecycle for flat positions
-                        var key = BuildExitKey(symbol, side, pos?.EntryPrice ?? 0m);
-                        _pendingReset.TryRemove(key, out _);
-                        _beStage.TryRemove(key, out _);
-                        _beLevel.TryRemove(key, out _);
-                        _beMoved.TryRemove(key, out _);
-                        return;
-                    }
+                    if (longPos != null && Math.Abs(longPos.Quantity) > POSITION_EPS)
+                        _beOverrideForStrongTrend.Add(BuildExitKey(symbol, PositionSide.Long, longPos.EntryPrice));
 
-                    decimal qty = Math.Abs(pos.Quantity);
-                    decimal entry = pos.EntryPrice;
-                    decimal mark = pos.MarkPrice;
-                    var keyProbe = BuildExitKey(symbol, side, entry);
+                    if (shortPos != null && Math.Abs(shortPos.Quantity) > POSITION_EPS)
+                        _beOverrideForStrongTrend.Add(BuildExitKey(symbol, PositionSide.Short, shortPos.EntryPrice));
+                }
+            }
 
-                    if (qty <= 0 || entry <= 0 || mark <= 0) return;
+            // 4) SMART TRAILING / BE / PARTIAL CLOSE
+            async Task ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
+            {
+                if (pos == null || Math.Abs(pos.Quantity) < POSITION_EPS)
+                {
+                    var key = BuildExitKey(symbol, side, pos?.EntryPrice ?? 0m);
+                    _pendingReset.TryRemove(key, out _);
+                    _beStage.TryRemove(key, out _);
+                    _beLevel.TryRemove(key, out _);
+                    _beMoved.TryRemove(key, out _);
+                    _beOverrideForStrongTrend.Remove(key);
+                    return;
+                }
 
-                    // ================= ROI =================
-                    decimal roi = side == PositionSide.Long ? (mark - entry) / entry : (entry - mark) / entry;
+                decimal qty = Math.Abs(pos.Quantity);
+                decimal entry = pos.EntryPrice;
+                decimal mark = pos.MarkPrice;
+                var keyProbe = BuildExitKey(symbol, side, entry);
 
-                    // ================= CONFIG =================
-                    decimal MIN_BUFFER = _tradingSettings.CurrentValue.ToxicSymbols.Contains(symbol) ? 0.0061m : 0.0037m;
-                    decimal STEP = 0.0061m;
-                    decimal PARTIAL_STEP = 0.0240m;
-                    decimal PARTIAL_SIZE = _tradingSettings.CurrentValue.ToxicSymbols.Contains(symbol) ? 0.42m : 0.34m;
-                    decimal ATR = atr14_1m;
+                if (qty <= 0 || entry <= 0 || mark <= 0) return;
 
-                    // ================= BE LEVEL =================
-                    int level = (int)(roi / STEP);
-                    int prevLevel = _beLevel.GetOrAdd(keyProbe, 0);
-                    if (level > prevLevel)
-                    {
-                        _beLevel[keyProbe] = level;
-                        _logger.LogInformation("[BE LEVEL][{symbol}][{side}] {old} → {new} roi={roi:P2}", symbol, side, prevLevel, level, roi);
-                    }
+                // ROI
+                decimal roi = side == PositionSide.Long ? (mark - entry) / entry : (entry - mark) / entry;
 
-                    // ================= PARTIAL CLOSE =================
+                // CONFIG (через ATR)
+                decimal ATR = atr14_1m;
+                decimal STEP = ATR * 0.5m;
+                decimal PARTIAL_STEP = ATR * 2m;
+                decimal PARTIAL_SIZE = _tradingSettings.CurrentValue.ToxicSymbols.Contains(symbol) ? 0.42m : 0.34m;
+                decimal MIN_BUFFER = ATR * (_tradingSettings.CurrentValue.ToxicSymbols.Contains(symbol) ? 0.5m : 0.3m);
+
+                // BE LEVEL
+                int level = (int)(roi / STEP);
+                int prevLevel = _beLevel.GetOrAdd(keyProbe, 0);
+                if (level > prevLevel) _beLevel[keyProbe] = level;
+
+                bool skipSoftFilters = _beOverrideForStrongTrend.Contains(keyProbe);
+
+                // PARTIAL CLOSE
+                if (!skipSoftFilters)
+                {
                     int partialLevel = (int)(roi / PARTIAL_STEP);
                     int prevPartial = (int)_beStage.GetOrAdd(keyProbe, BeStage.None);
                     if (partialLevel > prevPartial && partialLevel >= 1)
@@ -356,67 +355,66 @@ namespace VertexAutoTradeBinance8.Services
                         closeQty = Math.Min(closeQty, Math.Round(qty * 0.9m, 8));
                         if (closeQty > 0)
                         {
-                            _logger.LogWarning("[PARTIAL CLOSE][{symbol}][{side}] qty={qty}", symbol, side, closeQty);
                             await ClosePartialAsync(client, symbol, side, closeQty, pos, ct);
                             qty -= closeQty;
                         }
                     }
-
-                    // ================= SMART TRAILING / SL =================
-                    decimal baseDistance = ATR * 1.2m;
-                    decimal profitDistance = side == PositionSide.Long ? mark - entry : entry - mark;
-                    decimal dynamicBuffer = Math.Max(ATR * 0.8m, MIN_BUFFER);
-
-                    decimal newSl = profitDistance <= 0
-                        ? entry
-                        : profitDistance < baseDistance
-                            ? side == PositionSide.Long ? mark - dynamicBuffer : mark + dynamicBuffer
-                            : side == PositionSide.Long ? mark - baseDistance : mark + baseDistance;
-
-                    if (newSl <= 0 || Math.Abs(newSl - mark) < ATR * 0.1m) return;
-
-                    // smart cooldown
-                    var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                    var cooldown = _tradingSettings.CurrentValue.ToxicSymbols.Contains(symbol) ? 3000 : 800;
-                    if (_beMoved.TryGetValue(keyProbe, out var lastMove) && now - lastMove < cooldown) return;
-                    _beMoved[keyProbe] = now;
-
-                    // cancel old SL orders
-                    var exitOrders = (await LoadOrdersAsync(client, symbol))
-                        .Where(o => o.PositionSide == side && o.Type == FuturesOrderType.StopMarket)
-                        .ToList();
-                    foreach (var o in exitOrders)
-                        await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, o.Id, ct: ct);
-
-                    await Task.Delay(80, ct);
-
-                    _logger.LogWarning("[SMART SL][{symbol}][{side}] entry={entry} mark={mark} → SL={sl} roi={roi:P2}", symbol, side, entry, mark, newSl, roi);
-
-                    await PlaceStopLossAtBeAsync(client, symbol, side, qty, newSl, pos, ct);
                 }
 
-                await ProbeSide(longPos, PositionSide.Long);
-                await ProbeSide(shortPos, PositionSide.Short);
+                // SMART TRAILING / SL
+                decimal baseDistance = ATR * 1.2m;
+                decimal profitDistance = side == PositionSide.Long ? mark - entry : entry - mark;
+                decimal dynamicBuffer = Math.Max(ATR * 0.8m, MIN_BUFFER);
+
+                decimal newSl = profitDistance <= 0
+                    ? entry
+                    : profitDistance < baseDistance
+                        ? side == PositionSide.Long ? mark - dynamicBuffer : mark + dynamicBuffer
+                        : side == PositionSide.Long ? mark - baseDistance : mark + baseDistance;
+
+                if (skipSoftFilters) newSl = entry;
+
+                // Cooldown BE MOVE
+                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                var cooldown = _tradingSettings.CurrentValue.ToxicSymbols.Contains(symbol) ? 3000 : 1000;
+                if (_beMoved.TryGetValue(keyProbe, out var lastMove) && now - lastMove < cooldown) return;
+                _beMoved[keyProbe] = now;
+
+                // Cancel **all old SL с префиксом BE**
+                var exitOrders = (await LoadOrdersAsync(client, symbol))
+                    .Where(o => o.PositionSide == side && o.Type == FuturesOrderType.StopMarket && o.ClientOrderId?.StartsWith(BE_PREFIX) == true)
+                    .ToList();
+                foreach (var o in exitOrders)
+                    await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, o.Id, ct: ct);
+
+                // Place new BE SL
+                await Task.Delay(90, ct);
+                await PlaceStopLossAtBeAsync(client, symbol, side, qty, newSl, pos, ct);
             }
 
-            // =========================
-            // 5) HANDLE SIDES
-            // =========================
+            if (smart1m != null && atr14_1m > 0)
+                await Task.WhenAll(
+                    ProbeSide(longPos, PositionSide.Long),
+                    ProbeSide(shortPos, PositionSide.Short)
+                );
+
+            // 5) HANDLE OPEN POSITIONS
             if (hasLong)
-                await HandleSideAsync(client, symbol, PositionSide.Long, longPos!, openOrders, lastSignal, klines1m, ct);
+                await HandleSideAsync(client, symbol, PositionSide.Long, longPos!, await LoadOrdersAsync(client, symbol), lastSignal, klines1m, ct);
             if (hasShort)
-                await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, openOrders, lastSignal, klines1m, ct);
+                await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, await LoadOrdersAsync(client, symbol), lastSignal, klines1m, ct);
         }
+
 
         // ===== PLACE BE SL =====
         private async Task PlaceStopLossAtBeAsync(
-       IBinanceRestClient client,
-       string symbol,
-       PositionSide side,
-       decimal qty,
-       decimal entryPrice,
-       BinancePositionDetailsUsdt pos,
-       CancellationToken ct)
+      IBinanceRestClient client,
+      string symbol,
+      PositionSide side,
+      decimal qty,
+      decimal entryPrice,
+      BinancePositionDetailsUsdt pos,
+      CancellationToken ct)
         {
             if (qty <= 0 || pos == null) return;
 
@@ -428,45 +426,34 @@ namespace VertexAutoTradeBinance8.Services
             var (qtyPrecision, pricePrecision) = await GetSymbolPrecisionsAsync(client, symbol);
             qty = await NormalizeQuantityAsync(symbol, side, qty, client, ct);
             entryPrice = await NormalizeTriggerPriceAsync(client, symbol, side, entryPrice, filters.tickSize, true, ct);
-
             entryPrice = RoundPrice(entryPrice, pricePrecision);
 
             var open = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
-
-            BinanceFuturesOrder? currentSl = null;
             decimal currentStop = 0m;
+
             if (open.Success)
             {
-                // ✅ проверяем текущий SL с нашим BE префиксом
-                currentSl = open.Data
-                    .FirstOrDefault(o => o.Type == FuturesOrderType.StopMarket &&
-                                         o.PositionSide == side &&
-                                         o.ClientOrderId != null &&
-                                         o.ClientOrderId.StartsWith(BE_PREFIX));
-            }
+                // ✅ отменяем все старые BE SL
+                var currentSlList = open.Data
+                    .Where(o => o.Type == FuturesOrderType.StopMarket &&
+                                o.PositionSide == side &&
+                                o.ClientOrderId != null &&
+                                o.ClientOrderId.StartsWith(BE_PREFIX))
+                    .ToList();
 
-            // --- Критический фикс PnL ---
-            if (currentSl != null && currentSl.StopPrice != null)
-            {
-                currentStop = currentSl.StopPrice.Value;
-
-                bool better =
-                    side == PositionSide.Long
-                    ? entryPrice > currentStop
-                    : entryPrice < currentStop;
-
-                if (!better)
+                foreach (var currentSl in currentSlList)
                 {
-                    // Текущий SL лучше или равен — ничего не делаем
-                    _logger.LogInformation("[BE MOVE][{symbol}][{side}] current SL {stop} is better than new {newSl}, skip", symbol, side, currentStop, entryPrice);
-                    return;
-                }
+                    currentStop = currentSl.StopPrice ?? 0m;
 
-                // Новый SL лучше — отменяем старый
-                var cancel = await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, orderId: currentSl.Id, ct: ct);
-                if (!cancel.Success)
-                {
-                    _logger.LogWarning("[BE MOVE][{symbol}][{side}] Failed to cancel old SL {stop}", symbol, side, currentStop);
+                    var cancel = await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, currentSl.Id, ct: ct);
+                    if (!cancel.Success)
+                    {
+                        _logger.LogWarning("[BE MOVE][{symbol}][{side}] Failed to cancel old SL {stop}", symbol, side, currentStop);
+                    }
+                    else
+                    {
+                        _logger.LogInformation("[BE MOVE][{symbol}][{side}] canceled old SL {stop}", symbol, side, currentStop);
+                    }
                 }
             }
 
@@ -490,28 +477,30 @@ namespace VertexAutoTradeBinance8.Services
             if (result.Success)
                 _logger.LogInformation("[BE MOVE][{symbol}][{side}] BE SL placed at {price} qty={qty}", symbol, side, entryPrice, qty);
             else
+            {
                 _logger.LogError("[BE MOVE][{symbol}][{side}] Failed: {msg}", symbol, side, result.Error?.Message);
 
-            // --- rollback старого SL, если новый не стал
-            if (!result.Success && currentSl != null)
-            {
-                _logger.LogError("[BE MOVE][{symbol}][{side}] rollback old SL", symbol, side);
-                await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
-                    symbol: symbol,
-                    side: orderSide,
-                    type: ConditionalOrderType.StopMarket,
-                    quantity: qty,
-                    positionSide: side,
-                    triggerPrice: currentStop,
-                    workingType: WorkingType.Mark,
-                    clientOrderId: $"{BE_PREFIX}{symbol}_{side}_rb_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
-                    priceProtect: true,
-                    ct: ct
-                );
+                // --- rollback старого SL, если новый не стал ---
+                if (currentStop > 0m)
+                {
+                    await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                        symbol: symbol,
+                        side: orderSide,
+                        type: ConditionalOrderType.StopMarket,
+                        quantity: qty,
+                        positionSide: side,
+                        triggerPrice: currentStop,
+                        workingType: WorkingType.Mark,
+                        clientOrderId: $"{BE_PREFIX}{symbol}_{side}_rb_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
+                        priceProtect: true,
+                        ct: ct
+                    );
+                    _logger.LogInformation("[BE MOVE][{symbol}][{side}] rollback old SL placed at {price}", symbol, side, currentStop);
+                }
             }
         }
 
-       private async Task HandleSideAsync(
+        private async Task HandleSideAsync(
        BinanceRestClient client,
        string symbol,
        PositionSide side,
@@ -566,24 +555,46 @@ namespace VertexAutoTradeBinance8.Services
 
                 _manualHandler.SetPrevState(key, pos.Quantity, pos.EntryPrice);
 
-                // =====================================================
-                // ❌ НЕТ ПОЗИЦИИ → ЧИСТИМ LIFECYCLE
-                // =====================================================
-                if (qtyAbs <= 0)
+            // =====================================================
+            // ❌ НЕТ ПОЗИЦИИ → ЧИСТИМ LIFECYCLE
+            // =====================================================
+            // =====================================================
+            // ❌ FULL POSITION CLOSED → CLEANUP ORDERS & LIFECYCLE
+            // =====================================================
+            if (qtyAbs <= 0)
+            {
+                _logger.LogInformation("[SUPERVISOR] {symbol} {side}: fully flat → cleanup all SL/TP orders", symbol, side);
+
+                var openOrders = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
+                if (openOrders.Success)
                 {
-                    _lifecycle.Clear(BuildExitKey(symbol, side, prevEntry));
+                    var ordersToCancel = openOrders.Data
+                        .Where(o => o.PositionSide == side &&
+                                    (o.Type == FuturesOrderType.StopMarket || o.Type == FuturesOrderType.TakeProfitMarket))
+                        .ToList();
 
-                    _logger.LogInformation(
-                        "[SUPERVISOR] {symbol} {side}: no position",
-                        symbol, side);
-
-                    return;
+                    foreach (var o in ordersToCancel)
+                    {
+                        await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, o.Id, ct: ct);
+                        _logger.LogInformation("[SUPERVISOR] {symbol} {side}: canceled leftover order {id}", symbol, side, o.Id);
+                    }
                 }
 
-                // =====================================================
-                // 📌 ENTRY RESOLVE (если Binance не дал entry)
-                // =====================================================
-                decimal entry = pos.EntryPrice;
+                // Очистка локальных lifecycle-хранилищ
+                _beLevel.Clear();
+                _beStage.Clear();
+                _beMoved.Clear();
+                _pendingReset.Clear();
+                _earlyTpDone.Clear();
+                _lifecycle.Clear(BuildExitKey(symbol, side, prevEntry));
+
+                return;
+            }
+
+            // =====================================================
+            // 📌 ENTRY RESOLVE (если Binance не дал entry)
+            // =====================================================
+            decimal entry = pos.EntryPrice;
 
                 if (entry <= 0)
                 {
@@ -643,6 +654,7 @@ namespace VertexAutoTradeBinance8.Services
 
            
             }
+
        private async Task ClosePartialChunkedAsync(
        IBinanceRestClient client,
        string symbol,
