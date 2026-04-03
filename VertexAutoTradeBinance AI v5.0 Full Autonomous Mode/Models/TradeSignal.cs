@@ -88,9 +88,7 @@ public class TradeSignal
         StopLoss = src.StopLoss;
 
         var tps = src.TakeProfits;
-        TakeProfits = (tps != null && tps.Count > 0)
-            ? new List<decimal>(tps)
-            : null;
+        TakeProfits = tps;
 
         Confidence = src.Confidence;
         Reason = src.Reason;

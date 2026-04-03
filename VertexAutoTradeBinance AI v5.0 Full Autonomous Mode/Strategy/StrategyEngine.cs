@@ -2082,7 +2082,7 @@ namespace VertexAutoTradeBinance8.Strategy
             // =========================
             // SOFT SLOPE CHECK (НЕ БЛОКИРУЕТ)
             // =========================
-            var slopeLock = 0.006m + smart.VolatilityPercent * 1.0m;
+            var slopeLock = 0.007m + smart.VolatilityPercent * 1.1m;
             slopeLock = Math.Clamp(slopeLock, 0.005m, 0.020m);
 
             bool slopeUp = smart.TrendSlopePercent > slopeLock;
@@ -2345,8 +2345,8 @@ namespace VertexAutoTradeBinance8.Strategy
                 }
             }
 
-            var slopeLock = 0.008m + smart.VolatilityPercent * 1.2m;
-            slopeLock = Math.Clamp(slopeLock, 0.006m, 0.025m);
+            var slopeLock = 0.007m + smart.VolatilityPercent * 1.1m;
+            slopeLock = Math.Clamp(slopeLock, 0.005m, 0.020m);
 
             bool slopeUp = smart.TrendSlopePercent > slopeLock;
             bool slopeDown = smart.TrendSlopePercent < -slopeLock;
@@ -2418,7 +2418,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     // 🔥 allow strong signals
                     var conf = signal.Confidence ?? 0m;
 
-                    bool strongSignal = conf >= 0.45m || signal.IsSuperSignal;
+                bool strongSignal = conf >= 0.58m || signal.IsSuperSignal;
 
                     // 🔥 allow continuation / momentum setups
                     bool momentum =
@@ -2427,11 +2427,12 @@ namespace VertexAutoTradeBinance8.Strategy
 
                     // 🔥 allow if aligned with trend pressure
                     bool aligned =
-                        (smart.TrendSlopePercent < 0 && signal.Side == SignalSide.Sell) ||
-                        (smart.TrendSlopePercent > 0 && signal.Side == SignalSide.Buy);
+                        (smart.TrendSlopePercent < -0.5m && signal.Side == SignalSide.Sell) ||
+                        (smart.TrendSlopePercent > 0.5m && signal.Side == SignalSide.Buy);
+                 
 
-                    // 🔥 если сильный и по тренду — НЕ БЛОКИРУЕМ
-                    if ((strongSignal && aligned) || momentum)
+                // 🔥 если сильный и по тренду — НЕ БЛОКИРУЕМ
+                if ((strongSignal && aligned) || momentum)
                     {
                         signal.Confidence *= 0.82m;
 
@@ -2478,70 +2479,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 }
                 catch { }
             }
-            // ------------------------------------------------------------------
-            // 2) LiquidityCluster — async refinement / adjustment
-            // ------------------------------------------------------------------
-            TradeSignal? after;
-            try
-            {
-                after = await _liquidityClusterService
-                    .FilterAndAdjustAsync(signal, ct)
-                    .ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // cancellation is NOT a trading decision
-                return FastFailResult.Ok(); // 🔥 FIX: НЕ блокируем
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "[STRAT][{symbol}][{tf}] LiquidityCluster ERROR → soft-pass",
-                    signal.Symbol,
-                    tf);
-
-                    // fail-safe: never block on cluster exception
-                    LastBlockedByLiquidity = false;
-                    return FastFailResult.Ok();
-                }
-
-                // ------------------------------------------------------------------
-                // 3) Cluster returned NULL → assess risk via AI strictness
-                // ------------------------------------------------------------------
-                if (after == null)
-                {
-                    // ❗ ЭТО НЕ BLOCK — это просто нет улучшений
-
-                    var w = 1.0m;
-                    try
-                    {
-                        w = _aiLearning.GetGateMultiplier(signal.Symbol, smart.BaseRegime, "LIQ");
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        return FastFailResult.Ok(); // НЕ блокировать
-                    }
-
-                    w = Math.Clamp(w, 0.7m, 1.5m);
-
-                    // 👉 только soft penalty
-                    if (!signal.IsSuperSignal)
-                    {
-                        var penalty = w >= 1.2m ? 0.82m : 0.92m;
-                        signal.Confidence *= penalty;
-
-                        _engineState.LastEntryDecision = "WARN_LIQ_CLUSTER";
-                    }
-
-                    LastBlockedByLiquidity = false;
-                    return FastFailResult.Ok();
-                }
-
-                // ------------------------------------------------------------------
-                // 4) Cluster adjusted signal → accept mutation
-                // ------------------------------------------------------------------
-                signal.CopyFrom(after);
+         
                 LastBlockedByLiquidity = false;
 
                 return FastFailResult.Ok();
@@ -3444,6 +3382,38 @@ namespace VertexAutoTradeBinance8.Strategy
                 if (!g3.Allow || baseSignal == null)
                     return Finalize(trace, smart);
 
+
+                // =========================
+                // REVERSAL DETECTION
+                // =========================
+                bool weakTrend =
+                    smart.Confidence < 0.45m &&
+                    Math.Abs(smart.TrendSlopePercent) < 0.8m;
+
+                bool momentumShift =
+                  IsAgainstMicroMomentum(klines, baseSignal.Side);
+
+                bool exhaustion =
+                    IsParabolicMove(klines) || IsAgainstMicroMomentum(klines, baseSignal.Side);
+
+                if (weakTrend && exhaustion)
+                {
+                    var reversed = new TradeSignal
+                    {
+                        Symbol = baseSignal.Symbol,
+                        Side = baseSignal.Side == SignalSide.Buy ? SignalSide.Sell : SignalSide.Buy,
+                        Confidence = baseSignal.Confidence * 0.82m,
+                        Reason = "REVERSAL"
+                    };
+
+                    trace.Signal = reversed;
+                    trace.Allow = true;
+
+                    _engineState.LastEntryDecision = "REVERSAL_SIGNAL";
+
+                    return Finalize(trace, smart);
+                }
+
                 // =========================
                 // CONFIDENCE (PRO)
                 // =========================
@@ -3513,6 +3483,43 @@ namespace VertexAutoTradeBinance8.Strategy
 
                 // --- APPLY FINAL CONFIDENCE ---
                 baseSignal.Confidence = finalConfidence;
+
+                // =========================
+                // EXHAUSTION BLOCK
+                // =========================
+                bool exhaustionShort =
+                    smart.TrendSlopePercent < -1.5m &&
+                    smart.Confidence < 0.5m;
+
+                bool exhaustionLong =
+                    smart.TrendSlopePercent > 1.5m &&
+                    smart.Confidence < 0.5m;
+
+                // 🔻 блокируем шорт в выдохе тренда
+                if (exhaustionShort && baseSignal.Side == SignalSide.Sell)
+                {
+                    baseSignal.Confidence *= 0.7m;
+                    _engineState.LastEntryDecision = "EXHAUSTION_BLOCK_SHORT";
+
+                    _logger.LogInformation(
+                        "[EXHAUSTION][{symbol}] SHORT degraded slope={slope:F2} conf={conf:F2}",
+                        symbol,
+                        smart.TrendSlopePercent,
+                        smart.Confidence);
+                }
+
+                // 🔺 блокируем лонг в выдохе вверх
+                if (exhaustionLong && baseSignal.Side == SignalSide.Buy)
+                {
+                    baseSignal.Confidence *= 0.7m;
+                    _engineState.LastEntryDecision = "EXHAUSTION_BLOCK_LONG";
+
+                    _logger.LogInformation(
+                        "[EXHAUSTION][{symbol}] LONG degraded slope={slope:F2} conf={conf:F2}",
+                        symbol,
+                        smart.TrendSlopePercent,
+                        smart.Confidence);
+                }
 
                 // =========================
                 // ENGINE STATE (1 РАЗ!)

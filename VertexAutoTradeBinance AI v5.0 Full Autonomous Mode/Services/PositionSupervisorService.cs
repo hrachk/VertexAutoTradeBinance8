@@ -80,6 +80,7 @@ namespace VertexAutoTradeBinance8.Services
         private const string TR_PREFIX = "TR_";
         // 🔹 Для отслеживания сильных сигналов, чтобы пропускать мягкие фильтры
         private readonly HashSet<string> _beOverrideForStrongTrend = new();
+        private readonly ConcurrentDictionary<string, decimal> _lastSl = new();
 
         public PositionSupervisorService(
             ILogger<PositionSupervisorService> logger,
@@ -305,6 +306,7 @@ namespace VertexAutoTradeBinance8.Services
                 }
             }
 
+
             // 4) SMART TRAILING / BE / PARTIAL CLOSE
             async Task ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
             {
@@ -315,6 +317,7 @@ namespace VertexAutoTradeBinance8.Services
                     _beStage.TryRemove(key, out _);
                     _beLevel.TryRemove(key, out _);
                     _beMoved.TryRemove(key, out _);
+                    _lastSl.TryRemove(key, out _);
                     _beOverrideForStrongTrend.Remove(key);
                     return;
                 }
@@ -322,37 +325,61 @@ namespace VertexAutoTradeBinance8.Services
                 decimal qty = Math.Abs(pos.Quantity);
                 decimal entry = pos.EntryPrice;
                 decimal mark = pos.MarkPrice;
-                var keyProbe = BuildExitKey(symbol, side, entry);
 
                 if (qty <= 0 || entry <= 0 || mark <= 0) return;
 
-                // ROI
-                decimal roi = side == PositionSide.Long ? (mark - entry) / entry : (entry - mark) / entry;
+                var keyProbe = BuildExitKey(symbol, side, entry);
 
-                // CONFIG (через ATR)
+                // =========================
+                // ROI (текущая прибыль)
+                // =========================
+                decimal roi = side == PositionSide.Long
+                    ? (mark - entry) / entry
+                    : (entry - mark) / entry;
+
+                // =========================
+                // CONFIG
+                // =========================
                 decimal ATR = atr14_1m;
-                decimal STEP = ATR * 0.5m;
-                decimal PARTIAL_STEP = ATR * 2m;
-                decimal PARTIAL_SIZE = _tradingSettings.CurrentValue.ToxicSymbols.Contains(symbol) ? 0.42m : 0.34m;
-                decimal MIN_BUFFER = ATR * (_tradingSettings.CurrentValue.ToxicSymbols.Contains(symbol) ? 0.5m : 0.3m);
+                if (ATR <= 0) return;
 
-                // BE LEVEL
-                int level = (int)(roi / STEP);
-                int prevLevel = _beLevel.GetOrAdd(keyProbe, 0);
-                if (level > prevLevel) _beLevel[keyProbe] = level;
+                bool isToxic = _tradingSettings.CurrentValue.ToxicSymbols.Contains(symbol);
+
+                decimal STEP = ATR * 0.5m;           // шаг BE
+                decimal PARTIAL_STEP = ATR * 2m;     // шаг partial close
+                decimal PARTIAL_SIZE = isToxic ? 0.42m : 0.34m;
+                decimal MIN_BUFFER = ATR * (isToxic ? 0.5m : 0.3m);
 
                 bool skipSoftFilters = _beOverrideForStrongTrend.Contains(keyProbe);
 
-                // PARTIAL CLOSE
+                // =========================
+                // SAFE ZONE → не дергать SL
+                // =========================
+                decimal BE_TRIGGER = ATR * 1.0m;     // перенос BE только после 1 ATR
+                if (roi < BE_TRIGGER && !skipSoftFilters) return;
+
+                // =========================
+                // LEVEL CONTROL (анти-спам)
+                // =========================
+                int level = (int)((roi - BE_TRIGGER) / STEP) + 1;
+                int prevLevel = _beLevel.GetOrAdd(keyProbe, 0);
+                if (level <= prevLevel) return;  // не дергаем повторно
+                _beLevel[keyProbe] = level;
+
+                // =========================
+                // PARTIAL CLOSE (раз в уровень)
+                // =========================
                 if (!skipSoftFilters)
                 {
                     int partialLevel = (int)(roi / PARTIAL_STEP);
                     int prevPartial = (int)_beStage.GetOrAdd(keyProbe, BeStage.None);
+
                     if (partialLevel > prevPartial && partialLevel >= 1)
                     {
                         _beStage[keyProbe] = (BeStage)partialLevel;
                         decimal closeQty = Math.Round(qty * PARTIAL_SIZE, 8);
                         closeQty = Math.Min(closeQty, Math.Round(qty * 0.9m, 8));
+
                         if (closeQty > 0)
                         {
                             await ClosePartialAsync(client, symbol, side, closeQty, pos, ct);
@@ -361,37 +388,75 @@ namespace VertexAutoTradeBinance8.Services
                     }
                 }
 
-                // SMART TRAILING / SL
+                // =========================
+                // CALC NEW SL
+                // =========================
                 decimal baseDistance = ATR * 1.2m;
-                decimal profitDistance = side == PositionSide.Long ? mark - entry : entry - mark;
+                decimal profitDistance = side == PositionSide.Long
+                    ? mark - entry
+                    : entry - mark;
                 decimal dynamicBuffer = Math.Max(ATR * 0.8m, MIN_BUFFER);
 
-                decimal newSl = profitDistance <= 0
-                    ? entry
-                    : profitDistance < baseDistance
-                        ? side == PositionSide.Long ? mark - dynamicBuffer : mark + dynamicBuffer
-                        : side == PositionSide.Long ? mark - baseDistance : mark + baseDistance;
+                decimal newSl =
+                    profitDistance <= 0
+                        ? entry
+                        : profitDistance < baseDistance
+                            ? (side == PositionSide.Long ? mark - dynamicBuffer : mark + dynamicBuffer)
+                            : (side == PositionSide.Long ? mark - baseDistance : mark + baseDistance);
 
-                if (skipSoftFilters) newSl = entry;
+                if (skipSoftFilters)
+                    newSl = entry;
 
-                // Cooldown BE MOVE
+                // =========================
+                // DIFF CHECK → не дергать SL на шум
+                // =========================
+                decimal lastPlacedSl = _lastSl.GetOrAdd(keyProbe, 0m);
+                if (Math.Abs(lastPlacedSl - newSl) < ATR * 0.2m) return;
+
+                // =========================
+                // COOLDOWN
+                // =========================
                 var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                var cooldown = _tradingSettings.CurrentValue.ToxicSymbols.Contains(symbol) ? 3000 : 1000;
+                var cooldown = isToxic ? 3000 : 1200;
                 if (_beMoved.TryGetValue(keyProbe, out var lastMove) && now - lastMove < cooldown) return;
+
+                // =========================
+                // CANCEL CURRENT SL
+                // =========================
+                var exitOrders = (await LoadOrdersAsync(client, symbol))
+                    .Where(o =>
+                        o.PositionSide == side &&
+                        o.Type == FuturesOrderType.StopMarket &&
+                        o.ClientOrderId?.StartsWith(BE_PREFIX) == true)
+                    .OrderByDescending(o => o.UpdateTime)
+                    .ToList();
+
+                var currentSl = exitOrders.FirstOrDefault();
+                if (currentSl != null)
+                {
+                    decimal existing = currentSl.StopPrice ?? 0m;
+                    if (Math.Abs(existing - newSl) >= ATR * 0.2m)
+                        await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, currentSl.Id, ct: ct);
+                }
+
+                // =========================
+                // PLACE NEW SL
+                // =========================
+                await Task.Delay(60, ct);
+                await PlaceStopLossAtBeAsync(client, symbol, side, qty, newSl, pos, ct);
+
+                // =========================
+                // SAVE STATE
+                // =========================
+                _lastSl[keyProbe] = newSl;
                 _beMoved[keyProbe] = now;
 
-                // Cancel **all old SL с префиксом BE**
-                var exitOrders = (await LoadOrdersAsync(client, symbol))
-                    .Where(o => o.PositionSide == side && o.Type == FuturesOrderType.StopMarket && o.ClientOrderId?.StartsWith(BE_PREFIX) == true)
-                    .ToList();
-                foreach (var o in exitOrders)
-                    await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, o.Id, ct: ct);
-
-                // Place new BE SL
-                await Task.Delay(90, ct);
-                await PlaceStopLossAtBeAsync(client, symbol, side, qty, newSl, pos, ct);
+                _logger.LogInformation(
+                    "[SL MOVE][{symbol}][{side}] → {sl} lvl={lvl} roi={roi:P2}",
+                    symbol, side, newSl, level, roi);
             }
 
+            // запуск для обеих сторон
             if (smart1m != null && atr14_1m > 0)
                 await Task.WhenAll(
                     ProbeSide(longPos, PositionSide.Long),
@@ -792,21 +857,14 @@ namespace VertexAutoTradeBinance8.Services
             if (qty <= 0 || pos == null)
                 return;
 
-            var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-
-            //   var (qtyPrecision, _) = await GetSymbolPrecisionsAsync(client, symbol);
+            var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy; 
             qty = await NormalizeQuantityAsync(symbol, side, qty, client, ct);
-            //var positionQty = Math.Abs(pos.Quantity);
-
-            //if (qty > positionQty)
-            //    qty = positionQty;
-
+          
             if (qty <= 0)
             {
                 _logger.LogWarning("[PARTIAL CLOSE SKIPPED][{symbol}][{side}] qty rounded to 0", symbol, side);
                 return;
             }
-
 
             await ClosePartialChunkedAsync(
             client,

@@ -116,15 +116,16 @@ public sealed class LiquidityGuardService
         decimal volRatio,
         KlineInterval interval)
     {
-        bool softLowVolume = volRatio < 0.35m;
-        bool extremeLowVolume = volRatio < 0.18m;
+        bool softLowVolume = volRatio < 0.28m;
+        bool extremeLowVolume = volRatio < 0.12m;
 
         if (isMajor) softLowVolume = extremeLowVolume = false;
 
         // Soft-warning → разрешаем быстрый вход/выход
         if (softLowVolume)
         {
-            decimal score = Math.Clamp((volRatio - 0.10m) / (0.35m - 0.10m), 0.15m, 0.80m);
+            // decimal score = Math.Clamp((volRatio - 0.10m) / (0.35m - 0.10m), 0.15m, 0.80m);
+            decimal score = Math.Clamp(volRatio, 0.1m, 1.0m);
             return SetDanger(false, LiquidityGuardReason.LowVolume, false,
                 $"SOFT LOW VOLUME {symbol} {interval}", score, true);
         }
