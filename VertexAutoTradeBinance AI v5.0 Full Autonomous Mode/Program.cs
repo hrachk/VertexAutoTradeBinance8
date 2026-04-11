@@ -110,6 +110,10 @@ public class Program
 
                     services.Configure<TradingOptions>(
                       ctx.Configuration.GetSection("Trading")); // TRUE default
+ 
+
+                    services.Configure<TradingOptions>(
+                  ctx.Configuration.GetSection("SignalOnlyMode"));
 
                     services.Configure<TradingOptions>("BTC",
                         ctx.Configuration.GetSection("Trading:BTC"));

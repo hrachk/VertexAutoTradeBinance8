@@ -3382,23 +3382,21 @@ namespace VertexAutoTradeBinance8.Strategy
                 if (!g3.Allow || baseSignal == null)
                     return Finalize(trace, smart);
 
-
+   int lastIndex = klines.Count - 1;
                 // =========================
-                // REVERSAL DETECTION
+                // REVERSAL
                 // =========================
                 bool weakTrend =
                     smart.Confidence < 0.45m &&
                     Math.Abs(smart.TrendSlopePercent) < 0.8m;
 
-                bool momentumShift =
-                  IsAgainstMicroMomentum(klines, baseSignal.Side);
-
                 bool exhaustion =
-                    IsParabolicMove(klines) || IsAgainstMicroMomentum(klines, baseSignal.Side);
+                    IsParabolicMove(klines) ||
+                    IsAgainstMicroMomentum(klines, baseSignal.Side);
 
                 if (weakTrend && exhaustion)
                 {
-                    var reversed = new TradeSignal
+                    baseSignal = new TradeSignal
                     {
                         Symbol = baseSignal.Symbol,
                         Side = baseSignal.Side == SignalSide.Buy ? SignalSide.Sell : SignalSide.Buy,
@@ -3406,94 +3404,89 @@ namespace VertexAutoTradeBinance8.Strategy
                         Reason = "REVERSAL"
                     };
 
-                    trace.Signal = reversed;
-                    trace.Allow = true;
-
                     _engineState.LastEntryDecision = "REVERSAL_SIGNAL";
-
-                    return Finalize(trace, smart);
                 }
 
                 // =========================
-                // CONFIDENCE (PRO)
+                // CONFIDENCE
                 // =========================
                 var conf = _confidenceAgg.Evaluate(smart, baseSignal, tf);
                 decimal finalConfidence = conf?.Final ?? smart.Confidence;
-                int lastIndex = klines.Count - 1;
 
-                // --- PARABOLIC ---
+                decimal totalPenalty = 1.0m;
+
+                void Mark(string msg)
+                {
+                    _engineState.LastEntryDecision += $"|{msg}";
+                }
+
                 if (IsParabolicMove(klines))
                 {
-                    finalConfidence *= 0.82m;
-                    _engineState.LastEntryDecision = "WARN_PARABOLIC";
+                    totalPenalty *= 0.82m;
+                    Mark("PARABOLIC");
                 }
 
-                // --- MICRO MOMENTUM ---
                 if (IsAgainstMicroMomentum(klines, baseSignal.Side))
                 {
-                    finalConfidence *= 0.90m;
-                    _engineState.LastEntryDecision = "WARN_MICRO_MOMENTUM";
+                    totalPenalty *= 0.9m;
+                    Mark("MICRO");
                 }
 
-                // --- ABSORPTION ---
                 if (IsAbsorption(klines, lastIndex))
                 {
-                    finalConfidence *= 0.85m;
-                    _engineState.LastEntryDecision = "WARN_ABSORPTION";
+                    totalPenalty *= 0.85m;
+                    Mark("ABSORPTION");
                 }
 
-                // --- FAKE MOMENTUM ---
                 if (IsFakeMomentum(klines, lastIndex))
                 {
-                    finalConfidence *= 0.88m;
-                    _engineState.LastEntryDecision = "WARN_FAKE_MOMENTUM";
+                    totalPenalty *= 0.88m;
+                    Mark("FAKE");
                 }
 
-                // --- TRAP FILTER ---
                 var trap = Gate_TrapFilter(klines, baseSignal, out var trapMult);
                 trace.Add(trap);
-                finalConfidence *= trapMult;
+                totalPenalty *= trapMult;
 
-                // --- NO REACTION AFTER BREAK ---
                 if (NoReactionAfterBreak(klines, lastIndex, baseSignal.Side))
                 {
-                    finalConfidence *= 0.87m;
-                    _engineState.LastEntryDecision = "WARN_NO_REACTION";
+                    totalPenalty *= 0.87m;
+                    Mark("NO_REACTION");
                 }
 
-                // --- BAD ENTRY LOCATION ---
                 if (IsBadEntryLocation(klines, baseSignal, smart))
                 {
-                    finalConfidence *= 0.88m;
-                    _engineState.LastEntryDecision = "WARN_BAD_LOCATION";
-                    _logger.LogInformation("[BAD_LOCATION] {symbol} {tf} conf adjusted {conf:F2}", symbol, tf, finalConfidence);
+                    totalPenalty *= 0.88m;
+                    Mark("BAD_LOCATION");
                 }
 
-                // --- EMA DISTANCE / PULLBACK ---
                 var c = klines[^1];
                 var ema21 = Ema(klines, 21, lastIndex);
                 var atr = Atr(klines, 14, lastIndex);
 
                 if (Math.Abs(c.ClosePrice - ema21) > atr * 1.2m)
                 {
-                    finalConfidence *= 0.82m;
-                    _engineState.LastEntryDecision = "WARN_NO_PULLBACK";
-                    _logger.LogInformation("[PULLBACK] {symbol} {tf} conf adjusted {conf:F2}", symbol, tf, finalConfidence);
+                    totalPenalty *= 0.82m;
+                    Mark("NO_PULLBACK");
                 }
 
-                // --- APPLY FINAL CONFIDENCE ---
+                totalPenalty = Math.Max(totalPenalty, 0.65m);
+
+                finalConfidence *= totalPenalty;
                 baseSignal.Confidence = finalConfidence;
 
                 // =========================
                 // EXHAUSTION BLOCK
                 // =========================
                 bool exhaustionShort =
-                    smart.TrendSlopePercent < -1.5m &&
-                    smart.Confidence < 0.5m;
+     smart.TrendSlopePercent < -1.5m &&
+     smart.Confidence < 0.5m &&
+     Math.Abs(smart.TrendSlopePercent) > 1.5m;
 
                 bool exhaustionLong =
                     smart.TrendSlopePercent > 1.5m &&
-                    smart.Confidence < 0.5m;
+                    smart.Confidence < 0.5m &&
+                    Math.Abs(smart.TrendSlopePercent) > 1.5m;
 
                 // 🔻 блокируем шорт в выдохе тренда
                 if (exhaustionShort && baseSignal.Side == SignalSide.Sell)

@@ -81,7 +81,7 @@ namespace VertexAutoTradeBinance8.Services
         // 🔹 Для отслеживания сильных сигналов, чтобы пропускать мягкие фильтры
         private readonly HashSet<string> _beOverrideForStrongTrend = new();
         private readonly ConcurrentDictionary<string, decimal> _lastSl = new();
-
+        private readonly IOptionsMonitor<TradingOptions> _tradingOptions;
         public PositionSupervisorService(
             ILogger<PositionSupervisorService> logger,
             BinanceClientFactory factory,
@@ -97,7 +97,7 @@ namespace VertexAutoTradeBinance8.Services
             SmartRegimeService smartRegime,
             IAccountStateService accountState,
             ReverseProbeEngine reverseProbe, PositionLifecycleTracker lifecycle/*, AtrAdaptiveProfitLockManager atrLock*/,
-            IOptionsMonitor<TradingSettings> tradingSettings)
+            IOptionsMonitor<TradingSettings> tradingSettings, IOptionsMonitor<TradingOptions> tradingOptions)
         {
             _logger = logger;
             _factory = factory;
@@ -119,6 +119,7 @@ namespace VertexAutoTradeBinance8.Services
             // _atrLock = atrLock;
             _accountState = accountState;
             _tradingSettings = tradingSettings;
+            _tradingOptions = tradingOptions;
         }
 
 
@@ -226,7 +227,11 @@ namespace VertexAutoTradeBinance8.Services
         }
         public async Task SuperviseAsync(string symbol, TradeSignal? lastSignal, CancellationToken ct)
         {
-            using var client = _factory.CreateRestClient();
+            if (!_tradingOptions.CurrentValue.EnableExecution)
+                return;
+
+
+                using var client = _factory.CreateRestClient();
 
             // 0) MANUAL SIGNAL INJECTION
             if (lastSignal == null)
@@ -469,7 +474,6 @@ namespace VertexAutoTradeBinance8.Services
             if (hasShort)
                 await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, await LoadOrdersAsync(client, symbol), lastSignal, klines1m, ct);
         }
-
 
         // ===== PLACE BE SL =====
         private async Task PlaceStopLossAtBeAsync(

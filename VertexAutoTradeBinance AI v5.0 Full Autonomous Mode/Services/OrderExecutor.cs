@@ -37,9 +37,10 @@ namespace VertexAutoTradeBinance8.Services
         private const decimal AGGR_LIMIT_OFFSET_PCT = 0.0006m;  // 0.06% агрессивный лимит (тюнится)
         private const decimal MARKET_FALLBACK_MAX_SLIP_PCT = 0.0015m; // 0.15% макс. слип для fallback-market
         private bool? _isHedgeMode;
-        private const int MAX_ENTRIES_PER_SYMBOL = 4;
+        private const int MAX_ENTRIES_PER_SYMBOL = 2;
         private const decimal MAX_LIMIT_STALE_DRIFT = 0.0047m; // 0.45%
         private readonly IOptionsMonitor<TradingSettings> _tradingSettings;
+        private readonly IOptionsMonitor<TradingOptions> _tradingOptions;
 
         public class EntryTracker
         {
@@ -111,9 +112,10 @@ namespace VertexAutoTradeBinance8.Services
             SmartRegimeService smartRegime,
             LiquidityGuardService liquidityGuard, AiSelfLearningService ai, RiskManager risk,
             MarketDataFacade marketDataFacade,
-            IOptionsMonitor<TradingSettings> tradingSettings, AiLiquidityClusterService liquidityClusterService,
+            IOptionsMonitor<TradingSettings> tradingSettings, 
+            AiLiquidityClusterService liquidityClusterService,
             EntryTracker entryTracker,
-            CooldownGuard cooldown)
+            CooldownGuard cooldown, IOptionsMonitor<TradingOptions> tradingOptions)
         {
             _logger = logger;
             _factory = factory;
@@ -131,6 +133,7 @@ namespace VertexAutoTradeBinance8.Services
             _liquidityClusterService = liquidityClusterService;
             _entryTracker = entryTracker;
             _cooldown = cooldown;
+            _tradingOptions = tradingOptions;
         }
 
         public async Task<bool> ConfirmEntryOn1m(
@@ -1252,7 +1255,28 @@ namespace VertexAutoTradeBinance8.Services
             // =============================================================
             // PLACE ENTRY
             // =============================================================
+            if (!_tradingOptions.CurrentValue.EnableExecution)
+            {
+                _logger.LogWarning(
+                    "[DRY-RUN][{symbol}] Execution disabled → signal processed but NO order sent",
+                    signal.Symbol);
 
+                await _simulator.SimulateMissedTradeAsync(
+                    signal,
+                    "DRY_RUN_EXECUTION_DISABLED",
+                    note: $"entryType={entryType}; qty={quantity}; price={(orderPrice?.ToString() ?? "MKT")}",
+                    attemptNotional: notionalAtCreate,
+                    requiredMinNotional: 0m);
+
+                _executedSignalService.UpdateStatus(
+                    signal.Symbol,
+                    execTime,
+                    TradeExecutionStatus.Blocked,
+                    0,
+                    0);
+
+                return OrderResult.Fail("EXECUTION_DISABLED");
+            }
             var entryRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: signal.Symbol,
                 side: side,
