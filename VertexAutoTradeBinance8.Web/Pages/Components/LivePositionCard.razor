@@ -1,0 +1,33 @@
+﻿@using Binance.Net.Enums
+@using VertexAutoTradeBinance8.Models
+
+<div class="bn-card">
+    <div class="top">
+        <span class="sym">@Pos.Symbol</span>
+        <span class="side @(Pos.Side == PositionSide.Long ? "long" : "short")">
+            @Pos.Side
+        </span>
+        <span class="lev">@Pos.Leverage x</span>
+    </div>
+
+    <div class="mid">
+        <div>
+            PnL: <b class="@(Pos.UnrealizedPnl >= 0 ? "plus" : "minus")">
+                @Pos.UnrealizedPnl.ToString("0.00")
+            </b>
+        </div>
+
+        <div>Entry: @Pos.EntryPrice</div>
+        <div>Mark: @Pos.MarkPrice</div>
+        <div>Size: @Pos.Notional.ToString("0.00")</div>
+    </div>
+
+    <div class="bot">
+        <span>Margin: @Pos.IsolatedMargin</span>
+        <span>Liq: @Pos.LiquidationPrice</span>
+    </div>
+</div>
+
+@code {
+    [Parameter] public LivePositionState Pos { get; set; } = default!;
+}

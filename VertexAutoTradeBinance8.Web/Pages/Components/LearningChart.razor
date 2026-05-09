@@ -1,0 +1,51 @@
+﻿@using VertexAutoTradeBinance8.Services
+@inject IJSRuntime JS
+
+<div class="ai-learning-chart-wrapper">
+    <!-- фиксированная высота, чтобы точно было что рисовать -->
+    <canvas id="learningChart" style="width:100%; height:260px;"></canvas>
+</div>
+
+@code {
+    [Parameter]
+    public IReadOnlyList<AiSelfLearningService.MarketState> States { get; set; }
+        = Array.Empty<AiSelfLearningService.MarketState>();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // ВАЖНО: БОЛЬШЕ НЕ ЮЗАЕМ firstRender,
+        // график должен перерисоваться когда появятся данные.
+        if (States == null || States.Count == 0)
+            return;
+
+        // На всякий случай сортируем по времени
+        var ordered = States
+            .OrderBy(s => s.Time)
+            .ToList();
+
+        var labels = ordered
+            .Select(s => s.Time.ToLocalTime().ToString("HH:mm:ss"))
+            .ToList();
+
+        // если хочешь — масштабируй проценты тут
+        var volatility = ordered
+            .Select(s => (double)(s.VolatilityPercent * 100m))
+            .ToList();
+
+        var slope = ordered
+            .Select(s => (double)(s.TrendSlopePercent * 8000m))
+            .ToList();
+
+        var liqDanger = ordered
+            .Select(s => s.Reason == "LIQUIDITY_DANGER" ? 1d : 0d)
+            .ToList();
+
+        await JS.InvokeVoidAsync(
+            "renderLearningChart",
+            labels,
+            volatility,
+            slope,
+            liqDanger
+        );
+    }
+}

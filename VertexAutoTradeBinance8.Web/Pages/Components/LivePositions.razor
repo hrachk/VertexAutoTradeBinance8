@@ -1,0 +1,76 @@
+﻿@page "/live-positions"
+
+@using VertexAutoTradeBinance8.Web.Models
+@using VertexAutoTradeBinance8.Web.Services
+@inject PositionsLiveService Live
+
+<h2 class="page-title">Live Positions</h2>
+
+@if (Positions.Count == 0)
+{
+    <div class="empty">No open positions</div>
+}
+else
+{
+    <table class="bn-table">
+        <thead>
+            <tr>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Size</th>
+                <th>Entry</th>
+                <th>Mark</th>
+                <th>Liq</th>
+                <th>uPnL</th>
+                <th>ROI</th>
+                <th>Margin</th>
+                <th>Risk</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var p in Positions)
+            {
+                <LivePositionRow Pos="p" />
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    // ============================
+    // DATA (КАНОН)
+    // ============================
+    private IReadOnlyList<PositionVm> Positions = Array.Empty<PositionVm>();
+
+    // ============================
+    // UI THROTTLE (~5 FPS)
+    // ============================
+    private DateTime _lastUiUpdate = DateTime.MinValue;
+    private static readonly TimeSpan UiThrottle = TimeSpan.FromMilliseconds(200);
+
+    protected override void OnInitialized()
+    {
+        // 🔥 WS → UI
+        Live.OnPositionUpdated += OnPositionUpdated;
+
+        // первичный snapshot
+        Positions = Live.GetAll().ToList();
+    }
+
+    private void OnPositionUpdated(PositionVm _)
+    {
+        var now = DateTime.UtcNow;
+        if (now - _lastUiUpdate < UiThrottle)
+            return;
+
+        _lastUiUpdate = now;
+
+        Positions = Live.GetAll().ToList();
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        Live.OnPositionUpdated -= OnPositionUpdated;
+    }
+}

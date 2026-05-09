@@ -1,0 +1,213 @@
+﻿@page "/trade-permission"
+
+@using VertexAutoTradeBinance8.Web.Models
+@using VertexAutoTradeBinance8.Web.Services
+@inject TradePermissionFileService Service
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<h2 class="title">AI Trade Permission Monitor</h2>
+<p class="subtitle">Why AI allows or blocks trades right now</p>
+
+<!-- ================= TOOLBAR ================= -->
+<div class="toolbar">
+    <div class="left">
+        <select class="filter" @onchange="OnFilterChanged">
+            <option value="ALL">All</option>
+            <option value="ALLOWED">Allowed only</option>
+            <option value="BLOCKED">Blocked only</option>
+        </select>
+
+        <button class="pin @(PinnedAllowed ? "on" : "")"
+                @onclick="TogglePin">
+            📌 Allowed only
+        </button>
+    </div>
+
+    <span class="refresh">Auto refresh: 5s</span>
+</div>
+
+<!-- ================= SUMMARY ================= -->
+<div class="summary">
+    <span class="ok">Allowed: @Allowed</span>
+    <span class="blocked">Blocked: @Blocked</span>
+    <span class="time">Last update: @LastUpdate</span>
+</div>
+
+<!-- ================= CARDS ================= -->
+<div class="cards">
+    @foreach (var e in Filtered)
+    {
+        <div class="card @(e.Allow ? "allow" : "blocked") @(BlinkClass(e))">
+            <div class="head">
+                <span class="symbol">@e.Symbol</span>
+                <span class="tf">@Tf(e.Timeframe)</span>
+
+                <span class="status">@Status(e)</span>
+                <span class="time">@e.Time.ToLocalTime():HH:mm:ss</span>
+            </div>
+
+            <div class="body">
+                @Reason(e)
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    // ===== PIN STATE =====
+    private bool PinnedAllowed;
+
+    // ===== DATA =====
+    private List<TradePermissionEvent> All = [];
+    private List<TradePermissionEvent> Filtered = [];
+
+    private Dictionary<(string Symbol, string Tf), bool> _prevAllow = new();
+    private HashSet<(string Symbol, string Tf)> _justChanged = new();
+
+    private string Filter = "ALL";
+
+    private int Allowed;
+    private int Blocked;
+    private string LastUpdate = "—";
+
+    private PeriodicTimer? _timer;
+    private CancellationTokenSource _cts = new();
+
+    // ================= INIT =================
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadAsync();
+
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (await _timer.WaitForNextTickAsync(_cts.Token))
+                {
+                    await InvokeAsync(ReloadAsync);
+                }
+            }
+            catch (OperationCanceledException) { }
+        });
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        PinnedAllowed = await JS.InvokeAsync<bool>("vertex.getPinnedAllowed");
+
+        if (PinnedAllowed)
+        {
+            Filter = "ALLOWED";
+            ApplyFilter();
+            StateHasChanged();
+        }
+    }
+
+    // ================= CORE =================
+    private async Task ReloadAsync()
+    {
+        All = (await Service.LoadLatestAsync()).ToList();
+
+        Allowed = All.Count(x => x.Allow);
+        Blocked = All.Count(x => !x.Allow);
+
+        LastUpdate = All
+            .OrderByDescending(x => x.Time)
+            .FirstOrDefault()?
+            .Time.ToLocalTime().ToString("HH:mm:ss") ?? "—";
+
+        _justChanged.Clear();
+
+        // sync Trade Permission -> Market page
+        foreach (var g in All.GroupBy(x => new { x.Symbol, x.Timeframe }))
+        {
+            await JS.InvokeVoidAsync(
+                "vertex.tradePermission.update",
+                g.Key.Symbol,
+                g.Key.Timeframe,
+                g
+                    .Select((x, i) => new
+                    {
+                        index = i,      // индекс свечи
+                        allow = x.Allow // true / false
+                    })
+                    .ToArray()
+            );
+        }
+
+
+        ApplyFilter();
+        StateHasChanged();
+    }
+
+    private void ApplyFilter()
+    {
+        IEnumerable<TradePermissionEvent> q = Filter switch
+        {
+            "ALLOWED" => All.Where(x => x.Allow),
+            "BLOCKED" => All.Where(x => !x.Allow),
+            _ => All
+        };
+
+        Filtered = q
+            .OrderByDescending(x => x.Allow)
+            .ThenByDescending(x => x.Time)
+            .ToList();
+    }
+
+    // ================= UI EVENTS =================
+    private void OnFilterChanged(ChangeEventArgs e)
+    {
+        Filter = e.Value?.ToString() ?? "ALL";
+        ApplyFilter();
+    }
+
+    private async Task TogglePin()
+    {
+        PinnedAllowed = !PinnedAllowed;
+        await JS.InvokeVoidAsync("vertex.setPinnedAllowed", PinnedAllowed);
+
+        Filter = PinnedAllowed ? "ALLOWED" : "ALL";
+        ApplyFilter();
+    }
+
+    // ================= HELPERS =================
+    string BlinkClass(TradePermissionEvent e)
+        => _justChanged.Contains((e.Symbol, e.Timeframe)) ? "blink" : "";
+
+    static string Tf(string tf) => tf switch
+    {
+        "OneMinute" => "1m",
+        "FiveMinutes" => "5m",
+        _ => tf
+    };
+
+    static string Status(TradePermissionEvent e)
+        => e.Allow ? "ENTRY ALLOWED" : "ENTRY BLOCKED";
+
+    static string Reason(TradePermissionEvent e)
+    {
+        if (e.Allow)
+            return "Market conditions acceptable. AI allows entry.";
+
+        return e.FailedGate switch
+        {
+            "BASE" => "No valid market structure. Entry blocked for safety.",
+            _ => e.Reason ?? "Entry blocked by risk filter."
+        };
+    }
+
+    // ================= DISPOSE =================
+    public async ValueTask DisposeAsync()
+    {
+        _cts.Cancel();
+        _timer?.Dispose();
+        _cts.Dispose();
+        await Task.CompletedTask;
+    }
+}

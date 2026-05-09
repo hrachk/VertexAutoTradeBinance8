@@ -1,0 +1,85 @@
+﻿@page "/positions"
+@using VertexAutoTradeBinance8.Web.Models
+@using VertexAutoTradeBinance8.Web.Services
+@inject PositionsLiveService Live
+
+<div class="positions-container">
+
+    <!-- === HEADER / TABS === -->
+    <div class="positions-header">
+        <div class="tabs">
+            <div class="@TabClass("positions")" @onclick="@(() => SetTab("positions"))">
+                Positions (6)
+            </div>
+
+            <div class="@TabClass("orders")" @onclick="@(() => SetTab("orders"))">
+                Open Orders (0)
+            </div>
+
+            <div class="@TabClass("bots")" @onclick="@(() => SetTab("bots"))">
+                Bots
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn-secondary">Close all</button>
+        </div>
+    </div>
+  
+    @if (ActiveTab == "positions")
+    {
+         
+        <!-- === POSITION CARD === -->
+        @foreach (var p in Positionss.Values)
+        {
+            <PositionCard @key="p.Key"
+                          Symbol="@p.Symbol"
+                          Side="@p.Side"
+                          Leverage="@p.Leverage"
+                          Pnl="@p.Pnl"
+                          Roi="@p.Roi"
+                          Size="@p.SizeUsdt"
+                          Margin="@p.Margin"
+                          Entry="@p.Entry"
+                          Mark="@p.Mark"
+                          LiqPrice="@p.LiqPrice"
+                          MarginRatio="@p.MarginRatio"
+                          AiScore="@p.AiScore"
+                          Regime="@p.Regime"
+                          AiHint="@p.AiHint"
+                          StopLoss="@p.StopLoss"
+                          TakeProfit="@p.TakeProfit" />
+        }
+    }
+   
+
+</div>
+@code {
+    string ActiveTab = "positions";
+    private Dictionary<string, PositionVm> Positionss = new();
+
+    protected override void OnInitialized()
+    {
+        foreach (var vm in Live.GetAll())
+            Positionss[vm.Key] = vm;
+
+        Live.OnPositionUpdated += OnPositionUpdated;
+         Live.StartMock();
+    }
+
+    void SetTab(string tab)
+    {
+        ActiveTab = tab;
+    }
+
+    string TabClass(string tab)
+    {
+        return "tab " + (ActiveTab == tab ? "active" : "");
+    }
+
+    private void OnPositionUpdated(PositionVm vm)
+    {
+        Positionss[vm.Key] = vm;
+        InvokeAsync(StateHasChanged);
+    }
+}

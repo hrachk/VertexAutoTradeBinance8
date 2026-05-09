@@ -1,0 +1,82 @@
+﻿@using VertexAutoTradeBinance8.Web.Models
+@using static VertexAutoTradeBinance8.Web.Services.PositionsLiveService
+
+<tr class="pos-row @(Pos.Pnl >= 0 ? "pnl-plus" : "pnl-minus") @ChangeCss">
+    <td class="sym-cell">
+        <span class="sym">@Pos.Symbol</span>
+        <span class="side @(IsLong ? "long" : "short")">
+            @Pos.Side
+        </span>
+    </td>
+
+    <td class="lev">@Fmt0(Pos.Leverage)x</td>
+
+    <td>@Fmt(Size)</td>
+    <td>@Fmt(Pos.Entry)</td>
+    <td>@Fmt(Pos.Mark)</td>
+
+    <td class="pnl">
+        @FmtSigned(Pos.Pnl)
+        <div class="roi">@FmtSignedPct(Pos.Roi)</div>
+    </td>
+
+    <td>@Fmt(Pos.Margin)</td>
+
+    <td class="liq @RiskCss">
+        @Fmt(Pos.LiqPrice)
+    </td>
+</tr>
+
+@code {
+    // 🔥 КАНОН: PositionVm
+    [Parameter] public PositionVm Pos { get; set; } = default!;
+
+    bool IsLong => Pos.Side == "LONG";
+
+    // ============================
+    // 🔥 CHANGE MASK HIGHLIGHT
+    // ============================
+    string ChangeCss =>
+        Pos.ChangeMask switch
+        {
+            PositionChange.Pnl => "chg-pnl",
+            PositionChange.Roi => "chg-roi",
+            PositionChange.Risk => "chg-risk",
+            PositionChange.Mark => "chg-mark",
+            _ => ""
+        };
+
+    decimal Size => Pos.SizeUsdt;
+
+    /// <summary>
+    /// Насколько близко к ликвидации (0–100%)
+    /// </summary>
+    decimal RiskPct =>
+        Pos.LiqPrice <= 0 || Pos.Entry <= 0
+            ? 0
+            : Math.Min(
+                100m,
+                Math.Abs(Pos.Mark - Pos.Entry) /
+                Math.Abs(Pos.Entry - Pos.LiqPrice) * 100m
+            );
+
+    string RiskCss =>
+        RiskPct < 40 ? "safe" :
+        RiskPct < 70 ? "warn" :
+        "danger";
+
+    static string Fmt(decimal? v) =>
+        v.HasValue && v.Value != 0 ? v.Value.ToString("0.########") : "—";
+
+    static string Fmt(decimal v) =>
+        v != 0 ? v.ToString("0.########") : "—";
+
+    static string Fmt0(int? v) =>
+        v.HasValue && v.Value > 0 ? v.Value.ToString() : "—";
+
+    static string FmtSigned(decimal v) =>
+        v >= 0 ? $"+{v:0.00}" : $"{v:0.00}";
+
+    static string FmtSignedPct(decimal v) =>
+        v >= 0 ? $"+{v:0.0}%" : $"{v:0.0}%";
+}

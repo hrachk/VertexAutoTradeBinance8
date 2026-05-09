@@ -1,0 +1,278 @@
+﻿@page "/ai-learning"
+@using System.Text.Json
+@using VertexAutoTradeBinance8.Models
+@using VertexAutoTradeBinance8.Web.Services
+@using VertexAutoTradeBinance8.Web.Models
+@inject AiLearningFileService AiFile
+@inject IJSRuntime JS
+
+
+ 
+
+
+<div class="ai-pulse-card">
+    @* <section class="ai-card pulse-section"> *@
+        <div class="ai-card-header">⚡ AI PULSE / NEURON ACTIVITY</div>
+      @*   <div class="pulse-container" style="height: 200px; background: #000; border-radius: 8px;"> *@
+    <canvas id="aiPulseCanvas2" width="1200" height="260"></canvas>
+       @*  </div> *@
+
+        <div class="pulse-footer">
+            <div class="metric-group">
+                <div class="metric-label">VOLATILITY</div>
+                <div class="metric-bar-bg"><div class="metric-bar-fill" style="width:@UiVolatility%"></div></div>
+                <div class="metric-value-row">
+                    <span class="val">@UiVolatility%</span>
+                    <span class="lab">VOLATILITY</span>
+                </div>
+            </div>
+            <div class="metric-unit border-l">
+                <div class="unit-val">@TotalEvents</div>
+                <div class="unit-lab">ORDERS / SEC</div>
+            </div>
+            <div class="metric-unit border-l">
+                <div class="unit-val">@(TotalEvents / 2 + 12)</div>
+                <div class="unit-lab">TICKS</div>
+            </div>
+        </div>
+   @*  </section> *@
+  
+    <div class="dashboard-columns">
+        <div class="col">
+            <section class="ai-card">
+                <div class="ai-card-header">⚡ LIVE MARKET PROCESSING</div>
+                <div class="live-list">
+                    @foreach (var r in LiveStates.Take(4))
+                    {
+                        <div class="live-row @(ExpandedSymbol == r.Symbol ? "active" : "")" @onclick="() => ToggleLive(r.Symbol)">
+                            <div class="sym-info">
+                                <div class="sym-name">@r.Symbol</div>
+                                <div class="sym-regime">@r.Regime</div>
+                            </div>
+                            <div class="sym-conf">@r.Confidence%</div>
+                            <div class="sym-status @r.Status.ToLower()">@r.Status</div>
+                        </div>
+                        @if (ExpandedSymbol == r.Symbol)
+                        {
+                            <div class="live-expand-area">
+                                <div class="mini-chart-container">
+                                    @* Реальный индикатор силы сигнала *@
+                                    <div class="chart-bar-glow" style="width:@r.Confidence%"></div>
+                                </div>
+                                <div class="expand-details">
+                                    <span>Signal strength: @r.Confidence%</span>
+                                    <span>Status: <b class="@r.Status.ToLower()">@r.Status</b></span>
+                                </div>
+                            </div>
+                        }
+                    }
+                </div>
+            </section>
+
+            <section class="ai-card">
+                <div class="ai-card-header">⚡ AI EXPOSURE MATRIX</div>
+                @foreach (var e in Exposure.Take(3))
+                {
+                    <div class="matrix-row">
+                        <div class="m-info">
+                            <span class="m-sym">@e.Symbol</span>
+                            <span class="m-reg">@e.Regime</span>
+                        </div>
+                        <div class="m-val">
+                            <span class="m-num">@e.Score.ToString("F1")%</span>
+                            <span class="m-arrow">↗</span>
+                        </div>
+                        <div class="m-progress"><div class="m-fill" style="width:@e.Score%"></div></div>
+                    </div>
+                }
+            </section>
+        </div>
+
+        <div class="col">
+            <section class="ai-card">
+                <div class="ai-card-header">⚡ AI LEARNING INSIGHTS</div>
+                <div class="insight-box">
+                    <div class="ins-title">BASE REGIME</div>
+                    <div class="ins-meta">@TotalEvents events · AVG @AvgScore%</div>
+                    <div class="ins-wave"></div>
+                </div>
+                <div class="insight-box mt-20">
+                    <div class="ins-flex">
+                        <span class="ins-label">MICRO_SIGNAL_PULLBACK</span>
+                        <span class="ins-val">75.0</span>
+                    </div>
+                    <div class="ins-progress"><div class="ins-fill" style="width:75%"></div></div>
+                    <div class="ins-percent">75 %</div>
+                </div>
+            </section>
+
+            <section class="ai-card">
+                <div class="ai-card-header">⚡ AI EXPOSURE MATRIX</div>
+                @foreach (var e in Exposure.Skip(3).Take(5))
+                {
+                    <div class="matrix-row compact">
+                        <div class="m-info">
+                            <span class="m-sym">@e.Symbol</span>
+                            @if (e.Score > 75)
+                            {
+                                <span class="m-badge">StrongUpTrend</span>
+                            }
+                        </div>
+                        <div class="m-val">
+                            <span class="m-num @(e.Score < 70 ? "low" : "")">@e.Score%</span>
+                            <span class="m-arrow">↗</span>
+                        </div>
+                        <div class="m-progress"><div class="m-fill" style="width:@e.Score%"></div></div>
+                    </div>
+                }
+            </section>
+        </div>
+    </div>
+</div>
+
+@code {
+    int TotalEvents;
+    int AvgScore;
+    int UiVolatility;
+    List<ExposureVm> Exposure = new();
+    List<LiveSymbolState> LiveStates = new();
+    string? ExpandedSymbol;
+    private int UniqueSymbols;
+    private DateTime? LastEventUtc;
+    private CancellationTokenSource? _loopCts;
+    private bool _disposed;
+   
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            //await JS.InvokeVoidAsync("window.AiPulse.init");
+            await JS.InvokeVoidAsync("aiPulse.init", "aiPulseCanvas2");
+         
+          
+        }
+    }
+    protected override async Task OnInitializedAsync()
+    {
+        _loopCts = new CancellationTokenSource();
+        _ = LoopUpdate(_loopCts.Token);
+        await InitialLoad();
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _loopCts?.Cancel();
+        _loopCts?.Dispose();
+    }
+    // Вынеси первую загрузку в отдельный метод для чистоты
+  private async Task InitialLoad()
+{
+    try 
+    {
+        var points = await AiFile.LoadAsync();
+        if (points != null && points.Any())
+        {
+            TotalEvents = points.Count;
+            AvgScore = (int)Math.Round(points.Average(x => x.Score));
+            UiVolatility = (int)Math.Min(100, points.Average(x => x.Volatility) * 100);
+      
+
+            // Обновляем статистику, чтобы время "Last Event" тикало
+UniqueSymbols = points.Select(x => x.Symbol).Distinct().Count();
+LastEventUtc = points.Max(x => x.Time);
+
+            // Группировка для таблицы
+            Exposure = points.GroupBy(x => x.Symbol)
+                .Select(g => new ExposureVm
+                {
+                    Symbol = g.Key,
+                    Score = (int)Math.Round(g.Average(x => x.Score)),
+                        Regime = g.Average(x => x.Confidence) > 0.75m ? "StrongUpTrend" : MarketRegime.Range.ToString()
+                })
+                .OrderByDescending(x => x.Score)
+                .ToList();
+
+            // Данные для JS Пульса
+            await JS.InvokeVoidAsync("AiPulse.push", new { 
+                score = AvgScore, 
+                confidence = 80, 
+                volatility = UiVolatility 
+            });
+
+            StateHasChanged();
+        }
+    }
+    catch (Exception ex) { Console.WriteLine("Error: " + ex.Message); }
+}
+
+    async Task LoopUpdate(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                if (_disposed) break;
+
+                var points = await AiFile.LoadAsync();
+                if (points == null || points.Count == 0)
+                    continue;
+
+                TotalEvents = points.Count;
+                AvgScore = (int)Math.Round(points.Average(x => x.Score));
+                UiVolatility = (int)Math.Min(100, points.Average(x => x.Volatility) * 100);
+
+                Exposure = points.GroupBy(x => x.Symbol)
+                    .Select(g => new ExposureVm
+                    {
+                        Symbol = g.Key,
+                        Score = (int)Math.Round(g.Average(x => x.Score)),
+                        Regime = g.Average(x => x.Confidence) > 0.75m
+                            ? "StrongUpTrend"
+                            : "Range"
+                    })
+                    .OrderByDescending(x => x.Score)
+                    .ToList();
+
+                LiveStates = Exposure.Select(e => new LiveSymbolState
+                {
+                    Symbol = e.Symbol,
+                    Confidence = e.Score,
+                    Regime = e.Regime,
+                    Status = e.Score >= 75 ? "READY" : "WAIT"
+                }).ToList();
+
+                // 🔒 SAFE JS CALL
+                try
+                {
+                    await JS.InvokeVoidAsync("AiPulse.push", new
+                    {
+                        score = AvgScore,
+                        confidence = 80,
+                        volatility = UiVolatility
+                    });
+                }
+                catch (JSDisconnectedException)
+                {
+                    break; // circuit умер → выходим
+                }
+
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // нормально — Dispose
+        }
+    }
+
+
+
+
+    void ToggleLive(string s) => ExpandedSymbol = (ExpandedSymbol == s) ? null : s;
+
+    public class ExposureVm { public string Symbol { get; set; } = ""; public string Regime { get; set; } = ""; public int Score { get; set; } }
+    public class LiveSymbolState { public string Symbol { get; set; } = ""; public string Regime { get; set; } = ""; public int Confidence { get; set; } public string Status { get; set; } = ""; }
+}

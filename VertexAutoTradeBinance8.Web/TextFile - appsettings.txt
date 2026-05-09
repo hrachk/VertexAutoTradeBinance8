@@ -1,0 +1,212 @@
+﻿{
+  "Binance": {
+    "ApiKey": "WztkkdMs7ykcnEZ8bpQgcbz8Po19E5XQkP0131vkNgZjSx3rDaQ7sTxzqgkR7hEp",
+    "SecretKey": "lAyOcVCw4ohWkRvBZdYZscmF2Ps7GR5f0q8BJnAzz8ya8Vvw7KcSJtsYWrGLadsE",
+
+    "Depth": 50,
+    "DepthUpdateMs": 200
+  },
+
+  "Network": {
+    "BindIp": "37.186.114.62​"
+  },
+
+  "HedgeKill": {
+    "Mode": "Hybrid",
+    "NetOkUsd": 3.0,
+    "HardNetUsd": -10.0,
+    "HardLoserUsd": 18.0,
+    "HardLoserAtrMult": 1.8,
+    "GivebackMinUsd": 1.5, // Снижено, чтобы трейлинг начинался раньше NetOk
+    "GivebackMaxUsd": 25.0,
+    "GivebackBucketLow": 0.15,
+    "GivebackBucketMid": 0.25,
+    "GivebackBucketHigh": 0.35,
+    "SlopeWeak": 0.008,
+    "SlopeStrong": 0.015,
+    "AtrPctExtreme": 0.020,
+    "UseCooldown": false,
+    "CooldownMinutes": 10,
+    "LoserCloseFraction": 0.60
+  },
+
+  /* Пример будущего UI-режима
+ 
+    "Mode": "Safe",
+    "UseCooldown": true,
+    "CooldownMinutes": 15
+
+  */
+
+  "SignalConfidence": {
+    "MinEntry": 0.46,
+
+    "Bands": {
+      "MediumFrom": 0.46,
+      "HighFrom": 0.55
+    },
+
+    "EarlyTpAtr": {
+      "Medium": 0.66,
+      "High": 0.90
+    }
+  },
+  "SymbolSelection": {
+    "Mode": "Manual",
+
+    // 🔒 Приоритетные символы (не гарантия одновременной торговли)
+    "Pinned": [
+      "BTCUSDT",
+      "ZECUSDT",
+      "BEATUSDT",
+      "PIPPINUSDT",
+      "SQDUSDT",
+      "TRXUSDT",
+      "FILUSDT",
+      "CHZUSDT",
+      "LINKUSDT",
+      "DOTUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "DOGSUSDT",
+      "ADAUSDT",
+      "GUNUSDT",
+      "RIVERUSDT",
+      "AVAXUSDT",
+      "MANAUSDT",
+      "AXSUSDT",
+      "UNIUSDT",
+      "DASHUSDT",
+      "GMXUSDT",
+      "IOTAUSDT",
+      "ALGOUSDT",
+      "BICOUSDT",
+      "ILVUSDT",
+      "ARKMUSDT",
+      "ANKRUSDT",
+      "IMXUSDT",
+      "WIFUSDT",
+      "FETUSDT",
+      "CFXUSDT",
+      "ONTUSDT",
+      "EDUUSDT",
+      "SSVUSDT",
+      "APEUSDT",
+      "ICPUSDT",
+      "RONINUSDT",
+      "SEIUSDT",
+      "WUSDT",
+      "STXUSDT",
+      "ENAUSDT",
+      "NEOUSDT",
+      "NFPUSDT"
+    ],
+
+    "Auto": {
+      // === ОБНОВЛЕНИЕ UNIVERSE ===
+      "RefreshInterval": 5,
+      "ScannerCacheSeconds": 300, // production 600 or 900
+
+      // === КАНДИДАТЫ ===
+      "TopVolumeCount": 40,
+
+      // 🎯 АКТИВНЫЙ UNIVERSE
+      // >= pinned.count (9)
+      "FinalUniverseCap": 35,
+
+      // Абсолютный потолок
+      "TotalUniverseCap": 50,
+
+      // 🔥 КЛЮЧ: только 1 новый символ за цикл
+      "StabilityMaxAdds": 2,
+
+      // === ФИЛЬТР МУСОРА ===
+      "MinPrice": 0.04,
+
+      // === ОБЪЁМЫ ===
+      "Min24hVolumeLong": 2000000,
+      "Min24hVolumeShort": 3300000,
+
+      // === ВЕСА ===
+      "AiWeight": 0.47,
+      "MomentumWeight": 0.46,
+      "MomentumCapPercent": 18,
+
+      // === BTC FILTER ===
+      "EnableBtcFilter": true,
+      "BtcDumpThreshold": -2.5,
+      "BtcSqueezeThreshold": 2.5,
+
+      // Логи
+      "DryRunLogLimit": 10
+    },
+
+    "DynamicCap": {
+      "Enabled": true,
+
+      "LowVolPct": 1.2,
+      "MidVolPct": 2.5,
+
+      // ❗ НИКОГДА ниже pinned.count
+      "CapLowVol": 25,
+      "CapMidVol": 25,
+      "CapHighVol": 26
+    }
+  },
+
+
+  "Trading": {
+    "Enabled": true,
+    "Level": "pro",
+
+    "TimeframeMinutes": 5,
+
+    "Deposit": 15.0,
+    "Leverage": 2,
+
+    "RiskPerTrade": 0.02,
+    "BaseRiskPercent": 1.0,
+
+    "MinNotional": 6,
+    "MinNotionalGuard": 12,
+    "MinNotionalGuardPercent": 0.002,
+
+    "CooldownSeconds": 120
+  },
+
+  "TestMode": {
+    "Enabled": true
+  },
+  "Strategy": {
+    "Mode": "Pullback",
+    "PullbackType": "CandleNearEma",
+    "EmaPeriod": 21,
+    "EmaZonePercent": 0.002,
+    "EntryPriceSource": "Close"
+  },
+
+  "TakeProfit": {
+    "Mode": "MultiAtr",
+    "AtrPeriod": 14,
+
+    "Tp1Multiplier": 1.0,
+    "Tp2Multiplier": 1.5,
+    "Tp3Multiplier": 2.0,
+
+    "Tp1Part": 0.4,
+    "Tp2Part": 0.35,
+    "Tp3Part": 0.25
+  },
+
+  "Debug": {
+    "EnableStrategyDebug": true
+  },
+
+  "EngineState": {
+    "SnapshotPath": "C:\\VertexShared\\engine_state.json"
+  },
+  "SharedData": {
+    "Root": "C:\\Vertex\\Engines\\client_001"
+  }
+}
+ 

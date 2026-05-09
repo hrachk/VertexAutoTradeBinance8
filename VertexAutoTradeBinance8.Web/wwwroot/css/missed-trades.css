@@ -1,0 +1,209 @@
+﻿:root {
+    --bg-main: #0b0f14;
+    --bg-card: #0f1318;
+    --bg-card-hover: #121720;
+    --border-soft: #1c2128;
+    --border-strong: #2a313b;
+    --binance-yellow: #f0b90b;
+    --binance-green: #0ecb81;
+    --binance-red: #f6465d;
+    --binance-blue: #3b82f6;
+    --text-main: #e5e7eb;
+    --text-dim: #9ca3af;
+    --text-soft: #6b7280;
+    --radius-card: 14px;
+    --radius-chip: 999px;
+    --glow-green: 0 0 18px rgba(14,203,129,0.15);
+    --glow-yellow: 0 0 18px rgba(240,185,11,0.15);
+    --glow-red: 0 0 18px rgba(246,70,93,0.18);
+}
+.missed-card {
+    background: linear-gradient(180deg, #0f1318, #0b0f14);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-card);
+    padding: 10px 12px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.015), 0 8px 22px rgba(0,0,0,0.45);
+    transition: all .18s ease;
+    position: relative;
+    /*height:299px;*/
+}
+
+    .missed-card:hover {
+        background: var(--bg-card-hover);
+        border-color: var(--border-strong);
+        transform: translateY(-2px);
+    }
+.flash-new {
+    animation: flashGlow 1.8s ease-out;
+}
+
+@keyframes flashGlow {
+    0% {
+        box-shadow: 0 0 0 rgba(240,185,11,0);
+    }
+
+    30% {
+        box-shadow: var(--glow-yellow);
+    }
+
+    100% {
+        box-shadow: none;
+    }
+}
+.missed-symbol {
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: .4px;
+    color: var(--binance-yellow);
+}
+
+.missed-date {
+    
+    color: var(--text-soft);
+	
+    opacity: 0.7;
+    margin-bottom: 10px;
+  font-size: x-large;
+    color:white;
+    font-weight: 700;
+}
+.score-block {
+    margin-top: 6px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    font-size: 11px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border: 1px solid var(--border-soft);
+}
+
+.score-green {
+    background: rgba(14,203,129,0.08);
+    color: var(--binance-green);
+}
+
+.score-blue {
+    background: rgba(59,130,246,0.08);
+    color: var(--binance-blue);
+}
+
+.score-yellow {
+    background: rgba(240,185,11,0.10);
+    color: var(--binance-yellow);
+}
+
+.score-red {
+    background: rgba(246,70,93,0.10);
+    color: var(--binance-red);
+}
+.liquidity-block {
+    margin-top: 6px;
+    padding: 8px;
+    border-radius: 10px;
+    border: 1px solid var(--border-soft);
+}
+
+.liq-high {
+    background: rgba(246,70,93,0.08);
+    border-color: rgba(246,70,93,0.3);
+    box-shadow: var(--glow-red);
+}
+
+.liq-med {
+    background: rgba(240,185,11,0.08);
+    border-color: rgba(240,185,11,0.3);
+    box-shadow: var(--glow-yellow);
+}
+
+.liq-low {
+    background: rgba(14,203,129,0.08);
+    border-color: rgba(14,203,129,0.3);
+    box-shadow: var(--glow-green);
+}
+
+.liq-bar {
+    display: flex;
+    gap: 3px;
+    margin-top: 6px;
+}
+
+.liq-bar-fill {
+    flex: 1;
+    height: 4px;
+    background: currentColor;
+    opacity: .9;
+    border-radius: 3px;
+}
+
+.liq-bar-empty {
+    flex: 1;
+    height: 4px;
+    background: #1f2933;
+    border-radius: 3px;
+}
+.tag-long {
+    background: rgba(14,203,129,0.15);
+    color: var(--binance-green);
+    padding: 2px 8px;
+    border-radius: var(--radius-chip);
+    font-weight: 700;
+    font-size: 11px;
+}
+
+.tag-short {
+    background: rgba(246,70,93,0.15);
+    color: var(--binance-red);
+    padding: 2px 8px;
+    border-radius: var(--radius-chip);
+    font-weight: 700;
+    font-size: 11px;
+}
+.conf-bar {
+    height: 5px;
+    background: #1f2933;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.conf-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #0ecb81, #f0b90b);
+}
+.ai-summary {
+    background: linear-gradient(180deg, #0f1318, #0b0f14);
+    border: 1px solid var(--border-soft);
+    border-radius: 14px;
+    padding: 14px;
+    box-shadow: 0 8px 22px rgba(0,0,0,0.45);
+}
+
+.summary-title {
+    font-weight: 800;
+    color: var(--binance-yellow);
+    margin-bottom: 10px;
+}
+
+.summary-item {
+    font-size: 12px;
+    margin-bottom: 6px;
+    color: var(--text-main);
+}
+.missed-card[data-reason="ExecutionFailed"] {
+    border-left: 3px solid #f6465d;
+}
+
+.missed-card[data-reason="InsufficientBalance"] {
+    border-left: 3px solid #f0b90b;
+}
+
+.missed-card[data-reason="BelowMinNotional"] {
+    border-left: 3px solid #3b82f6;
+}
+.ai-verdict {
+    font-size: 11px;
+    margin-top: 6px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    background: rgba(255,255,255,0.04);
+}

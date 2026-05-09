@@ -1,0 +1,626 @@
+﻿@page "/ai-dashboard"
+@using VertexAutoTradeBinance8.Models
+@using VertexAutoTradeBinance8.Services
+@inject IJSRuntime JS
+@inject AiRuntimeDataProvider Runtime
+@implements IDisposable
+
+<div class="px-6 py-4">
+
+    <h2 class="text-3xl font-bold mb-4">AI Dashboard</h2>
+
+    @if (State is null)
+    {
+        <div class="text-red-400">⚠ Runtime не загружен</div>
+    }
+    else
+    {
+        var Stats = State.Snapshot;
+        var MarketStates = State.MarketStates ?? new List<AiSelfLearningService.MarketState>();
+        var Trades = State?.Trades;
+
+    <!-- ================= SUMMARY ================= -->
+    <div class="summary-bar mb-6">
+        @SummaryChip("Символы", Stats.Meta.Symbols.ToString())
+        @SummaryChip("Market States", Stats.Meta.MarketStates.ToString())
+        @SummaryChip("Trades", Stats.Meta.Trades.ToString())
+        @RuntimeChip()
+    </div>
+
+    <!-- ================= AI PERFORMANCE ================= -->
+  <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700 mb-8">
+
+    <div class="section-header">
+        <div>
+            <h3 class="font-bold text-xl">AI Performance — Best Symbols</h3>
+            <span class="text-xs text-slate-400">
+                Weighted by WinRate & sample size
+            </span>
+        </div>
+        <div class="chevron @(PerformanceOpen ? "open" : "")"
+             @onclick="TogglePerformance"></div>
+    </div>
+
+    @if (PerformanceOpen)
+    {
+        <div class="section-body">
+            <div class="wr-grid">
+
+                @{
+                    const int TopN = 20;
+                    const int MinTrades = 20;
+
+                    var leaderboard = Stats.Symbols
+                        .Select(s => new
+                        {
+                            s.Symbol,
+                            Trades = s.Regimes.Sum(r => r.Trades),
+                            Wins   = s.Regimes.Sum(r => r.Wins)
+                        })
+                        .Where(x => x.Trades >= MinTrades)
+                        .Select(x =>
+                        {
+                            var winRate = x.Trades > 0
+                                ? (double)x.Wins / x.Trades * 100.0
+                                : 0;
+
+                            // сглаживание: penalize small samples
+                            var weight = Math.Min(1.0, x.Trades / 20.0);
+
+                            return new
+                            {
+                                x.Symbol,
+                                x.Trades,
+                                WinRate = winRate,
+                                Score = winRate * weight
+                            };
+                        })
+                        .OrderByDescending(x => x.Score)
+                        .ThenByDescending(x => x.Trades)
+                        .Take(TopN)
+                        .ToList();
+                }
+
+                @foreach (var s in leaderboard)
+                {
+                    <div class="wr-card clickable"
+                         title="Focus symbol in AI Brain"
+                         @onclick="() => FocusSymbol(s.Symbol)">
+
+                        <div class="flex justify-between items-center">
+                            <div class="font-bold text-lg">@s.Symbol</div>
+                            <span class="text-xs text-slate-400">
+                                score @s.Score.ToString("F1")
+                            </span>
+                        </div>
+
+                        <div class="text-sm mt-1">
+                            <span class="font-semibold">WinRate:</span>
+                            <span class="@WinRateColor(s.WinRate)">
+                                @s.WinRate.ToString("F1")%
+                            </span>
+                        </div>
+
+                        <div class="flex justify-between text-xs text-slate-400 mt-1">
+                            <span>Trades: @s.Trades</span>
+                            <span>@WinRateLabel(s.WinRate, s.Trades)</span>
+                        </div>
+                    </div>
+                }
+
+            </div>
+        </div>
+    }
+</div>
+
+
+    <!-- ================= AI BRAIN ================= -->
+    <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700 mb-8">
+
+        <div class="section-header">
+            <div>
+                <h3 class="font-bold text-xl">AI Brain — Live Neurons</h3>
+                <div class="text-xs text-slate-400">
+                    Symbol-centric view (strongest TF)
+                </div>
+            </div>
+            <div class="chevron @(BrainOpen ? "open" : "")"
+                 @onclick="ToggleBrain"></div>
+        </div>
+
+        @if (!BrainOpen)
+        {
+            <div class="text-xs text-amber-400 mt-2">
+                PINNED ONLY
+            </div>
+        }
+
+        <div class="section-body">
+            <div class="market-grid dense">
+@if (BrainSymbols.Count == 0)
+{
+    <div class="text-xs text-slate-400 mt-4">
+        Brain data loading...
+    </div>
+}
+else{
+      @foreach (var item in BrainSymbols)
+            {
+                if (!BrainOpen && !IsPinned(item.Symbol))
+                    continue;
+
+                var st = item.Strongest;
+
+                <div id="brain-@item.Symbol"
+                     class="market-card neuron
+                     @(IsPinned(item.Symbol) ? "pinned" : "")
+                     @PulseClass(NeuronLevel(NeuronPower(st)))
+                     @GlowClass(NeuronLevel(NeuronPower(st)))">
+
+                    <!-- ===== HEADER ===== -->
+                    <div class="flex justify-between items-center mb-2">
+
+                        <div class="flex items-center gap-2">
+                            <!-- PIN -->
+                            <span class="pin-icon @(IsPinned(item.Symbol) ? "pinned" : "")"
+                                  @onclick:stopPropagation
+                                  @onclick="() => TogglePin(item.Symbol)">
+                                📌
+                            </span>
+
+                            <b>@item.Symbol</b>
+                            <span class="text-xs text-slate-400">
+                                (@st.Timeframe)
+                            </span>
+                        </div>
+
+                        <!-- EXPAND TF -->
+                        <span class="tf-chevron @(IsExpanded(item.Symbol) ? "open" : "")"
+                              @onclick="() => ToggleExpand(item.Symbol)">
+                        </span>
+                    </div>
+
+                    <!-- ===== STRONGEST TF INFO ===== -->
+                    <div class="telemetry">
+                        <span class="telemetry-item">
+                            Slope
+                            <b class="@(st.TrendSlopePercent >= 0 ? "text-emerald-400" : "text-red-400")">
+                                @(st.TrendSlopePercent >= 0 ? "↑" : "↓")
+                                @Math.Abs(st.TrendSlopePercent).ToString("F3")
+                            </b>
+                        </span>
+
+                        <span class="telemetry-item">
+                            Vol <b>@st.VolatilityPercent.ToString("F2")</b>
+                        </span>
+
+                        <span class="telemetry-item">
+                            ATR <b>@st.Atr.ToString("F2")</b>
+                        </span>
+                    </div>
+
+                    <div class="text-xs mt-2 flex items-center gap-2">
+                        <span>
+                            Confidence:
+                            <b>@st.Confidence.ToString("P0")</b>
+                        </span>
+
+                        <span class="status-pill @(NeuronLevel(NeuronPower(st)) switch {
+                            3 => "hot",
+                            2 => "active",
+                            1 => "watch",
+                            _ => "idle"
+                        })">
+                            @(NeuronLevel(NeuronPower(st)) switch {
+                                3 => "ACTIVE",
+                                2 => "THINKING",
+                                1 => "WATCHING",
+                                _ => "SLEEPING"
+                            })
+                        </span>
+                    </div>
+
+                    <!-- ===== EXPANDED TF LIST ===== -->
+                    @if (IsExpanded(item.Symbol))
+                    {
+                        <div class="tf-list">
+                            @foreach (var tf in item.All)
+                            {
+                                var isStrongest = tf == item.Strongest;
+
+                                <div class="tf-row @(isStrongest ? "strongest" : "")">
+                                    <span class="tf-name">@tf.Timeframe</span>
+
+                                    <span class="tf-state">
+                                        @if (isStrongest)
+                                        {
+                                            <span class="tf-badge">STRONG</span>
+                                        }
+                                        Conf @tf.Confidence.ToString("P0")
+                                    </span>
+
+                                    <span class="tf-slope">
+                                        @(tf.TrendSlopePercent >= 0 ? "↑" : "↓")
+                                        @Math.Abs(tf.TrendSlopePercent).ToString("F3")
+                                    </span>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+
+}
+                
+      
+
+            </div>
+        </div>
+    </div>
+
+ <!-- ================= TRADES ================= -->
+<div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700">
+
+    <div class="section-header">
+        <h3 class="font-bold text-xl">Последние сделки</h3>
+        <div class="chevron @(TradesOpen ? "open" : "")"
+             @onclick="ToggleTrades"></div>
+    </div>
+
+    @if (TradesOpen)
+    {
+        <div class="section-body">
+            <div class="trade-grid">
+
+                @if (Trades == null || Trades.Count == 0)
+                {
+                    <div class="text-slate-400 text-sm">
+                        Нет данных по сделкам
+                    </div>
+                }
+                else
+                {
+                    @foreach (var t in Trades.OrderByDescending(x => x.Time).Take(30))
+                    {
+                        var isWin = t.PnlPct >= 0;
+                        var ageSec = (DateTime.UtcNow - t.Time.ToUniversalTime()).TotalSeconds;
+
+                        <div class="trade-card">
+
+                            <!-- HEADER -->
+                            <div class="flex justify-between mb-2 items-center">
+                                <div class="flex items-center gap-2">
+                                    <span class="trade-symbol">@t.Symbol</span>
+
+                                    <span class="side-badge @(t.Side == SignalSide.Buy ? "buy-badge" : "sell-badge")">
+                                        @t.Side
+                                    </span>
+                                </div>
+
+                                <span class="@(isWin ? "text-emerald-400" : "text-red-400") font-semibold">
+                                    @(isWin ? "+" : "")
+                                    @((t.PnlPct * 100).ToString("F2")) %
+                                </span>
+                            </div>
+
+                            <!-- BODY -->
+                            <div class="text-xs space-y-1 text-slate-300">
+
+                                <div class="flex justify-between">
+                                    <span>Entry</span>
+                                    <b>@t.Entry.ToString("F4")</b>
+                                </div>
+
+                                <div class="flex justify-between">
+                                    <span>Exit</span>
+                                    <b>@t.Exit.ToString("F4")</b>
+                                </div>
+
+                                <div class="flex justify-between">
+                                    <span>Regime</span>
+                                    <b>@t.Regime</b>
+                                </div>
+
+                            </div>
+
+                            <!-- FOOTER -->
+                            <div class="flex justify-between items-center mt-2 text-xs text-slate-400">
+                                <span>@t.Time.ToLocalTime()</span>
+
+                                <span class="@LiveDotClass(t.Time)">
+                                    @(ageSec < 15 ? "LIVE" :
+                                      ageSec < 60 ? "recent" :
+                                      "archived")
+                                </span>
+                            </div>
+
+                        </div>
+                    }
+                }
+
+            </div>
+        </div>
+    }
+</div>
+
+
+    }
+
+   
+
+</div>
+
+
+@code {
+    class BrainSymbolGroup
+{
+    public string Symbol { get; set; } = "";
+    public AiSelfLearningService.MarketState Strongest { get; set; } = null!;
+    public List<AiSelfLearningService.MarketState> All { get; set; } = new();
+}
+
+    List<BrainSymbolGroup> BrainSymbols = new();
+    AiRuntimeState? State => Runtime.Current;
+
+    bool BrainOpen = true;
+    bool TradesOpen = false;
+
+    HashSet<string> PinnedSymbols = new();
+
+    HashSet<string> ExpandedSymbols = new();
+
+    bool IsExpanded(string symbol) =>
+        ExpandedSymbols.Contains(symbol);
+
+    void ToggleExpand(string symbol)
+    {
+        if (!ExpandedSymbols.Add(symbol))
+            ExpandedSymbols.Remove(symbol);
+    }
+
+    void TogglePin(string symbol)
+    {
+        if (!PinnedSymbols.Add(symbol))
+            PinnedSymbols.Remove(symbol);
+    }
+
+    protected override void OnInitialized()
+    {
+        Runtime.OnUpdated += Refresh;
+    }
+
+    bool PerformanceOpen = true;
+    
+    async Task TogglePerformance()
+    {
+        PerformanceOpen = !PerformanceOpen;
+        await JS.InvokeVoidAsync("uiState.set", "ai.performance.open", PerformanceOpen);
+    }
+
+   const double AutoExpandConfidence = 0.45;
+
+    void AutoExpandStrongSignals()
+{
+    if (BrainSymbols.Count == 0) return;
+
+    foreach (var item in BrainSymbols)
+    {
+        var st = item.Strongest;
+        if (st == null) continue;
+
+        var level = NeuronLevel(NeuronPower(st));
+
+        if (level == 3 && (double)st.Confidence >= AutoExpandConfidence)
+        {
+            ExpandedSymbols.Add(item.Symbol);
+        }
+    }
+}
+
+    void RebuildBrainSymbols()
+    {
+        if (State == null || State.MarketStates.Count == 0)
+    {
+        BrainSymbols.Clear();
+        return;
+    }
+
+    BrainSymbols = State.MarketStates
+        .GroupBy(x => x.Symbol)
+        .Where(g => g.Any())
+        .Select(g =>
+        {
+            var strongest = g
+                .OrderByDescending(s => NeuronPower(s))
+                .FirstOrDefault();
+
+            if (strongest == null)
+                return null;
+
+            return new BrainSymbolGroup
+            {
+                Symbol = g.Key,
+                Strongest = strongest,
+                All = g
+                    .OrderByDescending(s => NeuronPower(s))
+                    .ToList()
+            };
+        })
+        .Where(x => x != null)
+        .OrderByDescending(x => NeuronPower(x!.Strongest))
+        .ToList()!;
+    }
+
+    async Task ToggleBrain()
+    {
+        BrainOpen = !BrainOpen;
+        await JS.InvokeVoidAsync("uiState.set", "ai.brain.open", BrainOpen);
+    }
+
+    async Task ToggleTrades()
+    {
+        TradesOpen = !TradesOpen;
+        await JS.InvokeVoidAsync("uiState.set", "ai.trades.open", TradesOpen);
+    }
+
+    bool IsPinned(string symbol) =>
+        PinnedSymbols.Contains(symbol); 
+  // || AutoPinnedSymbols.Contains(symbol);
+
+    void Refresh()
+    {
+        RebuildBrainSymbols();
+    InvokeAsync(StateHasChanged);
+    }
+
+    void FocusSymbol(string symbol)
+    {
+        // pin
+        PinnedSymbols.Add(symbol);
+
+        // раскрыть TF
+        ExpandedSymbols.Add(symbol);
+
+        // открыть Brain
+        BrainOpen = true;
+
+        StateHasChanged();
+
+        // scroll
+        _ = JS.InvokeVoidAsync("uiScrollToSymbol", symbol);
+    }
+
+    bool _autoExpandedOnce = false;
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        PerformanceOpen = await JS.InvokeAsync<bool>("uiState.get", "ai.performance.open", true);
+        BrainOpen = await JS.InvokeAsync<bool>("uiState.get", "ai.brain.open", true);
+        TradesOpen = await JS.InvokeAsync<bool>("uiState.get", "ai.trades.open", false);
+
+        if (!_autoExpandedOnce)
+        {
+            AutoExpandStrongSignals();
+            _autoExpandedOnce = true;
+            StateHasChanged();
+        }
+    }
+
+    public void Dispose()
+    {
+        Runtime.OnUpdated -= Refresh;
+    }
+
+    /* ===== SUMMARY ===== */
+ 
+
+    RenderFragment SummaryChip(string title, string value) => @<div class="summary-chip">
+        <span class="label">@title</span>
+        <span class="value">@value</span>
+    </div>;
+
+    RenderFragment RuntimeChip() => @<div class="summary-chip">
+        <span class="label">Runtime</span>
+        <span class="value">@((int)(DateTime.UtcNow - (State?.LoadedAtUtc ?? DateTime.UtcNow)).TotalSeconds)s</span>
+    </div>;
+
+    /* ===== NEURON HELPERS (без логических изменений) ===== */
+
+    double NeuronPower(AiSelfLearningService.MarketState s)
+    {
+        var conf = Math.Clamp((double)s.Confidence, 0, 1);
+        var slope = Math.Min(Math.Abs((double)s.TrendSlopePercent) / 0.30, 1.0);
+        var vol = (double)s.VolatilityPercent;
+        var volScore = vol < 0.3 ? 0.5 : 1.0;
+        return Math.Clamp(conf * 0.6 + slope * 0.25 + volScore * 0.15, 0, 1);
+    }
+
+    int NeuronLevel(double p) =>
+        p >= 0.75 ? 3 :
+        p >= 0.50 ? 2 :
+        p >= 0.25 ? 1 : 0;
+
+    string PulseClass(int l) => l switch
+    {
+        3 => "pulse-fast",
+        2 => "pulse-med",
+        1 => "pulse-slow",
+        _ => "pulse-off"
+    };
+
+    string GlowClass(int l) => l switch
+    {
+        3 => "glow-strong",
+        2 => "glow-med",
+        1 => "glow-weak",
+        _ => "glow-off"
+    };
+
+    string LiveDotClass(DateTime t)
+    {
+        var age = (DateTime.UtcNow - t.ToUniversalTime()).TotalSeconds;
+        if (age <= 10) return "dot-live";
+        if (age <= 30) return "dot-warm";
+        return "dot-cold";
+    }
+
+    string WinRateLabel(double wr, int trades)
+    {
+        if (trades < 3) return "мало данных";
+        if (wr >= 60) return "стабильно";
+        if (wr >= 40) return "нестабильно";
+        return "слабо";
+    }
+
+    string WinRateColor(double wr)
+    {
+        if (wr >= 60) return "text-emerald-400";
+        if (wr >= 40) return "text-amber-400";
+        return "text-red-400";
+    }
+    RenderFragment MarketCard(AiSelfLearningService.MarketState st) => @<div class="market-card neuron
+        @(IsPinned(st.Symbol) ? "pinned" : "")
+        @PulseClass(NeuronLevel(NeuronPower(st)))
+        @GlowClass(NeuronLevel(NeuronPower(st)))">
+        <div class="flex justify-between items-center mb-2">
+            <div class="flex items-center gap-2">
+                <span class="pin-icon @(IsPinned(st.Symbol) ? "pinned" : "")"
+                      title="Pin symbol"
+                      @onclick:stopPropagation
+                      @onclick="() => TogglePin(st.Symbol)">📌</span>
+
+                <div>
+                    <b>@st.Symbol</b>
+                    <span class="text-slate-400 text-xs">(@st.Timeframe)</span>
+                </div>
+            </div>
+
+            <span class="reason-badge">@st.Reason</span>
+        </div>
+
+        <div class="telemetry">
+            <span class="telemetry-item">
+                Slope
+                <b class="@(st.TrendSlopePercent >= 0 ? "text-emerald-400" : "text-red-400")">
+                    @(st.TrendSlopePercent >= 0 ? "↑" : "↓")
+                    @Math.Abs(st.TrendSlopePercent).ToString("F3")
+                </b>
+            </span>
+
+            <span class="telemetry-item">
+                Vol <b>@st.VolatilityPercent.ToString("F3")</b>
+            </span>
+
+            <span class="telemetry-item">
+                ATR <b>@st.Atr.ToString("F2")</b>
+            </span>
+        </div>
+
+        <div class="timestamp">
+            @st.Time.ToLocalTime()
+        </div>
+    </div>;
+
+}
+
