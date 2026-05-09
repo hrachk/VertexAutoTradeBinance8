@@ -1,4 +1,7 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using Binance.Net;
+using Binance.Net.Clients;
+using CryptoExchange.Net.Authentication;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using Serilog;
 using Serilog.Events;
@@ -14,8 +17,10 @@ using VertexAutoTradeBinance8.Services.Interface;
 using VertexAutoTradeBinance8.Services.MarketState;
 using VertexAutoTradeBinance8.Services.Recovery;
 using VertexAutoTradeBinance8.Services.State;
+using VertexAutoTradeBinance8.Services.Trading;
 using VertexAutoTradeBinance8.Services.Ws;
 using VertexAutoTradeBinance8.Strategy;
+using static VertexAutoTradeBinance8.Services.OrderExecutor;
 // остальные using как у тебя
 
 namespace VertexAutoTradeBinance8;
@@ -102,12 +107,13 @@ public class Program
                 {
                     // ===== ТВОЙ СУЩЕСТВУЮЩИЙ DI — БЕЗ ИЗМЕНЕНИЙ =====
                     services.Configure<BinanceOptions>(ctx.Configuration.GetSection("Binance"));
-                    //services.Configure<TradingOptions>(ctx.Configuration.GetSection("Trading"));
-                    //services.Configure<TradingOptions>(ctx.Configuration.GetSection("Trading:BTC"));
-                    //services.Configure<TradingOptions>(ctx.Configuration.GetSection("Trading:ETH"));
 
-                    services.Configure<TradingOptions>("default",
-                    ctx.Configuration.GetSection("Trading"));
+                    services.Configure<TradingOptions>(
+                      ctx.Configuration.GetSection("Trading")); // TRUE default
+ 
+
+                    services.Configure<TradingOptions>(
+                  ctx.Configuration.GetSection("SignalOnlyMode"));
 
                     services.Configure<TradingOptions>("BTC",
                         ctx.Configuration.GetSection("Trading:BTC"));
@@ -115,14 +121,24 @@ public class Program
                     services.Configure<TradingOptions>("ETH",
                         ctx.Configuration.GetSection("Trading:ETH"));
 
-                    services.Configure<TestModeOptions>(ctx.Configuration.GetSection("TestMode"));
-                    services.Configure<HedgeKillSettings>(ctx.Configuration.GetSection("HedgeKill"));
-                    services.Configure<SignalConfidenceSettings>(ctx.Configuration.GetSection("SignalConfidence"));
-                    
+                    services.AddSingleton<TradingOptionsResolver>();
 
+                    services.Configure<TestModeOptions>(
+     ctx.Configuration.GetSection("TestMode"));
+
+                    services.Configure<HedgeKillSettings>(
+                        ctx.Configuration.GetSection("HedgeKill"));
+
+                    services.Configure<SignalConfidenceSettings>(
+                        ctx.Configuration.GetSection("SignalConfidence"));
+
+                    services.Configure<TradingSettings>(
+                        ctx.Configuration.GetSection("TradingSettings"));
+
+                    services.AddSingleton<ConfidenceResolver>();
 
                     services.AddSingleton(sp =>
-                        sp.GetRequiredService<IOptions<TradingOptions>>().Value);
+                       sp.GetRequiredService<IOptions<TradingOptions>>().Value);
 
                     services.AddSingleton(sp =>
                         sp.GetRequiredService<IOptions<TestModeOptions>>().Value);
@@ -132,16 +148,55 @@ public class Program
 
                     services.AddSingleton(sp =>
                         sp.GetRequiredService<IOptions<SignalConfidenceSettings>>().Value);
+                 
+                    services.AddSingleton<BinanceRestClient>(sp =>
+                    {
+                        var cfg = sp.GetRequiredService<IOptions<BinanceOptions>>().Value;
+
+                        return new BinanceRestClient(opt =>
+                        {
+                            opt.Environment = cfg.UseTestnet
+                                ? BinanceEnvironment.Testnet
+                                : BinanceEnvironment.Live;
+
+                            opt.ApiCredentials = new ApiCredentials(
+                                cfg.ApiKey,
+                                cfg.SecretKey);
+
+                            opt.AutoTimestamp = true;
+                            opt.RequestTimeout = TimeSpan.FromSeconds(15);
+                        });
+                    });
+
+
+                    services.AddSingleton<BinanceSocketClient>(sp =>
+                    {
+                        var cfg = sp.GetRequiredService<IOptions<BinanceOptions>>().Value;
+
+                        return new BinanceSocketClient(opt =>
+                        {
+                            opt.Environment = cfg.UseTestnet
+                                ? BinanceEnvironment.Testnet
+                                : BinanceEnvironment.Live;
+
+                            opt.ApiCredentials = new ApiCredentials(
+                                cfg.ApiKey,
+                                cfg.SecretKey);
+                        });
+                    });
 
                     services.AddHttpClient();
 
                  
 
 
+
+
                     // ===== BASE / MARKET =====
                     services.AddSingleton<BinanceClientFactory>();
                     services.AddSingleton<MarketDataKlineBuffer>();
                     services.AddSingleton<KlineBufferPersistence>();
+                    services.AddSingleton<RealtimePriceService>();
 
                     services.AddSingleton<MarketContextService>();
                     services.AddSingleton<WsKlineSubscriber>();
@@ -151,7 +206,7 @@ public class Program
                     services.AddSingleton<PositionLifecycleTracker>();
 
                     services.AddSingleton<BinanceHistoryImporter>();
-                    services.AddSingleton<TradingOptionsResolver>();
+                    //services.AddSingleton<AtrAdaptiveProfitLockManager>();
                     
     
 
@@ -168,7 +223,12 @@ public class Program
 
                     // ===== AI / CORE =====
                     services.AddSingleton<AiSelfLearningService>();
-                    services.AddSingleton<AiMarketRegimeService>();
+                   
+                  services.AddSingleton<AiMarketRegimeService>();
+                    services.AddSingleton<Lazy<MarketDataService>>(sp => new Lazy<MarketDataService>(() => sp.GetRequiredService<MarketDataService>()));
+                    services.AddSingleton<EntryTracker>();
+                    services.AddSingleton<CooldownGuard>();
+
                     services.AddSingleton<AiPatternEngineService>();
                     services.AddSingleton<AiCorrelationService>();
                     services.AddSingleton<AiLiquidityClusterService>();
@@ -188,14 +248,13 @@ public class Program
                     services.AddSingleton<StrategyEngine>();
                     services.AddSingleton<SmartRegimeService>();
                     services.AddSingleton<ReverseProbeEngine>();
+                    services.AddSingleton<IAccountStateService, AccountStateService>();
 
 
                     // ===== SUPERVISOR / STATE =====
                     services.AddSingleton<PositionSupervisorService>();
                     services.AddSingleton<PositionGuardService>();
                     services.AddSingleton<PositionProtectorService>();
-
-                    services.AddSingleton<IAccountStateService, AccountStateService>();
                     services.AddSingleton<TradeStateManager>();
                     services.AddSingleton<EngineStateBuilder>();
                     services.AddSingleton<EngineStateSnapshotService>();

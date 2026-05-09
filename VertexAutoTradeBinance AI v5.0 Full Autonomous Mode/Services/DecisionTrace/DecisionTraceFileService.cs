@@ -44,7 +44,15 @@ namespace VertexAutoTradeBinance8.Services.DecisionTrace
 
                 lock (_lock)
                 {
-                    File.AppendAllText(file, json + Environment.NewLine);
+                    using var fs = new FileStream(
+                        file,
+                        FileMode.Append,
+                        FileAccess.Write,
+                        FileShare.Read);
+
+                    using var sw = new StreamWriter(fs);
+
+                    sw.WriteLine(json);
                 }
             }
             catch (Exception ex)

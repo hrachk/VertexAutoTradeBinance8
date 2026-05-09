@@ -83,12 +83,26 @@ public sealed class MarketContextService
 
     private static MarketBias ResolveBias(MarketRegime r1d, MarketRegime r4h)
     {
-        if (r1d == MarketRegime.StrongUpTrend) return MarketBias.LongOnly;
-        if (r1d == MarketRegime.StrongDownTrend) return MarketBias.ShortOnly;
-        if (r4h == MarketRegime.StrongUpTrend) return MarketBias.LongOnly;
-        if (r4h == MarketRegime.StrongDownTrend) return MarketBias.ShortOnly;
+        if (r1d == MarketRegime.StrongUpTrend &&
+            r4h == MarketRegime.StrongUpTrend)
+            return MarketBias.LongOnly;
+
+        if (r1d == MarketRegime.StrongDownTrend &&
+            r4h == MarketRegime.StrongDownTrend)
+            return MarketBias.ShortOnly;
+
+        // conflicting signals → neutral
+        if (r1d == MarketRegime.StrongUpTrend &&
+            r4h == MarketRegime.StrongDownTrend)
+            return MarketBias.Neutral;
+
+        if (r1d == MarketRegime.StrongDownTrend &&
+            r4h == MarketRegime.StrongUpTrend)
+            return MarketBias.Neutral;
+
         return MarketBias.Neutral;
     }
+
 
     private void Log(
         string s, MarketRegime r1h, MarketRegime r4h, MarketRegime r1d,

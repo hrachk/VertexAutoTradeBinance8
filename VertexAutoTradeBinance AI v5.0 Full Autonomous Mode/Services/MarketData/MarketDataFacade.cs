@@ -22,8 +22,6 @@ namespace VertexAutoTradeBinance8.Services
         // Global REST limiter (hard cap)
         private static readonly SemaphoreSlim _globalRestLimiter = new(3, 3);
 
-        // Warmup accounting (used as "availability bars" — snapshot counts too)
-        private readonly ConcurrentDictionary<string, int> _barsAvailable = new(StringComparer.OrdinalIgnoreCase);
 
         // Snapshot flags:
         //  - _restoreAttempted: RestoreSnapshotStateAsync already executed (cold-start allowed)
@@ -45,18 +43,26 @@ namespace VertexAutoTradeBinance8.Services
         private readonly object _universeLock = new();
         private HashSet<string> _universe = new(StringComparer.OrdinalIgnoreCase);
 
+        // Warmup accounting (used as "availability bars" — snapshot counts too)
+        private readonly ConcurrentDictionary<string, int> _barsAvailable = new(StringComparer.OrdinalIgnoreCase);
+
         // WS subscribe singleflight
         private readonly ConcurrentDictionary<string, Task> _subTasks = new(StringComparer.OrdinalIgnoreCase);
 
         // REST singleflight (per symbol+tf)
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _restLocks = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, decimal> _lastPrice = new();
+
+
+        public event Action<string, decimal>? RealtimePrice;
 
         public MarketDataFacade(
             MarketDataKlineBuffer buffer,
             WsKlineSubscriber ws,
             BinanceClientFactory factory,
             ILogger<MarketDataFacade> logger,
-            MarketStateService marketState)
+            MarketStateService marketState
+             )
         {
             _buf = buffer;
             _ws = ws;
@@ -72,6 +78,105 @@ namespace VertexAutoTradeBinance8.Services
                 MarkSnapshotReady();
 
             _marketState.OnRestored += MarkSnapshotReady;
+
+            _ws.OnPrice += (symbol, price) =>
+            {
+                UpdateRealtimePrice(symbol, price);
+
+                RealtimePrice?.Invoke(symbol, price);
+            };
+            // ✅ START CLEANUP LOOP (fire and forget)
+            _ = Task.Run(CleanupLoop);
+        }
+
+        public void CleanupUnavailableSymbols(IReadOnlyCollection<string> activeSymbols)
+        {
+            var active = new HashSet<string>(
+                activeSymbols.Select(NormalizeSymbol),
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var key in _barsAvailable.Keys)
+            {
+                var symbol = key.Split(':')[0];
+
+                if (!active.Contains(symbol))
+                    _barsAvailable.TryRemove(key, out _);
+            }
+
+            foreach (var key in _restBackfilled.Keys)
+            {
+                var symbol = key.Split(':')[0];
+
+                if (!active.Contains(symbol))
+                    _restBackfilled.TryRemove(key, out _);
+            }
+
+            foreach (var key in _lastRestFetchUtc.Keys)
+            {
+                var symbol = key.Split(':')[0];
+
+                if (!active.Contains(symbol))
+                    _lastRestFetchUtc.TryRemove(key, out _);
+            }
+
+            foreach (var key in _subTasks.Keys)
+            {
+                var symbol = key.Split(':')[0];
+
+                if (!active.Contains(symbol))
+                    _subTasks.TryRemove(key, out _);
+            }
+
+            foreach (var key in _restLocks.Keys)
+            {
+                var symbol = key.Split(':')[0];
+
+                if (!active.Contains(symbol))
+                    _restLocks.TryRemove(key, out _);
+            }
+
+            foreach (var key in _lastPrice.Keys)
+            {
+                if (!active.Contains(key))
+                    _lastPrice.TryRemove(key, out _);
+            }
+        }
+        private async Task CleanupLoop()
+        {
+            while (true)
+            {
+                await Task.Delay(TimeSpan.FromMinutes(10));
+
+                try
+                {
+                    HashSet<string> universe;
+
+                    lock (_universeLock)
+                        universe = new HashSet<string>(_universe);
+
+                    CleanupUnavailableSymbols(universe);
+
+                    _logger.LogInformation(
+                        "[MD][CLEANUP] symbols={count} bars={bars}",
+                        universe.Count,
+                        _barsAvailable.Count);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[MD][CLEANUP] failed");
+                }
+            }
+        }
+
+        public void UpdateRealtimePrice(string symbol, decimal price)
+        {
+            _lastPrice[symbol] = price;
+        }
+        public decimal GetLastPrice(string symbol)
+        {
+            return _lastPrice.TryGetValue(symbol, out var p)
+                ? p
+                : 0m;
         }
 
         // =====================================================
@@ -107,10 +212,12 @@ namespace VertexAutoTradeBinance8.Services
                 foreach (var sym in target)
                 {
                     // Keep WS subscriptions alive (best-effort)
+                    _ = EnsureWsSubscribed(sym, KlineInterval.OneMinute, CancellationToken.None);
                     _ = EnsureWsSubscribed(sym, KlineInterval.FiveMinutes, CancellationToken.None);
                     _ = EnsureWsSubscribed(sym, KlineInterval.FifteenMinutes, CancellationToken.None);
                     _ = EnsureWsSubscribed(sym, KlineInterval.OneHour, CancellationToken.None);
                     _ = EnsureWsSubscribed(sym, KlineInterval.OneDay, CancellationToken.None);
+
                 }
 
                 _universe = target;
@@ -232,6 +339,8 @@ namespace VertexAutoTradeBinance8.Services
         private static string Key(string symbol, KlineInterval tf) =>
             $"{NormalizeSymbol(symbol)}:{tf}";
 
+
+
         // =====================================================
         // MAIN API
         // =====================================================
@@ -338,7 +447,7 @@ namespace VertexAutoTradeBinance8.Services
                             "[MD][HTF] request {symbol} {tf} readyBySnapshot={ready}",
                             symbol, tf, _readyBySnapshot);
                     }
-                     
+
                     return got;
                 }
                 finally
@@ -396,7 +505,7 @@ namespace VertexAutoTradeBinance8.Services
 
                 return task;
             });
-        } 
+        }
         private async Task SubscribeInternal(string symbol, KlineInterval tf)
         {
             await _ws.SubscribeAsync(symbol, tf, CancellationToken.None)

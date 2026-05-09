@@ -1,9 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using Binance.Net.Enums;
+﻿using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
-using Microsoft.Extensions.Logging;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -75,48 +71,69 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // ------------- main decision -------------
-
         public AiDecision Decide(
             string symbol,
             KlineInterval timeframe,
             IReadOnlyList<BinanceFuturesUsdtKline> klines,
             TradeSignal signal)
         {
+            if (klines == null || klines.Count < 60)
+            {
+                return new AiDecision(false, "BLOCK", 0m, 0m, "FLAT", 0m, 0m, false, signal.IsSuperSignal, "NO_DATA");
+            }
+
             int lastIndex = klines.Count - 1;
             var last = klines[lastIndex];
 
-            // === ATR / ATR% ===
+            // === ATR ===
             var atr14 = Atr(klines, 14, lastIndex);
-            if (atr14 <= 0m)
+            if (atr14 <= 0m || last.ClosePrice <= 0m)
             {
-                return new AiDecision(
-                    Allow: false,
-                    Grade: "BLOCK",
-                    Score: 0m,
-                    AtrPct: 0m,
-                    Trend: "FLAT",
-                    BodyAtr: 0m,
-                    Rr: 0m,
-                    Manipulation: false,
-                    SuperSignal: signal.IsSuperSignal,
-                    Reason: "NO_ATR");
+                return new AiDecision(false, "BLOCK", 0m, 0m, "FLAT", 0m, 0m, false, signal.IsSuperSignal, "NO_ATR");
             }
 
-            var atrPct = atr14 / last.ClosePrice; // в долях
+            var atrPct = atr14 / last.ClosePrice;
 
-            // === Trend / EMA21 / EMA50 ===
+            // ======================================================
+            // SLOPE + ACCELERATION
+            // ======================================================
+            decimal slope = 0m;
+            decimal prevSlope = 0m;
+            int lookback = 20;
+
+            if (lastIndex >= lookback)
+            {
+                var past = klines[lastIndex - lookback].ClosePrice;
+                if (past > 0)
+                    slope = (last.ClosePrice - past) / past;
+            }
+
+            if (lastIndex >= lookback * 2)
+            {
+                var p1 = klines[lastIndex - lookback].ClosePrice;
+                var p2 = klines[lastIndex - lookback * 2].ClosePrice;
+
+                if (p2 > 0)
+                    prevSlope = (p1 - p2) / p2;
+            }
+
+            decimal acceleration = slope - prevSlope;
+
+            // ======================================================
+            // EMA TREND
+            // ======================================================
             var ema21 = Ema(klines, 21, lastIndex);
             var ema50 = Ema(klines, 50, lastIndex);
 
             string trend;
             decimal trendScore;
 
-            if (ema21 > ema50 * 1.001m && last.ClosePrice > ema21)
+            if (ema21 > ema50 && last.ClosePrice > ema21 && acceleration > 0)
             {
                 trend = "UP";
                 trendScore = 1.0m;
             }
-            else if (ema21 < ema50 * 0.999m && last.ClosePrice < ema21)
+            else if (ema21 < ema50 && last.ClosePrice < ema21 && acceleration < 0)
             {
                 trend = "DOWN";
                 trendScore = 1.0m;
@@ -127,47 +144,84 @@ namespace VertexAutoTradeBinance8.Services
                 trendScore = 0.3m;
             }
 
-            // === Body / ATR ===
+            // ======================================================
+            // BODY
+            // ======================================================
             decimal body = Math.Abs(last.ClosePrice - last.OpenPrice);
-            decimal bodyAtr = body / atr14; // 0..?
+            decimal bodyAtr = body / atr14;
 
-            decimal bodyScore;
-            if (bodyAtr >= 1.5m) bodyScore = 1.0m;
-            else if (bodyAtr >= 1.0m) bodyScore = 0.8m;
-            else if (bodyAtr >= 0.6m) bodyScore = 0.5m;
-            else bodyScore = 0.2m;
+            decimal bodyScore =
+                bodyAtr >= 1.5m ? 1.0m :
+                bodyAtr >= 1.0m ? 0.8m :
+                bodyAtr >= 0.6m ? 0.5m :
+                0.2m;
 
-            // === Risk/Reward ===
+            // ======================================================
+            // ORDERFLOW
+            // ======================================================
+            decimal buy = 0m;
+            decimal sell = 0m;
+
+            int flowStart = Math.Max(1, lastIndex - 10);
+
+            for (int i = flowStart; i <= lastIndex; i++)
+            {
+                buy += klines[i].TakerBuyBaseVolume;
+                sell += (klines[i].Volume - klines[i].TakerBuyBaseVolume);
+            }
+
+            decimal pressure = (buy - sell) / Math.Max(1m, buy + sell);
+
+            // ======================================================
+            // TRAP DETECTION
+            // ======================================================
+            bool weakMove = Math.Abs(acceleration) < atrPct * 0.5m;
+            bool extremeBody = bodyAtr > 1.8m;
+            bool weakPressure = Math.Abs(pressure) < 0.15m;
+
+            bool isTrap = weakMove && extremeBody && weakPressure;
+
+            // ======================================================
+            // RR
+            // ======================================================
             decimal rr = 0m;
-            if (signal.TakeProfits != null && signal.TakeProfits.Count > 0)
+
+            if (signal.TakeProfits?.Count > 0)
             {
                 var tp1 = signal.TakeProfits[0];
                 var risk = Math.Abs(signal.EntryPrice - signal.StopLoss);
                 var reward = Math.Abs(tp1 - signal.EntryPrice);
-                if (risk > 0m)
+
+                if (risk > 0)
                     rr = reward / risk;
             }
 
-            decimal rrScore;
-            if (rr >= 2.0m) rrScore = 1.0m;
-            else if (rr >= 1.5m) rrScore = 0.8m;
-            else if (rr >= 1.0m) rrScore = 0.6m;
-            else if (rr >= 0.6m) rrScore = 0.3m;
-            else rrScore = 0.1m;
+            decimal rrScore =
+                rr >= 2.0m ? 1.0m :
+                rr >= 1.5m ? 0.8m :
+                rr >= 1.0m ? 0.6m :
+                rr >= 0.6m ? 0.3m :
+                0.1m;
 
-            // === Manipulation (простая оценка по хвостам) ===
+            // ======================================================
+            // MANIPULATION (STOP HUNT)
+            // ======================================================
             decimal upperWick = last.HighPrice - Math.Max(last.OpenPrice, last.ClosePrice);
             decimal lowerWick = Math.Min(last.OpenPrice, last.ClosePrice) - last.LowPrice;
+
             bool manip = upperWick > atr14 * 1.8m || lowerWick > atr14 * 1.8m;
 
-            decimal manipScore = manip ? 0.2m : 1.0m; // если манипуляция сильная – режем score
+            if (manip && weakPressure)
+            {
+                return new AiDecision(false, "BLOCK", 0m, atrPct, trend, bodyAtr, rr, true, signal.IsSuperSignal, "STOP_HUNT");
+            }
 
-            // === SuperSignal ===
+            decimal manipScore = manip ? 0.2m : 1.0m;
             decimal superScore = signal.IsSuperSignal ? 1.0m : 0.4m;
 
-            // --------------------------------------------------
-            // HyperSensitivity weights  (более чувствительные)
-            // --------------------------------------------------
+            // ======================================================
+            // SCORE
+            // ======================================================
             const decimal wTrend = 0.25m;
             const decimal wAtr = 0.30m;
             const decimal wBody = 0.25m;
@@ -175,14 +229,12 @@ namespace VertexAutoTradeBinance8.Services
             const decimal wManip = 0.07m;
             const decimal wSuper = 0.03m;
 
-            // ATR score: чем выше ATR%, тем лучше, но без экстремума.
-            decimal atrScore;
-            if (atrPct >= 0.004m) atrScore = 0.9m;          // 0.4%+
-            else if (atrPct >= 0.002m) atrScore = 1.0m;     // 0.2–0.4%
-            else if (atrPct >= 0.0008m) atrScore = 0.7m;    // 0.08–0.2%
-            else atrScore = 0.2m;                           // слишком мало движения
+            decimal atrScore =
+                atrPct >= 0.004m ? 0.9m :
+                atrPct >= 0.002m ? 1.0m :
+                atrPct >= 0.0008m ? 0.7m :
+                0.2m;
 
-            // manipScore: 1.0 без манипуляции, 0.2 если заметна
             decimal score =
                 wTrend * trendScore +
                 wAtr * atrScore +
@@ -191,16 +243,29 @@ namespace VertexAutoTradeBinance8.Services
                 wManip * manipScore +
                 wSuper * superScore;
 
+            // ======================================================
+            // IMPULSE BOOST
+            // ======================================================
+            if (Math.Abs(pressure) > 0.25m && Math.Abs(acceleration) > atrPct)
+            {
+                score = Math.Min(1m, score + 0.15m);
+            }
+
             score = Clamp01(score);
 
-            // --------------------------------------------------
-            // Градации чувствительной версии
-            // --------------------------------------------------
+            // ======================================================
+            // FINAL DECISION
+            // ======================================================
+            if (isTrap)
+            {
+                return new AiDecision(false, "BLOCK", 0m, atrPct, trend, bodyAtr, rr, true, signal.IsSuperSignal, "TRAP");
+            }
+
             string grade;
             bool allow = true;
             string reason = "OK";
 
-            if (atrPct < 0.0008m) // ATR% < 0.08% → рынок спит
+            if (atrPct < 0.0008m)
             {
                 grade = "BLOCK";
                 allow = false;
@@ -215,7 +280,7 @@ namespace VertexAutoTradeBinance8.Services
             else if (score < 0.50m)
             {
                 grade = "BORDER";
-                reason = "BORDERLINE";
+                reason = "BORDER";
             }
             else if (score < 0.70m)
             {
@@ -229,20 +294,27 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             var decision = new AiDecision(
-                Allow: allow,
-                Grade: grade,
-                Score: score,
-                AtrPct: atrPct,
-                Trend: trend,
-                BodyAtr: bodyAtr,
-                Rr: rr,
-                Manipulation: manip,
-                SuperSignal: signal.IsSuperSignal,
-                Reason: reason);
+                allow,
+                grade,
+                score,
+                atrPct,
+                trend,
+                bodyAtr,
+                rr,
+                manip,
+                signal.IsSuperSignal,
+                reason);
 
             _logger.LogInformation(
-                "AI v4.5 DECISION {Symbol} TF={TF} allow={Allow}, grade={Grade}, score={Score:F2}, atrPct={AtrPct:P2}, trend={Trend}, bodyATR={BodyAtr:F2}, rr={Rr:F2}, manip={Manip}, super={Super}, reason={Reason}",
-                symbol, timeframe, allow, grade, score, atrPct, trend, bodyAtr, rr, manip, signal.IsSuperSignal, reason);
+                "AI DECISION {Symbol} {TF} allow={Allow} grade={Grade} score={Score:F2} trend={Trend} acc={Acc:P2} pressure={Pressure:P2}",
+                symbol,
+                timeframe,
+                allow,
+                grade,
+                score,
+                trend,
+                acceleration,
+                pressure);
 
             return decision;
         }

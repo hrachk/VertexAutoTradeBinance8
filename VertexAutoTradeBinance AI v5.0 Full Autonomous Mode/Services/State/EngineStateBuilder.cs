@@ -1,6 +1,7 @@
-﻿using VertexAutoTradeBinance8.Models;
-using VertexAutoTradeBinance8.Strategy;
+﻿using Binance.Net.Enums;
+using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
+using VertexAutoTradeBinance8.Strategy;
 
 namespace VertexAutoTradeBinance8.Services
 {
@@ -30,7 +31,7 @@ namespace VertexAutoTradeBinance8.Services
             _stateSvc = stateSvc;
         }
 
-        public EngineState Build(string symbol, string timeframe)
+        public EngineState Build(string symbol, KlineInterval timeframe)
         {
             var s = _stateSvc.State;
 
@@ -49,7 +50,7 @@ namespace VertexAutoTradeBinance8.Services
 
                 Mode = _strategy.CurrentMode ?? "Detecting",
                 BalanceUsdt = _risk.LastBalanceUsdt,
-
+                BaseDepositUsd = s.BaseDepositUsd,
                 Symbol = symbol,
                 Timeframe = timeframe,
 
@@ -73,7 +74,8 @@ namespace VertexAutoTradeBinance8.Services
                 LastSupervisorMessage = s.LastSupervisorMessage,
                 LastUpdate = DateTime.UtcNow,
                  OpenPositions = s.OpenPositions,
-                  RealizedPnlUsd = s.RealizedPnlUsd,
+                  RealizedPnlUsd = s.BaseDepositUsd
+
             };
 
             

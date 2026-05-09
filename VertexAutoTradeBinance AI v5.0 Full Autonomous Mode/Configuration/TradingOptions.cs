@@ -31,4 +31,5 @@ public class TradingOptions
     /// Prevents WS / warmup storm.
     /// </summary>
     public int StartupSubscriptionCap { get; set; } = 8;
+    public bool EnableExecution { get; set; } = true;
 } 

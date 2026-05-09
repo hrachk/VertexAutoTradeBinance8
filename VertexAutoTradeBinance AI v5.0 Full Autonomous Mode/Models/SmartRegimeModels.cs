@@ -12,9 +12,15 @@ namespace VertexAutoTradeBinance8.Models
         SmartChop = 5,
         SmartExhaustion = 6
     }
-
+    public enum VolatilityRegime
+    {
+        Low,
+        Normal,
+        High
+    }
     public class SmartRegimeInfo
     {
+        public VolatilityRegime VolRegime { get; init; }
         public string Symbol { get; set; } = string.Empty;
         public KlineInterval Interval { get; set; }
 

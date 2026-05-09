@@ -1,4 +1,6 @@
 ﻿using Binance.Net.Enums;
+using CryptoExchange.Net;
+using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -7,423 +9,300 @@ namespace VertexAutoTradeBinance8.Services
     {
         private readonly ILogger<RiskManager> _logger;
         private readonly SymbolInfoService _symbolInfo;
-
         private readonly BinanceClientFactory _factory;
         private readonly MarketDataService _marketData;
         private readonly AiLeverageService _aiLeverage;
         private readonly AiMarketRegimeService _marketRegimeService;
         private readonly SmartRegimeService _smartRegime;
-
         private readonly TradingOptionsResolver _tradingResolver;
+        private readonly AiSelfLearningService _ai;
+
+        private const decimal MaxMarginPercent = 0.12m; // 12% hard cap margin
 
         public string? LastRejectReason { get; private set; }
-
         public decimal LastBalanceUsdt { get; private set; }
 
         public RiskManager(
             ILogger<RiskManager> logger,
             SymbolInfoService symbolInfo,
-
             BinanceClientFactory factory,
             MarketDataService marketData,
-            AiLeverageService aiLeverage, AiMarketRegimeService marketRegimeService, SmartRegimeService smartRegime,
-            TradingOptionsResolver tradingResolver
-            //SimulatedTradeService simulator
-            )
+            AiLeverageService aiLeverage,
+            AiMarketRegimeService marketRegimeService,
+            SmartRegimeService smartRegime,
+            TradingOptionsResolver tradingResolver,
+            AiSelfLearningService ai
+        )
         {
             _logger = logger;
             _symbolInfo = symbolInfo;
-
             _factory = factory;
             _marketData = marketData;
             _aiLeverage = aiLeverage;
             _marketRegimeService = marketRegimeService;
             _smartRegime = smartRegime;
-            // _simulator = simulator;
             _tradingResolver = tradingResolver;
+            _ai = ai;
         }
 
-        // ====================================================================
-        // SAFE QTY v7.7 (QUANT-REALTIME FINAL)
-        // ====================================================================
-        public async Task<decimal> CalculateSafeQty(
-       TradeSignal signal,          // добавлен параметр signal
-       string symbol,
-       decimal entryPrice,
-       decimal stopLoss,
-       decimal riskMultiplier,
-       decimal safetyRiskMultiplier,
-       decimal leverage,
-       SignalSide side,
-       List<decimal> takeProfits,
-       CancellationToken ct)
+        public int GetPrecision(decimal step)
         {
-            var trading = _tradingResolver.Resolve(symbol);
+            step = step.Normalize();
+            int[] bits = decimal.GetBits(step);
+            int scale = (bits[3] >> 16) & 0x7F;
+            return scale;
+        }
 
-            _logger.LogInformation(
-    "[CFG] RISK using Trading:{Key} for {Symbol} | lev={Lev} risk={Risk:P2} minNotional={Min}",
-    symbol.StartsWith("BTC") ? "BTC" :
-    symbol.StartsWith("ETH") ? "ETH" : "default",
-    symbol,
-    trading.Leverage,
-    trading.RiskPerTrade,
-    trading.MinNotional
-);
-
-              leverage = trading.Leverage > 0
-    ? trading.Leverage
-    : (signal.Leverage ?? 1m);
+        public decimal GetPropDeskQtyFinal(
+            TradeSignal signal,
+            decimal balance,
+            decimal step,
+            decimal minQty,
+            decimal riskMult,
+            TradingOptions trading)
+        {
             LastRejectReason = null;
 
-            if (entryPrice <= 0 || stopLoss <= 0)
+            // -----------------------------
+            // VALIDATION
+            // -----------------------------
+            if (signal == null || balance <= 0 || step <= 0)
+            {
+                LastRejectReason = "Invalid input params";
                 return 0;
+            }
 
-            decimal slDist = Math.Abs(entryPrice - stopLoss);
-            if (slDist <= 0)
+            decimal entry = signal.EntryPrice;
+            decimal stop = signal.StopLoss;
+
+            if (entry <= 0 || stop <= 0)
+            {
+                LastRejectReason = "Invalid entry/stop";
                 return 0;
-
-            // LOAD FILTERS
-            var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-
-            decimal step = f.step > 0 ? f.step : 0.001m;
-            decimal minQty = f.minQty > 0 ? f.minQty : step;
-
-            decimal minNotional = f.minNotional > 0
-                ? f.minNotional
-                : (trading.MinNotionalGuard > 0 ? trading.MinNotionalGuard : 5m);
-
-            decimal binanceMinNotional = minNotional;
-            if (trading.MinNotional > 0)
-                binanceMinNotional = Math.Max(binanceMinNotional, trading.MinNotional);
-
-            // ACCOUNT BALANCE
-            using var client = _factory.CreateRestClient();
-            var acc = await client.UsdFuturesApi.Account.GetBalancesAsync(null, ct);
-            decimal free = acc?.Data?.FirstOrDefault(x => x.Asset == "USDT")?.AvailableBalance ?? 0;
-
-            // === Dynamic MinNotional by capital percent ===
-            if (trading.MinNotionalGuardPercent > 0)
-            {
-                decimal dynMin = free * trading.MinNotionalGuardPercent;
-                if (dynMin > binanceMinNotional)
-                    binanceMinNotional = dynMin;
             }
 
-            // for UI
-            LastBalanceUsdt = free;
-
-            var klines = await _marketData.GetKlines(symbol, KlineInterval.FiveMinutes, 200);
-            var baseReg = _marketRegimeService.DetectRegime(symbol, KlineInterval.FiveMinutes, klines);
-            var smart = _smartRegime.Evaluate(symbol, KlineInterval.FiveMinutes, klines);
-
-            decimal atr = baseReg.VolatilityPercent * klines.Last().ClosePrice;
-
-            // ===============================
-            //  AI Opportunity Score v2.0
-            // ===============================
-
-            int scoreUi = 50; // базовая середина — нейтральный рынок
-
-            // === 1) Трендовый бонус (Slope) ===
-            decimal slope = Math.Abs(baseReg.TrendSlopePercent);
-
-            if (slope > 0.004m) scoreUi += 22;       // 0.40% — сильнейший тренд
-            else if (slope > 0.003m) scoreUi += 15;  // 0.30%
-            else if (slope > 0.002m) scoreUi += 8;   // 0.20%
-            else if (slope > 0.001m) scoreUi += 3;   // 0.10%
-
-            // === 2) Волатильность (VolatilityPercent) ===
-            // Высокая волатильность = шум, хаос → минус score
-            decimal vol = baseReg.VolatilityPercent;
-
-            if (vol > 0.025m) scoreUi -= 22;        // 2.5% — ад
-            else if (vol > 0.015m) scoreUi -= 15;   // 1.5% — дикий рынок
-            else if (vol > 0.010m) scoreUi -= 8;    // шумный
-            else if (vol > 0.006m) scoreUi -= 3;    // легкий шум
-
-            // === 3) ATR нагрузка (atr / price) ===
-            // ATR% показывает “нервность” рынка
-            decimal atrPct = atr / entryPrice;
-
-            if (atrPct > 0.025m) scoreUi -= 15;  // ATR > 2.5%
-            else if (atrPct > 0.015m) scoreUi -= 8;
-            else if (atrPct > 0.010m) scoreUi -= 4;
-            else scoreUi += 4;                   // маленький ATR = стабильность рынка
-
-            // === 4) Chop-zone — опасный рынок, но НЕ смертельно ===
-            if (smart.IsDangerChopZone)
-                scoreUi -= 18;
-
-            // === 5) Smart regime bonuses ===
-            switch (smart.SmartType)
+            decimal leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
+            if (leverage <= 0)
             {
-                case SmartRegimeType.SmartStrongTrend:
-                    scoreUi += 18;
-                    break;
-
-                case SmartRegimeType.SmartTrend:
-                    scoreUi += 8;
-                    break;
-
-                case SmartRegimeType.SmartSqueeze:
-                    scoreUi += 10;
-                    break;
-
-                case SmartRegimeType.SmartRange:
-                    scoreUi += 0;
-                    break;
-
-                case SmartRegimeType.SmartChop:
-                    scoreUi -= 10;
-                    break;
+                LastRejectReason = "Invalid leverage";
+                return 0;
             }
 
-            // === 6) Take Profit structure ===
-            if (takeProfits.Count >= 3) scoreUi += 8;
-            else if (takeProfits.Count == 2) scoreUi += 4;
+            // -----------------------------
+            // STOP % и базовый риск
+            // -----------------------------
+            decimal slDistance = Math.Abs(entry - stop);
+            const decimal MinSlPercent = 0.002m; // 0.2%
+            decimal slPercent = Math.Max(slDistance / entry, MinSlPercent);
 
-            // === 7) AI Confidence ===
-            scoreUi += (int)(smart.Confidence * 20); // 0..20
+            if (slDistance / entry < MinSlPercent)
+                _logger.LogWarning("[RISK] SL too close for {symbol}, forcing min {MinSlPercent:P2}", signal.Symbol, MinSlPercent);
 
-            // === 8) Окончательная нормализация ===
-            scoreUi = Math.Clamp(scoreUi, 1, 100);
+            // -----------------------------
+            // BASE RISK + Safety Multiplier
+            // -----------------------------
+            decimal baseRisk = trading.RiskPerTrade > 0
+                ? (decimal)trading.RiskPerTrade
+                : GetDynamicBaseRisk(balance);
 
-            if (free <= 0)
+            decimal safetyMult = signal.SafetyRiskMultiplier > 0 ? signal.SafetyRiskMultiplier : 1m;
+            decimal finalRisk =
+     CalculateAdaptiveRisk(signal, baseRisk, riskMult);
+
+            // =============================================================
+            // AI WINRATE ADJUSTMENT
+            // =============================================================
+            var winRate = _ai.GetWinRate(signal.Side);
+
+            if (winRate < 0.45m)
+                finalRisk *= 0.7m;
+            else if (winRate > 0.60m)
+                finalRisk *= 1.2m;
+
+
+            if (finalRisk <= 0)
             {
-
-                if (free <= 0)
-                {
-                    LastRejectReason = "NoBalance";
-                    signal.RejectReason = LastRejectReason;
-                    return 0;
-                }
+                LastRejectReason = "Final risk <= 0";
+                return 0;
             }
 
-            // BASE RISK
-            decimal baseRiskPercent =
-     trading.RiskPerTrade > 0
-         ? (decimal)trading.RiskPerTrade
-         : trading.BaseRiskPercent > 0
-             ? trading.BaseRiskPercent
-             : 0.01m;
+            decimal riskBudget = balance * finalRisk;
 
+            // -----------------------------
+            // Notional calculation
+            // -----------------------------
+            decimal riskNotional = riskBudget / slPercent;
+            decimal leverageCapNotional = balance * leverage * 0.98m;
+            
+            decimal marginCapNotional =
+    balance < 50
+        ? balance * leverage   // 🔥 отключаем ограничение
+        : balance * MaxMarginPercent * leverage;
 
-            // AI LEVERAGE FACTOR
-            decimal aiLevMult = await GetAiLeverageMultiplierAsync(symbol, ct);
+            decimal finalNotional = Math.Min(riskNotional, Math.Min(leverageCapNotional, marginCapNotional));
+            
+            if (finalNotional <= 0)
+            {
+                LastRejectReason = "Final notional <= 0";
+                return 0;
+            }
 
-            // FINAL MULTIPLIER
-            decimal finalRisk = riskMultiplier * safetyRiskMultiplier * aiLevMult;
-            finalRisk = Math.Clamp(finalRisk, 0.3m, 2.7m);
+            // -----------------------------
+            // Adaptive minNotional
+            // -----------------------------
+            decimal minNotional = trading.MinNotional > 0 ? trading.MinNotional : 10m;
+            decimal minNotionalAdaptive = Math.Min(minNotional, Math.Max(0.01m, entry * minQty));
+            decimal effectiveNotional = Math.Max(finalNotional, minNotionalAdaptive);
 
-            decimal maxRisk = free * baseRiskPercent * finalRisk;
-            if (maxRisk < 1m) maxRisk = 1m;
-            if (maxRisk > free * 0.20m) maxRisk = free * 0.20m;
+            // -----------------------------
+            // Convert to qty
+            // -----------------------------
+            decimal rawQty = effectiveNotional / entry;
 
-            decimal qty = maxRisk / slDist;
-            if (leverage > 0) qty *= leverage;
+            if (step > 1 && entry < minNotionalAdaptive)
+                step = Math.Max(0.00001m, entry / 10m);
 
-            qty = Math.Floor(qty / step) * step;
+            decimal qty = Math.Floor(rawQty / step) * step;
+
+            // -----------------------------
+            // Check minQty
+            // -----------------------------
             if (qty < minQty) qty = minQty;
 
-            decimal notional = qty * entryPrice;
-
-            // =====================
-            // SIGNAL STRENGTH LOGIC
-            // =====================
-
-            decimal score = riskMultiplier * safetyRiskMultiplier;
-            bool strong = score >= 1.30m;
-            bool weak = score < 0.80m;
-
-            if (weak)
+            // -----------------------------
+            // Check minNotional again
+            // -----------------------------
+            decimal finalNotionalCheck = qty * entry;
+            if (finalNotionalCheck < minNotionalAdaptive)
             {
+                qty = Math.Ceiling(minNotionalAdaptive / entry / step) * step;
+                finalNotionalCheck = qty * entry;
 
-                _logger.LogInformation($"[RISK][{symbol}] Weak signal detected — lowering position size.");
-
-                // уменьшаем риск, но НЕ отбрасываем сделку (фактически maxRisk уже использован,
-                // строка ниже не влияет на qty/notional, оставляем как комментарий намерения)
-                maxRisk *= 0.35m;
-            }
-
-            // =============================================================
-            //  BOOST + ADAPTIVE REDUCE (v7.5)
-            // =============================================================
-            if (notional < binanceMinNotional)
-            {
-                _logger.LogInformation($"[RISK][{symbol}] Below minNotional → boosting or reducing.");
-
-                decimal targetNotional = weak
-                    ? binanceMinNotional          // слабый сигнал → минимум
-                    : binanceMinNotional * 1.4m;  // сильный сигнал → усилить
-
-                // ограничение реальным балансом
-                decimal maxAllowed = free * leverage;
-                if (targetNotional > maxAllowed)
-                    targetNotional = maxAllowed;
-
-                // первая попытка
-                qty = Math.Floor((targetNotional / entryPrice) / step) * step;
-                if (qty < minQty)
-                    qty = minQty;
-
-                notional = qty * entryPrice;
-
-                // если всё нормально — продолжаем
-                if (notional >= binanceMinNotional)
-                    goto BOOST_OK;
-
-                // иначе → уменьшаем позицию до допустимых значений
-                for (int i = 0; i < 12; i++)   // до 12 попыток
+                if (finalNotionalCheck < minNotionalAdaptive)
                 {
-                    targetNotional *= 0.85m;  // уменьшаем на 15%
-
-                    qty = Math.Floor((targetNotional / entryPrice) / step) * step;
-                    if (qty < minQty)
-                        qty = minQty;
-
-                    notional = qty * entryPrice;
-
-                    if (notional >= binanceMinNotional)
-                        goto BOOST_OK;
-                }
-
-                LastRejectReason = "MinNotionalAfterAdaptiveReduce";
-                signal.RejectReason = LastRejectReason;
-                return 0;
-            }
-
-        BOOST_OK:
-            _logger.LogInformation($"[RISK][{symbol}] Boost/Reduce OK → qty={qty}, notional={notional:F4}");
-
-            if (qty <= 0 || notional <= 0)
-            {
-                LastRejectReason = "QtyZeroAfterAdjust";
-                signal.RejectReason = LastRejectReason;
-                return 0;
-            }
-
-            // 🔥 ДОБАВЛЕНО: ФИНАЛЬНАЯ ПРОВЕРКА МАРЖИ
-            if (leverage <= 0)
-                leverage = trading.Leverage > 0 ? trading.Leverage : 1m;
-
-
-            decimal requiredMargin = notional / leverage;
-
-            // =============================================================
-            //  SMART MARGIN ADJUSTMENT v7.5 — уменьшаем позицию, но НЕ отбрасываем
-            // =============================================================
-            if (requiredMargin > free)
-            {
-                _logger.LogInformation($"[RISK][{symbol}] Margin too high → reducing position.");
-
-                // 1) максимальный возможный notional
-                decimal maxNotional = free * leverage * 0.97m;
-                if (maxNotional <= 0)
-                {
-
-                    LastRejectReason = "NoMargin";
-                    signal.RejectReason = LastRejectReason;
-                    return 0;
-
-                }
-
-                // 2) Уменьшаем notional пошагово, пока не пройдём фильтры
-                for (int i = 0; i < 12; i++)  // до 12 уменьшений (достаточно)
-                {
-                    qty = Math.Floor((maxNotional / entryPrice) / step) * step;
-
-                    if (qty >= minQty)
-                    {
-                        notional = qty * entryPrice;
-                        requiredMargin = notional / leverage;
-
-                        _logger.LogInformation(
-                        "[RISK][FINAL] {Symbol} {Side} | risk={Risk:P2} lev={Lev} | qty={Qty} notional={Notional:F2} margin={Margin:F2} | minNotional={MinNotional:F2}",
-                        symbol,
-                        side,
-                        baseRiskPercent,
-                        leverage,
-                        qty,
-                        notional,
-                        requiredMargin,
-                        binanceMinNotional
-                    );
-
-                        if (notional >= binanceMinNotional && requiredMargin <= free)
-                        {
-                            _logger.LogInformation(
-                                $"[RISK][{symbol}] Reduced position OK → qty={qty}, ntn={notional:F2}, margin={requiredMargin:F2}");
-                            break;
-                        }
-                    }
-
-                    // уменьшаем позицию на 15%
-                    maxNotional *= 0.85m;
-                }
-
-                // 3) После цикла, если всё равно не проходит — вернуть 0
-                if (notional < binanceMinNotional || requiredMargin > free || qty < minQty)
-                {
-                    signal.RejectReason = "InsufficientBalanceAfterReduce";
+                    LastRejectReason = $"Qty too small even after adaptive minNotional: qty={qty} notional={finalNotionalCheck:F8} minNotional={minNotionalAdaptive}";
                     return 0;
                 }
             }
-
-            // Для недостаточного баланса ПОСЛЕ всех корректировок — только предупреждение
-            if (notional < binanceMinNotional)
-            {
-                _logger.LogWarning(
-                    $"[RISK][{symbol}] Warning: notional < minNotional AFTER full reduce. " +
-                    $"notional={notional:F4}, required={binanceMinNotional:F4}");
-
-                // НЕ return!!!
-                // Просто позволяем торговать минимально допустимой позицией.
-            }
-            // ===== FINAL HARD SAFETY =====
-            if (qty <= 0)
-            {
-                qty = minQty;
-                notional = qty * entryPrice;
-            }
-
-            // если даже minQty не проходит — честно выходим
-            if (notional < binanceMinNotional && free < (binanceMinNotional / Math.Max(leverage, 1)))
-            {
-                signal.RejectReason = "FinalSafetyQtyZero";
-                return 0;
-            }
-
-
-            // 🔥 ВОТ ЗДЕСЬ ДОБАВИТЬ
-            signal.RejectReason = "RISK_OK";
-
 
             return qty;
         }
 
-        // ====================================================================
-        // AI LEVERAGE MULTIPLIER
-        // ====================================================================
-        private async Task<decimal> GetAiLeverageMultiplierAsync(string symbol, CancellationToken ct)
+        private decimal GetDynamicBaseRisk(decimal balance)
+        {
+            if (balance <= 100m) return 0.025m;
+            if (balance <= 500m) return 0.02m;
+            if (balance <= 1000m) return 0.015m;
+            if (balance <= 5000m) return 0.012m;
+            if (balance <= 10000m) return 0.01m;
+            return 0.0075m;
+        }
+
+        public async Task<decimal> GetRealtimeBalanceAsync(CancellationToken ct)
         {
             try
             {
-                var klines = await _marketData.GetKlines(symbol, KlineInterval.FifteenMinutes, 200);
-                if (klines == null || klines.Count < 30)
-                    return 1.0m;
+                var client = _factory.CreateRestClient();
+                var account = await client.UsdFuturesApi.Account.GetAccountInfoV3Async(ct: ct).ConfigureAwait(false);
 
-                decimal m = _aiLeverage.Calculate(symbol, KlineInterval.FifteenMinutes, klines);
-                return m > 0 ? m : 1.0m;
+                if (!account.Success || account.Data == null)
+                {
+                    _logger.LogWarning("GetRealtimeBalanceAsync: Failed to fetch account info. Success={Success}", account.Success);
+                    return 0m;
+                }
+
+                var free = account.Data.Assets.FirstOrDefault(a => a.Asset == "USDT")?.AvailableBalance ?? 0m;
+                free = Math.Max(free, 0m);
+                LastBalanceUsdt = free;
+                return free;
             }
-            catch
+            catch (Exception ex)
             {
-                return 1.0m;
+                _logger.LogError(ex, "GetRealtimeBalanceAsync: Exception while fetching balance");
+                return 0m;
             }
         }
 
-        // ====================================================================
-        // LOG MISSED TRADES (FULL VERSION WITH ATR / VOL / SLOPE / CONF)
-        // ====================================================================
+        private decimal CalculateAdaptiveRisk(
+    TradeSignal signal,
+    decimal baseRisk,
+    decimal riskMult)
+        {
+            decimal confidence = signal.Confidence ?? 0.6m;
+            decimal liquidity = signal.LiquidityScore ?? 0.8m;
+            decimal aiQuality = signal.AiQuality ?? 0.6m;
 
+            decimal atr = signal.Atr ?? 0m;
+            decimal price = signal.EntryPrice;
+
+            decimal volatility =
+                price > 0 && atr > 0
+                ? atr / price
+                : 0.01m;
+
+            // -------------------------
+            // CONFIDENCE
+            // -------------------------
+
+            decimal confMult =
+                confidence < 0.4m ? 0.7m :
+                confidence < 0.6m ? 0.9m :
+                confidence < 0.8m ? 1.0m :
+                1.15m;
+
+            // -------------------------
+            // LIQUIDITY
+            // -------------------------
+
+            decimal liqMult =
+                liquidity < 0.4m ? 0.6m :
+                liquidity < 0.7m ? 0.8m :
+                1.0m;
+
+            // -------------------------
+            // VOLATILITY
+            // -------------------------
+
+            decimal volMult =
+                volatility > 0.035m ? 0.6m :
+                volatility > 0.02m ? 0.8m :
+                volatility < 0.005m ? 1.1m :
+                1m;
+
+            // -------------------------
+            // AI QUALITY
+            // -------------------------
+
+            decimal aiMult =
+                aiQuality < 0.4m ? 0.8m :
+                aiQuality > 0.7m ? 1.1m :
+                1m;
+
+            // -------------------------
+            // SAFETY
+            // -------------------------
+
+            decimal safety =
+                signal.SafetyRiskMultiplier > 0
+                ? signal.SafetyRiskMultiplier
+                : 1m;
+
+            if (signal.HighTfSafetyMode)
+                safety *= 0.7m;
+
+            if (signal.LiquiditySoftWarning)
+                safety *= 0.75m;
+
+            decimal risk =
+                baseRisk
+                * riskMult
+                * confMult
+                * liqMult
+                * volMult
+                * aiMult
+                * safety;
+
+            return Math.Clamp(risk, 0.002m, 0.05m);
+        }
     }
 }

@@ -15,10 +15,34 @@ using static VertexAutoTradeBinance8.Services.AiTimeframeSelectorService;
 
 namespace VertexAutoTradeBinance8
 {
+
+    public sealed class RealtimePriceService
+    {
+        private readonly ConcurrentDictionary<string, decimal> _lastPrice = new();
+
+        public void Update(string symbol, decimal price)
+        {
+            _lastPrice[symbol] = price;
+        }
+
+        public bool TryGet(string symbol, out decimal price)
+        {
+            return _lastPrice.TryGetValue(symbol, out price);
+        }
+
+        public decimal GetOrDefault(string symbol)
+        {
+            return _lastPrice.TryGetValue(symbol, out var p) ? p : 0m;
+        }
+    }
+
+
+
     public class TradingWorker : BackgroundService
     {
         private readonly ILogger<TradingWorker> _logger;
         private readonly TradingOptions _options;
+        private readonly TradingOptionsResolver _resolver;
 
         private readonly MarketDataService _market;
         private readonly MarketDataFacade _marketDataFacade;
@@ -44,6 +68,7 @@ namespace VertexAutoTradeBinance8
         private readonly IStrategyPreFilter _pre;
         private readonly MarketContextService _marketContext;
         private readonly SimulatedTradeService _sim;
+        private readonly SymbolInfoService _symbolInfo;
 
         private DateTime _lastQuantTick = DateTime.UtcNow;
 
@@ -72,18 +97,29 @@ namespace VertexAutoTradeBinance8
         private static readonly TimeSpan TrackedGrace = TimeSpan.FromMinutes(20);
         private volatile string _currentSymbol = "—";
 
+        private readonly RealtimePriceService _price;
+
         private readonly BinanceHistoryImporter _importer;
 
         // ===============================
         // STRATEGY SIGNAL QUEUE (PRO)
         // ===============================
+        //private readonly Channel<TradeSignal> _signalChannel =
+        //    Channel.CreateUnbounded<TradeSignal>(
+        //        new UnboundedChannelOptions
+        //        {
+        //            SingleReader = true,
+        //            SingleWriter = false
+        //        });
         private readonly Channel<TradeSignal> _signalChannel =
-            Channel.CreateUnbounded<TradeSignal>(
-                new UnboundedChannelOptions
-                {
-                    SingleReader = true,
-                    SingleWriter = false
-                });
+    Channel.CreateBounded<TradeSignal>(
+        new BoundedChannelOptions(2000)
+        {
+            //FullMode = BoundedChannelFullMode.DropOldest,
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+            SingleWriter = false
+        });
 
         public int StartupSubscriptionCap { get; set; } = 8;
         public TradingWorker(
@@ -108,7 +144,9 @@ namespace VertexAutoTradeBinance8
             EngineStateBuilder engineStateBuilder,
             EngineStateSnapshotService engineStateSnapshot,
             IBootGate bootGate,
-            IStrategyPreFilter pre, MarketContextService marketContext, SimulatedTradeService sim, AiMarketRegimeService marketRegime, BinanceHistoryImporter importer)
+            TradingOptionsResolver resolver,
+            IStrategyPreFilter pre, MarketContextService marketContext, SimulatedTradeService sim, AiMarketRegimeService marketRegime, BinanceHistoryImporter importer
+            , RealtimePriceService price, SymbolInfoService symbolInfo)
         {
             _logger = logger;
             _options = options.Value;
@@ -139,6 +177,9 @@ namespace VertexAutoTradeBinance8
             _sim = sim;
             _marketRegime = marketRegime;
             _importer = importer;
+            _price = price;
+            _resolver = resolver;
+            _symbolInfo = symbolInfo;
         }
 
         private int _lastCyclesPerMinute = 0;
@@ -214,9 +255,9 @@ namespace VertexAutoTradeBinance8
                 await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneHour, 60, ct);
                 await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FourHour, 60, ct);
                 await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneDay, 60, ct);
-                await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneHour, 60, ct);
+                await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneWeek, 60, ct);
 
-                _logger.LogInformation("[MD][HTF] warmup {symbol} 1H/4H/1D/1H", s);
+                _logger.LogInformation("[MD][HTF] warmup {symbol} 1H/4H/1D/1W", s);
             }
         }
 
@@ -340,7 +381,7 @@ namespace VertexAutoTradeBinance8
                 _logger.LogInformation("[AI-BOOT] Importing Binance Futures history from {From}", from);
 
                 var fills = await LoadFromBinanceAsync(from.AddMilliseconds(1), ct);
-                _importer.ImportClosedTrades(fills);
+               // _importer.ImportClosedTrades(fills);
 
                 _learn.ForceSnapshot();
 
@@ -422,8 +463,19 @@ _strategy.OnSignalGenerated += signal =>
             // =======================================================
             // 🔒 INIT BASE DEPOSIT (ONCE, HARD ANCHOR)
             // =======================================================
-            _engineStateSnapshot.EnsureDepositInitialized(_options.Deposit);
+           // _engineStateSnapshot.EnsureDepositInitialized(_options.Deposit);
+            var realBalance = await GetBalanceCachedAsync(ct);
 
+            decimal depositForCalc = realBalance > 0
+            ? realBalance
+            : _options.Deposit;
+
+            // инициализация состояния движка (однократно)
+            _engineStateSnapshot.EnsureDepositInitialized(depositForCalc);
+
+            _logger.LogInformation(
+    "[TRADING INIT] Deposit initialized → RealBalance={realBalance}, UsedDeposit={depositForCalc}",
+    realBalance, depositForCalc);
 
             _logger.LogWarning("TradingWorker QUANT-REALTIME STARTED");
 
@@ -480,20 +532,26 @@ _strategy.OnSignalGenerated += signal =>
                     }
                 }
 
+                var activePositionsTask = _supervisor.GetActivePositionsCountAsync(ct);
+                var balanceTask = GetBalanceCachedAsync(ct);
+                await Task.WhenAll(activePositionsTask, balanceTask);
+                var activePositions = activePositionsTask.Result;
+                var balance = balanceTask.Result;
+
                 // ===== ROTATION: ПО КАЖДОМУ СИМВОЛУ =====
                 foreach (var symbol in trackedSymbols)
                 {
                     _currentSymbol = symbol;
 
                     var selectedTf = await ResolveTimeframeSafeAsync(symbol, ct);  // можно для аналитики/логов
-                    var tradeTf = KlineInterval.FifteenMinutes; // жестко   // либо маппинг из _options.TimeframeMinutes -> KlineInterval
+                    var tradeTf = KlineInterval.FiveMinutes; // жестко   // либо маппинг из _options.TimeframeMinutes -> KlineInterval
 
 
                     var ctx = await _marketContext.GetContextAsync(symbol, ct);
 
                     var state = _engineStateBuilder.Build(
                         symbol: symbol,
-                        timeframe: selectedTf.ToString()
+                        timeframe: selectedTf
                     );
 
                     state.LastEngineTick = DateTime.UtcNow;
@@ -501,16 +559,16 @@ _strategy.OnSignalGenerated += signal =>
                     state.CyclesPerMinute = _lastCyclesPerMinute;
                     state.UniverseSize = _symbols.ActiveSymbols.Count;
                     state.TrackedSymbols = trackedSymbols.Count;
-                    state.Timeframe = selectedTf.ToString();
-                     state.OpenPositions = await _supervisor.GetActivePositionsCountAsync(ct);
-                   
+                    state.Timeframe = selectedTf;
+                    state.OpenPositions = activePositions;
+                    state.BalanceUsdt = balance;
 
                     _engineStateSnapshot.Save(state);
 
-                    if (ctx.Allows(SignalSide.Buy))
+                    if (ctx.Allows(SignalSide.Buy,0m))
                         await ProcessSymbolWithUniverseSide(symbol, tradeTf, SignalSide.Buy, ct);
 
-                    if (ctx.Allows(SignalSide.Sell))
+                    if (ctx.Allows(SignalSide.Sell,0m))
                         await ProcessSymbolWithUniverseSide(symbol, tradeTf, SignalSide.Sell, ct);
 
                     ConsoleSymbolTableFormatter.UpdateTf(symbol, tradeTf, $"TF={tradeTf} (sel={selectedTf})", "...");
@@ -526,6 +584,43 @@ _strategy.OnSignalGenerated += signal =>
                 await Task.Delay(80, ct);
             }
         }
+ 
+        private decimal _cachedBalance;
+        private DateTime _lastBalanceFetchUtc = DateTime.MinValue;
+        private static readonly TimeSpan BalanceTtl = TimeSpan.FromSeconds(15);
+        private readonly SemaphoreSlim _balanceLock = new(1, 1);
+
+        public async Task<decimal> GetBalanceCachedAsync(CancellationToken ct)
+        {
+            if (DateTime.UtcNow - _lastBalanceFetchUtc < BalanceTtl)
+                return _cachedBalance;
+
+            await _balanceLock.WaitAsync(ct);
+            try
+            {
+                if (DateTime.UtcNow - _lastBalanceFetchUtc < BalanceTtl)
+                    return _cachedBalance;
+
+                var acc = await _factory
+                    .CreateRestClient()
+                    .UsdFuturesApi
+                    .Account
+                    .GetAccountInfoV3Async(ct: ct);
+
+                if (acc.Success && acc.Data != null)
+                {
+                    _cachedBalance = acc.Data.TotalWalletBalance;
+                    _lastBalanceFetchUtc = DateTime.UtcNow;
+                }
+
+                return _cachedBalance;
+            }
+            finally
+            {
+                _balanceLock.Release();
+            }
+        }
+
 
         private async Task HandleStrategySignalAsync(
         TradeSignal signal,
@@ -564,20 +659,6 @@ _strategy.OnSignalGenerated += signal =>
                     symbol, tf, "▶ STRAT", signal.Side.ToString());
 
                 // =====================================================
-                // 1) CONTEXT / UNIVERSE SIDE CHECK
-                // =====================================================
-                var ctx = await _marketContext.GetContextAsync(symbol, ct);
-                if (!ctx.Allows(signal.Side))
-                {
-                    await RejectAsync(
-                        signal, symbol, tf,
-                        "UNIVERSE_SIDE",
-                        "SIDE_NOT_ALLOWED",
-                        ct);
-                    return;
-                }
-
-                // =====================================================
                 // 2) COOLDOWN
                 // =====================================================
                 if (InCooldown(symbol))
@@ -589,17 +670,15 @@ _strategy.OnSignalGenerated += signal =>
                         ct);
                     return;
                 }
-
-                // =====================================================
-                // 3) AI CONFIRMATION
-                // =====================================================
-                AiDecision ai;
+            var klines = await _marketDataFacade
+            .GetKlinesAsync(symbol, tf, 200, ct)
+            .ConfigureAwait(false);
+            // =====================================================
+            // 3) AI CONFIRMATION
+            // =====================================================
+            AiDecision ai;
                 try
                 {
-                    var klines = await _marketDataFacade
-                        .GetKlinesAsync(symbol, tf, 200, ct)
-                        .ConfigureAwait(false);
-
                     ai = _predict.Decide(symbol, tf, klines, signal);
                 }
                 catch (Exception ex)
@@ -623,11 +702,23 @@ _strategy.OnSignalGenerated += signal =>
                         extra: ai.Reason);
                     return;
                 }
-
-                // =====================================================
-                // 4) RISK SCALING
-                // =====================================================
-                var riskMult = _riskScaler.Scale(ai.Grade);
+            // =====================================================
+            // 3.5) CONTEXT SIDE CHECK (NOW WITH CONFIDENCE)
+            // =====================================================
+            var ctx = await _marketContext.GetContextAsync(symbol, ct);
+            if (!ctx.Allows(signal.Side, ai.Score))
+            {
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "UNIVERSE_SIDE",
+                    "SIDE_NOT_ALLOWED",
+                    ct);
+                return;
+            }
+            // =====================================================
+            // 4) RISK SCALING
+            // =====================================================
+            var riskMult = _riskScaler.Scale(ai.Grade);
                 if (riskMult <= 0)
                 {
                     await RejectAsync(
@@ -644,9 +735,7 @@ _strategy.OnSignalGenerated += signal =>
                 LiquidityGuardResult liq;
                 try
                 {
-                    var klines = await _marketDataFacade
-                        .GetKlinesAsync(symbol, tf, 120, ct)
-                        .ConfigureAwait(false);
+                    
 
                     liq = _liq.Analyze(
                         symbol, tf, klines,
@@ -674,40 +763,56 @@ _strategy.OnSignalGenerated += signal =>
                     return;
                 }
 
-                // =====================================================
-                // 6) QTY
-                // =====================================================
-                var qty = await _risk.CalculateSafeQty(
+            var trading = _resolver.Resolve(symbol);
+
+
+            // =====================================================
+            // 6) QTY — Clean PropDesk version (с временным hardcode SL)
+            // =====================================================
+
+            // 1️⃣ Получаем Binance реальные фильтры
+            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+            decimal step = filters.step > 0 ? filters.step : 0.001m;
+            decimal minQty = filters.minQty > 0 ? filters.minQty : step;
+            decimal exchangeMinNotional = filters.minNotional > 0
+                ? filters.minNotional
+                : 5m; // safety fallback
+
+            // 2️⃣ Баланс
+            var balance = await _risk.GetRealtimeBalanceAsync(ct);
+            balance = Math.Max(balance, 0.01m);
+
+            // 3️⃣ Вызов RiskManager (новая сигнатура с hardcode SL)
+            // =========================
+            // 3️⃣ Вызов RiskManager (настоящая логика)
+            // =========================
+            var qty = _risk.GetPropDeskQtyFinal(
+      signal,
+      balance,
+      step,
+      minQty,
+      riskMult,
+      trading
+  );
+
+            // Проверка результата
+            if (qty <= 0)
+            {
+                await RejectAsync(
                     signal,
                     symbol,
-                    signal.EntryPrice,
-                    signal.StopLoss,
-                    riskMult,
-                    signal.SafetyRiskMultiplier,
-                    signal.Leverage ?? 1m,
-                    signal.Side,
-                    signal.TakeProfits,
-                    ct).ConfigureAwait(false);
-
-                if (qty <= 0)
-                {
-                    await RejectAsync(
-                        signal, symbol, tf,
-                        "RISK",
-                        "NO_BALANCE_OR_MIN_NOTIONAL",
-                        ct);
-                    return;
-                }
-
-                // =====================================================
-                // 7) SL / TP OPTIMIZATION
-                // =====================================================
-                try
-                {
-                    var klines = await _marketDataFacade
-                        .GetKlinesAsync(symbol, tf, 120, ct)
-                        .ConfigureAwait(false);
-
+                    tf,
+                    "RISK",
+                    _risk.LastRejectReason ?? "POSITION_REJECTED",
+                    ct
+                );
+                return;
+            }
+            // =====================================================
+            // 7) SL / TP OPTIMIZATION
+            // =====================================================
+            try
+            {
                     signal.StopLoss =
                         _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
 
@@ -729,11 +834,20 @@ _strategy.OnSignalGenerated += signal =>
                 // =====================================================
                 // 8) EXECUTION
                 // =====================================================
-                var result = await _executor
-                    .ExecuteAsync(signal, qty, ct)
-                    .ConfigureAwait(false);
+              
 
-                if (!result.Success)
+            // 🔥 realtime price override
+            if (_price.TryGet(symbol, out var realtimePrice) && realtimePrice > 0)
+            {
+                signal.EntryPrice = realtimePrice;
+            }
+            
+            var leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
+            var result = await _executor.ExecuteAsync(signal, qty, ct, leverage);
+
+
+
+            if (!result.Success)
                 {
                     await RejectAsync(
                         signal, symbol, tf,

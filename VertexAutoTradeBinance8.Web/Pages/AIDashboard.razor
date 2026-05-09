@@ -258,47 +258,91 @@ else{
         </div>
     </div>
 
-    <!-- ================= TRADES ================= -->
-    <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700">
+ <!-- ================= TRADES ================= -->
+<div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700">
 
-        <div class="section-header">
-            <h3 class="font-bold text-xl">Последние сделки</h3>
-            <div class="chevron @(TradesOpen ? "open" : "")"
-                 @onclick="ToggleTrades"></div>
-        </div>
+    <div class="section-header">
+        <h3 class="font-bold text-xl">Последние сделки</h3>
+        <div class="chevron @(TradesOpen ? "open" : "")"
+             @onclick="ToggleTrades"></div>
+    </div>
 
-        @if (TradesOpen)
-        {
-            <div class="section-body">
-                <div class="trade-grid">
-                    @foreach (var t in Trades)
+    @if (TradesOpen)
+    {
+        <div class="section-body">
+            <div class="trade-grid">
+
+                @if (Trades == null || Trades.Count == 0)
+                {
+                    <div class="text-slate-400 text-sm">
+                        Нет данных по сделкам
+                    </div>
+                }
+                else
+                {
+                    @foreach (var t in Trades.OrderByDescending(x => x.Time).Take(30))
                     {
-                        var isWin = t.Pnl >= 0;
+                        var isWin = t.PnlPct >= 0;
+                        var ageSec = (DateTime.UtcNow - t.Time.ToUniversalTime()).TotalSeconds;
+
                         <div class="trade-card">
-                            <div class="flex justify-between mb-1 items-center">
-                                <span class="trade-symbol">@t.Symbol</span>
-                                <span class="side-badge @(t.Side == SignalSide.Buy ? "buy-badge" : "sell-badge")">
-                                    @t.Side
+
+                            <!-- HEADER -->
+                            <div class="flex justify-between mb-2 items-center">
+                                <div class="flex items-center gap-2">
+                                    <span class="trade-symbol">@t.Symbol</span>
+
+                                    <span class="side-badge @(t.Side == SignalSide.Buy ? "buy-badge" : "sell-badge")">
+                                        @t.Side
+                                    </span>
+                                </div>
+
+                                <span class="@(isWin ? "text-emerald-400" : "text-red-400") font-semibold">
+                                    @(isWin ? "+" : "")
+                                    @((t.PnlPct * 100).ToString("F2")) %
                                 </span>
                             </div>
 
-                            <div class="text-xs space-y-1">
-                                <div>
-                                    PnL:
-                                    <b class="@(isWin ? "text-emerald-400" : "text-red-400")">
-                                        @t.Pnl.ToString("F4")
-                                    </b>
+                            <!-- BODY -->
+                            <div class="text-xs space-y-1 text-slate-300">
+
+                                <div class="flex justify-between">
+                                    <span>Entry</span>
+                                    <b>@t.Entry.ToString("F4")</b>
                                 </div>
-                                <div>Regime: <b>@t.Regime</b></div>
+
+                                <div class="flex justify-between">
+                                    <span>Exit</span>
+                                    <b>@t.Exit.ToString("F4")</b>
+                                </div>
+
+                                <div class="flex justify-between">
+                                    <span>Regime</span>
+                                    <b>@t.Regime</b>
+                                </div>
+
                             </div>
 
-                            <div class="trade-timestamp">@t.Time.ToLocalTime()</div>
+                            <!-- FOOTER -->
+                            <div class="flex justify-between items-center mt-2 text-xs text-slate-400">
+                                <span>@t.Time.ToLocalTime()</span>
+
+                                <span class="@LiveDotClass(t.Time)">
+                                    @(ageSec < 15 ? "LIVE" :
+                                      ageSec < 60 ? "recent" :
+                                      "archived")
+                                </span>
+                            </div>
+
                         </div>
                     }
-                </div>
+                }
+
             </div>
-        }
-    </div>
+        </div>
+    }
+</div>
+
 
     }
 

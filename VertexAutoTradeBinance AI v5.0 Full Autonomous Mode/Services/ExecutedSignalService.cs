@@ -39,7 +39,7 @@ namespace VertexAutoTradeBinance8.Services
 
             Directory.CreateDirectory(root);
 
-            _filePath = Path.Combine(root, "executed_signals.json");
+            _filePath = Path.Combine(AppContext.BaseDirectory, "executed_signals.json");
 
             EnsureFileExists();
         }

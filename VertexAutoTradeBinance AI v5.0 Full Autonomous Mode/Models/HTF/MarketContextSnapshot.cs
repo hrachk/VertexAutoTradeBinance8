@@ -35,13 +35,24 @@ namespace VertexAutoTradeBinance8.Models.HTF
         public bool HighVolatilityContext { get; init; }
         public bool ManipulationRisk { get; init; }
 
-        public bool Allows(SignalSide side) =>
-            Bias switch
-            {
-                MarketBias.LongOnly => side == SignalSide.Buy,
-                MarketBias.ShortOnly => side == SignalSide.Sell,
-                _ => true
-            };
+        //public bool Allows(SignalSide side) =>
+        //    Bias switch
+        //    {
+        //        MarketBias.LongOnly => side == SignalSide.Buy,
+        //        MarketBias.ShortOnly => side == SignalSide.Sell,
+        //        _ => true
+        //    };
+
+        public bool Allows(SignalSide side, decimal confidence)
+        {
+            if (Bias == MarketBias.LongOnly && side == SignalSide.Sell)
+                return confidence >= 0.85m;
+
+            if (Bias == MarketBias.ShortOnly && side == SignalSide.Buy)
+                return confidence >= 0.85m;
+
+            return true;
+        }
     }
 
     public enum MarketBias

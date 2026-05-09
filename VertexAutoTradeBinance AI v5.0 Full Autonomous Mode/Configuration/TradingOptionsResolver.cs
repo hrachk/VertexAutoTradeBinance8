@@ -4,20 +4,60 @@ using VertexAutoTradeBinance8.Configuration;
 public sealed class TradingOptionsResolver
 {
     private readonly IOptionsMonitor<TradingOptions> _options;
-
-    public TradingOptionsResolver(IOptionsMonitor<TradingOptions> options)
+    private readonly ILogger<TradingOptionsResolver> _logger;
+    public TradingOptionsResolver(IOptionsMonitor<TradingOptions> options, ILogger<TradingOptionsResolver> logger)
     {
         _options = options;
+        _logger = logger;
     }
 
     public TradingOptions Resolve(string symbol)
     {
-        if (symbol.StartsWith("BTC", StringComparison.OrdinalIgnoreCase))
-            return _options.Get("BTC");
+        var baseAsset = ExtractBaseAsset(symbol).ToUpperInvariant();
 
-        if (symbol.StartsWith("ETH", StringComparison.OrdinalIgnoreCase))
-            return _options.Get("ETH");
+        TradingOptions result;
 
-        return _options.Get("default");
+        switch (baseAsset)
+        {
+            case "BTC":
+                result = _options.Get("BTC");
+                break;
+
+            case "ETH":
+                result = _options.Get("ETH");
+                break;
+
+            default:
+                result = _options.CurrentValue; // БАЗОВЫЙ Trading
+                break;
+        }
+
+        _logger.LogInformation(
+            "[TRADING CONFIG] {symbol} → PROFILE={profile} LEVERAGE={lev}",
+            symbol,
+            baseAsset == "BTC" || baseAsset == "ETH" ? baseAsset : "BASE",
+            result.Leverage);
+
+        return result;
+    }
+
+
+
+    private static string ExtractBaseAsset(string symbol)
+    {
+        // BTCUSDT → BTC
+        // ETHUSDT → ETH
+        // XRPUSDT → XRP
+
+        if (symbol.EndsWith("USDT"))
+            return symbol[..^4];
+
+        if (symbol.EndsWith("USDC"))
+            return symbol[..^4];
+
+        if (symbol.EndsWith("BUSD"))
+            return symbol[..^4];
+
+        return symbol;
     }
 }

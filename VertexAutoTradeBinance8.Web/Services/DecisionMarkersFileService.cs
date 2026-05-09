@@ -48,68 +48,80 @@ public sealed class DecisionMarkersFileService
     // ============================================================
     private async Task<Dictionary<string, IReadOnlyList<UiDecisionMarker>>> LoadInternalAsync()
     {
-        using var fs = new FileStream(
-            _file,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite,
-            bufferSize: 64 * 1024,
-            FileOptions.SequentialScan);
-
-        using var doc = await JsonDocument.ParseAsync(fs);
-
-        var result = new Dictionary<string, IReadOnlyList<UiDecisionMarker>>(128);
-
-        if (doc.RootElement.ValueKind != JsonValueKind.Object)
-            return result;
-
-        foreach (var prop in doc.RootElement.EnumerateObject())
+        try
         {
-            if (prop.Value.ValueKind != JsonValueKind.Array)
-                continue;
+            using var fs = new FileStream(
+                      _file,
+                      FileMode.Open,
+                      FileAccess.Read,
+                      FileShare.ReadWrite,
+                      bufferSize: 64 * 1024,
+                      FileOptions.SequentialScan);
 
-            var list = new List<UiDecisionMarker>();
+            if (fs.Length == 0)
+                return new Dictionary<string, IReadOnlyList<UiDecisionMarker>>();
 
-            foreach (var m in prop.Value.EnumerateArray())
+            using var doc = await JsonDocument.ParseAsync(fs);
+
+            var result = new Dictionary<string, IReadOnlyList<UiDecisionMarker>>(128);
+
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return result;
+
+            foreach (var prop in doc.RootElement.EnumerateObject())
             {
-                if (!m.TryGetProperty("candleTimeUtc", out var tEl))
+                if (prop.Value.ValueKind != JsonValueKind.Array)
                     continue;
 
-                var candleMs = ReadTimeToUnixMs(tEl);
-                if (candleMs <= 0)
-                    continue;
+                var list = new List<UiDecisionMarker>();
 
-                UiMarkerType type = UiMarkerType.EntryRejected;
-
-                if (m.TryGetProperty("type", out var ty))
+                foreach (var m in prop.Value.EnumerateArray())
                 {
-                    if (ty.ValueKind == JsonValueKind.Number)
-                        type = (UiMarkerType)ty.GetInt32();
-                    else if (ty.ValueKind == JsonValueKind.String)
-                        type = ParseType(ty.GetString());
+                    if (!m.TryGetProperty("candleTimeUtc", out var tEl))
+                        continue;
+
+                    var candleMs = ReadTimeToUnixMs(tEl);
+                    if (candleMs <= 0)
+                        continue;
+
+                    UiMarkerType type = UiMarkerType.EntryRejected;
+
+                    if (m.TryGetProperty("type", out var ty))
+                    {
+                        if (ty.ValueKind == JsonValueKind.Number)
+                            type = (UiMarkerType)ty.GetInt32();
+                        else if (ty.ValueKind == JsonValueKind.String)
+                            type = ParseType(ty.GetString());
+                    }
+
+                    var code = m.TryGetProperty("code", out var cd)
+                        ? cd.GetString() ?? ""
+                        : "";
+
+                    var details = m.TryGetProperty("details", out var dt)
+                        ? dt.GetString()
+                        : null;
+
+                    list.Add(new UiDecisionMarker(
+                        CandleOpenTimeMs: candleMs,
+                        Type: type,
+                        Code: code,
+                        Details: details
+                    ));
                 }
 
-                var code = m.TryGetProperty("code", out var cd)
-                    ? cd.GetString() ?? ""
-                    : "";
-
-                var details = m.TryGetProperty("details", out var dt)
-                    ? dt.GetString()
-                    : null;
-
-                list.Add(new UiDecisionMarker(
-                    CandleOpenTimeMs: candleMs,
-                    Type: type,
-                    Code: code,
-                    Details: details
-                ));
+                if (list.Count > 0)
+                    result[prop.Name] = list;
             }
 
-            if (list.Count > 0)
-                result[prop.Name] = list;
+            return result;
         }
+        catch (Exception)
+        {
 
-        return result;
+            return new Dictionary<string, IReadOnlyList<UiDecisionMarker>>();
+        }
+      
     }
 
     private static string Key(string symbol, string tf)

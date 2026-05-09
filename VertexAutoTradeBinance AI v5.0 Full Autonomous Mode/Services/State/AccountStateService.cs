@@ -20,16 +20,38 @@ namespace VertexAutoTradeBinance8.Services.State
 
         public event Action? Updated;
 
-        
-            public AccountStateService(ILogger<AccountStateService> logger)
+
+        private decimal _realizedPnlSession = 0m;
+
+
+        public AccountStateService(ILogger<AccountStateService> logger)
         {
             _logger = logger;
             _logger.LogCritical("[STATE] AccountStateService instance created: " + GetHashCode());
         }
 
-         
+        public decimal GetRealizedPnlSession() => _realizedPnlSession;
 
         public AccountBalanceState GetBalance() => _bal;
+
+        public IReadOnlyList<LivePositionState> GetPositions()
+            => _pos.Values.OrderBy(x => x.Symbol).ThenBy(x => x.Side).ToList();
+
+        public void AddRealizedPnl(decimal pnl)
+        {
+            if (pnl == 0)
+                return;
+
+            _realizedPnlSession += pnl;
+
+            _logger.LogInformation(
+                "[STATE] RealizedPnL += {pnl}, session={session}",
+                pnl,
+                _realizedPnlSession);
+
+            Updated?.Invoke();
+        }
+       
 
         public IReadOnlyList<LivePositionState> GetPositions(string? symbolsCsv = null)
         {
@@ -74,7 +96,7 @@ namespace VertexAutoTradeBinance8.Services.State
 
             Updated?.Invoke();
         }
-
+ 
         public void RemovePosition(string symbol, PositionSide side)
         {
             if (string.IsNullOrWhiteSpace(symbol) || side == PositionSide.Both)

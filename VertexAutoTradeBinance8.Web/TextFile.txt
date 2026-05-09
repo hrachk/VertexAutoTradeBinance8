@@ -5,7 +5,7 @@ RiskManager			- BaseDirectory, "missed_trades.json");
 ExecutedSignalService		- BaseDirectory, "executed_signals.json");
 
 
-Armen Gevorgyan- test
+Armen Gevorgyan-  
 Ключ API
 mmsfbBOxHuy62Lo3xLIpt9sA0bwvId8njz4OGmYTYzmejz7VqRLOLyamQNds86eZ
 Секретный ключ:
@@ -20,6 +20,31 @@ WztkkdMs7ykcnEZ8bpQgcbz8Po19E5XQkP0131vkNgZjSx3rDaQ7sTxzqgkR7hEp
 Секретный ключ:
 lAyOcVCw4ohWkRvBZdYZscmF2Ps7GR5f0q8BJnAzz8ya8Vvw7KcSJtsYWrGLadsE
  
+
+ Hrach test trading ==================
+API Key
+3dykCG2p5eTnJjpQkifdmpRL19c5h85DOgC1qezVReMpVP1KfUfxzhg2etBOItfX
+Secret Key
+ZrQZlCeLL2TLICUGJgx2O5gyHAVpj50Wn5Tk0n2ieli4NLT80A0TTLvfWJsndvPB
+ ================================
+
+ ==HRACH REAL TRADING========================
+ 
+Ключ API
+LNyF6rRHWQsAIZ5DlNeZutO46rury5RMrGC06YNXev4bCEsoO6OFXeB2z2w1G0TH
+Секретный ключ:
+r6tpGT7KCm5aqLUsTzZZ5kCKe7rhVcUqldIEY4v25HkrZIt8jFV95OdZa4kthXsl
+ =====--------------=============================
+
+
+ ==Inna test trading keys
+ 
+Ключ API
+N4iXAHxPIkI2s1psz0MoZlxYvuJ9OFgrajh01pqO8qqjLSSfJUUXFfk0xkNhE7r5
+Секретный ключ:
+NeDqpYLccfBacvbxw1K0Cq714RxGLLJHyMCHkuDqortnytjCuanwh3JcJfV823b0
+
+===================================================================
 
 install_service_client_001.bat   1 client
 
@@ -47,13 +72,17 @@ echo Service %SERVICE% installed and started
 pause
 
 ==============================================
-C:\Tools\nssm.exe remove Engine_Client_001 confirm
+C:\Tools\nssm.exe remove Engine_Client_02 confirm
+C:\Tools\nssm.exe remove Engine_Client_Web_02 confirm
 
 C:\Tools\nssm.exe remove Engine_Client_001 confirm
 
-C:\Tools\nssm.exe stop Engine_Client_001
-C:\Tools\nssm.exe start Engine_Client_001
+C:\Tools\nssm.exe stop Engine_Client_002
+C:\Tools\nssm.exe start Engine_Client_Web_002
 
+
+C:\Tools\nssm.exe remove Engine_RIVERUSDT confirm
+C:\Tools\nssm.exe remove Engine_Web_RIVERUSDT confirm
 
 C:\Tools\nssm.exe install Engine_Client_001 C:\Vertex\Engines\client_001\VertexAutoTradeBinance8.exe
 

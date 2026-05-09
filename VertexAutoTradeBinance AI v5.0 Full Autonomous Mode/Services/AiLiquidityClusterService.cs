@@ -20,7 +20,7 @@ namespace VertexAutoTradeBinance8.Services
         private const decimal ImbalanceDangerThreshold = 0.75m;
 
         // Макс. расстояние до стены, чтобы блокировать вход
-        private const decimal MaxDistancePctToBlockEntry = 0.0015m; // 0.15%
+        private const decimal MaxDistancePctToBlockEntry = 0.004m; // 0.15%
 
         // Насколько дальше за кластер уводить стоп
         private const decimal StopBeyondClusterPct = 0.0007m; // 0.07%
@@ -34,22 +34,7 @@ namespace VertexAutoTradeBinance8.Services
             _logger = logger;
             _marketData = marketData;
         }
-
-        /// <summary>
-        /// Backward-compatible sync wrapper.
-        /// ВАЖНО: в production лучше вызывать async-версию из StrategyEngine,
-        /// но этот метод оставляем чтобы не ломать текущие вызовы.
-        /// </summary>
-        public TradeSignal? FilterAndAdjust(TradeSignal signal)
-        {
-            // Do NOT use .Result. This still blocks, but avoids AggregateException wrapping.
-            // Prefer async path in new code.
-            return FilterAndAdjustAsync(signal, CancellationToken.None)
-                .ConfigureAwait(false)
-                .GetAwaiter()
-                .GetResult();
-        }
-
+ 
         public async Task<TradeSignal?> FilterAndAdjustAsync(TradeSignal signal, CancellationToken ct)
         {
             OrderBookSnapshot? snapshot = null;
@@ -105,10 +90,24 @@ namespace VertexAutoTradeBinance8.Services
             if (analysis.IsDangerZone)
             {
                 _logger.LogInformation(
-                    "LiquidityCluster: DANGER for {symbol} side={side}, reason={reason}, imbalance={imb:F2}",
+                    "LiquidityCluster: SOFT danger for {symbol} side={side}, reason={reason}, imbalance={imb:F2}",
                     signal.Symbol, signal.Side, analysis.Reason ?? "n/a", analysis.Imbalance);
 
-                return null;
+                // ❗ НЕ блокируем
+                // только штраф
+
+                var penalty = 0.88m;
+
+                // усиленный штраф если реально плохо
+                if (analysis.Imbalance > 0.3m)
+                    penalty = 0.8m;
+
+                signal.Confidence *= penalty;
+
+                // можно чуть уменьшить размер
+                signal.SizeMultiplier *= 0.8m;
+
+                return signal;
             }
 
             // Apply adjustments (only if meaningful)
@@ -258,10 +257,11 @@ namespace VertexAutoTradeBinance8.Services
                     if (nearestBid != null)
                     {
                         var distPct = (signal.EntryPrice - nearestBid.Price) / signal.EntryPrice;
+
                         if (distPct < MaxDistancePctToBlockEntry)
                         {
                             result.IsDangerZone = true;
-                            result.Reason = $"Strong BID wall near entry ({distPct:P2}) at {nearestBid.Price}";
+                            result.Reason = $"BID wall below short ({distPct:P2}) at {nearestBid.Price}";
                             return result;
                         }
                     }
@@ -269,10 +269,17 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // 4) Imbalance danger
-            if (Math.Abs(result.Imbalance) > ImbalanceDangerThreshold)
+            if (signal.Side == SignalSide.Buy && result.Imbalance < -ImbalanceDangerThreshold)
             {
                 result.IsDangerZone = true;
-                result.Reason = $"Orderbook imbalance={result.Imbalance:F2} > {ImbalanceDangerThreshold:F2}";
+                result.Reason = $"Heavy BID vs BUY (bad)";
+                return result;
+            }
+
+            if (signal.Side == SignalSide.Sell && result.Imbalance > ImbalanceDangerThreshold)
+            {
+                result.IsDangerZone = true;
+                result.Reason = $"Heavy ASK vs SELL (bad)";
                 return result;
             }
 

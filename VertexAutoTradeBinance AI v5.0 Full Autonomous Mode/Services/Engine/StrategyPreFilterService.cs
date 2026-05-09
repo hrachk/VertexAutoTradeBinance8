@@ -1,6 +1,4 @@
 ﻿using Binance.Net.Enums;
-using Microsoft.Extensions.Options;
-using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services.Engine
@@ -8,49 +6,48 @@ namespace VertexAutoTradeBinance8.Services.Engine
     public sealed class StrategyPreFilterService : IStrategyPreFilter
     {
         private readonly ILogger<StrategyPreFilterService> _logger;
-        private readonly TradingOptions _opt;
+        private readonly TradingOptionsResolver _resolver;
         private readonly MarketDataService _market;
         private readonly EngineStateSnapshotService _stateSvc;
 
-        // WS latency guard (если нет новых данных — не гоняем стратегию)
+        // Configurable thresholds
         private readonly TimeSpan _maxStaleness1m = TimeSpan.FromSeconds(25);
         private readonly TimeSpan _maxStaleness5m = TimeSpan.FromSeconds(75);
         private readonly TimeSpan _maxStaleness15m = TimeSpan.FromSeconds(125);
+        private readonly decimal _deadVolatilityThreshold = 0.0015m;
+        private readonly decimal _deadRangeThreshold = 0.0010m;
+        private readonly TimeSpan _exposureHardBlockSeconds = TimeSpan.FromSeconds(10);
 
         public StrategyPreFilterService(
             ILogger<StrategyPreFilterService> logger,
-            IOptions<TradingOptions> opt,
             MarketDataService market,
-            EngineStateSnapshotService stateSvc)
+            EngineStateSnapshotService stateSvc,
+            TradingOptionsResolver resolver)
         {
             _logger = logger;
-            _opt = opt.Value;
             _market = market;
             _stateSvc = stateSvc;
+            _resolver = resolver;
         }
 
         public async Task<PreFilterResult> EvaluateAsync(string symbol, KlineInterval tf, CancellationToken ct)
         {
-            // 1) COOL DOWN (глобальный, если включён в TradingOptions)
-            // TradingWorker уже делает InCooldown(symbol) после signal,
-            // но здесь — PRE: чтобы не грузить систему.
+            var _opt = _resolver.Resolve(symbol);
+
+            // 1) COOL DOWN
             if (_opt.CooldownMinutes > 0)
             {
-                var st = _stateSvc.State; // общий стейт
+                var st = _stateSvc.State;
                 if (TryIsSymbolInCooldown(st, symbol, TimeSpan.FromMinutes(_opt.CooldownMinutes), out var cdReason))
                     return PreFilterResult.Skip("COOLDOWN", cdReason, sleepMs: 40);
             }
 
-            // 2) MarketSnapshot: если нет снапшота — пропускаем (не зависаем)
+            // 2) MarketSnapshot
             var snap = await _market.GetMarketSnapshot(symbol, tf, ct);
             if (snap == null)
                 return PreFilterResult.Skip("NO_SNAPSHOT", "Нет MarketSnapshot", sleepMs: 40);
 
-            // 3) WS latency / stale data guard
-            // В твоей модели снапшота может быть любое поле времени.
-            // Ниже — максимально безопасная проверка:
-            // - если есть Timestamp/UpdatedUtc/CloseTime — используем
-            // - если нет — допускаем работу (чтобы не заблокировать торговлю)
+            // 3) WS latency / stale guard
             if (TryGetSnapshotUtc(snap, out var snapUtc))
             {
                 var age = DateTime.UtcNow - snapUtc;
@@ -60,7 +57,7 @@ namespace VertexAutoTradeBinance8.Services.Engine
                     KlineInterval.OneMinute => _maxStaleness1m,
                     KlineInterval.FiveMinutes => _maxStaleness5m,
                     KlineInterval.FifteenMinutes => _maxStaleness15m,
-                    _ => TimeSpan.FromSeconds(90)
+                    _ => TimeSpan.FromSeconds(45)
                 };
 
                 if (age > max)
@@ -72,15 +69,11 @@ namespace VertexAutoTradeBinance8.Services.Engine
                 }
             }
 
-            // 4) Fast market dead-zone guard (микро-рынок/тишина):
-            // Если волатильность микро и рынок стоит, смысла гонять стратегию нет.
-            // (адаптируй поля снапшота под твою модель)
+            // 4) Dead market guard
             if (TryIsDeadMarket(snap))
                 return PreFilterResult.Skip("DEAD_MKT", "Рынок стоит (dead zone)", sleepMs: 60);
 
-            // 5) Lightweight exposure guard (только по EngineState):
-            // В StrategyEngine ты уже вызываешь CanIncreaseExposure(...),
-            // здесь — грубая защита от циклического добавления риска.
+            // 5) Lightweight exposure guard
             if (IsExposureHardBlocked(symbol))
                 return PreFilterResult.Skip("EXPO_HARD", "Exposure hard block (engine state)", sleepMs: 80);
 
@@ -98,25 +91,28 @@ namespace VertexAutoTradeBinance8.Services.Engine
                 var key = EngineState.Key(symbol);
                 if (_stateSvc.State.Symbols.TryGetValue(key, out var st))
                 {
-                    // пример: после частичных закрытий/защит — не доливаем сразу
-                    if (DateTime.UtcNow - st.LastProtectionUtc < TimeSpan.FromSeconds(10))
+                    if (st.LastProtectionUtc.HasValue &&
+                        DateTime.UtcNow - st.LastProtectionUtc.Value < _exposureHardBlockSeconds)
                         return true;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error in IsExposureHardBlocked for {symbol}", symbol);
+            }
+
             return false;
         }
 
         private static bool TryIsSymbolInCooldown(EngineState state, string symbol, TimeSpan cd, out string reason)
         {
             reason = string.Empty;
+
             try
             {
                 var key = EngineState.Key(symbol);
                 if (state.Symbols.TryGetValue(key, out var st))
                 {
-                    // если у тебя есть поле LastStopUtc/LastTradeUtc — используй его.
-                    // Здесь — универсально: cooldown от LastProtectionUtc как safety fallback.
                     var last = st.LastProtectionUtc;
 
                     if (last.HasValue)
@@ -131,7 +127,12 @@ namespace VertexAutoTradeBinance8.Services.Engine
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // Логируем, но не блокируем поток
+                Console.WriteLine($"TryIsSymbolInCooldown failed: {ex}");
+            }
+
             return false;
         }
 
@@ -139,47 +140,52 @@ namespace VertexAutoTradeBinance8.Services.Engine
         {
             utc = default;
 
-            // Пытаемся вытащить самые типичные поля рефлексией,
-            // чтобы не ломать твою модель MarketSnapshot.
-            var t = snap.GetType();
-
-            DateTime? dt = null;
-
-            var p1 = t.GetProperty("UpdatedUtc") ?? t.GetProperty("TimestampUtc") ?? t.GetProperty("Timestamp");
-            if (p1 != null && p1.PropertyType == typeof(DateTime))
-                dt = (DateTime)p1.GetValue(snap)!;
-
-            if (dt == null)
+            try
             {
-                var p2 = t.GetProperty("CloseTime") ?? t.GetProperty("CloseTimeUtc");
-                if (p2 != null && p2.PropertyType == typeof(DateTime))
-                    dt = (DateTime)p2.GetValue(snap)!;
+                var t = snap.GetType();
+                DateTime? dt = null;
+
+                var p1 = t.GetProperty("UpdatedUtc") ?? t.GetProperty("TimestampUtc") ?? t.GetProperty("Timestamp");
+                if (p1 != null && p1.GetValue(snap) is DateTime d1)
+                    dt = d1;
+
+                if (dt == null)
+                {
+                    var p2 = t.GetProperty("CloseTime") ?? t.GetProperty("CloseTimeUtc");
+                    if (p2 != null && p2.GetValue(snap) is DateTime d2)
+                        dt = d2;
+                }
+
+                if (dt == null)
+                    return false;
+
+                utc = DateTime.SpecifyKind(dt.Value, DateTimeKind.Utc);
+                return utc != default;
             }
-
-            if (dt == null)
+            catch
+            {
                 return false;
-
-            utc = DateTime.SpecifyKind(dt.Value, DateTimeKind.Utc);
-            return utc != default;
+            }
         }
 
-        private static bool TryIsDeadMarket(object snap)
+        private bool TryIsDeadMarket(object snap)
         {
-            // Безопасно: если полей нет — не блокируем.
             try
             {
                 var t = snap.GetType();
 
-                // Примеры: VolatilityPercent / SpreadPercent / RangePercent
                 var volP = t.GetProperty("VolatilityPercent")?.GetValue(snap);
-                if (volP is decimal vol && vol >= 0 && vol < 0.0015m)
+                if (volP is decimal vol && vol >= 0 && vol < _deadVolatilityThreshold)
                     return true;
 
                 var rangeP = t.GetProperty("RangePercent")?.GetValue(snap);
-                if (rangeP is decimal rp && rp >= 0 && rp < 0.0010m)
+                if (rangeP is decimal rp && rp >= 0 && rp < _deadRangeThreshold)
                     return true;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "TryIsDeadMarket reflection failed");
+            }
 
             return false;
         }

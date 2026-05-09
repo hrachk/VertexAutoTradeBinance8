@@ -347,16 +347,14 @@ public class SymbolRegistryService
         // ============================================================
         decimal Score(SymbolMarketSnapshot s, SignalSide side)
         {
-            TryNormalize01(
-                _ai.GetSymbolScore(s.Symbol, side),
-                0m, 1m,
-                out var ai);
+            // AI score: нормализуем 0..1
+            TryNormalize01(_ai.GetSymbolScore(s.Symbol, side), 0m, 1m, out var ai);
 
-            TryNormalize01(
-                (decimal)Math.Abs(s.PriceChangePercent),
-                0m, 15m,
-                out var mom);
+            // Price change: учитываем падение как отрицательный фактор
+            // нормализуем от -15% до +15%
+            TryNormalize01(s.PriceChangePercent, -15m, 15m, out var mom);
 
+            // Объединяем с весами
             return ai * 0.65m + mom * 0.35m;
         }
 
@@ -371,13 +369,14 @@ public class SymbolRegistryService
         // ============================================================
         // UNIVERSE BUILD (AI CAP = 60)
         // ============================================================
+        var momentumCapPercent = 100m; // или из конфига
         var longs = BlacklistFilter(
             NormalizeSymbols(
-                _universeBuilder.Build(longSnaps, pinnedCfg.ToArray(), 60, 0m, 0m)));
+                _universeBuilder.Build(longSnaps, pinnedCfg.ToArray(), 60, 0m, 0m, momentumCapPercent)));
 
         var shorts = BlacklistFilter(
             NormalizeSymbols(
-                _universeBuilder.Build(shortSnaps, pinnedCfg.ToArray(), 60, 0m, 0m)));
+                _universeBuilder.Build(shortSnaps, pinnedCfg.ToArray(), 60, 0m, 0m, momentumCapPercent)));
 
         // ============================================================
         // FINAL UNION (PINNED FIRST, HARD CAP)

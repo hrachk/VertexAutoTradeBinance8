@@ -58,9 +58,38 @@
     // ===== INIT (NO JS HERE) =====
     protected override async Task OnInitializedAsync()
     {
-        Series = (await Service.LoadAsync()).ToList();
+        Series = (await Service.LoadAsync())
+     .OrderBy(s => s.Symbol)               // A-Z по символу
+     .ThenBy(s => TfOrder(s.Timeframe))    // порядок таймфреймов
+     .ToList();
         Selected = Series.FirstOrDefault();
     }
+
+    static int TfOrder(string tf) => tf switch
+{
+    "OneMinute" => 1,
+    "ThreeMinutes" => 2,
+    "FiveMinutes" => 3,
+    "FifteenMinutes" => 4,
+    "ThirtyMinutes" => 5,
+    "OneHour" => 6,
+    "FourHour" => 7,
+    "OneDay" => 8,
+    _ => 999
+};
+
+  static string TfShort(string tf) => tf switch
+    {
+        "OneMinute" => "1m",
+        "ThreeMinutes" => "3m",
+        "FiveMinutes" => "5m",
+        "FifteenMinutes" => "15m",
+        "ThirtyMinutes" => "30m",
+        "OneHour" => "1h",
+        "FourHour" => "4h",
+        "OneDay" => "1D",
+        _ => tf
+    };
 
     private async Task SafeJs(Func<Task> action)
 {
@@ -99,7 +128,10 @@
                     {
                         await InvokeAsync(async () =>
                         {
-                            Series = (await Service.LoadAsync()).ToList();
+                            Series = (await Service.LoadAsync())
+    .OrderBy(s => s.Symbol)               // A-Z по символу
+    .ThenBy(s => TfOrder(s.Timeframe))    // порядок таймфреймов
+    .ToList();
                             Selected ??= Series.FirstOrDefault();
                             await SafeJs(LoadAndRenderAsync);
                         });
@@ -130,20 +162,7 @@
             volumes
         );
     }
-
-
-    // ===== UI =====
-    // private async Task OnSelect(ChangeEventArgs e)
-    // {
-    //     var next = Series.FirstOrDefault(s => Key(s) == e.Value?.ToString());
-    //     if (next == null)
-    //         return;
-
-    //     Selected = next;
-
-    //     if (!Frozen)
-    //         await LoadAndRenderAsync();
-    // }
+ 
 
     private async Task OnSelect(ChangeEventArgs e)
     {
@@ -158,18 +177,7 @@
         if (!Frozen)
             await LoadAndRenderAsync();
     }
-    static string TfShort(string tf) => tf switch
-    {
-        "OneMinute" => "1m",
-        "ThreeMinutes" => "3m",
-        "FiveMinutes" => "5m",
-        "FifteenMinutes" => "15m",
-        "ThirtyMinutes" => "30m",
-        "OneHour" => "1h",
-        "FourHour" => "4h",
-        "OneDay" => "1D",
-        _ => tf
-    };
+  
     private void ToggleFreeze() => Frozen = !Frozen;
 
     static string Key(MarketSeries s)
