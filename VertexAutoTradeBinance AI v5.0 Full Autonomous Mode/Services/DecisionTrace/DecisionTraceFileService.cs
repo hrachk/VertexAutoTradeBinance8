@@ -7,8 +7,8 @@ namespace VertexAutoTradeBinance8.Services.DecisionTrace
         private readonly object _lock = new();
         private readonly ILogger<DecisionTraceFileService> _logger;
 
-        private static readonly string TraceDir =
-            Path.Combine(AppContext.BaseDirectory, "ai-models", "decision-trace");
+        private static readonly string TraceDir = Path.Combine(AppContext.BaseDirectory, "ai-models", "decision-trace");
+    
 
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
@@ -44,13 +44,18 @@ namespace VertexAutoTradeBinance8.Services.DecisionTrace
 
                 lock (_lock)
                 {
+                    Directory.CreateDirectory(TraceDir);
+
                     using var fs = new FileStream(
                         file,
                         FileMode.Append,
                         FileAccess.Write,
                         FileShare.Read);
 
-                    using var sw = new StreamWriter(fs);
+                    using var sw = new StreamWriter(fs)
+                    {
+                        AutoFlush = true
+                    };
 
                     sw.WriteLine(json);
                 }

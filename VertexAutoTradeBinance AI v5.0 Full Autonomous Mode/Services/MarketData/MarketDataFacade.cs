@@ -1,8 +1,10 @@
-﻿using System.Collections.Concurrent;
-using System.Globalization;
-using Binance.Net.Enums;
+﻿using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Globalization;
 using VertexAutoTradeBinance8.MarketData;
+using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services.MarketState;
 
 namespace VertexAutoTradeBinance8.Services
@@ -321,7 +323,6 @@ namespace VertexAutoTradeBinance8.Services
             symbol = NormalizeSymbol(symbol);
             var key = Key(symbol, tf);
 
-            // availability increments (ws closed bars)
             var count = _barsAvailable.AddOrUpdate(key, 1, (_, v) => v + 1);
 
             if (count == FastWarmBars)
@@ -331,6 +332,134 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             WsClosedKline?.Invoke(symbol, tf, candle);
+
+            UpdateMarketState(symbol, tf, candle);
+        }
+
+        private readonly ConcurrentDictionary<string, long> _lastStateUpdate = new();
+
+        private void UpdateMarketState(
+      string symbol,
+      KlineInterval tf,
+      BinanceFuturesUsdtKline candle)
+        {
+            var key = Key(symbol, tf);
+            var now = Stopwatch.GetTimestamp();
+
+            var shouldUpdate = false;
+
+            _lastStateUpdate.AddOrUpdate(
+                key,
+                _ =>
+                {
+                    shouldUpdate = true;
+                    return now;
+                },
+                (_, last) =>
+                {
+                    var elapsedMs = (now - last) * 1000.0 / Stopwatch.Frequency;
+
+                    if (elapsedMs < 200)
+                        return last;
+
+                    shouldUpdate = true;
+                    return now;
+                });
+
+            if (!shouldUpdate)
+                return;
+
+            try
+            {
+                var snapshot = BuildSnapshot(symbol, tf, candle);
+
+                if (snapshot == null)
+                    return;
+
+                _marketState.Update(snapshot);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[MD][STATE] update failed {symbol} {tf}", symbol, tf);
+            }
+        }
+
+        private MarketStateSnapshot BuildSnapshot(
+        string symbol,
+        KlineInterval tf,
+        BinanceFuturesUsdtKline candle)
+        {
+            const int required = 70; // EMA55 + запас
+            var klines = _buf.GetLast(symbol, tf, required);
+
+            if (klines.Count < required)
+                return null;
+
+            var atr = CalculateAtr(klines, 14);
+            var ema21 = CalculateEma(klines, 21);
+            var ema55 = CalculateEma(klines, 55);
+
+            return new MarketStateSnapshot
+            {
+                Symbol = symbol,
+                Timeframe = tf.ToString(),
+                LastCloseTimeUtc = candle.CloseTime,
+
+                LastPrice = candle.ClosePrice,
+
+                Atr14 = atr,
+                Ema21 = ema21,
+                Ema55 = ema55,
+
+                Volatility = atr,
+                TrendSlope = ema21 - ema55,
+
+                Regime =
+                    ema21 > ema55 ? MarketRegime.UpTrend :
+                    ema21 < ema55 ? MarketRegime.DownTrend :
+                    MarketRegime.Range
+            };
+        }
+
+        private static decimal CalculateAtr(IReadOnlyList<BinanceFuturesUsdtKline> klines, int period)
+        {
+            if (klines.Count < period + 2)
+                return 0;
+
+            decimal sum = 0;
+
+            for (int i = klines.Count - period; i < klines.Count; i++)
+            {
+                var cur = klines[i];
+                var prev = klines[i - 1];
+
+                decimal tr1 = cur.HighPrice - cur.LowPrice;
+                decimal tr2 = Math.Abs(cur.HighPrice - prev.ClosePrice);
+                decimal tr3 = Math.Abs(cur.LowPrice - prev.ClosePrice);
+
+                decimal tr = Math.Max(tr1, Math.Max(tr2, tr3));
+
+                sum += tr;
+            }
+
+            return sum / period;
+        }
+
+        private static decimal CalculateEma(IReadOnlyList<BinanceFuturesUsdtKline> klines, int period)
+        {
+            if (klines.Count == 0)
+                return 0;
+
+            decimal k = 2m / (period + 1);
+
+            decimal ema = klines[0].ClosePrice;
+
+            for (int i = 1; i < klines.Count; i++)
+            {
+                ema = klines[i].ClosePrice * k + ema * (1 - k);
+            }
+
+            return ema;
         }
 
         private static string NormalizeSymbol(string symbol) =>
@@ -338,9 +467,6 @@ namespace VertexAutoTradeBinance8.Services
 
         private static string Key(string symbol, KlineInterval tf) =>
             $"{NormalizeSymbol(symbol)}:{tf}";
-
-
-
         // =====================================================
         // MAIN API
         // =====================================================
@@ -433,6 +559,8 @@ namespace VertexAutoTradeBinance8.Services
                         };
 
                         _buf.Upsert(symbol, tf, candle);
+                        // ❗ ВОТ ГЛАВНЫЙ ФИКС
+                        UpdateMarketState(symbol, tf, candle);
                     }
 
                     _restBackfilled[key] = true;
@@ -460,7 +588,6 @@ namespace VertexAutoTradeBinance8.Services
                 restLock.Release();
             }
         }
-
         // =====================================================
         // WARMUP LOGIC
         // =====================================================
@@ -483,7 +610,6 @@ namespace VertexAutoTradeBinance8.Services
 
             return DateTime.UtcNow - last > RestCooldown;
         }
-
         // =====================================================
         // WS SUBSCRIBE SINGLEFLIGHT (retry-safe)
         // =====================================================
