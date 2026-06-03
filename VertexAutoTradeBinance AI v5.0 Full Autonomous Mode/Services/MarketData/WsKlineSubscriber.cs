@@ -91,6 +91,22 @@ namespace VertexAutoTradeBinance8.Services
                     {
                         _subs[key] = result.Data;
 
+                        // =====================================================
+                        // Авто-переподключение при обрыве соединения
+                        // Binance.Net v12: ConnectionLost / ConnectionRestored
+                        // =====================================================
+                        result.Data.ConnectionLost += () =>
+                        {
+                            _logger.LogWarning("[WS] Connection LOST {symbol} {tf}", symbol, interval);
+                        };
+
+                        result.Data.ConnectionRestored += downtime =>
+                        {
+                            _logger.LogInformation(
+                                "[WS] Connection RESTORED {symbol} {tf} after {dt}s",
+                                symbol, interval, downtime.TotalSeconds);
+                        };
+
                         _logger.LogInformation(
                             "[WS] Subscribe OK {symbol} {tf}",
                             symbol,

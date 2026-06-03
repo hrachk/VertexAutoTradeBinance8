@@ -784,6 +784,7 @@ namespace VertexAutoTradeBinance8.Services
          price: price,
          timeInForce: TimeInForce.ImmediateOrCancel,
          positionSide: side,
+         selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
          ct: ct);
 
                     if (!result.Success)
@@ -1234,6 +1235,7 @@ namespace VertexAutoTradeBinance8.Services
                 positionSide: side,
                 workingType: WorkingType.Mark,
                 reduceOnly: null,
+                selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                 ct: ct);
 
             if (sl.Success)
@@ -1385,6 +1387,7 @@ namespace VertexAutoTradeBinance8.Services
                     type: FuturesOrderType.Market,
                     quantity: probeQty,
                     positionSide: probeSide,
+                    selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                     ct: token);
 
                 if (!entryRes.Success)
@@ -1456,6 +1459,7 @@ namespace VertexAutoTradeBinance8.Services
                 quantity: absQty,
                 positionSide: pos.PositionSide,
                 reduceOnly: null,
+                selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                 ct: ct
             );
 
@@ -1941,6 +1945,7 @@ namespace VertexAutoTradeBinance8.Services
                     type: FuturesOrderType.Market,
                     quantity: closeQty,
                     positionSide: side,
+                    selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                     ct: ct);
 
 
@@ -2205,6 +2210,7 @@ namespace VertexAutoTradeBinance8.Services
                         positionSide: side,
                         stopPrice: sl,
                         reduceOnly: null,
+                        selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                         ct: ct);
 
                     if (res.Success)
@@ -2382,6 +2388,7 @@ namespace VertexAutoTradeBinance8.Services
                         positionSide: side,
                         stopPrice: trigger,
                         reduceOnly: null,
+                        selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                         ct: CancellationToken.None);
 
                     if (res.Success)
@@ -2536,6 +2543,7 @@ namespace VertexAutoTradeBinance8.Services
                 type: FuturesOrderType.Market,
                 quantity: closeQty,
                 positionSide: side,
+                selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                 ct: ct);
 
                 _logger.LogInformation("[TP-EXT][{symbol}] Partial TP executed {closed}/{total}, runner={runner}",
@@ -2611,6 +2619,7 @@ namespace VertexAutoTradeBinance8.Services
                         stopPrice: s,
                         positionSide: side,
                         workingType: WorkingType.Mark,
+                        selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                         ct: token);
 
                     if (!r1.Success && IsAlgoRequired(r1.Error))
@@ -2635,6 +2644,7 @@ namespace VertexAutoTradeBinance8.Services
                             quantity: qty,
                             stopPrice: s,
                             positionSide: side,
+                            selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                             ct: token);
                     }
                     HookAiLearningOnSlMove(signal, symbol, side, entry, s);
@@ -2748,8 +2758,8 @@ namespace VertexAutoTradeBinance8.Services
                 if (reduceOnly.HasValue && positionSide == PositionSide.Both)
                     q.Add(new("reduceOnly", reduceOnly.Value ? "true" : "false"));
 
-                var query = BuildQuery(q);
-                var sig = Sign(query, _apiSecret);
+                var (query, rawQuery) = BuildQuery(q);
+                var sig = Sign(rawQuery, _apiSecret);  // подписываем RAW строку
 
                 var url = $"{_baseUrl}/fapi/v1/algoOrder?{query}&signature={sig}";
 
@@ -2779,23 +2789,35 @@ namespace VertexAutoTradeBinance8.Services
                 }
             }
 
-            private static string BuildQuery(IEnumerable<KeyValuePair<string, string>> q)
+            // =====================================================
+            // BuildQuery: строим query string для URL (percent-encoded)
+            // Sign: подписываем RAW строку ДО encoding — требование Binance с декабря 2025
+            // =====================================================
+            private static (string encoded, string raw) BuildQuery(IEnumerable<KeyValuePair<string, string>> q)
             {
-                var sb = new StringBuilder();
+                var encoded = new StringBuilder();
+                var raw = new StringBuilder();
+
                 foreach (var kv in q)
                 {
-                    if (sb.Length > 0) sb.Append('&');
-                    sb.Append(Uri.EscapeDataString(kv.Key));
-                    sb.Append('=');
-                    sb.Append(Uri.EscapeDataString(kv.Value));
+                    if (encoded.Length > 0) { encoded.Append('&'); raw.Append('&'); }
+
+                    // raw — без encoding, используется для подписи
+                    raw.Append(kv.Key).Append('=').Append(kv.Value);
+
+                    // encoded — для URL
+                    encoded.Append(Uri.EscapeDataString(kv.Key))
+                           .Append('=')
+                           .Append(Uri.EscapeDataString(kv.Value));
                 }
-                return sb.ToString();
+
+                return (encoded.ToString(), raw.ToString());
             }
 
-            private static string Sign(string queryString, string secret)
+            private static string Sign(string rawQueryString, string secret)
             {
                 using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-                var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(queryString));
+                var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(rawQueryString));
                 var sb = new StringBuilder(hash.Length * 2);
                 foreach (var b in hash) sb.Append(b.ToString("x2"));
                 return sb.ToString();
@@ -2963,6 +2985,7 @@ namespace VertexAutoTradeBinance8.Services
      type: FuturesOrderType.Market,
      quantity: closeQty,
      positionSide: side,
+     selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
      ct: ct);
 
 
