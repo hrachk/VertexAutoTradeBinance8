@@ -47,7 +47,8 @@ public sealed class BinanceClientFactory
 
             _cachedRest = new BinanceRestClient(cfg =>
             {
-                cfg.ApiCredentials = new ApiCredentials(
+                // ✅ Binance.Net v12: используем BinanceCredentials вместо ApiCredentials
+                cfg.ApiCredentials = new BinanceCredentials(
                     opt.ApiKey,
                     opt.SecretKey);
 
@@ -99,7 +100,7 @@ public sealed class BinanceClientFactory
 
             return new BinanceRestClient(cfg =>
             {
-                cfg.ApiCredentials = new ApiCredentials(
+                cfg.ApiCredentials = new BinanceCredentials(
                     opt.ApiKey,
                     opt.SecretKey);
 
@@ -136,7 +137,7 @@ public sealed class BinanceClientFactory
 
         return new BinanceSocketClient(cfg =>
         {
-            cfg.ApiCredentials = new ApiCredentials(
+            cfg.ApiCredentials = new BinanceCredentials(
                 opt.ApiKey,
                 opt.SecretKey);
 

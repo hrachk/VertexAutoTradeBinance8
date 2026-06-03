@@ -157,7 +157,8 @@ public class Program
                                 ? BinanceEnvironment.Testnet
                                 : BinanceEnvironment.Live;
 
-                            opt.ApiCredentials = new ApiCredentials(
+                            // ✅ Binance.Net v12: BinanceCredentials
+                            opt.ApiCredentials = new BinanceCredentials(
                                 cfg.ApiKey,
                                 cfg.SecretKey);
 
@@ -177,7 +178,8 @@ public class Program
                                 ? BinanceEnvironment.Testnet
                                 : BinanceEnvironment.Live;
 
-                            opt.ApiCredentials = new ApiCredentials(
+                            // ✅ Binance.Net v12: BinanceCredentials
+                            opt.ApiCredentials = new BinanceCredentials(
                                 cfg.ApiKey,
                                 cfg.SecretKey);
                         });
