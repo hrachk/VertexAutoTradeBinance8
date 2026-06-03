@@ -35,11 +35,11 @@ namespace VertexAutoTradeBinance8.Services
             using var client = _factory.CreateRestClient();
 
             var openOrdersResult =
-                await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol);
+                await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
 
             if (!openOrdersResult.Success || openOrdersResult.Data == null)
             {
-                _logger.LogWarning($"[Cleaner] Не удалось загрузить открытые ордера: {openOrdersResult.Error}");
+                _logger.LogWarning("[CLEANER] Failed to load open orders for {symbol}: {err}", symbol, openOrdersResult.Error);
                 return;
             }
 
@@ -47,8 +47,7 @@ namespace VertexAutoTradeBinance8.Services
             if (!openOrders.Any())
                 return;
 
-            _logger.LogInformation(
-                $"🧹 CLEANER START {symbol}: найдено {openOrders.Length} активных ордеров");
+            _logger.LogInformation("[CLEANER] START {symbol}: {count} active orders found", symbol, openOrders.Length);
 
             // Биржевые фильтры
             var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
@@ -92,12 +91,18 @@ namespace VertexAutoTradeBinance8.Services
                 }
 
                 // =============================================================
-                // 3) Удаляем TP, если они устарели
+                // 3) Удаляем TP если они устарели
+                // В Hedge mode TP ордера НЕ используют reduceOnly —
+                // они определяются по type + positionSide.
+                // Проверяем оба варианта.
                 // =============================================================
-                if (order.Type == FuturesOrderType.Limit &&
-                    order.ReduceOnly == true) // TP всегда reduceOnly
+                if (order.Type is FuturesOrderType.TakeProfit
+                               or FuturesOrderType.TakeProfitMarket)
                 {
-                    if (!tpRounded.Contains(order.Price))
+                    bool isOurTp = order.ReduceOnly == true  // One-way mode
+                        || order.PositionSide != PositionSide.Both; // Hedge mode
+
+                    if (isOurTp && !tpRounded.Contains(order.Price) && !tpRounded.Contains(order.StopPrice))
                         shouldDelete = true;
                 }
 
@@ -108,22 +113,17 @@ namespace VertexAutoTradeBinance8.Services
                 {
                     var cancelResult = await client.UsdFuturesApi.Trading.CancelOrderAsync(
                         symbol: symbol,
-                        orderId: order.Id);
+                        orderId: order.Id,
+                        ct: ct);
 
                     if (cancelResult.Success)
-                    {
-                        _logger.LogInformation(
-                            $"🧹 CLEANER: удалён старый ордер [{order.Id}] price={order.Price}");
-                    }
+                        _logger.LogInformation("[CLEANER] Canceled stale order [{id}] type={type} price={price}", order.Id, order.Type, order.Price);
                     else
-                    {
-                        _logger.LogWarning(
-                            $"CLEANER FAIL {symbol}: {cancelResult.Error}");
-                    }
+                        _logger.LogWarning("[CLEANER] Failed to cancel {symbol} order [{id}]: {err}", symbol, order.Id, cancelResult.Error);
                 }
             }
 
-            _logger.LogInformation($"🧹 CLEANER END {symbol}");
+            _logger.LogInformation("[CLEANER] END {symbol}", symbol);
         }
 
         private static decimal Round(decimal x, decimal tick)
