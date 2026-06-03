@@ -12,6 +12,13 @@ public sealed class SymbolLiquidityScanner
     private DateTime _cachedAtUtc = DateTime.MinValue;
     private List<SymbolMarketSnapshot> _cache = new();
 
+    // =====================================================
+    // GetTickersAsync (все фьючерсы) имеет weight=40
+    // Защищаемся от слишком частых вызовов — минимум 60 сек между попытками
+    // =====================================================
+    private DateTime _lastAttemptUtc = DateTime.MinValue;
+    private static readonly TimeSpan MinRequestInterval = TimeSpan.FromSeconds(60);
+
     public SymbolLiquidityScanner(
         ILogger<SymbolLiquidityScanner> logger,
         BinanceClientFactory factory,
@@ -40,8 +47,21 @@ public sealed class SymbolLiquidityScanner
 
             using var client = _factory.CreateRestClient();
 
+            // =====================================================
+            // Rate limit guard: GetTickersAsync weight=40
+            // Не шлём запрос если последняя попытка была < 60 сек назад
+            // =====================================================
+            var sinceLastAttempt = DateTime.UtcNow - _lastAttemptUtc;
+            if (sinceLastAttempt < MinRequestInterval && _cache.Count > 0)
+            {
+                _logger.LogDebug("[SYMBOL] Rate limit guard: returning cache (last attempt {s}s ago)", (int)sinceLastAttempt.TotalSeconds);
+                return _cache;
+            }
+            _lastAttemptUtc = DateTime.UtcNow;
+
             // =========================
             // 1) TRY TICKERS (3 RETRIES с безопасной обработкой ошибок)
+            // GetTickersAsync weight=40 — тяжёлый запрос, используем осторожно
             // =========================
             for (int attempt = 1; attempt <= 3; attempt++)
             {

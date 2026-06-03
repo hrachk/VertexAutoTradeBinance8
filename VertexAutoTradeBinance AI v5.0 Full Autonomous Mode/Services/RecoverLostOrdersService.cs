@@ -2,7 +2,6 @@
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Binance.Net.Clients;
 using Binance.Net.Enums;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -14,6 +13,11 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ILogger<RecoverLostOrdersService> _logger;
         private readonly BinanceClientFactory _factory;
         private readonly OrderTracerService _tracer;
+
+        // Exponential backoff state
+        private int _consecutiveErrors = 0;
+        private static readonly TimeSpan BaseInterval   = TimeSpan.FromSeconds(10);
+        private static readonly TimeSpan MaxInterval    = TimeSpan.FromMinutes(2);
 
         public RecoverLostOrdersService(
             ILogger<RecoverLostOrdersService> logger,
@@ -32,13 +36,21 @@ namespace VertexAutoTradeBinance8.Services
                 try
                 {
                     await ScanAsync(stoppingToken);
+                    _consecutiveErrors = 0; // сброс при успехе
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "[RECOVER] Fatal error in RecoverLostOrdersService");
+                    _consecutiveErrors++;
+                    _logger.LogError(ex, "[RECOVER] Fatal error (attempt {n})", _consecutiveErrors);
                 }
 
-                await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken); // каждые 10 сек
+                // Exponential backoff: 10s → 20s → 40s → ... → max 2min
+                var delay = TimeSpan.FromSeconds(
+                    Math.Min(
+                        BaseInterval.TotalSeconds * Math.Pow(2, _consecutiveErrors),
+                        MaxInterval.TotalSeconds));
+
+                await Task.Delay(delay, stoppingToken);
             }
         }
 
@@ -50,12 +62,12 @@ namespace VertexAutoTradeBinance8.Services
 
             using var client = _factory.CreateRestClient();
 
-            // берём все позиции разом
-            var posRes = await client.UsdFuturesApi.Account.GetPositionInformationAsync();
+            // Загружаем все позиции одним запросом
+            var posRes = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
             if (!posRes.Success || posRes.Data == null)
             {
                 _logger.LogWarning("[RECOVER] Failed to load positions: {err}", posRes.Error);
-                return;
+                throw new Exception($"GetPositionInformation failed: {posRes.Error}");
             }
 
             var allPos = posRes.Data.ToList();
@@ -64,7 +76,7 @@ namespace VertexAutoTradeBinance8.Services
             {
                 ct.ThrowIfCancellationRequested();
 
-                var longPos = allPos.FirstOrDefault(p =>
+                var longPos  = allPos.FirstOrDefault(p =>
                     p.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase) &&
                     p.PositionSide == PositionSide.Long);
 
@@ -72,32 +84,36 @@ namespace VertexAutoTradeBinance8.Services
                     p.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase) &&
                     p.PositionSide == PositionSide.Short);
 
-                decimal longQty = longPos != null ? Math.Abs(longPos.Quantity) : 0m;
+                decimal longQty  = longPos  != null ? Math.Abs(longPos.Quantity)  : 0m;
                 decimal shortQty = shortPos != null ? Math.Abs(shortPos.Quantity) : 0m;
 
-                var ordersRes = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol);
+                var ordersRes = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
                 if (!ordersRes.Success || ordersRes.Data == null)
                     continue;
 
                 var openOrders = ordersRes.Data.ToList();
-                var knownIds = _tracer.GetKnownOrderIds(symbol);
+                var knownIds   = _tracer.GetKnownOrderIds(symbol);
 
                 foreach (var o in openOrders)
                 {
                     bool isBotOrder = knownIds.Contains(o.Id);
                     if (!isBotOrder)
-                        continue; // чужие/ручные не трогаем
+                        continue; // чужие/ручные ордера не трогаем
 
                     bool noPosForSide =
-                        (o.PositionSide == PositionSide.Long && longQty == 0m) ||
+                        (o.PositionSide == PositionSide.Long  && longQty  == 0m) ||
                         (o.PositionSide == PositionSide.Short && shortQty == 0m) ||
-                        (o.PositionSide == PositionSide.Both && longQty == 0m && shortQty == 0m);
+                        (o.PositionSide == PositionSide.Both  && longQty  == 0m && shortQty == 0m);
 
                     if (!noPosForSide)
                         continue;
 
+                    // =====================================================
                     // Наш ордер, но по стороне уже НЕТ позиции → отменяем.
-                    var cancel = await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, o.Id);
+                    // =====================================================
+                    var cancel = await client.UsdFuturesApi.Trading.CancelOrderAsync(
+                        symbol, o.Id, ct: ct);
+
                     if (cancel.Success)
                     {
                         _logger.LogWarning(
@@ -107,9 +123,25 @@ namespace VertexAutoTradeBinance8.Services
                     }
                     else
                     {
-                        _logger.LogError(
-                            "[RECOVER] Failed cancel orphan order {symbol} id={id}: {err}",
-                            symbol, o.Id, cancel.Error);
+                        // =====================================================
+                        // Если ордер уже не существует (-2011) — просто удаляем
+                        // из трекера. С апреля 2026 Binance добавил expiryReason
+                        // в ответы на истёкшие ордера — если ордер уже истёк,
+                        // повторная отмена вернёт -2011.
+                        // =====================================================
+                        if (cancel.Error?.Code == -2011)
+                        {
+                            _logger.LogInformation(
+                                "[RECOVER] Order {symbol} id={id} already gone (expiryReason or manually closed) → removing from tracker",
+                                symbol, o.Id);
+                            _tracer.Remove(symbol, o.Id);
+                        }
+                        else
+                        {
+                            _logger.LogError(
+                                "[RECOVER] Failed cancel orphan order {symbol} id={id}: {err}",
+                                symbol, o.Id, cancel.Error);
+                        }
                     }
                 }
 
