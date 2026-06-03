@@ -1429,9 +1429,9 @@ namespace VertexAutoTradeBinance8.Services
             _reverseProbe.MarkProbe(symbol);
         }
 
-        private async Task<List<BinanceUsdFuturesOrder>> LoadOrdersAsync(BinanceRestClient client, string symbol)
+        private async Task<List<BinanceUsdFuturesOrder>> LoadOrdersAsync(BinanceRestClient client, string symbol, CancellationToken ct = default)
         {
-            var res = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol);
+            var res = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
             return res.Success && res.Data != null ? res.Data.ToList() : new List<BinanceUsdFuturesOrder>();
         }
 
