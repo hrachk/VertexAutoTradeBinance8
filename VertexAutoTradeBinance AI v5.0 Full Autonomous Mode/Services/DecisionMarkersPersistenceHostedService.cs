@@ -1,4 +1,6 @@
-﻿using VertexAutoTradeBinance8.Services.DTO.Debug;
+﻿
+
+using VertexAutoTradeBinance8.Models.DTO;
 
 public sealed class DecisionMarkersPersistenceHostedService : BackgroundService
 {

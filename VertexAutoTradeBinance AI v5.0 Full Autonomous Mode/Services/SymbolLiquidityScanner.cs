@@ -48,7 +48,7 @@ public sealed class SymbolLiquidityScanner
                 try
                 {
                     var res = await client.UsdFuturesApi.ExchangeData.GetTickersAsync(ct);
-                    if (res.Success && res.Data != null && res.Data.Count() > 0)
+                    if (res.Success && res.Data != null)
                     {
                         var topVolumeCount = _cfg.GetValue<int?>("SymbolSelection:Auto:TopVolumeCount") ?? 60;
                         var cap = Math.Clamp(Math.Max(topVolumeCount * 2, 60), 40, 200);

@@ -8,11 +8,13 @@
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
-using VertexAutoTradeBinance8.Models.DTO.Debug;
+using VertexAutoTradeBinance8.Models.DTO.Debugg;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Services.DecisionTrace;
 using VertexAutoTradeBinance8.Strategy.Confidence;
@@ -24,6 +26,8 @@ namespace VertexAutoTradeBinance8.Strategy
         public static FastFailResult Ok() => new(true, "OK", "OK");
         public static FastFailResult Fail(string gate, string reason) => new(false, gate, reason);
     }
+
+
 
     public class StrategyEngine
     {
@@ -69,7 +73,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
         // per-key singleflight locks + TTL cleanup
         private readonly ConcurrentDictionary<string, LockEntry> _reactiveLocks = new();
-        private long _lockCleanupTick; // interlocked tick
+         
 
         // LockEntry upgrade
         private sealed class LockEntry
@@ -85,6 +89,7 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly ConcurrentDictionary<string, DateTime> _lastSignalUtc = new();
         private static readonly TimeSpan SignalCooldown = TimeSpan.FromSeconds(10);
         private static readonly long RealtimeThrottleTicks = (long)(Stopwatch.Frequency * 0.250); // 250 ms
+      
 
         public StrategyEngine(
             ILogger<StrategyEngine> logger,
@@ -121,9 +126,8 @@ namespace VertexAutoTradeBinance8.Strategy
                 _test.Level);
 
             _confidenceAgg = new SignalConfidenceAggregator(_smartRegimeService);
-
         }
-  
+      
 
         private bool ShouldRunRealtime(string symbol)
         {
@@ -145,6 +149,359 @@ namespace VertexAutoTradeBinance8.Strategy
             // если значение обновилось → можно запускать
             return updated == now;
         }
+       
+        private MarketDataFacade? _boundMarketData;
+
+        private Action<string, KlineInterval>? _onWarmHandler;
+        private Action<string, KlineInterval, BinanceFuturesUsdtKline>? _onKlineHandler;
+        private Action<string, decimal>? _onRealtimeHandler;
+      //  private ChannelWriter<TradeSignal> _signalWriter;
+
+
+        public void BindReactive(MarketDataFacade marketData)
+        {
+            if (marketData == null)
+                throw new ArgumentNullException(nameof(marketData));
+
+            // 🔥 always unbind previous
+            UnbindReactive();
+
+            _marketData = marketData;
+            _boundMarketData = marketData;
+
+            _onWarmHandler = (symbol, tf) =>
+            {
+                _logger.LogInformation(
+                    "[STRAT][WARM] market warm confirmed {symbol} {tf}",
+                    symbol, tf);
+            };
+
+            _onKlineHandler = (symbol, tf, candle) =>
+            {
+                if (!ReactiveTf.Contains(tf))
+                    return;
+
+                SafeFireAndForget(() => RunReactive(symbol, tf, "CLOSE"));
+            };
+
+            _onRealtimeHandler = (symbol, price) =>
+            {
+                if (!ShouldRunRealtime(symbol))
+                    return;
+
+                SafeFireAndForget(() =>
+                    RunReactive(symbol, KlineInterval.FiveMinutes, "REALTIME"));
+            };
+
+            marketData.OnWarm += _onWarmHandler;
+            marketData.WsClosedKline += _onKlineHandler;
+            marketData.RealtimePrice += _onRealtimeHandler;
+
+            _logger.LogInformation(
+                "[STRAT][PUSH] Reactive entry-point bound (REALTIME ENABLED)");
+        }
+
+        public void UnbindReactive()
+        {
+            if (_boundMarketData == null)
+                return;
+
+            if (_onWarmHandler != null)
+                _boundMarketData.OnWarm -= _onWarmHandler;
+
+            if (_onKlineHandler != null)
+                _boundMarketData.WsClosedKline -= _onKlineHandler;
+
+            if (_onRealtimeHandler != null)
+                _boundMarketData.RealtimePrice -= _onRealtimeHandler;
+
+            _onWarmHandler = null;
+            _onKlineHandler = null;
+            _onRealtimeHandler = null;
+
+            _boundMarketData = null;
+        }
+ 
+        private void SafeFireAndForget(Func<Task> action)
+        {
+            _ = action().ContinueWith(t =>
+            {
+                if (t.Exception != null)
+                    _logger.LogError(t.Exception, "[STRAT] async error");
+            }, TaskContinuationOptions.OnlyOnFaulted);
+        }
+
+        private static readonly HashSet<string> _htfSymbols = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "BTCUSDT",
+        "ETHUSDT",
+        "SOLUSDT",
+        "XRPUSDT",
+        "BNBUSDT"
+    };
+        private readonly ConcurrentDictionary<(string symbol, SignalSide side, KlineInterval tf), DateTime> _lastSignalCandle = new();
+        private async Task RunReactive(string symbol, KlineInterval interval, string reason)
+        {
+            var md = _marketData;
+            if (md == null)
+                return;
+          
+
+            var decisionTf = _htfSymbols.Contains(symbol)
+                ? KlineInterval.FifteenMinutes
+                : KlineInterval.FiveMinutes;
+
+            _logger.LogInformation(
+    "[REACTIVE] ENTER {symbol} {tf} reason={reason}",
+    symbol,
+    decisionTf,
+    reason);
+
+            var key = (symbol, decisionTf);
+            var nowTick = Stopwatch.GetTimestamp();
+
+            // --- WARMUP ---
+            if (md.IsInWarmup(symbol, decisionTf) || !md.HasSnapshotState)
+
+            {
+                    _logger.LogDebug(
+                        "[REACTIVE] warmup skip {symbol} {tf}",
+                        symbol,
+                        decisionTf);
+
+                    return;
+                } 
+
+                // --- REALTIME THROTTLE (atomic) ---
+                if (reason == "REALTIME")
+            {
+                var updated = _lastReactiveRun.AddOrUpdate(
+                    key,
+                    nowTick,
+                    (_, last) => (nowTick - last < RealtimeThrottleTicks) ? last : nowTick);
+
+                if (updated != nowTick)
+                    return;
+            }
+            else
+            {
+                _lastReactiveRun[key] = nowTick;
+            }
+
+            // --- LOCK ---
+            var le = _reactiveLocks.GetOrAdd($"{symbol}:{decisionTf}", _ => new LockEntry());
+            le.LastUsedUtc = DateTime.UtcNow;
+
+            if (!await le.Gate.WaitAsync(0))
+            {
+                Interlocked.CompareExchange(ref le.Pending, 1, 0);
+                return;
+            }
+
+            try
+            {
+                while (true) // drain loop
+                {
+                    Interlocked.Exchange(ref le.Pending, 0);
+
+                    // --- LOAD ---
+                    var klines = await md.GetKlinesAsync(
+                        symbol,
+                        decisionTf,
+                        need: 200,
+                        CancellationToken.None);
+
+                    if (klines == null || klines.Count < 50)
+                    {
+                        _logger.LogWarning(
+                            "[REACTIVE] insufficient klines {symbol} {tf} count={count}",
+                            symbol,
+                            decisionTf,
+                            klines?.Count ?? 0);
+
+                        SafeRecordDecisionTrace(symbol, decisionTf,
+                            SignalDecisionTrace.Fail(
+                                "NO_KLINES",
+                                $"count={klines?.Count ?? 0}"));
+
+                        return;
+                    }
+
+                    var working = klines;
+
+                    // --- REALTIME PATCH (без лишних аллокаций если не нужно) ---
+                    if (reason == "REALTIME")
+                    {
+                        var price = md.GetLastPrice(symbol);
+                        if (price > 0)
+                        {
+                            var last = klines[^1];
+
+                            var modified = new BinanceFuturesUsdtKline
+                            {
+                                OpenTime = last.OpenTime,
+                                CloseTime = last.CloseTime,
+                                OpenPrice = last.OpenPrice,
+                                HighPrice = Math.Max(last.HighPrice, price),
+                                LowPrice = Math.Min(last.LowPrice, price),
+                                ClosePrice = price,
+                                Volume = last.Volume,
+                                QuoteVolume = last.QuoteVolume,
+                                TradeCount = last.TradeCount,
+                                TakerBuyBaseVolume = last.TakerBuyBaseVolume,
+                                TakerBuyQuoteVolume = last.TakerBuyQuoteVolume
+                            };
+
+                            var temp = new List<BinanceFuturesUsdtKline>(klines);
+                            temp[^1] = modified;
+                            working = temp;
+                        }
+                    }
+
+                    // --- EVAL ---
+                    var sw = Stopwatch.StartNew();
+
+                    SignalDecisionTrace? decision = null;
+
+                    try
+                    {
+                        decision = await EvaluateSignalAsync(
+                            symbol,
+                            decisionTf,
+                            working,
+                            CancellationToken.None);
+
+                        SafeRecordDecisionTrace(symbol, decisionTf, decision);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex,
+                            "[REACTIVE] EvaluateSignal failed {symbol} {tf}",
+                            symbol,
+                            decisionTf);
+
+                        SafeRecordDecisionTrace(symbol, decisionTf,
+                            SignalDecisionTrace.Fail(
+                                "EVALUATE_EXCEPTION",
+                                ex.Message));
+
+                        return;
+                    }
+
+                    if (!decision.Allow || decision.Signal == null)
+                    {
+                        SafeRecordDecisionTrace(symbol, decisionTf,
+                         SignalDecisionTrace.Fail(
+                             "REJECT",
+                             "no_signal")); 
+                        break;
+                    }
+
+                    var signal = decision.Signal;
+
+                    signal.Symbol = symbol;
+                    signal.Timeframe = decisionTf.ToString();
+                    signal.Time = DateTime.UtcNow;
+ 
+
+                    if (signal.EntryPrice <= 0)
+                        signal.EntryPrice = working[^1].ClosePrice;
+
+                    if (signal.StopLoss <= 0)
+                        signal.StopLoss = working[^1].ClosePrice;
+
+                    if (!Enum.IsDefined(typeof(SignalSide), signal.Side))
+                        break;
+
+                    // --- COOLDOWN (atomic-ish) ---
+                    var sigKey = (symbol, signal.Side, decisionTf);
+                    var nowUtc = DateTime.UtcNow;
+                    var candleTime = working[^1].OpenTime;
+
+                    if (_lastSignalUtc.TryGetValue($"{symbol}:{signal.Side}:{decisionTf}", out var lastUtc))
+                    {
+                        if (nowUtc - lastUtc < SignalCooldown)
+                            break;
+                    }
+
+                    if (_lastSignalCandle.TryGetValue(sigKey, out var lastCandle))
+                    {
+                        if (lastCandle == candleTime)
+                            break;
+                    }
+
+                    _lastSignalUtc[$"{symbol}:{signal.Side}:{decisionTf}"] = nowUtc;
+                    _lastSignalCandle[sigKey] = candleTime;
+
+                    _logger.LogInformation(
+                        "[LATENCY] {symbol} {reason} eval {ms}ms",
+                        symbol,
+                        reason,
+                        sw.ElapsedMilliseconds);
+
+
+
+
+                       var handler = OnSignalGenerated;
+                       handler?.Invoke(signal);
+
+                    //_signalWriter ??= Channel.CreateUnbounded<TradeSignal>().Writer;
+
+                    //if (!_signalWriter.TryWrite(signal))
+                    //{
+                    //    _logger.LogCritical("[STRAT] SignalWriter overflow or null");
+                    //}
+
+                    // если нет pending — выходим
+                    if (Interlocked.CompareExchange(ref le.Pending, 0, 0) == 0)
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[STRAT][{symbol}] reactive error",
+                    symbol);
+            }
+            finally
+            {
+                le.Gate.Release();
+            }
+        }
+        
+        private void SafeRecordDecisionTrace(string symbol, KlineInterval tf, SignalDecisionTrace decision)
+        {
+            if (decision == null) return;
+
+            try
+            {
+                // Проверяем Signal и Confidence
+                decimal confidence = 0m;
+                if (decision.Signal?.Confidence != null)
+                    confidence = decision.Signal.Confidence.Value;
+                if (_decisionTrace == null)
+                {
+                    _logger.LogCritical("[TRACE] DecisionTraceService is NULL!");
+                    return;
+                }
+                _decisionTrace.Record(new DecisionTraceSnapshot
+                {
+                    Symbol = symbol,
+                    Timeframe = tf.ToString(),
+                    Allow = decision.Allow,
+                    FailedGate = decision.FailedGate?.Gate,
+                    Reason = decision.FailedGate?.Reason,
+                    Time = DateTime.UtcNow,
+                    Confidence = confidence
+                });
+            }
+            catch (Exception ex)
+            {
+                // Логируем, но не ломаем цепочку
+                _logger.LogError(ex, "[DECISION][{symbol}][{tf}] DecisionTrace.Record failed (Safe)", symbol, tf);
+            }
+        }
+
 
         public enum TrendPhase
         {
@@ -155,6 +512,7 @@ namespace VertexAutoTradeBinance8.Strategy
             Distribution,
             Decay
         }
+
         private static TrendPhase DetectTrendPhase(
        IReadOnlyList<BinanceFuturesUsdtKline> klines,
        decimal atr,
@@ -270,6 +628,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return TrendPhase.Unknown;
         }
+
         private static bool IsConfirmedReversal(
             IReadOnlyList<BinanceFuturesUsdtKline> klines,
             int last,
@@ -352,307 +711,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return true;
         }
-        private MarketDataFacade? _boundMarketData;
 
-        private Action<string, KlineInterval>? _onWarmHandler;
-        private Action<string, KlineInterval, BinanceFuturesUsdtKline>? _onKlineHandler;
-        private Action<string, decimal>? _onRealtimeHandler;
-
-        public void BindReactive(MarketDataFacade marketData)
-        {
-            if (marketData == null)
-                throw new ArgumentNullException(nameof(marketData));
-
-            // idempotency: если уже забинжено — сначала отписываемся
-            if (_boundMarketData != null)
-                UnbindReactive();
-
-            _marketData = marketData;
-            _boundMarketData = marketData;
-
-            _onWarmHandler = (symbol, tf) =>
-            {
-                _logger.LogInformation(
-                    "[STRAT][WARM] market warm confirmed {symbol} {tf}",
-                    symbol, tf);
-            };
-
-            _onKlineHandler = (symbol, tf, candle) =>
-            {
-                if (!ReactiveTf.Contains(tf))
-                    return;
-
-                SafeFireAndForget(() => RunReactive(symbol, tf, "CLOSE"));
-            };
-
-            _onRealtimeHandler = (symbol, price) =>
-            {
-                if (!ShouldRunRealtime(symbol))
-                    return;
-
-                // фиксируем TF как design choice
-                SafeFireAndForget(() => RunReactive(symbol, KlineInterval.FiveMinutes, "REALTIME"));
-            };
-
-            marketData.OnWarm += _onWarmHandler;
-            marketData.WsClosedKline += _onKlineHandler;
-            marketData.RealtimePrice += _onRealtimeHandler;
-
-            _logger.LogInformation(
-                "[STRAT][PUSH] Reactive entry-point bound (REALTIME ENABLED)");
-        }
-
-        public void UnbindReactive()
-        {
-            if (_boundMarketData == null)
-                return;
-
-            if (_onWarmHandler != null)
-                _boundMarketData.OnWarm -= _onWarmHandler;
-
-            if (_onKlineHandler != null)
-                _boundMarketData.WsClosedKline -= _onKlineHandler;
-
-            if (_onRealtimeHandler != null)
-                _boundMarketData.RealtimePrice -= _onRealtimeHandler;
-
-            _boundMarketData = null;
-        }
-
-        private void SafeFireAndForget(Func<Task> action)
-        {
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await action().ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "[STRAT][ASYNC] Unhandled exception in reactive pipeline");
-                }
-            });
-        }
-
-        private static readonly HashSet<string> _htfSymbols = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "BTCUSDT",
-        "ETHUSDT",
-        "SOLUSDT",
-        "XRPUSDT",
-        "BNBUSDT"
-    };
-
-        private readonly ConcurrentDictionary<(string symbol, SignalSide side, KlineInterval tf), DateTime> _lastSignalCandle = new();
-        private async Task RunReactive(string symbol, KlineInterval interval, string reason)
-        {
-            var md = _marketData;
-            if (md == null)
-                return;
-
-            var decisionTf = _htfSymbols.Contains(symbol)
-                ? KlineInterval.FifteenMinutes
-                : KlineInterval.FiveMinutes;
-
-            var key = (symbol, decisionTf);
-            var nowTick = Stopwatch.GetTimestamp();
-
-            // --- WARMUP ---
-            if (!md.HasSnapshotState && md.IsInWarmup(symbol, decisionTf))
-                return;
-
-            // --- REALTIME THROTTLE (atomic) ---
-            if (reason == "REALTIME")
-            {
-                var updated = _lastReactiveRun.AddOrUpdate(
-                    key,
-                    nowTick,
-                    (_, last) => (nowTick - last < RealtimeThrottleTicks) ? last : nowTick);
-
-                if (updated != nowTick)
-                    return;
-            }
-            else
-            {
-                _lastReactiveRun[key] = nowTick;
-            }
-
-            // --- LOCK ---
-            var le = _reactiveLocks.GetOrAdd($"{symbol}:{decisionTf}", _ => new LockEntry());
-            le.LastUsedUtc = DateTime.UtcNow;
-
-            if (!await le.Gate.WaitAsync(0))
-            {
-                Interlocked.Exchange(ref le.Pending, 1);
-                return;
-            }
-
-            try
-            {
-                while (true) // drain loop
-                {
-                    Interlocked.Exchange(ref le.Pending, 0);
-
-                    // --- LOAD ---
-                    var klines = await md.GetKlinesAsync(
-                        symbol,
-                        decisionTf,
-                        need: 200,
-                        CancellationToken.None);
-
-                    if (klines == null || klines.Count < 50)
-                        return;
-
-                    var working = klines;
-
-                    // --- REALTIME PATCH (без лишних аллокаций если не нужно) ---
-                    if (reason == "REALTIME")
-                    {
-                        var price = md.GetLastPrice(symbol);
-                        if (price > 0)
-                        {
-                            var last = klines[^1];
-
-                            var modified = new BinanceFuturesUsdtKline
-                            {
-                                OpenTime = last.OpenTime,
-                                CloseTime = last.CloseTime,
-                                OpenPrice = last.OpenPrice,
-                                HighPrice = Math.Max(last.HighPrice, price),
-                                LowPrice = Math.Min(last.LowPrice, price),
-                                ClosePrice = price,
-                                Volume = last.Volume,
-                                QuoteVolume = last.QuoteVolume,
-                                TradeCount = last.TradeCount,
-                                TakerBuyBaseVolume = last.TakerBuyBaseVolume,
-                                TakerBuyQuoteVolume = last.TakerBuyQuoteVolume
-                            };
-
-                            var temp = new List<BinanceFuturesUsdtKline>(klines);
-                            temp[^1] = modified;
-                            working = temp;
-                        }
-                    }
-
-                    // --- EVAL ---
-                    var sw = Stopwatch.StartNew();
-
-                    var decision = await EvaluateSignalAsync(
-                        symbol,
-                        decisionTf,
-                        working,
-                        CancellationToken.None);
-
-                    sw.Stop();
-
-                    SafeRecordDecisionTrace(symbol, decisionTf, decision);
-
-                    if (!decision.Allow || decision.Signal == null)
-                        break;
-
-                    var signal = decision.Signal;
-
-                    signal.Symbol = symbol;
-                    signal.Timeframe = decisionTf.ToString();
-                    signal.Time = DateTime.UtcNow;
-
-                    if (signal.EntryPrice <= 0)
-                        signal.EntryPrice = working[^1].ClosePrice;
-
-                    if (signal.StopLoss <= 0)
-                        signal.StopLoss = working[^1].ClosePrice;
-
-                    if (!Enum.IsDefined(typeof(SignalSide), signal.Side))
-                        break;
-
-                    // --- COOLDOWN (atomic-ish) ---
-                    var sigKey = (symbol, signal.Side, decisionTf);
-                    var nowUtc = DateTime.UtcNow;
-                    var candleTime = working[^1].OpenTime;
-
-                    if (_lastSignalUtc.TryGetValue($"{symbol}:{signal.Side}:{decisionTf}", out var lastUtc))
-                    {
-                        if (nowUtc - lastUtc < SignalCooldown)
-                            break;
-                    }
-
-                    if (_lastSignalCandle.TryGetValue(sigKey, out var lastCandle))
-                    {
-                        if (lastCandle == candleTime)
-                            break;
-                    }
-
-                    _lastSignalUtc[$"{symbol}:{signal.Side}:{decisionTf}"] = nowUtc;
-                    _lastSignalCandle[sigKey] = candleTime;
-
-                    _logger.LogInformation(
-                        "[LATENCY] {symbol} {reason} eval {ms}ms",
-                        symbol,
-                        reason,
-                        sw.ElapsedMilliseconds);
-
-                    OnSignalGenerated?.Invoke(signal);
-
-                    // если нет pending — выходим
-                    if (Interlocked.CompareExchange(ref le.Pending, 0, 0) == 0)
-                        break;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex,
-                    "[STRAT][{symbol}] reactive error",
-                    symbol);
-            }
-            finally
-            {
-                le.Gate.Release();
-            }
-        }
-
-        private readonly ConcurrentDictionary<(string symbol, KlineInterval tf), long> _traceThrottle = new();
-
-        private static readonly long TraceThrottleTicks =
-            (long)(Stopwatch.Frequency * 0.100); // 100 ms
-        private void SafeRecordDecisionTrace(string symbol, KlineInterval tf, SignalDecisionTrace decision)
-        {
-            var trace = _decisionTrace;
-            if (trace == null || decision == null)
-                return;
-
-            var key = (symbol, tf);
-            var now = Stopwatch.GetTimestamp();
-
-            var updated = _traceThrottle.AddOrUpdate(
-                key,
-                now,
-                (_, last) => (now - last < TraceThrottleTicks) ? last : now);
-
-            if (updated != now)
-                return;
-
-            try
-            {
-                var snapshot = new DecisionTraceSnapshot
-                {
-                    Symbol = symbol,
-                    Timeframe = tf.ToString(),
-                    Allow = decision.Allow,
-                    FailedGate = decision.FailedGate?.Gate,
-                    Reason = decision.FailedGate?.Reason,
-                    Time = DateTime.UtcNow,
-                    Confidence = decision.Signal?.Confidence ?? 0m
-                };
-
-                trace.Record(snapshot);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex,
-                    "[DECISION][{symbol}][{tf}] DecisionTrace.Record failed",
-                    symbol, tf);
-            }
-        }
         // ----------------------------- CORE HELPERS -----------------------------
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static (decimal slMult, decimal tp1Mult, decimal tp2Mult, decimal tp3Mult)
@@ -679,6 +738,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 _ => (1.0m, 1.6m, 2.4m, 3.3m)
             };
         }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static decimal Ema(IReadOnlyList<BinanceFuturesUsdtKline> klines, int period, int index)
         {
@@ -702,6 +762,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return ema;
         }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static decimal Atr(IReadOnlyList<BinanceFuturesUsdtKline> klines, int period, int lastIndex)
         {
@@ -745,6 +806,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return Math.Max(tr1, Math.Max(tr2, tr3));
         }
+
         private const decimal ImpulseAtrMultiplier = 2.2m;
 
         private static bool IsTooBigImpulseBar(
@@ -1502,21 +1564,53 @@ namespace VertexAutoTradeBinance8.Strategy
             return minRr;
         }
         // ----------------------------- DECISION TRACE MODEL -----------------------------
+        //internal sealed class SignalDecisionTrace
+        //{
+        //    public bool Allow { get; set; }
+        //    public TradeSignal? Signal { get; set; }
+        //    public List<FastFailResult> Gates { get; } = new();
+
+        //    public FastFailResult? FailedGate => Gates.FirstOrDefault(g => !g.Allow);
+
+        //    public void Add(FastFailResult r)
+        //    {
+        //        Gates.Add(r);
+        //        if (!r.Allow)
+        //            Allow = false;
+        //    }
+
+        //}
+
         internal sealed class SignalDecisionTrace
         {
             public bool Allow { get; set; }
             public TradeSignal? Signal { get; set; }
             public List<FastFailResult> Gates { get; } = new();
 
-            public FastFailResult? FailedGate => Gates.FirstOrDefault(g => !g.Allow);
+            public FastFailResult? FailedGate =>
+                Gates.FirstOrDefault(g => !g.Allow);
 
             public void Add(FastFailResult r)
             {
                 Gates.Add(r);
+
                 if (!r.Allow)
                     Allow = false;
             }
 
+            public static SignalDecisionTrace Fail(
+                string gate,
+                string reason)
+            {
+                var t = new SignalDecisionTrace
+                {
+                    Allow = false
+                };
+
+                t.Add(FastFailResult.Fail(gate, reason));
+
+                return t;
+            }
         }
 
         // ----------------------------- GATES 0..7 (PRODUCTION) -----------------------------
@@ -1699,9 +1793,9 @@ namespace VertexAutoTradeBinance8.Strategy
                 adaptiveFloor *= 0.85m;
 
             decimal absoluteFloor = cfg.MinEntry;
-           // decimal finalFloor = Math.Max(absoluteFloor, adaptiveFloor);
+            // decimal finalFloor = Math.Max(absoluteFloor, adaptiveFloor);
 
-           // finalFloor = Math.Clamp(finalFloor, 0.10m, 0.85m);
+            // finalFloor = Math.Clamp(finalFloor, 0.10m, 0.85m);
 
             decimal finalFloor = adaptiveFloor;
 
@@ -2399,64 +2493,64 @@ namespace VertexAutoTradeBinance8.Strategy
                 return FastFailResult.Ok();
             }
 
-                // 1) LiquidityGuard — HARD structural block (top priority)
-                var lg = _liquidityGuardService.Analyze(
-                    symbol: signal.Symbol,
-                    interval: tf,
-                    klines: klines,
-                    side: signal.Side,
-                    superSignal: signal.IsSuperSignal);
+            // 1) LiquidityGuard — HARD structural block (top priority)
+            var lg = _liquidityGuardService.Analyze(
+                symbol: signal.Symbol,
+                interval: tf,
+                klines: klines,
+                side: signal.Side,
+                superSignal: signal.IsSuperSignal);
 
-                // ALWAYS attach context (even if not blocking)
-                signal.LiquidityScore = lg.Score;
-                signal.LiquiditySoftWarning = lg.SoftWarning;
-                signal.LiquidityDetails = lg.Details;
+            // ALWAYS attach context (even if not blocking)
+            signal.LiquidityScore = lg.Score;
+            signal.LiquiditySoftWarning = lg.SoftWarning;
+            signal.LiquidityDetails = lg.Details;
 
-                // HARD block stays HARD
-                if (lg.Block && !relaxLiquidity)
-                {
-                    // 🔥 allow strong signals
-                    var conf = signal.Confidence ?? 0m;
+            // HARD block stays HARD
+            if (lg.Block && !relaxLiquidity)
+            {
+                // 🔥 allow strong signals
+                var conf = signal.Confidence ?? 0m;
 
                 bool strongSignal = conf >= 0.58m || signal.IsSuperSignal;
 
-                    // 🔥 allow continuation / momentum setups
-                    bool momentum =
-                        signal.Reason == "CONTINUATION" ||
-                        signal.Reason == "EARLY_TREND";
+                // 🔥 allow continuation / momentum setups
+                bool momentum =
+                    signal.Reason == "CONTINUATION" ||
+                    signal.Reason == "EARLY_TREND";
 
-                    // 🔥 allow if aligned with trend pressure
-                    bool aligned =
-                        (smart.TrendSlopePercent < -0.5m && signal.Side == SignalSide.Sell) ||
-                        (smart.TrendSlopePercent > 0.5m && signal.Side == SignalSide.Buy);
-                 
+                // 🔥 allow if aligned with trend pressure
+                bool aligned =
+                    (smart.TrendSlopePercent < -0.5m && signal.Side == SignalSide.Sell) ||
+                    (smart.TrendSlopePercent > 0.5m && signal.Side == SignalSide.Buy);
+
 
                 // 🔥 если сильный и по тренду — НЕ БЛОКИРУЕМ
                 if ((strongSignal && aligned) || momentum)
-                    {
-                        signal.Confidence *= 0.82m;
+                {
+                    signal.Confidence *= 0.82m;
 
-                        _engineState.LastEntryDecision = "WARN_LIQ_GUARD_STRONG_PASS";
-                        LastBlockedByLiquidity = false;
+                    _engineState.LastEntryDecision = "WARN_LIQ_GUARD_STRONG_PASS";
+                    LastBlockedByLiquidity = false;
 
-                        return FastFailResult.Ok();
-                    }
-
-                    // 🔥 иначе — реально блокируем
-                    _engineState.LastEntryDecision = "BLOCKED_LIQ_GUARD";
-                    _engineState.BlockedByLiquidity = true;
-                    _engineState.LiquidityReason = lg.Reason.ToString();
-                    LastBlockedByLiquidity = true;
-
-                    return FastFailResult.Fail("LIQ_GUARD", lg.Reason.ToString());
+                    return FastFailResult.Ok();
                 }
 
-                // SOFT warning: DO NOT BLOCK — reduce size (executor will use it)
-                if (lg.SoftWarning && !relaxLiquidity && !signal.IsSuperSignal)
-                {
-                    // clamp 0.35..0.85 typical; tune as you like
-                    var m = 0.55m + 0.35m * Math.Clamp(lg.Score, 0m, 1m);
-                    signal.SizeMultiplier = Math.Clamp(m, 0.35m, 0.85m);
+                // 🔥 иначе — реально блокируем
+                _engineState.LastEntryDecision = "BLOCKED_LIQ_GUARD";
+                _engineState.BlockedByLiquidity = true;
+                _engineState.LiquidityReason = lg.Reason.ToString();
+                LastBlockedByLiquidity = true;
+
+                return FastFailResult.Fail("LIQ_GUARD", lg.Reason.ToString());
+            }
+
+            // SOFT warning: DO NOT BLOCK — reduce size (executor will use it)
+            if (lg.SoftWarning && !relaxLiquidity && !signal.IsSuperSignal)
+            {
+                // clamp 0.35..0.85 typical; tune as you like
+                var m = 0.55m + 0.35m * Math.Clamp(lg.Score, 0m, 1m);
+                signal.SizeMultiplier = Math.Clamp(m, 0.35m, 0.85m);
 
                 // Optional: write marker "LIQ_SOFT" (not blocking)
                 try
@@ -2479,86 +2573,86 @@ namespace VertexAutoTradeBinance8.Strategy
                 }
                 catch { }
             }
-         
-                LastBlockedByLiquidity = false;
 
-                return FastFailResult.Ok();
-            }
+            LastBlockedByLiquidity = false;
+
+            return FastFailResult.Ok();
+        }
 
         private FastFailResult Gate7_Exposure(
         string symbol,
         KlineInterval tf,
         TradeSignal signal,
         SmartRegimeInfo smart)
-            {
-                var es = _engineState;
-                if (es == null || es.EquityUsd <= 0)
-                    return FastFailResult.Ok();
+        {
+            var es = _engineState;
+            if (es == null || es.EquityUsd <= 0)
+                return FastFailResult.Ok();
 
-                // ------------------------------------------------------------------
-                // 1) AI multiplier (defensive)
-                // ------------------------------------------------------------------
-                var w = 1.0m;
+            // ------------------------------------------------------------------
+            // 1) AI multiplier (defensive)
+            // ------------------------------------------------------------------
+            var w = 1.0m;
+            try
+            {
+                w = _aiLearning.GetGateMultiplier(symbol, smart.BaseRegime, "EXPO");
+            }
+            catch { /* non-critical */ }
+
+            // Clamp AI influence to sane bounds
+            w = Math.Clamp(w, 0.7m, 1.3m);
+
+            // ------------------------------------------------------------------
+            // 2) Edge score normalization (CRITICAL)
+            // ------------------------------------------------------------------
+            var aiEdgeScore = smart.Confidence * w;
+            aiEdgeScore = Math.Clamp(aiEdgeScore, 0.0m, 1.0m);
+
+            // ------------------------------------------------------------------
+            // 3) Exposure decision
+            // ------------------------------------------------------------------
+            var res = CanIncreaseExposure(
+                state: es,
+                symbol: symbol,
+                symbolNotionalUsd: 0m, // intentionally 0; executor/supervisor checks real notional
+                equityUsd: es.EquityUsd,
+                usedMarginUsd: es.UsedMarginUsd,
+                aiEdgeScore: aiEdgeScore,
+                isSpecialSetup: signal.IsSuperSignal,
+                isHighVolatility: smart.VolatilityPercent >= 0.015m,
+                isLowEquityMode: es.EquityUsd < 500m
+            );
+
+            // ------------------------------------------------------------------
+            // 4) BLOCK handling
+            // ------------------------------------------------------------------
+            if (!res.AllowAdd)
+            {
+                // UI / EngineState
+                _engineState.LastEntryDecision = "BLOCKED_EXPOSURE";
+                CurrentMode = "Blocked:EXPO";
+
+                // AI trace (fail-safe)
                 try
                 {
-                    w = _aiLearning.GetGateMultiplier(symbol, smart.BaseRegime, "EXPO");
+                    _aiLearning.RecordMarketStateTriggered(
+                        reason: "EXPOSURE_BLOCK",
+                        symbol: symbol,
+                        timeframe: tf.ToString(),
+                        regime: smart.BaseRegime,
+                        slope: smart.TrendSlopePercent,
+                        volatility: smart.VolatilityPercent,
+                        atr: signal.Atr ?? 0,
+                        confidence: smart.Confidence
+                    );
                 }
                 catch { /* non-critical */ }
 
-                // Clamp AI influence to sane bounds
-                w = Math.Clamp(w, 0.7m, 1.3m);
-
-                // ------------------------------------------------------------------
-                // 2) Edge score normalization (CRITICAL)
-                // ------------------------------------------------------------------
-                var aiEdgeScore = smart.Confidence * w;
-                aiEdgeScore = Math.Clamp(aiEdgeScore, 0.0m, 1.0m);
-
-                // ------------------------------------------------------------------
-                // 3) Exposure decision
-                // ------------------------------------------------------------------
-                var res = CanIncreaseExposure(
-                    state: es,
-                    symbol: symbol,
-                    symbolNotionalUsd: 0m, // intentionally 0; executor/supervisor checks real notional
-                    equityUsd: es.EquityUsd,
-                    usedMarginUsd: es.UsedMarginUsd,
-                    aiEdgeScore: aiEdgeScore,
-                    isSpecialSetup: signal.IsSuperSignal,
-                    isHighVolatility: smart.VolatilityPercent >= 0.015m,
-                    isLowEquityMode: es.EquityUsd < 500m
-                );
-
-                // ------------------------------------------------------------------
-                // 4) BLOCK handling
-                // ------------------------------------------------------------------
-                if (!res.AllowAdd)
-                {
-                    // UI / EngineState
-                    _engineState.LastEntryDecision = "BLOCKED_EXPOSURE";
-                    CurrentMode = "Blocked:EXPO";
-
-                    // AI trace (fail-safe)
-                    try
-                    {
-                        _aiLearning.RecordMarketStateTriggered(
-                            reason: "EXPOSURE_BLOCK",
-                            symbol: symbol,
-                            timeframe: tf.ToString(),
-                            regime: smart.BaseRegime,
-                            slope: smart.TrendSlopePercent,
-                            volatility: smart.VolatilityPercent,
-                            atr: signal.Atr ?? 0,
-                            confidence: smart.Confidence
-                        );
-                    }
-                    catch { /* non-critical */ }
-
-                    return FastFailResult.Fail("EXPO", res.Reason);
-                }
-
-                return FastFailResult.Ok();
+                return FastFailResult.Fail("EXPO", res.Reason);
             }
+
+            return FastFailResult.Ok();
+        }
         //==============================================BTC HTF BLOCK
 
         bool VolumeSpike(IReadOnlyList<BinanceFuturesUsdtKline> klines, int i)
@@ -2573,7 +2667,7 @@ namespace VertexAutoTradeBinance8.Strategy
             return klines[i].Volume > avg * 2.5m;
         }
 
-        bool IsExhaustion(IReadOnlyList<BinanceFuturesUsdtKline> klines, int i,  decimal atr)
+        bool IsExhaustion(IReadOnlyList<BinanceFuturesUsdtKline> klines, int i, decimal atr)
         {
             int bullish = 0;
 
@@ -2760,7 +2854,7 @@ namespace VertexAutoTradeBinance8.Strategy
             bool slopeUp = smart.TrendSlopePercent > 0m;
             bool slopeDown = smart.TrendSlopePercent < 0m;
 
-       
+
             // --- LONG early trend join ---
             if (priceAbove21 && slopeUp)
             {
@@ -2771,7 +2865,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
                 // в сильном даун-тренде early-long запрещаем
                 if (smart.BaseRegime == MarketRegime.StrongDownTrend) return null;
-               
+
                 var s = new TradeSignal
                 {
                     Symbol = symbol,
@@ -3270,21 +3364,27 @@ namespace VertexAutoTradeBinance8.Strategy
 
             try
             {
+                
                 // ✅ Проверка входных данных
                 if (klines == null || klines.Count < 3)
-                {
+                { 
+                    
+                    _decisionMarkers.Add(new DecisionMarkerDto
+                    {
+                        Symbol = symbol,
+                        Timeframe = tf.ToString(),
+                        CandleTimeUtc = DateTime.UtcNow,
+                        Type = DecisionMarkerType.BlockedLate,
+                        Code = "NO_KLINES",
+                        Details = "Insufficient klines",
+                    });
+
                     trace.Allow = false;
                     trace.Signal = null;
                     trace.Gates.Add(FastFailResult.Fail("DATA", "Insufficient Klines"));
+
                     return Finalize(trace, null);
                 }
-
-                // -----------------------------
-                // Gate0: Data sanity check
-                // -----------------------------
-                var g0 = Gate0_Data(symbol, tf, klines);
-                trace.Add(g0);
-                if (!g0.Allow) return Finalize(trace, null);
 
                 // Decision marker
                 try
@@ -3294,7 +3394,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     {
                         Symbol = symbol,
                         Timeframe = tf.ToString(),
-                        CandleTimeUtc = last.CloseTime,
+                       CandleTimeUtc = last.OpenTime,
                         Type = DecisionMarkerType.Evaluated,
                         Code = "EVALUATED",
                         Details = "Signal evaluated",
@@ -3304,6 +3404,14 @@ namespace VertexAutoTradeBinance8.Strategy
                 {
                     _logger.LogDebug(ex, "[DECISION_MARKER] Failed to add marker for {symbol} {tf}", symbol, tf);
                 }
+                // -----------------------------
+                // Gate0: Data sanity check
+                // -----------------------------
+                var g0 = Gate0_Data(symbol, tf, klines);
+                trace.Add(g0);
+                if (!g0.Allow) return Finalize(trace, null);
+
+               
 
                 // -----------------------------
                 // Gate1: Smart Regime
@@ -3382,7 +3490,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 if (!g3.Allow || baseSignal == null)
                     return Finalize(trace, smart);
 
-   int lastIndex = klines.Count - 1;
+                int lastIndex = klines.Count - 1;
                 // =========================
                 // REVERSAL
                 // =========================
@@ -3520,7 +3628,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 Confidence = finalConfidence;
                 _engineState.ConfidenceRaw = finalConfidence;
                 _engineState.ConfidencePercent = (int)(finalConfidence * 100);
-                 cfg = _confidenceCfg.Resolve(symbol);
+                cfg = _confidenceCfg.Resolve(symbol);
                 _engineState.ConfidenceLevel =
                     finalConfidence >= cfg.Bands.HighFrom ? "HIGH" :
                     finalConfidence >= cfg.Bands.MediumFrom ? "MEDIUM" :
@@ -3629,7 +3737,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
             decimal avgVol = vol / 5m;
 
-          
+
             return
     klines[last].Volume > avgVol * 1.5m &&
     move < klines[last].ClosePrice * 0.002m;

@@ -1,8 +1,7 @@
-﻿using Binance.Net.Clients;
+﻿using System.Collections.Concurrent;
 using Binance.Net.Enums;
 using Binance.Net.Interfaces;
 using Binance.Net.Objects.Models.Futures;
-using System.Collections.Concurrent;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services;
@@ -26,11 +25,9 @@ public class MarketDataService
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _depthLocks =
         new(StringComparer.OrdinalIgnoreCase);
 
-
-
     // tune: 300-1200ms is typical for reactive
-    private static readonly TimeSpan DepthTtl = TimeSpan.FromMilliseconds(1000);
-    private readonly BinanceRestClient _client;
+    private static readonly TimeSpan DepthTtl = TimeSpan.FromMilliseconds(800);
+
     public MarketDataService(
         ILogger<MarketDataService> logger,
         BinanceClientFactory factory,
@@ -41,7 +38,6 @@ public class MarketDataService
         _factory = factory;
         _smartRegime = smartRegime;
         _md = md;
-        _client = new BinanceRestClient();
     }
 
     // ============================================================
@@ -52,21 +48,18 @@ public class MarketDataService
         KlineInterval interval,
         int limit = 100)
     {
-          var client = _factory.CreateRestClient();
+        using var client = _factory.CreateRestClient();
 
-        var result = await SafeCall(
-     () => client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
-         symbol,
-         interval,
-         limit: limit),
-     $"KLINES:{symbol}"
- );
+        var result = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
+            symbol,
+            interval,
+            limit: limit
+        );
 
-        if (result == null || !result.Success || result.Data == null)
+        if (!result.Success || result.Data == null)
         {
             _logger.LogError("Error fetching futures klines for {symbol}: {error}", symbol, result.Error);
-            throw new InvalidOperationException(
-     $"Klines failed for {symbol}: {result.Error}");
+            throw new Exception($"Error fetching futures klines: {result.Error}");
         }
 
         return result.Data;
@@ -80,26 +73,24 @@ public class MarketDataService
         KlineInterval interval,
         int limit = 200)
     {
-          var client = _factory.CreateRestClient();
+        using var client = _factory.CreateRestClient();
 
-        var result = await SafeCall(
-     () => client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
-         symbol,
-         interval,
-         limit: limit),
-     $"KLINES:{symbol}"
- );
+        var result = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
+            symbol,
+            interval,
+            limit: limit
+        );
 
-        if (result == null || !result.Success || result.Data == null)
+        if (!result.Success || result.Data == null)
         {
             _logger.LogError("Error loading klines for {symbol}: {error}", symbol, result.Error);
             return Array.Empty<BinanceFuturesUsdtKline>();
         }
-      
-        return result.Data.OfType<BinanceFuturesUsdtKline>().ToList();
+
+        return result.Data
+            .Cast<BinanceFuturesUsdtKline>()
+            .ToList();
     }
-
-
 
     // ============================================================
     // 3) EMA
@@ -141,24 +132,7 @@ public class MarketDataService
 
         return sum / period;
     }
-    private async Task<T?> SafeCall<T>(Func<Task<T>> fn, string tag)
-    {
-        for (int i = 0; i < 3; i++)
-        {
-            try
-            {
-                return await fn();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[RETRY {tag}] attempt {i}", tag, i);
 
-                await Task.Delay(100 + Random.Shared.Next(50, 150));
-            }
-        }
-
-        return default;
-    }
     // ============================================================
     // 5) FUTURES ORDER BOOK (PRODUCTION-GRADE)
     // - thread-safe cache
@@ -236,10 +210,6 @@ public class MarketDataService
         finally
         {
             gate.Release();
-
-            // cleanup (важно!)
-            if (gate.CurrentCount == 1)
-                _depthLocks.TryRemove(symbol, out _);
         }
     }
 

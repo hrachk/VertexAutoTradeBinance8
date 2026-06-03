@@ -1,23 +1,21 @@
 ﻿using Binance.Net;
 using Binance.Net.Clients;
 using CryptoExchange.Net.Authentication;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using Serilog;
 using Serilog.Events;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.MarketData;
 using VertexAutoTradeBinance8.Models;
+using VertexAutoTradeBinance8.Models.DTO;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Services.Bootstrap;
 using VertexAutoTradeBinance8.Services.DecisionTrace;
-using VertexAutoTradeBinance8.Services.DTO.Debug;
 using VertexAutoTradeBinance8.Services.Engine;
 using VertexAutoTradeBinance8.Services.Interface;
 using VertexAutoTradeBinance8.Services.MarketState;
 using VertexAutoTradeBinance8.Services.Recovery;
 using VertexAutoTradeBinance8.Services.State;
-using VertexAutoTradeBinance8.Services.Trading;
 using VertexAutoTradeBinance8.Services.Ws;
 using VertexAutoTradeBinance8.Strategy;
 using static VertexAutoTradeBinance8.Services.OrderExecutor;
@@ -85,7 +83,7 @@ public class Program
             //{
             //    builder.UseWindowsService();
             //}
-           
+
 
             using IHost host = Host.CreateDefaultBuilder(args)
                  .UseWindowsService() // 👈 ВОТ ЭТО КЛЮЧ
@@ -97,7 +95,7 @@ public class Program
                  .ConfigureLogging(logging =>
                  {
                      logging.ClearProviders();
-                   //  logging.AddConsole();
+                     //  logging.AddConsole();
                  })
                  .ConfigureHostOptions(o =>
                  {
@@ -110,7 +108,7 @@ public class Program
 
                     services.Configure<TradingOptions>(
                       ctx.Configuration.GetSection("Trading")); // TRUE default
- 
+
 
                     services.Configure<TradingOptions>(
                   ctx.Configuration.GetSection("SignalOnlyMode"));
@@ -148,7 +146,7 @@ public class Program
 
                     services.AddSingleton(sp =>
                         sp.GetRequiredService<IOptions<SignalConfidenceSettings>>().Value);
-                 
+
                     services.AddSingleton<BinanceRestClient>(sp =>
                     {
                         var cfg = sp.GetRequiredService<IOptions<BinanceOptions>>().Value;
@@ -159,7 +157,8 @@ public class Program
                                 ? BinanceEnvironment.Testnet
                                 : BinanceEnvironment.Live;
 
-                            opt.ApiCredentials = new ApiCredentials(
+                            // ✅ Binance.Net v12: BinanceCredentials
+                            opt.ApiCredentials = new BinanceCredentials(
                                 cfg.ApiKey,
                                 cfg.SecretKey);
 
@@ -179,7 +178,8 @@ public class Program
                                 ? BinanceEnvironment.Testnet
                                 : BinanceEnvironment.Live;
 
-                            opt.ApiCredentials = new ApiCredentials(
+                            // ✅ Binance.Net v12: BinanceCredentials
+                            opt.ApiCredentials = new BinanceCredentials(
                                 cfg.ApiKey,
                                 cfg.SecretKey);
                         });
@@ -187,7 +187,7 @@ public class Program
 
                     services.AddHttpClient();
 
-                 
+
 
 
 
@@ -207,8 +207,8 @@ public class Program
 
                     services.AddSingleton<BinanceHistoryImporter>();
                     //services.AddSingleton<AtrAdaptiveProfitLockManager>();
-                    
-    
+
+
 
 
                     // ⚠️ РЕГИСТРИРУЕМ ОДИН РАЗ
@@ -223,8 +223,8 @@ public class Program
 
                     // ===== AI / CORE =====
                     services.AddSingleton<AiSelfLearningService>();
-                   
-                  services.AddSingleton<AiMarketRegimeService>();
+
+                    services.AddSingleton<AiMarketRegimeService>();
                     services.AddSingleton<Lazy<MarketDataService>>(sp => new Lazy<MarketDataService>(() => sp.GetRequiredService<MarketDataService>()));
                     services.AddSingleton<EntryTracker>();
                     services.AddSingleton<CooldownGuard>();
@@ -258,10 +258,10 @@ public class Program
                     services.AddSingleton<TradeStateManager>();
                     services.AddSingleton<EngineStateBuilder>();
                     services.AddSingleton<EngineStateSnapshotService>();
-                     
+
                     services.AddSingleton<DecisionMarkerSink>();
                     services.AddSingleton<DecisionMarkersFileService>();
-                 
+
                     // ===== HOSTED =====
                     services.AddHostedService<SupervisorBootstrapHostedService>();
                     services.AddHostedService<BackgroundMarketScannerService>();
@@ -299,21 +299,21 @@ public class Program
                     services.AddSingleton<OrderTracerService>();
                     services.AddSingleton<RecoverLostOrdersService>();
                     services.AddSingleton<ManualPositionHandler>();
-                    
-                    
-                    services.AddSingleton<LiquidityGuardService>(); 
-                 
-                
+
+
+                    services.AddSingleton<LiquidityGuardService>();
+
+
                     services.Configure<EngineStateSettings>(ctx.Configuration.GetSection("EngineState"));
-                  
-                    services.AddSingleton<PredictiveEngineV4ConfirmationService>();                  
-                                         
- 
-                    services.AddSingleton<AiTimeframeSelectorService>();                 
-                  
+
+                    services.AddSingleton<PredictiveEngineV4ConfirmationService>();
+
+
+                    services.AddSingleton<AiTimeframeSelectorService>();
+
                     services.AddSingleton<IOrderDispatcher, OrderDispatcher>();
                     services.AddSingleton<BinanceUserDataSubscriber>();
- 
+
 
                 })
                 .Build();
