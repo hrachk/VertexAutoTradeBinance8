@@ -39,9 +39,8 @@ public class SymbolUniverseBuilder
         "SIRENUSDT",
         "DENTUSDT",
         "SIGNUSDT",
-        "BANANAS31USDT",
-        "PIPPINUSDT",
-        "BANANAS31USDT"
+        "BANANAS31USDT",  // дубликат удалён
+        "PIPPINUSDT"
     };
 
     public List<string> Build(
@@ -81,10 +80,13 @@ public class SymbolUniverseBuilder
 
         // ------------------------------------------------
         // CORE LIQUIDITY FUNNEL
+        // Берём топ по объёму — минимум topVolumeCount*2 чтобы
+        // momentum selection не обрезал нужные символы
         // ------------------------------------------------
+        int coreCap = Math.Max(topVolumeCount * 2, 50);
         var core = filteredMarket
             .OrderByDescending(x => x.QuoteVolume24h)
-            .Take(25)
+            .Take(coreCap)
             .ToList();
 
         // ------------------------------------------------
