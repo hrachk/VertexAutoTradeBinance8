@@ -1285,7 +1285,6 @@ namespace VertexAutoTradeBinance8.Services
                 price: orderPrice,
                 positionSide: isHedge ? posSide : null,
                 timeInForce: tif,
-                selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                 reduceOnly: null,
                 ct: ct);
 
@@ -1345,7 +1344,6 @@ namespace VertexAutoTradeBinance8.Services
                                 price: retryPrice,
                                 positionSide: isHedge ? posSide : null,
                                 timeInForce: TimeInForce.GoodTillCanceled,
-                                selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                                 ct: ct);
                         }
                     }
@@ -1563,7 +1561,6 @@ namespace VertexAutoTradeBinance8.Services
                     price: retryPrice,
                     positionSide: isHedge ? posSide : null,
                     timeInForce: TimeInForce.GoodTillCanceled,
-                    selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                     ct: ct);
 
                 if (retryOrder.Success && retryOrder.Data != null)
@@ -1707,7 +1704,6 @@ namespace VertexAutoTradeBinance8.Services
                     type: FuturesOrderType.Market,
                     quantity: mktQty,
                     positionSide: isHedge ? posSide : null,
-                    selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                     ct: ct);
 
                 if (mktRes.Success && mktRes.Data != null)
@@ -1829,7 +1825,6 @@ namespace VertexAutoTradeBinance8.Services
                         stopPrice: tp,
                         quantity: quantity,
                         positionSide: isHedge ? posSide : null,
-                        selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                         ct: ct
                     );
                 }
