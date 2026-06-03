@@ -1,9 +1,4 @@
-﻿using System;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using Binance.Net.Enums;
-using Microsoft.Extensions.Logging;
+﻿using Binance.Net.Enums;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -102,7 +97,7 @@ namespace VertexAutoTradeBinance8.Services
                     bool isOurTp = order.ReduceOnly == true  // One-way mode
                         || order.PositionSide != PositionSide.Both; // Hedge mode
 
-                    if (isOurTp && !tpRounded.Contains(order.Price) && !tpRounded.Contains(order.StopPrice))
+                    if (isOurTp && !tpRounded.Contains(order.Price) && !tpRounded.Contains((decimal)order.StopPrice))
                         shouldDelete = true;
                 }
 

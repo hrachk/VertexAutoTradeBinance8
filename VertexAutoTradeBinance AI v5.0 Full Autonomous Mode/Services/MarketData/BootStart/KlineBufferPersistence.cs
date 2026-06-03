@@ -24,9 +24,9 @@ public sealed class KlineBufferPersistence
         _buffer = buffer;
         _logger = logger;
 
-        var dir = Path.Combine(AppContext.BaseDirectory, "market");
-        Directory.CreateDirectory(dir);
-        _path = Path.Combine(dir, "klines_bootstrap.json");
+        //var dir = Path.Combine(AppContext.BaseDirectory, "market");
+        //Directory.CreateDirectory(dir);
+        _path = Path.Combine(AppContext.BaseDirectory, "market", "klines_bootstrap.json");
     }
 
     // =====================================================================
