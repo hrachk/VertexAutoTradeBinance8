@@ -34,6 +34,26 @@ public class BinanceClientFactory
         return client;
     }
 
+    public BinanceRestClient CreateRestClientForWeb()
+    {
+        var apikeyW = _options.AnoterApiKey;
+        var secretW = _options.AnoterSecretKey;
+
+        if (string.IsNullOrWhiteSpace(apikeyW) ||
+            string.IsNullOrWhiteSpace(secretW))
+        {
+            throw new InvalidOperationException(
+                "Binance API credentials are missing (CreateRestClient)");
+        }
+
+     
+
+        var client = new BinanceRestClient();
+        client.SetApiCredentials(
+            new ApiCredentials(apikeyW, secretW));
+        return client;
+    }
+
     // ✅ НОВЫЙ МЕТОД — ДЛЯ WEB / UI / LIVE-PNL
     public BinanceRestClient? TryCreateRestClient()
     {

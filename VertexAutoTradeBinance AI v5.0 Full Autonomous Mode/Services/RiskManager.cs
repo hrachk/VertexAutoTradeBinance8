@@ -20,7 +20,6 @@ namespace VertexAutoTradeBinance8.Services
         private static readonly string MissedTradesPath =
             Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
 
-
         public decimal LastBalanceUsdt { get; private set; }
 
         public RiskManager(
@@ -29,7 +28,10 @@ namespace VertexAutoTradeBinance8.Services
             TradingOptions options,
             BinanceClientFactory factory,
             MarketDataService marketData,
-            AiLeverageService aiLeverage, AiMarketRegimeService marketRegimeService, SmartRegimeService smartRegime, SimulatedTradeService simulator)
+            AiLeverageService aiLeverage,
+            AiMarketRegimeService marketRegimeService,
+            SmartRegimeService smartRegime,
+            SimulatedTradeService simulator)
         {
             _logger = logger;
             _symbolInfo = symbolInfo;
@@ -43,30 +45,25 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // ====================================================================
-        // SAFE QTY v7.7 (QUANT-REALTIME FINAL)
+        // SAFE QTY — Fixed 35% margin sizing with symbol-specific leverage
         // ====================================================================
         public async Task<decimal> CalculateSafeQty(
-       TradeSignal signal,          // добавлен параметр signal
-       string symbol,
-       decimal entryPrice,
-       decimal stopLoss,
-       decimal riskMultiplier,
-       decimal safetyRiskMultiplier,
-       decimal leverage,
-       SignalSide side,
-       List<decimal> takeProfits,
-       CancellationToken ct)
+            TradeSignal signal,
+            string symbol,
+            decimal entryPrice,
+            decimal stopLoss,             // для логов
+            decimal riskMultiplier,       // оставлен для совместимости
+            decimal safetyRiskMultiplier, // оставлен для совместимости
+            decimal leverage,             // будет переопределён под символ
+            SignalSide side,
+            List<decimal> takeProfits,
+            CancellationToken ct)
         {
             if (entryPrice <= 0 || stopLoss <= 0)
                 return 0;
 
-            decimal slDist = Math.Abs(entryPrice - stopLoss);
-            if (slDist <= 0)
-                return 0;
-
             // LOAD FILTERS
             var f = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-
             decimal step = f.step > 0 ? f.step : 0.001m;
             decimal minQty = f.minQty > 0 ? f.minQty : step;
 
@@ -81,83 +78,71 @@ namespace VertexAutoTradeBinance8.Services
             var acc = await client.UsdFuturesApi.Account.GetBalancesAsync(null, ct);
             decimal free = acc?.Data?.FirstOrDefault(x => x.Asset == "USDT")?.AvailableBalance ?? 0;
 
-            // for UI
             LastBalanceUsdt = free;
 
+            // Market regime and smart info (для логов/аналитики)
             var klines = await _marketData.GetKlines(symbol, KlineInterval.FiveMinutes, 200);
             var baseReg = _marketRegimeService.DetectRegime(symbol, KlineInterval.FiveMinutes, klines);
             var smart = _smartRegime.Evaluate(symbol, KlineInterval.FiveMinutes, klines);
-
             decimal atr = baseReg.VolatilityPercent * klines.Last().ClosePrice;
 
             // ===============================
-            //  AI Opportunity Score v2.0
+            //  AI Opportunity Score (для логов)
             // ===============================
+            int scoreUi = 50;
 
-            int scoreUi = 50; // базовая середина — нейтральный рынок
-
-            // === 1) Трендовый бонус (Slope) ===
+            // 1) Тренд
             decimal slope = Math.Abs(baseReg.TrendSlopePercent);
+            if (slope > 0.004m) scoreUi += 22;
+            else if (slope > 0.003m) scoreUi += 15;
+            else if (slope > 0.002m) scoreUi += 8;
+            else if (slope > 0.001m) scoreUi += 3;
 
-            if (slope > 0.004m) scoreUi += 22;       // 0.40% — сильнейший тренд
-            else if (slope > 0.003m) scoreUi += 15;  // 0.30%
-            else if (slope > 0.002m) scoreUi += 8;   // 0.20%
-            else if (slope > 0.001m) scoreUi += 3;   // 0.10%
-
-            // === 2) Волатильность (VolatilityPercent) ===
-            // Высокая волатильность = шум, хаос → минус score
+            // 2) Волатильность
             decimal vol = baseReg.VolatilityPercent;
+            if (vol > 0.025m) scoreUi -= 22;
+            else if (vol > 0.015m) scoreUi -= 15;
+            else if (vol > 0.010m) scoreUi -= 8;
+            else if (vol > 0.006m) scoreUi -= 3;
 
-            if (vol > 0.025m) scoreUi -= 22;        // 2.5% — ад
-            else if (vol > 0.015m) scoreUi -= 15;   // 1.5% — дикий рынок
-            else if (vol > 0.010m) scoreUi -= 8;    // шумный
-            else if (vol > 0.006m) scoreUi -= 3;    // легкий шум
-
-            // === 3) ATR нагрузка (atr / price) ===
-            // ATR% показывает “нервность” рынка
+            // 3) ATR нагрузка
             decimal atrPct = atr / entryPrice;
-
-            if (atrPct > 0.025m) scoreUi -= 15;  // ATR > 2.5%
+            if (atrPct > 0.025m) scoreUi -= 15;
             else if (atrPct > 0.015m) scoreUi -= 8;
             else if (atrPct > 0.010m) scoreUi -= 4;
-            else scoreUi += 4;                   // маленький ATR = стабильность рынка
+            else scoreUi += 4;
 
-            // === 4) Chop-zone — опасный рынок, но НЕ смертельно ===
-            if (smart.IsDangerChopZone)
-                scoreUi -= 18;
+            // 4) Chop zone
+            if (smart.IsDangerChopZone) scoreUi -= 18;
 
-            // === 5) Smart regime bonuses ===
+            // 5) Smart regime
             switch (smart.SmartType)
             {
                 case SmartRegimeType.SmartStrongTrend:
                     scoreUi += 18;
                     break;
-
                 case SmartRegimeType.SmartTrend:
                     scoreUi += 8;
                     break;
-
                 case SmartRegimeType.SmartSqueeze:
                     scoreUi += 10;
                     break;
-
                 case SmartRegimeType.SmartRange:
                     scoreUi += 0;
                     break;
-
                 case SmartRegimeType.SmartChop:
                     scoreUi -= 10;
                     break;
             }
 
-            // === 6) Take Profit structure ===
+            // 6) TP структура
             if (takeProfits.Count >= 3) scoreUi += 8;
             else if (takeProfits.Count == 2) scoreUi += 4;
 
-            // === 7) AI Confidence ===
-            scoreUi += (int)(smart.Confidence * 20); // 0..20
+            // 7) Confidence
+            scoreUi += (int)(smart.Confidence * 20);
 
-            // === 8) Окончательная нормализация ===
+            // 8) Clamp
             scoreUi = Math.Clamp(scoreUi, 1, 100);
 
             if (free <= 0)
@@ -168,8 +153,37 @@ namespace VertexAutoTradeBinance8.Services
                     stopLoss,
                     "NoBalance",
                     free,
-                    0,                          // attemptNotional
-                    binanceMinNotional,         // requiredMinNotional
+                    0,
+                    binanceMinNotional,
+                    side,
+                    takeProfits,
+                    baseReg,
+                    smart,
+                    atr,
+                    scoreUi
+                );
+
+                await _simulator.SimulateMissedTradeAsync(signal, "NoBalance");
+            }
+
+            // =============================================================
+            //  FIXED-MARGIN SIZING: берем 35% free как маржу и плечо по правилу
+            // =============================================================
+            decimal preferredLev = await GetPreferredLeverageAsync(symbol, ct);
+            if (preferredLev < 1m) preferredLev = 1m;
+            leverage = preferredLev;
+
+            decimal targetMargin = free * 0.35m;
+            if (targetMargin <= 0)
+            {
+                LogMissedTrade(
+                    symbol,
+                    entryPrice,
+                    stopLoss,
+                    "NoBalance",
+                    free,
+                    0,
+                    binanceMinNotional,
                     side,
                     takeProfits,
                     baseReg,
@@ -182,129 +196,36 @@ namespace VertexAutoTradeBinance8.Services
                 return 0;
             }
 
-            // BASE RISK
-            decimal baseRiskPercent = _options.BaseRiskPercent > 0
-                ? _options.BaseRiskPercent
-                : 0.03m;
+            decimal targetNotional = targetMargin * leverage;
 
-            // AI LEVERAGE FACTOR
-            decimal aiLevMult = await GetAiLeverageMultiplierAsync(symbol, ct);
+            decimal qty = 0;
+            decimal notional = 0;
+            decimal requiredMargin = 0;
 
-            // FINAL MULTIPLIER
-            decimal finalRisk = riskMultiplier * safetyRiskMultiplier * aiLevMult;
-            finalRisk = Math.Clamp(finalRisk, 0.3m, 2.7m);
-
-            decimal maxRisk = free * baseRiskPercent * finalRisk;
-            if (maxRisk < 1m) maxRisk = 1m;
-            if (maxRisk > free * 0.20m) maxRisk = free * 0.20m;
-
-            decimal qty = maxRisk / slDist;
-            if (leverage > 0) qty *= leverage;
-
-            qty = Math.Floor(qty / step) * step;
-            if (qty < minQty) qty = minQty;
-
-            decimal notional = qty * entryPrice;
-
-            // =====================
-            // SIGNAL STRENGTH LOGIC
-            // =====================
-
-            decimal score = riskMultiplier * safetyRiskMultiplier;
-            bool strong = score >= 1.30m;
-            bool weak = score < 0.80m;
-
-            if (weak)
+            for (int i = 0; i < 12; i++)
             {
-                LogMissedTrade(
-                    symbol,
-                    entryPrice,
-                    stopLoss,
-                    "WeakSignalRejected",
-                    free,
-                    0, // attemptNotional
-                    binanceMinNotional, // requiredMinNotional
-                    side,
-                    takeProfits,
-                    baseReg,
-                    smart,
-                    atr,
-                    scoreUi
-                );
-
-                _logger.LogInformation($"[RISK][{symbol}] Weak signal detected — lowering position size.");
-
-                // уменьшаем риск, но НЕ отбрасываем сделку (фактически maxRisk уже использован,
-                // строка ниже не влияет на qty/notional, оставляем как комментарий намерения)
-                maxRisk *= 0.35m;
-            }
-
-            // =============================================================
-            //  BOOST + ADAPTIVE REDUCE (v7.5)
-            // =============================================================
-            if (notional < binanceMinNotional)
-            {
-                _logger.LogInformation($"[RISK][{symbol}] Below minNotional → boosting or reducing.");
-
-                decimal targetNotional = weak
-                    ? binanceMinNotional          // слабый сигнал → минимум
-                    : binanceMinNotional * 1.4m;  // сильный сигнал → усилить
-
-                // ограничение реальным балансом
-                decimal maxAllowed = free * leverage;
-                if (targetNotional > maxAllowed)
-                    targetNotional = maxAllowed;
-
-                // первая попытка
                 qty = Math.Floor((targetNotional / entryPrice) / step) * step;
-                if (qty < minQty)
-                    qty = minQty;
+                if (qty < minQty) qty = minQty;
 
                 notional = qty * entryPrice;
+                requiredMargin = notional / leverage;
 
-                // если всё нормально — продолжаем
-                if (notional >= binanceMinNotional)
-                    goto BOOST_OK;
+                if (notional >= binanceMinNotional && requiredMargin <= free)
+                    break;
 
-                // иначе → уменьшаем позицию до допустимых значений
-                for (int i = 0; i < 12; i++)   // до 12 попыток
-                {
-                    targetNotional *= 0.85m;  // уменьшаем на 15%
-
-                    qty = Math.Floor((targetNotional / entryPrice) / step) * step;
-                    if (qty < minQty)
-                        qty = minQty;
-
-                    notional = qty * entryPrice;
-
-                    if (notional >= binanceMinNotional)
-                        goto BOOST_OK;
-                }
-
-                // если даже после 12 уменьшений не прошли → пропускаем
-                LogMissedTrade(
-                    symbol, entryPrice, stopLoss, "MinNotionalAfterAdaptiveReduce",
-                    free, notional, binanceMinNotional,
-                    side, takeProfits, baseReg, smart, atr, scoreUi
-                );
-
-                await _simulator.SimulateMissedTradeAsync(signal, "MinNotionalAfterAdaptiveReduce");
-                return 0;
+                targetNotional *= 0.85m; // адаптивное уменьшение
             }
 
-        BOOST_OK:
-            _logger.LogInformation($"[RISK][{symbol}] Boost/Reduce OK → qty={qty}, notional={notional:F4}");
-
-            if (qty <= 0 || notional <= 0)
+            if (qty <= 0 || notional <= 0 || notional < binanceMinNotional || requiredMargin > free)
             {
                 LogMissedTrade(
                     symbol,
                     entryPrice,
                     stopLoss,
-                    "QtyZeroAfterAdjust",
+                    "InsufficientBalanceAfterReduce",
                     free,
-                    0,                          // attemptNotional
-                    binanceMinNotional,         // requiredMinNotional
+                    notional,
+                    binanceMinNotional,
                     side,
                     takeProfits,
                     baseReg,
@@ -313,93 +234,48 @@ namespace VertexAutoTradeBinance8.Services
                     scoreUi
                 );
 
-                await _simulator.SimulateMissedTradeAsync(signal, "QtyZeroAfterAdjust");
+                await _simulator.SimulateMissedTradeAsync(signal, "InsufficientBalanceAfterReduce");
                 return 0;
             }
 
-            // 🔥 ДОБАВЛЕНО: ФИНАЛЬНАЯ ПРОВЕРКА МАРЖИ
-            if (leverage <= 0)
-                leverage = 1m;
-
-            decimal requiredMargin = notional / leverage;
-
-            // =============================================================
-            //  SMART MARGIN ADJUSTMENT v7.5 — уменьшаем позицию, но НЕ отбрасываем
-            // =============================================================
-            if (requiredMargin > free)
-            {
-                _logger.LogInformation($"[RISK][{symbol}] Margin too high → reducing position.");
-
-                // 1) максимальный возможный notional
-                decimal maxNotional = free * leverage * 0.97m;
-                if (maxNotional <= 0)
-                {
-                    LogMissedTrade(
-                        symbol, entryPrice, stopLoss, "NoMargin",
-                        free, 0,
-                        binanceMinNotional,
-                        side, takeProfits, baseReg, smart, atr, scoreUi
-                    );
-
-                    await _simulator.SimulateMissedTradeAsync(signal, "NoMargin");
-                    return 0;
-                }
-
-                // 2) Уменьшаем notional пошагово, пока не пройдём фильтры
-                for (int i = 0; i < 12; i++)  // до 12 уменьшений (достаточно)
-                {
-                    qty = Math.Floor((maxNotional / entryPrice) / step) * step;
-
-                    if (qty >= minQty)
-                    {
-                        notional = qty * entryPrice;
-                        requiredMargin = notional / leverage;
-
-                        if (notional >= binanceMinNotional && requiredMargin <= free)
-                        {
-                            _logger.LogInformation(
-                                $"[RISK][{symbol}] Reduced position OK → qty={qty}, ntn={notional:F2}, margin={requiredMargin:F2}");
-                            break;
-                        }
-                    }
-
-                    // уменьшаем позицию на 15%
-                    maxNotional *= 0.85m;
-                }
-
-                // 3) После цикла, если всё равно не проходит — вернуть 0
-                if (notional < binanceMinNotional || requiredMargin > free || qty < minQty)
-                {
-                    LogMissedTrade(
-                        symbol, entryPrice, stopLoss, "InsufficientBalanceAfterReduce",
-                        free, 0,
-                        binanceMinNotional,
-                        side, takeProfits, baseReg, smart, atr, scoreUi
-                    );
-
-                    await _simulator.SimulateMissedTradeAsync(signal, "InsufficientBalanceAfterReduce");
-                    return 0;
-                }
-            }
-
-            // Для недостаточного баланса ПОСЛЕ всех корректировок — только предупреждение
-            if (notional < binanceMinNotional)
-            {
-                _logger.LogWarning(
-                    $"[RISK][{symbol}] Warning: notional < minNotional AFTER full reduce. " +
-                    $"notional={notional:F4}, required={binanceMinNotional:F4}");
-
-                // НЕ return!!!
-                // Просто позволяем торговать минимально допустимой позицией.
-            }
+            _logger.LogInformation(
+                $"[RISK][{symbol}] Fixed-margin sizing → lev={leverage}, qty={qty}, " +
+                $"ntn={notional:F4}, margin={requiredMargin:F4}");
 
             return qty;
         }
 
+        // ====================================================================
+        // Preferred leverage per symbol:
+        // if maxLev >= 50 → 50; else if maxLev >= 10 → 10; else → maxLev
+        // ====================================================================
+        private async Task<decimal> GetPreferredLeverageAsync(string symbol, CancellationToken ct)
+        {
+            try
+            {
+                using var client = _factory.CreateRestClient();
+                var res = await client.UsdFuturesApi.Account.GetBracketsAsync(symbol, null, ct);
+                if (!res.Success || res.Data == null || res.Data.Length == 0)
+                    return 10m;
 
+                var brackets = res.Data[0].Brackets;
+                if (brackets == null || brackets.Length == 0)
+                    return 10m;
+
+                decimal maxLev = (decimal)brackets.Max(b => b.InitialLeverage);
+
+                if (maxLev >= 50m) return 50m;
+                if (maxLev >= 10m) return 10m;
+                return Math.Max(1m, maxLev);
+            }
+            catch
+            {
+                return 10m;
+            }
+        }
 
         // ====================================================================
-        // AI LEVERAGE MULTIPLIER
+        // AI LEVERAGE MULTIPLIER (оставлен для совместимости, сейчас не влияет)
         // ====================================================================
         private async Task<decimal> GetAiLeverageMultiplierAsync(string symbol, CancellationToken ct)
         {
@@ -421,22 +297,20 @@ namespace VertexAutoTradeBinance8.Services
         // ====================================================================
         // LOG MISSED TRADES (FULL VERSION WITH ATR / VOL / SLOPE / CONF)
         // ====================================================================
-
         private void LogMissedTrade(
-    string symbol,
-    decimal entry,
-    decimal sl,
-    string reason,
-    decimal freeBalance,
-    decimal attemptNotional,
-    decimal requiredMinNotional,
-    SignalSide side,
-    List<decimal> takeProfits,
-    MarketRegimeResult baseReg,
-    SmartRegimeInfo smart,
-    decimal atr, int scoreUi)
-
-
+            string symbol,
+            decimal entry,
+            decimal sl,
+            string reason,
+            decimal freeBalance,
+            decimal attemptNotional,
+            decimal requiredMinNotional,
+            SignalSide side,
+            List<decimal> takeProfits,
+            MarketRegimeResult baseReg,
+            SmartRegimeInfo smart,
+            decimal atr,
+            int scoreUi)
         {
             try
             {
@@ -455,17 +329,16 @@ namespace VertexAutoTradeBinance8.Services
                     attemptNotional,
                     requiredMinNotional,
 
-                    // === Market regime ===
+                    // Market regime
                     atr = atr,
                     slope = baseReg.TrendSlopePercent,
                     vol = baseReg.VolatilityPercent,
                     deviation = baseReg.DeviationScore,
                     regime = baseReg.Regime.ToString(),
 
-                    // === Smart regime ===
+                    // Smart regime
                     confidence = (int)(smart.Confidence * 100),
                     smartType = smart.SmartType.ToString(),
-                    // === NEW ===
                     score = scoreUi
                 };
 
@@ -476,16 +349,22 @@ namespace VertexAutoTradeBinance8.Services
                     var json = File.ReadAllText(MissedTradesPath);
                     list = JsonSerializer.Deserialize<List<object>>(json) ?? new();
                 }
-                else list = new();
+                else
+                {
+                    list = new();
+                }
 
                 list.Add(record);
 
-                File.WriteAllText(MissedTradesPath,
-                    JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true }));
+                File.WriteAllText(
+                    MissedTradesPath,
+                    JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true })
+                );
             }
-            catch { }
+            catch
+            {
+                // ignore logging errors
+            }
         }
-
-
     }
 }

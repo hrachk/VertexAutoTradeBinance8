@@ -50,9 +50,9 @@ namespace VertexAutoTradeBinance8.Services
         // MAIN ENTRY
         // =====================================================================
         public async Task<OrderResult> ExecuteAsync(
-                                                     TradeSignal signal,
-                                                     decimal quantity,
-                                                     CancellationToken ct = default)
+    TradeSignal signal,
+    decimal quantity,
+    CancellationToken ct = default)
         {
             using var client = _factory.CreateRestClient();
 
@@ -72,6 +72,24 @@ namespace VertexAutoTradeBinance8.Services
             var posSide = signal.Side == SignalSide.Buy ? PositionSide.Long : PositionSide.Short;
 
             decimal entryPrice = Round(signal.EntryPrice, tick);
+
+            // =====================================================================
+            // 0.1) ЛИМИТ НА КОЛ-ВО ОТКРЫТЫХ ПОЗИЦИЙ (АККАУНТ-ВАЙД)
+            // =====================================================================
+            var posResBefore = await client.UsdFuturesApi.Trading.GetPositionsAsync(null, ct: ct);
+            if (posResBefore.Success && posResBefore.Data != null)
+            {
+                var openPositionsCount = posResBefore.Data.Count(p => p.PositionAmt != 0m);
+                if (openPositionsCount >= 2)
+                {
+                    _logger.LogWarning(
+                        "[ORDER][{symbol}] POSITION LIMIT REACHED: openPositions={cnt} → skip new entry",
+                        signal.Symbol, openPositionsCount);
+
+                    await _simulator.SimulateMissedTradeAsync(signal, "TooManyOpenPositions");
+                    return OrderResult.Fail("Too many open positions (>=2)");
+                }
+            }
 
             // =============================================================
             // 0) Regime / SmartRegime → UI / analytics
@@ -94,19 +112,16 @@ namespace VertexAutoTradeBinance8.Services
 
             // 3) RR CHECK
             decimal rr = 0m;
-            if (signal.StopLoss > 0 && signal.TakeProfit.HasValue)
+            if (signal.StopLoss > 0 && signal.TakeProfits?.Any() == true)
             {
                 var risk = Math.Abs(signal.EntryPrice - signal.StopLoss);
-                var reward = Math.Abs(signal.TakeProfit.Value - signal.EntryPrice);
-                if (risk > 0)
-                    rr = reward / risk;
+                var reward = signal.TakeProfits.Max(tp => Math.Abs(tp - signal.EntryPrice));
+                if (risk > 0) rr = reward / risk;
             }
-
             const decimal MIN_MARKET_RR = 1.8m;
             bool rrOk = rr >= MIN_MARKET_RR;
 
-            // 4) LiquidityGuard (REAL API)  ✅
-            //    Никаких IsDanger/IsSymbolBlocked — у тебя есть только Analyze(...)
+            // 4) LiquidityGuard (REAL API)
             LiquidityGuardResult liquidityResult;
             try
             {
@@ -120,7 +135,6 @@ namespace VertexAutoTradeBinance8.Services
             }
             catch (Exception ex)
             {
-                // fail-safe: если LiquidityGuard упал — не блокируем market-only по ошибке сервиса
                 _logger.LogWarning(ex, "[LiquidityGuard] Analyze failed → fail-safe allow");
                 liquidityResult = new LiquidityGuardResult(false, LiquidityGuardReason.None, "AnalyzeFailed");
             }
@@ -177,12 +191,8 @@ namespace VertexAutoTradeBinance8.Services
                 $"AiRisk={aiRisk:F2}"
             );
 
- 
-
-
-
             // =====================================================================
-            // 1) ENTRY (LIMIT) — БЕЗ reduceOnly
+            // 1) ENTRY (LIMIT / MARKET) — БЕЗ reduceOnly
             // =====================================================================
             var entryRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: signal.Symbol,
@@ -191,7 +201,6 @@ namespace VertexAutoTradeBinance8.Services
                 quantity: quantity,
                 price: allowMarketEntry ? null : entryPrice,
                 positionSide: posSide,
-              //  workingType: WorkingType.Mark,
                 timeInForce: allowMarketEntry ? null : TimeInForce.GoodTillCanceled,
                 ct: ct);
 
@@ -230,14 +239,12 @@ namespace VertexAutoTradeBinance8.Services
 
             if (!wait.HasPosition)
             {
-                // Позиция реально НЕТ → считаем пропущенной
                 _logger.LogError(
                     "[ORDER][{symbol}] ENTRY FAIL — {reason}",
                     signal.Symbol, wait.Reason);
 
                 await _simulator.SimulateMissedTradeAsync(signal, wait.Reason ?? "EntryNotFilled");
 
-                // На всякий случай: отмена ордера (если ещё жив)
                 try
                 {
                     await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, entryOrderId, ct: ct);
@@ -251,6 +258,23 @@ namespace VertexAutoTradeBinance8.Services
             entryPrice = wait.EntryPrice;
             quantity = wait.Qty;
 
+            // =====================================================================
+            // 2.1) ПОВТОРНАЯ ПРОВЕРКА ЛИМИТА ПОЗИЦИЙ (ПОСЛЕ ОТКРЫТИЯ)
+            // =====================================================================
+            var posResAfter = await client.UsdFuturesApi.Trading.GetPositionsAsync(null, ct: ct);
+            if (posResAfter.Success && posResAfter.Data != null)
+            {
+                var openPositionsCount = posResAfter.Data.Count(p => p.PositionAmt != 0m);
+                if (openPositionsCount > 2)
+                {
+                    _logger.LogWarning(
+                        "[ORDER][{symbol}] POSITION LIMIT BREACHED AFTER OPEN: openPositions={cnt}",
+                        signal.Symbol, openPositionsCount);
+                    // здесь можно, по желанию, сразу закрыть эту новую позицию,
+                    // но пока только логируем
+                }
+            }
+
             _logger.LogInformation("[ORDER][{symbol}] POSITION OPENED at {price}, qty={qty}",
                 signal.Symbol, entryPrice, quantity);
 
@@ -262,16 +286,64 @@ namespace VertexAutoTradeBinance8.Services
                 notional: quantity * entryPrice,
                 entryPrice
             );
+            await _simulator.SimulateMissedTradeAsync(signal, wait.Reason ?? "Opened");
+            // =====================================================================
+            // 2.5) IMMEDIATE HARD TP (один TP сразу после открытия позиции)
+            // =====================================================================
+            decimal tpPrice = signal.TakeProfit ?? 0m;
+            if (tpPrice <= 0 && signal.TakeProfits != null && signal.TakeProfits.Count > 0)
+                tpPrice = signal.TakeProfits[0];
+
+            if (tpPrice > 0)
+            {
+                tpPrice = Round(tpPrice, tick);
+                var tpSide = side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy;
+
+                var tpRes = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                    symbol: signal.Symbol,
+                    side: tpSide,
+                    type: ConditionalOrderType.TakeProfitMarket,
+                    quantity: quantity,
+                    price: null,
+                    positionSide: posSide,
+                    timeInForce: TimeInForce.GoodTillCanceled,
+                    reduceOnly: true,
+                    clientOrderId: null,
+                    triggerPrice: tpPrice,
+                    activationPrice: null,
+                    callbackRate: null,
+                    workingType: WorkingType.Mark,
+                    closePosition: null,
+                    priceProtect: null,
+                    priceMatch: null,
+                    selfTradePreventionMode: null,
+                    goodTillDate: null,
+                    receiveWindow: null,
+                    ct: ct
+                );
+
+                if (!tpRes.Success)
+                {
+                    _logger.LogError(
+                        "[ORDER][{symbol}] TP PLACE ERROR: price={tp}, err={err}",
+                        signal.Symbol, tpPrice, tpRes.Error
+                    );
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "[ORDER][{symbol}] TP PLACED: tp={tp}, algoId={id}",
+                        signal.Symbol, tpPrice, tpRes.Data.Id
+                    );
+                }
+            }
 
             // =====================================================================
-            // 3) COMPUTE SL / TP (NO PLACEMENT HERE)
-            // Responsibility: PositionSupervisorService v8.1 (NORMAL → ALGO RAW)
+            // 3) COMPUTE SL / TP (ONLY FOR ANALYTICS / SUPERVISOR)
             // =====================================================================
-
             decimal atr = signal.Atr ?? 0m;
             decimal sl = signal.StopLoss;
 
-            // TP FIX
             decimal tp = signal.TakeProfit ?? 0;
             if (tp <= 0 && signal.TakeProfits != null && signal.TakeProfits.Count > 0)
                 tp = signal.TakeProfits[0];
@@ -284,13 +356,13 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             _logger.LogWarning(
-                "[ORDER][{symbol}] PROTECTION COMPUTED ONLY → SL={sl}, TP={tp}. Supervisor will place orders (NORMAL/ALGO).",
+                "[ORDER][{symbol}] PROTECTION: SL={sl}, TP={tp}. TP-ордер уже поставлен сразу после открытия позиции.",
                 signal.Symbol, sl, tp
             );
 
-            // ❗ НИЧЕГО НЕ СТАВИМ ЗДЕСЬ
             return OrderResult.Successs(entryPrice, quantity, entryOrderId);
         }
+
 
         // =====================================================================
         // WAIT FOR POSITION or ORDER FILL (dual-track)
@@ -380,7 +452,6 @@ namespace VertexAutoTradeBinance8.Services
                         }
                     }
 
-                    // ---- 3) Проверка "цена улетела" (только если вообще не fill'ился) ----
                     // ---- 3) Проверка "цена улетела" — НЕ ФАТАЛ, НЕ CANCEL ----
                     if (lastExecuted <= 0)
                     {
@@ -402,10 +473,7 @@ namespace VertexAutoTradeBinance8.Services
                                             "[ORDER][{symbol}] PRICE RUN AWAY (LONG) → keep LIMIT alive: entry={e}, mark={m}, diff={d:P2}",
                                             signal.Symbol, fallbackEntry, mark, diffPct);
 
-                                        // ВАЖНО:
-                                        // ❌ НЕ отменяем ордер
-                                        // ❌ НЕ возвращаем FAIL
-                                        // ✔ просто ждём дальше
+                                        // НЕ отменяем ордер, просто ждём дальше
                                     }
                                 }
                                 else // Short
@@ -426,7 +494,6 @@ namespace VertexAutoTradeBinance8.Services
                             _logger.LogWarning(exPrice, "[ORDER][{symbol}] Error reading mark price", signal.Symbol);
                         }
                     }
-
 
                     await Task.Delay(delayMs, ct);
                 }
@@ -490,7 +557,6 @@ namespace VertexAutoTradeBinance8.Services
 
                 if (executedQty > 0)
                 {
-                    // Теоретически позиция может появиться позже, но мы сделали всё возможное.
                     _logger.LogError(
                         "[ORDER][{symbol}] EXECUTED QTY > 0, но позиция не обнаружена. entry={e}, exec={exec}",
                         signal.Symbol, avgPrice, executedQty);
@@ -505,6 +571,7 @@ namespace VertexAutoTradeBinance8.Services
                 return (false, 0m, 0m, "WaitFatalError");
             }
         }
+
 
         // =====================================================================
         // ROUND UTIL

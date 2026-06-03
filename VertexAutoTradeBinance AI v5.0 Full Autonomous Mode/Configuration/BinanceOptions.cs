@@ -7,4 +7,7 @@ public class BinanceOptions
     public bool IsTestNet { get; set; }
     public string[] Symbols { get; set; } = Array.Empty<string>();
     public bool UseFutures { get; set; } = true;
+
+    public string AnoterApiKey { get; set; } = string.Empty;
+    public string AnoterSecretKey { get; set; } = string.Empty;
 }

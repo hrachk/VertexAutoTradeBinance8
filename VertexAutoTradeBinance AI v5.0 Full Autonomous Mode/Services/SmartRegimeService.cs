@@ -6,11 +6,10 @@ namespace VertexAutoTradeBinance8.Services
 {
     /// <summary>
     /// SmartRegimeService — надстройка над AiMarketRegimeService + корреляция с BTC.
-    /// Не ломает существующую логику, даёт более умную картину рынка.
+    /// Оптимизирована под мажоры (BTC/ETH/BNB/SOL) и альты с разной волатильностью.
     /// </summary>
     public class SmartRegimeService
     {
-
         public MarketRegime LastBaseRegime { get; private set; } = MarketRegime.Range;
         public SmartRegimeType LastSmartRegime { get; private set; } = SmartRegimeType.Unknown;
 
@@ -22,9 +21,6 @@ namespace VertexAutoTradeBinance8.Services
         public bool LastDangerChop { get; private set; }
         public bool LastAllowAggressive { get; private set; }
         public bool LastAllowCounter { get; private set; }
-
-
-
 
         private readonly ILogger<SmartRegimeService> _logger;
         private readonly AiMarketRegimeService _marketRegimeService;
@@ -38,6 +34,12 @@ namespace VertexAutoTradeBinance8.Services
             _logger = logger;
             _marketRegimeService = marketRegimeService;
             _correlationService = correlationService;
+        }
+
+        private static bool IsMajor(string symbol)
+        {
+            // Мажоры с более “чистой” динамикой и меньшими процентными наклонами
+            return symbol is "BTCUSDT" or "ETHUSDT" or "BNBUSDT" or "SOLUSDT";
         }
 
         public SmartRegimeInfo Evaluate(
@@ -72,16 +74,20 @@ namespace VertexAutoTradeBinance8.Services
                     corrToBtc = dc;
             }
 
-            // 3) Определяем SmartType
+            // 3) Определяем SmartType с учётом мажоров
             var absSlope = Math.Abs(slope);
             var absVol = Math.Abs(vol);
-
-            SmartRegimeType smartType;
 
             bool isRange = baseRegime == MarketRegime.Range;
             bool isStrongTrend = baseRegime == MarketRegime.StrongUpTrend ||
                                  baseRegime == MarketRegime.StrongDownTrend;
+            bool isMajor = IsMajor(symbol);
 
+            // Порог наклона для сильного тренда:
+            // мажоры: ~0.4% (0.004), альты: 1% (0.01)
+            decimal strongTrendSlopeThreshold = isMajor ? 0.004m : 0.01m;
+
+            SmartRegimeType smartType;
             if (isRange && absVol < 0.004m)          // < 0.4% волы → узкий флэт/сжатие
             {
                 smartType = SmartRegimeType.SmartSqueeze;
@@ -90,7 +96,7 @@ namespace VertexAutoTradeBinance8.Services
             {
                 smartType = SmartRegimeType.SmartRange;
             }
-            else if (isStrongTrend && absSlope > 0.01m) // >1% наклон → сильный тренд
+            else if (isStrongTrend && absSlope > strongTrendSlopeThreshold)
             {
                 smartType = SmartRegimeType.SmartStrongTrend;
             }
@@ -104,20 +110,34 @@ namespace VertexAutoTradeBinance8.Services
                 smartType = SmartRegimeType.SmartTrend;
             }
 
-            // 4) Уверенность
-            // базово от наклона + штраф за хаос
-            decimal confidence = 0.3m;
+            // 4) Уверенность (confidence) с разными весами для мажоров/альтов
+            decimal confidence;
 
-            confidence += Math.Min(absSlope * 5m, 0.4m); // до +0.4 за тренд
-            confidence += Math.Min((0.02m - Math.Min(absVol, 0.02m)) * 5m, 0.2m); // +0.2 за умеренную волу
+            if (isMajor)
+            {
+                // Для мажоров базовый уровень повыше, но меньше зависимость от огромных наклонов
+                confidence = 0.4m;
+                confidence += Math.Min(absSlope * 3m, 0.3m); // до +0.3 за наклон
+            }
+            else
+            {
+                confidence = 0.3m;
+                confidence += Math.Min(absSlope * 5m, 0.4m); // до +0.4 за тренд
+            }
+
+            // Волатильность: для мажоров допустим чуть больший шум
+            decimal volCap = isMajor ? 0.03m : 0.02m;
+            confidence += Math.Min((volCap - Math.Min(absVol, volCap)) * 4m, 0.2m); // до +0.2 за умеренную волу
 
             if (smartType == SmartRegimeType.SmartChop)
                 confidence -= 0.3m;
 
-            // корреляция с BTC усиливает уверенность в трендовом режиме
+            // Корреляция с BTC усиливает уверенность в трендовом режиме
+            // Для самого BTC corrToBtc = 0 и не влияет.
             if (smartType == SmartRegimeType.SmartTrend || smartType == SmartRegimeType.SmartStrongTrend)
             {
-                confidence += Math.Min(Math.Abs(corrToBtc) * 0.3m, 0.3m);
+                var corrWeight = isMajor ? 0.15m : 0.3m;
+                confidence += Math.Min(Math.Abs(corrToBtc) * corrWeight, 0.3m);
             }
 
             // ограничение 0..1
@@ -155,11 +175,7 @@ namespace VertexAutoTradeBinance8.Services
                 info.CorrelationToBtc,
                 info.Confidence);
 
-
-
-
-            ////////FOR UI
-
+            // Для UI
             LastBaseRegime = info.BaseRegime;
             LastSmartRegime = info.SmartType;
 
@@ -171,8 +187,6 @@ namespace VertexAutoTradeBinance8.Services
             LastDangerChop = info.IsDangerChopZone;
             LastAllowAggressive = info.AllowAggressiveTrendEntries;
             LastAllowCounter = info.AllowCounterTrendEntries;
-
-
 
             return info;
         }

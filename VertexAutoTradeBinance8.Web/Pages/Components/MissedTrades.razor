@@ -3,6 +3,7 @@
 @using VertexAutoTradeBinance8.Web.Services
 @using VertexAutoTradeBinance8.Web.Models
 @inject MissedTradeFileService MissedService
+@inject ManualOrderService ManualOrder
 
 <div class="missed-container">
 
@@ -232,6 +233,15 @@
                                     Min Binance: <b class="min-notional">@Money(r.RequiredMinNotional)</b>
                                 </div>
 
+                               
+
+<!-- OPEN POSITION BUTTON -->
+<div class="mt-3">
+    <button class="btn-open" @onclick="() => OpenPositionDialog(r)">
+        Open Position
+    </button>
+</div>
+
                             </div>
                         </div>
                     }
@@ -269,6 +279,80 @@
         </div>
     }
 </div>
+
+
+
+@if (_isDialogOpen && _dialogRecord != null)
+{
+    var entryRounded = F(_dialogRecord.Symbol, _dialogRecord.Entry);
+    var tpRounded = F(_dialogRecord.Symbol, _manualTp);
+    var approxNotional = (_manualMargin * _manualLeverage);
+
+    <div class="modal-backdrop">
+        <div class="modal-box">
+            <div class="modal-title">
+                Open Position: @_dialogRecord.Symbol (@_dialogRecord.Side)
+            </div>
+
+            <div class="modal-row">
+                <label>Margin (USDT):</label>
+                <input type="number"
+                       class="modal-input"
+                       step="0.01"
+                       min="0.01"
+                       @bind="_manualMargin" />
+            </div>
+
+            <div class="modal-row">
+                <label>Leverage:</label>
+                <input type="number"
+                       class="modal-input"
+                       min="1"
+                       max="125"
+                       @bind="_manualLeverage" />
+            </div>
+
+            <div class="modal-row">
+                <label>TP price:</label>
+                <input type="number"
+                       class="modal-input"
+                       step="0.0001"
+                       @bind="_manualTp" />
+            </div>
+
+            <div class="modal-row">
+                <label>Entry (info):</label>
+                <span>@entryRounded</span>
+            </div>
+
+            <div class="modal-row">
+                <label>TP (info):</label>
+                <span>@tpRounded</span>
+            </div>
+
+            <div class="modal-row">
+                <label>Notional ≈</label>
+                <span>@approxNotional.ToString("F2") USDT (@_manualMargin.ToString("F2") × @_manualLeverage)</span>
+            </div>
+
+            @if (!string.IsNullOrEmpty(_openError))
+            {
+                <div class="modal-error">@_openError</div>
+            }
+
+            <div class="modal-actions">
+                <button class="btn-cancel" @onclick="CloseDialog" disabled="@_openInProgress">
+                    Cancel
+                </button>
+                <button class="btn-confirm"
+                        @onclick="ConfirmOpenPositionAsync"
+                        disabled="@_openInProgress">
+                    @(_openInProgress ? "Opening..." : "Open Position")
+                </button>
+            </div>
+        </div>
+    </div>
+}
 
 
 @code {
@@ -548,6 +632,93 @@
 
     string F(string symbol, decimal v) => F(v);
 
-  
+    private MissedTradeRecord? _dialogRecord;
+private bool _isDialogOpen = false;
+
+private decimal _manualMargin;      // маржа в USDT
+private int _manualLeverage = 10;
+private decimal _manualTp;
+
+private string? _openError;
+private bool _openInProgress = false;
+
+private void OpenPositionDialog(MissedTradeRecord r)
+{
+    _dialogRecord = r;
+
+    _manualMargin = 1m;     // дефолт, можно 0.5/1/2
+    _manualLeverage = 10;
+    _openError = null;
+
+    _manualTp = (r.TakeProfits != null && r.TakeProfits.Count > 0)
+        ? r.TakeProfits[0]
+        : 0;
+
+    _isDialogOpen = true;
+}
+
+private void CloseDialog()
+{
+    _isDialogOpen = false;
+    _dialogRecord = null;
+    _openError = null;
+}
+
+private async Task ConfirmOpenPositionAsync()
+{
+    if (_dialogRecord == null) return;
+
+    _openError = null;
+    _openInProgress = true;
+    try
+    {
+        if (_manualMargin <= 0 || _manualLeverage <= 0)
+        {
+            _openError = "Введите корректные маржу и плечо.";
+            return;
+        }
+
+        var entry = _dialogRecord.Entry;
+        if (entry <= 0)
+        {
+            _openError = "Некорректная цена входа.";
+            return;
+        }
+
+        // NOTIONAL = margin * leverage
+        var targetNotional = _manualMargin * _manualLeverage;
+        if (targetNotional <= 0)
+        {
+            _openError = "Notional <= 0.";
+            return;
+        }
+
+        // quantity в монетах
+        var qty = targetNotional / entry;
+
+            var (ok, error) = await ManualOrder.OpenPositionWithTpAsync(
+        symbol: _dialogRecord.Symbol,
+        sideText: _dialogRecord.Side,
+        requestedMargin: _manualMargin,   // ВАЖНО: маржа
+        leverage: _manualLeverage,
+        entryPrice: _dialogRecord.Entry,
+        tpPrice: _manualTp
+    );
+
+        if (!ok)
+        {
+            _openError = error ?? "Ошибка открытия позиции или TP.";
+            return;
+        }
+
+        _isDialogOpen = false;
+        _dialogRecord = null;
+    }
+    finally
+    {
+        _openInProgress = false;
+    }
+}
+
 
 }

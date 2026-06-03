@@ -132,22 +132,25 @@ namespace VertexAutoTradeBinance8
                 {
                     var m1 = await _market.GetMarketSnapshot(symbol, KlineInterval.OneMinute, ct);
                     var m5 = await _market.GetMarketSnapshot(symbol, KlineInterval.FiveMinutes, ct);
+                    var m15 = await _market.GetMarketSnapshot(symbol, KlineInterval.FifteenMinutes, ct);
 
-                    if (m1 == null || m5 == null)
+                    // ⚠️ ИСПРАВЛЕНО: проверяем все 3 TF
+                    if (m1 == null || m5 == null || m15 == null)
                         continue;
 
-                    var decision = _tfSelector.SelectTF(m1, m5);
+                    var decision = _tfSelector.SelectTF(m1, m5, m15);
 
                     KlineInterval? finalTf = decision switch
                     {
                         AiTimeframeSelectorService.DominantTF.OneMinute => KlineInterval.OneMinute,
                         AiTimeframeSelectorService.DominantTF.FiveMinutes => KlineInterval.FiveMinutes,
                         AiTimeframeSelectorService.DominantTF.Both => KlineInterval.FiveMinutes,
+                        AiTimeframeSelectorService.DominantTF.FifteenMinutes => KlineInterval.FifteenMinutes, // ✅ ДОБАВЛЕНО
                         _ => null
                     };
 
                     if (finalTf == null)
-                        continue; 
+                        continue;
 
                     // --- 1) Обработка сигнала
                     await ProcessSymbol(symbol, finalTf.Value, ct);
@@ -162,10 +165,10 @@ namespace VertexAutoTradeBinance8
                     await Task.Delay(25, ct);
                 }
 
-
                 await PeriodicSnapshot(ct);
                 await Task.Delay(80, ct);
             }
+
         }
 
 

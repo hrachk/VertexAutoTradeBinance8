@@ -14,40 +14,55 @@ namespace VertexAutoTradeBinance8.Services
         {
             OneMinute,
             FiveMinutes,
+            FifteenMinutes,
             Both,
             None
         }
 
         public DominantTF SelectTF(
-            MarketSnapshot oneM,
-            MarketSnapshot fiveM)
+    MarketSnapshot oneM,
+    MarketSnapshot fiveM,
+    MarketSnapshot fifteenM)
         {
-            if (oneM == null || fiveM == null)
+            if (oneM == null || fiveM == null || fifteenM == null)
                 return DominantTF.None;
 
-            // --- 1. Сильный выброс волатильности на 1m → шум, отключаем
+            // --- 0. Если 15m в сильном тренде → он главный (макро-направление)
+            if (Math.Abs(fifteenM.TrendSlopePercent) > 0.01m
+                && fifteenM.VolatilityPercent < 0.02m)
+            {
+                // Если 5m подтверждает 15m → используем 5m для входов
+                if (Math.Sign(fiveM.TrendSlopePercent) == Math.Sign(fifteenM.TrendSlopePercent))
+                    return DominantTF.FiveMinutes;
+
+                // Если 5m против 15m → ждём (коррекция или разворот)
+                return DominantTF.None;
+            }
+
+            // --- 1. Сильный выброс волатильности на 1m → шум, игнорируем
             if (oneM.VolatilityPercent > fiveM.VolatilityPercent * 2.2m)
                 return DominantTF.FiveMinutes;
 
-            // --- 2. Если тренд на 5m сильнее → dominate 5m
+            // --- 2. Если тренд на 5m сильнее 1m → dominate 5m
             if (Math.Abs(fiveM.TrendSlopePercent) > Math.Abs(oneM.TrendSlopePercent) * 1.5m)
                 return DominantTF.FiveMinutes;
 
-            // --- 3. Если 1m и 5m совпадают по направлению — оба сильные
-            if (Math.Sign(oneM.TrendSlopePercent) == Math.Sign(fiveM.TrendSlopePercent))
-            {
-                // но только если шум низкий
-                if (oneM.VolatilityPercent < fiveM.VolatilityPercent * 1.3m)
-                    return DominantTF.Both;
-            }
+            // --- 3. Все 3 TF совпадают по направлению → сильный тренд (используем 1m+5m)
+            bool allAligned = Math.Sign(oneM.TrendSlopePercent) == Math.Sign(fiveM.TrendSlopePercent)
+                           && Math.Sign(fiveM.TrendSlopePercent) == Math.Sign(fifteenM.TrendSlopePercent);
 
-            // --- 4. Импульс 1m > 5m → 1m доминирует (рынок быстрый)
+            if (allAligned && oneM.VolatilityPercent < fiveM.VolatilityPercent * 1.3m)
+                return DominantTF.Both; // или можно добавить DominantTF.AllTimeframes
+
+            // --- 4. Импульс 1m > 5m, но 15m не против → быстрый рынок (scalping zone)
             if (Math.Abs(oneM.TrendSlopePercent) > Math.Abs(fiveM.TrendSlopePercent) * 1.4m
-                && oneM.VolatilityPercent < 0.015m)
+                && oneM.VolatilityPercent < 0.015m
+                && Math.Sign(oneM.TrendSlopePercent) == Math.Sign(fifteenM.TrendSlopePercent))
             {
                 return DominantTF.OneMinute;
             }
 
+            // --- 5. Флет на всех TF → выключаем торговлю
             // --- 5. Флет и шум → отключить оба
             if (Math.Abs(oneM.TrendSlopePercent) < 0.005m &&
                 Math.Abs(fiveM.TrendSlopePercent) < 0.005m)
@@ -55,6 +70,7 @@ namespace VertexAutoTradeBinance8.Services
 
             // Контрольный fallback
             return DominantTF.FiveMinutes;
+
         }
     }
 }

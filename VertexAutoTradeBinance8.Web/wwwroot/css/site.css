@@ -1900,3 +1900,77 @@ compact-card {
         min-width: unset;
     }
 }
+
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal-box {
+    background: #1b1e2a;
+    border-radius: 8px;
+    padding: 16px 20px;
+    min-width: 320px;
+    color: #fff;
+}
+
+.modal-title {
+    font-weight: 600;
+    margin-bottom: 12px;
+}
+
+.modal-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+    gap: 8px;
+}
+
+.modal-input {
+    flex: 1;
+    padding: 4px 6px;
+    border-radius: 4px;
+    border: 1px solid #444;
+    background: #111;
+    color: #fff;
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.btn-open, .btn-confirm, .btn-cancel {
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: none;
+    cursor: pointer;
+}
+
+.btn-open {
+    background: #2b6cb0;
+    color: white;
+}
+
+.btn-confirm {
+    background: #38a169;
+    color: white;
+}
+
+.btn-cancel {
+    background: #4a5568;
+    color: white;
+}
+
+.modal-error {
+    color: #f56565;
+    margin-top: 4px;
+    font-size: 0.85rem;
+}
