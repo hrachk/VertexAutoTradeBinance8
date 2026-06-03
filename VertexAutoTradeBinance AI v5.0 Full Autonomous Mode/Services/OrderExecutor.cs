@@ -12,6 +12,7 @@ using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
+using VertexAutoTradeBinance8.Services.Interface;
 
 namespace VertexAutoTradeBinance8.Services
 {
@@ -41,6 +42,12 @@ namespace VertexAutoTradeBinance8.Services
         private const decimal MAX_LIMIT_STALE_DRIFT = 0.0047m; // 0.45%
         private readonly IOptionsMonitor<TradingSettings> _tradingSettings;
         private readonly IOptionsMonitor<TradingOptions> _tradingOptions;
+        private readonly IAccountStateService _accountState;
+
+        // =====================================================
+        // Максимум открытых позиций глобально (по всем символам)
+        // =====================================================
+        private const int MAX_GLOBAL_POSITIONS = 3;
 
         public class EntryTracker
         {
@@ -115,7 +122,9 @@ namespace VertexAutoTradeBinance8.Services
             IOptionsMonitor<TradingSettings> tradingSettings, 
             AiLiquidityClusterService liquidityClusterService,
             EntryTracker entryTracker,
-            CooldownGuard cooldown, IOptionsMonitor<TradingOptions> tradingOptions)
+            CooldownGuard cooldown,
+            IOptionsMonitor<TradingOptions> tradingOptions,
+            IAccountStateService accountState)
         {
             _logger = logger;
             _factory = factory;
@@ -134,6 +143,7 @@ namespace VertexAutoTradeBinance8.Services
             _entryTracker = entryTracker;
             _cooldown = cooldown;
             _tradingOptions = tradingOptions;
+            _accountState = accountState;
         }
 
         public async Task<bool> ConfirmEntryOn1m(
@@ -226,6 +236,22 @@ namespace VertexAutoTradeBinance8.Services
                     signal.Symbol);
 
                 return OrderResult.Fail("COOLDOWN_ACTIVE");
+            }
+
+            // =============================================================
+            // GLOBAL POSITION CAP — не более MAX_GLOBAL_POSITIONS открытых
+            // позиций одновременно по всем символам
+            // =============================================================
+            int openPositionsCount = _accountState.GetPositions().Count;
+            if (openPositionsCount >= MAX_GLOBAL_POSITIONS)
+            {
+                _logger.LogWarning(
+                    "[ENTRY BLOCKED][{symbol}] global position cap reached ({count}/{max})",
+                    signal.Symbol,
+                    openPositionsCount,
+                    MAX_GLOBAL_POSITIONS);
+
+                return OrderResult.Fail("GLOBAL_POSITION_CAP");
             }
 
             int existingEntries = _entryTracker.GetEntries(signal.Symbol, posSide);
@@ -1814,22 +1840,59 @@ namespace VertexAutoTradeBinance8.Services
 
             // лог для дебага
             _logger.LogInformation("[TP_CALC][{symbol}] entry={entry} TP={tps}", signal.Symbol, entryPrice, string.Join(", ", tps));
-            if (wait.HasPosition && tps.Any())
+            // =============================================================
+            // PLACE TP1 + TP2 IMMEDIATELY AFTER POSITION OPEN
+            // SL ставит PositionSupervisorService — здесь только TP
+            // =============================================================
+            if (wait.HasPosition && tps.Count >= 1)
             {
-                foreach (var tp in tps)
-                {
-                    await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                        symbol: signal.Symbol,
-                        side: signal.Side == SignalSide.Buy ? OrderSide.Sell : OrderSide.Buy,
-                        type: FuturesOrderType.TakeProfitMarket,
-                        stopPrice: tp,
-                        quantity: quantity,
-                        positionSide: isHedge ? posSide : null,
-                        ct: ct
-                    );
-                }
+                // Части позиции для TP1 и TP2 из конфига TakeProfit
+                // TP1Part = 0.4 (40%), TP2Part = 0.35 (35%) — из appsettings.json
+                decimal tp1Part = 0.40m;  // TakeProfit:Tp1Part
+                decimal tp2Part = 0.35m;  // TakeProfit:Tp2Part
 
-                _logger.LogInformation("[TP_PLACED][{symbol}] TP={tps}", signal.Symbol, string.Join(", ", tps));
+                var tpSide = signal.Side == SignalSide.Buy ? OrderSide.Sell : OrderSide.Buy;
+
+                // TP1
+                decimal tp1Qty = Math.Floor((quantity * tp1Part) / step) * step;
+                tp1Qty = Math.Max(tp1Qty, filters.minQty);
+
+                var tp1Res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol:                  signal.Symbol,
+                    side:                    tpSide,
+                    type:                    FuturesOrderType.TakeProfitMarket,
+                    stopPrice:               tps[0],
+                    quantity:                tp1Qty,
+                    positionSide:            isHedge ? posSide : null,
+                    selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
+                    ct:                      ct);
+
+                if (tp1Res.Success)
+                    _logger.LogInformation("[TP1_PLACED][{symbol}] price={price} qty={qty}", signal.Symbol, tps[0], tp1Qty);
+                else
+                    _logger.LogWarning("[TP1_FAIL][{symbol}] {err}", signal.Symbol, tp1Res.Error?.Message);
+
+                // TP2 — только если есть второй уровень
+                if (tps.Count >= 2)
+                {
+                    decimal tp2Qty = Math.Floor((quantity * tp2Part) / step) * step;
+                    tp2Qty = Math.Max(tp2Qty, filters.minQty);
+
+                    var tp2Res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol:                  signal.Symbol,
+                        side:                    tpSide,
+                        type:                    FuturesOrderType.TakeProfitMarket,
+                        stopPrice:               tps[1],
+                        quantity:                tp2Qty,
+                        positionSide:            isHedge ? posSide : null,
+                        selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
+                        ct:                      ct);
+
+                    if (tp2Res.Success)
+                        _logger.LogInformation("[TP2_PLACED][{symbol}] price={price} qty={qty}", signal.Symbol, tps[1], tp2Qty);
+                    else
+                        _logger.LogWarning("[TP2_FAIL][{symbol}] {err}", signal.Symbol, tp2Res.Error?.Message);
+                }
             }
 
             return OrderResult.Successs(entryPrice, quantity, entryOrderId);
