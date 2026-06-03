@@ -1,4 +1,4 @@
-﻿using Binance.Net.Enums;
+using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using System.Text.Json;
 using VertexAutoTradeBinance8.MarketData;
@@ -157,12 +157,31 @@ public sealed class KlineBufferPersistence
 
             var json = JsonSerializer.Serialize(dtoDump, JsonOpts);
 
+            var dir = Path.GetDirectoryName(_path)!;
+            Directory.CreateDirectory(dir);
+
             var tmp = _path + ".tmp";
 
             await File.WriteAllTextAsync(tmp, json, ct);
 
-            // атомарная замена
-            File.Replace(tmp, _path, null);
+            // =====================================================
+            // Атомарная замена — File.Replace падает если:
+            // 1) целевой файл не существует (первый запуск)
+            // 2) файл заблокирован антивирусом / Windows
+            // =====================================================
+            try
+            {
+                if (File.Exists(_path))
+                    File.Replace(tmp, _path, null);
+                else
+                    File.Move(tmp, _path, overwrite: true);
+            }
+            catch (IOException)
+            {
+                // fallback: пишем напрямую — не атомарно, но данные не теряются
+                try { File.Delete(tmp); } catch { }
+                await File.WriteAllTextAsync(_path, json, ct);
+            }
 
             _logger.LogInformation(
                 "[BOOT] Kline buffer saved: {cnt} streams",
