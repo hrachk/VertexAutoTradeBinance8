@@ -1,4 +1,4 @@
-﻿using Binance.Net.Clients;
+using Binance.Net.Clients;
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models;
 using Binance.Net.Objects.Models.Futures.Socket;
@@ -93,7 +93,16 @@ namespace VertexAutoTradeBinance8.Services.Ws
 
             if (!res.Success)
             {
-                _logger.LogError("[USERDATA] WS subscribe failed: {err}", res.Error);
+                _logger.LogError("[USERDATA] WS subscribe failed: {err} → retry in 15s", res.Error);
+
+                // =====================================================
+                // CantConnectError при старте — сеть ещё не готова.
+                // Ждём 15 сек и перезапускаем через RestartAsync.
+                // =====================================================
+                _socket?.Dispose();
+                _socket = null;
+                await Task.Delay(TimeSpan.FromSeconds(15), ct);
+                _ = Task.Run(() => RestartAsync(), ct);
                 return;
             }
 

@@ -294,7 +294,7 @@ public class Program
                     services.AddSingleton<SimulatedTradeService>();
                     services.AddSingleton<AiModelSnapshotService>();
                     services.AddSingleton<TradeResultMonitorService>();
-                    services.AddSingleton<CheckAfterFillService>();
+              
                     services.AddSingleton<TradeSignalMemoryService>();
                     services.AddSingleton<OrderTracerService>();
                     services.AddSingleton<RecoverLostOrdersService>();
