@@ -360,7 +360,7 @@ namespace VertexAutoTradeBinance8.Services
                 // =========================
                 // SAFE ZONE → не дергать SL
                 // =========================
-                decimal BE_TRIGGER = ATR * 1.0m;     // перенос BE только после 1 ATR
+                decimal BE_TRIGGER = ATR * 1.3m;     // перенос BE только после 1.3 ATR (было 1.0 — слишком агрессивно при DVOL=37)
                 if (roi < BE_TRIGGER && !skipSoftFilters) return;
 
                 // =========================
@@ -649,13 +649,22 @@ namespace VertexAutoTradeBinance8.Services
                     }
                 }
 
-                // Очистка локальных lifecycle-хранилищ
-                _beLevel.Clear();
-                _beStage.Clear();
-                _beMoved.Clear();
-                _pendingReset.Clear();
-                _earlyTpDone.Clear();
-                _lifecycle.Clear(BuildExitKey(symbol, side, prevEntry));
+                // =====================================================
+                // Очистка lifecycle только для ЭТОЙ позиции
+                // БЫЛО: .Clear() — сбрасывало ВСЕ позиции!
+                // ТЕПЕРЬ: точечное удаление по ключу символ+сторона
+                // =====================================================
+                var exitKey = BuildExitKey(symbol, side, prevEntry);
+                var posGuardKey = BuildPosGuardKey(symbol, side, prevEntry, prevQty);
+
+                _beLevel.TryRemove(exitKey, out _);
+                _beStage.TryRemove(exitKey, out _);
+                _beMoved.TryRemove(exitKey, out _);
+                _lastSl.TryRemove(exitKey, out _);
+                _pendingReset.TryRemove(exitKey, out _);
+                _earlyTpDone.TryRemove(posGuardKey, out _);
+                _beOverrideForStrongTrend.Remove(exitKey);
+                _lifecycle.Clear(exitKey);
 
                 return;
             }
@@ -1922,17 +1931,48 @@ namespace VertexAutoTradeBinance8.Services
             var guardKey = BuildPosGuardKey(symbol, side, entry, qty);
 
             // =======================
-            // 🔒 HARD RULE (PROP-DESK):
-            // BE → потом PARTIAL
+            // 🔒 RULE: EarlyTP запускается если:
+            // 1) BE уже перемещён (штатный путь), ИЛИ
+            // 2) BE ещё не перемещён, но цена достигла +1.5 ATR
+            //    (fallback — защита если ProbeSide не успел)
             // =======================
-            if (!_beMoved.ContainsKey(guardKey))
-                return;
+            bool beAlreadyMoved = _beMoved.ContainsKey(BuildExitKey(symbol, side, entry));
+
+            if (!beAlreadyMoved)
+            {
+                // fallback: разрешаем EarlyTP только при более глубоком профите
+                bool deepProfit =
+                    side == PositionSide.Long
+                        ? last >= entry + atr * 1.5m
+                        : last <= entry - atr * 1.5m;
+
+                if (!deepProfit)
+                    return;
+            }
 
             if (_earlyTpDone.ContainsKey(guardKey))
                 return;
 
             var closeQty = Math.Round(qty * 0.35m, 8);
             if (closeQty <= 0) return;
+
+            // =====================================================
+            // MIN NOTIONAL GUARD — после частичных закрытий
+            // qty уже уменьшен, closeQty может быть слишком мал
+            // =====================================================
+            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+            closeQty = Math.Max(closeQty, filters.minQty);
+            closeQty = Math.Floor(closeQty / filters.step) * filters.step;
+
+            decimal closeNotional = closeQty * last;
+            if (closeNotional < filters.minNotional || closeQty <= 0)
+            {
+                _logger.LogDebug("[EARLY-TP][{symbol}][{side}] skip — closeQty too small notional={n}", symbol, side, closeNotional);
+                return;
+            }
+
+            // Не закрываем больше чем есть
+            closeQty = Math.Min(closeQty, Math.Round(qty * 0.9m, 8));
 
             var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
