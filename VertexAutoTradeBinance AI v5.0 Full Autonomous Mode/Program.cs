@@ -313,6 +313,12 @@ public class Program
 
                     services.AddSingleton<IOrderDispatcher, OrderDispatcher>();
                     services.AddSingleton<BinanceUserDataSubscriber>();
+                    // =====================================================
+                    // Funding Rate Service — динамическое отслеживание
+                    // funding rate в реальном времени (каждые 60 сек)
+                    // =====================================================
+                    services.AddSingleton<FundingRateService>();
+                    services.AddHostedService(sp => sp.GetRequiredService<FundingRateService>());
 
 
                 })

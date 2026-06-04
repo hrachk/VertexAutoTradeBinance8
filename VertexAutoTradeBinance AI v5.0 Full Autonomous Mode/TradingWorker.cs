@@ -1,4 +1,5 @@
-﻿using Binance.Net.Enums;
+using VertexAutoTradeBinance8.Services.MarketData;
+using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using CryptoExchange.Net.Objects;
 using Microsoft.Extensions.Options;
@@ -69,6 +70,7 @@ namespace VertexAutoTradeBinance8
         private readonly MarketContextService _marketContext;
         private readonly SimulatedTradeService _sim;
         private readonly SymbolInfoService _symbolInfo;
+        private readonly FundingRateService _fundingRate;
 
         private DateTime _lastQuantTick = DateTime.UtcNow;
 
@@ -145,7 +147,7 @@ namespace VertexAutoTradeBinance8
             IBootGate bootGate,
             TradingOptionsResolver resolver,
             IStrategyPreFilter pre, MarketContextService marketContext, SimulatedTradeService sim, AiMarketRegimeService marketRegime, BinanceHistoryImporter importer
-            , RealtimePriceService price, SymbolInfoService symbolInfo)
+            , RealtimePriceService price, SymbolInfoService symbolInfo, FundingRateService fundingRate)
         {
             _logger = logger;
             _options = options.Value;
@@ -171,6 +173,7 @@ namespace VertexAutoTradeBinance8
             _bootGate = bootGate;
             _pre = pre;
             _marketContext = marketContext;
+            _fundingRate = fundingRate;
 
             learn.ForceSnapshot();
             _sim = sim;
@@ -403,9 +406,14 @@ namespace VertexAutoTradeBinance8
             // 2) APPLY UNIVERSE → WS subscriptions (1m/5m/15m)
             _marketDataFacade.ApplyUniverse(_symbols.ActiveSymbols);
 
+            // Подписываем FundingRateService на активные символы
+            _ = _fundingRate.TrackSymbolsAsync(_symbols.ActiveSymbols);
+
             _symbols.UniverseChanged += syms =>
             {
                 _marketDataFacade.ApplyUniverse(syms);
+                // Обновляем символы для funding rate при изменении вселенной
+                _ = _fundingRate.TrackSymbolsAsync(syms);
             };
 
             // 3) RESTORE SNAPSHOT (authoritative if exists)
