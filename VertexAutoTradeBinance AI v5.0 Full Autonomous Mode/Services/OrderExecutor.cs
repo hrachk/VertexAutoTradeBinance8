@@ -1871,55 +1871,108 @@ namespace VertexAutoTradeBinance8.Services
             // =============================================================
             // PLACE TP1 + TP2 IMMEDIATELY AFTER POSITION OPEN
             // SL ставит PositionSupervisorService — здесь только TP
+            //
+            // ВАЖНО по документации Binance:
+            // - TakeProfitMarket требует workingType (Mark или Contract)
+            // - stopPrice должен быть выше markPrice для Long TP
+            //   и ниже markPrice для Short TP
+            // - В Hedge mode positionSide обязателен
+            // - timeInForce: GTC обязателен для TakeProfitMarket
             // =============================================================
             if (wait.HasPosition && tps.Count >= 1)
             {
-                // Части позиции для TP1 и TP2 из конфига TakeProfit
-                // TP1Part = 0.4 (40%), TP2Part = 0.35 (35%) — из appsettings.json
-                decimal tp1Part = 0.40m;  // TakeProfit:Tp1Part
-                decimal tp2Part = 0.35m;  // TakeProfit:Tp2Part
+                decimal tp1Part = 0.40m;
+                decimal tp2Part = 0.35m;
 
                 var tpSide = signal.Side == SignalSide.Buy ? OrderSide.Sell : OrderSide.Buy;
+                bool isLong = signal.Side == SignalSide.Buy;
+
+                // Получаем текущую mark price для валидации stopPrice
+                decimal markPrice = 0m;
+                try
+                {
+                    var mark = await client.UsdFuturesApi.ExchangeData.GetMarkPriceAsync(signal.Symbol, ct);
+                    if (mark.Success) markPrice = mark.Data.MarkPrice;
+                }
+                catch { }
 
                 // TP1
                 decimal tp1Qty = Math.Floor((quantity * tp1Part) / step) * step;
                 tp1Qty = Math.Max(tp1Qty, filters.minQty);
 
-                var tp1Res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol:                  signal.Symbol,
-                    side:                    tpSide,
-                    type:                    FuturesOrderType.TakeProfitMarket,
-                    stopPrice:               tps[0],
-                    quantity:                tp1Qty,
-                    positionSide:            isHedge ? posSide : null,
-                    selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
-                    ct:                      ct);
+                decimal tp1Price = tps[0];
 
-                if (tp1Res.Success)
-                    _logger.LogInformation("[TP1_PLACED][{symbol}] price={price} qty={qty}", signal.Symbol, tps[0], tp1Qty);
+                // Валидация: TP должен быть выше markPrice для Long, ниже для Short
+                bool tp1Valid = markPrice <= 0 ||
+                    (isLong  && tp1Price > markPrice) ||
+                    (!isLong && tp1Price < markPrice);
+
+                if (!tp1Valid)
+                {
+                    _logger.LogWarning(
+                        "[TP1_SKIP][{symbol}] stopPrice={tp} is invalid vs markPrice={mark} side={side}",
+                        signal.Symbol, tp1Price, markPrice, signal.Side);
+                }
                 else
-                    _logger.LogWarning("[TP1_FAIL][{symbol}] {err}", signal.Symbol, tp1Res.Error?.Message);
+                {
+                    var tp1Res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol:                  signal.Symbol,
+                        side:                    tpSide,
+                        type:                    FuturesOrderType.TakeProfitMarket,
+                        stopPrice:               tp1Price,
+                        quantity:                tp1Qty,
+                        timeInForce:             TimeInForce.GoodTillCanceled,
+                        positionSide:            isHedge ? posSide : null,
+                        workingType:             WorkingType.Mark,      // Mark price trigger — профессиональный стандарт
+                        selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
+                        ct:                      ct);
+
+                    if (tp1Res.Success)
+                        _logger.LogInformation("[TP1_PLACED][{symbol}] stopPrice={price} qty={qty} workingType=Mark", signal.Symbol, tp1Price, tp1Qty);
+                    else
+                        _logger.LogWarning(
+                            "[TP1_FAIL][{symbol}] code={code} msg={msg} stopPrice={tp} markPrice={mark}",
+                            signal.Symbol, tp1Res.Error?.Code, tp1Res.Error?.Message, tp1Price, markPrice);
+                }
 
                 // TP2 — только если есть второй уровень
                 if (tps.Count >= 2)
                 {
-                    decimal tp2Qty = Math.Floor((quantity * tp2Part) / step) * step;
+                    decimal tp2Price = tps[1];
+                    decimal tp2Qty   = Math.Floor((quantity * tp2Part) / step) * step;
                     tp2Qty = Math.Max(tp2Qty, filters.minQty);
 
-                    var tp2Res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                        symbol:                  signal.Symbol,
-                        side:                    tpSide,
-                        type:                    FuturesOrderType.TakeProfitMarket,
-                        stopPrice:               tps[1],
-                        quantity:                tp2Qty,
-                        positionSide:            isHedge ? posSide : null,
-                        selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
-                        ct:                      ct);
+                    bool tp2Valid = markPrice <= 0 ||
+                        (isLong  && tp2Price > markPrice) ||
+                        (!isLong && tp2Price < markPrice);
 
-                    if (tp2Res.Success)
-                        _logger.LogInformation("[TP2_PLACED][{symbol}] price={price} qty={qty}", signal.Symbol, tps[1], tp2Qty);
+                    if (!tp2Valid)
+                    {
+                        _logger.LogWarning(
+                            "[TP2_SKIP][{symbol}] stopPrice={tp} is invalid vs markPrice={mark}",
+                            signal.Symbol, tp2Price, markPrice);
+                    }
                     else
-                        _logger.LogWarning("[TP2_FAIL][{symbol}] {err}", signal.Symbol, tp2Res.Error?.Message);
+                    {
+                        var tp2Res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                            symbol:                  signal.Symbol,
+                            side:                    tpSide,
+                            type:                    FuturesOrderType.TakeProfitMarket,
+                            stopPrice:               tp2Price,
+                            quantity:                tp2Qty,
+                            timeInForce:             TimeInForce.GoodTillCanceled,
+                            positionSide:            isHedge ? posSide : null,
+                            workingType:             WorkingType.Mark,
+                            selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
+                            ct:                      ct);
+
+                        if (tp2Res.Success)
+                            _logger.LogInformation("[TP2_PLACED][{symbol}] stopPrice={price} qty={qty} workingType=Mark", signal.Symbol, tp2Price, tp2Qty);
+                        else
+                            _logger.LogWarning(
+                                "[TP2_FAIL][{symbol}] code={code} msg={msg} stopPrice={tp} markPrice={mark}",
+                                signal.Symbol, tp2Res.Error?.Code, tp2Res.Error?.Message, tp2Price, markPrice);
+                    }
                 }
             }
 

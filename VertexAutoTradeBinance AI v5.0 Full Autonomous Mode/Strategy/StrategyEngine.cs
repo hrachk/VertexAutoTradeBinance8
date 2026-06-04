@@ -24,7 +24,10 @@ namespace VertexAutoTradeBinance8.Strategy
 {
     public sealed record FastFailResult(bool Allow, string Gate, string Reason)
     {
+        public string Tag { get; init; } = string.Empty;
+
         public static FastFailResult Ok() => new(true, "OK", "OK");
+        public static FastFailResult OkWithTag(string tag) => new(true, "OK", tag) { Tag = tag };
         public static FastFailResult Fail(string gate, string reason) => new(false, gate, reason);
     }
 
@@ -2514,7 +2517,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
             // Нет данных — пропускаем (не блокируем)
             if (snapshot == null || snapshot.UpdatedAt == default)
-                return FastFailResult.Pass("FUNDING_NO_DATA");
+                return FastFailResult.OkWithTag("FUNDING_NO_DATA");
 
             bool isLong  = signal.Side == SignalSide.Buy;
             bool isShort = signal.Side == SignalSide.Sell;
@@ -2529,7 +2532,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     _logger.LogWarning(
                         "[FUNDING_BLOCK][{symbol}] LONG blocked — extreme positive funding rate={rate:P4}",
                         symbol, rate);
-                    return FastFailResult.Fail("FUNDING_EXTREME_LONG_BLOCKED");
+                    return FastFailResult.Fail("GATE_6_5", "FUNDING_EXTREME_LONG_BLOCKED");
                 }
 
                 if (isShort && rate < 0)
@@ -2537,7 +2540,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     _logger.LogWarning(
                         "[FUNDING_BLOCK][{symbol}] SHORT blocked — extreme negative funding rate={rate:P4}",
                         symbol, rate);
-                    return FastFailResult.Fail("FUNDING_EXTREME_SHORT_BLOCKED");
+                    return FastFailResult.Fail("GATE_6_5", "FUNDING_EXTREME_SHORT_BLOCKED");
                 }
             }
 
@@ -2549,7 +2552,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     _logger.LogInformation(
                         "[FUNDING_PENALTY][{symbol}] {side} high funding rate={rate:P4} → confidence -15%",
                         symbol, signal.Side, rate);
-                    return FastFailResult.Pass("FUNDING_HIGH_PENALTY");
+                    return FastFailResult.OkWithTag("FUNDING_HIGH_PENALTY");
                 }
             }
 
@@ -2557,11 +2560,13 @@ namespace VertexAutoTradeBinance8.Strategy
             if (risk == FundingRateService.FundingRisk.Medium)
             {
                 if ((isLong && rate > 0) || (isShort && rate < 0))
-                    return FastFailResult.Pass("FUNDING_MEDIUM_PENALTY");
+                    return FastFailResult.OkWithTag("FUNDING_MEDIUM_PENALTY");
             }
 
-            return FastFailResult.Pass("FUNDING_OK");
+            return FastFailResult.OkWithTag("FUNDING_OK");
         }
+
+        private async Task<FastFailResult> Gate6_LiquidityAsync(
           TradeSignal signal,
           SmartRegimeInfo smart,
           IReadOnlyList<BinanceFuturesUsdtKline> klines,
