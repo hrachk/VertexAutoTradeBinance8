@@ -319,6 +319,8 @@ namespace VertexAutoTradeBinance8.Services
             var filters = await _symbolInfo.GetFuturesFiltersAsync(signal.Symbol);
             var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
 
+            int existingEntries = _entryTracker.GetActiveEntries(signal.Symbol, posSide);
+
             if (existingEntries == 1 && sameSidePosition != null)
             {
                 decimal avgEntry = sameSidePosition.EntryPrice;
