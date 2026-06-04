@@ -41,6 +41,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly LiquidityGuardService _liquidityGuard;
         private readonly IAccountStateService _accountState;
         private readonly IOrderDispatcher _dispatcher;
+        private readonly EntryTracker _entryTracker;   // ← сброс активных входов при закрытии позиции
         private MarketRegime _regimeNow;
 
         // === Anti-spam guards for EarlyTP / BE-move ===
@@ -96,7 +97,8 @@ namespace VertexAutoTradeBinance8.Services
             IOrderDispatcher dispatcher, EngineStateSnapshotService stateSvc,
             SmartRegimeService smartRegime,
             IAccountStateService accountState,
-            ReverseProbeEngine reverseProbe, PositionLifecycleTracker lifecycle/*, AtrAdaptiveProfitLockManager atrLock*/,
+            ReverseProbeEngine reverseProbe, PositionLifecycleTracker lifecycle,
+            EntryTracker entryTracker,
             IOptionsMonitor<TradingSettings> tradingSettings, IOptionsMonitor<TradingOptions> tradingOptions)
         {
             _logger = logger;
@@ -116,7 +118,7 @@ namespace VertexAutoTradeBinance8.Services
             _smartRegime = smartRegime;
             _reverseProbe = reverseProbe;
             _lifecycle = lifecycle;
-            // _atrLock = atrLock;
+            _entryTracker = entryTracker;
             _accountState = accountState;
             _tradingSettings = tradingSettings;
             _tradingOptions = tradingOptions;
@@ -633,6 +635,13 @@ namespace VertexAutoTradeBinance8.Services
             if (qtyAbs <= 0)
             {
                 _logger.LogInformation("[SUPERVISOR] {symbol} {side}: fully flat → cleanup all SL/TP orders", symbol, side);
+
+                // =====================================================
+                // Сбрасываем активный счётчик входов для этой стороны
+                // Сессионный счётчик остаётся — повторный вход разрешён
+                // только если session < MAX_SESSION_ENTRIES (4)
+                // =====================================================
+                _entryTracker.OnPositionClosed(symbol, side);
 
                 var openOrders = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
                 if (openOrders.Success)
