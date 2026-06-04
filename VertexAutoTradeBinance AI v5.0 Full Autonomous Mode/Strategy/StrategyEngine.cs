@@ -745,19 +745,33 @@ namespace VertexAutoTradeBinance8.Strategy
             if (klines == null || klines.Count == 0 || index < 0 || index >= klines.Count)
                 return 0;
 
-            int start = Math.Max(0, index - period + 1);
-            int count = index - start + 1;
+            // =====================================================
+            // Правильный EMA warm-up:
+            // Берём 2*period баров для прогрева SMA — это стандартная
+            // практика (TradingView, Bloomberg).
+            // Старый расчёт брал только period баров от текущего index,
+            // что давало SMA вместо EMA при коротких окнах.
+            // =====================================================
+            int warmup = period * 2;
+            int seedEnd = Math.Max(period - 1, index - warmup);
+            int seedStart = Math.Max(0, seedEnd - period + 1);
 
-            // начальное значение = SMA
+            // SMA как начальное значение (seed)
             decimal sum = 0m;
-            for (int i = start; i <= index; i++)
+            int seedCount = 0;
+            for (int i = seedStart; i <= seedEnd; i++)
+            {
                 sum += klines[i].ClosePrice;
+                seedCount++;
+            }
 
-            decimal ema = sum / count;
+            if (seedCount == 0) return 0;
 
+            decimal ema = sum / seedCount;
             decimal k = 2m / (period + 1);
 
-            for (int i = start + 1; i <= index; i++)
+            // Wilder smoothing от seed до index
+            for (int i = seedEnd + 1; i <= index; i++)
                 ema = klines[i].ClosePrice * k + ema * (1 - k);
 
             return ema;
@@ -2919,8 +2933,9 @@ namespace VertexAutoTradeBinance8.Strategy
 
         public enum MarketProfileType
         {
-            Default = 0,
-            BtcMacro = 1
+            Default  = 0,
+            BtcMacro = 1,
+            EthAlt   = 2   // ETH: более волатильный, менее macro-driven чем BTC
         }
 
         private static MarketProfileType GetProfile(string symbol)
@@ -2928,8 +2943,12 @@ namespace VertexAutoTradeBinance8.Strategy
             if (string.Equals(symbol, "BTCUSDT", StringComparison.OrdinalIgnoreCase))
                 return MarketProfileType.BtcMacro;
 
+            // =====================================================
+            // ETH теперь EthAlt — торгуется активнее BTC,
+            // имеет собственные движения, больше волатильность
+            // =====================================================
             if (string.Equals(symbol, "ETHUSDT", StringComparison.OrdinalIgnoreCase))
-                return MarketProfileType.BtcMacro;
+                return MarketProfileType.EthAlt;
 
             return MarketProfileType.Default;
         }
@@ -3121,8 +3140,16 @@ namespace VertexAutoTradeBinance8.Strategy
             if (!h4.Valid || !d1.Valid)
                 return null;
 
-            bool htfSqueezeOk = h4.SqueezeScore >= 0.62m && h4.AtrPct <= 0.014m;
-            bool d1StableOk = d1.AtrPct <= 0.022m;
+            // =====================================================
+            // HTF SQUEEZE: при высокой волатильности (DVOL=37+)
+            // h4.AtrPct часто > 0.014 — прежний порог блокировал
+            // все BTC сигналы именно когда они нужны.
+            // Новый порог 0.022 (H4) и 0.032 (D1) — реалистичнее.
+            // SqueezeScore снижен до 0.50 чтобы не требовать
+            // идеальной компрессии перед каждым входом.
+            // =====================================================
+            bool htfSqueezeOk = h4.SqueezeScore >= 0.50m && h4.AtrPct <= 0.022m;
+            bool d1StableOk   = d1.AtrPct <= 0.032m;
 
             if (!htfSqueezeOk || !d1StableOk)
                 return null;
@@ -3446,6 +3473,18 @@ namespace VertexAutoTradeBinance8.Strategy
                     }
                 }
 
+                // =====================================================
+                // ETH: использует стандартные gate-ы но с
+                // relaxLiquidity=true (ETH очень ликвиден сам по себе)
+                // и lowerRegimeThreshold=true (ETH менее "чистый" тренд)
+                // =====================================================
+                bool ethMode = GetProfile(symbol) == MarketProfileType.EthAlt;
+                if (ethMode)
+                {
+                    relaxLiquidity = true;
+                    lowerRegimeThreshold = true;
+                }
+
                 var cfg = _confidenceCfg.Resolve(symbol);
 
                 // Gate2 pre-check / telemetry
@@ -3502,7 +3541,15 @@ namespace VertexAutoTradeBinance8.Strategy
                     IsParabolicMove(klines) ||
                     IsAgainstMicroMomentum(klines, baseSignal.Side);
 
-                if (weakTrend && exhaustion)
+                // =====================================================
+                // REVERSAL: разрешаем только для BTC/ETH (BtcMacro).
+                // Для алткоинов и шиткоинов REVERSAL опасен —
+                // IsParabolicMove срабатывает на pump-движениях,
+                // что генерирует шорты против сильного тренда.
+                // =====================================================
+                bool isReversalAllowed = GetProfile(symbol) == MarketProfileType.BtcMacro;
+
+                if (weakTrend && exhaustion && isReversalAllowed)
                 {
                     baseSignal = new TradeSignal
                     {
@@ -3513,6 +3560,12 @@ namespace VertexAutoTradeBinance8.Strategy
                     };
 
                     _engineState.LastEntryDecision = "REVERSAL_SIGNAL";
+                }
+                else if (weakTrend && exhaustion)
+                {
+                    // для алткоинов — штрафуем confidence но не разворачиваем
+                    baseSignal.Confidence = (baseSignal.Confidence ?? smart.Confidence) * 0.75m;
+                    _engineState.LastEntryDecision = "REVERSAL_DEGRADED";
                 }
 
                 // =========================
@@ -3578,7 +3631,13 @@ namespace VertexAutoTradeBinance8.Strategy
                     Mark("NO_PULLBACK");
                 }
 
-                totalPenalty = Math.Max(totalPenalty, 0.65m);
+                // =====================================================
+                // PENALTY FLOOR: было 0.65 — слишком высокий минимум.
+                // При накоплении PARABOLIC + ABSORPTION + FAKE + BAD_LOCATION
+                // confidence всё равно проходила MinEntry порог.
+                // 0.50 позволяет плохим сигналам реально блокироваться.
+                // =====================================================
+                totalPenalty = Math.Max(totalPenalty, 0.50m);
 
                 finalConfidence *= totalPenalty;
                 baseSignal.Confidence = finalConfidence;
@@ -3661,9 +3720,26 @@ namespace VertexAutoTradeBinance8.Strategy
                 trace.Add(late);
                 if (!late.Allow)
                 {
-                    finalConfidence *= 0.82m;
-                    baseSignal.Confidence = finalConfidence;
-                    _engineState.LastEntryDecision = "WARN_LATE_ENTRY";
+                    // =====================================================
+                    // LATE ENTRY:
+                    // BTC/ETH — мягкий штраф -18% confidence (ликвидны, можно войти)
+                    // Алткоины/шиткоины — HARD BLOCK (тонкая ликвидность,
+                    // поздний вход = высокий slippage + быстрый разворот)
+                    // =====================================================
+                    bool isMajor = GetProfile(symbol) != MarketProfileType.Default;
+
+                    if (isMajor)
+                    {
+                        finalConfidence *= 0.82m;
+                        baseSignal.Confidence = finalConfidence;
+                        _engineState.LastEntryDecision = "WARN_LATE_ENTRY";
+                    }
+                    else
+                    {
+                        _engineState.LastEntryDecision = "BLOCK_LATE_ENTRY_ALT";
+                        _logger.LogInformation("[LATE_ENTRY_BLOCK][{symbol}] altcoin late entry blocked", symbol);
+                        return Finalize(trace, smart);
+                    }
                 }
 
                 trace.Add(Gate4_RR(symbol, tf, baseSignal, smart, relaxRr));
