@@ -38,7 +38,8 @@ namespace VertexAutoTradeBinance8.Services
         private const decimal AGGR_LIMIT_OFFSET_PCT = 0.0006m;  // 0.06% агрессивный лимит (тюнится)
         private const decimal MARKET_FALLBACK_MAX_SLIP_PCT = 0.0015m; // 0.15% макс. слип для fallback-market
         private bool? _isHedgeMode;
-        private const int MAX_ENTRIES_PER_SYMBOL = 2;
+        private const int MAX_ENTRIES_PER_SYMBOL = 2;   // макс входов пока позиция открыта (initial + 1 DCA)
+        private const int MAX_SESSION_ENTRIES    = 4;   // макс входов за всю сессию на одну сторону
         private const decimal MAX_LIMIT_STALE_DRIFT = 0.0047m; // 0.45%
         private readonly IOptionsMonitor<TradingSettings> _tradingSettings;
         private readonly IOptionsMonitor<TradingOptions> _tradingOptions;
@@ -49,43 +50,76 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================
         private const int MAX_GLOBAL_POSITIONS = 3;
 
+        // =====================================================
+        // EntryTracker — двойной счётчик:
+        //
+        // _active  = входы пока позиция открыта (сбрасывается при закрытии)
+        //            Лимит: MAX_ENTRIES_PER_SYMBOL = 2
+        //            Цель: разрешить initial вход + 1 DCA на откате
+        //
+        // _session = все входы за сессию (НЕ сбрасывается до рестарта)
+        //            Лимит: MAX_SESSION_ENTRIES = 4
+        //            Цель: ограничить суммарные сделки включая хедж
+        // =====================================================
         public class EntryTracker
         {
-            private readonly ConcurrentDictionary<string, int> _entries = new();
+            private readonly ConcurrentDictionary<string, int> _active  = new();
+            private readonly ConcurrentDictionary<string, int> _session = new();
 
-            public int GetEntries(string symbol, PositionSide side)
-            {
-                return _entries.GetOrAdd(Key(symbol, side), 0);
-            }
+            private string Key(string symbol, PositionSide side) => $"{symbol}_{side}";
 
+            public int GetActiveEntries(string symbol, PositionSide side)
+                => _active.GetOrAdd(Key(symbol, side), 0);
+
+            public int GetSessionEntries(string symbol, PositionSide side)
+                => _session.GetOrAdd(Key(symbol, side), 0);
+
+            // Вызывается при каждом успешном открытии/добавлении
             public void RegisterEntry(string symbol, PositionSide side)
             {
-                _entries.AddOrUpdate(
-                    Key(symbol, side),
-                    1,
-                    (_, v) => v + 1);
+                var key = Key(symbol, side);
+                _active.AddOrUpdate(key,  1, (_, v) => v + 1);
+                _session.AddOrUpdate(key, 1, (_, v) => v + 1);
             }
+
+            // Вызывается при полном закрытии позиции
+            // Сбрасывает ТОЛЬКО активный счётчик — сессионный остаётся
+            public void OnPositionClosed(string symbol, PositionSide side)
+            {
+                _active.TryRemove(Key(symbol, side), out _);
+            }
+
+            // Проверяет оба лимита
+            public bool CanEnter(string symbol, PositionSide side, out string reason)
+            {
+                int active  = GetActiveEntries(symbol, side);
+                int session = GetSessionEntries(symbol, side);
+
+                if (active >= MAX_ENTRIES_PER_SYMBOL)
+                {
+                    reason = $"MAX_ACTIVE_ENTRIES ({active}/{MAX_ENTRIES_PER_SYMBOL})";
+                    return false;
+                }
+
+                if (session >= MAX_SESSION_ENTRIES)
+                {
+                    reason = $"MAX_SESSION_ENTRIES ({session}/{MAX_SESSION_ENTRIES})";
+                    return false;
+                }
+
+                reason = string.Empty;
+                return true;
+            }
+
+            // Обратная совместимость
+            public int GetEntries(string symbol, PositionSide side)
+                => GetActiveEntries(symbol, side);
 
             public void Reset(string symbol, PositionSide side)
-            {
-                _entries.TryRemove(Key(symbol, side), out _);
-            }
+                => OnPositionClosed(symbol, side);
 
             public bool TryReserveSlot(string symbol, PositionSide side, int max)
-            {
-                var key = Key(symbol, side);
-
-                return _entries.AddOrUpdate(
-                    key,
-                    1,
-                    (_, v) =>
-                    {
-                        if (v >= max) return v;
-                        return v + 1;
-                    }) <= max;
-            }
-
-            private string Key(string s, PositionSide p) => $"{s}_{p}";
+                => CanEnter(symbol, side, out _);
         }
 
         public class CooldownGuard
@@ -254,16 +288,19 @@ namespace VertexAutoTradeBinance8.Services
                 return OrderResult.Fail("GLOBAL_POSITION_CAP");
             }
 
-            int existingEntries = _entryTracker.GetEntries(signal.Symbol, posSide);
-
-            if (existingEntries >= MAX_ENTRIES_PER_SYMBOL)
+            // =====================================================
+            // ENTRY LIMITS:
+            // Active: max 2 входа пока позиция открыта (initial + 1 DCA)
+            // Session: max 4 входа за сессию на эту сторону
+            // =====================================================
+            if (!_entryTracker.CanEnter(signal.Symbol, posSide, out var entryBlockReason))
             {
                 _logger.LogWarning(
-                    "[ENTRY BLOCKED][{symbol}] max entries reached ({entries})",
+                    "[ENTRY BLOCKED][{symbol}] {reason}",
                     signal.Symbol,
-                    existingEntries);
+                    entryBlockReason);
 
-                return OrderResult.Fail("MAX_ENTRIES_REACHED");
+                return OrderResult.Fail(entryBlockReason);
             }
 
             // =============================================================
@@ -1437,6 +1474,7 @@ namespace VertexAutoTradeBinance8.Services
                 if (wait.Qty > 0)
                 {
                     _logger.LogInformation("[LIMIT_PARTIAL_FILL] qty={0}", wait.Qty);
+                    _entryTracker.RegisterEntry(signal.Symbol, posSide);
                     return OrderResult.Successs(wait.EntryPrice, wait.Qty, entryOrderId);
                 }
 
@@ -1530,6 +1568,7 @@ namespace VertexAutoTradeBinance8.Services
                             "[RACE-GUARD][{symbol}] position appeared during timeout → abort fallback",
                             signal.Symbol);
 
+                        _entryTracker.RegisterEntry(signal.Symbol, posSide);
                         return OrderResult.Successs(existing.EntryPrice, Math.Abs(existing.Quantity), entryOrderId);
                     }
                 }
@@ -1604,7 +1643,8 @@ namespace VertexAutoTradeBinance8.Services
                     {
                         wait = retryWait;
                         entryOrderId = retryOrder.Data.Id;
-                        return OrderResult.Successs(wait.EntryPrice, wait.Qty, entryOrderId);
+                        _entryTracker.RegisterEntry(signal.Symbol, posSide);
+                    return OrderResult.Successs(wait.EntryPrice, wait.Qty, entryOrderId);
                     }
                 }
                 // ========================================================
@@ -1895,6 +1935,7 @@ namespace VertexAutoTradeBinance8.Services
                 }
             }
 
+            _entryTracker.RegisterEntry(signal.Symbol, posSide);
             return OrderResult.Successs(entryPrice, quantity, entryOrderId);
         }
 
