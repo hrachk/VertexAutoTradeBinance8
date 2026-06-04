@@ -64,36 +64,39 @@ namespace VertexAutoTradeBinance8.Services
         public class EntryTracker
         {
             private readonly ConcurrentDictionary<string, int> _active  = new();
+            // _session считается PER SYMBOL (Long+Short вместе) — лимит 4 на символ за сессию
             private readonly ConcurrentDictionary<string, int> _session = new();
 
-            private string Key(string symbol, PositionSide side) => $"{symbol}_{side}";
+            private string ActiveKey(string symbol, PositionSide side) => $"{symbol}_{side}";
+            private string SessionKey(string symbol) => symbol.ToUpperInvariant();
 
             public int GetActiveEntries(string symbol, PositionSide side)
-                => _active.GetOrAdd(Key(symbol, side), 0);
+                => _active.GetOrAdd(ActiveKey(symbol, side), 0);
 
-            public int GetSessionEntries(string symbol, PositionSide side)
-                => _session.GetOrAdd(Key(symbol, side), 0);
+            public int GetSessionEntries(string symbol)
+                => _session.GetOrAdd(SessionKey(symbol), 0);
 
             // Вызывается при каждом успешном открытии/добавлении
             public void RegisterEntry(string symbol, PositionSide side)
             {
-                var key = Key(symbol, side);
-                _active.AddOrUpdate(key,  1, (_, v) => v + 1);
-                _session.AddOrUpdate(key, 1, (_, v) => v + 1);
+                _active.AddOrUpdate(ActiveKey(symbol, side), 1, (_, v) => v + 1);
+                // сессионный счётчик — общий для Long+Short
+                _session.AddOrUpdate(SessionKey(symbol), 1, (_, v) => v + 1);
             }
 
             // Вызывается при полном закрытии позиции
             // Сбрасывает ТОЛЬКО активный счётчик — сессионный остаётся
             public void OnPositionClosed(string symbol, PositionSide side)
             {
-                _active.TryRemove(Key(symbol, side), out _);
+                _active.TryRemove(ActiveKey(symbol, side), out _);
             }
 
             // Проверяет оба лимита
             public bool CanEnter(string symbol, PositionSide side, out string reason)
             {
                 int active  = GetActiveEntries(symbol, side);
-                int session = GetSessionEntries(symbol, side);
+                // сессионный — суммарно Long+Short на символ
+                int session = GetSessionEntries(symbol);
 
                 if (active >= MAX_ENTRIES_PER_SYMBOL)
                 {
@@ -103,7 +106,7 @@ namespace VertexAutoTradeBinance8.Services
 
                 if (session >= MAX_SESSION_ENTRIES)
                 {
-                    reason = $"MAX_SESSION_ENTRIES ({session}/{MAX_SESSION_ENTRIES})";
+                    reason = $"MAX_SESSION_ENTRIES ({session}/{MAX_SESSION_ENTRIES} total Long+Short)";
                     return false;
                 }
 
