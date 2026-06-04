@@ -1,3 +1,4 @@
+using VertexAutoTradeBinance8.Services.MarketData;
 //  -----------------------------------------------------------------------------
 // Движок стратегий v6.5 ФИНАЛЬНАЯ (ПРОИЗВОДСТВЕННАЯ)
 // - Реактивный асинхронный конвейер (БЕЗ .GetResult / БЕЗ взаимоблокировок)
@@ -43,6 +44,7 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly TradingOptions _opt;
         private readonly TestModeOptions _test;
         private readonly ConfidenceResolver _confidenceCfg;
+        private readonly FundingRateService _fundingRate;
 
         // UI flags
         public string CurrentMode { get; private set; } = "Detecting";
@@ -103,6 +105,7 @@ namespace VertexAutoTradeBinance8.Strategy
             EngineStateSnapshotService stateSvc,
             IDecisionTraceService decisionTrace,
             LiquidityGuardService liquidityGuardService,
+            FundingRateService fundingRate,
             ConfidenceResolver confidenceCfg, DecisionMarkerSink decisionMarkers)
         {
             _logger = logger;
@@ -116,6 +119,7 @@ namespace VertexAutoTradeBinance8.Strategy
             _stateSvc = stateSvc;
             _decisionTrace = decisionTrace;
             _liquidityGuardService = liquidityGuardService;
+            _fundingRate = fundingRate;
             _confidenceCfg = confidenceCfg;
             _decisionMarkers = decisionMarkers;
 
@@ -2493,7 +2497,71 @@ namespace VertexAutoTradeBinance8.Strategy
             }
         }
 
-        private async Task<FastFailResult> Gate6_LiquidityAsync(
+        // =====================================================
+        // GATE 6.5 — FUNDING RATE FILTER
+        //
+        // Extreme (|rate| >= 0.05%):
+        //   Long  при положительном rate → BLOCK (платишь шортам)
+        //   Short при отрицательном rate → BLOCK (платишь лонгам)
+        //
+        // High (|rate| >= 0.03%): penalty -15%
+        // Medium (|rate| >= 0.01%): penalty -7%
+        // Low: pass
+        // =====================================================
+        private FastFailResult Gate6_5_FundingRate(string symbol, TradeSignal signal)
+        {
+            var snapshot = _fundingRate?.Get(symbol);
+
+            // Нет данных — пропускаем (не блокируем)
+            if (snapshot == null || snapshot.UpdatedAt == default)
+                return FastFailResult.Pass("FUNDING_NO_DATA");
+
+            bool isLong  = signal.Side == SignalSide.Buy;
+            bool isShort = signal.Side == SignalSide.Sell;
+            var risk     = snapshot.Risk;
+            decimal rate = snapshot.PredictedRate;
+
+            // EXTREME — hard block
+            if (risk == FundingRateService.FundingRisk.Extreme)
+            {
+                if (isLong && rate > 0)
+                {
+                    _logger.LogWarning(
+                        "[FUNDING_BLOCK][{symbol}] LONG blocked — extreme positive funding rate={rate:P4}",
+                        symbol, rate);
+                    return FastFailResult.Fail("FUNDING_EXTREME_LONG_BLOCKED");
+                }
+
+                if (isShort && rate < 0)
+                {
+                    _logger.LogWarning(
+                        "[FUNDING_BLOCK][{symbol}] SHORT blocked — extreme negative funding rate={rate:P4}",
+                        symbol, rate);
+                    return FastFailResult.Fail("FUNDING_EXTREME_SHORT_BLOCKED");
+                }
+            }
+
+            // HIGH — penalty
+            if (risk == FundingRateService.FundingRisk.High)
+            {
+                if ((isLong && rate > 0) || (isShort && rate < 0))
+                {
+                    _logger.LogInformation(
+                        "[FUNDING_PENALTY][{symbol}] {side} high funding rate={rate:P4} → confidence -15%",
+                        symbol, signal.Side, rate);
+                    return FastFailResult.Pass("FUNDING_HIGH_PENALTY");
+                }
+            }
+
+            // MEDIUM — light penalty
+            if (risk == FundingRateService.FundingRisk.Medium)
+            {
+                if ((isLong && rate > 0) || (isShort && rate < 0))
+                    return FastFailResult.Pass("FUNDING_MEDIUM_PENALTY");
+            }
+
+            return FastFailResult.Pass("FUNDING_OK");
+        }
           TradeSignal signal,
           SmartRegimeInfo smart,
           IReadOnlyList<BinanceFuturesUsdtKline> klines,
@@ -3751,6 +3819,23 @@ namespace VertexAutoTradeBinance8.Strategy
                 var g6 = await Gate6_LiquidityAsync(baseSignal, smart, klines, tf, relaxLiquidity, ct).ConfigureAwait(false);
                 trace.Add(g6);
                 if (!g6.Allow) return Finalize(trace, smart);
+
+                // =============================================================
+                // GATE 6.5 — FUNDING RATE FILTER
+                // Extreme funding → hard block
+                // High funding    → confidence penalty -15%
+                // Medium funding  → confidence penalty -7%
+                // =============================================================
+                var g65 = Gate6_5_FundingRate(symbol, baseSignal);
+                trace.Add(g65);
+                if (!g65.Allow) return Finalize(trace, smart);
+
+                if (g65.Tag == "FUNDING_HIGH_PENALTY")
+                    finalConfidence = (baseSignal.Confidence ?? finalConfidence) * 0.85m;
+                else if (g65.Tag == "FUNDING_MEDIUM_PENALTY")
+                    finalConfidence = (baseSignal.Confidence ?? finalConfidence) * 0.93m;
+
+                baseSignal.Confidence = finalConfidence;
 
                 trace.Add(Gate7_Exposure(symbol, tf, baseSignal, smart));
                 if (!trace.Allow) return Finalize(trace, smart);

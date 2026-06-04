@@ -1,4 +1,5 @@
-﻿using Binance.Net.Clients;
+using VertexAutoTradeBinance8.Services.MarketData;
+using Binance.Net.Clients;
 using Binance.Net.Enums;
 using Binance.Net.Interfaces.Clients;
 using Binance.Net.Objects.Models.Futures;
@@ -42,6 +43,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly IAccountStateService _accountState;
         private readonly IOrderDispatcher _dispatcher;
         private readonly EntryTracker _entryTracker;   // ← сброс активных входов при закрытии позиции
+        private readonly FundingRateService _fundingRate;
         private MarketRegime _regimeNow;
 
         // === Anti-spam guards for EarlyTP / BE-move ===
@@ -99,6 +101,7 @@ namespace VertexAutoTradeBinance8.Services
             IAccountStateService accountState,
             ReverseProbeEngine reverseProbe, PositionLifecycleTracker lifecycle,
             EntryTracker entryTracker,
+            FundingRateService fundingRate,
             IOptionsMonitor<TradingSettings> tradingSettings, IOptionsMonitor<TradingOptions> tradingOptions)
         {
             _logger = logger;
@@ -119,6 +122,7 @@ namespace VertexAutoTradeBinance8.Services
             _reverseProbe = reverseProbe;
             _lifecycle = lifecycle;
             _entryTracker = entryTracker;
+            _fundingRate = fundingRate;
             _accountState = accountState;
             _tradingSettings = tradingSettings;
             _tradingOptions = tradingOptions;
@@ -1934,6 +1938,34 @@ namespace VertexAutoTradeBinance8.Services
     side == PositionSide.Long
         ? last >= entry + atr * 0.90m
         : last <= entry - atr * 0.90m;
+
+            // =====================================================
+            // FUNDING RATE ACCELERATION
+            // Если funding высокий И до следующего списания < 30 мин —
+            // снижаем порог EarlyTP с 0.90 до 0.65 ATR
+            // Цель: зафиксировать прибыль ДО списания funding
+            // =====================================================
+            if (!reached && _fundingRate != null)
+            {
+                var funding = _fundingRate.Get(symbol);
+                if (funding?.ShouldAccelerateTP == true)
+                {
+                    bool reachedEarly =
+                        side == PositionSide.Long
+                            ? last >= entry + atr * 0.65m
+                            : last <= entry - atr * 0.65m;
+
+                    if (reachedEarly)
+                    {
+                        reached = true;
+                        _logger.LogInformation(
+                            "[EARLY-TP][{symbol}][{side}] Accelerated by funding: rate={rate:P4} nextIn={min:F0}min",
+                            symbol, side,
+                            funding.PredictedRate,
+                            funding.MinutesToNextFunding);
+                    }
+                }
+            }
 
             if (!reached) return;
 
