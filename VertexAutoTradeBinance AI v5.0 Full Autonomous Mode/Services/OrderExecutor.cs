@@ -39,7 +39,6 @@ namespace VertexAutoTradeBinance8.Services
         private const decimal MARKET_FALLBACK_MAX_SLIP_PCT = 0.0015m; // 0.15% макс. слип для fallback-market
         private bool? _isHedgeMode;
         private const int MAX_ENTRIES_PER_SYMBOL = 2;   // макс входов пока позиция открыта (initial + 1 DCA)
-        private const int MAX_SESSION_ENTRIES    = 4;   // макс входов за всю сессию на одну сторону
         private const decimal MAX_LIMIT_STALE_DRIFT = 0.0047m; // 0.45%
         private readonly IOptionsMonitor<TradingSettings> _tradingSettings;
         private readonly IOptionsMonitor<TradingOptions> _tradingOptions;
@@ -47,8 +46,10 @@ namespace VertexAutoTradeBinance8.Services
 
         // =====================================================
         // Максимум открытых позиций глобально (по всем символам)
+        // 4 позиции = до 4 разных символов, каждый может иметь
+        // Long + Short одновременно (хедж)
         // =====================================================
-        private const int MAX_GLOBAL_POSITIONS = 3;
+        private const int MAX_GLOBAL_POSITIONS = 4;
 
         // =====================================================
         // EntryTracker — двойной счётчик:
@@ -63,50 +64,32 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================
         public class EntryTracker
         {
-            private readonly ConcurrentDictionary<string, int> _active  = new();
-            // _session считается PER SYMBOL (Long+Short вместе) — лимит 4 на символ за сессию
-            private readonly ConcurrentDictionary<string, int> _session = new();
+            // _active: входы пока позиция открыта, сбрасывается при закрытии
+            // Контролирует DCA — не более 2 входов на одну сторону
+            private readonly ConcurrentDictionary<string, int> _active = new();
 
-            private string ActiveKey(string symbol, PositionSide side) => $"{symbol}_{side}";
-            private string SessionKey(string symbol) => symbol.ToUpperInvariant();
+            private string Key(string symbol, PositionSide side) => $"{symbol}_{side}";
 
             public int GetActiveEntries(string symbol, PositionSide side)
-                => _active.GetOrAdd(ActiveKey(symbol, side), 0);
+                => _active.GetOrAdd(Key(symbol, side), 0);
 
-            public int GetSessionEntries(string symbol)
-                => _session.GetOrAdd(SessionKey(symbol), 0);
-
-            // Вызывается при каждом успешном открытии/добавлении
+            // Вызывается при каждом успешном входе
             public void RegisterEntry(string symbol, PositionSide side)
-            {
-                _active.AddOrUpdate(ActiveKey(symbol, side), 1, (_, v) => v + 1);
-                // сессионный счётчик — общий для Long+Short
-                _session.AddOrUpdate(SessionKey(symbol), 1, (_, v) => v + 1);
-            }
+                => _active.AddOrUpdate(Key(symbol, side), 1, (_, v) => v + 1);
 
-            // Вызывается при полном закрытии позиции
-            // Сбрасывает ТОЛЬКО активный счётчик — сессионный остаётся
+            // Вызывается при полном закрытии позиции — сбрасывает счётчик
+            // После закрытия бот может снова войти (глобальный cap контролирует MAX_GLOBAL_POSITIONS=4)
             public void OnPositionClosed(string symbol, PositionSide side)
-            {
-                _active.TryRemove(ActiveKey(symbol, side), out _);
-            }
+                => _active.TryRemove(Key(symbol, side), out _);
 
-            // Проверяет оба лимита
+            // Проверяет лимит активных входов на одну сторону
             public bool CanEnter(string symbol, PositionSide side, out string reason)
             {
-                int active  = GetActiveEntries(symbol, side);
-                // сессионный — суммарно Long+Short на символ
-                int session = GetSessionEntries(symbol);
+                int active = GetActiveEntries(symbol, side);
 
                 if (active >= MAX_ENTRIES_PER_SYMBOL)
                 {
                     reason = $"MAX_ACTIVE_ENTRIES ({active}/{MAX_ENTRIES_PER_SYMBOL})";
-                    return false;
-                }
-
-                if (session >= MAX_SESSION_ENTRIES)
-                {
-                    reason = $"MAX_SESSION_ENTRIES ({session}/{MAX_SESSION_ENTRIES} total Long+Short)";
                     return false;
                 }
 
