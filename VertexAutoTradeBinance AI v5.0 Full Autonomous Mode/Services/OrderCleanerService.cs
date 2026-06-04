@@ -89,7 +89,9 @@ namespace VertexAutoTradeBinance8.Services
                 // 3) Удаляем TP если они устарели
                 // В Hedge mode TP ордера НЕ используют reduceOnly —
                 // они определяются по type + positionSide.
-                // Проверяем оба варианта.
+                // Используем fuzzy matching (0.1% допуск) вместо точного
+                // сравнения — иначе удаляем TP поставленные OrderExecutor
+                // с небольшим округлением цены.
                 // =============================================================
                 if (order.Type is FuturesOrderType.TakeProfit
                                or FuturesOrderType.TakeProfitMarket)
@@ -97,8 +99,18 @@ namespace VertexAutoTradeBinance8.Services
                     bool isOurTp = order.ReduceOnly == true  // One-way mode
                         || order.PositionSide != PositionSide.Both; // Hedge mode
 
-                    if (isOurTp && !tpRounded.Contains(order.Price) && !tpRounded.Contains((decimal)order.StopPrice))
-                        shouldDelete = true;
+                    if (isOurTp && tpRounded.Count > 0)
+                    {
+                        decimal orderTpPrice = order.StopPrice > 0 ? (decimal)order.StopPrice : order.Price;
+
+                        // fuzzy match: считаем TP валидным если любой из сигнальных TP
+                        // в пределах 0.1% от цены ордера
+                        bool matchFound = tpRounded.Any(tp =>
+                            tp > 0 && Math.Abs(orderTpPrice - tp) / tp <= 0.001m);
+
+                        if (!matchFound)
+                            shouldDelete = true;
+                    }
                 }
 
                 // =============================================================

@@ -733,14 +733,26 @@ namespace VertexAutoTradeBinance8.Services
                         symbol, side);
                 }
 
-                // ❗ TP отсутствует → ставим аварийный (опционально)
-                if (tp == null)
+                // ❗ TP отсутствует → ставим аварийный
+                // НО: OrderExecutor мог уже поставить TP1 + TP2
+                // Проверяем количество TP ордеров — если уже есть 2+, не трогаем
+                var existingTps = orders.Count(o =>
+                    o.Type == FuturesOrderType.TakeProfitMarket ||
+                    o.Type == FuturesOrderType.TakeProfit);
+
+                if (existingTps == 0)
                 {
                     await CreateEmergencyTPAsync(client, symbol, side, qtyAbs, entry, signal, ct);
 
                     _logger.LogWarning(
-                        "[SUPERVISOR][{symbol}][{side}] Emergency TP created",
+                        "[SUPERVISOR][{symbol}][{side}] Emergency TP created (no TP orders found)",
                         symbol, side);
+                }
+                else
+                {
+                    _logger.LogDebug(
+                        "[SUPERVISOR][{symbol}][{side}] {count} TP order(s) already exist — skipping Emergency TP",
+                        symbol, side, existingTps);
                 }
 
            
