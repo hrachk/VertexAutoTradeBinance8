@@ -319,6 +319,12 @@ public class Program
                     // =====================================================
                     services.AddSingleton<FundingRateService>();
                     services.AddHostedService(sp => sp.GetRequiredService<FundingRateService>());
+                    // =====================================================
+                    // Liquidation Risk Engine — pre-trade расчёт цены
+                    // ликвидации + real-time мониторинг открытых позиций
+                    // =====================================================
+                    services.AddSingleton<LiquidationRiskEngine>();
+                    services.AddHostedService(sp => sp.GetRequiredService<LiquidationRiskEngine>());
 
 
                 })
