@@ -16,6 +16,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly SmartRegimeService _smartRegime;
         private readonly TradingOptionsResolver _tradingResolver;
         private readonly AiSelfLearningService _ai;
+        private readonly LiquidationRiskEngine _liqRisk;
 
         private const decimal MaxMarginPercent = 0.12m; // 12% hard cap margin
 
@@ -31,7 +32,8 @@ namespace VertexAutoTradeBinance8.Services
             AiMarketRegimeService marketRegimeService,
             SmartRegimeService smartRegime,
             TradingOptionsResolver tradingResolver,
-            AiSelfLearningService ai
+            AiSelfLearningService ai,
+            LiquidationRiskEngine liqRisk
         )
         {
             _logger = logger;
@@ -43,6 +45,7 @@ namespace VertexAutoTradeBinance8.Services
             _smartRegime = smartRegime;
             _tradingResolver = tradingResolver;
             _ai = ai;
+            _liqRisk = liqRisk;
         }
 
         public int GetPrecision(decimal step)
@@ -182,6 +185,46 @@ namespace VertexAutoTradeBinance8.Services
                 {
                     LastRejectReason = $"Qty too small even after adaptive minNotional: qty={qty} notional={finalNotionalCheck:F8} minNotional={minNotionalAdaptive}";
                     return 0;
+                }
+            }
+
+            // =============================================================
+            // LIQUIDATION RISK PRE-TRADE CHECK
+            // Проверяем: при данном qty безопасно ли открывать позицию?
+            // Если SL слишком близко к цене ликвидации — корректируем qty.
+            // =============================================================
+            if (_liqRisk != null)
+            {
+                var liqCheck = _liqRisk.CheckPreTrade(signal, qty, balance, leverage);
+
+                if (!liqCheck.IsAllowed)
+                {
+                    LastRejectReason = $"LIQ_RISK_BLOCKED: {liqCheck.BlockReason}";
+                    _logger.LogWarning(
+                        "[RISK] {symbol} BLOCKED by liquidation risk: {reason}",
+                        signal.Symbol, liqCheck.BlockReason);
+                    return 0;
+                }
+
+                // Если qty был скорректирован — используем безопасный
+                if (liqCheck.SafeQty < qty && liqCheck.SafeQty > 0)
+                {
+                    _logger.LogInformation(
+                        "[RISK] {symbol} qty adjusted by liq risk: {orig:F4}→{safe:F4} liqPrice={liq:F4} buffer={buf:P2} mmr={mmr}",
+                        signal.Symbol, qty, liqCheck.SafeQty,
+                        liqCheck.LiquidationPrice, liqCheck.LiqBufferPct, liqCheck.MmrTier);
+
+                    qty = Math.Floor(liqCheck.SafeQty / step) * step;
+                    if (qty < minQty) qty = minQty;
+                }
+                else
+                {
+                    _logger.LogDebug(
+                        "[RISK] {symbol} liqPrice={liq:F4} buffer={buf:P2} tier={mmr} — OK",
+                        signal.Symbol,
+                        liqCheck.LiquidationPrice,
+                        liqCheck.LiqBufferPct,
+                        liqCheck.MmrTier);
                 }
             }
 
