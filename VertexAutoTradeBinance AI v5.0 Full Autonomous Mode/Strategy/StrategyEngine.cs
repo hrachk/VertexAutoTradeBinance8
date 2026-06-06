@@ -49,6 +49,18 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly ConfidenceResolver _confidenceCfg;
         private readonly FundingRateService _fundingRate;
 
+        // Auto Range cache (Binance Grid Bot логика)
+        private sealed class SymbolRange
+        {
+            public decimal  Low        { get; set; }
+            public decimal  High       { get; set; }
+            public decimal  MidPrice   { get; set; }
+            public DateTime ComputedAt { get; set; }
+            public bool     IsPaused   { get; set; }
+        }
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SymbolRange>
+            _symbolRanges = new(StringComparer.OrdinalIgnoreCase);
+
         // UI flags
         public string CurrentMode { get; private set; } = "Detecting";
         public bool LastSoftEntry { get; private set; }
@@ -724,25 +736,32 @@ namespace VertexAutoTradeBinance8.Strategy
         private static (decimal slMult, decimal tp1Mult, decimal tp2Mult, decimal tp3Mult)
       GetAtrConfig(KlineInterval interval)
         {
+            // =====================================================
+            // LOGARITHMIC TP SPACING (Binance Grid Bot ratio ≈ 1.57)
+            // Каждый TP на ~57% дальше предыдущего — даёт runner эффект:
+            //   TP1 — быстрый выход (40%)
+            //   TP2 — средний (35%)
+            //   TP3 — дальний runner (25%)
+            // =====================================================
             return interval switch
             {
                 // scalping / noisy
                 KlineInterval.OneMinute or KlineInterval.FiveMinutes
-                    => (0.9m, 1.6m, 2.4m, 3.3m),
+                    => (0.9m, 1.4m, 2.2m, 3.4m),   // ratio ≈ 1.57
 
                 // intraday
                 KlineInterval.FifteenMinutes
-                    => (1.2m, 1.8m, 2.6m, 3.6m),
+                    => (1.2m, 1.8m, 2.8m, 4.3m),   // ratio ≈ 1.56
 
                 // swing
                 KlineInterval.OneHour or KlineInterval.FourHour
-                    => (1.8m, 2.2m, 3.2m, 4.2m),
+                    => (1.8m, 2.5m, 3.9m, 6.0m),   // ratio ≈ 1.56
 
                 // position
                 KlineInterval.OneDay
-                    => (2.5m, 2.8m, 3.8m, 5.0m),
+                    => (2.5m, 3.5m, 5.5m, 8.5m),   // ratio ≈ 1.57
 
-                _ => (1.0m, 1.6m, 2.4m, 3.3m)
+                _ => (1.0m, 1.4m, 2.2m, 3.4m)
             };
         }
 
@@ -2515,55 +2534,120 @@ namespace VertexAutoTradeBinance8.Strategy
         {
             var snapshot = _fundingRate?.Get(symbol);
 
-            // Нет данных — пропускаем (не блокируем)
             if (snapshot == null || snapshot.UpdatedAt == default)
                 return FastFailResult.OkWithTag("FUNDING_NO_DATA");
 
             bool isLong  = signal.Side == SignalSide.Buy;
             bool isShort = signal.Side == SignalSide.Sell;
-            var risk     = snapshot.Risk;
-            decimal rate = snapshot.PredictedRate;
+
+            // 3d cumulative как Binance Arbitrage Bot
+            decimal cum3d = snapshot.CumulativeRate3d;
+            var risk      = snapshot.Risk;
 
             // EXTREME — hard block
             if (risk == FundingRateService.FundingRisk.Extreme)
             {
-                if (isLong && rate > 0)
+                if (isLong && cum3d > 0)
                 {
                     _logger.LogWarning(
-                        "[FUNDING_BLOCK][{symbol}] LONG blocked — extreme positive funding rate={rate:P4}",
-                        symbol, rate);
+                        "[FUNDING_BLOCK][{symbol}] LONG blocked — extreme positive carry 3d={cum:P4} ({dir})",
+                        symbol, cum3d, snapshot.CarryDirection);
                     return FastFailResult.Fail("GATE_6_5", "FUNDING_EXTREME_LONG_BLOCKED");
                 }
-
-                if (isShort && rate < 0)
+                if (isShort && cum3d < 0)
                 {
                     _logger.LogWarning(
-                        "[FUNDING_BLOCK][{symbol}] SHORT blocked — extreme negative funding rate={rate:P4}",
-                        symbol, rate);
+                        "[FUNDING_BLOCK][{symbol}] SHORT blocked — extreme negative carry 3d={cum:P4} ({dir})",
+                        symbol, cum3d, snapshot.CarryDirection);
                     return FastFailResult.Fail("GATE_6_5", "FUNDING_EXTREME_SHORT_BLOCKED");
                 }
             }
 
-            // HIGH — penalty
+            // HIGH — penalty -15%
             if (risk == FundingRateService.FundingRisk.High)
             {
-                if ((isLong && rate > 0) || (isShort && rate < 0))
+                if ((isLong && cum3d > 0) || (isShort && cum3d < 0))
                 {
                     _logger.LogInformation(
-                        "[FUNDING_PENALTY][{symbol}] {side} high funding rate={rate:P4} → confidence -15%",
-                        symbol, signal.Side, rate);
+                        "[FUNDING_PENALTY][{symbol}] {side} high carry 3d={cum:P4} → -15%",
+                        symbol, signal.Side, cum3d);
                     return FastFailResult.OkWithTag("FUNDING_HIGH_PENALTY");
                 }
             }
 
-            // MEDIUM — light penalty
+            // MEDIUM — penalty -7%
             if (risk == FundingRateService.FundingRisk.Medium)
             {
-                if ((isLong && rate > 0) || (isShort && rate < 0))
+                if ((isLong && cum3d > 0) || (isShort && cum3d < 0))
                     return FastFailResult.OkWithTag("FUNDING_MEDIUM_PENALTY");
             }
 
             return FastFailResult.OkWithTag("FUNDING_OK");
+        }
+
+        // =====================================================
+        // GATE 0.5 — AUTO RANGE (Binance Grid Bot логика)
+        // Диапазон = ATR(100 свечей) × 2.5 от текущей цены
+        // Обновляется каждые 4 часа автоматически
+        // Если цена вышла за диапазон → пауза стратегии
+        // Если цена вернулась → Resume
+        // =====================================================
+        private FastFailResult Gate0_5_AutoRange(
+            string symbol,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines)
+        {
+            if (klines.Count < 20)
+                return FastFailResult.Ok();
+
+            var range = _symbolRanges.GetOrAdd(symbol, _ => new SymbolRange());
+            decimal lastPrice = klines[^1].ClosePrice;
+
+            // Обновляем диапазон каждые 4 часа
+            if (range.ComputedAt == default ||
+                DateTime.UtcNow - range.ComputedAt > TimeSpan.FromHours(4))
+            {
+                decimal atr = Atr(klines, Math.Min(100, klines.Count - 1), klines.Count - 1);
+                if (atr > 0)
+                {
+                    range.MidPrice   = lastPrice;
+                    range.Low        = lastPrice - atr * 2.5m;
+                    range.High       = lastPrice + atr * 2.5m;
+                    range.ComputedAt = DateTime.UtcNow;
+                    range.IsPaused   = false;
+
+                    _logger.LogDebug(
+                        "[AUTO_RANGE] {symbol} updated mid={mid:F4} ±ATR×2.5 [{low:F4},{high:F4}]",
+                        symbol, lastPrice, range.Low, range.High);
+                }
+            }
+
+            if (range.Low <= 0 || range.High <= 0)
+                return FastFailResult.Ok();
+
+            // Цена вышла за диапазон → пауза
+            if (lastPrice < range.Low || lastPrice > range.High)
+            {
+                if (!range.IsPaused)
+                {
+                    range.IsPaused   = true;
+                    range.ComputedAt = default; // сбросить диапазон при следующем обновлении
+                    _logger.LogInformation(
+                        "[AUTO_RANGE] {symbol} PAUSED — price={p:F4} outside [{l:F4},{h:F4}]",
+                        symbol, lastPrice, range.Low, range.High);
+                }
+                return FastFailResult.Fail("GATE_0_5", $"PRICE_OUT_OF_RANGE");
+            }
+
+            // Цена вернулась → Resume
+            if (range.IsPaused)
+            {
+                range.IsPaused = false;
+                _logger.LogInformation(
+                    "[AUTO_RANGE] {symbol} RESUMED — price={p:F4} back in [{l:F4},{h:F4}]",
+                    symbol, lastPrice, range.Low, range.High);
+            }
+
+            return FastFailResult.Ok();
         }
 
         private async Task<FastFailResult> Gate6_LiquidityAsync(
@@ -3510,6 +3594,11 @@ namespace VertexAutoTradeBinance8.Strategy
                 var g0 = Gate0_Data(symbol, tf, klines);
                 trace.Add(g0);
                 if (!g0.Allow) return Finalize(trace, null);
+
+                // Gate 0.5: Auto Range — пауза если цена вышла за ATR×2.5
+                var g05 = Gate0_5_AutoRange(symbol, klines);
+                trace.Add(g05);
+                if (!g05.Allow) return Finalize(trace, null);
 
                
 

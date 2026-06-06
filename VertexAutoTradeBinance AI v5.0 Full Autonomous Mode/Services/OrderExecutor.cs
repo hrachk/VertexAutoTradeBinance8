@@ -312,9 +312,10 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // =============================================================
-            // AVERAGING CONTROL (FIXED)
+            // TRAILING DCA (Binance Grid Bot логика)
+            // Разрешаем DCA только если цена откатила >= ATR×0.8 от avgEntry
+            // Блокируем если цена ушла > ATR×2.0 (ловля ножа)
             // =============================================================
-
             decimal lastPrice = _marketDataFacade.GetLastPrice(signal.Symbol);
             var filters = await _symbolInfo.GetFuturesFiltersAsync(signal.Symbol);
             var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
@@ -324,24 +325,41 @@ namespace VertexAutoTradeBinance8.Services
             if (existingEntries == 1 && sameSidePosition != null)
             {
                 decimal avgEntry = sameSidePosition.EntryPrice;
+                decimal atr      = signal.Atr ?? lastPrice * 0.001m;
+                bool    isLong   = signal.Side == SignalSide.Buy;
 
-                decimal delta = (signal.Atr ?? lastPrice * 0.001m);
-                delta = Math.Max(delta, tick * 2);
+                decimal minRetrace = atr * 0.8m;
+                decimal maxRetrace = atr * 2.0m;
 
-                bool badAveraging =
-                    (signal.Side == SignalSide.Buy && lastPrice >= avgEntry + delta) ||
-                    (signal.Side == SignalSide.Sell && lastPrice <= avgEntry - delta);
+                bool retracedEnough =
+                    isLong  ? lastPrice <= avgEntry - minRetrace
+                            : lastPrice >= avgEntry + minRetrace;
 
-                if (badAveraging)
+                bool catchingKnife =
+                    isLong  ? lastPrice <= avgEntry - maxRetrace
+                            : lastPrice >= avgEntry + maxRetrace;
+
+                if (catchingKnife)
+                {
+                    _logger.LogWarning(
+                        "[DCA BLOCKED][{symbol}] catching knife — avg={avg:F4} last={last:F4} max={max:F4}",
+                        signal.Symbol, avgEntry, lastPrice,
+                        isLong ? avgEntry - maxRetrace : avgEntry + maxRetrace);
+                    return OrderResult.Fail("DCA_CATCHING_KNIFE");
+                }
+
+                if (!retracedEnough)
                 {
                     _logger.LogInformation(
-                        "[AVERAGING BLOCKED][{symbol}] price not favorable avg={avg} last={last}",
-                        signal.Symbol,
-                        avgEntry,
-                        lastPrice);
-
-                    return OrderResult.Fail("AVERAGING_BAD_PRICE");
+                        "[DCA BLOCKED][{symbol}] insufficient retrace — avg={avg:F4} last={last:F4} need={need:F4}",
+                        signal.Symbol, avgEntry, lastPrice,
+                        isLong ? avgEntry - minRetrace : avgEntry + minRetrace);
+                    return OrderResult.Fail("DCA_INSUFFICIENT_RETRACE");
                 }
+
+                _logger.LogInformation(
+                    "[DCA OK][{symbol}] retrace={ret:F2}×ATR avg={avg:F4} last={last:F4}",
+                    signal.Symbol, Math.Abs(lastPrice - avgEntry) / atr, avgEntry, lastPrice);
             }
 
             // =============================================================

@@ -32,70 +32,76 @@ namespace VertexAutoTradeBinance8.Services.MarketData
         public sealed class FundingSnapshot
         {
             public string   Symbol              { get; init; } = string.Empty;
-            public decimal?  LastFundingRate     { get; set; }   // последний применённый
-            public decimal  PredictedRate       { get; set; }   // прогнозный на следующий период
-            public decimal  PremiumIndex        { get; set; }   // текущий premium (mark - index) / index
+            public decimal? LastFundingRate     { get; set; }
+            public decimal  PredictedRate       { get; set; }
+            public decimal  PremiumIndex        { get; set; }
             public decimal  MarkPrice           { get; set; }
             public decimal  IndexPrice          { get; set; }
             public DateTime NextFundingTime     { get; set; }
             public DateTime UpdatedAt           { get; set; }
 
-            // =====================================================
-            // Тренд: premium растёт или падает
-            // Берём последние 5 обновлений (5 минут)
-            // =====================================================
+            // 3-дневная история applied rates (9 периодов × 8ч)
+            private readonly Queue<decimal> _rateHistory    = new();
             private readonly Queue<decimal> _premiumHistory = new();
-            private const int HistoryDepth = 5;
+            private const int RateHistoryDepth    = 9;
+            private const int PremiumHistoryDepth = 5;
+
+            public void PushFundingRate(decimal rate)
+            {
+                _rateHistory.Enqueue(rate);
+                if (_rateHistory.Count > RateHistoryDepth)
+                    _rateHistory.Dequeue();
+            }
 
             public void PushPremium(decimal premium)
             {
                 _premiumHistory.Enqueue(premium);
-                if (_premiumHistory.Count > HistoryDepth)
+                if (_premiumHistory.Count > PremiumHistoryDepth)
                     _premiumHistory.Dequeue();
             }
+
+            // 3-дневный кумулятивный rate (как в Binance Arbitrage Bot)
+            public decimal CumulativeRate3d =>
+                _rateHistory.Count > 0 ? _rateHistory.Sum() : (LastFundingRate ?? 0m) * 9;
 
             public decimal PremiumTrend =>
                 _premiumHistory.Count < 2 ? 0m :
                 _premiumHistory.Last() - _premiumHistory.First();
 
-            // =====================================================
-            // FundingRisk — оценка риска позиции с этим символом
-            //
-            // Binance типичные пороги:
-            //   Normal:  |rate| < 0.01% (0.0001)
-            //   Medium:  |rate| < 0.03% (0.0003)
-            //   High:    |rate| < 0.05% (0.0005)
-            //   Extreme: |rate| >= 0.05% (max cap по умолчанию)
-            // =====================================================
+            // Risk по 3d cumulative (как Binance Arbitrage Bot)
             public FundingRisk Risk =>
+                Math.Abs(CumulativeRate3d) >= 0.0015m ? FundingRisk.Extreme :
+                Math.Abs(CumulativeRate3d) >= 0.0009m ? FundingRisk.High    :
+                Math.Abs(CumulativeRate3d) >= 0.0003m ? FundingRisk.Medium  :
+                                                        FundingRisk.Low;
+
+            // Мгновенный риск для quick decisions
+            public FundingRisk InstantRisk =>
                 Math.Abs(PredictedRate) >= 0.0005m ? FundingRisk.Extreme :
                 Math.Abs(PredictedRate) >= 0.0003m ? FundingRisk.High    :
                 Math.Abs(PredictedRate) >= 0.0001m ? FundingRisk.Medium  :
                                                      FundingRisk.Low;
 
-            // Минут до следующего funding
             public double MinutesToNextFunding =>
                 Math.Max(0, (NextFundingTime - DateTime.UtcNow).TotalMinutes);
 
-            // =====================================================
-            // ShouldBlockLong: блокировать ли Long вход
-            // При высоком положительном funding лонги платят шортам
-            // =====================================================
+            // Positive Carry: cum > 0 → лонги платят шортам
             public bool ShouldBlockLong =>
-                PredictedRate >= 0.0003m && Risk >= FundingRisk.High;
+                CumulativeRate3d >= 0.0009m && Risk >= FundingRisk.High;
 
-            // ShouldBlockShort: блокировать ли Short вход  
-            // При высоком отрицательном funding шорты платят лонгам
+            // Reverse Carry: cum < 0 → шорты платят лонгам
             public bool ShouldBlockShort =>
-                PredictedRate <= -0.0003m && Risk >= FundingRisk.High;
+                CumulativeRate3d <= -0.0009m && Risk >= FundingRisk.High;
 
-            // Нужно ли ускорить TP (списание близко и rate высокий)
             public bool ShouldAccelerateTP =>
-                Risk >= FundingRisk.High && MinutesToNextFunding <= 30;
+                InstantRisk >= FundingRisk.High && MinutesToNextFunding <= 30;
 
-            // Аннуализированная ставка (для логов)
             public decimal AnnualizedPct =>
-                PredictedRate * 3 * 365 * 100m; // 3 раза в день * 365
+                PredictedRate * 3 * 365 * 100m;
+
+            public string CarryDirection =>
+                CumulativeRate3d > 0.0003m  ? "POSITIVE_CARRY" :
+                CumulativeRate3d < -0.0003m ? "REVERSE_CARRY"  : "NEUTRAL";
         }
 
         public enum FundingRisk { Low, Medium, High, Extreme }
@@ -259,23 +265,23 @@ namespace VertexAutoTradeBinance8.Services.MarketData
             snapshot.NextFundingTime =  data.NextFundingTime;
             snapshot.UpdatedAt       = DateTime.UtcNow;
             snapshot.PushPremium(premium);
+            // Обновляем историю applied rates (LastFundingRate меняется раз в 8ч)
+            snapshot.PushFundingRate(data.LastFundingRate);
 
-            if (snapshot.Risk >= FundingRisk.High)
+            if (snapshot.Risk >= FundingRisk.High || snapshot.InstantRisk >= FundingRisk.High)
             {
                 _logger.LogWarning(
-                    "[FUNDING] {symbol} rate={rate:P4} predicted={pred:P4} risk={risk} nextIn={min:F0}min annualized={apr:F1}%/yr",
-                    symbol,
-                    data.FundingRate,
-                    predictedRate,
-                    snapshot.Risk,
-                    snapshot.MinutesToNextFunding,
-                    snapshot.AnnualizedPct);
+                    "[FUNDING] {symbol} rate={rate:P4} pred={pred:P4} 3d={cum:P4} carry={carry} risk={risk} nextIn={min:F0}min apr={apr:F1}%/yr",
+                    symbol, data.FundingRate, predictedRate,
+                    snapshot.CumulativeRate3d, snapshot.CarryDirection,
+                    snapshot.Risk, snapshot.MinutesToNextFunding, snapshot.AnnualizedPct);
             }
             else
             {
                 _logger.LogDebug(
-                    "[FUNDING] {symbol} rate={rate:P4} predicted={pred:P4} risk={risk}",
-                    symbol, data.FundingRate, predictedRate, snapshot.Risk);
+                    "[FUNDING] {symbol} rate={rate:P4} pred={pred:P4} 3d={cum:P4} carry={carry}",
+                    symbol, data.FundingRate, predictedRate,
+                    snapshot.CumulativeRate3d, snapshot.CarryDirection);
             }
         }
     }
