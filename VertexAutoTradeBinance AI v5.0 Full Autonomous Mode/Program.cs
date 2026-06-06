@@ -13,6 +13,7 @@ using VertexAutoTradeBinance8.Services.Bootstrap;
 using VertexAutoTradeBinance8.Services.DecisionTrace;
 using VertexAutoTradeBinance8.Services.Engine;
 using VertexAutoTradeBinance8.Services.Interface;
+using VertexAutoTradeBinance8.Services.MarketData;
 using VertexAutoTradeBinance8.Services.MarketState;
 using VertexAutoTradeBinance8.Services.Recovery;
 using VertexAutoTradeBinance8.Services.State;

@@ -32,7 +32,7 @@ namespace VertexAutoTradeBinance8.Services.MarketData
         public sealed class FundingSnapshot
         {
             public string   Symbol              { get; init; } = string.Empty;
-            public decimal  LastFundingRate     { get; set; }   // последний применённый
+            public decimal?  LastFundingRate     { get; set; }   // последний применённый
             public decimal  PredictedRate       { get; set; }   // прогнозный на следующий период
             public decimal  PremiumIndex        { get; set; }   // текущий premium (mark - index) / index
             public decimal  MarkPrice           { get; set; }
@@ -251,12 +251,12 @@ namespace VertexAutoTradeBinance8.Services.MarketData
 
             var snapshot = _cache.GetOrAdd(symbol, k => new FundingSnapshot { Symbol = k });
 
-            snapshot.LastFundingRate = data.LastFundingRate;
+            snapshot.LastFundingRate = data.FundingRate;
             snapshot.PredictedRate   = predictedRate;
             snapshot.PremiumIndex    = premium;
             snapshot.MarkPrice       = data.MarkPrice;
             snapshot.IndexPrice      = data.IndexPrice;
-            snapshot.NextFundingTime = DateTimeOffset.FromUnixTimeMilliseconds(data.NextFundingTime).UtcDateTime;
+            snapshot.NextFundingTime =  data.NextFundingTime;
             snapshot.UpdatedAt       = DateTime.UtcNow;
             snapshot.PushPremium(premium);
 
@@ -265,7 +265,7 @@ namespace VertexAutoTradeBinance8.Services.MarketData
                 _logger.LogWarning(
                     "[FUNDING] {symbol} rate={rate:P4} predicted={pred:P4} risk={risk} nextIn={min:F0}min annualized={apr:F1}%/yr",
                     symbol,
-                    data.LastFundingRate,
+                    data.FundingRate,
                     predictedRate,
                     snapshot.Risk,
                     snapshot.MinutesToNextFunding,
@@ -275,7 +275,7 @@ namespace VertexAutoTradeBinance8.Services.MarketData
             {
                 _logger.LogDebug(
                     "[FUNDING] {symbol} rate={rate:P4} predicted={pred:P4} risk={risk}",
-                    symbol, data.LastFundingRate, predictedRate, snapshot.Risk);
+                    symbol, data.FundingRate, predictedRate, snapshot.Risk);
             }
         }
     }
