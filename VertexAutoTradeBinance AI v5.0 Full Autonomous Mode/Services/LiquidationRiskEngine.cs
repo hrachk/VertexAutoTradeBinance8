@@ -309,14 +309,77 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
+        // Cooldown: не пытаемся снова если предыдущая попытка провалилась
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime>
+            _emergencyCooldown = new(StringComparer.OrdinalIgnoreCase);
+
+        // Кэш stepSize чтобы не вызывать ExchangeInfo каждый раз
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, decimal>
+            _stepSizeCache = new(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly TimeSpan EmergencyCooldown = TimeSpan.FromSeconds(60);
+
         private async Task EmergencyReduceAsync(
             LivePositionState pos,
             decimal reduceQty,
             CancellationToken ct)
         {
+            var cooldownKey = $"{pos.Symbol}_{pos.Side}";
+
+            // Проверяем cooldown — не спамим Binance при повторных ошибках
+            if (_emergencyCooldown.TryGetValue(cooldownKey, out var lastAttempt) &&
+                DateTime.UtcNow - lastAttempt < EmergencyCooldown)
+            {
+                _logger.LogDebug(
+                    "[LIQ-RISK] Emergency reduce cooldown active for {symbol} {side}",
+                    pos.Symbol, pos.Side);
+                return;
+            }
+
+            _emergencyCooldown[cooldownKey] = DateTime.UtcNow;
+
             try
             {
                 using var client = _factory.CreateRestClient();
+
+                // =====================================================
+                // Получаем stepSize для округления qty (с кэшем)
+                // "Precision is over the maximum" = qty не округлен
+                // =====================================================
+                decimal step = 0.001m;
+
+                if (!_stepSizeCache.TryGetValue(pos.Symbol, out step) || step <= 0)
+                {
+                    step = 0.001m; // fallback
+
+                    var info = await client.UsdFuturesApi.ExchangeData
+                        .GetExchangeInfoAsync(ct);
+
+                    if (info.Success && info.Data != null)
+                    {
+                        var sym = info.Data.Symbols.FirstOrDefault(s =>
+                            s.Name.Equals(pos.Symbol, StringComparison.OrdinalIgnoreCase));
+
+                        if (sym?.LotSizeFilter?.StepSize > 0)
+                            step = sym.LotSizeFilter.StepSize;
+                    }
+
+                    _stepSizeCache[pos.Symbol] = step;
+                }
+
+                // Округляем qty по stepSize
+                decimal roundedQty = Math.Floor(reduceQty / step) * step;
+
+                if (roundedQty <= 0)
+                {
+                    _logger.LogWarning(
+                        "[LIQ-RISK] Emergency reduce qty={qty} rounded to 0 by step={step} for {symbol}",
+                        reduceQty, step, pos.Symbol);
+                    return;
+                }
+
+                // Не закрываем больше чем есть
+                roundedQty = Math.Min(roundedQty, Math.Floor(pos.Qty / step) * step);
 
                 var closeSide = pos.Side == PositionSide.Long
                     ? Binance.Net.Enums.OrderSide.Sell
@@ -326,23 +389,35 @@ namespace VertexAutoTradeBinance8.Services
                     symbol:                  pos.Symbol,
                     side:                    closeSide,
                     type:                    FuturesOrderType.Market,
-                    quantity:                reduceQty,
+                    quantity:                roundedQty,
                     positionSide:            pos.Side,
                     selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                     ct:                      ct);
 
                 if (result.Success)
+                {
+                    // Успех — сбрасываем cooldown
+                    _emergencyCooldown.TryRemove(cooldownKey, out _);
+
                     _logger.LogWarning(
-                        "[LIQ-RISK] Emergency reduce OK {symbol} {side} qty={qty}",
-                        pos.Symbol, pos.Side, reduceQty);
+                        "[LIQ-RISK] Emergency reduce OK {symbol} {side} qty={qty} (step={step})",
+                        pos.Symbol, pos.Side, roundedQty, step);
+                }
                 else
+                {
                     _logger.LogError(
-                        "[LIQ-RISK] Emergency reduce FAILED {symbol}: {err}",
-                        pos.Symbol, result.Error?.Message);
+                        "[LIQ-RISK] Emergency reduce FAILED {symbol}: code={code} msg={msg} qty={qty} step={step}",
+                        pos.Symbol,
+                        result.Error?.Code,
+                        result.Error?.Message,
+                        roundedQty,
+                        step);
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[LIQ-RISK] Emergency reduce exception {symbol}", pos.Symbol);
+            }
             }
         }
 
