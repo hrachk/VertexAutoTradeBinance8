@@ -950,6 +950,10 @@ namespace VertexAutoTradeBinance8.Services
             if (signal.Reason is "IMPULSE_CONTINUATION" or "EARLY_TREND_JOIN")
                 useMarket = true;
 
+            // Range паттерны → Limit ордер (цена у границы канала, точный вход)
+            if (signal.Reason is "RANGE_BOUND_LONG" or "RANGE_BOUND_SHORT")
+                useMarket = false;
+
             FuturesOrderType entryType = useMarket ? FuturesOrderType.Market : FuturesOrderType.Limit;
 
             // =====================================================
