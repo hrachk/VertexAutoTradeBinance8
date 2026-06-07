@@ -943,6 +943,13 @@ namespace VertexAutoTradeBinance8.Services
 
             bool useMarket = breakoutMarket || reclaimMarket || emergencyMarket;
 
+            // =====================================================
+            // Momentum паттерны входят только Market ордером —
+            // они уже на движении и Limit не исполнится вовремя
+            // =====================================================
+            if (signal.Reason is "IMPULSE_CONTINUATION" or "EARLY_TREND_JOIN")
+                useMarket = true;
+
             FuturesOrderType entryType = useMarket ? FuturesOrderType.Market : FuturesOrderType.Limit;
 
             // =====================================================

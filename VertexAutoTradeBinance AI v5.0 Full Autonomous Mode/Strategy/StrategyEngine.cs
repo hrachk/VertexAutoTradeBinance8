@@ -2913,16 +2913,33 @@ namespace VertexAutoTradeBinance8.Strategy
             // --- LONG continuation ---
             if (slopeUp && c0.ClosePrice > ema21)
             {
+                var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(tf);
+
+                decimal entry = c0.ClosePrice + atr * 0.05m;
+                decimal sl    = Math.Min(c0.LowPrice, c1.LowPrice) - atr * slMult;
+                decimal risk  = entry - sl;
+
+                if (risk <= atr * 0.3m) return null;
+                if ((entry + atr * tp1Mult - entry) / risk < 1.3m) return null;
+
                 var s = new TradeSignal
                 {
-                    Symbol = symbol,
-                    Side = SignalSide.Buy,
-                    Reason = "IMPULSE_CONTINUATION",
-                    Atr = atr,
-                    Confidence = smart.Confidence * 0.85m, // penalty
+                    Symbol        = symbol,
+                    Side          = SignalSide.Buy,
+                    Reason        = "IMPULSE_CONTINUATION",
+                    Atr           = atr,
+                    EntryPrice    = entry,
+                    StopLoss      = sl,
+                    Confidence    = smart.Confidence * 0.85m,
                     SizeMultiplier = 0.35m,
                     ForceFullExit = true,
-                    TimeStopBars = 4
+                    TimeStopBars  = 4,
+                    TakeProfits   = new List<decimal>
+                    {
+                        entry + atr * tp1Mult,
+                        entry + atr * tp2Mult,
+                        entry + atr * tp3Mult
+                    }
                 };
                 NormalizeEntryAndSl(s);
                 return s;
@@ -2931,16 +2948,33 @@ namespace VertexAutoTradeBinance8.Strategy
             // --- SHORT continuation ---
             if (slopeDown && c0.ClosePrice < ema21)
             {
+                var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(tf);
+
+                decimal entry = c0.ClosePrice - atr * 0.05m;
+                decimal sl    = Math.Max(c0.HighPrice, c1.HighPrice) + atr * slMult;
+                decimal risk  = sl - entry;
+
+                if (risk <= atr * 0.3m) return null;
+                if ((entry - (entry - atr * tp1Mult)) / risk < 1.3m) return null;
+
                 var s = new TradeSignal
                 {
-                    Symbol = symbol,
-                    Side = SignalSide.Sell,
-                    Reason = "IMPULSE_CONTINUATION",
-                    Atr = atr,
-                    Confidence = smart.Confidence * 0.85m,
+                    Symbol        = symbol,
+                    Side          = SignalSide.Sell,
+                    Reason        = "IMPULSE_CONTINUATION",
+                    Atr           = atr,
+                    EntryPrice    = entry,
+                    StopLoss      = sl,
+                    Confidence    = smart.Confidence * 0.85m,
                     SizeMultiplier = 0.35m,
                     ForceFullExit = true,
-                    TimeStopBars = 4
+                    TimeStopBars  = 4,
+                    TakeProfits   = new List<decimal>
+                    {
+                        entry - atr * tp1Mult,
+                        entry - atr * tp2Mult,
+                        entry - atr * tp3Mult
+                    }
                 };
                 NormalizeEntryAndSl(s);
                 return s;
@@ -3029,21 +3063,33 @@ namespace VertexAutoTradeBinance8.Strategy
             // --- LONG early trend join ---
             if (priceAbove21 && slopeUp)
             {
-                // минимальная "ступенька": EMA21 выше EMA55 или цена удерживает EMA21 после пробоя
                 bool structureOk = ema21 >= ema55 * 0.999m || (c1.ClosePrice > ema21 && c0.ClosePrice > ema21);
-
                 if (!structureOk) return null;
-
-                // в сильном даун-тренде early-long запрещаем
                 if (smart.BaseRegime == MarketRegime.StrongDownTrend) return null;
+
+                var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(tf);
+                decimal entry = c0.ClosePrice + atr * 0.05m;
+                decimal sl    = Math.Min(c0.LowPrice, ema21) - atr * slMult;
+                decimal risk  = entry - sl;
+
+                if (risk <= atr * 0.3m) return null;
+                if ((atr * tp1Mult) / risk < 1.3m) return null;
 
                 var s = new TradeSignal
                 {
-                    Symbol = symbol,
-                    Side = SignalSide.Buy,
-                    Reason = "EARLY_TREND_JOIN",
-                    Atr = atr,
-                    Confidence = smart.Confidence
+                    Symbol      = symbol,
+                    Side        = SignalSide.Buy,
+                    Reason      = "EARLY_TREND_JOIN",
+                    Atr         = atr,
+                    EntryPrice  = entry,
+                    StopLoss    = sl,
+                    Confidence  = smart.Confidence,
+                    TakeProfits = new List<decimal>
+                    {
+                        entry + atr * tp1Mult,
+                        entry + atr * tp2Mult,
+                        entry + atr * tp3Mult
+                    }
                 };
                 NormalizeEntryAndSl(s);
                 return s;
@@ -3053,19 +3099,32 @@ namespace VertexAutoTradeBinance8.Strategy
             if (priceBelow21 && slopeDown)
             {
                 bool structureOk = ema21 <= ema55 * 1.001m || (c1.ClosePrice < ema21 && c0.ClosePrice < ema21);
-
                 if (!structureOk) return null;
-
-                // в сильном ап-тренде early-short запрещаем
                 if (smart.BaseRegime == MarketRegime.StrongUpTrend) return null;
+
+                var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(tf);
+                decimal entry = c0.ClosePrice - atr * 0.05m;
+                decimal sl    = Math.Max(c0.HighPrice, ema21) + atr * slMult;
+                decimal risk  = sl - entry;
+
+                if (risk <= atr * 0.3m) return null;
+                if ((atr * tp1Mult) / risk < 1.3m) return null;
 
                 var s = new TradeSignal
                 {
-                    Symbol = symbol,
-                    Side = SignalSide.Sell,
-                    Reason = "EARLY_TREND_JOIN",
-                    Atr = atr,
-                    Confidence = smart.Confidence
+                    Symbol      = symbol,
+                    Side        = SignalSide.Sell,
+                    Reason      = "EARLY_TREND_JOIN",
+                    Atr         = atr,
+                    EntryPrice  = entry,
+                    StopLoss    = sl,
+                    Confidence  = smart.Confidence,
+                    TakeProfits = new List<decimal>
+                    {
+                        entry - atr * tp1Mult,
+                        entry - atr * tp2Mult,
+                        entry - atr * tp3Mult
+                    }
                 };
                 NormalizeEntryAndSl(s);
                 return s;
