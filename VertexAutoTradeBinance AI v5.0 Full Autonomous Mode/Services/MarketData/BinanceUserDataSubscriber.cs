@@ -95,14 +95,24 @@ namespace VertexAutoTradeBinance8.Services.Ws
             {
                 _logger.LogError("[USERDATA] WS subscribe failed: {err} → retry in 15s", res.Error);
 
-                // =====================================================
-                // CantConnectError при старте — сеть ещё не готова.
-                // Ждём 15 сек и перезапускаем через RestartAsync.
-                // =====================================================
                 _socket?.Dispose();
                 _socket = null;
-                await Task.Delay(TimeSpan.FromSeconds(15), ct);
-                _ = Task.Run(() => RestartAsync(), ct);
+
+                // =====================================================
+                // CantConnectError при старте — сеть не готова.
+                // Используем CancellationTokenSource с таймаутом —
+                // НЕ используем ct напрямую (он может быть уже отменён)
+                // =====================================================
+                try
+                {
+                    using var delayCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    await Task.Delay(TimeSpan.FromSeconds(15), delayCts.Token);
+                }
+                catch (OperationCanceledException) { }
+
+                // Перезапускаем только если основной токен не отменён
+                if (!_startCt.IsCancellationRequested)
+                    _ = Task.Run(() => RestartAsync(), CancellationToken.None);
                 return;
             }
 
