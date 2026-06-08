@@ -1,4 +1,4 @@
-﻿using Binance.Net.Enums;
+using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using VertexAutoTradeBinance8.Models;
 
@@ -141,7 +141,9 @@ namespace VertexAutoTradeBinance8.Services
             else
             {
                 trend = "FLAT";
-                trendScore = 0.3m;
+                // Range сигналы в боковике — для них FLAT это норма, не штраф
+                bool isRangeSignal = signal.Reason is "RANGE_BOUND_LONG" or "RANGE_BOUND_SHORT";
+                trendScore = isRangeSignal ? 0.7m : 0.3m;
             }
 
             // ======================================================
@@ -174,12 +176,22 @@ namespace VertexAutoTradeBinance8.Services
 
             // ======================================================
             // TRAP DETECTION
+            // Условие ловушки: большая свеча + слабое движение +
+            // слабое давление И направление против тренда
+            // Убрали extremeBody как главный сигнал — большая свеча
+            // по направлению тренда это НЕ ловушка
             // ======================================================
-            bool weakMove = Math.Abs(acceleration) < atrPct * 0.5m;
-            bool extremeBody = bodyAtr > 1.8m;
+            bool weakMove     = Math.Abs(acceleration) < atrPct * 0.5m;
+            bool extremeBody  = bodyAtr > 1.8m;
             bool weakPressure = Math.Abs(pressure) < 0.15m;
 
-            bool isTrap = weakMove && extremeBody && weakPressure;
+            // Направление свечи совпадает с сигналом?
+            bool candleAligned =
+                (signal.Side == VertexAutoTradeBinance8.Models.SignalSide.Buy  && last.ClosePrice > last.OpenPrice) ||
+                (signal.Side == VertexAutoTradeBinance8.Models.SignalSide.Sell && last.ClosePrice < last.OpenPrice);
+
+            // Ловушка только если свеча ПРОТИВ направления входа
+            bool isTrap = weakMove && extremeBody && weakPressure && !candleAligned;
 
             // ======================================================
             // RR
@@ -265,7 +277,9 @@ namespace VertexAutoTradeBinance8.Services
             bool allow = true;
             string reason = "OK";
 
-            if (atrPct < 0.0008m)
+            // BTC/ETH имеют atrPct ~0.001-0.002 в норме
+            // Снижаем порог с 0.0008 до 0.0003 — рынок всегда движется
+            if (atrPct < 0.0003m)
             {
                 grade = "BLOCK";
                 allow = false;

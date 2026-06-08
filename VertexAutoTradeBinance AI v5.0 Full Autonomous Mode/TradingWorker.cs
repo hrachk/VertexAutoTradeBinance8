@@ -857,6 +857,16 @@ namespace VertexAutoTradeBinance8
                 minQty,
                 riskMult,
                 trading);
+
+            if (qty <= 0)
+            {
+                await RejectAsync(
+                    signal, symbol, tf,
+                    "RISK",
+                    $"QTY_ZERO: {_risk.LastRejectReason}",
+                    ct);
+                return;
+            }
             // =====================================================
             // 7) SL / TP OPTIMIZATION
             // =====================================================

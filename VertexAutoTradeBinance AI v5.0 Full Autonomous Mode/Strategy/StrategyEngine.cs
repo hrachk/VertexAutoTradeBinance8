@@ -418,16 +418,35 @@ namespace VertexAutoTradeBinance8.Strategy
 
                     var signal = decision.Signal;
 
-                    signal.Symbol = symbol;
+                    signal.Symbol    = symbol;
                     signal.Timeframe = decisionTf.ToString();
-                    signal.Time = DateTime.UtcNow;
- 
+                    signal.Time      = DateTime.UtcNow;
 
                     if (signal.EntryPrice <= 0)
                         signal.EntryPrice = working[^1].ClosePrice;
 
+                    // StopLoss нулевой — сигнал невалидный, пропускаем
                     if (signal.StopLoss <= 0)
-                        signal.StopLoss = working[^1].ClosePrice;
+                    {
+                        _logger.LogWarning(
+                            "[STRATEGY] {symbol} signal {reason} has no StopLoss — skipping",
+                            symbol, signal.Reason);
+                        break;
+                    }
+
+                    // TakeProfits пустые — строим fallback по ATR
+                    if (signal.TakeProfits == null || signal.TakeProfits.Count == 0)
+                    {
+                        decimal atr = Atr(working, 14, working.Count - 1);
+                        var (_, tp1M, tp2M, tp3M) = GetAtrConfig(decisionTf);
+                        bool isLong = signal.Side == SignalSide.Buy;
+                        signal.TakeProfits = new List<decimal>
+                        {
+                            signal.EntryPrice + (isLong ? 1 : -1) * atr * tp1M,
+                            signal.EntryPrice + (isLong ? 1 : -1) * atr * tp2M,
+                            signal.EntryPrice + (isLong ? 1 : -1) * atr * tp3M,
+                        };
+                    }
 
                     if (!Enum.IsDefined(typeof(SignalSide), signal.Side))
                         break;
