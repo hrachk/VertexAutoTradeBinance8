@@ -592,11 +592,19 @@ namespace VertexAutoTradeBinance8
             {
                 _logger.LogInformation("[BALANCE] Requesting USDT Futures account info...");
 
+                // =====================================================
+                // Используем отдельный timeout токен (15 сек) вместо
+                // основного ct воркера — иначе при перезапуске/отмене
+                // запрос падает с TaskCanceledException
+                // =====================================================
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(15));
+
                 var acc = await _factory
                     .CreateRestClient()
                     .UsdFuturesApi
                     .Account
-                    .GetAccountInfoV3Async(ct: ct);
+                    .GetAccountInfoV3Async(ct: timeoutCts.Token);
 
                 if (!acc.Success)
                 {
@@ -621,6 +629,17 @@ namespace VertexAutoTradeBinance8
                     wallet, available, unrealized);
 
                 return wallet;
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // Timeout нашего собственного CTS — сеть медленная, но не критично
+                _logger.LogWarning("[BALANCE] Timeout (15s) requesting balance — will retry next cycle");
+                return 0m;
+            }
+            catch (OperationCanceledException)
+            {
+                // Основной токен отменён — нормальный shutdown
+                return 0m;
             }
             catch (Exception ex)
             {
@@ -1024,8 +1043,10 @@ namespace VertexAutoTradeBinance8
                 _lastPositionsScanUtc = DateTime.UtcNow;
 
                 using var client = _factory.CreateRestClient();
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
 
-                var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+                var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: timeoutCts.Token);
                 if (!res.Success || res.Data == null)
                     return _cachedPositionSymbols;
 
