@@ -190,20 +190,9 @@ namespace VertexAutoTradeBinance8.Services
 
             // =====================================================
             // Проверка: margin не превышает MaxMarginPercent
-            // от баланса учитывая уже открытые позиции
+            // Этот cap уже применяется в RiskManager.GetPropDeskQtyFinal
+            // Здесь только проверяем SL vs liquidation distance
             // =====================================================
-            decimal usedMargin = GetCurrentUsedMargin();
-            decimal freeForNew = walletBalance * 0.12m - usedMargin;  // 12% hard cap
-
-            if (initialMargin > freeForNew && freeForNew > 0)
-            {
-                // Уменьшаем qty до максимально допустимого
-                decimal cappedNotional = freeForNew * leverage;
-                decimal cappedQty      = cappedNotional / entry;
-
-                return Allow(cappedQty, entry, leverage, liqPrice, liqBuffer,
-                    $"MARGIN_CAP_ADJUSTED qty={cappedQty:F4}");
-            }
 
             return Allow(qty, entry, leverage, liqPrice, liqBuffer, string.Empty);
         }
