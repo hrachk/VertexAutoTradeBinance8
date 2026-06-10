@@ -113,9 +113,9 @@ namespace VertexAutoTradeBinance8.Services
                 // Volume surge
                 decimal avgVol = klines1m
                     .TakeLast(20)
-                    .Average(c => (double)c.Volume);
+                    .Average(c => c.Volume);
                 decimal volumeMult = avgVol > 0
-                    ? (decimal)volume / (decimal)avgVol
+                    ? volume / avgVol
                     : 1m;
 
                 if (volumeMult < VolumeSurgeRatio) return;
@@ -154,7 +154,7 @@ namespace VertexAutoTradeBinance8.Services
                     isGreen ? "LONG" : "SHORT",
                     moveRatio,
                     volumeMult,
-                    k.ClosePrice);
+                    closePrice);
 
                 MomentumDetected?.Invoke(symbol, signal);
             }
