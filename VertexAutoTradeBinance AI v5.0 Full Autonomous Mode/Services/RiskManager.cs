@@ -150,40 +150,73 @@ namespace VertexAutoTradeBinance8.Services
                 return 0;
             }
 
-            // -----------------------------
-            // Adaptive minNotional
-            // -----------------------------
-            decimal minNotional = trading.MinNotional > 0 ? trading.MinNotional : 10m;
-            decimal minNotionalAdaptive = Math.Min(minNotional, Math.Max(0.01m, entry * minQty));
-            decimal effectiveNotional = Math.Max(finalNotional, minNotionalAdaptive);
+            // =============================================================
+            // ADAPTIVE MINNOTIONAL — правильная логика
+            //
+            // Binance требует minNotional (из фильтров символа, обычно 5$).
+            // Старый код: minNotionalAdaptive = Math.Min(minNotional, entry*minQty)
+            // Для дешёвых монет (price=0.317): Math.Min(5, 0.317) = 0.317 → НЕВЕРНО
+            //
+            // Правильно: minNotional из конфига = РЕАЛЬНЫЙ минимум Binance.
+            // Если finalNotional < minNotional → поднимаем qty до минимума.
+            // Если даже минимальный qty даёт notional > maxAllowed → reject.
+            // =============================================================
+            decimal minNotional = trading.MinNotional > 0 ? trading.MinNotional : 5m;
+
+            // Минимальный qty чтобы покрыть minNotional
+            decimal minQtyForNotional = Math.Ceiling(minNotional / entry / step) * step;
+            decimal effectiveMinQty = Math.Max(minQty, minQtyForNotional);
+
+            // Поднимаем finalNotional до минимума если нужно
+            decimal effectiveNotional = Math.Max(finalNotional, minNotional);
 
             // -----------------------------
             // Convert to qty
             // -----------------------------
             decimal rawQty = effectiveNotional / entry;
 
-            if (step > 1 && entry < minNotionalAdaptive)
+            if (step > 1 && entry < minNotional)
                 step = Math.Max(0.00001m, entry / 10m);
 
             decimal qty = Math.Floor(rawQty / step) * step;
 
             // -----------------------------
-            // Check minQty
+            // Check minQty (включая minQty для покрытия minNotional)
             // -----------------------------
-            if (qty < minQty) qty = minQty;
+            if (qty < effectiveMinQty) qty = effectiveMinQty;
 
             // -----------------------------
-            // Check minNotional again
+            // Check minNotional — финальная проверка
             // -----------------------------
             decimal finalNotionalCheck = qty * entry;
-            if (finalNotionalCheck < minNotionalAdaptive)
+            if (finalNotionalCheck < minNotional)
             {
-                qty = Math.Ceiling(minNotionalAdaptive / entry / step) * step;
+                // Ещё раз поднимаем qty
+                qty = Math.Ceiling(minNotional / entry / step) * step;
                 finalNotionalCheck = qty * entry;
 
-                if (finalNotionalCheck < minNotionalAdaptive)
+                if (finalNotionalCheck < minNotional)
                 {
-                    LastRejectReason = $"Qty too small even after adaptive minNotional: qty={qty} notional={finalNotionalCheck:F8} minNotional={minNotionalAdaptive}";
+                    LastRejectReason = $"QTY_TOO_SMALL | qty={qty} minQty={effectiveMinQty} notional={finalNotionalCheck} minNotional={minNotional}";
+                    _logger.LogWarning(
+                        "[RISK] {symbol} {reason}",
+                        signal.Symbol, LastRejectReason);
+                    return 0;
+                }
+            }
+
+            // Проверяем что не превышаем маржинальный cap
+            decimal finalMargin = qty * entry / leverage;
+            if (finalMargin > balance * MaxMarginPercent && balance >= 50m)
+            {
+                // Обрезаем qty до cap
+                decimal cappedNotional = balance * MaxMarginPercent * leverage;
+                qty = Math.Floor(cappedNotional / entry / step) * step;
+
+                // Но не ниже минимума
+                if (qty < effectiveMinQty)
+                {
+                    LastRejectReason = $"MARGIN_CAP_BELOW_MIN: cappedQty={qty} < effectiveMinQty={effectiveMinQty}";
                     return 0;
                 }
             }
