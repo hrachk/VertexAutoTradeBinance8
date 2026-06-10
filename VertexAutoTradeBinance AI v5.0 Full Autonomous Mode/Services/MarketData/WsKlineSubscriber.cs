@@ -1,4 +1,5 @@
-﻿using Binance.Net.Clients;
+using VertexAutoTradeBinance8.Services;
+using Binance.Net.Clients;
 using Binance.Net.Enums;
 using Binance.Net.Interfaces;
 using Binance.Net.Objects.Models.Futures;
@@ -21,6 +22,11 @@ namespace VertexAutoTradeBinance8.Services
         private readonly BinanceSocketClient _socket;
         private readonly MarketDataKlineBuffer _buffer;
         private readonly ILogger<WsKlineSubscriber> _logger;
+        private RealtimeMomentumDetector? _momentumDetector;
+
+        // Подключаем momentum detector после создания
+        public void SetMomentumDetector(RealtimeMomentumDetector detector)
+            => _momentumDetector = detector;
 
         // active subscriptions
         private readonly ConcurrentDictionary<string, UpdateSubscription> _subs = new();
@@ -203,6 +209,23 @@ namespace VertexAutoTradeBinance8.Services
                     };
 
                     _buffer.Upsert(symbol, interval, candle);
+
+                    // =====================================================
+                    // REALTIME MOMENTUM DETECTION на 1M свечах
+                    // Детектируем начало тренда ДО закрытия свечи
+                    // =====================================================
+                    if (interval == KlineInterval.OneMinute && _momentumDetector != null)
+                    {
+                        _momentumDetector.OnKlineUpdate(
+                            symbol:     symbol,
+                            openPrice:  k.OpenPrice,
+                            highPrice:  k.HighPrice,
+                            lowPrice:   k.LowPrice,
+                            closePrice: k.ClosePrice,
+                            volume:     k.Volume,
+                            isFinal:    k.Final,
+                            interval:   KlineInterval.OneMinute);
+                    }
 
                     // closed candle event separately
                     if (k.Final)

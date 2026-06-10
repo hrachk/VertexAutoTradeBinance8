@@ -326,6 +326,11 @@ public class Program
                     // =====================================================
                     services.AddSingleton<LiquidationRiskEngine>();
                     services.AddHostedService(sp => sp.GetRequiredService<LiquidationRiskEngine>());
+                    // =====================================================
+                    // Realtime Momentum Detector — event-driven обнаружение
+                    // начала тренда на 1M свечах (без polling задержки)
+                    // =====================================================
+                    services.AddSingleton<RealtimeMomentumDetector>();
 
 
                 })

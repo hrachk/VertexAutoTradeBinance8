@@ -71,6 +71,7 @@ namespace VertexAutoTradeBinance8
         private readonly SimulatedTradeService _sim;
         private readonly SymbolInfoService _symbolInfo;
         private readonly FundingRateService _fundingRate;
+        private readonly RealtimeMomentumDetector _momentum;
 
         private DateTime _lastQuantTick = DateTime.UtcNow;
 
@@ -147,7 +148,9 @@ namespace VertexAutoTradeBinance8
             IBootGate bootGate,
             TradingOptionsResolver resolver,
             IStrategyPreFilter pre, MarketContextService marketContext, SimulatedTradeService sim, AiMarketRegimeService marketRegime, BinanceHistoryImporter importer
-            , RealtimePriceService price, SymbolInfoService symbolInfo, FundingRateService fundingRate)
+            , RealtimePriceService price, SymbolInfoService symbolInfo,
+            FundingRateService fundingRate,
+            RealtimeMomentumDetector momentum)
         {
             _logger = logger;
             _options = options.Value;
@@ -174,6 +177,7 @@ namespace VertexAutoTradeBinance8
             _pre = pre;
             _marketContext = marketContext;
             _fundingRate = fundingRate;
+            _momentum    = momentum;
 
             learn.ForceSnapshot();
             _sim = sim;
@@ -405,6 +409,32 @@ namespace VertexAutoTradeBinance8
 
             // 2) APPLY UNIVERSE → WS subscriptions (1m/5m/15m)
             _marketDataFacade.ApplyUniverse(_symbols.ActiveSymbols);
+
+            // Подключаем RealtimeMomentumDetector к WS
+            _marketDataFacade.SetMomentumDetector(_momentum);
+
+            // При обнаружении импульса — немедленно запускаем анализ символа
+            _momentum.MomentumDetected += async (symbol, sig) =>
+            {
+                try
+                {
+                    _logger.LogInformation(
+                        "[MOMENTUM→STRATEGY] {symbol} {dir} strength={str:F2}×ATR — triggering immediate analysis",
+                        symbol, sig.IsLong ? "LONG" : "SHORT", sig.Strength);
+
+                    var tf = KlineInterval.FiveMinutes;
+                    var ctx = await _marketContext.GetContextAsync(symbol, CancellationToken.None);
+
+                    // Запускаем анализ только для стороны импульса
+                    var side = sig.IsLong ? SignalSide.Buy : SignalSide.Sell;
+                    if (ctx.Allows(side, 0m))
+                        await ProcessSymbolWithUniverseSide(symbol, tf, side, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[MOMENTUM→STRATEGY] Error processing {symbol}", symbol);
+                }
+            };
 
             // Подписываем FundingRateService на активные символы
             _ = _fundingRate.TrackSymbolsAsync(_symbols.ActiveSymbols);

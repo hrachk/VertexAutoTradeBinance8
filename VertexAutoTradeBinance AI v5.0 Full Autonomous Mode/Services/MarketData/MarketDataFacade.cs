@@ -14,6 +14,19 @@ namespace VertexAutoTradeBinance8.Services
         private readonly MarketDataKlineBuffer _buf;
         private readonly MarketStateService _marketState;
         private readonly WsKlineSubscriber _ws;
+
+        // Подключает RealtimeMomentumDetector к WS подписчику
+        public void SetMomentumDetector(RealtimeMomentumDetector detector)
+            => _ws.SetMomentumDetector(detector);
+
+        // Синхронный доступ к кэшированным свечам (без API вызова)
+        // Используется в RealtimeMomentumDetector для ATR расчёта
+        public IReadOnlyList<BinanceFuturesUsdtKline>? GetCachedKlines(
+            string symbol, KlineInterval interval)
+        {
+            var snap = _buf.Snapshot(symbol, interval);
+            return snap.Count > 0 ? snap : null;
+        }
         private readonly BinanceClientFactory _factory;
         private readonly ILogger<MarketDataFacade> _logger;
 
