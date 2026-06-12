@@ -1,6 +1,7 @@
 @page "/missed-trades"
 @using VertexAutoTradeBinance8.Web.Services
 @using VertexAutoTradeBinance8.Web.Models
+@using MR = MR
 @inject MissedTradeFileService MissedService
 
 <PageTitle>Signal Intelligence — Vertex</PageTitle>
@@ -555,21 +556,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     string ConfColor(int c) => c >= 75 ? "#22c55e" : c >= 50 ? "#3b82f6" : "#ef4444";
     string ConfClass(int c) => c >= 75 ? "hi" : c >= 50 ? "mid" : "lo";
 
-    string RegClass(VertexAutoTradeBinance8.Models.MarketRegime r) => r switch
+    string RegClass(MR r) => r switch
     {
-        MarketRegime.StrongUpTrend or MarketRegime.UpTrend => "bull",
-        MarketRegime.StrongDownTrend or MarketRegime.DownTrend => "bear",
+        MR.StrongUpTrend or MR.UpTrend => "bull",
+        MR.StrongDownTrend or MR.DownTrend => "bear",
         _ => "warn"
     };
 
-    string RegShort(VertexAutoTradeBinance8.Models.MarketRegime r) => r switch
+    string RegShort(MR r) => r switch
     {
-        MarketRegime.StrongUpTrend => "↑↑",
-        MarketRegime.UpTrend => "↑",
-        MarketRegime.StrongDownTrend => "↓↓",
-        MarketRegime.DownTrend => "↓",
-        MarketRegime.Squeeze => "⊞",
-        MarketRegime.Range => "↔",
+        MR.StrongUpTrend => "↑↑",
+        MR.UpTrend => "↑",
+        MR.StrongDownTrend => "↓↓",
+        MR.DownTrend => "↓",
+        MR.Squeeze => "⊞",
+        MR.Range => "↔",
         _ => "?"
     };
 
@@ -611,11 +612,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         else
             sb.Append("Weak signal — better to wait. ");
 
-        if (r.Regime == MarketRegime.StrongUpTrend || r.Regime == MarketRegime.UpTrend)
+        if (r.Regime == MR.StrongUpTrend || r.Regime == MR.UpTrend)
             sb.Append("Strong uptrend regime — momentum in favor. ");
-        else if (r.Regime == MarketRegime.Range)
+        else if (r.Regime == MR.Range)
             sb.Append("Range regime — mean reversion play. ");
-        else if (r.Regime == MarketRegime.Squeeze)
+        else if (r.Regime == MR.Squeeze)
             sb.Append("Squeeze detected — breakout expected. ");
 
         if (r.Reason.Contains("Balance") || r.Reason.Contains("balance"))
