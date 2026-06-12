@@ -1,622 +1,631 @@
-﻿@page "/missed-trades"
-
-
+@page "/missed-trades"
 @using VertexAutoTradeBinance8.Web.Services
 @using VertexAutoTradeBinance8.Web.Models
+@using VertexAutoTradeBinance8.Models
 @inject MissedTradeFileService MissedService
 
-<div class="missed-container">
+<PageTitle>Signal Intelligence — Vertex</PageTitle>
 
-    <div class="missed-title">Пропущенные сделки</div>
-    <div class="missed-sub">Последние пропущенные попытки входа</div>
+<div class="si">
 
-    <!-- === FILTER PANEL === -->
-    <div class="filter-chips">
-
-        <div class="chip @(CurrentFilter == "ALL" ? "chip-active" : "")" @onclick="@(() => SetFilter("ALL"))">Все</div>
-
-        <div class="@ChipClass("BAL")" @onclick="@(() => SetFilter("BAL"))">Недостаточно баланса </div>
-
-        <div class="@ChipClass("MIN")"
-             @onclick="@(() => SetFilter("MIN"))">
-            MinNotional
+    <!-- HEADER -->
+    <div class="si-header">
+        <div class="si-title-block">
+            <span class="si-icon">📡</span>
+            <div>
+                <div class="si-title">SIGNAL INTELLIGENCE</div>
+                <div class="si-sub">Missed opportunities · Entry analysis · Pattern recognition</div>
+            </div>
         </div>
-
-        <div class="@ChipClass("LONG")"
-             @onclick="@(() => SetFilter("LONG"))">
-            LONG
+        <div class="si-header-stats">
+            <div class="si-hs"><div class="si-hs-val">@Total</div><div class="si-hs-lab">TOTAL SIGNALS</div></div>
+            <div class="si-hs"><div class="si-hs-val hi">@HighConf</div><div class="si-hs-lab">HIGH CONF</div></div>
+            <div class="si-hs"><div class="si-hs-val mid">@LongCount</div><div class="si-hs-lab">LONG</div></div>
+            <div class="si-hs"><div class="si-hs-val bear">@ShortCount</div><div class="si-hs-lab">SHORT</div></div>
+            <div class="si-hs"><div class="si-hs-val">@UniqueSymbols</div><div class="si-hs-lab">SYMBOLS</div></div>
+            <div class="si-hs"><div class="si-hs-val lo">@BalBlocked</div><div class="si-hs-lab">BAL BLOCKED</div></div>
         </div>
-
-        <div class="@ChipClass("SHORT")"
-             @onclick="@(() => SetFilter("SHORT"))">
-            SHORT
-        </div>
-
-        <div class="@ChipClass("HIGH")"
-             @onclick="@(() => SetFilter("HIGH"))">
-            Confidence > 70
-        </div>
-
     </div>
-     
+
+    <!-- FILTER BAR -->
+    <div class="si-filters">
+        @foreach (var f in Filters)
+        {
+            <button class="si-chip @(ActiveFilter == f.Key ? "si-chip-on" : "")"
+                    @onclick="() => SetFilter(f.Key)">
+                @f.Label
+                @if (f.Count > 0)
+                {
+                    <span class="si-chip-cnt">@f.Count</span>
+                }
+            </button>
+        }
+        <div class="si-sort">
+            <select @onchange="OnSortChange">
+                <option value="time">Latest first</option>
+                <option value="conf">High confidence</option>
+                <option value="symbol">By symbol</option>
+            </select>
+        </div>
+        <div class="si-search-wrap">
+            <input class="si-search" placeholder="Search symbol..." @bind="_search" @bind:event="oninput" />
+        </div>
+    </div>
 
     @if (_records == null)
     {
-        <div>Загрузка...</div>
+        <div class="si-loading">
+            <div class="si-spinner"></div>
+            Loading signal data...
+        </div>
     }
-    else if (_records.Count == 0)
+    else if (!Visible.Any())
     {
-        <div>Файл пуст.</div>
+        <div class="si-empty">No signals match the filter</div>
     }
     else
     {
-        <div class="layout-grid">
+        <div class="si-layout">
 
-            <!-- === LEFT SIDE — CARDS === -->
-            <div class="left-cards">
+            <!-- LEFT: SIGNAL CARDS -->
+            <div class="si-cards-col">
 
-                @{
-                    // счётчики по символам для компакт-режима
-                    var perSymbolIndex = new Dictionary<string, int>();
+                <!-- SUMMARY ROW -->
+                <div class="si-summary-row">
+                    <div class="si-sum-item">
+                        <span class="si-sum-lab">Best missed</span>
+                        <span class="si-sum-val hi">@BestSymbol</span>
+                    </div>
+                    <div class="si-sum-item">
+                        <span class="si-sum-lab">Top reason</span>
+                        <span class="si-sum-val warn">@ShortReason(TopReason)</span>
+                    </div>
+                    <div class="si-sum-item">
+                        <span class="si-sum-lab">Most active</span>
+                        <span class="si-sum-val mid">@TopSymbol</span>
+                    </div>
+                    <div class="si-sum-item">
+                        <span class="si-sum-lab">Showing</span>
+                        <span class="si-sum-val">@Math.Min(Visible.Count, 40) / @Visible.Count</span>
+                    </div>
+                </div>
+
+                <!-- CARDS -->
+                @foreach (var r in Visible.Take(40))
+                {
+                    bool isNew = NewFlash.Contains(Key(r));
+                    bool isLong = r.Side == "Buy";
+                    string regClass = RegClass(r.Regime);
+
+                    <div class="si-card @(isNew ? "si-card-new" : "") @(SelectedRecord == Key(r) ? "si-card-sel" : "")"
+                         @onclick="() => SelectCard(r)">
+
+                        <!-- CARD TOP -->
+                        <div class="si-card-top">
+                            <div class="si-card-left">
+                                <span class="si-csym @(isLong ? "bull" : "bear")">@r.Symbol</span>
+                                <span class="si-ctime">@r.Time.ToLocalTime().ToString("MM/dd HH:mm:ss")</span>
+                            </div>
+                            <div class="si-card-right">
+                                <span class="si-side @(isLong ? "lng" : "sht")">@(isLong?"LONG":"SHORT")</span>
+                                <span class="si-reason @ReasonClass(r.Reason)">@ShortReason(r.Reason)</span>
+                                @if (isNew) { <span class="si-new-badge">NEW</span> }
+                            </div>
+                        </div>
+
+                        <!-- CONFIDENCE BAR -->
+                        <div class="si-cbar-wrap">
+                            <div class="si-cbar" style="width:@r.Confidence%;background:@ConfColor(r.Confidence)"></div>
+                        </div>
+
+                        <!-- CARD METRICS -->
+                        <div class="si-card-metrics">
+                            <div class="si-cm">
+                                <span class="si-cm-lab">ENTRY</span>
+                                <span class="si-cm-val">@Fmt(r.Entry)</span>
+                            </div>
+                            <div class="si-cm">
+                                <span class="si-cm-lab">SL</span>
+                                <span class="si-cm-val lo">@Fmt(r.StopLoss)</span>
+                            </div>
+                            <div class="si-cm">
+                                <span class="si-cm-lab">CONF</span>
+                                <span class="si-cm-val @ConfClass(r.Confidence)">@r.Confidence%</span>
+                            </div>
+                            <div class="si-cm">
+                                <span class="si-cm-lab">ATR</span>
+                                <span class="si-cm-val">@r.ATR.ToString("F2")</span>
+                            </div>
+                            <div class="si-cm">
+                                <span class="si-cm-lab">VOL</span>
+                                <span class="si-cm-val">@r.Vol.ToString("P1")</span>
+                            </div>
+                            <div class="si-cm">
+                                <span class="si-cm-lab">REGIME</span>
+                                <span class="si-cm-val @regClass">@RegShort(r.Regime)</span>
+                            </div>
+                            <div class="si-cm">
+                                <span class="si-cm-lab">BAL</span>
+                                <span class="si-cm-val">$@r.FreeBalance.ToString("F1")</span>
+                            </div>
+                            <div class="si-cm">
+                                <span class="si-cm-lab">TPs</span>
+                                <span class="si-cm-val hi">@r.TakeProfits.Count</span>
+                            </div>
+                        </div>
+
+                        <!-- TP levels -->
+                        @if (r.TakeProfits.Any())
+                        {
+                            <div class="si-tps">
+                                @foreach (var (tp, i) in r.TakeProfits.Select((v,i)=>(v,i)))
+                                {
+                                    var pct = r.Entry > 0
+                                        ? Math.Abs(tp - r.Entry) / r.Entry * 100m * (isLong ? 1 : -1)
+                                        : 0m;
+                                    <span class="si-tp @(i==0?"si-tp1":"")">
+                                        TP@(i+1) @Fmt(tp)
+                                        <span class="si-tp-pct">+@pct.ToString("F2")%</span>
+                                    </span>
+                                }
+                            </div>
+                        }
+
+                    </div>
                 }
+            </div>
 
-                <div class="missed-grid">
-                    @foreach (var r in FilteredRecords
-                                    .OrderByDescending(x => x.Time)   // всегда самые свежие
-                                    .Take(30))                         // показываем только X count (можешь поменять)
+            <!-- RIGHT: DETAIL + STATS -->
+            <div class="si-right-col">
+
+                <!-- SYMBOL BREAKDOWN -->
+                <div class="si-panel">
+                    <div class="si-ph">📊 TOP SYMBOLS</div>
+                    @foreach (var g in SymbolGroups.Take(10))
                     {
-                        var score = CalcScore(r);
-
-                        // номер записи для данного символа
-                        var idx = perSymbolIndex.TryGetValue(r.Symbol, out var val) ? val : 0;
-                        perSymbolIndex[r.Symbol] = idx + 1;
-
-                        var totalForSymbol = SymbolCounts.TryGetValue(r.Symbol, out var total) ? total : 0;
-                        var isCompact = totalForSymbol > 3 && idx >= 3;
-
-                        var cardClasses =
-                        "missed-card " +
-                        (isCompact ? "missed-card-compact " : "") +
-                        (NewFlash.Contains(Key(r)) ? "flash-new" : "");
-
-                        <div class="@cardClasses">
-                            <div class="tooltip-container">
-                                <div class="tooltip-trigger">ℹ</div>
-                                <div class="tooltip-box">
-                                    @AiHint(r.Confidence)
-                                </div>
-                            </div> 
-
-                            <div class="missed-header">
-                                <div>
-                                   
-                                    <div class="missed-symbol clickable"
-                                         @onclick="() => SelectSymbol(r.Symbol)">
-                                        @r.Symbol
-                                    </div>
-
-                                    <div class="missed-date">@r.Time.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss")</div>
-                                </div>
-
-                                <span class="badge @(r.Reason == "BelowMinNotional" ? "badge-yellow" : "badge-red")">
-                                    @TranslateReason(r.Reason)
-                                </span>
-                              
+                        var pct = Total > 0 ? (double)g.Count / Total * 100 : 0;
+                        var avgConf = (int)g.Items.Average(x => x.Confidence);
+                        <div class="si-sym-row" @onclick="() => FilterBySymbol(g.Symbol)">
+                            <span class="si-sg-sym">@g.Symbol</span>
+                            <div class="si-sg-bar">
+                                <div class="si-sg-fill @(avgConf>=70?"fill-hi":avgConf>=50?"fill-mid":"fill-lo")"
+                                     style="width:@pct%"></div>
                             </div>
-
-                            <!-- SCORE BADGE -->
-                            <div class="score-block @ScoreColor(r.Confidence)">
-                                Opportunity Score: <b>@r.Confidence</b>/100
-
-                                <span class="info-icon"
-                                      title="@ScoreHint(r)">
-                                    ℹ
-                                </span>
-                            </div>
-
-                            <!-- LIQUIDITY RISK BLOCK (большая полоса) -->
-                            <div class="liquidity-block @LiquidityColor(r)">
-                                <div class="liq-title">
-                                    ⚠ Liquidity Danger (@LiquiditySeverity(r))
-                                    <span class="info-icon"
-                                          title="@LiquidityHint(r)">
-                                        ℹ
-                                    </span>
-                                </div>
- 
-                                <div class="liq-bar">
-                                    @for (var i = 0; i < LiquidityBars(r); i++)
-                                    {
-                                        <span class="liq-bar-fill"></span>
-                                    }
-                                    @for (var i = LiquidityBars(r); i < 10; i++)
-                                    {
-                                        <span class="liq-bar-empty"></span>
-                                    }
-                                </div>
-                            </div>
-                            
-                            <div class="missed-body">
-
-                                <!-- SIDE -->
-                                <div class="value-block">
-                                    <span class="v-label">Side:</span>
-                                    @if (r.Side == "Buy")
-                                    {
-                                        <span class="tag-long">LONG</span>
-                                    }
-                                    else
-                                    {
-                                        <span class="tag-short">SHORT</span>
-                                    }
-                                </div>
-
-                                <!-- Entry / SL -->
-                                <div class="value-block">
-                                    <span class="v-label">Вход:</span>
-                                    <span class="v-val">@F(r.Symbol, r.Entry)</span>
-                                </div>
-
-                                <div class="value-block">
-                                    <span class="v-label">SL:</span>
-                                    <span class="v-sl">@F(r.Symbol, r.StopLoss)</span>
-                                </div>
-                                <!-- ATR / Vol -->
-                                <div class="value-block mt-1">
-                                    <span class="v-label">ATR:</span>
-                                    <span class="v-atr">@r.ATR.ToString("F2")</span>
-                                </div>
-
-                                <div class="value-block">
-                                    <span class="v-label">Vol:</span>
-                                    <span class="v-vol">@($"{r.Vol:P2}")</span>   <!-- 1.23% -->
-                                </div>
-
-                                <!-- TPs -->
-                                <div class="value-block mt-2">
-                                    <div class="v-label">TPs:</div>
-                                    <div class="tp-list">
-                                        @foreach (var tp in r.TakeProfits)
-                                        {
-                                            <span>@F(r.Symbol, tp)</span>
-                                        }
-                                    </div>
-                                </div>
-
-                                <!-- === LIQUIDITY + SMART REGIME + CONFIDENCE TAGS === -->
-                                <div class="flex gap-2 mt-3">
-
-                                    @{
-                                        var sev = LiquiditySeverity(r);         // HIGH / MEDIUM / LOW
-                                        var liqClass = LiquidityClass(sev);    // CSS класс для цвета
-                                    }
-
-                                    <!-- Ликвидность tag -->
-                                    <span class="@liqClass">
-                                        Liquidity: @sev
-                                    </span>
-
-                                    <!-- Smart regime tag -->
-
-                                    <span class="@SmartClass(r.Regime)">
-                                        @r.Regime
-                                        <span class="info-icon"
-                                              title="@SmartHint(r)">
-                                            ℹ
-                                        </span>
-                                    </span>
-                                </div>
-
-                                <!-- CONFIDENCE BAR -->
-                                <div class="conf-bar mt-2">
-                                    <div class="conf-fill" style="width:@r.Confidence%"></div>
-                                </div>
-
-                                <!-- INTENSITY / SPARKLINE -->
-                                <div class="value-block mt-2">
-                                    <div class="v-label">Интенсивность попытки:</div>
-                                    <div class="sparkline">
-                                        @{
-                                            var ratio = r.RequiredMinNotional > 0
-                                            ? (double)(r.AttemptNotional / r.RequiredMinNotional)
-                                            : 0.0;
-                                            var bars = Math.Clamp((int)Math.Round(ratio * 3), 1, 5);
-                                        }
-                                        @for (var i = 0; i < bars; i++)
-                                        {
-                                            <span class="spark-bar"></span>
-                                        }
-                                    </div>
-                                </div>
-
-                                <!-- BALANCE -->
-                                <div class="balance-info mt-3">
-                                    Баланс: <b>@Money(r.FreeBalance)</b><br />
-                                  @*   Попытка Notional: <b class="notional">@Money(r.AttemptNotional)</b><br />
-                                    Min Binance: <b class="min-notional">@Money(r.RequiredMinNotional)</b> *@
-                                </div>
-
-                            </div>
+                            <span class="si-sg-cnt">@g.Count</span>
+                            <span class="si-sg-conf @ConfClass(avgConf)">@avgConf%</span>
                         </div>
                     }
                 </div>
+
+                <!-- REASON BREAKDOWN -->
+                <div class="si-panel">
+                    <div class="si-ph">🚫 BLOCK REASONS</div>
+                    @foreach (var g in ReasonGroups)
+                    {
+                        var pct = Total > 0 ? (double)g.Count / Total * 100 : 0;
+                        <div class="si-reason-row">
+                            <span class="si-rr-name @ReasonClass(g.Reason)">@ShortReason(g.Reason)</span>
+                            <div class="si-rr-bar">
+                                <div class="si-rr-fill" style="width:@pct%"></div>
+                            </div>
+                            <span class="si-rr-cnt">@g.Count</span>
+                        </div>
+                    }
+                </div>
+
+                <!-- SELECTED DETAIL -->
+                @if (_selected is not null)
+                {
+                    <div class="si-panel si-detail">
+                        <div class="si-ph">
+                            🔍 SIGNAL DETAIL
+                            <button class="si-close" @onclick="ClearSelected">✕</button>
+                        </div>
+                        <div class="si-detail-grid">
+                            <div class="si-drow"><span class="si-dl">Symbol</span><span class="si-dv blue">@_selected.Symbol</span></div>
+                            <div class="si-drow"><span class="si-dl">Time</span><span class="si-dv">@_selected.Time.ToLocalTime().ToString("dd.MM HH:mm:ss")</span></div>
+                            <div class="si-drow"><span class="si-dl">Side</span>
+                                <span class="si-dv @(_selected.Side=="Buy"?"bull":"bear")">@(_selected.Side=="Buy"?"LONG":"SHORT")</span></div>
+                            <div class="si-drow"><span class="si-dl">Reason</span><span class="si-dv warn">@_selected.Reason</span></div>
+                            <div class="si-drow"><span class="si-dl">Stage</span><span class="si-dv">@_selected.Stage</span></div>
+                            <div class="si-drow"><span class="si-dl">Entry</span><span class="si-dv">@Fmt(_selected.Entry)</span></div>
+                            <div class="si-drow"><span class="si-dl">Stop Loss</span><span class="si-dv lo">@Fmt(_selected.StopLoss)</span></div>
+                            <div class="si-drow"><span class="si-dl">Confidence</span><span class="si-dv @ConfClass(_selected.Confidence)">@_selected.Confidence%</span></div>
+                            <div class="si-drow"><span class="si-dl">Regime</span><span class="si-dv @RegClass(_selected.Regime)">@_selected.Regime</span></div>
+                            <div class="si-drow"><span class="si-dl">ATR</span><span class="si-dv">@_selected.ATR.ToString("F4")</span></div>
+                            <div class="si-drow"><span class="si-dl">Volatility</span><span class="si-dv">@_selected.Vol.ToString("P2")</span></div>
+                            <div class="si-drow"><span class="si-dl">Slope</span><span class="si-dv">@_selected.Slope.ToString("F4")</span></div>
+                            <div class="si-drow"><span class="si-dl">Balance</span><span class="si-dv">$@_selected.FreeBalance.ToString("F2")</span></div>
+                            <div class="si-drow"><span class="si-dl">Notional</span><span class="si-dv">$@_selected.AttemptNotional.ToString("F2")</span></div>
+                            <div class="si-drow"><span class="si-dl">Min Notional</span><span class="si-dv">$@_selected.RequiredMinNotional.ToString("F2")</span></div>
+                        </div>
+                        @if (_selected!.TakeProfits.Any())
+                        {
+                            <div class="si-detail-tps">
+                                <div class="si-dl" style="margin-bottom:6px">TAKE PROFITS</div>
+                                @foreach (var tpItem in _selected!.TakeProfits.Select((v,idx)=>new{v,idx}))
+                                {
+                                    var tp = tpItem.v; var i = tpItem.idx;
+                                    var pct = _selected!.Entry > 0
+                                        ? Math.Abs(tp - _selected!.Entry) / _selected!.Entry * 100m
+                                        : 0m;
+                                    <div class="si-dtp">
+                                        <span>TP@(i+1)</span>
+                                        <span class="blue">@Fmt(tp)</span>
+                                        <span class="hi">+@pct.ToString("F2")%</span>
+                                    </div>
+                                }
+                            </div>
+                        }
+                        <div class="si-ai-hint">
+                            <div class="si-ai-icon">🤖</div>
+                            <div class="si-ai-text">@AiHint(_selected!)</div>
+                        </div>
+                    </div>
+                }
+
             </div>
-
-          @*   <!-- === RIGHT SIDE — AI SUMMARY === -->
-            <div class="ai-summary">
-                <div class="summary-title">AI Summary (24h)</div>
-
-                <div class="summary-item">
-                    Всего пропусков: <b>@_records.Count</b>
-                </div>
-
-                <div class="summary-item">
-                    High-Score (&gt;70): <b>@_records.Count(x => CalcScore(x) > 70)</b>
-                </div>
-
-                <div class="summary-item">
-                    Лучшая упущенная сделка:
-                    <b>@BestSymbol</b> (Score @BestScore)
-                </div>
-
-                <div class="summary-item">
-                    Наиболее частый символ:
-                    <b>@TopSymbol</b>
-                </div>
-
-                <div class="summary-item">
-                    Основная причина:
-                    <b>@TranslateReason(TopReason)</b>
-                </div>
-            </div>
- *@
-            
         </div>
     }
-    @if (!string.IsNullOrWhiteSpace(SelectedSymbol))
-    {
-        <div class="chart-overlay" @onclick="CloseChart">
-            <div class="chart-modal" @onclick:stopPropagation="true">
-                <div class="chart-modal-header">
-                    <div class="chart-modal-title">
-                        @SelectedSymbol <span class="chart-modal-tf">@SelectedTimeframe</span>
-                    </div>
-
-                    <div class="chart-modal-actions">
-                        <select class="chart-tf" @onchange="OnTfChanged" value="@SelectedTimeframe">
-                            <option value="OneMinute">1m</option>
-                            <option value="FiveMinutes">5m</option>
-                            <option value="FifteenMinutes">15m</option>
-                            <option value="OneHour">1h</option>
-                            <option value="FourHour">4h</option>
-                        </select>
-
-                        <button class="chart-close" @onclick="CloseChart">✕</button>
-                    </div>
-                </div>
-
-                <div class="chart-modal-body">
-                    <MarketMiniChart @key="SelectedSymbol + ':' + SelectedTimeframe"
-                                     Symbol="@SelectedSymbol"
-                                     Timeframe="@SelectedTimeframe"
-                                     MaxBars="160" />
-                </div>
-            </div>
-        </div>
-    }
-
 
 </div>
 
+<style>
+:root{--bg:#0a0d12;--bg2:#111520;--bg3:#1a1f2e;--bdr:#1e2535;--acc:#3b82f6;--grn:#22c55e;--red:#ef4444;--yel:#eab308;--txt:#e2e8f0;--dim:#64748b;--mono:'JetBrains Mono','Fira Code',monospace;}
+html,body{background:var(--bg)!important;color:var(--txt);}
+.si{font-family:'Inter','Segoe UI',sans-serif;background:var(--bg);min-height:100vh;padding-bottom:40px;}
+
+/* HEADER */
+.si-header{display:flex;align-items:center;justify-content:space-between;padding:20px 28px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
+.si-title-block{display:flex;align-items:center;gap:14px;}
+.si-icon{font-size:28px;}
+.si-title{font-family:var(--mono);font-size:17px;font-weight:700;letter-spacing:2px;color:var(--acc);}
+.si-sub{font-size:11px;color:var(--dim);margin-top:3px;}
+.si-header-stats{display:flex;gap:24px;}
+.si-hs{text-align:center;}
+.si-hs-val{font-family:var(--mono);font-size:20px;font-weight:700;}
+.si-hs-lab{font-size:10px;letter-spacing:1px;color:var(--dim);}
+.hi{color:var(--grn)!important;}
+.mid{color:var(--acc)!important;}
+.lo{color:var(--red)!important;}
+.warn{color:var(--yel)!important;}
+.bear{color:var(--red)!important;}
+.bull{color:var(--grn)!important;}
+.blue{color:var(--acc)!important;}
+
+/* FILTERS */
+.si-filters{display:flex;align-items:center;gap:8px;padding:12px 28px;background:var(--bg2);border-bottom:1px solid var(--bdr);flex-wrap:wrap;}
+.si-chip{padding:5px 14px;background:var(--bg3);border:1px solid var(--bdr);border-radius:20px;color:var(--dim);font-size:12px;cursor:pointer;transition:all .15s;display:flex;align-items:center;gap:6px;}
+.si-chip:hover{border-color:var(--acc);color:var(--txt);}
+.si-chip-on{background:rgba(59,130,246,.15);border-color:var(--acc);color:var(--txt);}
+.si-chip-cnt{background:var(--bg);border-radius:10px;padding:1px 6px;font-size:10px;}
+.si-sort select{background:var(--bg3);border:1px solid var(--bdr);color:var(--txt);padding:5px 10px;border-radius:6px;font-size:12px;}
+.si-search{background:var(--bg3);border:1px solid var(--bdr);color:var(--txt);padding:5px 12px;border-radius:6px;font-size:12px;width:150px;}
+.si-search::placeholder{color:var(--dim);}
+
+/* LOADING */
+.si-loading{display:flex;align-items:center;gap:12px;padding:40px;color:var(--dim);}
+.si-spinner{width:20px;height:20px;border:2px solid var(--bdr);border-top-color:var(--acc);border-radius:50%;animation:spin .8s linear infinite;}
+@@keyframes spin{to{transform:rotate(360deg);}}
+.si-empty{text-align:center;padding:40px;color:var(--dim);}
+
+/* LAYOUT */
+.si-layout{display:grid;grid-template-columns:1fr 320px;gap:1px;background:var(--bdr);margin-top:1px;}
+.si-cards-col{background:var(--bg);padding:16px 20px;display:flex;flex-direction:column;gap:10px;}
+.si-right-col{background:var(--bg);display:flex;flex-direction:column;gap:1px;}
+
+/* SUMMARY ROW */
+.si-summary-row{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--bdr);border-radius:6px;overflow:hidden;margin-bottom:4px;}
+.si-sum-item{background:var(--bg2);padding:10px 14px;display:flex;flex-direction:column;gap:3px;}
+.si-sum-lab{font-size:10px;color:var(--dim);letter-spacing:1px;}
+.si-sum-val{font-family:var(--mono);font-size:14px;font-weight:700;}
+
+/* CARD */
+.si-card{background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;padding:14px;cursor:pointer;transition:all .15s;border-left:3px solid transparent;}
+.si-card:hover{background:var(--bg3);border-color:#2a3550;}
+.si-card-sel{border-left-color:var(--acc)!important;background:var(--bg3)!important;}
+.si-card-new{animation:flashNew .8s ease;}
+@@keyframes flashNew{0%,100%{background:var(--bg2);}50%{background:rgba(34,197,94,.08);}}
+.si-card-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;}
+.si-card-left{display:flex;flex-direction:column;gap:3px;}
+.si-csym{font-family:var(--mono);font-size:15px;font-weight:700;}
+.si-ctime{font-size:11px;color:var(--dim);}
+.si-card-right{display:flex;align-items:center;gap:8px;}
+.si-side{font-size:11px;font-weight:700;letter-spacing:1px;padding:2px 8px;border-radius:4px;}
+.lng{background:rgba(34,197,94,.15);color:var(--grn);}
+.sht{background:rgba(239,68,68,.15);color:var(--red);}
+.si-reason{font-size:11px;padding:2px 8px;border-radius:4px;background:var(--bg3);}
+.si-new-badge{background:var(--grn);color:#000;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;}
+
+/* CONFIDENCE BAR */
+.si-cbar-wrap{height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;margin-bottom:10px;}
+.si-cbar{height:100%;border-radius:2px;transition:width .4s;}
+
+/* CARD METRICS */
+.si-card-metrics{display:grid;grid-template-columns:repeat(8,1fr);gap:6px;margin-bottom:8px;}
+.si-cm{display:flex;flex-direction:column;gap:2px;}
+.si-cm-lab{font-size:9px;color:var(--dim);letter-spacing:.5px;}
+.si-cm-val{font-family:var(--mono);font-size:11px;font-weight:600;}
+
+/* TP LEVELS */
+.si-tps{display:flex;gap:8px;flex-wrap:wrap;}
+.si-tp{font-size:11px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2);padding:2px 8px;border-radius:4px;color:var(--grn);}
+.si-tp1{background:rgba(34,197,94,.2);border-color:rgba(34,197,94,.4);}
+.si-tp-pct{color:var(--grn);margin-left:4px;font-size:10px;}
+
+/* RIGHT PANELS */
+.si-panel{background:var(--bg2);padding:16px 18px;border-bottom:1px solid var(--bdr);}
+.si-ph{font-family:var(--mono);font-size:11px;letter-spacing:1.5px;color:var(--dim);font-weight:700;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;}
+.si-close{background:none;border:none;color:var(--dim);cursor:pointer;font-size:14px;padding:0;}
+.si-close:hover{color:var(--red);}
+
+/* SYMBOL GROUPS */
+.si-sym-row{display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;transition:background .1s;border-radius:4px;}
+.si-sym-row:hover{background:var(--bg3);padding:5px 6px;}
+.si-sg-sym{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--acc);min-width:90px;}
+.si-sg-bar{flex:1;height:4px;background:var(--bdr);border-radius:2px;overflow:hidden;}
+.si-sg-fill{height:100%;border-radius:2px;}
+.fill-hi{background:var(--grn);}
+.fill-mid{background:var(--acc);}
+.fill-lo{background:var(--red);}
+.si-sg-cnt{font-size:11px;color:var(--txt);min-width:24px;text-align:right;}
+.si-sg-conf{font-family:var(--mono);font-size:11px;min-width:32px;text-align:right;}
+
+/* REASON GROUPS */
+.si-reason-row{display:flex;align-items:center;gap:8px;padding:5px 0;}
+.si-rr-name{font-size:11px;min-width:100px;}
+.si-rr-bar{flex:1;height:4px;background:var(--bdr);border-radius:2px;overflow:hidden;}
+.si-rr-fill{height:100%;background:var(--red);border-radius:2px;}
+.si-rr-cnt{font-size:11px;color:var(--dim);}
+
+/* DETAIL */
+.si-detail-grid{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;}
+.si-drow{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--bdr);}
+.si-dl{font-size:11px;color:var(--dim);}
+.si-dv{font-family:var(--mono);font-size:12px;}
+.si-detail-tps{margin-bottom:12px;}
+.si-dtp{display:flex;justify-content:space-between;padding:4px 0;font-size:12px;border-bottom:1px solid var(--bdr);}
+.si-ai-hint{display:flex;gap:10px;background:var(--bg3);border-radius:6px;padding:10px;font-size:12px;color:var(--dim);line-height:1.5;}
+.si-ai-icon{font-size:18px;}
+
+/* REASON COLORS */
+.rc-bal{color:var(--red);}
+.rc-min{color:var(--yel);}
+.rc-exec{color:var(--red);}
+.rc-ok{color:var(--grn);}
+
+@@media(max-width:1100px){.si-layout{grid-template-columns:1fr;}}
+@@media(max-width:700px){.si-header{flex-direction:column;gap:12px;}.si-card-metrics{grid-template-columns:repeat(4,1fr);}}
+</style>
 
 @code {
-    private List<MissedTradeRecord>? _records;
-    private List<MissedTradeRecord> FilteredRecords = new();
-    private Dictionary<string, int> SymbolCounts = new();
+    List<VertexAutoTradeBinance8.Web.Models.MissedTradeRecord>? _records;
+    List<VertexAutoTradeBinance8.Web.Models.MissedTradeRecord> Visible = new();
+    VertexAutoTradeBinance8.Web.Models.MissedTradeRecord? _selected;
+    string SelectedRecord = "";
 
-    private HashSet<string> _known = new();
-    private HashSet<string> NewFlash = new();
-    private System.Threading.Timer? _timer;
+    HashSet<string> _known = new();
+    HashSet<string> NewFlash = new();
+    System.Threading.Timer? _timer;
 
-    private string CurrentFilter = "ALL";
+    string ActiveFilter = "ALL";
+    string _sort = "time";
+    string _search = "";
+    string _symbolFilter = "";
 
-    string Key(MissedTradeRecord r) => $"{r.Symbol}-{r.Time:yyyyMMddHHmmss.ffff}";
+    record FilterDef(string Key, string Label, int Count);
+    List<FilterDef> Filters = new();
 
- 
-    private string? SelectedSymbol;
-    private string SelectedTimeframe = "FiveMinutes";
+    record SymbolGroup(string Symbol, int Count, List<VertexAutoTradeBinance8.Web.Models.MissedTradeRecord> Items);
+    record ReasonGroup(string Reason, int Count);
+    List<SymbolGroup> SymbolGroups = new();
+    List<ReasonGroup> ReasonGroups = new();
 
-    private void SelectSymbol(string symbol)
-    {
-        if (string.IsNullOrWhiteSpace(symbol))
-            return;
+    // stats
+    int Total, HighConf, LongCount, ShortCount, UniqueSymbols, BalBlocked;
+    string BestSymbol = "—", TopSymbol = "—", TopReason = "—";
 
-        SelectedSymbol = symbol.Trim().ToUpperInvariant();
-
-        // если хочешь всегда стартовать с 5m
-        if (string.IsNullOrWhiteSpace(SelectedTimeframe))
-            SelectedTimeframe = "FiveMinutes";
-
-        StateHasChanged();
-    }
-
-    private void CloseChart()
-    {
-        SelectedSymbol = null;
-        StateHasChanged();
-    }
-
-    private void OnTfChanged(ChangeEventArgs e)
-    {
-        var tf = e.Value?.ToString();
-        if (!string.IsNullOrWhiteSpace(tf))
-            SelectedTimeframe = tf;
-
-        StateHasChanged();
-    }
-
-    string LiquiditySeverity(MissedTradeRecord r)
-    {
-        if (r.ATR > 200 && r.Vol < 0.01m) return "HIGH";   // опасно
-        if (r.ATR > 100 && r.Vol < 0.02m) return "MEDIUM";
-        return "LOW";
-    }
-    
-    string LiquidityClass(string sev)
-    {
-        return sev switch
-        {
-            "HIGH" => "liq-high",
-            "MEDIUM" => "liq-med",
-            _ => "liq-low"
-        };
-    }
-
-    string ScoreHint(MissedTradeRecord r)
-    {
-        if (r.Confidence >= 80)
-            return "AI: Очень сильный сигнал. Тренд мощный, волатильность низкая. Такой вход был бы безопасным.";
-
-        if (r.Confidence >= 65)
-            return "AI: Хороший сигнал. Достаточно стабильный рынок, можно рассматривать вход.";
-
-        if (r.Confidence >= 50)
-            return "AI: Средний сигнал. Рынок неоднозначный — лучше подождать.";
-
-        if (r.Confidence >= 35)
-            return "AI: Слабый сигнал. Условия плохие для входа.";
-
-        return "AI: Очень высокий риск. Такой вход лучше избегать.";
-    }
-    string LiquidityHint(MissedTradeRecord r)
-    {
-        return
-            $"ATR: {r.ATR:F2}\n" +
-            $"Volatility: {r.Vol:P2}\n\n" +
-            (r.ATR > 200
-                ? "⚠ Слишком высокая турбулентность. Возможны сквизы и сбор стопов."
-                : r.ATR > 100
-                    ? "⚠ Умеренная ликвидность, возможны резкие движения."
-                    : "✔ Ликвидность стабильная, проскальзывание минимально.");
-    }
-    string SmartHint(MissedTradeRecord r)
-    {
-        if (r.Regime == VertexAutoTradeBinance8.Models.MarketRegime.StrongUpTrend)
-            return "Сильный тренд вверх, импульсный.: Рынок находится в мощном тренде. Такие режимы часто дают хорошие входы.";
-
-
-        if (r.Regime == VertexAutoTradeBinance8.Models.MarketRegime.StrongDownTrend)
-            return "StrongDownTrend: Сильный тренд вниз, импульсный.:";
-
-
-        if (r.Regime == VertexAutoTradeBinance8.Models.MarketRegime.Squeeze)
-            return "Squeeze: Цена сжата. Возможно резкое движение (breakout).";
-
-        if (r.Regime == VertexAutoTradeBinance8.Models.MarketRegime.Unknown)
-            return "Chop: Хаос. Рынок пилит. Входы опасны.";
-
-        if (r.Regime == VertexAutoTradeBinance8.Models.MarketRegime.Range)
-            return "Range: движение внутри боковика./Флэт. Трендов нет, движения слабые.";
-
-        return "AI: режим рынка неопределён.";
-    }
-
-    string AiHint(int score)
-    {
-        if (score >= 80)
-            return "AI: Отличный сигнал. Сильный тренд и низкие риски. Такой вход обоснован.";
-        if (score >= 65)
-            return "AI: В целом хороший сигнал. Можно рассматривать вход с аккуратным стопом.";
-        if (score >= 50)
-            return "AI: Сигнал среднего качества. Лучше дождаться более чёткого подтверждения.";
-        if (score >= 35)
-            return "AI: Сигнал слабый. Условия неидеальные. Вход не рекомендуется.";
-
-        return "AI: Высокие риски. Лучше избегать этот вход.";
-    }
-
-    string LiquidityColor(MissedTradeRecord r)
-    {
-        var sev = LiquiditySeverity(r);
-        return sev switch
-        {
-            "HIGH" => "liq-high",
-            "MEDIUM" => "liq-med",
-            _ => "liq-low",
-        };
-    }
-
-    string SmartClass(VertexAutoTradeBinance8.Models.MarketRegime Regime)
-    {
-        // if (t.Contains("StrongTrend")) return "smart-strong";
-        // if (t.Contains("Squeeze")) return "smart-squeeze";
-        // if (t.Contains("Chop")) return "smart-chop";
-        return $"{Regime}";
-    }
-      //string RegimeToString() => $"{Regime}";
-
-    int LiquidityBars(MissedTradeRecord r)
-    {
-        // Нормализуем уровень ликвидности от 1 до 10
-        double LQ = (double)(r.ATR / (r.Vol + 0.0001m));
-
-        if (LQ > 300) return 10;
-        if (LQ > 200) return 8;
-        if (LQ > 150) return 6;
-        if (LQ > 100) return 4;
-        if (LQ > 50) return 2;
-        return 1;
-    }
+    string Key(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r) => $"{r.Symbol}-{r.Time:yyyyMMddHHmmss.fff}";
 
     protected override async Task OnInitializedAsync()
     {
-
         await LoadData();
-
-        _timer = new System.Threading.Timer(
-            async _ =>
-            {
-                await InvokeAsync(async () =>
-                {
-                    await Refresh();
-                    ApplyFilter();
-                    StateHasChanged();
-                });
-            },
-            null,
-            TimeSpan.FromSeconds(5),
-            TimeSpan.FromSeconds(5));
+        _timer = new System.Threading.Timer(async _ =>
+        {
+            await InvokeAsync(async () => { await Refresh(); StateHasChanged(); });
+        }, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
     }
 
-    private async Task LoadData()
+    async Task LoadData()
     {
-        _records = await MissedService.LoadAsync() ?? new List<MissedTradeRecord>();
-
-        foreach (var r in _records)
-            _known.Add(Key(r));
-
-        RebuildSymbolCounts();
-        ApplyFilter();
+        _records = await MissedService.LoadAsync() ?? new();
+        foreach (var r in _records) _known.Add(Key(r));
+        Rebuild();
     }
 
-    private async Task Refresh()
+    async Task Refresh()
     {
-        var newRecords = await MissedService.LoadAsync();
-        if (newRecords == null) return;
-
-        var newOnes = newRecords.Where(r => !_known.Contains(Key(r))).ToList();
-
+        var fresh = await MissedService.LoadAsync();
+        if (fresh == null) return;
+        var newOnes = fresh.Where(r => !_known.Contains(Key(r))).ToList();
         if (newOnes.Count > 0)
         {
-            foreach (var r in newOnes)
-                _known.Add(Key(r));
-
-            NewFlash = newOnes.Select(r => Key(r)).ToHashSet();
+            foreach (var r in newOnes) _known.Add(Key(r));
+            NewFlash = newOnes.Select(Key).ToHashSet();
         }
-
-        _records = newRecords;
-        RebuildSymbolCounts();
-        ApplyFilter();
+        _records = fresh;
+        Rebuild();
     }
 
-    private void RebuildSymbolCounts()
+    void Rebuild()
     {
-        if (_records == null)
-        {
-            SymbolCounts = new();
-            return;
-        }
+        if (_records == null) return;
 
-        SymbolCounts = _records
-            .GroupBy(x => x.Symbol)
-            .ToDictionary(g => g.Key, g => g.Count());
-    }
+        // Stats
+        Total = _records.Count;
+        HighConf = _records.Count(r => r.Confidence >= 70);
+        LongCount = _records.Count(r => r.Side == "Buy");
+        ShortCount = _records.Count(r => r.Side == "Sell");
+        UniqueSymbols = _records.Select(r => r.Symbol).Distinct().Count();
+        BalBlocked = _records.Count(r => r.Reason.Contains("Balance") || r.Reason.Contains("balance"));
+        BestSymbol = _records.OrderByDescending(r => r.Confidence).FirstOrDefault()?.Symbol ?? "—";
+        TopSymbol = _records.GroupBy(r => r.Symbol).OrderByDescending(g => g.Count()).FirstOrDefault()?.Key ?? "—";
+        TopReason = _records.GroupBy(r => r.Reason).OrderByDescending(g => g.Count()).FirstOrDefault()?.Key ?? "—";
 
-    private void ApplyFilter()
-    {
-        if (_records == null)
+        // Filters
+        Filters = new()
         {
-            FilteredRecords = new();
-            return;
-        }
-
-        FilteredRecords = CurrentFilter switch
-        {
-            "BAL" => _records.Where(x => x.Reason.Contains("InsufficientBalance")).ToList(),
-            "MIN" => _records.Where(x => x.Reason.Contains("MinNotional")).ToList(),
-            "LONG" => _records.Where(x => x.Side == "Buy").ToList(),
-            "SHORT" => _records.Where(x => x.Side == "Sell").ToList(),
-            "HIGH" => _records.Where(x => x.Confidence > 70).ToList(),
-            _ => _records
+            new("ALL",   "All",         Total),
+            new("LONG",  "Long ▲",      LongCount),
+            new("SHORT", "Short ▼",     ShortCount),
+            new("HIGH",  "Conf > 70",   HighConf),
+            new("BAL",   "Bal blocked", BalBlocked),
+            new("MIN",   "MinNotional", _records.Count(r => r.Reason.Contains("MinNotional"))),
         };
 
-    }
-    int CalcScore(MissedTradeRecord r)
-    {
-        int score = 0;
+        // Groups
+        SymbolGroups = _records.GroupBy(r => r.Symbol)
+            .Select(g => new SymbolGroup(g.Key, g.Count(), g.ToList()))
+            .OrderByDescending(g => g.Count).ToList();
 
-        if (r.TakeProfits.Count >= 2) score += 20;
-        if (r.AttemptNotional > r.RequiredMinNotional * 3) score += 20;
-        if (r.Side == "Buy") score += 10;
-        if (r.Reason.Contains("InsufficientBalance")) score += 20;
-        if (r.AttemptNotional > 10) score += 30;
+        ReasonGroups = _records.GroupBy(r => r.Reason)
+            .Select(g => new ReasonGroup(g.Key, g.Count()))
+            .OrderByDescending(g => g.Count).ToList();
 
-        return Math.Clamp(score, 0, 100);
-    }
-    void SetFilter(string f)
-    {
-        CurrentFilter = f;
         ApplyFilter();
     }
-    string ChipClass(string f)
-    {
-        bool active = CurrentFilter == f;
 
-        return "chip " + (active ? "chip-active" : "");
+    void ApplyFilter()
+    {
+        if (_records == null) { Visible = new(); return; }
+
+        var q = _records.AsEnumerable();
+
+        if (!string.IsNullOrWhiteSpace(_symbolFilter))
+            q = q.Where(r => r.Symbol == _symbolFilter);
+        else if (!string.IsNullOrWhiteSpace(_search))
+            q = q.Where(r => r.Symbol.Contains(_search.ToUpper()));
+
+        q = ActiveFilter switch
+        {
+            "LONG"  => q.Where(r => r.Side == "Buy"),
+            "SHORT" => q.Where(r => r.Side == "Sell"),
+            "HIGH"  => q.Where(r => r.Confidence >= 70),
+            "BAL"   => q.Where(r => r.Reason.Contains("Balance") || r.Reason.Contains("balance")),
+            "MIN"   => q.Where(r => r.Reason.Contains("MinNotional")),
+            _       => q
+        };
+
+        Visible = (_sort switch
+        {
+            "conf"   => q.OrderByDescending(r => r.Confidence),
+            "symbol" => q.OrderBy(r => r.Symbol),
+            _        => q.OrderByDescending(r => r.Time)
+        }).ToList();
     }
-    string GetFilterClass(string key)
+
+    void SetFilter(string f)
     {
-        return CurrentFilter == key ? "active" : "";
-    } 
-    string ScoreColor(int score)
-    {
-        if (score >= 80) return "score-green";
-        if (score >= 60) return "score-blue";
-        if (score >= 40) return "score-yellow";
-        return "score-red";
+        ActiveFilter = f;
+        _symbolFilter = "";
+        ApplyFilter();
     }
 
-    string BestSymbol => _records?.OrderByDescending(x => CalcScore(x)).FirstOrDefault()?.Symbol ?? "-";
-    int BestScore => _records?.Max(x => CalcScore(x)) ?? 0;
-    string TopSymbol => _records?.GroupBy(x => x.Symbol).OrderByDescending(g => g.Count()).FirstOrDefault()?.Key ?? "-";
-    string TopReason => _records?.GroupBy(x => x.Reason).OrderByDescending(g => g.Count()).FirstOrDefault()?.Key ?? "-";
-
-    string TranslateReason(string r) => r switch
+    void FilterBySymbol(string s)
     {
-        "BelowMinNotional" => "Сумма ниже MinNotional",
-        "InsufficientBalance" => "Недостаточно баланса",
-        "InsufficientBalanceForMinNotional" => "Недостаточно для MinNotional",
-        "EXEC:EXECUTION_FAILED" => "EXEC:ВЫПОЛНЕНИЕ НЕ УДАЛОСЬ",
-        "EXECUTION_FAILED" => "ВЫПОЛНЕНИЕ НЕ УДАЛОСЬ",
-        "NO_BALANCE_OR_MIN_NOTIONAL" => "ОТСУТСТВИЕ БАЛАНСА ИЛИ МИНИМАЛЬНОГО  БАЛАНСА",
-        "RISK:NO_BALANCE_OR_MIN_NOTIONAL" => "RISK:ОТСУТСТВИЕ БАЛАНСА ИЛИ МИНИМАЛЬНОГО  БАЛАНСА",
-        _ => r
+        _symbolFilter = _symbolFilter == s ? "" : s;
+        ApplyFilter();
+    }
+
+    void OnSortChange(ChangeEventArgs e)
+    {
+        _sort = e.Value?.ToString() ?? "time";
+        ApplyFilter();
+    }
+
+    void SelectCard(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r)
+    {
+        if (SelectedRecord == Key(r)) { _selected = null; SelectedRecord = ""; }
+        else { _selected = r; SelectedRecord = Key(r); }
+    }
+
+    void ClearSelected() { _selected = null; SelectedRecord = ""; }
+
+    string Fmt(decimal v) => v >= 1 ? v.ToString("F4") : v.ToString("0.00000000");
+
+    string ConfColor(int c) => c >= 75 ? "#22c55e" : c >= 50 ? "#3b82f6" : "#ef4444";
+    string ConfClass(int c) => c >= 75 ? "hi" : c >= 50 ? "mid" : "lo";
+
+    string RegClass(MarketRegime r) => r switch
+    {
+        MarketRegime.StrongUpTrend or MarketRegime.UpTrend => "bull",
+        MarketRegime.StrongDownTrend or MarketRegime.DownTrend => "bear",
+        _ => "warn"
     };
 
-    string F(decimal v)
+    string RegShort(MarketRegime r) => r switch
     {
-        if (v >= 1) return v.ToString("F4");
-        return v.ToString("0.00000000");
+        MarketRegime.StrongUpTrend => "↑↑",
+        MarketRegime.UpTrend => "↑",
+        MarketRegime.StrongDownTrend => "↓↓",
+        MarketRegime.DownTrend => "↓",
+        MarketRegime.Squeeze => "⊞",
+        MarketRegime.Range => "↔",
+        _ => "?"
+    };
+
+    string ReasonClass(string r)
+    {
+        if (r.Contains("Balance") || r.Contains("balance")) return "rc-bal";
+        if (r.Contains("MinNotional") || r.Contains("minNotional")) return "rc-min";
+        if (r.Contains("EXEC") || r.Contains("FAIL")) return "rc-exec";
+        return "";
     }
 
-    string Money(decimal v)
+    string ShortReason(string r) => r switch
     {
-        if (v >= 1) return v.ToString("F2") + " USDT";
-        return v.ToString("0.00000000");
+        "BelowMinNotional" or "NO_BALANCE_OR_MIN_NOTIONAL"
+            or "RISK:NO_BALANCE_OR_MIN_NOTIONAL" => "Min Notional",
+        "InsufficientBalance" or "RISK:INSUFFICIENT_BALANCE" => "Low Balance",
+        "InsufficientBalanceForMinNotional" => "Bal < MinNot",
+        "EXECUTION_FAILED" or "EXEC:EXECUTION_FAILED" => "Exec Failed",
+        "COOLDOWN_ACTIVE" => "Cooldown",
+        "MAX_ACTIVE_ENTRIES" => "Max Entries",
+        "GLOBAL_POSITION_CAP" => "Pos Cap",
+        "DCA_CATCHING_KNIFE" => "Knife ⚠",
+        "DCA_INSUFFICIENT_RETRACE" => "No Retrace",
+        "GATE_0_5" => "Out of Range",
+        "FUNDING_EXTREME_LONG_BLOCKED" => "Funding ⚠ L",
+        "FUNDING_EXTREME_SHORT_BLOCKED" => "Funding ⚠ S",
+        _ => r.Length > 20 ? r[..20] + "…" : r
+    };
+
+    string AiHint(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r)
+    {
+        var sb = new System.Text.StringBuilder();
+        if (r.Confidence >= 80)
+            sb.Append("Strong signal — high confidence entry. ");
+        else if (r.Confidence >= 65)
+            sb.Append("Good signal with decent setup. ");
+        else if (r.Confidence >= 50)
+            sb.Append("Mixed conditions — moderate quality. ");
+        else
+            sb.Append("Weak signal — better to wait. ");
+
+        if (r.Regime == MarketRegime.StrongUpTrend || r.Regime == MarketRegime.UpTrend)
+            sb.Append("Strong uptrend regime — momentum in favor. ");
+        else if (r.Regime == MarketRegime.Range)
+            sb.Append("Range regime — mean reversion play. ");
+        else if (r.Regime == MarketRegime.Squeeze)
+            sb.Append("Squeeze detected — breakout expected. ");
+
+        if (r.Reason.Contains("Balance") || r.Reason.Contains("balance"))
+            sb.Append("Blocked by insufficient balance — increase deposit to capture this.");
+        else if (r.Reason.Contains("MinNotional"))
+            sb.Append("Blocked by min notional — this symbol needs higher capital per trade.");
+
+        return sb.ToString();
     }
 
-    string F(string symbol, decimal v) => F(v);
-
-  
-
+    public void Dispose() => _timer?.Dispose();
 }

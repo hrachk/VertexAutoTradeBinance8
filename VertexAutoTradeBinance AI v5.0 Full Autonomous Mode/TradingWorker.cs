@@ -1140,28 +1140,28 @@ namespace VertexAutoTradeBinance8
 
         private async Task<KlineInterval> ResolveTimeframeSafeAsync(string symbol, CancellationToken ct)
         {
-            var fallback = KlineInterval.FifteenMinutes;
+            // =====================================================
+            // SCALPING MODE: приоритет 5M/1M
+            // Fallback = 5M (не 15M как раньше)
+            // =====================================================
+            var fallback = KlineInterval.FiveMinutes;
 
             try
             {
                 var m1Task = _market.GetMarketSnapshot(symbol, KlineInterval.OneMinute, ct);
                 var m5Task = _market.GetMarketSnapshot(symbol, KlineInterval.FiveMinutes, ct);
-                var m15Task = _market.GetMarketSnapshot(symbol, KlineInterval.FifteenMinutes, ct);
 
                 var m1 = await m1Task;
                 var m5 = await m5Task;
-                var m15 = await m15Task;
 
-                if (m1 != null && m5 != null && m15 != null)
+                if (m1 != null && m5 != null)
                 {
-                    var d = _tfSelector.SelectTF(m1, m5, m15);
+                    var d = _tfSelector.SelectTF(m1, m5, m5); // m15 = m5 (игнор 15M)
                     return d switch
                     {
-                        DominantTF.OneMinute => KlineInterval.OneMinute,
-                        DominantTF.FiveMinutes => KlineInterval.FiveMinutes,
-                        DominantTF.FifteenMinutes => KlineInterval.FifteenMinutes,
-                        DominantTF.Both => KlineInterval.FifteenMinutes,
-                        _ => fallback
+                        DominantTF.OneMinute    => KlineInterval.OneMinute,
+                        DominantTF.FiveMinutes  => KlineInterval.FiveMinutes,
+                        _                       => KlineInterval.FiveMinutes
                     };
                 }
             }

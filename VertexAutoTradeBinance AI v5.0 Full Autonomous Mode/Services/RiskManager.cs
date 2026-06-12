@@ -131,8 +131,52 @@ namespace VertexAutoTradeBinance8.Services
 
             decimal riskBudget = balance * finalRisk;
 
+            // =============================================================
+            // SMALL BALANCE MODE (balance < 50$)
+            // При малом депозите не можем считать от riskBudget/slPercent —
+            // результат слишком мал. Вместо этого:
+            // - Входим на minNotional (минимальный ордер Binance = 5$)
+            // - Используем весь доступный баланс × leverage
+            // - Это позволяет торговать при депозите $10-20
+            // =============================================================
+            decimal minNotional = trading.MinNotional > 0 ? trading.MinNotional : 5m;
+
+            if (balance < 50m)
+            {
+                // Максимально допустимый notional при малом балансе
+                decimal maxNotionalSmall = balance * leverage * 0.90m;
+                // Но не больше чем нужно для 1 TP (не жадничаем)
+                decimal targetNotionalSmall = Math.Max(minNotional, Math.Min(maxNotionalSmall, balance * leverage * 0.5m));
+
+                decimal minQtyForMin = Math.Ceiling(minNotional / entry / step) * step;
+                decimal effectiveMinQtySmall = Math.Max(minQty, minQtyForMin);
+
+                decimal rawQtySmall = targetNotionalSmall / entry;
+                decimal qtySmall = Math.Floor(rawQtySmall / step) * step;
+                if (qtySmall < effectiveMinQtySmall) qtySmall = effectiveMinQtySmall;
+
+                _logger.LogInformation(
+                    "[RISK] SMALL_BALANCE mode balance={bal:F2}$ → notional={not:F2}$ qty={qty} (leverage={lev}x)",
+                    balance, qtySmall * entry, qtySmall, leverage);
+
+                // Liq risk check
+                if (_liqRisk != null)
+                {
+                    var liqCheck = _liqRisk.CheckPreTrade(signal, qtySmall, balance, leverage);
+                    if (!liqCheck.IsAllowed)
+                    {
+                        LastRejectReason = $"LIQ_RISK_BLOCKED: {liqCheck.BlockReason}";
+                        return 0;
+                    }
+                    if (liqCheck.SafeQty < qtySmall && liqCheck.SafeQty > 0)
+                        qtySmall = Math.Floor(liqCheck.SafeQty / step) * step;
+                }
+
+                return qtySmall;
+            }
+
             // -----------------------------
-            // Notional calculation
+            // Notional calculation (normal balance >= 50$)
             // -----------------------------
             decimal riskNotional = riskBudget / slPercent;
             decimal leverageCapNotional = balance * leverage * 0.98m;

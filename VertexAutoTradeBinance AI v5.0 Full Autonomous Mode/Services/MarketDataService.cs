@@ -66,30 +66,64 @@ public class MarketDataService
     }
 
     // ============================================================
-    // 2) Klines (BinanceFuturesUsdtKline)
+    // 2) Klines (BinanceFuturesUsdtKline) — с retry backoff
     // ============================================================
     public async Task<IReadOnlyList<BinanceFuturesUsdtKline>> GetKlines(
         string symbol,
         KlineInterval interval,
         int limit = 200)
     {
-        using var client = _factory.CreateRestClient();
+        const int maxRetries = 3;
+        int delay = 1000;
 
-        var result = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
-            symbol,
-            interval,
-            limit: limit
-        );
-
-        if (!result.Success || result.Data == null)
+        for (int attempt = 1; attempt <= maxRetries; attempt++)
         {
-            _logger.LogError("Error loading klines for {symbol}: {error}", symbol, result.Error);
-            return Array.Empty<BinanceFuturesUsdtKline>();
+            try
+            {
+                using var client = _factory.CreateRestClient();
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+
+                var result = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
+                    symbol, interval, limit: limit, ct: cts.Token);
+
+                if (result.Success && result.Data != null)
+                    return result.Data.Cast<BinanceFuturesUsdtKline>().ToList();
+
+                // NetworkError / Timeout — retry
+                bool isNetwork = result.Error?.Message?.Contains("No such host") == true ||
+                                 result.Error?.Message?.Contains("timed out") == true ||
+                                 result.Error?.Code == null;
+
+                if (isNetwork && attempt < maxRetries)
+                {
+                    _logger.LogDebug("[MD] Klines {symbol} attempt {n}/{max} failed ({err}) → retry in {d}ms",
+                        symbol, attempt, maxRetries, result.Error?.Code, delay);
+                    await Task.Delay(delay);
+                    delay *= 2; // exponential backoff
+                    continue;
+                }
+
+                // Не сетевая ошибка — не повторяем
+                _logger.LogError("Error loading klines for {symbol}: {error}", symbol, result.Error);
+                return Array.Empty<BinanceFuturesUsdtKline>();
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogDebug("[MD] Klines {symbol} timeout attempt {n}", symbol, attempt);
+                if (attempt < maxRetries)
+                {
+                    await Task.Delay(delay);
+                    delay *= 2;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error loading klines for {symbol}", symbol);
+                return Array.Empty<BinanceFuturesUsdtKline>();
+            }
         }
 
-        return result.Data
-            .Cast<BinanceFuturesUsdtKline>()
-            .ToList();
+        return Array.Empty<BinanceFuturesUsdtKline>();
     }
 
     // ============================================================

@@ -756,31 +756,30 @@ namespace VertexAutoTradeBinance8.Strategy
       GetAtrConfig(KlineInterval interval)
         {
             // =====================================================
-            // LOGARITHMIC TP SPACING (Binance Grid Bot ratio ≈ 1.57)
-            // Каждый TP на ~57% дальше предыдущего — даёт runner эффект:
-            //   TP1 — быстрый выход (40%)
-            //   TP2 — средний (35%)
-            //   TP3 — дальний runner (25%)
+            // SCALPING CONFIG — ATR мультипликаторы
+            // На 1M/5M работаем как скальперы:
+            //   SL tight (0.6-0.9 ATR)
+            //   TP1 близко (0.9-1.2 ATR) — быстрая фиксация
+            //   TP2/TP3 для runner
             // =====================================================
             return interval switch
             {
-                // scalping / noisy
-                KlineInterval.OneMinute or KlineInterval.FiveMinutes
-                    => (0.9m, 1.4m, 2.2m, 3.4m),   // ratio ≈ 1.57
+                KlineInterval.OneMinute
+                    => (0.6m, 0.9m, 1.6m, 2.5m),   // скальпинг: SL tight, TP1 быстрый
 
-                // intraday
+                KlineInterval.FiveMinutes
+                    => (0.9m, 1.4m, 2.2m, 3.4m),   // scalp/intraday ratio ≈ 1.57
+
                 KlineInterval.FifteenMinutes
-                    => (1.2m, 1.8m, 2.8m, 4.3m),   // ratio ≈ 1.56
+                    => (1.2m, 1.8m, 2.8m, 4.3m),
 
-                // swing
                 KlineInterval.OneHour or KlineInterval.FourHour
-                    => (1.8m, 2.5m, 3.9m, 6.0m),   // ratio ≈ 1.56
+                    => (1.8m, 2.5m, 3.9m, 6.0m),
 
-                // position
                 KlineInterval.OneDay
-                    => (2.5m, 3.5m, 5.5m, 8.5m),   // ratio ≈ 1.57
+                    => (2.5m, 3.5m, 5.5m, 8.5m),
 
-                _ => (1.0m, 1.4m, 2.2m, 3.4m)
+                _ => (0.9m, 1.4m, 2.2m, 3.4m)
             };
         }
 
