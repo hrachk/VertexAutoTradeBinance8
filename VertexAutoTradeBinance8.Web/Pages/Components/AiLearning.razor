@@ -395,7 +395,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     {
         try
         {
-            var pts = await AiFile.LoadAsync() ?? new();
+            var pts = (await AiFile.LoadAsync()).ToList();
             if (!pts.Any()) return;
 
             RecentPoints = pts.OrderBy(p => p.Time).ToList();
