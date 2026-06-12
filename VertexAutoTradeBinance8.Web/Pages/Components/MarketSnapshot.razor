@@ -1,201 +1,407 @@
-﻿@page "/market"
-
+@page "/market"
 @using VertexAutoTradeBinance8.Web.Models
 @using VertexAutoTradeBinance8.Web.Services
 @inject MarketSnapshotFileService Service
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
-<h2 class="title">Market Snapshot</h2>
-<p class="subtitle">Live price & volume (read-only)</p>
+<PageTitle>Market Intelligence — Vertex</PageTitle>
 
-<div class="market-root">
+<div class="mk">
 
-    <!-- ===== TOOLBAR ===== -->
-    <div class="toolbar">
-        <select class="selector" @onchange="OnSelect">
-            @for (var i = 0; i < Series.Count; i++)
+    <!-- HEADER -->
+    <div class="mk-header">
+        <div class="mk-title-block">
+            <span class="mk-icon">📈</span>
+            <div>
+                <div class="mk-title">MARKET INTELLIGENCE</div>
+                <div class="mk-sub">Candlestick · EMA · Bollinger · RSI · Volume</div>
+            </div>
+        </div>
+        <div class="mk-hright">
+            @if (Selected != null)
             {
-                var s = Series[i];
-                <option value="@i" selected="@(s == Selected)">
-                    @s.Symbol · @TfShort(s.Timeframe)
-                </option>
+                <div class="mk-ticker">
+                    <span class="mk-tsym">@Selected.Symbol</span>
+                    <span class="mk-ttf">@TfLabel(Selected.Timeframe)</span>
+                    @if (_last > 0)
+                    {
+                        <span class="mk-tprice">@FmtP(_last)</span>
+                        <span class="mk-tchg @(_chg >= 0 ? "up" : "dn")">
+                            @(_chg >= 0 ? "▲" : "▼") @Math.Abs(_chg).ToString("F2")%
+                        </span>
+                    }
+                </div>
             }
-        </select>
-
-        <div class="right">
-            <button class="btn" @onclick="ToggleFreeze">
-                @(Frozen ? "Unfreeze" : "Freeze")
+            <button class="mk-btn @(Frozen?"mk-btn-on":"")" @onclick="ToggleFreeze">
+                @(Frozen ? "⏸ Paused" : "▶ Live")
             </button>
-            <span class="refresh">Auto refresh: 5s</span>
         </div>
     </div>
 
-    <!-- ===== CHARTS ===== -->
-    <div class="chart-grid">
-        <div class="chart-box">
-            <canvas id="priceChart"></canvas>
-        </div>
-        <div class="chart-box">
-            <canvas id="volumeChart"></canvas>
-        </div>
+    <!-- SYMBOL CHIPS -->
+    <div class="mk-chips">
+        @foreach (var s in Series)
+        {
+            var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
+            var first = s.Klines.Count > 1 ? s.Klines[0].Close : last;
+            var chg = first > 0 ? (last - first) / first * 100m : 0m;
+            <button class="mk-chip @(s==Selected?"mk-chip-on":"")" @onclick="()=>Pick(s)">
+                <span class="mk-chip-sym">@s.Symbol</span>
+                <span class="mk-chip-tf">@TfLabel(s.Timeframe)</span>
+                <span class="mk-chip-chg @(chg>=0?"up":"dn")">@(chg>=0?"+":"")@chg.ToString("F1")%</span>
+            </button>
+        }
+        @if (!Series.Any())
+        {
+            <span class="mk-dim">No data — start the bot first</span>
+        }
     </div>
 
+    @if (Selected == null || Selected.Klines.Count < 5)
+    {
+        <div class="mk-empty">
+            <div style="font-size:48px">📊</div>
+            <div style="font-size:16px;font-weight:600">Waiting for market data</div>
+            <div class="mk-dim" style="font-size:13px">Bot writes klines_bootstrap.json on startup</div>
+        </div>
+    }
+    else
+    {
+        <!-- STATS BAR -->
+        <div class="mk-stats">
+            <div class="mk-s"><div class="mk-sl">PRICE</div><div class="mk-sv">@FmtP(_last)</div></div>
+            <div class="mk-s"><div class="mk-sl">OPEN</div><div class="mk-sv mk-dim">@FmtP(Selected.Klines[^1].Open)</div></div>
+            <div class="mk-s"><div class="mk-sl">HIGH</div><div class="mk-sv up">@FmtP(Selected.Klines[^1].High)</div></div>
+            <div class="mk-s"><div class="mk-sl">LOW</div><div class="mk-sv dn">@FmtP(Selected.Klines[^1].Low)</div></div>
+            <div class="mk-s"><div class="mk-sl">CHANGE</div><div class="mk-sv @(_chg>=0?"up":"dn")">@(_chg>=0?"+":"")@_chg.ToString("F2")%</div></div>
+            <div class="mk-s"><div class="mk-sl">EMA21</div><div class="mk-sv" style="color:#38bdf8">@FmtP(_ema21)</div></div>
+            <div class="mk-s"><div class="mk-sl">EMA55</div><div class="mk-sv" style="color:#a855f7">@FmtP(_ema55)</div></div>
+            <div class="mk-s"><div class="mk-sl">ATR</div><div class="mk-sv">@FmtP(_atr)</div></div>
+            <div class="mk-s"><div class="mk-sl">RSI</div>
+                <div class="mk-sv @(_rsi>=70?"dn":_rsi<=30?"up":"")">
+                    @_rsi.ToString("F1") @(_rsi>=70?"OB":_rsi<=30?"OS":"")
+                </div>
+            </div>
+            <div class="mk-s"><div class="mk-sl">TREND</div>
+                <div class="mk-sv @(_last>_ema21?"up":"dn")">
+                    @(_last>_ema21?"▲ BULL":"▼ BEAR")
+                </div>
+            </div>
+            <div class="mk-s"><div class="mk-sl">BARS</div><div class="mk-sv mk-dim">@Selected.Klines.Count</div></div>
+            <div class="mk-s"><div class="mk-sl">VOLUME</div><div class="mk-sv mk-dim">@FmtV(Selected.Klines[^1].Volume)</div></div>
+        </div>
+
+        <!-- CHART AREA -->
+        <div class="mk-charts-area">
+
+            <!-- Price chart label -->
+            <div class="mk-chart-head">
+                <div class="mk-chart-title">CANDLESTICK · @Selected.Symbol · @TfLabel(Selected.Timeframe)</div>
+                <div class="mk-legend">
+                    <span style="color:#38bdf8">── EMA21</span>
+                    <span style="color:#a855f7">── EMA55</span>
+                    <span style="color:#eab308">╌╌ VWAP</span>
+                    <span style="color:rgba(59,130,246,0.5)">╌╌ BB(20)</span>
+                </div>
+            </div>
+            <div class="mk-canvas-wrap" style="height:300px">
+                <canvas id="priceChart"></canvas>
+            </div>
+
+            <!-- RSI label -->
+            <div class="mk-chart-head" style="padding-top:4px">
+                <div class="mk-chart-title">RSI(14)</div>
+                <div class="mk-legend">
+                    <span style="color:#ef4444">── OB 70</span>
+                    <span style="color:#22c55e">── OS 30</span>
+                </div>
+            </div>
+            <div class="mk-canvas-wrap" style="height:80px">
+                <canvas id="rsiChart"></canvas>
+            </div>
+
+            <!-- Volume label -->
+            <div class="mk-chart-head" style="padding-top:4px">
+                <div class="mk-chart-title">VOLUME</div>
+                <div class="mk-legend">
+                    <span style="color:#38bdf8">● Spike ×2.2</span>
+                </div>
+            </div>
+            <div class="mk-canvas-wrap" style="height:80px">
+                <canvas id="volumeChart"></canvas>
+            </div>
+
+        </div>
+
+        <!-- SYMBOL TABLE -->
+        <div class="mk-tbl-wrap">
+            <div class="mk-tbl-title">ALL INSTRUMENTS</div>
+            <div class="mk-tbl-scroll">
+                <table class="mk-tbl">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th><th>TF</th><th>Price</th>
+                            <th>Open</th><th>Change</th><th>High</th>
+                            <th>Low</th><th>Volume</th><th>Bars</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var s in Series)
+                        {
+                            var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
+                            var open = s.Klines.Count > 0 ? s.Klines[0].Close  : 0m;
+                            var chg  = open > 0 ? (last - open) / open * 100m  : 0m;
+                            <tr @onclick="()=>Pick(s)"
+                                class="@(s==Selected?"mk-row-sel":"")">
+                                <td class="mk-rsym">@s.Symbol</td>
+                                <td><span class="mk-rtf">@TfLabel(s.Timeframe)</span></td>
+                                <td class="mk-mono">@FmtP(last)</td>
+                                <td class="mk-mono mk-dim">@FmtP(open)</td>
+                                <td class="mk-mono @(chg>=0?"up":"dn")">@(chg>=0?"+":"")@chg.ToString("F2")%</td>
+                                <td class="mk-mono up">@FmtP(s.Klines.Count>0?s.Klines[^1].High:0)</td>
+                                <td class="mk-mono dn">@FmtP(s.Klines.Count>0?s.Klines[^1].Low:0)</td>
+                                <td class="mk-mono mk-dim">@FmtV(s.Klines.Count>0?s.Klines[^1].Volume:0)</td>
+                                <td class="mk-dim">@s.Klines.Count</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
 </div>
 
+<style>
+:root{--bg:#0a0d12;--bg2:#111520;--bg3:#1a1f2e;--bdr:#1e2535;--acc:#3b82f6;--grn:#22c55e;--red:#ef4444;--yel:#eab308;--txt:#e2e8f0;--dim:#64748b;--mono:'JetBrains Mono','Fira Code',monospace;}
+html,body{background:var(--bg)!important;color:var(--txt);}
+.mk{font-family:'Inter','Segoe UI',sans-serif;background:var(--bg);min-height:100vh;padding-bottom:48px;}
+.up{color:var(--grn)!important;}.dn{color:var(--red)!important;}.mk-dim{color:var(--dim)!important;}
+
+/* HEADER */
+.mk-header{display:flex;align-items:center;justify-content:space-between;padding:18px 28px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
+.mk-title-block{display:flex;align-items:center;gap:14px;}
+.mk-icon{font-size:28px;}
+.mk-title{font-family:var(--mono);font-size:17px;font-weight:700;letter-spacing:2px;color:var(--acc);}
+.mk-sub{font-size:11px;color:var(--dim);margin-top:3px;}
+.mk-hright{display:flex;align-items:center;gap:16px;}
+.mk-ticker{display:flex;align-items:center;gap:10px;}
+.mk-tsym{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--acc);}
+.mk-ttf{font-size:11px;background:var(--bg3);border:1px solid var(--bdr);padding:2px 8px;border-radius:4px;color:var(--dim);}
+.mk-tprice{font-family:var(--mono);font-size:20px;font-weight:700;}
+.mk-tchg{font-family:var(--mono);font-size:14px;font-weight:600;}
+.mk-btn{padding:6px 16px;border:1px solid var(--bdr);background:var(--bg3);color:var(--dim);border-radius:6px;cursor:pointer;font-size:12px;transition:all .2s;}
+.mk-btn:hover{border-color:var(--acc);color:var(--txt);}
+.mk-btn-on{background:rgba(239,68,68,.15);border-color:var(--red);color:var(--red);}
+
+/* CHIPS */
+.mk-chips{display:flex;gap:6px;padding:10px 28px;background:var(--bg2);border-bottom:1px solid var(--bdr);overflow-x:auto;flex-wrap:wrap;}
+.mk-chip{display:flex;align-items:center;gap:6px;padding:5px 12px;background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;cursor:pointer;transition:all .15s;white-space:nowrap;}
+.mk-chip:hover{border-color:var(--acc);}
+.mk-chip-on{background:rgba(59,130,246,.12);border-color:var(--acc);}
+.mk-chip-sym{font-family:var(--mono);font-size:12px;font-weight:700;}
+.mk-chip-tf{font-size:10px;color:var(--dim);}
+.mk-chip-chg{font-family:var(--mono);font-size:11px;font-weight:600;}
+
+/* EMPTY */
+.mk-empty{display:flex;flex-direction:column;align-items:center;gap:14px;padding:80px;color:var(--dim);text-align:center;}
+
+/* STATS */
+.mk-stats{display:grid;grid-template-columns:repeat(12,1fr);gap:1px;background:var(--bdr);border-bottom:1px solid var(--bdr);}
+.mk-s{background:var(--bg2);padding:12px 16px;}
+.mk-sl{font-size:10px;letter-spacing:1.5px;color:var(--dim);font-weight:600;}
+.mk-sv{font-family:var(--mono);font-size:14px;font-weight:700;margin-top:4px;}
+
+/* CHARTS */
+.mk-charts-area{background:var(--bg2);padding:16px 20px;border-bottom:1px solid var(--bdr);}
+.mk-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.mk-chart-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
+.mk-legend{display:flex;gap:14px;font-size:11px;color:var(--dim);}
+.mk-canvas-wrap{position:relative;background:#070a0f;border-radius:4px;margin-bottom:4px;}
+.mk-canvas-wrap canvas{display:block;width:100%!important;height:100%!important;}
+
+/* TABLE */
+.mk-tbl-wrap{padding:20px 28px;}
+.mk-tbl-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--bdr);}
+.mk-tbl-scroll{overflow-x:auto;}
+.mk-tbl{width:100%;border-collapse:collapse;}
+.mk-tbl th{text-align:left;padding:7px 12px;font-size:10px;letter-spacing:1px;color:var(--dim);border-bottom:1px solid var(--bdr);white-space:nowrap;}
+.mk-tbl td{padding:8px 12px;border-bottom:1px solid var(--bdr);}
+.mk-tbl tr{cursor:pointer;transition:background .1s;}
+.mk-tbl tr:hover td{background:var(--bg3);}
+.mk-row-sel td{background:var(--bg3)!important;}
+.mk-row-sel td:first-child{border-left:3px solid var(--acc);}
+.mk-rsym{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--acc);}
+.mk-rtf{background:var(--bg3);padding:2px 6px;border-radius:3px;font-size:10px;color:var(--dim);}
+.mk-mono{font-family:var(--mono);font-size:12px;}
+
+@@media(max-width:1400px){.mk-stats{grid-template-columns:repeat(6,1fr);}}
+@@media(max-width:900px){.mk-stats{grid-template-columns:repeat(3,1fr);}.mk-header{flex-direction:column;gap:12px;}}
+</style>
+
 @code {
-    // ===== STATE =====
-    private List<MarketSeries> Series = [];
-    private MarketSeries? Selected;
+    List<MarketSeries> Series = new();
+    MarketSeries? Selected;
+    PeriodicTimer? _timer;
+    CancellationTokenSource _cts = new();
+    bool Frozen, _jsReady;
 
-    private PeriodicTimer? _timer;
-    private CancellationTokenSource _cts = new();
+    decimal _last, _chg, _ema21, _ema55, _atr;
+    double _rsi;
 
-    private bool Frozen;
-    private double _scrollY;
-    private bool _jsReady;
-
-    // ===== INIT (NO JS HERE) =====
     protected override async Task OnInitializedAsync()
     {
-        Series = (await Service.LoadAsync())
-     .OrderBy(s => s.Symbol)               // A-Z по символу
-     .ThenBy(s => TfOrder(s.Timeframe))    // порядок таймфреймов
-     .ToList();
-        Selected = Series.FirstOrDefault();
+        await LoadData();
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        _ = TickAsync();
     }
 
-    static int TfOrder(string tf) => tf switch
-{
-    "OneMinute" => 1,
-    "ThreeMinutes" => 2,
-    "FiveMinutes" => 3,
-    "FifteenMinutes" => 4,
-    "ThirtyMinutes" => 5,
-    "OneHour" => 6,
-    "FourHour" => 7,
-    "OneDay" => 8,
-    _ => 999
-};
-
-  static string TfShort(string tf) => tf switch
-    {
-        "OneMinute" => "1m",
-        "ThreeMinutes" => "3m",
-        "FiveMinutes" => "5m",
-        "FifteenMinutes" => "15m",
-        "ThirtyMinutes" => "30m",
-        "OneHour" => "1h",
-        "FourHour" => "4h",
-        "OneDay" => "1D",
-        _ => tf
-    };
-
-    private async Task SafeJs(Func<Task> action)
-{
-    try
-    {
-        await action();
-    }
-    catch (JSException ex)
-    {
-        Console.Error.WriteLine("[JS ERROR] " + ex.Message);
-    }
-    catch (ObjectDisposedException)
-    {
-        // circuit already closed — OK
-    }
-}
-
-
-    // ===== FIRST SAFE JS CALL =====
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender || Selected == null)
-            return;
+        if (firstRender) { _jsReady = true; await RenderCharts(); }
+    }
 
-        _jsReady = true;
-        await LoadAndRenderAsync();
-
-        _timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
-        _ = Task.Run(async () =>
+    async Task TickAsync()
+    {
+        try
         {
-            try
+            while (await _timer!.WaitForNextTickAsync(_cts.Token))
             {
-                while (await _timer.WaitForNextTickAsync(_cts.Token))
-                {
-                    if (!Frozen)
-                    {
-                        await InvokeAsync(async () =>
-                        {
-                            Series = (await Service.LoadAsync())
-    .OrderBy(s => s.Symbol)               // A-Z по символу
-    .ThenBy(s => TfOrder(s.Timeframe))    // порядок таймфреймов
-    .ToList();
-                            Selected ??= Series.FirstOrDefault();
-                            await SafeJs(LoadAndRenderAsync);
-                        });
-                    }
-                }
+                if (Frozen) continue;
+                await LoadData();
+                await InvokeAsync(StateHasChanged);
+                await RenderCharts();
             }
-            catch (OperationCanceledException) { }
-        });
+        }
+        catch (OperationCanceledException) { }
     }
 
-    // ===== CORE =====
-    private async Task LoadAndRenderAsync()
+    async Task LoadData()
     {
-        if (!_jsReady || Selected == null)
-            return;
-
-        if (Selected.Klines.Count == 0)
-            return;
-
-        var closes = Selected.Klines.Select(k => (double)k.Close).ToArray();
-        var volumes = Selected.Klines.Select(k => (double)k.Volume).ToArray();
-
-        await JS.InvokeVoidAsync(
-            "marketChart.render",
-            Selected.Symbol,
-            Selected.Timeframe,
-            closes,
-            volumes
-        );
+        try
+        {
+            var fresh = await Service.LoadAsync();
+            if (fresh == null || fresh.Count == 0) return;
+            Series = fresh.ToList();
+            if (Selected == null)
+                Selected = Series.FirstOrDefault();
+            else
+            {
+                var upd = Series.FirstOrDefault(s =>
+                    s.Symbol == Selected.Symbol && s.Timeframe == Selected.Timeframe);
+                if (upd != null) Selected = upd;
+            }
+            CalcStats();
+        }
+        catch { }
     }
- 
 
-    private async Task OnSelect(ChangeEventArgs e)
+    void CalcStats()
     {
-        if (!int.TryParse(e.Value?.ToString(), out var idx))
-            return;
+        if (Selected == null || Selected.Klines.Count < 2) return;
+        var kl = Selected.Klines;
+        _last = kl[^1].Close;
+        var first = kl[0].Close;
+        _chg = first > 0 ? (_last - first) / first * 100m : 0m;
 
-        if (idx < 0 || idx >= Series.Count)
-            return;
+        var closes = kl.Select(k => (double)k.Close).ToList();
 
-        Selected = Series[idx];
+        // EMA21 + EMA55
+        if (closes.Count >= 21) _ema21 = (decimal)EmaLast(closes, 21);
+        if (closes.Count >= 55) _ema55 = (decimal)EmaLast(closes, 55);
 
-        if (!Frozen)
-            await LoadAndRenderAsync();
+        // ATR14
+        if (kl.Count >= 15)
+        {
+            decimal s = 0;
+            for (int i = kl.Count - 14; i < kl.Count; i++)
+            {
+                var c = kl[i]; var p = kl[i-1];
+                s += Math.Max(c.High - c.Low, Math.Max(Math.Abs(c.High - p.Close), Math.Abs(c.Low - p.Close)));
+            }
+            _atr = s / 14;
+        }
+
+        // RSI14
+        if (closes.Count >= 15)
+        {
+            double ag = 0, al = 0;
+            for (int i = 1; i <= 14; i++) { var d = closes[i] - closes[i-1]; if (d > 0) ag += d; else al -= d; }
+            ag /= 14; al /= 14;
+            for (int i = 15; i < closes.Count; i++) {
+                var d = closes[i] - closes[i-1];
+                ag = (ag * 13 + Math.Max(d, 0)) / 14;
+                al = (al * 13 + Math.Max(-d, 0)) / 14;
+            }
+            _rsi = al == 0 ? 100 : 100 - 100 / (1 + ag / al);
+        }
     }
-  
-    private void ToggleFreeze() => Frozen = !Frozen;
 
-    static string Key(MarketSeries s)
-        => $"{s.Symbol}:{s.Timeframe}";
-
-    static string Tf(string tf) => tf switch
+    static double EmaLast(List<double> arr, int period)
     {
-        "OneMinute" => "1m",
-        "FiveMinutes" => "5m",
+        double k = 2.0 / (period + 1);
+        double v = arr.Take(period).Average();
+        for (int i = period; i < arr.Count; i++) v = arr[i] * k + v * (1 - k);
+        return v;
+    }
+
+    async Task RenderCharts()
+    {
+        if (!_jsReady || Selected == null || Selected.Klines.Count < 5) return;
+        try
+        {
+            var klines = Selected.Klines.Select(k => new
+            {
+                open   = (double)k.Open,
+                high   = (double)k.High,
+                low    = (double)k.Low,
+                close  = (double)k.Close,
+                volume = (double)k.Volume
+            }).ToArray();
+
+            await JS.InvokeVoidAsync("marketChart.render",
+                Selected.Symbol, Selected.Timeframe, klines);
+        }
+        catch { }
+    }
+
+    void Pick(MarketSeries s)
+    {
+        Selected = s; CalcStats();
+        StateHasChanged();
+        _ = RenderCharts();
+    }
+
+    void ToggleFreeze() => Frozen = !Frozen;
+
+    string TfLabel(string tf) => tf switch
+    {
+        "OneMinute"      => "1m",
+        "FiveMinutes"    => "5m",
+        "FifteenMinutes" => "15m",
+        "OneHour"        => "1h",
+        "FourHour"       => "4h",
+        "OneDay"         => "1D",
         _ => tf
     };
 
-    // ===== DISPOSE =====
-    public ValueTask DisposeAsync()
+    string FmtP(decimal v)
     {
-        _cts.Cancel();
-        _timer?.Dispose();
-        _cts.Dispose();
-        return ValueTask.CompletedTask;
+        if (v <= 0) return "—";
+        if (v >= 1000) return v.ToString("F2");
+        if (v >= 1)    return v.ToString("F4");
+        return v.ToString("G5");
+    }
+
+    string FmtV(decimal v)
+    {
+        if (v >= 1_000_000) return (v/1_000_000m).ToString("F1") + "M";
+        if (v >= 1_000)     return (v/1_000m).ToString("F1") + "K";
+        return v.ToString("F2");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _cts.Cancel(); _timer?.Dispose();
     }
 }
