@@ -3,119 +3,115 @@
 @using VertexAutoTradeBinance8.Web.Models
 @inject EngineStateService EngineState
 @inject LivePnlService PnlService
-@inject NavigationManager Nav
 @implements IDisposable
 
-<PageTitle>Vertex AI — Live Dashboard</PageTitle>
+<PageTitle>Vertex AI — Live</PageTitle>
 
-<div class="vx-dashboard">
+<div class="vx">
 
-    <!-- ═══════════════════════════════════════════════
-         TOP BAR — статус движка в одну строку
-    ═══════════════════════════════════════════════ -->
-    <div class="vx-topbar">
-        <div class="vx-topbar-left">
-            <span class="vx-logo">⬡ VERTEX</span>
-            <span class="vx-version">AI v5.0</span>
-        </div>
-        <div class="vx-topbar-center">
-            <div class="vx-status-pill @(_state != null ? "pill-live" : "pill-offline")">
-                <span class="vx-pulse-dot"></span>
-                @(_state != null ? "LIVE" : "OFFLINE")
-            </div>
-            @if (_state != null)
+    <!-- TOP BAR -->
+    <div class="vx-bar">
+        <span class="vx-logo">⬡ VERTEX AI</span>
+        <div class="vx-bar-mid">
+            <span class="vx-pill @(_s != null ? "pill-on" : "pill-off")">
+                <span class="dot"></span>@(_s != null ? "LIVE" : "OFFLINE")
+            </span>
+            @if (_s != null)
             {
-                <span class="vx-regime @RegimeClass">@_state.MarketRegime</span>
-                <span class="vx-separator">|</span>
-                <span class="vx-topbar-label">Mode:</span>
-                <span class="vx-topbar-value">@_state.Mode</span>
-                <span class="vx-separator">|</span>
-                <span class="vx-topbar-label">Symbol:</span>
-                <span class="vx-topbar-value">@_state.Symbol</span>
-                <span class="vx-separator">|</span>
-                <span class="vx-topbar-label">TF:</span>
-                <span class="vx-topbar-value">@_state.Timeframe</span>
+                <span class="vx-tag @RegimeClass">@_s.MarketRegime</span>
+                <span class="vx-dim">|</span>
+                <span class="vx-dim">@_s.Mode</span>
+                <span class="vx-dim">|</span>
+                <span class="vx-sym">@_s.Symbol</span>
+                <span class="vx-dim">@_s.Timeframe</span>
             }
         </div>
-        <div class="vx-topbar-right">
-            <span class="vx-clock">@_now.ToString("HH:mm:ss")</span>
-        </div>
+        <span class="vx-clock">@DateTime.Now.ToString("HH:mm:ss")</span>
     </div>
 
-    <!-- ═══════════════════════════════════════════════
-         HERO ROW — ключевые метрики
-    ═══════════════════════════════════════════════ -->
-    <div class="vx-hero-row">
+    <!-- METRICS -->
+    <div class="vx-metrics">
 
-        <div class="vx-metric-card">
-            <div class="vx-metric-label">BALANCE</div>
-            <div class="vx-metric-value vx-accent-blue">
-                @(_state != null ? $"${_state.BalanceUsdt:F2}" : "—")
-            </div>
-            <div class="vx-metric-sub">USDT Wallet</div>
+        <div class="vx-m">
+            <div class="vx-m-label">BALANCE</div>
+            <div class="vx-m-val blue">@(_s != null ? $"${_s.BalanceUsdt:F2}" : "—")</div>
+            <div class="vx-m-sub">USDT</div>
         </div>
 
-        <div class="vx-metric-card">
-            <div class="vx-metric-label">REALIZED PNL</div>
-            <div class="vx-metric-value @PnlClass">
-                @(_state != null ? $"{(_state.RealizedPnlUsd >= 0 ? "+" : "")}{_state.RealizedPnlUsd:F2}$" : "—")
+        <div class="vx-m">
+            <div class="vx-m-label">REALIZED PNL</div>
+            <div class="vx-m-val @PnlClass">
+                @(_s != null ? $"{(_s.RealizedPnlUsd>=0?"+":"")}{_s.RealizedPnlUsd:F2}$" : "—")
             </div>
-            <div class="vx-metric-sub">Session</div>
+            <div class="vx-m-sub">Session</div>
         </div>
 
-        <div class="vx-metric-card">
-            <div class="vx-metric-label">OPEN POSITIONS</div>
-            <div class="vx-metric-value vx-accent-yellow">
-                @_positions.Count
-                <span class="vx-metric-cap">/ 4</span>
+        <div class="vx-m">
+            <div class="vx-m-label">POSITIONS</div>
+            <div class="vx-m-val yellow">
+                @_positions.Count<span class="vx-cap">/4</span>
             </div>
-            <div class="vx-metric-sub">Active</div>
+            <div class="vx-m-sub">Open</div>
         </div>
 
-        <div class="vx-metric-card">
-            <div class="vx-metric-label">UNREALIZED PNL</div>
-            <div class="vx-metric-value @UnrPnlClass">
-                @(_totalUnrPnl >= 0 ? "+" : "")@_totalUnrPnl.ToString("F2")$
+        <div class="vx-m">
+            <div class="vx-m-label">UNREALIZED</div>
+            <div class="vx-m-val @UnrClass">
+                @(_unrPnl>=0?"+":"")@_unrPnl.ToString("F2")$
             </div>
-            <div class="vx-metric-sub">All positions</div>
+            <div class="vx-m-sub">Total PnL</div>
         </div>
 
-        <div class="vx-metric-card">
-            <div class="vx-metric-label">LAST DECISION</div>
-            <div class="vx-metric-value vx-accent-gray vx-small">
-                @(_state?.LastEntryDecision ?? "—")
+        <div class="vx-m">
+            <div class="vx-m-label">CONFIDENCE</div>
+            <div class="vx-conf-wrap">
+                <div class="vx-conf-bar" style="width:@ConfPct%"></div>
             </div>
-            <div class="vx-metric-sub">@(_state?.LastBlockReason != null ? $"↳ {_state.LastBlockReason}" : "Strategy Engine")</div>
+            <div class="vx-m-val blue">
+                @(_s != null ? $"{_s.ConfidencePercent}%" : "—")
+            </div>
         </div>
 
-        <div class="vx-metric-card">
-            <div class="vx-metric-label">CONFIDENCE</div>
-            <div class="vx-confidence-bar-wrap">
-                <div class="vx-confidence-bar" style="width: @ConfidencePct%"></div>
+        <div class="vx-m">
+            <div class="vx-m-label">LAST DECISION</div>
+            <div class="vx-m-val sm @(_s?.LastEntryDecision?.Contains("BLOCK")==true?"warn":"")">
+                @(_s?.LastEntryDecision ?? "—")
             </div>
-            <div class="vx-metric-value vx-accent-blue">
-                @(_state != null ? $"{_state.Confidence:P0}" : "—")
-            </div>
+            <div class="vx-m-sub">@(_s?.ConfidenceLevel ?? "—")</div>
+        </div>
+
+        <div class="vx-m">
+            <div class="vx-m-label">UNIVERSE</div>
+            <div class="vx-m-val yellow">@(_s?.UniverseSize ?? 0)</div>
+            <div class="vx-m-sub">Symbols tracked</div>
+        </div>
+
+        <div class="vx-m">
+            <div class="vx-m-label">CYCLES/MIN</div>
+            <div class="vx-m-val blue">@(_s?.CyclesPerMinute ?? 0)</div>
+            <div class="vx-m-sub">Engine speed</div>
         </div>
 
     </div>
 
-    <!-- ═══════════════════════════════════════════════
-         POSITIONS TABLE
-    ═══════════════════════════════════════════════ -->
+    <!-- POSITIONS TABLE -->
     <div class="vx-section">
-        <div class="vx-section-header">
-            <span class="vx-section-title">OPEN POSITIONS</span>
-            <span class="vx-section-badge">@_positions.Count active</span>
+        <div class="vx-sh">
+            <span class="vx-st">POSITIONS</span>
+            <span class="vx-sb">@_positions.Count active</span>
+            @if (_unrPnl != 0)
+            {
+                <span class="vx-sb @UnrClass">Net: @(_unrPnl>=0?"+":"")@_unrPnl.ToString("F2")$</span>
+            }
         </div>
 
         @if (!_positions.Any())
         {
-            <div class="vx-empty">No open positions — bot is scanning markets</div>
+            <div class="vx-empty">No open positions — scanning @(_s?.UniverseSize ?? 0) symbols</div>
         }
         else
         {
-            <table class="vx-table">
+            <table class="vx-tbl">
                 <thead>
                     <tr>
                         <th>Symbol</th>
@@ -125,49 +121,42 @@
                         <th>Mark</th>
                         <th>PnL $</th>
                         <th>PnL %</th>
-                        <th>Liq Price</th>
-                        <th>Liq Buffer</th>
+                        <th>Liq</th>
+                        <th>Buffer</th>
                         <th>Margin</th>
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var pos in _positions)
+                    @foreach (var p in _positions)
                     {
-                        var pnlPct = pos.EntryPrice > 0
-                            ? (pos.MarkPrice - pos.EntryPrice) / pos.EntryPrice * (pos.Side == "LONG" ? 1 : -1) * 100m
-                            : 0m;
-                        var liqBuf = pos.LiquidationPrice.HasValue && pos.MarkPrice > 0
-                            ? Math.Abs(pos.MarkPrice - pos.LiquidationPrice.Value) / pos.MarkPrice * 100m
+                        var isLong = p.PositionSide == "LONG";
+                        var pnlPct = p.EntryPrice > 0
+                            ? (p.MarkPrice - p.EntryPrice) / p.EntryPrice * (isLong ? 1 : -1) * 100m : 0m;
+                        var liqBuf = p.LiquidationPrice.HasValue && p.MarkPrice > 0
+                            ? Math.Abs(p.MarkPrice - p.LiquidationPrice.Value) / p.MarkPrice * 100m
                             : (decimal?)null;
-                        var liqClass = liqBuf.HasValue
-                            ? (liqBuf < 4 ? "vx-danger" : liqBuf < 8 ? "vx-warn" : "vx-safe")
-                            : "";
+                        var liqCls = liqBuf.HasValue
+                            ? (liqBuf < 4 ? "danger" : liqBuf < 8 ? "warn" : "safe") : "";
 
-                        <tr class="@(pos.UnrealizedPnl >= 0 ? "row-profit" : "row-loss")">
-                            <td class="vx-symbol">@pos.Symbol</td>
-                            <td>
-                                <span class="vx-side-badge @(pos.Side == "LONG" ? "side-long" : "side-short")">
-                                    @pos.Side
-                                </span>
+                        <tr>
+                            <td class="sym">@p.Symbol</td>
+                            <td><span class="side @(isLong?"lng":"sht")">@p.PositionSide</span></td>
+                            <td>@p.PositionAmt.ToString("G6")</td>
+                            <td>@p.EntryPrice.ToString("G6")</td>
+                            <td>@p.MarkPrice.ToString("G6")</td>
+                            <td class="@(p.UnrealizedPnl>=0?"grn":"red")">
+                                @(p.UnrealizedPnl>=0?"+":"")@p.UnrealizedPnl.ToString("F2")$
                             </td>
-                            <td>@pos.PositionAmt.ToString("G6")</td>
-                            <td>@pos.EntryPrice.ToString("G6")</td>
-                            <td>@pos.MarkPrice.ToString("G6")</td>
-                            <td class="@(pos.UnrealizedPnl >= 0 ? "vx-profit" : "vx-loss")">
-                                @(pos.UnrealizedPnl >= 0 ? "+" : "")@pos.UnrealizedPnl.ToString("F2")$
+                            <td class="@(pnlPct>=0?"grn":"red")">
+                                @(pnlPct>=0?"+":"")@pnlPct.ToString("F2")%
                             </td>
-                            <td class="@(pnlPct >= 0 ? "vx-profit" : "vx-loss")">
-                                @(pnlPct >= 0 ? "+" : "")@pnlPct.ToString("F2")%
+                            <td class="@liqCls">
+                                @(p.LiquidationPrice.HasValue ? p.LiquidationPrice.Value.ToString("G6") : "—")
                             </td>
-                            <td class="@liqClass">
-                                @(pos.LiquidationPrice.HasValue ? pos.LiquidationPrice.Value.ToString("G6") : "—")
-                            </td>
-                            <td class="@liqClass">
+                            <td class="@liqCls">
                                 @(liqBuf.HasValue ? $"{liqBuf.Value:F1}%" : "—")
                             </td>
-                            <td>
-                                @(pos.IsolatedMargin.HasValue ? $"${pos.IsolatedMargin.Value:F2}" : "—")
-                            </td>
+                            <td>@(p.IsolatedMargin.HasValue ? $"${p.IsolatedMargin.Value:F2}" : "—")</td>
                         </tr>
                     }
                 </tbody>
@@ -175,324 +164,167 @@
         }
     </div>
 
-    <!-- ═══════════════════════════════════════════════
-         ENGINE STATE — детали движка
-    ═══════════════════════════════════════════════ -->
-    @if (_state != null)
+    <!-- ENGINE STATE -->
+    @if (_s != null)
     {
         <div class="vx-section">
-            <div class="vx-section-header">
-                <span class="vx-section-title">ENGINE STATE</span>
-            </div>
-            <div class="vx-engine-grid">
-
-                <div class="vx-info-card">
-                    <div class="vx-info-label">Last Signal</div>
-                    <div class="vx-info-value">@(_state.LastSignalReason ?? "—")</div>
-                </div>
-
-                <div class="vx-info-card">
-                    <div class="vx-info-label">Last Entry Decision</div>
-                    <div class="vx-info-value @(_state.LastEntryDecision?.Contains("BLOCK") == true ? "vx-warn" : "")">
-                        @(_state.LastEntryDecision ?? "—")
-                    </div>
-                </div>
-
-                <div class="vx-info-card">
-                    <div class="vx-info-label">Block Reason</div>
-                    <div class="vx-info-value vx-warn">
-                        @(_state.LastBlockReason ?? "none")
-                    </div>
-                </div>
-
-                <div class="vx-info-card">
-                    <div class="vx-info-label">Market Regime</div>
-                    <div class="vx-info-value @RegimeClass">@_state.MarketRegime</div>
-                </div>
-
-                <div class="vx-info-card">
-                    <div class="vx-info-label">Smart Regime</div>
-                    <div class="vx-info-value">@(_state.SmartRegime ?? "—")</div>
-                </div>
-
-                <div class="vx-info-card">
-                    <div class="vx-info-label">Trend Slope</div>
-                    <div class="vx-info-value">@_state.TrendSlope.ToString("F4")</div>
-                </div>
-
-                <div class="vx-info-card">
-                    <div class="vx-info-label">ATR</div>
-                    <div class="vx-info-value">@_state.Atr.ToString("G4")</div>
-                </div>
-
-                <div class="vx-info-card">
-                    <div class="vx-info-label">Confidence</div>
-                    <div class="vx-info-value vx-accent-blue">@_state.Confidence.ToString("P1")</div>
-                </div>
-
+            <div class="vx-sh"><span class="vx-st">ENGINE STATE</span></div>
+            <div class="vx-cards">
+                <div class="vx-card"><div class="vx-cl">Status</div><div class="vx-cv">@_s.Status</div></div>
+                <div class="vx-card"><div class="vx-cl">Mode</div><div class="vx-cv">@_s.Mode</div></div>
+                <div class="vx-card"><div class="vx-cl">Symbol</div><div class="vx-cv blue">@_s.Symbol</div></div>
+                <div class="vx-card"><div class="vx-cl">Timeframe</div><div class="vx-cv">@_s.Timeframe</div></div>
+                <div class="vx-card"><div class="vx-cl">Market Regime</div><div class="vx-cv @RegimeClass">@_s.MarketRegime</div></div>
+                <div class="vx-card"><div class="vx-cl">Smart Regime</div><div class="vx-cv">@_s.SmartRegime</div></div>
+                <div class="vx-card"><div class="vx-cl">Slope</div><div class="vx-cv">@_s.Slope.ToString("F4")</div></div>
+                <div class="vx-card"><div class="vx-cl">Volatility</div><div class="vx-cv">@_s.Volatility.ToString("F4")</div></div>
+                <div class="vx-card"><div class="vx-cl">Confidence</div><div class="vx-cv blue">@_s.ConfidencePercent% (@_s.ConfidenceLevel)</div></div>
+                <div class="vx-card"><div class="vx-cl">Last Decision</div>
+                    <div class="vx-cv @(_s.LastEntryDecision?.Contains("BLOCK")==true?"warn":"")">@(_s.LastEntryDecision ?? "—")</div></div>
+                <div class="vx-card"><div class="vx-cl">Liquidity</div>
+                    <div class="vx-cv @(_s.LiquidityDanger?"danger":"safe")">@(_s.LiquidityDanger ? $"⚠ {_s.LiquidityReason}" : "OK")</div></div>
+                <div class="vx-card"><div class="vx-cl">Open Positions</div><div class="vx-cv yellow">@_s.OpenPositions / 4</div></div>
+                <div class="vx-card"><div class="vx-cl">Universe Size</div><div class="vx-cv">@_s.UniverseSize</div></div>
+                <div class="vx-card"><div class="vx-cl">Supervisor</div><div class="vx-cv sm">@(_s.LastSupervisorMessage ?? "—")</div></div>
+                <div class="vx-card"><div class="vx-cl">Last Update</div><div class="vx-cv sm">@_s.LastUpdate.ToString("HH:mm:ss")</div></div>
+                <div class="vx-card"><div class="vx-cl">Cycles/min</div><div class="vx-cv">@_s.CyclesPerMinute</div></div>
             </div>
         </div>
     }
 
-    <!-- ═══════════════════════════════════════════════
-         QUICK LINKS
-    ═══════════════════════════════════════════════ -->
-    <div class="vx-quick-links">
-        <a class="vx-qlink" href="/engine">⚙ Engine</a>
-        <a class="vx-qlink" href="/ai-dashboard">🤖 AI Dashboard</a>
-        <a class="vx-qlink" href="/positions">📊 Positions</a>
-        <a class="vx-qlink" href="/missed-trades">📡 Signals</a>
-        <a class="vx-qlink" href="/ai-learning">📈 Learning</a>
+    <!-- NAV LINKS -->
+    <div class="vx-nav">
+        <a href="/engine">⚙ Engine</a>
+        <a href="/ai-dashboard">🤖 AI Dashboard</a>
+        <a href="/positions">📊 Positions</a>
+        <a href="/missed-trades">📡 Signals</a>
+        <a href="/ai-learning">📈 Learning</a>
     </div>
 
 </div>
 
 <style>
-    :root {
-        --bg:        #0a0d12;
-        --bg2:       #111520;
-        --bg3:       #1a1f2e;
-        --border:    #1e2535;
-        --accent:    #3b82f6;
-        --green:     #22c55e;
-        --red:       #ef4444;
-        --yellow:    #eab308;
-        --gray:      #6b7280;
-        --text:      #e2e8f0;
-        --text-dim:  #64748b;
-        --font-mono: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
-        --font-ui:   'Inter', 'Segoe UI', sans-serif;
-    }
+:root {
+    --bg: #0a0d12; --bg2: #111520; --bg3: #1a1f2e;
+    --bdr: #1e2535; --acc: #3b82f6; --grn: #22c55e;
+    --red: #ef4444; --yel: #eab308; --txt: #e2e8f0;
+    --dim: #64748b; --mono: 'JetBrains Mono','Fira Code',monospace;
+}
+html,body{background:var(--bg)!important;color:var(--txt);}
+.vx{font-family:'Inter','Segoe UI',sans-serif;background:var(--bg);min-height:100vh;padding:0 0 40px;}
 
-    html, body { background: var(--bg) !important; color: var(--text); }
+/* BAR */
+.vx-bar{display:flex;align-items:center;justify-content:space-between;background:var(--bg2);border-bottom:1px solid var(--bdr);padding:10px 24px;position:sticky;top:0;z-index:100;}
+.vx-logo{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--acc);letter-spacing:3px;}
+.vx-bar-mid{display:flex;align-items:center;gap:10px;font-size:13px;}
+.vx-clock{font-family:var(--mono);font-size:14px;color:var(--dim);}
+.vx-dim{color:var(--bdr);}
+.vx-sym{color:var(--acc);font-weight:600;}
+.vx-tag{font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px;background:var(--bg3);}
+.vx-pill{display:flex;align-items:center;gap:6px;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:1px;}
+.pill-on{background:rgba(34,197,94,.15);color:var(--grn);border:1px solid rgba(34,197,94,.3);}
+.pill-off{background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.3);}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor;animation:pulse 1.5s infinite;}
+@@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
 
-    .vx-dashboard {
-        font-family: var(--font-ui);
-        background: var(--bg);
-        min-height: 100vh;
-        padding: 0 0 40px 0;
-    }
+/* METRICS */
+.vx-metrics{display:grid;grid-template-columns:repeat(8,1fr);gap:1px;background:var(--bdr);border-bottom:1px solid var(--bdr);}
+.vx-m{background:var(--bg2);padding:18px 16px 14px;display:flex;flex-direction:column;gap:4px;}
+.vx-m-label{font-size:10px;letter-spacing:1.5px;color:var(--dim);font-weight:600;}
+.vx-m-val{font-family:var(--mono);font-size:20px;font-weight:700;}
+.vx-m-val.sm{font-size:12px;word-break:break-all;}
+.vx-m-sub{font-size:11px;color:var(--dim);}
+.vx-cap{font-size:13px;color:var(--dim);}
+.blue{color:var(--acc)!important;}
+.yellow{color:var(--yel)!important;}
+.grn{color:var(--grn)!important;}
+.red{color:var(--red)!important;}
+.warn{color:var(--yel)!important;}
+.safe{color:var(--grn)!important;}
+.danger{color:var(--red)!important;font-weight:700!important;}
 
-    /* ── TOP BAR ── */
-    .vx-topbar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        background: var(--bg2);
-        border-bottom: 1px solid var(--border);
-        padding: 10px 24px;
-        position: sticky;
-        top: 0;
-        z-index: 100;
-    }
-    .vx-topbar-left { display: flex; align-items: center; gap: 10px; }
-    .vx-logo { font-family: var(--font-mono); font-size: 18px; font-weight: 700; color: var(--accent); letter-spacing: 3px; }
-    .vx-version { font-size: 11px; color: var(--text-dim); }
-    .vx-topbar-center { display: flex; align-items: center; gap: 12px; font-size: 13px; }
-    .vx-topbar-label { color: var(--text-dim); }
-    .vx-topbar-value { color: var(--text); font-weight: 500; }
-    .vx-separator { color: var(--border); }
-    .vx-clock { font-family: var(--font-mono); font-size: 15px; color: var(--text-dim); }
+/* CONFIDENCE */
+.vx-conf-wrap{height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;margin:4px 0;}
+.vx-conf-bar{height:100%;background:var(--acc);border-radius:2px;transition:width .5s;}
 
-    /* ── STATUS PILL ── */
-    .vx-status-pill {
-        display: flex; align-items: center; gap: 6px;
-        padding: 3px 12px; border-radius: 20px;
-        font-size: 11px; font-weight: 700; letter-spacing: 1px;
-    }
-    .pill-live { background: rgba(34,197,94,.15); color: var(--green); border: 1px solid rgba(34,197,94,.3); }
-    .pill-offline { background: rgba(239,68,68,.15); color: var(--red); border: 1px solid rgba(239,68,68,.3); }
-    .vx-pulse-dot {
-        width: 7px; height: 7px; border-radius: 50%; background: currentColor;
-        animation: pulse 1.5s infinite;
-    }
-    @@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+/* REGIME */
+.bull{color:var(--grn)!important;}
+.bear{color:var(--red)!important;}
+.rng{color:var(--yel)!important;}
 
-    /* ── REGIME ── */
-    .vx-regime { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 4px; background: var(--bg3); }
-    .regime-bull { color: var(--green); }
-    .regime-bear { color: var(--red); }
-    .regime-range { color: var(--yellow); }
-    .regime-neutral { color: var(--text-dim); }
+/* SECTION */
+.vx-section{padding:20px 24px 8px;}
+.vx-sh{display:flex;align-items:center;gap:12px;margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid var(--bdr);}
+.vx-st{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
+.vx-sb{font-size:11px;padding:2px 8px;background:var(--bg3);border-radius:10px;color:var(--dim);}
+.vx-empty{text-align:center;padding:32px;color:var(--dim);background:var(--bg2);border-radius:8px;border:1px dashed var(--bdr);}
 
-    /* ── HERO METRICS ── */
-    .vx-hero-row {
-        display: grid;
-        grid-template-columns: repeat(6, 1fr);
-        gap: 1px;
-        background: var(--border);
-        border-bottom: 1px solid var(--border);
-    }
-    .vx-metric-card {
-        background: var(--bg2);
-        padding: 20px 20px 16px;
-        display: flex; flex-direction: column; gap: 4px;
-    }
-    .vx-metric-label { font-size: 10px; letter-spacing: 1.5px; color: var(--text-dim); font-weight: 600; }
-    .vx-metric-value { font-family: var(--font-mono); font-size: 22px; font-weight: 700; }
-    .vx-metric-cap { font-size: 14px; color: var(--text-dim); }
-    .vx-metric-sub { font-size: 11px; color: var(--text-dim); }
-    .vx-small { font-size: 13px !important; word-break: break-all; }
-    .vx-accent-blue { color: var(--accent); }
-    .vx-accent-yellow { color: var(--yellow); }
-    .vx-accent-gray { color: var(--text); }
+/* TABLE */
+.vx-tbl{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13px;}
+.vx-tbl th{text-align:left;padding:7px 12px;font-size:10px;letter-spacing:1px;color:var(--dim);border-bottom:1px solid var(--bdr);font-family:'Inter',sans-serif;font-weight:600;}
+.vx-tbl td{padding:9px 12px;border-bottom:1px solid var(--bdr);}
+.vx-tbl tr:hover td{background:var(--bg3);}
+.sym{color:var(--acc);font-weight:700;}
+.side{padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:1px;}
+.lng{background:rgba(34,197,94,.15);color:var(--grn);}
+.sht{background:rgba(239,68,68,.15);color:var(--red);}
 
-    /* ── CONFIDENCE BAR ── */
-    .vx-confidence-bar-wrap {
-        height: 4px; background: var(--bg3); border-radius: 2px; overflow: hidden; margin: 4px 0;
-    }
-    .vx-confidence-bar {
-        height: 100%; background: var(--accent);
-        border-radius: 2px; transition: width .5s ease;
-    }
+/* CARDS */
+.vx-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+.vx-card{background:var(--bg2);border:1px solid var(--bdr);border-radius:6px;padding:12px 14px;}
+.vx-cl{font-size:10px;letter-spacing:1.5px;color:var(--dim);margin-bottom:5px;font-weight:600;}
+.vx-cv{font-family:var(--mono);font-size:13px;word-break:break-all;}
+.vx-cv.sm{font-size:11px;}
 
-    /* ── SECTIONS ── */
-    .vx-section { padding: 24px 24px 8px; }
-    .vx-section-header {
-        display: flex; align-items: center; gap: 12px;
-        margin-bottom: 16px;
-        padding-bottom: 10px;
-        border-bottom: 1px solid var(--border);
-    }
-    .vx-section-title {
-        font-family: var(--font-mono); font-size: 11px;
-        letter-spacing: 2px; color: var(--text-dim); font-weight: 700;
-    }
-    .vx-section-badge {
-        font-size: 11px; padding: 2px 8px;
-        background: var(--bg3); border-radius: 10px; color: var(--text-dim);
-    }
-    .vx-empty {
-        text-align: center; padding: 40px; color: var(--text-dim);
-        font-size: 14px; background: var(--bg2); border-radius: 8px;
-        border: 1px dashed var(--border);
-    }
+/* NAV */
+.vx-nav{display:flex;gap:10px;padding:20px 24px 0;flex-wrap:wrap;}
+.vx-nav a{padding:7px 16px;background:var(--bg2);border:1px solid var(--bdr);border-radius:6px;color:var(--dim);font-size:13px;text-decoration:none;transition:all .2s;}
+.vx-nav a:hover{border-color:var(--acc);color:var(--txt);}
 
-    /* ── TABLE ── */
-    .vx-table {
-        width: 100%; border-collapse: collapse;
-        font-family: var(--font-mono); font-size: 13px;
-    }
-    .vx-table th {
-        text-align: left; padding: 8px 12px;
-        font-size: 10px; letter-spacing: 1px; color: var(--text-dim);
-        border-bottom: 1px solid var(--border);
-        font-family: var(--font-ui); font-weight: 600;
-    }
-    .vx-table td {
-        padding: 10px 12px;
-        border-bottom: 1px solid var(--border);
-        color: var(--text);
-    }
-    .vx-table tr:hover td { background: var(--bg3); }
-    .row-profit { border-left: 2px solid transparent; }
-    .row-profit:hover { border-left-color: var(--green); }
-    .row-loss:hover { border-left-color: var(--red); }
-    .vx-symbol { color: var(--accent); font-weight: 700; }
-    .vx-profit { color: var(--green); font-weight: 600; }
-    .vx-loss { color: var(--red); font-weight: 600; }
-    .vx-safe { color: var(--green); }
-    .vx-warn { color: var(--yellow) !important; }
-    .vx-danger { color: var(--red) !important; font-weight: 700; }
-
-    /* ── SIDE BADGE ── */
-    .vx-side-badge {
-        padding: 2px 8px; border-radius: 4px;
-        font-size: 11px; font-weight: 700; letter-spacing: 1px;
-    }
-    .side-long { background: rgba(34,197,94,.15); color: var(--green); }
-    .side-short { background: rgba(239,68,68,.15); color: var(--red); }
-
-    /* ── ENGINE GRID ── */
-    .vx-engine-grid {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 12px;
-    }
-    .vx-info-card {
-        background: var(--bg2); border: 1px solid var(--border);
-        border-radius: 6px; padding: 14px 16px;
-    }
-    .vx-info-label { font-size: 10px; letter-spacing: 1.5px; color: var(--text-dim); margin-bottom: 6px; font-weight: 600; }
-    .vx-info-value { font-family: var(--font-mono); font-size: 13px; color: var(--text); word-break: break-all; }
-
-    /* ── QUICK LINKS ── */
-    .vx-quick-links {
-        display: flex; gap: 12px; padding: 24px 24px 0;
-        flex-wrap: wrap;
-    }
-    .vx-qlink {
-        padding: 8px 18px; background: var(--bg2);
-        border: 1px solid var(--border); border-radius: 6px;
-        color: var(--text-dim); font-size: 13px; text-decoration: none;
-        transition: all .2s;
-    }
-    .vx-qlink:hover { border-color: var(--accent); color: var(--text); }
-
-    @@media (max-width: 1200px) {
-        .vx-hero-row { grid-template-columns: repeat(3, 1fr); }
-        .vx-engine-grid { grid-template-columns: repeat(2, 1fr); }
-    }
-    @@media (max-width: 700px) {
-        .vx-hero-row { grid-template-columns: repeat(2, 1fr); }
-        .vx-engine-grid { grid-template-columns: 1fr; }
-        .vx-topbar-center { display: none; }
-    }
+@@media(max-width:1400px){.vx-metrics{grid-template-columns:repeat(4,1fr);}}
+@@media(max-width:900px){.vx-metrics{grid-template-columns:repeat(2,1fr);}.vx-cards{grid-template-columns:repeat(2,1fr);}.vx-bar-mid{display:none;}}
 </style>
 
 @code {
-    private EngineStateModel? _state;
-    private List<LivePositionsService.LivePosition> _positions = new();
-    private decimal _totalUnrPnl;
-    private DateTime _now = DateTime.Now;
+    private EngineStateModel? _s;
+    private List<LivePositionModel> _positions = new();
+    private decimal _unrPnl;
     private System.Threading.Timer? _timer;
 
     protected override void OnInitialized()
     {
-        // Обновляем каждые 2 секунды
-        _timer = new System.Threading.Timer(async _ =>
+        PnlService.Start(null, 1000);
+        PnlService.Updated += OnUpdated;
+
+        _timer = new System.Threading.Timer(_ =>
         {
-            await LoadState();
-            await InvokeAsync(StateHasChanged);
+            _s = EngineState.Load();
+            InvokeAsync(StateHasChanged);
         }, null, 0, 2000);
     }
 
-    private async Task LoadState()
+    private void OnUpdated()
     {
-        try
-        {
-            _state = await EngineState.GetAsync();
-            var positions = PnlService.GetAll().ToList();
-            _positions = positions.Select(p => new LivePositionsService.LivePosition
-            {
-                Symbol          = p.Symbol,
-                PositionSide    = p.Side.ToString(),
-                PositionAmt     = p.Qty,
-                EntryPrice      = p.EntryPrice,
-                MarkPrice       = p.MarkPrice,
-                UnrealizedPnl   = p.UnrealizedPnl,
-                Notional        = p.Notional,
-                LiquidationPrice = p.LiquidationPrice,
-                IsolatedMargin  = p.IsolatedMargin,
-                Leverage        = p.Leverage.HasValue ? (int)p.Leverage.Value : null
-            }).ToList();
-
-            _totalUnrPnl = _positions.Sum(p => p.UnrealizedPnl);
-            _now = DateTime.Now;
-        }
-        catch { }
+        _positions = PnlService.GetPositions();
+        _unrPnl = _positions.Sum(p => p.UnrealizedPnl);
+        InvokeAsync(StateHasChanged);
     }
 
-    private string PnlClass => _state?.RealizedPnlUsd >= 0 ? "vx-profit" : "vx-loss";
-    private string UnrPnlClass => _totalUnrPnl >= 0 ? "vx-profit" : "vx-loss";
-    private double ConfidencePct => _state != null ? (double)(_state.Confidence * 100m) : 0;
-    private string RegimeClass => _state?.MarketRegime?.ToLower() switch
+    private string PnlClass  => _s?.RealizedPnlUsd >= 0 ? "grn" : "red";
+    private string UnrClass   => _unrPnl >= 0 ? "grn" : "red";
+    private double ConfPct    => _s != null ? Math.Min(100, (double)_s.ConfidencePercent) : 0;
+    private string RegimeClass => _s?.MarketRegime?.ToLower() switch
     {
-        "stronguptrend" or "uptrend" => "regime-bull",
-        "strongdowntrend" or "downtrend" => "regime-bear",
-        "range" or "sideways" => "regime-range",
-        _ => "regime-neutral"
+        "stronguptrend" or "uptrend"     => "bull",
+        "strongdowntrend" or "downtrend" => "bear",
+        "range" or "sideways"            => "rng",
+        _ => ""
     };
 
-    public void Dispose() => _timer?.Dispose();
+    public void Dispose()
+    {
+        PnlService.Updated -= OnUpdated;
+        PnlService.Stop();
+        _timer?.Dispose();
+    }
 }
