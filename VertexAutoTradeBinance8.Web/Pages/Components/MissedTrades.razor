@@ -1,7 +1,7 @@
 @page "/missed-trades"
 @using VertexAutoTradeBinance8.Web.Services
 @using VertexAutoTradeBinance8.Web.Models
-@using MR = MR
+@using VertexAutoTradeBinance8.Models
 @inject MissedTradeFileService MissedService
 
 <PageTitle>Signal Intelligence — Vertex</PageTitle>
@@ -239,15 +239,15 @@
                             <div class="si-drow"><span class="si-dl">Notional</span><span class="si-dv">$@_selected.AttemptNotional.ToString("F2")</span></div>
                             <div class="si-drow"><span class="si-dl">Min Notional</span><span class="si-dv">$@_selected.RequiredMinNotional.ToString("F2")</span></div>
                         </div>
-                        @if (sel.TakeProfits.Any())
+                        @if (_selected!.TakeProfits.Any())
                         {
                             <div class="si-detail-tps">
                                 <div class="si-dl" style="margin-bottom:6px">TAKE PROFITS</div>
-                                @foreach (var tpItem in sel.TakeProfits.Select((v,idx)=>new{v,idx}))
+                                @foreach (var tpItem in _selected!.TakeProfits.Select((v,idx)=>new{v,idx}))
                                 {
                                     var tp = tpItem.v; var i = tpItem.idx;
-                                    var pct = sel.Entry > 0
-                                        ? Math.Abs(tp - sel.Entry) / sel.Entry * 100m
+                                    var pct = _selected!.Entry > 0
+                                        ? Math.Abs(tp - _selected!.Entry) / _selected!.Entry * 100m
                                         : 0m;
                                     <div class="si-dtp">
                                         <span>TP@(i+1)</span>
@@ -259,7 +259,7 @@
                         }
                         <div class="si-ai-hint">
                             <div class="si-ai-icon">🤖</div>
-                            <div class="si-ai-text">@AiHint(sel)</div>
+                            <div class="si-ai-text">@AiHint(_selected!)</div>
                         </div>
                     </div>
                 }
@@ -558,19 +558,19 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     string RegClass(MR r) => r switch
     {
-        MR.StrongUpTrend or MR.UpTrend => "bull",
-        MR.StrongDownTrend or MR.DownTrend => "bear",
+        MarketRegime.StrongUpTrend or MarketRegime.UpTrend => "bull",
+        MarketRegime.StrongDownTrend or MarketRegime.DownTrend => "bear",
         _ => "warn"
     };
 
     string RegShort(MR r) => r switch
     {
-        MR.StrongUpTrend => "↑↑",
-        MR.UpTrend => "↑",
-        MR.StrongDownTrend => "↓↓",
-        MR.DownTrend => "↓",
-        MR.Squeeze => "⊞",
-        MR.Range => "↔",
+        MarketRegime.StrongUpTrend => "↑↑",
+        MarketRegime.UpTrend => "↑",
+        MarketRegime.StrongDownTrend => "↓↓",
+        MarketRegime.DownTrend => "↓",
+        MarketRegime.Squeeze => "⊞",
+        MarketRegime.Range => "↔",
         _ => "?"
     };
 
@@ -612,11 +612,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         else
             sb.Append("Weak signal — better to wait. ");
 
-        if (r.Regime == MR.StrongUpTrend || r.Regime == MR.UpTrend)
+        if (r.Regime == MarketRegime.StrongUpTrend || r.Regime == MarketRegime.UpTrend)
             sb.Append("Strong uptrend regime — momentum in favor. ");
-        else if (r.Regime == MR.Range)
+        else if (r.Regime == MarketRegime.Range)
             sb.Append("Range regime — mean reversion play. ");
-        else if (r.Regime == MR.Squeeze)
+        else if (r.Regime == MarketRegime.Squeeze)
             sb.Append("Squeeze detected — breakout expected. ");
 
         if (r.Reason.Contains("Balance") || r.Reason.Contains("balance"))
