@@ -556,14 +556,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     string ConfColor(int c) => c >= 75 ? "#22c55e" : c >= 50 ? "#3b82f6" : "#ef4444";
     string ConfClass(int c) => c >= 75 ? "hi" : c >= 50 ? "mid" : "lo";
 
-    string RegClass(MR r) => r switch
+    string RegClass(MarketRegime r) => r switch
     {
         MarketRegime.StrongUpTrend or MarketRegime.UpTrend => "bull",
         MarketRegime.StrongDownTrend or MarketRegime.DownTrend => "bear",
         _ => "warn"
     };
 
-    string RegShort(MR r) => r switch
+    string RegShort(MarketRegime r) => r switch
     {
         MarketRegime.StrongUpTrend => "↑↑",
         MarketRegime.UpTrend => "↑",
