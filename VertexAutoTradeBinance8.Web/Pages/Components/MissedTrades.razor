@@ -1,7 +1,6 @@
 @page "/missed-trades"
 @using VertexAutoTradeBinance8.Web.Services
 @using VertexAutoTradeBinance8.Web.Models
-@using VertexAutoTradeBinance8.Models
 @inject MissedTradeFileService MissedService
 
 <PageTitle>Signal Intelligence — Vertex</PageTitle>
@@ -214,7 +213,7 @@
                 </div>
 
                 <!-- SELECTED DETAIL -->
-                @if (_selected != null)
+                @if (_selected is not null)
                 {
                     <div class="si-panel si-detail">
                         <div class="si-ph">
@@ -239,14 +238,15 @@
                             <div class="si-drow"><span class="si-dl">Notional</span><span class="si-dv">$@_selected.AttemptNotional.ToString("F2")</span></div>
                             <div class="si-drow"><span class="si-dl">Min Notional</span><span class="si-dv">$@_selected.RequiredMinNotional.ToString("F2")</span></div>
                         </div>
-                        @if (_selected.TakeProfits.Any())
+                        @if (sel.TakeProfits.Any())
                         {
                             <div class="si-detail-tps">
                                 <div class="si-dl" style="margin-bottom:6px">TAKE PROFITS</div>
-                                @foreach (var (tp, i) in _selected.TakeProfits.Select((v,i)=>(v,i)))
+                                @foreach (var tpItem in sel.TakeProfits.Select((v,idx)=>new{v,idx}))
                                 {
-                                    var pct = _selected.Entry > 0
-                                        ? Math.Abs(tp - _selected.Entry) / _selected.Entry * 100m
+                                    var tp = tpItem.v; var i = tpItem.idx;
+                                    var pct = sel.Entry > 0
+                                        ? Math.Abs(tp - sel.Entry) / sel.Entry * 100m
                                         : 0m;
                                     <div class="si-dtp">
                                         <span>TP@(i+1)</span>
@@ -258,7 +258,7 @@
                         }
                         <div class="si-ai-hint">
                             <div class="si-ai-icon">🤖</div>
-                            <div class="si-ai-text">@AiHint(_selected)</div>
+                            <div class="si-ai-text">@AiHint(sel)</div>
                         </div>
                     </div>
                 }
@@ -398,9 +398,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 </style>
 
 @code {
-    List<MissedTradeRecord>? _records;
-    List<MissedTradeRecord> Visible = new();
-    MissedTradeRecord? _selected;
+    List<VertexAutoTradeBinance8.Web.Models.MissedTradeRecord>? _records;
+    List<VertexAutoTradeBinance8.Web.Models.MissedTradeRecord> Visible = new();
+    VertexAutoTradeBinance8.Web.Models.MissedTradeRecord? _selected;
     string SelectedRecord = "";
 
     HashSet<string> _known = new();
@@ -415,7 +415,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     record FilterDef(string Key, string Label, int Count);
     List<FilterDef> Filters = new();
 
-    record SymbolGroup(string Symbol, int Count, List<MissedTradeRecord> Items);
+    record SymbolGroup(string Symbol, int Count, List<VertexAutoTradeBinance8.Web.Models.MissedTradeRecord> Items);
     record ReasonGroup(string Reason, int Count);
     List<SymbolGroup> SymbolGroups = new();
     List<ReasonGroup> ReasonGroups = new();
@@ -424,7 +424,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     int Total, HighConf, LongCount, ShortCount, UniqueSymbols, BalBlocked;
     string BestSymbol = "—", TopSymbol = "—", TopReason = "—";
 
-    string Key(MissedTradeRecord r) => $"{r.Symbol}-{r.Time:yyyyMMddHHmmss.fff}";
+    string Key(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r) => $"{r.Symbol}-{r.Time:yyyyMMddHHmmss.fff}";
 
     protected override async Task OnInitializedAsync()
     {
@@ -542,7 +542,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         ApplyFilter();
     }
 
-    void SelectCard(MissedTradeRecord r)
+    void SelectCard(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r)
     {
         if (SelectedRecord == Key(r)) { _selected = null; SelectedRecord = ""; }
         else { _selected = r; SelectedRecord = Key(r); }
@@ -555,14 +555,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     string ConfColor(int c) => c >= 75 ? "#22c55e" : c >= 50 ? "#3b82f6" : "#ef4444";
     string ConfClass(int c) => c >= 75 ? "hi" : c >= 50 ? "mid" : "lo";
 
-    string RegClass(MarketRegime r) => r switch
+    string RegClass(VertexAutoTradeBinance8.Models.MarketRegime r) => r switch
     {
         MarketRegime.StrongUpTrend or MarketRegime.UpTrend => "bull",
         MarketRegime.StrongDownTrend or MarketRegime.DownTrend => "bear",
         _ => "warn"
     };
 
-    string RegShort(MarketRegime r) => r switch
+    string RegShort(VertexAutoTradeBinance8.Models.MarketRegime r) => r switch
     {
         MarketRegime.StrongUpTrend => "↑↑",
         MarketRegime.UpTrend => "↑",
@@ -599,7 +599,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _ => r.Length > 20 ? r[..20] + "…" : r
     };
 
-    string AiHint(MissedTradeRecord r)
+    string AiHint(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r)
     {
         var sb = new System.Text.StringBuilder();
         if (r.Confidence >= 80)
