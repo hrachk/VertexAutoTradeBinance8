@@ -306,8 +306,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         if (firstRender)
         {
             _jsReady = true;
-            await JS.InvokeVoidAsync("marketChart.init", "priceChart", "rsiChart", "volumeChart");
-            await JS.InvokeVoidAsync("marketResize.init", "priceWrap", "resizeHandle");
+            await JS.InvokeVoidAsync("marketChart.init",
+                "priceChart", "rsiChart", "volumeChart",
+                "resizeHandle", "priceWrap");
             await RenderCharts();
         }
     }
