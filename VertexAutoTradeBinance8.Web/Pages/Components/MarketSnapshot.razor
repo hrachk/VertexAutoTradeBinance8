@@ -39,25 +39,23 @@
         </div>
     </div>
 
-    <!-- SYMBOL TICKER BAR - horizontal scrollable, compact -->
+    <!-- ROW 1: SYMBOL TICKER -->
     <div class="mk-ticker-bar">
         <div class="mk-ticker-scroll">
-            @foreach (var s in Series)
+            @foreach (var sym in _symbols)
             {
-                var last  = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
-                var first = s.Klines.Count > 1 ? s.Klines[0].Close  : last;
+                var symSeries = Series.Where(s => s.Symbol == sym).ToList();
+                var best = symSeries.OrderByDescending(s => s.Klines.Count).FirstOrDefault();
+                var last  = best?.Klines.Count > 0 ? best.Klines[^1].Close : 0m;
+                var first = best?.Klines.Count > 1 ? best.Klines[0].Close  : last;
                 var chg   = first > 0 ? (last - first) / first * 100m : 0m;
-                var isSel = s == Selected;
-                <button class="mk-tk @(isSel?"mk-tk-on":"")" @onclick="()=>Pick(s)">
-                    <span class="mk-tk-sym">@s.Symbol</span>
-                    <span class="mk-tk-sep">/</span>
-                    <span class="mk-tk-tf">@TfLabel(s.Timeframe)</span>
-                    <span class="mk-tk-chg @(chg>=0?"up":"dn")">
-                        @(chg>=0?"+":"")@chg.ToString("F1")%
-                    </span>
+                var isSel = sym == _activeSym;
+                <button class="mk-tk @(isSel?"mk-tk-on":"")" @onclick="()=>PickSym(sym)">
+                    <span class="mk-tk-sym">@sym</span>
                     @if (last > 0)
                     {
                         <span class="mk-tk-price">@FmtP(last)</span>
+                        <span class="mk-tk-chg @(chg>=0?"up":"dn")">@(chg>=0?"+":"")@chg.ToString("F1")%</span>
                     }
                 </button>
             }
@@ -67,6 +65,22 @@
             }
         </div>
     </div>
+
+    <!-- ROW 2: TIMEFRAME SELECTOR (TradingView style) -->
+    @if (!string.IsNullOrEmpty(_activeSym))
+    {
+        <div class="mk-tf-bar">
+            @foreach (var tf in _allTfs)
+            {
+                var hasSeries = Series.Any(s => s.Symbol == _activeSym && s.Timeframe == tf.Key);
+                var isSelTf   = _activeTf == tf.Key;
+                <button class="mk-tf-btn @(isSelTf?"mk-tf-on":"") @(hasSeries?"":"mk-tf-dim")"
+                        @onclick="()=>PickTf(tf.Key)">
+                    @tf.Label
+                </button>
+            }
+        </div>
+    }
 
     @if (Selected == null || Selected.Klines.Count < 5)
     {
@@ -217,7 +231,13 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-btn:hover{border-color:var(--acc);color:var(--txt);}
 .mk-btn-on{background:rgba(239,68,68,.15);border-color:var(--red);color:var(--red);}
 
-/* CHIPS */
+/* TF BAR */
+.mk-tf-bar{display:flex;align-items:center;gap:2px;padding:6px 16px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
+.mk-tf-btn{padding:4px 10px;background:transparent;border:none;color:var(--dim);font-family:var(--mono);font-size:12px;font-weight:600;cursor:pointer;border-radius:4px;transition:all .15s;}
+.mk-tf-btn:hover{background:var(--bg3);color:var(--txt);}
+.mk-tf-on{background:var(--acc)!important;color:#fff!important;}
+.mk-tf-dim{opacity:.35;}
+.mk-tf-dim:hover{opacity:.6;}
 .mk-chips{display:flex;gap:6px;padding:10px 28px;background:var(--bg2);border-bottom:1px solid var(--bdr);overflow-x:auto;flex-wrap:wrap;}
 .mk-chip{display:flex;align-items:center;gap:6px;padding:5px 12px;background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;cursor:pointer;transition:all .15s;white-space:nowrap;}
 .mk-chip:hover{border-color:var(--acc);}
@@ -287,6 +307,30 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 @code {
     List<MarketSeries> Series = new();
     MarketSeries? Selected;
+
+    // Symbol + TF selection
+    string _activeSym = "";
+    string _activeTf  = "";
+    List<string> _symbols = new();
+
+    // All standard TFs in TradingView order
+    record TfDef(string Key, string Label);
+    readonly List<TfDef> _allTfs = new()
+    {
+        new("OneMinute",      "1m"),
+        new("ThreeMinutes",   "3m"),
+        new("FiveMinutes",    "5m"),
+        new("FifteenMinutes", "15m"),
+        new("ThirtyMinutes",  "30m"),
+        new("OneHour",        "1h"),
+        new("TwoHour",        "2h"),
+        new("FourHour",       "4h"),
+        new("SixHour",        "6h"),
+        new("TwelveHour",     "12h"),
+        new("OneDay",         "1D"),
+        new("ThreeDay",       "3D"),
+        new("OneWeek",        "1W"),
+    };
     PeriodicTimer? _timer;
     CancellationTokenSource _cts = new();
     bool Frozen, _jsReady;
@@ -335,17 +379,69 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             var fresh = await Service.LoadAsync();
             if (fresh == null || fresh.Count == 0) return;
             Series = fresh.ToList();
-            if (Selected == null)
-                Selected = Series.FirstOrDefault();
-            else
-            {
-                var upd = Series.FirstOrDefault(s =>
-                    s.Symbol == Selected.Symbol && s.Timeframe == Selected.Timeframe);
-                if (upd != null) Selected = upd;
-            }
+
+            // Rebuild symbol list (unique, ordered by count)
+            _symbols = Series
+                .GroupBy(s => s.Symbol)
+                .OrderByDescending(g => g.Count())
+                .Select(g => g.Key)
+                .ToList();
+
+            // Select default symbol if none active
+            if (string.IsNullOrEmpty(_activeSym) && _symbols.Any())
+                _activeSym = _symbols[0];
+
+            // Select default TF if none active
+            if (string.IsNullOrEmpty(_activeTf))
+                _activeTf = Series.FirstOrDefault(s => s.Symbol == _activeSym)?.Timeframe ?? "FiveMinutes";
+
+            ResolveSelected();
             CalcStats();
         }
         catch { }
+    }
+
+    void ResolveSelected()
+    {
+        // Find series matching active symbol + TF
+        var match = Series.FirstOrDefault(s =>
+            s.Symbol == _activeSym && s.Timeframe == _activeTf);
+
+        if (match != null)
+        {
+            Selected = match;
+        }
+        else if (!string.IsNullOrEmpty(_activeSym))
+        {
+            // Fallback: best available TF for this symbol
+            Selected = Series
+                .Where(s => s.Symbol == _activeSym)
+                .OrderByDescending(s => s.Klines.Count)
+                .FirstOrDefault();
+            if (Selected != null) _activeTf = Selected.Timeframe;
+        }
+    }
+
+    void PickSym(string sym)
+    {
+        _activeSym = sym;
+        // Try to keep current TF, fallback to first available
+        var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == _activeTf)
+            ?? Series.FirstOrDefault(s => s.Symbol == sym);
+        if (available != null) _activeTf = available.Timeframe;
+        ResolveSelected();
+        CalcStats();
+        StateHasChanged();
+        _ = RenderCharts();
+    }
+
+    void PickTf(string tf)
+    {
+        _activeTf = tf;
+        ResolveSelected();
+        CalcStats();
+        StateHasChanged();
+        _ = RenderCharts();
     }
 
     void CalcStats()
@@ -420,7 +516,10 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     void Pick(MarketSeries s)
     {
-        Selected = s; CalcStats();
+        _activeSym = s.Symbol;
+        _activeTf  = s.Timeframe;
+        Selected = s;
+        CalcStats();
         StateHasChanged();
         _ = RenderCharts();
     }
