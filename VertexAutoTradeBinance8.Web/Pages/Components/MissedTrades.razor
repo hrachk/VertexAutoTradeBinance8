@@ -2,435 +2,436 @@
 @using VertexAutoTradeBinance8.Web.Services
 @using VertexAutoTradeBinance8.Web.Models
 @using VertexAutoTradeBinance8.Models
-@inject MissedTradeFileService MissedService
+@inject MissedTradeFileService Svc
+@implements IDisposable
 
-<PageTitle>Missed Trades — Vertex</PageTitle>
+<PageTitle>Signal Log — Vertex</PageTitle>
 
-<div class="mt">
+<div class="sl">
 
-    <!-- HEADER -->
-    <div class="mt-header">
-        <div class="mt-title-block">
-            <span class="mt-icon">📡</span>
-            <div>
-                <div class="mt-title">MISSED TRADES</div>
-                <div class="mt-sub">Signal analysis · Block reasons · Opportunity log</div>
-            </div>
+    <!-- TOP BAR -->
+    <div class="sl-bar">
+        <div class="sl-bar-left">
+            <span class="sl-title">SIGNAL LOG</span>
+            <span class="sl-count">@_filtered.Count signals</span>
         </div>
-        <div class="mt-hstats">
-            <div class="mt-hs"><div class="mt-hv">@_all.Count</div><div class="mt-hl">TOTAL</div></div>
-            <div class="mt-hs up"><div class="mt-hv">@_all.Count(r=>r.Side=="Buy")</div><div class="mt-hl">LONG</div></div>
-            <div class="mt-hs dn"><div class="mt-hv">@_all.Count(r=>r.Side=="Sell")</div><div class="mt-hl">SHORT</div></div>
-            <div class="mt-hs hi"><div class="mt-hv">@_all.Count(r=>r.Confidence>=70)</div><div class="mt-hl">HIGH CONF</div></div>
-            <div class="mt-hs"><div class="mt-hv">@_symGroups.Count</div><div class="mt-hl">SYMBOLS</div></div>
-            <div class="mt-hs warn"><div class="mt-hv">@_all.Count(r=>r.Reason.Contains("Exec"))</div><div class="mt-hl">EXEC FAIL</div></div>
+        <div class="sl-bar-right">
+            <div class="sl-stat @(_all.Count(r=>r.Side=="Buy")>_all.Count(r=>r.Side=="Sell")?"sl-stat-up":"sl-stat-dn")">
+                <span>▲ @_all.Count(r=>r.Side=="Buy") Long</span>
+            </div>
+            <div class="sl-stat sl-stat-dn">
+                <span>▼ @_all.Count(r=>r.Side=="Sell") Short</span>
+            </div>
+            <div class="sl-stat">
+                <span>🎯 @_all.Count(r=>r.Confidence>=70) High conf</span>
+            </div>
+            <div class="sl-stat sl-stat-err">
+                <span>⚠ @_all.Count(r=>r.Reason.Contains("Exec")||r.Reason.Contains("Failed")) Exec fail</span>
+            </div>
         </div>
     </div>
 
-    <!-- FILTER + SEARCH -->
-    <div class="mt-toolbar">
-        <div class="mt-filters">
+    <!-- TOOLBAR -->
+    <div class="sl-toolbar">
+        <!-- Filter chips -->
+        <div class="sl-chips">
             @foreach (var f in _filters)
             {
-                <button class="mt-chip @(_activeFilter==f.Key?"mt-chip-on":"")"
-                        @onclick="()=>SetFilter(f.Key)">
+                <button class="sl-chip @(_fKey==f.Key?"sl-chip-on":"")"
+                        @onclick="()=>{_fKey=f.Key;_symFilter="";Refilter();}">
                     @f.Label
-                    <span class="mt-chip-n">@f.Count</span>
+                    <span class="sl-chip-n">@f.N</span>
                 </button>
             }
         </div>
-        <div class="mt-search-wrap">
-            <input class="mt-search" placeholder="🔍 symbol or reason..." 
-                   @bind="_search" @bind:event="oninput" />
-            <select class="mt-sort" @onchange="OnSort">
-                <option value="time">Latest first</option>
-                <option value="conf">High confidence</option>
-                <option value="sym">By symbol</option>
+        <!-- Search + sort -->
+        <div class="sl-tools">
+            <div class="sl-search-box">
+                <span class="sl-search-icon">⌕</span>
+                <input class="sl-search" placeholder="symbol, reason..."
+                       value="@_q" @oninput="OnSearch" />
+                @if (!string.IsNullOrEmpty(_q) || !string.IsNullOrEmpty(_symFilter))
+                {
+                    <button class="sl-search-clear" @onclick="ClearSearch">✕</button>
+                }
+            </div>
+            <select class="sl-select" @onchange="OnSort">
+                <option value="time">Newest first</option>
+                <option value="conf">Highest confidence</option>
+                <option value="sym">By symbol A→Z</option>
             </select>
         </div>
     </div>
 
     @if (_all.Count == 0)
     {
-        <div class="mt-empty">
-            <div style="font-size:40px">📭</div>
-            <div>No missed trades recorded yet</div>
-            <div class="dim">Records appear when signals are blocked or fail to execute</div>
+        <div class="sl-empty">
+            <div class="sl-empty-icon">📭</div>
+            <div class="sl-empty-title">No signals recorded</div>
+            <div class="sl-empty-sub">Blocked and failed signals appear here automatically</div>
         </div>
     }
     else
     {
-        <div class="mt-layout">
+        <div class="sl-body">
 
-            <!-- LEFT: SIGNAL LIST -->
-            <div class="mt-list-col">
+            <!-- SIGNAL CARDS -->
+            <div class="sl-feed">
+                @if (_symFilter != "")
+                {
+                    <div class="sl-feed-banner">
+                        Filtering: <b>@_symFilter</b>
+                        <button @onclick="()=>{_symFilter="";Refilter();}">✕ clear</button>
+                    </div>
+                }
 
-                <!-- SUMMARY BAR -->
-                <div class="mt-summary">
-                    <span class="mt-sum-item">
-                        <span class="dim">Top symbol</span>
-                        <span class="hi bold">@(_symGroups.FirstOrDefault().Key ?? "—")</span>
-                    </span>
-                    <span class="mt-sum-sep">·</span>
-                    <span class="mt-sum-item">
-                        <span class="dim">Top block</span>
-                        <span class="warn bold">@ShortReason(_topReason)</span>
-                    </span>
-                    <span class="mt-sum-sep">·</span>
-                    <span class="mt-sum-item">
-                        <span class="dim">Showing</span>
-                        <span class="bold">@Math.Min(_visible.Count,50) / @_visible.Count</span>
-                    </span>
-                    @if (!string.IsNullOrEmpty(_search) || _activeFilter != "ALL")
-                    {
-                        <button class="mt-clear" @onclick="ClearFilters">✕ clear</button>
-                    }
-                </div>
+                @foreach (var r in _filtered.Take(60))
+                {
+                    bool isLong = r.Side == "Buy";
+                    bool isSel  = _selId == SigId(r);
+                    var  regStr = RegStr(r.Regime);
+                    var  confCls = r.Confidence >= 70 ? "c-hi" : r.Confidence >= 50 ? "c-mid" : "c-lo";
 
-                <!-- CARDS -->
-                <div class="mt-cards">
-                    @foreach (var r in _visible.Take(50))
-                    {
-                        bool isLong = r.Side == "Buy";
-                        bool isSel  = _selKey == Key(r);
-                        string regStr = RegimeStr(r.Regime);
-                        string confCls = r.Confidence >= 70 ? "hi" : r.Confidence >= 50 ? "mid" : "lo";
+                    <div class="sl-card @(isSel?"sl-card-sel":"") @(isLong?"sl-card-long":"sl-card-short")"
+                         @onclick="()=>Toggle(r)">
 
-                        <div class="mt-card @(isSel?"mt-card-sel":"")" @onclick="()=>Select(r)">
-
-                            <!-- ROW 1: symbol + side + reason + time -->
-                            <div class="mt-card-top">
-                                <div class="mt-card-left">
-                                    <span class="mt-sym @(isLong?"up":"dn")">@r.Symbol</span>
-                                    <span class="mt-badge @(isLong?"badge-long":"badge-short")">
-                                        @(isLong?"▲ LONG":"▼ SHORT")
-                                    </span>
-                                    <span class="mt-stage dim">@r.Stage</span>
-                                </div>
-                                <div class="mt-card-right">
-                                    <span class="mt-block @BlockCls(r.Reason)" title="@r.Reason">
-                                        @ShortReason(r.Reason)
-                                    </span>
-                                    <span class="mt-time dim">@r.Time.ToLocalTime().ToString("dd.MM  HH:mm:ss")</span>
-                                </div>
+                        <!-- LINE 1: symbol · side · time · block reason -->
+                        <div class="sl-card-head">
+                            <span class="sl-csym @(isLong?"cu":"cd")">@r.Symbol</span>
+                            <span class="sl-cside @(isLong?"badge-l":"badge-s")">
+                                @(isLong?"▲ LONG":"▼ SHORT")
+                            </span>
+                            <span class="sl-cstage">@r.Stage</span>
+                            <div class="sl-head-right">
+                                <span class="sl-creason @ReasonCls(r.Reason)">@RShort(r.Reason)</span>
+                                <span class="sl-ctime">@r.Time.ToLocalTime().ToString("dd.MM.yy  HH:mm:ss")</span>
                             </div>
+                        </div>
 
-                            <!-- CONFIDENCE BAR -->
-                            <div class="mt-conf-bar">
-                                <div class="mt-conf-fill @confCls" style="width:@r.Confidence%"></div>
-                                <span class="mt-conf-lbl @confCls">@r.Confidence%</span>
+                        <!-- LINE 2: confidence bar -->
+                        <div class="sl-conf-row">
+                            <div class="sl-conf-track">
+                                <div class="sl-conf-fill @confCls" style="width:@r.Confidence%"></div>
                             </div>
+                            <span class="sl-conf-val @confCls">@r.Confidence%</span>
+                            <span class="sl-regime @RegimeCls(r.Regime)">@regStr</span>
+                        </div>
 
-                            <!-- ROW 2: key metrics in one readable line -->
-                            <div class="mt-metrics">
-                                <div class="mt-m">
-                                    <span class="mt-ml">ENTRY</span>
-                                    <span class="mt-mv mono">@FmtP(r.Entry)</span>
+                        <!-- LINE 3: key numbers -->
+                        <div class="sl-nums">
+                            <div class="sl-num">
+                                <span class="sl-nl">Entry</span>
+                                <span class="sl-nv">@FP(r.Entry)</span>
+                            </div>
+                            <div class="sl-num">
+                                <span class="sl-nl">SL</span>
+                                <span class="sl-nv cd">@FP(r.StopLoss)</span>
+                            </div>
+                            @if (r.TakeProfits.Count > 0)
+                            {
+                                var pct = r.Entry > 0
+                                    ? (Math.Abs(r.TakeProfits[0] - r.Entry) / r.Entry * 100m).ToString("F1") + "%"
+                                    : "";
+                                <div class="sl-num">
+                                    <span class="sl-nl">TP1</span>
+                                    <span class="sl-nv cu">@FP(r.TakeProfits[0]) <span class="sl-tpct">+@pct</span></span>
                                 </div>
-                                <div class="mt-m">
-                                    <span class="mt-ml">SL</span>
-                                    <span class="mt-mv mono dn">@FmtP(r.StopLoss)</span>
+                            }
+                            <div class="sl-num">
+                                <span class="sl-nl">ATR</span>
+                                <span class="sl-nv">@r.ATR.ToString("G3")</span>
+                            </div>
+                            <div class="sl-num">
+                                <span class="sl-nl">Vol%</span>
+                                <span class="sl-nv">@r.Vol.ToString("P1")</span>
+                            </div>
+                            <div class="sl-num">
+                                <span class="sl-nl">Balance</span>
+                                <span class="sl-nv @(r.FreeBalance<5?"cd":"")">$@r.FreeBalance.ToString("F1")</span>
+                            </div>
+                            @if (r.TakeProfits.Count > 1)
+                            {
+                                <div class="sl-num">
+                                    <span class="sl-nl">TPs</span>
+                                    <span class="sl-nv">@r.TakeProfits.Count</span>
+                                </div>
+                            }
+                        </div>
+
+                        <!-- EXPANDED DETAIL -->
+                        @if (isSel)
+                        {
+                            <div class="sl-detail" @onclick:stopPropagation="true">
+                                <div class="sl-detail-grid">
+                                    <div class="sl-drow"><span class="sl-dl">Stage</span><span class="sl-dv">@r.Stage</span></div>
+                                    <div class="sl-drow"><span class="sl-dl">Regime</span><span class="sl-dv @RegimeCls(r.Regime)">@RegStr(r.Regime)</span></div>
+                                    <div class="sl-drow"><span class="sl-dl">Smart Type</span><span class="sl-dv">@(r.SmartType.Length>0?r.SmartType:"—")</span></div>
+                                    <div class="sl-drow"><span class="sl-dl">Slope</span><span class="sl-dv">@r.Slope.ToString("G3")</span></div>
+                                    <div class="sl-drow"><span class="sl-dl">Deviation</span><span class="sl-dv">@r.Deviation.ToString("G3")</span></div>
+                                    <div class="sl-drow"><span class="sl-dl">Notional</span><span class="sl-dv">$@r.AttemptNotional.ToString("F2")</span></div>
+                                    <div class="sl-drow"><span class="sl-dl">Min Notional</span><span class="sl-dv">$@r.RequiredMinNotional.ToString("F2")</span></div>
+                                    <div class="sl-drow"><span class="sl-dl">Block reason</span><span class="sl-dv @ReasonCls(r.Reason)">@r.Reason</span></div>
                                 </div>
                                 @if (r.TakeProfits.Count > 0)
                                 {
-                                    <div class="mt-m">
-                                        <span class="mt-ml">TP1</span>
-                                        <span class="mt-mv mono hi">
-                                            @FmtP(r.TakeProfits[0])
-                                            @if (r.Entry > 0)
-                                            {
-                                                <span class="mt-pct">+@(Math.Abs(r.TakeProfits[0]-r.Entry)/r.Entry*100m).ToString("F1")%</span>
-                                            }
-                                        </span>
+                                    <div class="sl-tp-list">
+                                        @foreach (var (tp, i) in r.TakeProfits.Select((v,i)=>(v,i)))
+                                        {
+                                            var p = r.Entry>0 ? $"+{Math.Abs(tp-r.Entry)/r.Entry*100m:F2}%" : "";
+                                            <span class="sl-tp-item">TP@(i+1) @FP(tp) <b>@p</b></span>
+                                        }
                                     </div>
                                 }
-                                <div class="mt-m">
-                                    <span class="mt-ml">ATR</span>
-                                    <span class="mt-mv mono">@r.ATR.ToString("G3")</span>
-                                </div>
-                                <div class="mt-m">
-                                    <span class="mt-ml">REGIME</span>
-                                    <span class="mt-mv @RegimeCls(r.Regime)">@regStr</span>
-                                </div>
-                                <div class="mt-m">
-                                    <span class="mt-ml">BAL</span>
-                                    <span class="mt-mv mono @(r.FreeBalance<5?"lo":"")">$@r.FreeBalance.ToString("F1")</span>
-                                </div>
-                                <div class="mt-m">
-                                    <span class="mt-ml">VOL</span>
-                                    <span class="mt-mv mono">@r.Vol.ToString("P1")</span>
-                                </div>
+                                <div class="sl-hint">🤖 @Hint(r)</div>
                             </div>
+                        }
 
-                        </div>
-                    }
-                </div>
+                    </div>
+                }
+
+                @if (_filtered.Count > 60)
+                {
+                    <div class="sl-more">Showing 60 of @_filtered.Count · use filters to narrow down</div>
+                }
             </div>
 
-            <!-- RIGHT: PANELS -->
-            <div class="mt-right">
+            <!-- RIGHT SIDEBAR -->
+            <div class="sl-sidebar">
 
                 <!-- TOP SYMBOLS -->
-                <div class="mt-panel">
-                    <div class="mt-ph">📊 TOP SYMBOLS</div>
-                    @foreach (var g in _symGroups.Take(12))
+                <div class="sl-side-section">
+                    <div class="sl-side-title">TOP SYMBOLS</div>
+                    @foreach (var g in _bySymbol.Take(15))
                     {
-                        var pct = _all.Count > 0 ? (double)g.Value.Count / _all.Count * 100 : 0;
-                        var avgConf = g.Value.Count > 0 ? (int)g.Value.Average(x=>x.Confidence) : 0;
-                        var isSym = _symFilter == g.Key;
-                        <div class="mt-sym-row @(isSym?"mt-sym-sel":"")" @onclick="()=>FilterSym(g.Key)">
-                            <span class="mt-sr-sym">@g.Key</span>
-                            <div class="mt-sr-bar">
-                                <div class="mt-sr-fill @(avgConf>=70?"hi":avgConf>=50?"mid":"lo")"
-                                     style="width:@Math.Min(100,pct*3)%"></div>
+                        var c = g.AvgConf;
+                        var pct = _all.Count > 0 ? g.Count * 100.0 / _all.Count : 0;
+                        <div class="sl-sym-row @(_symFilter==g.Symbol?"sl-sym-sel":"")"
+                             @onclick="()=>ToggleSym(g.Symbol)">
+                            <span class="sl-sym-name">@g.Symbol</span>
+                            <div class="sl-sym-bar">
+                                <div class="sl-sym-fill @(c>=70?"c-hi":c>=50?"c-mid":"c-lo")"
+                                     style="width:@Math.Min(100.0,pct*4)%"></div>
                             </div>
-                            <span class="mt-sr-cnt">@g.Value.Count</span>
-                            <span class="mt-sr-conf @(avgConf>=70?"hi":avgConf>=50?"mid":"lo")">@avgConf%</span>
+                            <span class="sl-sym-n">@g.Count</span>
+                            <span class="sl-sym-conf @(c>=70?"cu":c>=50?"sl-dim":"cd")">@c%</span>
                         </div>
                     }
                 </div>
 
                 <!-- BLOCK REASONS -->
-                <div class="mt-panel">
-                    <div class="mt-ph">🚫 BLOCK REASONS</div>
-                    @foreach (var g in _reasonGroups)
+                <div class="sl-side-section">
+                    <div class="sl-side-title">BLOCK REASONS</div>
+                    @foreach (var g in _byReason.Take(12))
                     {
-                        var pct = _all.Count > 0 ? (double)g.Count / _all.Count * 100 : 0;
-                        <div class="mt-rr">
-                            <span class="mt-rr-name @BlockCls(g.Reason)" title="@g.Reason">@ShortReason(g.Reason)</span>
-                            <div class="mt-rr-bar">
-                                <div class="mt-rr-fill" style="width:@Math.Min(100,pct*3)%"></div>
+                        var pct = _all.Count > 0 ? g.Count * 100.0 / _all.Count : 0;
+                        <div class="sl-reason-row">
+                            <span class="sl-reason-name @ReasonCls(g.Reason)" title="@g.Reason">
+                                @RShort(g.Reason)
+                            </span>
+                            <div class="sl-reason-bar">
+                                <div class="sl-reason-fill" style="width:@Math.Min(100.0,pct*4)%"></div>
                             </div>
-                            <span class="mt-rr-cnt dim">@g.Count</span>
+                            <span class="sl-reason-n sl-dim">@g.Count</span>
                         </div>
                     }
                 </div>
 
-                <!-- DETAIL PANEL -->
-                @if (_sel != null)
-                {
-                    <div class="mt-panel mt-detail">
-                        <div class="mt-ph">
-                            🔍 DETAIL
-                            <button class="mt-close-btn" @onclick="()=>_sel=null">✕</button>
-                        </div>
-
-                        <div class="mt-detail-top">
-                            <span class="mt-sym @(_sel.Side=="Buy"?"up":"dn") big">@_sel.Symbol</span>
-                            <span class="mt-badge @(_sel.Side=="Buy"?"badge-long":"badge-short")">
-                                @(_sel.Side=="Buy"?"▲ LONG":"▼ SHORT")
-                            </span>
-                        </div>
-
-                        <div class="mt-detail-time">
-                            🕐 @_sel.Time.ToLocalTime().ToString("dd MMMM yyyy  HH:mm:ss")
-                        </div>
-
-                        <div class="mt-block-box @BlockCls(_sel.Reason)">
-                            🚫 @_sel.Reason
-                        </div>
-
-                        <div class="mt-drows">
-                            <div class="mt-drow"><span class="mt-dl">Stage</span><span class="mt-dv">@_sel.Stage</span></div>
-                            <div class="mt-drow"><span class="mt-dl">Entry</span><span class="mt-dv mono">@FmtP(_sel.Entry)</span></div>
-                            <div class="mt-drow"><span class="mt-dl">Stop Loss</span><span class="mt-dv mono dn">@FmtP(_sel.StopLoss)</span></div>
-                            <div class="mt-drow"><span class="mt-dl">Confidence</span><span class="mt-dv @(_sel.Confidence>=70?"hi":_sel.Confidence>=50?"mid":"lo")">@_sel.Confidence%</span></div>
-                            <div class="mt-drow"><span class="mt-dl">Regime</span><span class="mt-dv @RegimeCls(_sel.Regime)">@RegimeStr(_sel.Regime)</span></div>
-                            <div class="mt-drow"><span class="mt-dl">ATR</span><span class="mt-dv mono">@_sel.ATR.ToString("G4")</span></div>
-                            <div class="mt-drow"><span class="mt-dl">Volatility</span><span class="mt-dv mono">@_sel.Vol.ToString("P2")</span></div>
-                            <div class="mt-drow"><span class="mt-dl">Slope</span><span class="mt-dv mono">@_sel.Slope.ToString("G3")</span></div>
-                            <div class="mt-drow"><span class="mt-dl">Balance</span><span class="mt-dv mono @(_sel.FreeBalance<5?"lo":"")">$@_sel.FreeBalance.ToString("F2")</span></div>
-                            <div class="mt-drow"><span class="mt-dl">Notional</span><span class="mt-dv mono">$@_sel.AttemptNotional.ToString("F2")</span></div>
-                            <div class="mt-drow"><span class="mt-dl">Min Notional</span><span class="mt-dv mono">$@_sel.RequiredMinNotional.ToString("F2")</span></div>
-                            <div class="mt-drow"><span class="mt-dl">Smart Type</span><span class="mt-dv">@(_sel.SmartType.Length>0?_sel.SmartType:"—")</span></div>
-                        </div>
-
-                        @if (_sel.TakeProfits.Count > 0)
-                        {
-                            <div class="mt-tps">
-                                <div class="mt-dl" style="margin-bottom:6px">TAKE PROFITS</div>
-                                @foreach (var (tp, idx) in _sel.TakeProfits.Select((v,i)=>(v,i)))
-                                {
-                                    var pct2 = _sel.Entry > 0 ? Math.Abs(tp - _sel.Entry) / _sel.Entry * 100m : 0m;
-                                    <div class="mt-tp-row">
-                                        <span class="dim">TP@(idx+1)</span>
-                                        <span class="mono mid">@FmtP(tp)</span>
-                                        <span class="hi">+@pct2.ToString("F2")%</span>
-                                    </div>
-                                }
-                            </div>
-                        }
-
-                        <div class="mt-ai-hint">
-                            <span style="font-size:16px">🤖</span>
-                            <span>@AiHint(_sel)</span>
-                        </div>
-                    </div>
-                }
-
             </div>
         </div>
     }
+
 </div>
 
 <style>
-:root{--bg:#0a0d12;--bg2:#111520;--bg3:#1a1f2e;--bdr:#1e2535;--acc:#3b82f6;--grn:#22c55e;--red:#ef4444;--yel:#eab308;--txt:#e2e8f0;--dim:#64748b;--mono:'JetBrains Mono','Fira Code',monospace;}
-html,body{background:var(--bg)!important;color:var(--txt);}
-.mt{font-family:'Inter','Segoe UI',sans-serif;background:var(--bg);min-height:100vh;padding-bottom:40px;}
-.up{color:var(--grn)!important;}.dn{color:var(--red)!important;}.hi{color:var(--grn)!important;}
-.mid{color:var(--acc)!important;}.lo{color:var(--red)!important;}.warn{color:var(--yel)!important;}
-.dim{color:var(--dim)!important;}.bold{font-weight:700;}.mono{font-family:var(--mono);}
+:root {
+    --bg: #0a0d12; --bg2: #111520; --bg3: #1a1f2e; --bdr: #1e2535;
+    --acc: #3b82f6; --grn: #22c55e; --red: #ef4444; --yel: #eab308;
+    --txt: #e2e8f0; --dim: #64748b;
+    --mono: 'JetBrains Mono','Fira Code','Courier New',monospace;
+}
+html,body { background:var(--bg)!important; color:var(--txt); }
 
-/* HEADER */
-.mt-header{display:flex;align-items:center;justify-content:space-between;padding:18px 24px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
-.mt-title-block{display:flex;align-items:center;gap:12px;}
-.mt-icon{font-size:26px;}
-.mt-title{font-family:var(--mono);font-size:16px;font-weight:700;letter-spacing:2px;color:var(--acc);}
-.mt-sub{font-size:11px;color:var(--dim);margin-top:2px;}
-.mt-hstats{display:flex;gap:20px;}
-.mt-hs{text-align:center;}
-.mt-hv{font-family:var(--mono);font-size:20px;font-weight:700;}
-.mt-hl{font-size:10px;letter-spacing:1px;color:var(--dim);}
+.sl { font-family:'Inter','Segoe UI',sans-serif; background:var(--bg); min-height:100vh; }
+.cu { color:var(--grn)!important; }
+.cd { color:var(--red)!important; }
+.sl-dim { color:var(--dim)!important; }
+.c-hi  { color:var(--grn)!important; background:rgba(34,197,94,.15)!important; }
+.c-mid { color:var(--acc)!important; background:rgba(59,130,246,.15)!important; }
+.c-lo  { color:var(--red)!important; background:rgba(239,68,68,.15)!important; }
 
-/* TOOLBAR */
-.mt-toolbar{display:flex;align-items:center;justify-content:space-between;padding:10px 24px;background:var(--bg2);border-bottom:1px solid var(--bdr);gap:12px;flex-wrap:wrap;}
-.mt-filters{display:flex;gap:6px;flex-wrap:wrap;}
-.mt-chip{display:flex;align-items:center;gap:5px;padding:4px 12px;background:var(--bg3);border:1px solid var(--bdr);border-radius:20px;color:var(--dim);font-size:12px;cursor:pointer;transition:all .15s;}
-.mt-chip:hover{border-color:var(--acc);color:var(--txt);}
-.mt-chip-on{background:rgba(59,130,246,.15);border-color:var(--acc);color:var(--txt);}
-.mt-chip-n{background:var(--bg);border-radius:10px;padding:1px 5px;font-size:10px;}
-.mt-search-wrap{display:flex;gap:8px;}
-.mt-search{background:var(--bg3);border:1px solid var(--bdr);color:var(--txt);padding:5px 12px;border-radius:6px;font-size:12px;width:200px;}
-.mt-search::placeholder{color:var(--dim);}
-.mt-sort{background:var(--bg3);border:1px solid var(--bdr);color:var(--txt);padding:5px 10px;border-radius:6px;font-size:12px;}
+/* ── BAR ─────────────────────────────────────────────── */
+.sl-bar {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 24px; background:var(--bg2); border-bottom:1px solid var(--bdr);
+}
+.sl-bar-left { display:flex; align-items:baseline; gap:14px; }
+.sl-title { font-family:var(--mono); font-size:15px; font-weight:700; letter-spacing:2px; color:var(--acc); }
+.sl-count { font-size:12px; color:var(--dim); }
+.sl-bar-right { display:flex; gap:10px; flex-wrap:wrap; }
+.sl-stat { font-size:12px; padding:4px 12px; background:var(--bg3); border:1px solid var(--bdr); border-radius:20px; color:var(--dim); }
+.sl-stat-up { color:var(--grn); border-color:rgba(34,197,94,.3); }
+.sl-stat-dn { color:var(--red); border-color:rgba(239,68,68,.3); }
+.sl-stat-err { color:var(--yel); border-color:rgba(234,179,8,.3); }
 
-/* EMPTY */
-.mt-empty{display:flex;flex-direction:column;align-items:center;gap:10px;padding:60px;color:var(--dim);text-align:center;}
+/* ── TOOLBAR ─────────────────────────────────────────── */
+.sl-toolbar {
+    display:flex; align-items:center; gap:12px; padding:10px 24px;
+    background:var(--bg2); border-bottom:1px solid var(--bdr); flex-wrap:wrap;
+}
+.sl-chips { display:flex; gap:6px; flex-wrap:wrap; flex:1; }
+.sl-chip {
+    display:inline-flex; align-items:center; gap:5px; padding:4px 11px;
+    background:var(--bg3); border:1px solid var(--bdr); border-radius:20px;
+    color:var(--dim); font-size:12px; cursor:pointer; transition:all .15s;
+}
+.sl-chip:hover { border-color:var(--acc); color:var(--txt); }
+.sl-chip-on  { background:rgba(59,130,246,.12); border-color:var(--acc); color:var(--txt); }
+.sl-chip-n { font-family:var(--mono); font-size:10px; background:var(--bg); border-radius:10px; padding:0 5px; }
+.sl-tools { display:flex; gap:8px; }
+.sl-search-box {
+    position:relative; display:flex; align-items:center;
+    background:var(--bg3); border:1px solid var(--bdr); border-radius:6px; overflow:hidden;
+}
+.sl-search-icon { padding:0 8px; color:var(--dim); font-size:14px; }
+.sl-search { background:transparent; border:none; color:var(--txt); padding:5px 4px 5px 0; font-size:12px; width:180px; outline:none; }
+.sl-search::placeholder { color:var(--dim); }
+.sl-search-clear { background:none; border:none; color:var(--dim); padding:0 8px; cursor:pointer; font-size:12px; }
+.sl-search-clear:hover { color:var(--red); }
+.sl-select { background:var(--bg3); border:1px solid var(--bdr); color:var(--txt); padding:5px 10px; border-radius:6px; font-size:12px; }
 
-/* LAYOUT */
-.mt-layout{display:grid;grid-template-columns:1fr 300px;gap:1px;background:var(--bdr);min-height:calc(100vh - 120px);}
-.mt-list-col{background:var(--bg);padding:0;}
-.mt-right{background:var(--bg);display:flex;flex-direction:column;gap:1px;}
+/* ── EMPTY ───────────────────────────────────────────── */
+.sl-empty { display:flex; flex-direction:column; align-items:center; gap:12px; padding:80px 20px; color:var(--dim); text-align:center; }
+.sl-empty-icon { font-size:44px; }
+.sl-empty-title { font-size:16px; font-weight:600; color:var(--txt); }
+.sl-empty-sub { font-size:13px; }
 
-/* SUMMARY */
-.mt-summary{display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--bg2);border-bottom:1px solid var(--bdr);font-size:12px;flex-wrap:wrap;}
-.mt-sum-item{display:flex;align-items:center;gap:6px;}
-.mt-sum-sep{color:var(--bdr);}
-.mt-clear{margin-left:auto;padding:2px 10px;background:none;border:1px solid var(--bdr);border-radius:10px;color:var(--dim);font-size:11px;cursor:pointer;transition:all .15s;}
-.mt-clear:hover{border-color:var(--red);color:var(--red);}
+/* ── BODY ────────────────────────────────────────────── */
+.sl-body { display:grid; grid-template-columns:1fr 280px; min-height:calc(100vh - 108px); }
+.sl-feed { background:var(--bg); border-right:1px solid var(--bdr); }
 
-/* CARDS */
-.mt-cards{display:flex;flex-direction:column;gap:0;}
-.mt-card{padding:14px 16px;border-bottom:1px solid var(--bdr);cursor:pointer;transition:background .12s;border-left:3px solid transparent;}
-.mt-card:hover{background:var(--bg2);}
-.mt-card-sel{background:var(--bg2)!important;border-left-color:var(--acc);}
+.sl-feed-banner {
+    display:flex; align-items:center; gap:10px; padding:8px 16px;
+    background:rgba(59,130,246,.08); border-bottom:1px solid var(--bdr);
+    font-size:12px; color:var(--dim);
+}
+.sl-feed-banner b { color:var(--acc); }
+.sl-feed-banner button { background:none; border:1px solid var(--bdr); border-radius:10px; color:var(--dim); padding:1px 8px; font-size:11px; cursor:pointer; }
 
-/* CARD TOP */
-.mt-card-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
-.mt-card-left{display:flex;align-items:center;gap:8px;}
-.mt-card-right{display:flex;align-items:center;gap:10px;}
-.mt-sym{font-family:var(--mono);font-size:15px;font-weight:700;}
-.mt-sym.big{font-size:18px;}
-.mt-badge{font-size:10px;font-weight:700;letter-spacing:1px;padding:2px 8px;border-radius:4px;}
-.badge-long{background:rgba(34,197,94,.12);color:var(--grn);border:1px solid rgba(34,197,94,.25);}
-.badge-short{background:rgba(239,68,68,.12);color:var(--red);border:1px solid rgba(239,68,68,.25);}
-.mt-stage{font-size:10px;}
-.mt-block{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.block-exec{background:rgba(239,68,68,.15);color:var(--red);}
-.block-bal{background:rgba(239,68,68,.1);color:#f97316;}
-.block-min{background:rgba(234,179,8,.12);color:var(--yel);}
-.block-other{background:var(--bg3);color:var(--dim);}
+/* ── CARDS ───────────────────────────────────────────── */
+.sl-card {
+    padding:12px 16px; border-bottom:1px solid var(--bdr);
+    cursor:pointer; transition:background .1s;
+    border-left:3px solid transparent;
+}
+.sl-card:hover { background:var(--bg2); }
+.sl-card-long:hover  { border-left-color:rgba(34,197,94,.4); }
+.sl-card-short:hover { border-left-color:rgba(239,68,68,.4); }
+.sl-card-sel { background:var(--bg2)!important; }
+.sl-card-sel.sl-card-long  { border-left-color:var(--grn); }
+.sl-card-sel.sl-card-short { border-left-color:var(--red); }
 
-/* TIME — bigger and readable */
-.mt-time{font-family:var(--mono);font-size:12px;letter-spacing:0.5px;}
+/* card head */
+.sl-card-head {
+    display:flex; align-items:center; gap:8px; margin-bottom:7px; flex-wrap:wrap;
+}
+.sl-csym { font-family:var(--mono); font-size:15px; font-weight:700; }
+.sl-cside { font-size:10px; font-weight:700; padding:2px 7px; border-radius:3px; letter-spacing:.5px; }
+.badge-l { background:rgba(34,197,94,.12); color:var(--grn); border:1px solid rgba(34,197,94,.2); }
+.badge-s { background:rgba(239,68,68,.12); color:var(--red); border:1px solid rgba(239,68,68,.2); }
+.sl-cstage { font-size:10px; color:var(--dim); background:var(--bg3); padding:1px 6px; border-radius:3px; }
+.sl-head-right { margin-left:auto; display:flex; align-items:center; gap:10px; }
+.sl-creason { font-size:11px; font-weight:600; padding:2px 8px; border-radius:4px; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.reason-exec  { background:rgba(239,68,68,.12); color:var(--red); }
+.reason-bal   { background:rgba(249,115,22,.1); color:#f97316; }
+.reason-min   { background:rgba(234,179,8,.1); color:var(--yel); }
+.reason-other { background:var(--bg3); color:var(--dim); }
 
-/* CONFIDENCE BAR */
-.mt-conf-bar{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
-.mt-conf-bar > div:first-child{flex:1;height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;position:relative;}
-.mt-conf-fill{height:100%;border-radius:2px;transition:width .3s;}
-.mt-conf-fill.hi{background:var(--grn);}
-.mt-conf-fill.mid{background:var(--acc);}
-.mt-conf-fill.lo{background:var(--red);}
-.mt-conf-lbl{font-family:var(--mono);font-size:11px;font-weight:700;min-width:30px;text-align:right;}
+/* time — readable */
+.sl-ctime { font-family:var(--mono); font-size:12px; color:var(--txt); opacity:.7; white-space:nowrap; }
 
-/* METRICS GRID */
-.mt-metrics{display:flex;gap:16px;flex-wrap:wrap;}
-.mt-m{display:flex;flex-direction:column;gap:2px;}
-.mt-ml{font-size:9px;letter-spacing:1px;color:var(--dim);font-weight:600;text-transform:uppercase;}
-.mt-mv{font-size:12px;font-weight:600;}
-.mt-pct{font-size:10px;color:var(--grn);margin-left:3px;}
+/* confidence */
+.sl-conf-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.sl-conf-track { flex:1; height:3px; background:var(--bdr); border-radius:2px; overflow:hidden; }
+.sl-conf-fill { height:100%; border-radius:2px; }
+.sl-conf-fill.c-hi  { background:var(--grn); }
+.sl-conf-fill.c-mid { background:var(--acc); }
+.sl-conf-fill.c-lo  { background:var(--red); }
+.sl-conf-val { font-family:var(--mono); font-size:11px; font-weight:700; padding:1px 6px; border-radius:3px; min-width:36px; text-align:center; }
+.sl-regime { font-size:11px; padding:1px 7px; border-radius:3px; background:var(--bg3); }
+.regime-bull { color:var(--grn)!important; }
+.regime-bear { color:var(--red)!important; }
+.regime-range { color:var(--yel)!important; }
+.regime-squeeze { color:var(--acc)!important; }
 
-/* REGIME CLASSES */
-.rc-bull{color:var(--grn)!important;}
-.rc-bear{color:var(--red)!important;}
-.rc-range{color:var(--yel)!important;}
-.rc-squeeze{color:var(--acc)!important;}
+/* numbers */
+.sl-nums { display:flex; gap:20px; flex-wrap:wrap; }
+.sl-num { display:flex; flex-direction:column; gap:2px; }
+.sl-nl { font-size:9px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); font-weight:600; }
+.sl-nv { font-family:var(--mono); font-size:12px; font-weight:600; }
+.sl-tpct { font-size:10px; color:var(--grn); margin-left:3px; }
 
-/* RIGHT PANELS */
-.mt-panel{background:var(--bg2);padding:14px 16px;border-bottom:1px solid var(--bdr);}
-.mt-ph{font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--dim);font-weight:700;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;}
-.mt-close-btn{background:none;border:none;color:var(--dim);cursor:pointer;font-size:14px;padding:0 2px;transition:color .15s;}
-.mt-close-btn:hover{color:var(--red);}
+/* expanded detail */
+.sl-detail {
+    margin-top:12px; padding-top:12px;
+    border-top:1px dashed var(--bdr);
+}
+.sl-detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:0; margin-bottom:10px; }
+.sl-drow { display:flex; justify-content:space-between; padding:5px 6px; border-bottom:1px solid var(--bdr); gap:8px; }
+.sl-drow:nth-child(odd) { background:rgba(255,255,255,.01); }
+.sl-dl { font-size:11px; color:var(--dim); white-space:nowrap; }
+.sl-dv { font-family:var(--mono); font-size:11px; text-align:right; word-break:break-all; }
+.sl-tp-list { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+.sl-tp-item { font-family:var(--mono); font-size:11px; background:rgba(34,197,94,.08); border:1px solid rgba(34,197,94,.2); color:var(--grn); padding:2px 8px; border-radius:4px; }
+.sl-tp-item b { color:var(--grn); margin-left:4px; }
+.sl-hint { font-size:11px; color:var(--dim); background:var(--bg3); border-radius:6px; padding:8px 10px; line-height:1.5; }
 
-/* SYMBOL ROWS */
-.mt-sym-row{display:flex;align-items:center;gap:8px;padding:5px 4px;border-radius:4px;cursor:pointer;transition:background .1s;}
-.mt-sym-row:hover{background:var(--bg3);}
-.mt-sym-sel{background:rgba(59,130,246,.1)!important;}
-.mt-sr-sym{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--acc);min-width:100px;}
-.mt-sr-bar{flex:1;height:4px;background:var(--bdr);border-radius:2px;overflow:hidden;}
-.mt-sr-fill{height:100%;border-radius:2px;transition:width .4s;}
-.mt-sr-fill.hi{background:var(--grn);}
-.mt-sr-fill.mid{background:var(--acc);}
-.mt-sr-fill.lo{background:var(--red);}
-.mt-sr-cnt{font-family:var(--mono);font-size:12px;min-width:28px;text-align:right;}
-.mt-sr-conf{font-family:var(--mono);font-size:11px;min-width:32px;text-align:right;}
+.sl-more { text-align:center; padding:16px; font-size:12px; color:var(--dim); }
 
-/* REASON ROWS */
-.mt-rr{display:flex;align-items:center;gap:8px;padding:4px 0;}
-.mt-rr-name{font-size:11px;min-width:110px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.mt-rr-bar{flex:1;height:4px;background:var(--bdr);border-radius:2px;overflow:hidden;}
-.mt-rr-fill{height:100%;background:var(--red);border-radius:2px;opacity:.7;}
-.mt-rr-cnt{font-family:var(--mono);font-size:11px;min-width:28px;text-align:right;}
+/* ── SIDEBAR ─────────────────────────────────────────── */
+.sl-sidebar { background:var(--bg2); }
+.sl-side-section { padding:14px 16px; border-bottom:1px solid var(--bdr); }
+.sl-side-title { font-family:var(--mono); font-size:10px; letter-spacing:2px; color:var(--dim); font-weight:700; margin-bottom:10px; }
 
-/* DETAIL */
-.mt-detail-top{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
-.mt-detail-time{font-family:var(--mono);font-size:12px;color:var(--txt);background:var(--bg3);padding:6px 10px;border-radius:6px;margin-bottom:8px;letter-spacing:.5px;}
-.mt-block-box{font-size:11px;font-weight:600;padding:6px 10px;border-radius:6px;margin-bottom:10px;word-break:break-all;}
-.mt-block-box.block-exec{background:rgba(239,68,68,.12);color:var(--red);border:1px solid rgba(239,68,68,.2);}
-.mt-block-box.block-bal{background:rgba(249,115,22,.1);color:#f97316;border:1px solid rgba(249,115,22,.2);}
-.mt-block-box.block-min{background:rgba(234,179,8,.1);color:var(--yel);border:1px solid rgba(234,179,8,.2);}
-.mt-block-box.block-other{background:var(--bg3);color:var(--txt);border:1px solid var(--bdr);}
-.mt-drows{display:flex;flex-direction:column;gap:0;margin-bottom:10px;}
-.mt-drow{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--bdr);}
-.mt-dl{font-size:11px;color:var(--dim);}
-.mt-dv{font-size:12px;}
-.mt-tps{margin-bottom:10px;}
-.mt-tp-row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bdr);font-size:12px;}
-.mt-ai-hint{display:flex;gap:8px;background:var(--bg3);border-radius:6px;padding:10px;font-size:12px;color:var(--dim);line-height:1.6;}
+/* symbol rows */
+.sl-sym-row {
+    display:flex; align-items:center; gap:8px; padding:5px 4px;
+    border-radius:4px; cursor:pointer; transition:background .1s;
+}
+.sl-sym-row:hover { background:var(--bg3); }
+.sl-sym-sel { background:rgba(59,130,246,.1)!important; }
+.sl-sym-name { font-family:var(--mono); font-size:12px; font-weight:700; color:var(--acc); min-width:90px; }
+.sl-sym-bar { flex:1; height:4px; background:var(--bdr); border-radius:2px; overflow:hidden; }
+.sl-sym-fill { height:100%; border-radius:2px; transition:width .4s; }
+.sl-sym-fill.c-hi  { background:var(--grn); }
+.sl-sym-fill.c-mid { background:var(--acc); }
+.sl-sym-fill.c-lo  { background:var(--red); }
+.sl-sym-n    { font-family:var(--mono); font-size:11px; min-width:24px; text-align:right; }
+.sl-sym-conf { font-family:var(--mono); font-size:11px; min-width:30px; text-align:right; }
 
-@@media(max-width:1000px){.mt-layout{grid-template-columns:1fr;}}
-@@media(max-width:700px){.mt-header{flex-direction:column;gap:12px;}.mt-hstats{gap:14px;}}
+/* reason rows */
+.sl-reason-row { display:flex; align-items:center; gap:8px; padding:4px 0; }
+.sl-reason-name { font-size:11px; font-weight:600; min-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sl-reason-bar { flex:1; height:4px; background:var(--bdr); border-radius:2px; overflow:hidden; }
+.sl-reason-fill { height:100%; background:var(--red); opacity:.65; border-radius:2px; }
+.sl-reason-n { font-family:var(--mono); font-size:11px; min-width:24px; text-align:right; }
+
+@@media(max-width:900px){ .sl-body { grid-template-columns:1fr; } }
+@@media(max-width:700px){ .sl-bar { flex-direction:column; gap:10px; } .sl-toolbar { flex-direction:column; } }
 </style>
 
 @code {
-    List<VertexAutoTradeBinance8.Web.Models.MissedTradeRecord> _all = new();
-    List<VertexAutoTradeBinance8.Web.Models.MissedTradeRecord> _visible = new();
-    VertexAutoTradeBinance8.Web.Models.MissedTradeRecord? _sel;
-    string _selKey = "";
-    string _activeFilter = "ALL";
-    string _search = "";
-    string _symFilter = "";
-    string _sort = "time";
-    string _topReason = "";
-    Dictionary<string, List<VertexAutoTradeBinance8.Web.Models.MissedTradeRecord>> _symGroups = new();
-    record ReasonGroup(string Reason, int Count);
-    List<ReasonGroup> _reasonGroups = new();
-    record FilterDef(string Key, string Label, int Count);
-    List<FilterDef> _filters = new();
-    System.Threading.Timer? _timer;
+    record SymG(string Symbol, int Count, int AvgConf);
+    record ReasonG(string Reason, int Count);
+    record FDef(string Key, string Label, int N);
 
-    string Key(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r)
-        => $"{r.Symbol}_{r.Time:yyyyMMddHHmmssfff}";
+    List<MissedTradeRecord> _all      = new();
+    List<MissedTradeRecord> _filtered = new();
+    List<SymG>    _bySymbol = new();
+    List<ReasonG> _byReason = new();
+    List<FDef>    _filters  = new();
+
+    string _fKey = "ALL", _q = "", _symFilter = "", _sort = "time", _selId = "";
+    System.Threading.Timer? _timer;
 
     protected override async Task OnInitializedAsync()
     {
@@ -443,84 +444,88 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     async Task Load()
     {
-        var data = await MissedService.LoadAsync();
-        if (data == null) return;
-        _all = data.ToList();
+        var data = await Svc.LoadAsync();
+        _all = data ?? new();
         Rebuild();
     }
 
     void Rebuild()
     {
-        _symGroups = _all.GroupBy(r=>r.Symbol)
-            .OrderByDescending(g=>g.Count())
-            .ToDictionary(g=>g.Key, g=>g.ToList());
+        _bySymbol = _all
+            .GroupBy(r => r.Symbol)
+            .Select(g => new SymG(g.Key, g.Count(), (int)g.Average(x => x.Confidence)))
+            .OrderByDescending(g => g.Count).ToList();
 
-        _reasonGroups = _all.GroupBy(r=>r.Reason)
-            .Select(g=>new ReasonGroup(g.Key, g.Count()))
-            .OrderByDescending(g=>g.Count).ToList();
-
-        _topReason = _reasonGroups.FirstOrDefault()?.Reason ?? "";
+        _byReason = _all
+            .GroupBy(r => r.Reason)
+            .Select(g => new ReasonG(g.Key, g.Count()))
+            .OrderByDescending(g => g.Count).ToList();
 
         _filters = new()
         {
             new("ALL",   "All",         _all.Count),
-            new("LONG",  "▲ Long",      _all.Count(r=>r.Side=="Buy")),
-            new("SHORT", "▼ Short",     _all.Count(r=>r.Side=="Sell")),
-            new("HIGH",  "Conf ≥70",    _all.Count(r=>r.Confidence>=70)),
-            new("EXEC",  "Exec Fail",   _all.Count(r=>r.Reason.Contains("Exec"))),
-            new("BAL",   "Low Balance", _all.Count(r=>r.Reason.Contains("Balance")||r.Reason.Contains("balance"))),
+            new("LONG",  "▲ Long",      _all.Count(r => r.Side == "Buy")),
+            new("SHORT", "▼ Short",     _all.Count(r => r.Side == "Sell")),
+            new("HIGH",  "Conf ≥ 70",   _all.Count(r => r.Confidence >= 70)),
+            new("EXEC",  "Exec Failed", _all.Count(r => r.Reason.Contains("Exec") || r.Reason.Contains("Failed"))),
+            new("BAL",   "Low Balance", _all.Count(r => r.Reason.Contains("Balance") || r.Reason.Contains("balance"))),
+            new("MIN",   "Min Notional",_all.Count(r => r.Reason.Contains("Notional") || r.Reason.Contains("TOO_SMALL"))),
         };
-        ApplyFilter();
+
+        Refilter();
     }
 
-    void ApplyFilter()
+    void Refilter()
     {
         var q = _all.AsEnumerable();
+
         if (!string.IsNullOrEmpty(_symFilter))
-            q = q.Where(r=>r.Symbol==_symFilter);
-        else if (!string.IsNullOrEmpty(_search))
+            q = q.Where(r => r.Symbol == _symFilter);
+        else if (!string.IsNullOrEmpty(_q))
         {
-            var s = _search.ToUpperInvariant();
-            q = q.Where(r=>r.Symbol.Contains(s)||r.Reason.ToUpperInvariant().Contains(s));
+            var up = _q.ToUpperInvariant();
+            q = q.Where(r => r.Symbol.Contains(up) ||
+                              r.Reason.ToUpperInvariant().Contains(up) ||
+                              r.Stage.ToUpperInvariant().Contains(up));
         }
-        q = _activeFilter switch
+
+        q = _fKey switch
         {
-            "LONG"  => q.Where(r=>r.Side=="Buy"),
-            "SHORT" => q.Where(r=>r.Side=="Sell"),
-            "HIGH"  => q.Where(r=>r.Confidence>=70),
-            "EXEC"  => q.Where(r=>r.Reason.Contains("Exec")),
-            "BAL"   => q.Where(r=>r.Reason.Contains("Balance")||r.Reason.Contains("balance")),
+            "LONG"  => q.Where(r => r.Side == "Buy"),
+            "SHORT" => q.Where(r => r.Side == "Sell"),
+            "HIGH"  => q.Where(r => r.Confidence >= 70),
+            "EXEC"  => q.Where(r => r.Reason.Contains("Exec") || r.Reason.Contains("Failed")),
+            "BAL"   => q.Where(r => r.Reason.Contains("Balance") || r.Reason.Contains("balance")),
+            "MIN"   => q.Where(r => r.Reason.Contains("Notional") || r.Reason.Contains("TOO_SMALL")),
             _       => q
         };
-        _visible = (_sort switch
+
+        _filtered = (_sort switch
         {
-            "conf" => q.OrderByDescending(r=>r.Confidence),
-            "sym"  => q.OrderBy(r=>r.Symbol),
-            _      => q.OrderByDescending(r=>r.Time)
+            "conf" => q.OrderByDescending(r => r.Confidence),
+            "sym"  => q.OrderBy(r => r.Symbol).ThenByDescending(r => r.Time),
+            _      => q.OrderByDescending(r => r.Time)
         }).ToList();
     }
 
-    void SetFilter(string f) { _activeFilter=f; _symFilter=""; ApplyFilter(); }
-    void FilterSym(string s) { _symFilter=_symFilter==s?"":s; ApplyFilter(); }
-    void ClearFilters() { _activeFilter="ALL"; _search=""; _symFilter=""; ApplyFilter(); }
-    void OnSort(ChangeEventArgs e) { _sort=e.Value?.ToString()??"time"; ApplyFilter(); }
+    void OnSearch(ChangeEventArgs e) { _q = e.Value?.ToString() ?? ""; _symFilter = ""; Refilter(); }
+    void OnSort(ChangeEventArgs e)   { _sort = e.Value?.ToString() ?? "time"; Refilter(); }
+    void ClearSearch() { _q = ""; _symFilter = ""; Refilter(); }
+    void ToggleSym(string s) { _symFilter = _symFilter == s ? "" : s; _fKey = "ALL"; Refilter(); }
+    void Toggle(MissedTradeRecord r) { var id = SigId(r); _selId = _selId == id ? "" : id; }
 
-    void Select(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r)
-    {
-        if (_selKey==Key(r)){_sel=null;_selKey="";}
-        else{_sel=r;_selKey=Key(r);}
-    }
+    string SigId(MissedTradeRecord r) => $"{r.Symbol}_{r.Time:yyyyMMddHHmmssfff}";
 
-    // ── FORMATTING ────────────────────────────────────────
-    string FmtP(decimal v)
+    // ── FORMAT ────────────────────────────────────────────
+    string FP(decimal v)
     {
-        if(v<=0) return "—";
-        if(v>=1000) return v.ToString("F2");
-        if(v>=1)    return v.ToString("F4");
+        if (v <= 0) return "—";
+        if (v >= 1000) return v.ToString("F2");
+        if (v >= 1)    return v.ToString("F4");
         return v.ToString("G5");
     }
 
-    string RegimeStr(MarketRegime r) => r switch
+    string RegStr(MarketRegime r) => r switch
     {
         MarketRegime.StrongUpTrend   => "↑↑ Strong Bull",
         MarketRegime.UpTrend         => "↑ Bull",
@@ -528,62 +533,73 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         MarketRegime.DownTrend       => "↓ Bear",
         MarketRegime.Squeeze         => "⊞ Squeeze",
         MarketRegime.Range           => "↔ Range",
-        _ => "— Unknown"
+        _                            => "— Unknown"
     };
 
     string RegimeCls(MarketRegime r) => r switch
     {
-        MarketRegime.StrongUpTrend or MarketRegime.UpTrend       => "rc-bull",
-        MarketRegime.StrongDownTrend or MarketRegime.DownTrend   => "rc-bear",
-        MarketRegime.Squeeze                                      => "rc-squeeze",
-        MarketRegime.Range                                        => "rc-range",
-        _ => "dim"
+        MarketRegime.StrongUpTrend or MarketRegime.UpTrend       => "sl-regime regime-bull",
+        MarketRegime.StrongDownTrend or MarketRegime.DownTrend   => "sl-regime regime-bear",
+        MarketRegime.Squeeze                                      => "sl-regime regime-squeeze",
+        MarketRegime.Range                                        => "sl-regime regime-range",
+        _                                                         => "sl-regime sl-dim"
     };
 
-    string BlockCls(string r)
+    string ReasonCls(string r)
     {
-        if(r.Contains("Exec")||r.Contains("EXEC")||r.Contains("Failed")) return "block-exec";
-        if(r.Contains("Balance")||r.Contains("balance")||r.Contains("BAL")) return "block-bal";
-        if(r.Contains("Notional")||r.Contains("TOO_SMALL")||r.Contains("MIN")) return "block-min";
-        return "block-other";
+        if (r.Contains("Exec") || r.Contains("Failed") || r.Contains("ENTRY"))  return "sl-creason reason-exec";
+        if (r.Contains("Balance") || r.Contains("balance") || r.Contains("BAL")) return "sl-creason reason-bal";
+        if (r.Contains("Notional") || r.Contains("TOO_SMALL") || r.Contains("MIN")) return "sl-creason reason-min";
+        return "sl-creason reason-other";
     }
 
-    string ShortReason(string r) => r switch
+    string RShort(string r) => r switch
     {
-        var x when x.Contains("ExecFailed") || x.Contains("Exec Failed") || x.Contains("EXECUTION_FAILED") => "Exec Failed",
-        var x when x.Contains("Balance is zero") || x.Contains("BalanceZero") => "Balance Zero",
-        var x when x.Contains("InsufficientBalance") || x.Contains("INSUFFICIENT") => "Low Balance",
-        var x when x.Contains("MinNotional") || x.Contains("TOO_SMALL") => "Min Notional",
-        var x when x.Contains("DRY_RUN") => "Dry Run",
-        var x when x.Contains("Cooldown") || x.Contains("COOLDOWN") => "Cooldown",
-        var x when x.Contains("LiquidityGuard") => "Liq Guard",
-        var x when x.Contains("SIDE_NOT") => "Side Blocked",
-        var x when x.Contains("AI_BLOCK") || x.Contains("AI_PNL") => "AI Block",
-        var x when x.Contains("OrderBookImbalance") => "OB Imbalance",
-        var x when x.Contains("ADJUSTED_QTY") => "Qty Adjusted",
-        var x when x.Contains("StaleLimit") => "Stale Limit",
-        var x when x.Contains("EntryError") => "Entry Error",
-        _ => r.Length > 22 ? r[..22] + "…" : r
+        _ when r.Contains("ExecFailed") || r.Contains("Exec Failed") || r.Contains("EXECUTION_FAILED") || r.Contains("ENTRY_FAILED") => "Exec Failed",
+        _ when r.Contains("Balance is zero") || r.Contains("BalanceZero")   => "Balance Zero",
+        _ when r.Contains("InsufficientBalance") || r.Contains("INSUFFICIENT") => "Insufficient Bal",
+        _ when r.Contains("MinNotional") || r.Contains("TOO_SMALL")         => "Min Notional",
+        _ when r.Contains("DRY_RUN")                                         => "Dry Run",
+        _ when r.Contains("COOLDOWN") || r.Contains("Cooldown")             => "Cooldown",
+        _ when r.Contains("LiquidityGuard")                                  => "Liq Guard",
+        _ when r.Contains("SIDE_NOT")                                        => "Side Blocked",
+        _ when r.Contains("AI_BLOCK") || r.Contains("AI_PNL")               => "AI Block",
+        _ when r.Contains("OrderBookImbalance")                              => "OB Imbalance",
+        _ when r.Contains("ADJUSTED_QTY")                                    => "Qty Adjusted",
+        _ when r.Contains("StaleLimit")                                      => "Stale Limit",
+        _ when r.Contains("EntryError") || r.Contains("ENTRY_FAILED")       => "Entry Error",
+        _ when r.Contains("TRAP")                                            => "Trap",
+        _ => r.Length > 20 ? r[..20] + "…" : r
     };
 
-    string AiHint(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r)
+    string Hint(MissedTradeRecord r)
     {
-        var h = new System.Text.StringBuilder();
-        if(r.Confidence>=80) h.Append("Strong signal. ");
-        else if(r.Confidence>=60) h.Append("Decent setup. ");
-        else h.Append("Weak signal. ");
-        h.Append(r.Regime switch {
-            MarketRegime.StrongUpTrend => "Strong bull trend — momentum favors long. ",
-            MarketRegime.UpTrend => "Uptrend in play. ",
-            MarketRegime.StrongDownTrend => "Strong bear trend. ",
-            MarketRegime.Range => "Range market — mean reversion setup. ",
-            MarketRegime.Squeeze => "Squeeze — breakout expected soon. ",
+        var sb = new System.Text.StringBuilder();
+        if      (r.Confidence >= 80) sb.Append("Strong signal. ");
+        else if (r.Confidence >= 60) sb.Append("Decent setup. ");
+        else                          sb.Append("Weak signal. ");
+
+        sb.Append(r.Regime switch {
+            MarketRegime.StrongUpTrend   => "Strong bull — momentum in favour. ",
+            MarketRegime.UpTrend         => "Uptrend — direction clear. ",
+            MarketRegime.StrongDownTrend => "Strong bear — shorting opportunity. ",
+            MarketRegime.Range           => "Range market — mean reversion play. ",
+            MarketRegime.Squeeze         => "Squeeze — breakout expected soon. ",
             _ => ""
         });
-        if(r.Reason.Contains("Exec")) h.Append("Order failed at execution — may be API issue or balance.");
-        else if(r.Reason.Contains("Balance")) h.Append("Blocked by low balance — deposit more USDT to catch this.");
-        else if(r.Reason.Contains("Notional")) h.Append("Min notional not met — this symbol needs larger capital per trade.");
-        return h.ToString();
+
+        if      (r.Reason.Contains("Exec") || r.Reason.Contains("Failed"))
+            sb.Append("Blocked at execution — check API errors or balance.");
+        else if (r.Reason.Contains("Balance") || r.Reason.Contains("balance"))
+            sb.Append("Low balance — add USDT to capture similar setups.");
+        else if (r.Reason.Contains("Notional") || r.Reason.Contains("TOO_SMALL"))
+            sb.Append("Min notional not met — this symbol needs a larger position size.");
+        else if (r.Reason.Contains("TRAP"))
+            sb.Append("AI detected a potential trap — entry was blocked to avoid false move.");
+        else if (r.Reason.Contains("Cooldown"))
+            sb.Append("Symbol was in cooldown after a recent trade.");
+
+        return sb.ToString();
     }
 
     public void Dispose() => _timer?.Dispose();
