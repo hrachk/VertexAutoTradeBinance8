@@ -105,7 +105,7 @@
                     <span style="color:rgba(59,130,246,0.5)">╌╌ BB(20)</span>
                 </div>
             </div>
-            <div class="mk-canvas-wrap" style="height:300px">
+            <div class="mk-canvas-wrap mk-canvas-price">
                 <canvas id="priceChart"></canvas>
             </div>
 
@@ -117,7 +117,7 @@
                     <span style="color:#22c55e">── OS 30</span>
                 </div>
             </div>
-            <div class="mk-canvas-wrap" style="height:80px">
+            <div class="mk-canvas-wrap mk-canvas-rsi">
                 <canvas id="rsiChart"></canvas>
             </div>
 
@@ -128,7 +128,7 @@
                     <span style="color:#38bdf8">● Spike ×2.2</span>
                 </div>
             </div>
-            <div class="mk-canvas-wrap" style="height:80px">
+            <div class="mk-canvas-wrap mk-canvas-vol">
                 <canvas id="volumeChart"></canvas>
             </div>
 
@@ -217,8 +217,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
 .mk-chart-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
 .mk-legend{display:flex;gap:14px;font-size:11px;color:var(--dim);}
-.mk-canvas-wrap{position:relative;background:#070a0f;border-radius:4px;margin-bottom:4px;}
-.mk-canvas-wrap canvas{display:block;width:100%!important;height:100%!important;}
+.mk-canvas-wrap{position:relative;background:#070a0f;border-radius:4px;margin-bottom:4px;overflow:hidden;}
+.mk-canvas-wrap canvas{display:block;width:100%!important;}
+.mk-canvas-price{height:300px;}
+.mk-canvas-rsi{height:90px;}
+.mk-canvas-vol{height:90px;}
 
 /* TABLE */
 .mk-tbl-wrap{padding:20px 28px;}
@@ -352,11 +355,12 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             var klines = Selected.Klines.Select(k => new
             {
-                open   = (double)k.Open,
-                high   = (double)k.High,
-                low    = (double)k.Low,
-                close  = (double)k.Close,
-                volume = (double)k.Volume
+                openTime = k.OpenTime,
+                open     = (double)k.Open,
+                high     = (double)k.High,
+                low      = (double)k.Low,
+                close    = (double)k.Close,
+                volume   = (double)k.Volume
             }).ToArray();
 
             await JS.InvokeVoidAsync("marketChart.render",
