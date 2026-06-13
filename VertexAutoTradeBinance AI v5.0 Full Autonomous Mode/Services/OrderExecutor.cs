@@ -944,13 +944,18 @@ namespace VertexAutoTradeBinance8.Services
             bool useMarket = breakoutMarket || reclaimMarket || emergencyMarket;
 
             // =====================================================
-            // Momentum паттерны входят только Market ордером —
-            // они уже на движении и Limit не исполнится вовремя
+            // СКАЛЬПИНГ: 1M/5M — всегда Market
+            // Limit на быстрых таймфреймах не успевает заполниться
             // =====================================================
+            var signalTf = signal.Timeframe ?? "";
+            if (signalTf is "OneMinute" or "FiveMinutes" or "1m" or "5m")
+                useMarket = true;
+
+            // Momentum паттерны → Market (уже на движении)
             if (signal.Reason is "IMPULSE_CONTINUATION" or "EARLY_TREND_JOIN")
                 useMarket = true;
 
-            // Range паттерны → Limit ордер (цена у границы канала, точный вход)
+            // Range паттерны → Limit (цена у границы канала)
             if (signal.Reason is "RANGE_BOUND_LONG" or "RANGE_BOUND_SHORT")
                 useMarket = false;
 
@@ -1358,15 +1363,21 @@ namespace VertexAutoTradeBinance8.Services
                 return OrderResult.Fail("EXECUTION_DISABLED");
             }
             var entryRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol: signal.Symbol,
-                side: side,
-                type: entryType,
-                quantity: quantity,
-                price: orderPrice,
-                positionSide: isHedge ? posSide : null,
-                timeInForce: tif,
-                reduceOnly: null,
-                ct: ct);
+                symbol:                  signal.Symbol,
+                side:                    side,
+                type:                    entryType,
+                quantity:                quantity,
+                price:                   orderPrice,
+                positionSide:            isHedge ? posSide : null,
+                timeInForce:             tif,
+                reduceOnly:              null,
+                selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
+                ct:                      ct);
+
+            _logger.LogInformation(
+                "[ENTRY][{symbol}] PlaceOrder type={type} side={side} qty={qty} price={price} hedge={h} → {ok}",
+                signal.Symbol, entryType, side, quantity, orderPrice, isHedge,
+                entryRes.Success ? "OK" : $"FAIL code={entryRes.Error?.Code} msg={entryRes.Error?.Message}");
 
             // =============================================================
             // SAFE RETRY (LIMIT ONLY)
