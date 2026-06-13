@@ -1,7 +1,6 @@
 @page "/missed-trades"
 @using VertexAutoTradeBinance8.Web.Services
 @using VertexAutoTradeBinance8.Web.Models
-@using VertexAutoTradeBinance8.Models
 @inject MissedTradeFileService Svc
 @implements IDisposable
 
@@ -38,7 +37,7 @@
             @foreach (var f in _filters)
             {
                 <button class="sl-chip @(_fKey==f.Key?"sl-chip-on":"")"
-                        @onclick="()=>{_fKey=f.Key;_symFilter="";Refilter();}">
+                        @onclick="()=>{_fKey=f.Key;_symFilter=string.Empty;Refilter();}">
                     @f.Label
                     <span class="sl-chip-n">@f.N</span>
                 </button>
@@ -81,7 +80,7 @@
                 {
                     <div class="sl-feed-banner">
                         Filtering: <b>@_symFilter</b>
-                        <button @onclick="()=>{_symFilter="";Refilter();}">✕ clear</button>
+                        <button @onclick="()=>{_symFilter=string.Empty;Refilter();}">✕ clear</button>
                     </div>
                 }
 
@@ -424,8 +423,8 @@ html,body { background:var(--bg)!important; color:var(--txt); }
     record ReasonG(string Reason, int Count);
     record FDef(string Key, string Label, int N);
 
-    List<MissedTradeRecord> _all      = new();
-    List<MissedTradeRecord> _filtered = new();
+    List<VertexAutoTradeBinance8.Web.Models.MissedTradeRecord> _all      = new();
+    List<VertexAutoTradeBinance8.Web.Models.MissedTradeRecord> _filtered = new();
     List<SymG>    _bySymbol = new();
     List<ReasonG> _byReason = new();
     List<FDef>    _filters  = new();
@@ -512,9 +511,9 @@ html,body { background:var(--bg)!important; color:var(--txt); }
     void OnSort(ChangeEventArgs e)   { _sort = e.Value?.ToString() ?? "time"; Refilter(); }
     void ClearSearch() { _q = ""; _symFilter = ""; Refilter(); }
     void ToggleSym(string s) { _symFilter = _symFilter == s ? "" : s; _fKey = "ALL"; Refilter(); }
-    void Toggle(MissedTradeRecord r) { var id = SigId(r); _selId = _selId == id ? "" : id; }
+    void Toggle(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r) { var id = SigId(r); _selId = _selId == id ? "" : id; }
 
-    string SigId(MissedTradeRecord r) => $"{r.Symbol}_{r.Time:yyyyMMddHHmmssfff}";
+    string SigId(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r) => $"{r.Symbol}_{r.Time:yyyyMMddHHmmssfff}";
 
     // ── FORMAT ────────────────────────────────────────────
     string FP(decimal v)
@@ -525,23 +524,23 @@ html,body { background:var(--bg)!important; color:var(--txt); }
         return v.ToString("G5");
     }
 
-    string RegStr(MarketRegime r) => r switch
+    string RegStr(VertexAutoTradeBinance8.Models.MarketRegime r) => r switch
     {
-        MarketRegime.StrongUpTrend   => "↑↑ Strong Bull",
-        MarketRegime.UpTrend         => "↑ Bull",
-        MarketRegime.StrongDownTrend => "↓↓ Strong Bear",
-        MarketRegime.DownTrend       => "↓ Bear",
-        MarketRegime.Squeeze         => "⊞ Squeeze",
-        MarketRegime.Range           => "↔ Range",
+        VertexAutoTradeBinance8.Models.MarketRegime.StrongUpTrend   => "↑↑ Strong Bull",
+        VertexAutoTradeBinance8.Models.MarketRegime.UpTrend         => "↑ Bull",
+        VertexAutoTradeBinance8.Models.MarketRegime.StrongDownTrend => "↓↓ Strong Bear",
+        VertexAutoTradeBinance8.Models.MarketRegime.DownTrend       => "↓ Bear",
+        VertexAutoTradeBinance8.Models.MarketRegime.Squeeze         => "⊞ Squeeze",
+        VertexAutoTradeBinance8.Models.MarketRegime.Range           => "↔ Range",
         _                            => "— Unknown"
     };
 
-    string RegimeCls(MarketRegime r) => r switch
+    string RegimeCls(VertexAutoTradeBinance8.Models.MarketRegime r) => r switch
     {
-        MarketRegime.StrongUpTrend or MarketRegime.UpTrend       => "sl-regime regime-bull",
-        MarketRegime.StrongDownTrend or MarketRegime.DownTrend   => "sl-regime regime-bear",
-        MarketRegime.Squeeze                                      => "sl-regime regime-squeeze",
-        MarketRegime.Range                                        => "sl-regime regime-range",
+        VertexAutoTradeBinance8.Models.MarketRegime.StrongUpTrend or VertexAutoTradeBinance8.Models.MarketRegime.UpTrend       => "sl-regime regime-bull",
+        VertexAutoTradeBinance8.Models.MarketRegime.StrongDownTrend or VertexAutoTradeBinance8.Models.MarketRegime.DownTrend   => "sl-regime regime-bear",
+        VertexAutoTradeBinance8.Models.MarketRegime.Squeeze                                      => "sl-regime regime-squeeze",
+        VertexAutoTradeBinance8.Models.MarketRegime.Range                                        => "sl-regime regime-range",
         _                                                         => "sl-regime sl-dim"
     };
 
@@ -572,7 +571,7 @@ html,body { background:var(--bg)!important; color:var(--txt); }
         _ => r.Length > 20 ? r[..20] + "…" : r
     };
 
-    string Hint(MissedTradeRecord r)
+    string Hint(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r)
     {
         var sb = new System.Text.StringBuilder();
         if      (r.Confidence >= 80) sb.Append("Strong signal. ");
@@ -580,11 +579,11 @@ html,body { background:var(--bg)!important; color:var(--txt); }
         else                          sb.Append("Weak signal. ");
 
         sb.Append(r.Regime switch {
-            MarketRegime.StrongUpTrend   => "Strong bull — momentum in favour. ",
-            MarketRegime.UpTrend         => "Uptrend — direction clear. ",
-            MarketRegime.StrongDownTrend => "Strong bear — shorting opportunity. ",
-            MarketRegime.Range           => "Range market — mean reversion play. ",
-            MarketRegime.Squeeze         => "Squeeze — breakout expected soon. ",
+            VertexAutoTradeBinance8.Models.MarketRegime.StrongUpTrend   => "Strong bull — momentum in favour. ",
+            VertexAutoTradeBinance8.Models.MarketRegime.UpTrend         => "Uptrend — direction clear. ",
+            VertexAutoTradeBinance8.Models.MarketRegime.StrongDownTrend => "Strong bear — shorting opportunity. ",
+            VertexAutoTradeBinance8.Models.MarketRegime.Range           => "Range market — mean reversion play. ",
+            VertexAutoTradeBinance8.Models.MarketRegime.Squeeze         => "Squeeze — breakout expected soon. ",
             _ => ""
         });
 
