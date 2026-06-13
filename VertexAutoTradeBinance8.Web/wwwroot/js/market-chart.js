@@ -82,15 +82,20 @@ function derive() {
 // ── CANVAS SETUP ──────────────────────────────────────────
 function setupCanvas(el) {
     dpr = window.devicePixelRatio || 1;
-    el.width  = el.offsetWidth  * dpr;
-    el.height = el.offsetHeight * dpr;
+    // Always use parent element for dimensions (canvas 100% fills parent)
+    const parent = el.parentElement || el;
+    const w = parent.clientWidth  || el.offsetWidth  || 800;
+    const h = parent.clientHeight || el.offsetHeight || 300;
+    el.width  = w * dpr;
+    el.height = h * dpr;
     const ctx = el.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     return ctx;
 }
 
-function W(c)  { return c.offsetWidth;  }
-function H(c)  { return c.offsetHeight; }
+// Always read dimensions from parent (canvas fills parent via CSS)
+function W(c)  { return (c.parentElement || c).clientWidth  || c.offsetWidth  || 800; }
+function H(c)  { return (c.parentElement || c).clientHeight || c.offsetHeight || 300; }
 
 // ── LAYOUT ────────────────────────────────────────────────
 const PL=8, PR=70, PT=20, PB=20;
@@ -454,7 +459,15 @@ function fmtV(v){if(v>=1e6)return (v/1e6).toFixed(2)+'M';if(v>=1e3)return (v/1e3
 // ── RESIZE OBSERVER ───────────────────────────────────────
 function resize(){
     dpr=window.devicePixelRatio||1;
-    [MC,RC,VC].forEach(c=>{if(!c||!c.offsetWidth)return;c.width=c.offsetWidth*dpr;c.height=c.offsetHeight*dpr;c.getContext('2d').setTransform(dpr,0,0,dpr,0,0);});
+    [MC,RC,VC].forEach(c=>{
+        if(!c) return;
+        const parent=c.parentElement||c;
+        const w=parent.clientWidth||800;
+        const h=parent.clientHeight||300;
+        if(!w||!h) return;
+        c.width=w*dpr; c.height=h*dpr;
+        c.getContext('2d').setTransform(dpr,0,0,dpr,0,0);
+    });
 }
 
 // ── PUBLIC API ────────────────────────────────────────────
