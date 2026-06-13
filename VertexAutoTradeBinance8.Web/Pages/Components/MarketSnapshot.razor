@@ -116,9 +116,9 @@
                 </div>
             </div>
             <div class="mk-canvas-wrap mk-canvas-price" id="priceWrap">
-                <canvas id="priceChart"></canvas>
+                <canvas id="priceChart" style="cursor:crosshair"></canvas>
                 <div class="mk-resize-handle" id="resizeHandle"
-                     title="Drag to resize">
+                     title="Drag to resize · Ctrl+Wheel to zoom Y · Scroll to zoom X · Shift+Scroll to zoom price">
                     <div class="mk-resize-dots">⋯</div>
                 </div>
             </div>
@@ -144,6 +144,15 @@
             </div>
             <div class="mk-canvas-wrap mk-canvas-vol">
                 <canvas id="volumeChart"></canvas>
+            </div>
+
+            <!-- Controls hint -->
+            <div class="mk-hints">
+                <span>🖱 Drag to pan</span>
+                <span>⚲ Scroll to zoom X</span>
+                <span>⇧+Scroll to zoom Y</span>
+                <span>↕ Drag handle to resize</span>
+                <span>2× click to reset</span>
             </div>
 
         </div>
@@ -297,7 +306,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         if (firstRender)
         {
             _jsReady = true;
-            // Инициализируем resize handle и mouse wheel zoom
+            await JS.InvokeVoidAsync("marketChart.init", "priceChart", "rsiChart", "volumeChart");
             await JS.InvokeVoidAsync("marketResize.init", "priceWrap", "resizeHandle");
             await RenderCharts();
         }
@@ -448,3 +457,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _cts.Cancel(); _timer?.Dispose();
     }
 }
+
+<style>
+.mk-hints{display:flex;gap:16px;padding:8px 4px 0;font-size:11px;color:var(--dim);flex-wrap:wrap;}
+</style>
