@@ -423,7 +423,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     string _sort = "time";
     string _topReason = "";
     Dictionary<string, List<VertexAutoTradeBinance8.Web.Models.MissedTradeRecord>> _symGroups = new();
-    List<(string Reason, int Count)> _reasonGroups = new();
+    record ReasonGroup(string Reason, int Count);
+    List<ReasonGroup> _reasonGroups = new();
     record FilterDef(string Key, string Label, int Count);
     List<FilterDef> _filters = new();
     System.Threading.Timer? _timer;
@@ -455,10 +456,10 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             .ToDictionary(g=>g.Key, g=>g.ToList());
 
         _reasonGroups = _all.GroupBy(r=>r.Reason)
-            .Select(g=>(g.Key, g.Count()))
-            .OrderByDescending(g=>g.Item2).ToList();
+            .Select(g=>new ReasonGroup(g.Key, g.Count()))
+            .OrderByDescending(g=>g.Count).ToList();
 
-        _topReason = _reasonGroups.FirstOrDefault().Key ?? "";
+        _topReason = _reasonGroups.FirstOrDefault()?.Reason ?? "";
 
         _filters = new()
         {
