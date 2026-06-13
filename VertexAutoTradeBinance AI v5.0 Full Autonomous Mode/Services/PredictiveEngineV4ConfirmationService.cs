@@ -156,7 +156,8 @@ namespace VertexAutoTradeBinance8.Services
                 bodyAtr >= 1.5m ? 1.0m :
                 bodyAtr >= 1.0m ? 0.8m :
                 bodyAtr >= 0.6m ? 0.5m :
-                0.2m;
+                bodyAtr >= 0.3m ? 0.4m :
+                0.3m; // raised floor 0.2→0.3: small pullback candles are valid entries
 
             // ======================================================
             // ORDERFLOW
@@ -229,7 +230,7 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             decimal manipScore = manip ? 0.2m : 1.0m;
-            decimal superScore = signal.IsSuperSignal ? 1.0m : 0.4m;
+            decimal superScore = signal.IsSuperSignal ? 1.0m : 0.6m; // raised 0.4→0.6: was dragging all normal signals below threshold
 
             // ======================================================
             // SCORE
@@ -242,9 +243,11 @@ namespace VertexAutoTradeBinance8.Services
             const decimal wSuper = 0.03m;
 
             decimal atrScore =
-                atrPct >= 0.004m ? 0.9m :
-                atrPct >= 0.002m ? 1.0m :
-                atrPct >= 0.0008m ? 0.7m :
+                atrPct >= 0.004m  ? 0.9m :
+                atrPct >= 0.002m  ? 1.0m :
+                atrPct >= 0.001m  ? 0.8m :  // BTC/ETH typical range
+                atrPct >= 0.0005m ? 0.6m :
+                atrPct >= 0.0003m ? 0.4m :
                 0.2m;
 
             decimal score =
@@ -285,7 +288,7 @@ namespace VertexAutoTradeBinance8.Services
                 allow = false;
                 reason = "LOW_ATR";
             }
-            else if (score < 0.25m)
+            else if (score < 0.20m) // lowered threshold 0.25→0.20
             {
                 grade = "BLOCK";
                 allow = false;

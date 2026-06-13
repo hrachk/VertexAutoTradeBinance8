@@ -45,13 +45,15 @@ namespace VertexAutoTradeBinance8.Models.HTF
 
         public bool Allows(SignalSide side, decimal confidence)
         {
+            // Bias проверка: разрешаем противоположную сторону только при высокой уверенности
+            // confidence = ai.Score (0.0 - 1.0)
             if (Bias == MarketBias.LongOnly && side == SignalSide.Sell)
-                return confidence >= 0.85m;
+                return confidence >= 0.75m; // было 0.85 — слишком жёстко
 
             if (Bias == MarketBias.ShortOnly && side == SignalSide.Buy)
-                return confidence >= 0.85m;
+                return confidence >= 0.75m;
 
-            return true;
+            return true; // Neutral всегда разрешает
         }
     }
 
