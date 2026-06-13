@@ -66,40 +66,38 @@ public sealed class MarketContextService
     {
         try
         {
+            // Если таймфрейм в warmup — не блокируем, возвращаем Neutral (не Unknown)
+            // Unknown ломает ResolveBias и aligned проверку
             if (_market.IsInWarmup(symbol, tf))
-                return MarketRegime.Unknown;
+                return MarketRegime.Range; // Range = neutral, не блокирует
 
             var kl = await _market.GetKlinesAsync(symbol, tf, ContextBars, ct);
-            if (kl == null || kl.Count < 50)
-                return MarketRegime.Unknown;
+            if (kl == null || kl.Count < 20) // снижено с 50 до 20
+                return MarketRegime.Range;
 
             return _regime.DetectRegime(symbol, tf, kl).Regime;
         }
         catch
         {
-            return MarketRegime.Unknown;
+            return MarketRegime.Range;
         }
     }
 
     private static MarketBias ResolveBias(MarketRegime r1d, MarketRegime r4h)
     {
-        if (r1d == MarketRegime.StrongUpTrend &&
-            r4h == MarketRegime.StrongUpTrend)
-            return MarketBias.LongOnly;
+        // Unknown/Range = нейтральный, не блокируем
+        var upRegimes   = new[]{ MarketRegime.StrongUpTrend };
+        var downRegimes = new[]{ MarketRegime.StrongDownTrend };
 
-        if (r1d == MarketRegime.StrongDownTrend &&
-            r4h == MarketRegime.StrongDownTrend)
-            return MarketBias.ShortOnly;
+        bool d1Up   = upRegimes.Contains(r1d);
+        bool d1Down = downRegimes.Contains(r1d);
+        bool h4Up   = upRegimes.Contains(r4h);
+        bool h4Down = downRegimes.Contains(r4h);
 
-        // conflicting signals → neutral
-        if (r1d == MarketRegime.StrongUpTrend &&
-            r4h == MarketRegime.StrongDownTrend)
-            return MarketBias.Neutral;
+        if (d1Up   && h4Up)   return MarketBias.LongOnly;
+        if (d1Down && h4Down) return MarketBias.ShortOnly;
 
-        if (r1d == MarketRegime.StrongDownTrend &&
-            r4h == MarketRegime.StrongUpTrend)
-            return MarketBias.Neutral;
-
+        // Всё остальное — нейтрально (включая Unknown, Range, conflicting)
         return MarketBias.Neutral;
     }
 

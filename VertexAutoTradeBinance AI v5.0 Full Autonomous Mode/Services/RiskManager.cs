@@ -1,4 +1,4 @@
-﻿using Binance.Net.Enums;
+using Binance.Net.Enums;
 using CryptoExchange.Net;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
@@ -195,17 +195,9 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // =============================================================
-            // ADAPTIVE MINNOTIONAL — правильная логика
-            //
-            // Binance требует minNotional (из фильтров символа, обычно 5$).
-            // Старый код: minNotionalAdaptive = Math.Min(minNotional, entry*minQty)
-            // Для дешёвых монет (price=0.317): Math.Min(5, 0.317) = 0.317 → НЕВЕРНО
-            //
-            // Правильно: minNotional из конфига = РЕАЛЬНЫЙ минимум Binance.
-            // Если finalNotional < minNotional → поднимаем qty до минимума.
-            // Если даже минимальный qty даёт notional > maxAllowed → reject.
+            // ADAPTIVE MINNOTIONAL
             // =============================================================
-            decimal minNotional = trading.MinNotional > 0 ? trading.MinNotional : 5m;
+            // minNotional already declared above - reuse it
 
             // Минимальный qty чтобы покрыть minNotional
             decimal minQtyForNotional = Math.Ceiling(minNotional / entry / step) * step;
