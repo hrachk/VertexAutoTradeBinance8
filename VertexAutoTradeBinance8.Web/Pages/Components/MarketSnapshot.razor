@@ -39,23 +39,33 @@
         </div>
     </div>
 
-    <!-- SYMBOL CHIPS -->
-    <div class="mk-chips">
-        @foreach (var s in Series)
-        {
-            var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
-            var first = s.Klines.Count > 1 ? s.Klines[0].Close : last;
-            var chg = first > 0 ? (last - first) / first * 100m : 0m;
-            <button class="mk-chip @(s==Selected?"mk-chip-on":"")" @onclick="()=>Pick(s)">
-                <span class="mk-chip-sym">@s.Symbol</span>
-                <span class="mk-chip-tf">@TfLabel(s.Timeframe)</span>
-                <span class="mk-chip-chg @(chg>=0?"up":"dn")">@(chg>=0?"+":"")@chg.ToString("F1")%</span>
-            </button>
-        }
-        @if (!Series.Any())
-        {
-            <span class="mk-dim">No data — start the bot first</span>
-        }
+    <!-- SYMBOL TICKER BAR - horizontal scrollable, compact -->
+    <div class="mk-ticker-bar">
+        <div class="mk-ticker-scroll">
+            @foreach (var s in Series)
+            {
+                var last  = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
+                var first = s.Klines.Count > 1 ? s.Klines[0].Close  : last;
+                var chg   = first > 0 ? (last - first) / first * 100m : 0m;
+                var isSel = s == Selected;
+                <button class="mk-tk @(isSel?"mk-tk-on":"")" @onclick="()=>Pick(s)">
+                    <span class="mk-tk-sym">@s.Symbol</span>
+                    <span class="mk-tk-sep">/</span>
+                    <span class="mk-tk-tf">@TfLabel(s.Timeframe)</span>
+                    <span class="mk-tk-chg @(chg>=0?"up":"dn")">
+                        @(chg>=0?"+":"")@chg.ToString("F1")%
+                    </span>
+                    @if (last > 0)
+                    {
+                        <span class="mk-tk-price">@FmtP(last)</span>
+                    }
+                </button>
+            }
+            @if (!Series.Any())
+            {
+                <span class="mk-dim" style="padding:0 16px;font-size:12px">No data — start the bot first</span>
+            }
+        </div>
     </div>
 
     @if (Selected == null || Selected.Klines.Count < 5)
@@ -105,8 +115,12 @@
                     <span style="color:rgba(59,130,246,0.5)">╌╌ BB(20)</span>
                 </div>
             </div>
-            <div class="mk-canvas-wrap mk-canvas-price">
+            <div class="mk-canvas-wrap mk-canvas-price" id="priceWrap">
                 <canvas id="priceChart"></canvas>
+                <div class="mk-resize-handle" id="resizeHandle"
+                     title="Drag to resize">
+                    <div class="mk-resize-dots">⋯</div>
+                </div>
             </div>
 
             <!-- RSI label -->
@@ -217,11 +231,30 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
 .mk-chart-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
 .mk-legend{display:flex;gap:14px;font-size:11px;color:var(--dim);}
-.mk-canvas-wrap{position:relative;background:#070a0f;border-radius:4px;margin-bottom:4px;overflow:hidden;}
+/* TICKER BAR */
+.mk-ticker-bar{background:var(--bg2);border-bottom:1px solid var(--bdr);overflow:hidden;}
+.mk-ticker-scroll{display:flex;align-items:center;overflow-x:auto;scrollbar-width:none;padding:0 4px;}
+.mk-ticker-scroll::-webkit-scrollbar{display:none;}
+.mk-tk{display:inline-flex;align-items:center;gap:5px;padding:8px 14px;background:transparent;border:none;border-right:1px solid var(--bdr);cursor:pointer;transition:background .15s;white-space:nowrap;flex-shrink:0;}
+.mk-tk:hover{background:var(--bg3);}
+.mk-tk-on{background:rgba(59,130,246,.1);border-bottom:2px solid var(--acc);}
+.mk-tk-sym{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--txt);}
+.mk-tk-sep{font-size:10px;color:var(--bdr);}
+.mk-tk-tf{font-size:10px;color:var(--dim);}
+.mk-tk-chg{font-family:var(--mono);font-size:11px;font-weight:600;}
+.mk-tk-price{font-family:var(--mono);font-size:11px;color:var(--dim);}
+
+/* CANVAS */
+.mk-canvas-wrap{position:relative;background:#070a0f;border-radius:4px;margin-bottom:2px;overflow:hidden;}
 .mk-canvas-wrap canvas{display:block;width:100%!important;}
 .mk-canvas-price{height:300px;}
 .mk-canvas-rsi{height:90px;}
 .mk-canvas-vol{height:90px;}
+
+/* RESIZE HANDLE */
+.mk-resize-handle{position:absolute;bottom:0;left:0;right:0;height:10px;cursor:ns-resize;display:flex;align-items:center;justify-content:center;background:rgba(30,37,53,0.5);transition:background .15s;z-index:10;user-select:none;}
+.mk-resize-handle:hover{background:rgba(59,130,246,0.2);}
+.mk-resize-dots{font-size:12px;color:var(--dim);letter-spacing:2px;line-height:1;}
 
 /* TABLE */
 .mk-tbl-wrap{padding:20px 28px;}
@@ -261,7 +294,13 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender) { _jsReady = true; await RenderCharts(); }
+        if (firstRender)
+        {
+            _jsReady = true;
+            // Инициализируем resize handle и mouse wheel zoom
+            await JS.InvokeVoidAsync("marketResize.init", "priceWrap", "resizeHandle");
+            await RenderCharts();
+        }
     }
 
     async Task TickAsync()
