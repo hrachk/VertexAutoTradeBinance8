@@ -1,0 +1,700 @@
+@page "/overview"
+@using VertexAutoTradeBinance8.Web.Services
+@using VertexAutoTradeBinance8.Web.Models
+@inject EngineStateService EngineState
+@inject LivePnlService PnlService
+@inject MissedTradeFileService MissedSvc
+@inject AiLearningFileService AiSvc
+@inject MarketSnapshotFileService MarketSvc
+@implements IDisposable
+
+<PageTitle>Overview — Vertex AI</PageTitle>
+
+<div class="ov">
+
+    <!-- ═══ TOP HERO BAR ═══════════════════════════════════════ -->
+    <div class="ov-hero">
+        <div class="ov-hero-left">
+            <div class="ov-logo">⬡ VERTEX AI <span class="ov-ver">v5.0</span></div>
+            <div class="ov-hero-status">
+                <span class="ov-dot @(_state!=null?"dot-live":"dot-off")"></span>
+                <span class="@(_state!=null?"ov-live":"ov-off")">@(_state!=null?"LIVE":"OFFLINE")</span>
+                @if (_state != null)
+                {
+                    <span class="ov-pipe">|</span>
+                    <span class="ov-mode">@_state.Mode</span>
+                    <span class="ov-pipe">|</span>
+                    <span class="ov-regime @RegClass(_state.MarketRegime)">@_state.MarketRegime</span>
+                    <span class="ov-pipe">|</span>
+                    <span class="ov-sym">@_state.Symbol · @_state.Timeframe</span>
+                }
+            </div>
+        </div>
+        <div class="ov-hero-right">
+            <div class="ov-hero-bal">
+                <span class="ov-bal-val">$@(_state!=null?_state.BalanceUsdt.ToString("F2"):"—")</span>
+                <span class="ov-bal-lab">Balance USDT</span>
+            </div>
+            <div class="ov-hero-pnl @(_state?.RealizedPnlUsd>=0?"pnl-up":"pnl-dn")">
+                <span class="ov-pnl-val">@(_state!=null?$"{(_state.RealizedPnlUsd>=0?"+":"")}{_state.RealizedPnlUsd:F2}$":"—")</span>
+                <span class="ov-pnl-lab">Realized PnL</span>
+            </div>
+            <div class="ov-clock">@DateTime.Now.ToString("HH:mm:ss")</div>
+        </div>
+    </div>
+
+    <!-- ═══ KEY METRICS ROW ════════════════════════════════════ -->
+    <div class="ov-metrics">
+        <div class="ov-metric">
+            <div class="ov-ml">WIN RATE</div>
+            <div class="ov-mv @(_winRate>=60?"mv-hi":_winRate>=50?"mv-mid":"mv-lo")">@_winRate.ToString("F1")%</div>
+            <div class="ov-msub">@_wins W / @_losses L from @_totalTrades trades</div>
+        </div>
+        <div class="ov-metric">
+            <div class="ov-ml">AI CONFIDENCE</div>
+            <div class="ov-mv @(_state?.ConfidencePercent>=70?"mv-hi":_state?.ConfidencePercent>=50?"mv-mid":"mv-lo")">
+                @(_state?.ConfidencePercent ?? 0)%
+            </div>
+            <div class="ov-conf-bar"><div class="ov-conf-fill" style="width:@(_state?.ConfidencePercent??0)%"></div></div>
+            <div class="ov-msub">@(_state?.ConfidenceLevel ?? "—")</div>
+        </div>
+        <div class="ov-metric">
+            <div class="ov-ml">SIGNALS TODAY</div>
+            <div class="ov-mv">@_signalsToday</div>
+            <div class="ov-msub">@_blockedToday blocked · @_execFail exec fail</div>
+        </div>
+        <div class="ov-metric">
+            <div class="ov-ml">OPEN POSITIONS</div>
+            <div class="ov-mv @(_positions.Count>0?"mv-hi":"")">@_positions.Count <span class="ov-cap">/4</span></div>
+            <div class="ov-msub">@(_unrPnl>=0?"+":"")@_unrPnl.ToString("F2")$ unrealized</div>
+        </div>
+        <div class="ov-metric">
+            <div class="ov-ml">UNIVERSE</div>
+            <div class="ov-mv mv-mid">@(_state?.UniverseSize ?? 0)</div>
+            <div class="ov-msub">symbols · @(_state?.CyclesPerMinute ?? 0) cycles/min</div>
+        </div>
+        <div class="ov-metric">
+            <div class="ov-ml">AI SYMBOLS</div>
+            <div class="ov-mv mv-mid">@_aiSymbols</div>
+            <div class="ov-msub">@_aiStates market states</div>
+        </div>
+    </div>
+
+    <!-- ═══ MAIN CONTENT ════════════════════════════════════════ -->
+    <div class="ov-body">
+
+        <!-- LEFT COL -->
+        <div class="ov-left">
+
+            <!-- MARKET TABLE (CoinMarketCap style) -->
+            <div class="ov-panel">
+                <div class="ov-panel-head">
+                    <span class="ov-panel-title">📊 LIVE MARKET</span>
+                    <span class="ov-panel-badge">@_markets.Count instruments</span>
+                </div>
+                <table class="ov-tbl">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Symbol</th>
+                            <th>Price</th>
+                            <th>TF</th>
+                            <th>Regime</th>
+                            <th>ATR</th>
+                            <th>Slope</th>
+                            <th>EMA21</th>
+                            <th>Signal</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @{ int rank = 1; }
+                        @foreach (var m in _markets.OrderBy(x=>x.Symbol))
+                        {
+                            var regStr = RegimeStr(m.Regime);
+                            var regCls = RegimeClass(m.Regime);
+                            var slopeDir = m.Slope > 0.001 ? "▲" : m.Slope < -0.001 ? "▼" : "—";
+                            var slopeCls = m.Slope > 0 ? "up" : m.Slope < 0 ? "dn" : "";
+                            var signal = GetSignal(m);
+                            <tr>
+                                <td class="ov-rank">@rank</td>
+                                <td class="ov-tsym">@m.Symbol</td>
+                                <td class="ov-tprice mono">@FmtP(m.LastPrice)</td>
+                                <td><span class="ov-ttf">@TfShort(m.Timeframe)</span></td>
+                                <td><span class="ov-tregime @regCls">@regStr</span></td>
+                                <td class="ov-tatr mono dim">@m.Atr14.ToString("G3")</td>
+                                <td class="@slopeCls mono">@slopeDir @Math.Abs(m.Slope).ToString("G3")</td>
+                                <td class="mono dim">@FmtP(m.Ema21)</td>
+                                <td><span class="ov-sig @signal.cls">@signal.label</span></td>
+                            </tr>
+                            rank++;
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- POSITIONS -->
+            @if (_positions.Any())
+            {
+                <div class="ov-panel">
+                    <div class="ov-panel-head">
+                        <span class="ov-panel-title">🔥 OPEN POSITIONS</span>
+                        <span class="ov-panel-badge @(_unrPnl>=0?"badge-up":"badge-dn")">
+                            @(_unrPnl>=0?"+":"")@_unrPnl.ToString("F2")$ PnL
+                        </span>
+                    </div>
+                    <table class="ov-tbl">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th><th>Side</th><th>Entry</th>
+                                <th>Mark</th><th>PnL $</th><th>PnL %</th>
+                                <th>Liq</th><th>Buffer</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var p in _positions)
+                            {
+                                bool isL = p.PositionSide == "LONG";
+                                var pct = p.EntryPrice>0 ? (p.MarkPrice-p.EntryPrice)/p.EntryPrice*(isL?1:-1)*100m : 0m;
+                                var liq = p.LiquidationPrice;
+                                var buf = liq.HasValue&&p.MarkPrice>0 ? Math.Abs(p.MarkPrice-liq.Value)/p.MarkPrice*100m : (decimal?)null;
+                                var bufCls = buf.HasValue ? (buf<4?"dn":buf<8?"warn":"up") : "";
+                                <tr>
+                                    <td class="ov-tsym">@p.Symbol</td>
+                                    <td><span class="pos-badge @(isL?"pos-l":"pos-s")">@p.PositionSide</span></td>
+                                    <td class="mono">@FmtP(p.EntryPrice)</td>
+                                    <td class="mono">@FmtP(p.MarkPrice)</td>
+                                    <td class="@(p.UnrealizedPnl>=0?"up":"dn") mono">@(p.UnrealizedPnl>=0?"+":"")@p.UnrealizedPnl.ToString("F2")$</td>
+                                    <td class="@(pct>=0?"up":"dn") mono">@(pct>=0?"+":"")@pct.ToString("F2")%</td>
+                                    <td class="@bufCls mono">@(liq.HasValue?FmtP(liq.Value):"—")</td>
+                                    <td class="@bufCls mono">@(buf.HasValue?buf.Value.ToString("F1")+"%":"—")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            <!-- RECENT SIGNALS -->
+            <div class="ov-panel">
+                <div class="ov-panel-head">
+                    <span class="ov-panel-title">⚡ RECENT SIGNALS</span>
+                    <span class="ov-panel-badge">last 15</span>
+                </div>
+                <div class="ov-signals">
+                    @foreach (var s in _recentSignals)
+                    {
+                        bool isL = s.Side == "Buy";
+                        var regStr = RegimeStr(s.Regime);
+                        string evtCls = s.Event.Contains("EXEC") ? "sig-exec" :
+                                        s.Event == "ENTRY" ? "sig-ok" : "sig-block";
+                        string evtLabel = s.Event == "ENTRY" ? "✓ ENTRY" :
+                                          s.Event.Contains("EXEC") ? "✗ EXEC FAIL" : "✗ BLOCKED";
+                        <div class="ov-sig-row">
+                            <span class="ov-sig-time mono dim">@s.Time.ToLocalTime().ToString("HH:mm:ss")</span>
+                            <span class="ov-sig-sym @(isL?"up":"dn")">@s.Symbol</span>
+                            <span class="ov-sig-side @(isL?"badge-l":"badge-s")">@(isL?"▲":"▼")</span>
+                            <span class="ov-sig-price mono">@FmtP(s.Entry)</span>
+                            <span class="ov-sig-conf @(s.Confidence>=70?"up":s.Confidence>=50?"mid":"dn")">@s.Confidence%</span>
+                            <span class="ov-sig-regime @RegimeClass(s.Regime)">@regStr</span>
+                            <span class="ov-sig-reason @ReasonCls(s.Reason)">@ShortReason(s.Reason)</span>
+                            <span class="ov-sig-evt @evtCls">@evtLabel</span>
+                        </div>
+                    }
+                </div>
+            </div>
+
+        </div>
+
+        <!-- RIGHT COL -->
+        <div class="ov-right">
+
+            <!-- AI PERFORMANCE -->
+            <div class="ov-panel">
+                <div class="ov-panel-head">
+                    <span class="ov-panel-title">🧠 AI PERFORMANCE</span>
+                </div>
+                <div class="ov-ai-stats">
+                    <div class="ov-ai-big @(_winRate>=60?"mv-hi":_winRate>=50?"mv-mid":"mv-lo")">
+                        @_winRate.ToString("F1")%
+                        <span class="ov-ai-big-sub">Win Rate</span>
+                    </div>
+                    <div class="ov-ai-grid">
+                        <div class="ov-ai-item">
+                            <div class="ov-ai-val hi">@_wins</div>
+                            <div class="ov-ai-lab">Wins</div>
+                        </div>
+                        <div class="ov-ai-item">
+                            <div class="ov-ai-val lo">@_losses</div>
+                            <div class="ov-ai-lab">Losses</div>
+                        </div>
+                        <div class="ov-ai-item">
+                            <div class="ov-ai-val">@_totalTrades</div>
+                            <div class="ov-ai-lab">Total</div>
+                        </div>
+                        <div class="ov-ai-item">
+                            <div class="ov-ai-val @(_totalPnl>=0?"hi":"lo")">@(_totalPnl>=0?"+":"")@_totalPnl.ToString("F3")</div>
+                            <div class="ov-ai-lab">AI PnL</div>
+                        </div>
+                    </div>
+                    <!-- Win bar -->
+                    <div class="ov-win-bar-wrap">
+                        <div class="ov-win-bar-fill" style="width:@(_winRate)%"></div>
+                        <div class="ov-win-bar-loss" style="width:@(100-_winRate)%"></div>
+                    </div>
+                    <div class="ov-win-bar-labels">
+                        <span class="hi">Wins @_winRate.ToString("F0")%</span>
+                        <span class="lo">Losses @(100-_winRate).ToString("F0")%</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TOP ACTIVE SYMBOLS -->
+            <div class="ov-panel">
+                <div class="ov-panel-head">
+                    <span class="ov-panel-title">🏆 TOP SYMBOLS</span>
+                    <span class="ov-panel-badge">by signal count</span>
+                </div>
+                @foreach (var (sym, cnt, avgConf) in _topSymbols.Take(10))
+                {
+                    var barW = _topSymbols.Any() ? cnt * 100.0 / _topSymbols[0].Count : 0;
+                    var confCls = avgConf >= 70 ? "hi" : avgConf >= 50 ? "mid" : "lo";
+                    <div class="ov-sym-row">
+                        <span class="ov-sr-sym">@sym</span>
+                        <div class="ov-sr-bar">
+                            <div class="ov-sr-fill @confCls" style="width:@barW%"></div>
+                        </div>
+                        <span class="ov-sr-n">@cnt</span>
+                        <span class="ov-sr-conf @confCls">@avgConf%</span>
+                    </div>
+                }
+            </div>
+
+            <!-- BLOCK REASONS PIE-LIKE -->
+            <div class="ov-panel">
+                <div class="ov-panel-head">
+                    <span class="ov-panel-title">🚫 BLOCK ANALYSIS</span>
+                    <span class="ov-panel-badge">@_totalBlocked total</span>
+                </div>
+                @foreach (var (reason, cnt) in _topReasons.Take(8))
+                {
+                    var pct = _totalBlocked > 0 ? cnt * 100.0 / _totalBlocked : 0;
+                    <div class="ov-reason-row">
+                        <span class="ov-rr-name @ReasonCls(reason)">@ShortReason(reason)</span>
+                        <div class="ov-rr-bar">
+                            <div class="ov-rr-fill @ReasonFillCls(reason)" style="width:@Math.Min(100.0,pct)%"></div>
+                        </div>
+                        <span class="ov-rr-pct dim">@pct.ToString("F0")%</span>
+                        <span class="ov-rr-n dim">@cnt</span>
+                    </div>
+                }
+            </div>
+
+            <!-- ENGINE STATE -->
+            @if (_state != null)
+            {
+                <div class="ov-panel">
+                    <div class="ov-panel-head">
+                        <span class="ov-panel-title">⚙️ ENGINE STATE</span>
+                        <span class="ov-updated dim">@_state.LastUpdate.ToLocalTime().ToString("HH:mm:ss")</span>
+                    </div>
+                    <div class="ov-eng-rows">
+                        <div class="ov-er"><span class="dim">Status</span><span>@_state.Status</span></div>
+                        <div class="ov-er"><span class="dim">Mode</span><span>@_state.Mode</span></div>
+                        <div class="ov-er"><span class="dim">Symbol</span><span class="mid">@_state.Symbol</span></div>
+                        <div class="ov-er"><span class="dim">TF</span><span>@_state.Timeframe</span></div>
+                        <div class="ov-er"><span class="dim">Regime</span><span class="@RegClass(_state.MarketRegime)">@_state.MarketRegime</span></div>
+                        <div class="ov-er"><span class="dim">Smart</span><span>@_state.SmartRegime</span></div>
+                        <div class="ov-er"><span class="dim">Slope</span><span class="mono">@_state.Slope.ToString("F4")</span></div>
+                        <div class="ov-er"><span class="dim">Volatility</span><span class="mono">@_state.Volatility.ToString("F4")</span></div>
+                        <div class="ov-er"><span class="dim">Confidence</span><span class="@(_state.ConfidencePercent>=70?"hi":_state.ConfidencePercent>=50?"mid":"lo")">@_state.ConfidencePercent% (@_state.ConfidenceLevel)</span></div>
+                        <div class="ov-er"><span class="dim">Cycles/min</span><span>@_state.CyclesPerMinute</span></div>
+                        <div class="ov-er"><span class="dim">Universe</span><span>@_state.UniverseSize symbols</span></div>
+                        <div class="ov-er"><span class="dim">Liq Danger</span><span class="@(_state.LiquidityDanger?"lo":"hi")">@(_state.LiquidityDanger?"⚠ YES":"✓ OK")</span></div>
+                    </div>
+                </div>
+            }
+
+        </div>
+    </div>
+</div>
+
+<style>
+:root{--bg:#0a0d12;--bg2:#111520;--bg3:#1a1f2e;--bdr:#1e2535;--acc:#3b82f6;--grn:#22c55e;--red:#ef4444;--yel:#eab308;--txt:#e2e8f0;--dim:#64748b;--mono:'JetBrains Mono','Fira Code',monospace;}
+html,body{background:var(--bg)!important;color:var(--txt);}
+.ov{font-family:'Inter','Segoe UI',sans-serif;background:var(--bg);min-height:100vh;padding-bottom:40px;}
+.up{color:var(--grn)!important;}.dn{color:var(--red)!important;}.hi{color:var(--grn)!important;}
+.mid{color:var(--acc)!important;}.lo{color:var(--red)!important;}.warn{color:var(--yel)!important;}
+.dim{color:var(--dim)!important;}.mono{font-family:var(--mono)!important;}
+
+/* HERO */
+.ov-hero{display:flex;align-items:center;justify-content:space-between;padding:16px 28px;background:linear-gradient(135deg,#0f1629 0%,#111520 100%);border-bottom:1px solid var(--bdr);}
+.ov-logo{font-family:var(--mono);font-size:20px;font-weight:700;color:var(--acc);letter-spacing:3px;margin-bottom:6px;}
+.ov-ver{font-size:11px;color:var(--dim);letter-spacing:1px;margin-left:6px;}
+.ov-hero-status{display:flex;align-items:center;gap:8px;font-size:13px;}
+.ov-dot{width:8px;height:8px;border-radius:50%;animation:pulse 1.5s infinite;}
+.dot-live{background:var(--grn);box-shadow:0 0 8px var(--grn);}
+.dot-off{background:var(--red);}
+@@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+.ov-live{color:var(--grn);font-weight:700;}
+.ov-off{color:var(--red);}
+.ov-pipe{color:var(--bdr);}
+.ov-mode{color:var(--acc);}
+.ov-sym{color:var(--dim);}
+.ov-hero-right{display:flex;align-items:center;gap:24px;}
+.ov-hero-bal,.ov-hero-pnl{text-align:right;}
+.ov-bal-val{font-family:var(--mono);font-size:24px;font-weight:700;display:block;}
+.ov-bal-lab,.ov-pnl-lab{font-size:10px;color:var(--dim);letter-spacing:1px;}
+.ov-pnl-val{font-family:var(--mono);font-size:22px;font-weight:700;display:block;}
+.pnl-up .ov-pnl-val{color:var(--grn);}
+.pnl-dn .ov-pnl-val{color:var(--red);}
+.ov-clock{font-family:var(--mono);font-size:15px;color:var(--dim);}
+
+/* METRICS */
+.ov-metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--bdr);border-bottom:1px solid var(--bdr);}
+.ov-metric{background:var(--bg2);padding:16px 18px;}
+.ov-ml{font-size:10px;letter-spacing:1.5px;color:var(--dim);font-weight:600;}
+.ov-mv{font-family:var(--mono);font-size:24px;font-weight:700;margin:4px 0;}
+.mv-hi{color:var(--grn)!important;}.mv-mid{color:var(--acc)!important;}.mv-lo{color:var(--red)!important;}
+.ov-cap{font-size:14px;color:var(--dim);}
+.ov-msub{font-size:11px;color:var(--dim);}
+.ov-conf-bar{height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;margin:4px 0;}
+.ov-conf-fill{height:100%;background:var(--acc);border-radius:2px;}
+
+/* BODY */
+.ov-body{display:grid;grid-template-columns:1fr 300px;gap:1px;background:var(--bdr);}
+.ov-left{background:var(--bg);display:flex;flex-direction:column;gap:1px;}
+.ov-right{background:var(--bg);display:flex;flex-direction:column;gap:1px;}
+
+/* PANEL */
+.ov-panel{background:var(--bg2);padding:16px 20px;border-bottom:1px solid var(--bdr);}
+.ov-panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--bdr);}
+.ov-panel-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
+.ov-panel-badge{font-size:11px;padding:2px 8px;background:var(--bg3);border-radius:10px;color:var(--dim);}
+.badge-up{color:var(--grn)!important;background:rgba(34,197,94,.12)!important;}
+.badge-dn{color:var(--red)!important;background:rgba(239,68,68,.12)!important;}
+.ov-updated{font-family:var(--mono);font-size:11px;}
+
+/* TABLE */
+.ov-tbl{width:100%;border-collapse:collapse;font-size:12px;}
+.ov-tbl th{text-align:left;padding:5px 10px;font-size:10px;letter-spacing:1px;color:var(--dim);border-bottom:1px solid var(--bdr);font-family:'Inter',sans-serif;font-weight:600;}
+.ov-tbl td{padding:7px 10px;border-bottom:1px solid rgba(30,37,53,.5);}
+.ov-tbl tr:hover td{background:var(--bg3);}
+.ov-rank{color:var(--dim);font-size:11px;width:24px;}
+.ov-tsym{font-family:var(--mono);font-weight:700;color:var(--acc);}
+.ov-tprice{font-size:12px;}
+.ov-ttf{background:var(--bg3);padding:1px 5px;border-radius:3px;font-size:10px;color:var(--dim);}
+.ov-tatr,.ov-tslope{font-size:11px;}
+.ov-tregime{font-size:10px;padding:1px 6px;border-radius:3px;background:var(--bg3);}
+.ov-sig{font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;}
+.sig-bull{background:rgba(34,197,94,.12);color:var(--grn);}
+.sig-bear{background:rgba(239,68,68,.12);color:var(--red);}
+.sig-range{background:rgba(234,179,8,.12);color:var(--yel);}
+.sig-squeeze{background:rgba(59,130,246,.12);color:var(--acc);}
+.sig-none{color:var(--dim);}
+
+/* REGIME CLASSES */
+.rc-bull{color:var(--grn)!important;}.rc-bear{color:var(--red)!important;}
+.rc-range{color:var(--yel)!important;}.rc-squeeze{color:var(--acc)!important;}
+
+/* POSITIONS */
+.pos-badge{font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;letter-spacing:.5px;}
+.pos-l{background:rgba(34,197,94,.12);color:var(--grn);}
+.pos-s{background:rgba(239,68,68,.12);color:var(--red);}
+
+/* SIGNALS FEED */
+.ov-signals{display:flex;flex-direction:column;gap:3px;}
+.ov-sig-row{display:flex;align-items:center;gap:8px;padding:5px 4px;border-radius:4px;font-size:12px;transition:background .1s;}
+.ov-sig-row:hover{background:var(--bg3);}
+.ov-sig-time{min-width:54px;}
+.ov-sig-sym{min-width:90px;font-family:var(--mono);font-weight:700;}
+.ov-sig-side{font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;}
+.badge-l{background:rgba(34,197,94,.12);color:var(--grn);}
+.badge-s{background:rgba(239,68,68,.12);color:var(--red);}
+.ov-sig-price{min-width:80px;font-size:11px;}
+.ov-sig-conf{min-width:30px;font-family:var(--mono);font-size:11px;}
+.ov-sig-regime{font-size:10px;min-width:55px;}
+.ov-sig-reason{flex:1;font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ov-sig-evt{font-size:10px;font-weight:700;white-space:nowrap;}
+.sig-ok{color:var(--grn);}
+.sig-exec{color:var(--red);}
+.sig-block{color:var(--yel);}
+
+/* AI STATS */
+.ov-ai-stats{display:flex;flex-direction:column;gap:10px;}
+.ov-ai-big{font-family:var(--mono);font-size:36px;font-weight:700;text-align:center;padding:8px 0 4px;}
+.ov-ai-big-sub{font-size:11px;color:var(--dim);display:block;font-family:'Inter',sans-serif;font-weight:400;}
+.ov-ai-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
+.ov-ai-item{text-align:center;background:var(--bg3);border-radius:6px;padding:8px 4px;}
+.ov-ai-val{font-family:var(--mono);font-size:16px;font-weight:700;}
+.ov-ai-lab{font-size:10px;color:var(--dim);}
+.ov-win-bar-wrap{display:flex;height:8px;border-radius:4px;overflow:hidden;gap:1px;}
+.ov-win-bar-fill{background:var(--grn);border-radius:4px 0 0 4px;}
+.ov-win-bar-loss{background:var(--red);border-radius:0 4px 4px 0;}
+.ov-win-bar-labels{display:flex;justify-content:space-between;font-size:11px;}
+
+/* TOP SYMBOLS */
+.ov-sym-row{display:flex;align-items:center;gap:8px;padding:5px 0;}
+.ov-sr-sym{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--acc);min-width:90px;}
+.ov-sr-bar{flex:1;height:4px;background:var(--bdr);border-radius:2px;overflow:hidden;}
+.ov-sr-fill{height:100%;border-radius:2px;}
+.ov-sr-fill.hi{background:var(--grn);}.ov-sr-fill.mid{background:var(--acc);}.ov-sr-fill.lo{background:var(--red);}
+.ov-sr-n{font-family:var(--mono);font-size:11px;min-width:28px;text-align:right;}
+.ov-sr-conf{font-family:var(--mono);font-size:11px;min-width:32px;text-align:right;}
+
+/* BLOCK REASONS */
+.ov-reason-row{display:flex;align-items:center;gap:8px;padding:4px 0;}
+.ov-rr-name{font-size:11px;font-weight:600;min-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ov-rr-bar{flex:1;height:5px;background:var(--bdr);border-radius:2px;overflow:hidden;}
+.ov-rr-fill{height:100%;border-radius:2px;}
+.ov-rr-fill-exec{background:var(--red);}
+.ov-rr-fill-bal{background:#f97316;}
+.ov-rr-fill-other{background:var(--dim);}
+.ov-rr-pct,.ov-rr-n{font-family:var(--mono);font-size:11px;}
+
+/* ENGINE ROWS */
+.ov-eng-rows{display:flex;flex-direction:column;gap:0;}
+.ov-er{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid rgba(30,37,53,.5);font-size:12px;}
+
+@@media(max-width:1200px){.ov-metrics{grid-template-columns:repeat(3,1fr);}
+.ov-body{grid-template-columns:1fr;}}
+@@media(max-width:700px){.ov-metrics{grid-template-columns:repeat(2,1fr);}.ov-hero{flex-direction:column;gap:12px;}}
+</style>
+
+@code {
+    // ── State ────────────────────────────────────────────
+    EngineStateModel? _state;
+    IReadOnlyList<LivePositionModel> _positions = Array.Empty<LivePositionModel>();
+    decimal _unrPnl;
+
+    // AI
+    int _wins, _losses, _totalTrades;
+    double _winRate;
+    double _totalPnl;
+    int _aiSymbols, _aiStates;
+
+    // Signals
+    int _signalsToday, _blockedToday, _execFail, _totalBlocked;
+    List<SigRow> _recentSignals = new();
+    List<(string Symbol, int Count, int AvgConf)> _topSymbols = new();
+    List<(string Reason, int Count)> _topReasons = new();
+
+    // Market
+    List<MarketRow> _markets = new();
+
+    System.Threading.Timer? _timer;
+
+    record SigRow(string Event, string Symbol, string Side, decimal Entry,
+        int Confidence, int Regime, string Reason, DateTime Time);
+    record MarketRow(string Symbol, string Timeframe, decimal LastPrice,
+        decimal Ema21, decimal Atr14, double Slope, int Regime);
+
+    protected override async Task OnInitializedAsync()
+    {
+        PnlService.Updated += OnPnl;
+        PnlService.Start(null, 1500);
+        await LoadAll();
+        _timer = new System.Threading.Timer(async _ =>
+        {
+            await InvokeAsync(async () => { await LoadAll(); StateHasChanged(); });
+        }, null, 3000, 3000);
+    }
+
+    void OnPnl()
+    {
+        _positions = PnlService.GetPositions();
+        _unrPnl = _positions.Sum(p => p.UnrealizedPnl);
+        InvokeAsync(StateHasChanged);
+    }
+
+    async Task LoadAll()
+    {
+        _state = EngineState.Load();
+        _positions = PnlService.GetPositions();
+        _unrPnl = _positions.Sum(p => p.UnrealizedPnl);
+        await LoadAi();
+        await LoadSignals();
+        await LoadMarkets();
+    }
+
+    async Task LoadAi()
+    {
+        try
+        {
+            var snap = await AiSvc.LoadSnapshot();
+            if (snap == null) return;
+            _aiSymbols = snap.Meta?.Symbols ?? 0;
+            _aiStates  = snap.Meta?.MarketStates ?? 0;
+
+            var trades = snap.Trades ?? new();
+            _wins        = trades.Count(t => t.Pnl > 0);
+            _losses      = trades.Count(t => t.Pnl <= 0);
+            _totalTrades = trades.Count;
+            _winRate     = _totalTrades > 0 ? _wins * 100.0 / _totalTrades : 0;
+            _totalPnl    = (double)trades.Sum(t => t.Pnl);
+        }
+        catch { }
+    }
+
+    async Task LoadSignals()
+    {
+        try
+        {
+            var missed = await MissedSvc.LoadAsync();
+            if (missed == null) return;
+
+            var today = DateTime.UtcNow.Date;
+            _signalsToday = missed.Count(r => r.Time.Date == today);
+            _blockedToday = missed.Count(r => r.Time.Date == today && !r.Reason.Contains("EXEC"));
+            _execFail     = missed.Count(r => r.Reason.Contains("Exec") || r.Reason.Contains("EXEC"));
+            _totalBlocked = missed.Count;
+
+            _topSymbols = missed
+                .GroupBy(r => r.Symbol)
+                .Select(g => (g.Key, g.Count(), (int)g.Average(x => x.Confidence)))
+                .OrderByDescending(x => x.Item2).ToList();
+
+            _topReasons = missed
+                .GroupBy(r => string.IsNullOrEmpty(r.Reason) ? "Unknown" : r.Reason)
+                .Select(g => (g.Key, g.Count()))
+                .OrderByDescending(x => x.Item2).ToList();
+
+            _recentSignals = missed
+                .OrderByDescending(r => r.Time)
+                .Take(15)
+                .Select(r => new SigRow(
+                    r.Reason.Contains("EXEC") ? "EXEC_FAIL" : "BLOCKED",
+                    r.Symbol, r.Side,
+                    r.Entry, r.Confidence, (int)r.Regime,
+                    r.Reason, r.Time))
+                .ToList();
+        }
+        catch { }
+    }
+
+    async Task LoadMarkets()
+    {
+        try
+        {
+            var series = await MarketSvc.LoadAsync();
+            if (series == null) return;
+
+            // Deduplicate by symbol - prefer 5m > 1m > others
+            var bySymbol = series
+                .GroupBy(s => s.Symbol)
+                .Select(g =>
+                    g.FirstOrDefault(s => s.Timeframe == "FiveMinutes")
+                    ?? g.FirstOrDefault(s => s.Timeframe == "OneMinute")
+                    ?? g.First())
+                .ToList();
+
+            _markets = bySymbol
+                .Where(s => s.Klines.Count > 0)
+                .Select(s =>
+                {
+                    var kl = s.Klines;
+                    var last = kl[^1].Close;
+                    // Simple EMA21 from last 21 candles
+                    var ema21 = kl.Count >= 21
+                        ? kl.TakeLast(21).Average(k => k.Close)
+                        : last;
+                    // Slope from last 5 candles
+                    var slope = kl.Count >= 5
+                        ? (double)(kl[^1].Close - kl[^5].Close) / (double)kl[^5].Close
+                        : 0.0;
+                    // Regime guess from slope
+                    int regime = slope > 0.01 ? 2 : slope > 0.002 ? 1
+                               : slope < -0.01 ? 4 : slope < -0.002 ? 3 : 5;
+
+                    return new MarketRow(s.Symbol, s.Timeframe, last, ema21, 0m, slope, regime);
+                })
+                .OrderBy(m => m.Symbol)
+                .ToList();
+        }
+        catch { }
+    }
+
+    // ── FORMAT ────────────────────────────────────────────
+    string FmtP(decimal v)
+    {
+        if (v <= 0) return "—";
+        if (v >= 1000) return v.ToString("F2");
+        if (v >= 1)    return v.ToString("F4");
+        return v.ToString("G5");
+    }
+
+    string RegClass(string r) => r?.ToLower() switch
+    {
+        "stronguptrend" or "uptrend"     => "rc-bull",
+        "strongdowntrend" or "downtrend" => "rc-bear",
+        "range" or "sideways"            => "rc-range",
+        "squeeze"                        => "rc-squeeze",
+        _ => ""
+    };
+
+    string RegimeStr(int r) => r switch
+    {
+        1 => "↑ Up", 2 => "↑↑ Bull", 3 => "↓ Down", 4 => "↓↓ Bear",
+        5 => "↔ Range", 6 => "⊞ Squeeze", 7 => "~ Volatile",
+        _ => "—"
+    };
+
+    string RegimeClass(int r) => r switch
+    {
+        1 or 2 => "rc-bull", 3 or 4 => "rc-bear",
+        5 => "rc-range", 6 => "rc-squeeze",
+        _ => "dim"
+    };
+
+    string TfShort(string tf) => tf switch
+    {
+        "OneMinute" => "1m", "FiveMinutes" => "5m",
+        "FifteenMinutes" => "15m", "OneHour" => "1h",
+        "FourHour" => "4h", "OneDay" => "1D", _ => tf
+    };
+
+    (string label, string cls) GetSignal(MarketRow m) => m.Regime switch
+    {
+        2 => ("▲ BULL", "sig-bull"),
+        4 => ("▼ BEAR", "sig-bear"),
+        5 => ("↔ RANGE", "sig-range"),
+        6 => ("⊞ SQUEEZE", "sig-squeeze"),
+        _ => ("—", "sig-none")
+    };
+
+    string ReasonCls(string r)
+    {
+        if (r.Contains("Exec") || r.Contains("EXEC") || r.Contains("Failed")) return "lo";
+        if (r.Contains("Balance") || r.Contains("balance"))                    return "warn";
+        if (r.Contains("Notional") || r.Contains("TOO_SMALL"))                 return "warn";
+        return "dim";
+    }
+
+    string ReasonFillCls(string r)
+    {
+        if (r.Contains("Exec") || r.Contains("EXEC"))   return "ov-rr-fill-exec";
+        if (r.Contains("Balance") || r.Contains("balance")) return "ov-rr-fill-bal";
+        return "ov-rr-fill-other";
+    }
+
+    string ShortReason(string r) => r switch
+    {
+        _ when r.Contains("EXECUTION_FAILED") || r.Contains("ExecFailed") => "Exec Failed",
+        _ when r.Contains("Balance is zero") => "Balance Zero",
+        _ when r.Contains("InsufficientBalance") => "Insufficient Bal",
+        _ when r.Contains("MinNotional") || r.Contains("TOO_SMALL") => "Min Notional",
+        _ when r.Contains("DRY_RUN") => "Dry Run",
+        _ when r.Contains("COOLDOWN") => "Cooldown",
+        _ when r.Contains("AI_BLOCK") || r.Contains("AI_PNL") => "AI Block",
+        _ when r.Contains("SIDE_NOT") => "Side Blocked",
+        _ when r.Contains("OrderBookImbalance") => "OB Imbalance",
+        _ when string.IsNullOrEmpty(r) => "Unknown",
+        _ => r.Length > 18 ? r[..18] + "…" : r
+    };
+
+    public void Dispose()
+    {
+        PnlService.Updated -= OnPnl;
+        PnlService.Stop();
+        _timer?.Dispose();
+    }
+}
