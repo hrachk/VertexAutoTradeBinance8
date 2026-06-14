@@ -47,7 +47,12 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly TradingOptions _opt;
         private readonly TestModeOptions _test;
         private readonly ConfidenceResolver _confidenceCfg;
-        private readonly FundingRateService _fundingRate;
+        // =====================================================
+        // SLOPE THRESHOLDS для паттернов
+        // Было: 0.005 → бот пропускал слабые но реальные тренды
+        // Теперь: 0.001 → ловим более ранние движения
+        // =====================================================
+        private const decimal MinSlopeForTrend = 0.001m;  // 0.1% на свечу = активный рынок
 
         // Auto Range cache (Binance Grid Bot логика)
         private sealed class SymbolRange
@@ -557,7 +562,7 @@ namespace VertexAutoTradeBinance8.Strategy
        decimal slope)
         {
             int count = klines.Count;
-            if (count < 60 || atr <= 0)
+            if (count < 40 || atr <= 0) // lowered 60→40
                 return TrendPhase.Unknown;
 
             int last = count - 1; // последняя ЗАКРЫТАЯ свеча
@@ -1481,40 +1486,41 @@ namespace VertexAutoTradeBinance8.Strategy
                 smartType == SmartRegimeType.SmartTrend;
 
             // -------------------------
-            // 1️⃣ Base threshold
+            // 1️⃣ Base threshold (снижены на 5%)
             // -------------------------
 
             if (isRangeLike)
-                threshold = 42;
+                threshold = 38;          // было 42
             else if (isStrongTrendLike)
-                threshold = 48;
+                threshold = 42;          // было 48 — сильный тренд должно быть ЛЕГЧЕ войти
             else if (isTrendLike)
-                threshold = 45;
+                threshold = 40;          // было 45
             else
-                threshold = 45;
+                threshold = 40;          // было 45
 
             // -------------------------
             // 2️⃣ Volatility adjustment
+            // Высокая волатильность = больше возможностей, не нужно ужесточать
             // -------------------------
 
-            if (volatility < 0.008m)          // dead market
-                threshold += 4;
-
-            else if (volatility > 0.030m)     // high turbulence
-                threshold += 6;
+            if (volatility < 0.003m)          // мёртвый рынок → ужесточаем
+                threshold += 5;
+            else if (volatility < 0.008m)
+                threshold += 2;
+            // высокая волатильность — НЕ ужесточаем (было +6, убрали)
 
             // -------------------------
-            // 3️⃣ Trend acceleration
+            // 3️⃣ Trend acceleration — снижаем порог при сильном тренде
             // -------------------------
 
-            if (Math.Abs(slope) > Math.Max(0.004m, volatility * 0.6m))
-                threshold -= 4;
+            if (Math.Abs(slope) > Math.Max(0.002m, volatility * 0.4m))
+                threshold -= 5;          // было -4
 
             // -------------------------
             // 4️⃣ Clamp
             // -------------------------
 
-            return Math.Clamp(threshold, 32, 70);
+            return Math.Clamp(threshold, 28, 65); // было 32-70
         }
 
         private static bool IsFastTrendOverride(SmartRegimeInfo smart)
@@ -1675,7 +1681,7 @@ namespace VertexAutoTradeBinance8.Strategy
         private FastFailResult Gate0_Data(string symbol, KlineInterval tf, IReadOnlyList<BinanceFuturesUsdtKline> klines)
         {
             if (klines == null) return FastFailResult.Fail("DATA", "klines=null");
-            if (klines.Count < 60) return FastFailResult.Fail("DATA", $"bars={klines.Count}<60");
+            if (klines.Count < 40) return FastFailResult.Fail("DATA", $"bars={klines.Count}<40"); // lowered 60→40
             return FastFailResult.Ok();
         }
 
