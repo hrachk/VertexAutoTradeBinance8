@@ -644,10 +644,10 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;}
                         o.Type.ToString(),
                         o.Side.ToString().ToUpperInvariant(),
                         o.PositionSide.ToString().ToUpperInvariant(),
-                        o.Price, o.StopPrice,
+                        o.Price, o.StopPrice ?? 0m,
                         o.Quantity, o.QuantityFilled,
                         o.ReduceOnly,
-                        o.WorkingType?.ToString() ?? "",
+                        o.WorkingType.ToString(),
                         o.CreateTime));
                 }
             }
@@ -691,7 +691,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;}
                                 o.Id, o.Symbol,
                                 o.Type.ToString(),
                                 o.Side.ToString().ToUpperInvariant(),
-                                o.Price, o.AveragePrice,
+                                o.Price, o.AveragePrice ?? 0m,
                                 o.Quantity, o.QuantityFilled,
                                 o.Status.ToString().ToUpperInvariant(),
                                 o.CreateTime, o.UpdateTime));
