@@ -37,12 +37,12 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ConcurrentDictionary<string, DateTime> _lastTrigger =
             new(StringComparer.OrdinalIgnoreCase);
 
-        private static readonly TimeSpan TriggerCooldown = TimeSpan.FromSeconds(60);
+        private static readonly TimeSpan TriggerCooldown = TimeSpan.FromSeconds(30); // было 60s
 
         // Пороги
-        private const decimal MomentumThreshold = 0.4m;   // ATR×0.4 за одну 1M свечу
-        private const decimal VolumeSurgeRatio   = 1.5m;  // объём > avg20 × 1.5
-        private const int     DirectionBars      = 4;      // из последних N свечей
+        private const decimal MomentumThreshold = 0.35m;   // было 0.4 → ловим чуть раньше
+        private const decimal VolumeSurgeRatio   = 1.3m;   // было 1.5 → менее строго
+        private const int     DirectionBars      = 4;
 
         public event Action<string, MomentumSignal>? MomentumDetected;
 
