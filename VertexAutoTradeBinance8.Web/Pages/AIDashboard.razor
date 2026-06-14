@@ -662,6 +662,11 @@ html,body { background:var(--bg)!important; color:var(--txt); }
         "FourHour" => "4h", "OneDay" => "1D", _ => tf
     };
 
+    public void Dispose()
+    {
+        Runtime.OnUpdated -= Refresh;
+    }
+
     class BrainSymbolGroup
     {
         public string Symbol { get; set; } = "";
