@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -50,7 +50,8 @@ namespace VertexAutoTradeBinance8.Services
                         BaseInterval.TotalSeconds * Math.Pow(2, _consecutiveErrors),
                         MaxInterval.TotalSeconds));
 
-                await Task.Delay(delay, stoppingToken);
+                try { await Task.Delay(delay, stoppingToken); }
+                catch (OperationCanceledException) { break; }
             }
         }
 

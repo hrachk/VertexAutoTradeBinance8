@@ -1,4 +1,4 @@
-﻿using Binance.Net.Enums;
+using Binance.Net.Enums;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -99,7 +99,8 @@ namespace VertexAutoTradeBinance8.Services
 
                 try
                 {
-                    await Task.Delay(_interval, stoppingToken);
+                    try { await Task.Delay(_interval, stoppingToken); }
+                    catch (OperationCanceledException) { break; }
                 }
                 catch (OperationCanceledException)
                 {
