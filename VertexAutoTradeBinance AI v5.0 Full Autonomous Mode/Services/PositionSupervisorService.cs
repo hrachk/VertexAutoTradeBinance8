@@ -2447,15 +2447,27 @@ namespace VertexAutoTradeBinance8.Services
                     return;
                 }
 
+                // Округляем trigger к tick size
+                if (tick > 0)
+                    trigger = Math.Round(trigger / tick) * tick;
 
-                trigger = await NormalizeTriggerPriceAsync(
-    client,
-    symbol,
-    side,
-    entryPrice,
-    filters.tickSize,
-    true,
-    ct);
+                // Валидация против mark price
+                var markRes = await client.UsdFuturesApi.ExchangeData.GetMarkPriceAsync(symbol, ct);
+                if (markRes.Success)
+                {
+                    var mp = markRes.Data.MarkPrice;
+                    // TP для лонга должен быть ВЫШЕ mark, для шорта — НИЖЕ
+                    if (side == PositionSide.Long && trigger <= mp)
+                    {
+                        trigger = mp + tick * 5;
+                        _logger.LogWarning("[SUPERVISOR] TP adjusted above mark: {tp} (mark={mp})", trigger, mp);
+                    }
+                    else if (side == PositionSide.Short && trigger >= mp)
+                    {
+                        trigger = mp - tick * 5;
+                        _logger.LogWarning("[SUPERVISOR] TP adjusted below mark: {tp} (mark={mp})", trigger, mp);
+                    }
+                }
 
                 //if (side == PositionSide.Long && trigger <= entryPrice)
                 //    trigger = entryPrice + tick * 3;
