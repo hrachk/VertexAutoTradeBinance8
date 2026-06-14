@@ -1,626 +1,671 @@
-﻿@page "/ai-dashboard"
+@page "/ai-dashboard"
 @using VertexAutoTradeBinance8.Models
 @using VertexAutoTradeBinance8.Services
 @inject IJSRuntime JS
 @inject AiRuntimeDataProvider Runtime
 @implements IDisposable
 
-<div class="px-6 py-4">
+<PageTitle>AI Brain — Vertex</PageTitle>
 
-    <h2 class="text-3xl font-bold mb-4">AI Dashboard</h2>
+<div class="ab">
+
+    <!-- ═══ HEADER ═══════════════════════════════════════════════ -->
+    <div class="ab-header">
+        <div class="ab-header-left">
+            <div class="ab-logo">
+                <div class="ab-logo-icon">
+                    <div class="ab-pulse-ring"></div>
+                    <div class="ab-pulse-ring ab-pr2"></div>
+                    🧠
+                </div>
+                <div>
+                    <div class="ab-title">AI BRAIN</div>
+                    <div class="ab-sub">Live Neural Network · Self-learning pattern engine</div>
+                </div>
+            </div>
+        </div>
+        <div class="ab-header-right">
+            <div class="ab-hstat">
+                <div class="ab-hv">@(State?.Snapshot?.Meta?.Symbols ?? 0)</div>
+                <div class="ab-hl">Symbols</div>
+            </div>
+            <div class="ab-hstat">
+                <div class="ab-hv">@(State?.MarketStates?.Count ?? 0)</div>
+                <div class="ab-hl">Live States</div>
+            </div>
+            <div class="ab-hstat">
+                <div class="ab-hv @(_totalWins > _totalLosses ? "abg" : "abr")">@_winRatePct%</div>
+                <div class="ab-hl">Win Rate</div>
+            </div>
+            <div class="ab-hstat">
+                <div class="ab-hv">@(State?.Trades?.Count ?? 0)</div>
+                <div class="ab-hl">AI Trades</div>
+            </div>
+            <div class="ab-hstat">
+                <div class="ab-hv">@_hotCount</div>
+                <div class="ab-hl">🔥 Hot</div>
+            </div>
+            <div class="ab-hstat">
+                <div class="ab-hv abb">@_thinkingCount</div>
+                <div class="ab-hl">💭 Thinking</div>
+            </div>
+            <div class="ab-hstat">
+                <div class="ab-runtime">@_runtimeSec s</div>
+                <div class="ab-hl">Runtime</div>
+            </div>
+        </div>
+    </div>
 
     @if (State is null)
     {
-        <div class="text-red-400">⚠ Runtime не загружен</div>
+        <div class="ab-loading">
+            <div class="ab-spin"></div>
+            <span>AI Runtime loading...</span>
+        </div>
     }
     else
     {
         var Stats = State.Snapshot;
-        var MarketStates = State.MarketStates ?? new List<AiSelfLearningService.MarketState>();
-        var Trades = State?.Trades;
+        var Trades = State.Trades;
 
-    <!-- ================= SUMMARY ================= -->
-    <div class="summary-bar mb-6">
-        @SummaryChip("Символы", Stats.Meta.Symbols.ToString())
-        @SummaryChip("Market States", Stats.Meta.MarketStates.ToString())
-        @SummaryChip("Trades", Stats.Meta.Trades.ToString())
-        @RuntimeChip()
-    </div>
+        <div class="ab-body">
 
-    <!-- ================= AI PERFORMANCE ================= -->
-  <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700 mb-8">
+            <!-- ═══ LEFT ══════════════════════════════════════════════ -->
+            <div class="ab-left">
 
-    <div class="section-header">
-        <div>
-            <h3 class="font-bold text-xl">AI Performance — Best Symbols</h3>
-            <span class="text-xs text-slate-400">
-                Weighted by WinRate & sample size
-            </span>
-        </div>
-        <div class="chevron @(PerformanceOpen ? "open" : "")"
-             @onclick="TogglePerformance"></div>
-    </div>
-
-    @if (PerformanceOpen)
-    {
-        <div class="section-body">
-            <div class="wr-grid">
-
-                @{
-                    const int TopN = 20;
-                    const int MinTrades = 20;
-
-                    var leaderboard = Stats.Symbols
-                        .Select(s => new
-                        {
-                            s.Symbol,
-                            Trades = s.Regimes.Sum(r => r.Trades),
-                            Wins   = s.Regimes.Sum(r => r.Wins)
-                        })
-                        .Where(x => x.Trades >= MinTrades)
-                        .Select(x =>
-                        {
-                            var winRate = x.Trades > 0
-                                ? (double)x.Wins / x.Trades * 100.0
-                                : 0;
-
-                            // сглаживание: penalize small samples
-                            var weight = Math.Min(1.0, x.Trades / 20.0);
-
-                            return new
-                            {
-                                x.Symbol,
-                                x.Trades,
-                                WinRate = winRate,
-                                Score = winRate * weight
-                            };
-                        })
-                        .OrderByDescending(x => x.Score)
-                        .ThenByDescending(x => x.Trades)
-                        .Take(TopN)
-                        .ToList();
-                }
-
-                @foreach (var s in leaderboard)
-                {
-                    <div class="wr-card clickable"
-                         title="Focus symbol in AI Brain"
-                         @onclick="() => FocusSymbol(s.Symbol)">
-
-                        <div class="flex justify-between items-center">
-                            <div class="font-bold text-lg">@s.Symbol</div>
-                            <span class="text-xs text-slate-400">
-                                score @s.Score.ToString("F1")
-                            </span>
-                        </div>
-
-                        <div class="text-sm mt-1">
-                            <span class="font-semibold">WinRate:</span>
-                            <span class="@WinRateColor(s.WinRate)">
-                                @s.WinRate.ToString("F1")%
-                            </span>
-                        </div>
-
-                        <div class="flex justify-between text-xs text-slate-400 mt-1">
-                            <span>Trades: @s.Trades</span>
-                            <span>@WinRateLabel(s.WinRate, s.Trades)</span>
+                <!-- NEURAL ACTIVITY CANVAS -->
+                <div class="ab-panel ab-neural">
+                    <div class="ab-panel-hd">
+                        <span class="ab-panel-title">NEURAL ACTIVITY</span>
+                        <div class="ab-legend">
+                            <span class="ab-ld ab-ld-hot">● HOT</span>
+                            <span class="ab-ld ab-ld-think">● THINKING</span>
+                            <span class="ab-ld ab-ld-watch">● WATCHING</span>
+                            <span class="ab-ld ab-ld-idle">● SLEEPING</span>
                         </div>
                     </div>
-                }
-
-            </div>
-        </div>
-    }
-</div>
-
-
-    <!-- ================= AI BRAIN ================= -->
-    <div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700 mb-8">
-
-        <div class="section-header">
-            <div>
-                <h3 class="font-bold text-xl">AI Brain — Live Neurons</h3>
-                <div class="text-xs text-slate-400">
-                    Symbol-centric view (strongest TF)
+                    <canvas id="neuralCanvas" class="ab-canvas"></canvas>
                 </div>
-            </div>
-            <div class="chevron @(BrainOpen ? "open" : "")"
-                 @onclick="ToggleBrain"></div>
-        </div>
 
-        @if (!BrainOpen)
-        {
-            <div class="text-xs text-amber-400 mt-2">
-                PINNED ONLY
-            </div>
-        }
-
-        <div class="section-body">
-            <div class="market-grid dense">
-@if (BrainSymbols.Count == 0)
-{
-    <div class="text-xs text-slate-400 mt-4">
-        Brain data loading...
-    </div>
-}
-else{
-      @foreach (var item in BrainSymbols)
-            {
-                if (!BrainOpen && !IsPinned(item.Symbol))
-                    continue;
-
-                var st = item.Strongest;
-
-                <div id="brain-@item.Symbol"
-                     class="market-card neuron
-                     @(IsPinned(item.Symbol) ? "pinned" : "")
-                     @PulseClass(NeuronLevel(NeuronPower(st)))
-                     @GlowClass(NeuronLevel(NeuronPower(st)))">
-
-                    <!-- ===== HEADER ===== -->
-                    <div class="flex justify-between items-center mb-2">
-
-                        <div class="flex items-center gap-2">
-                            <!-- PIN -->
-                            <span class="pin-icon @(IsPinned(item.Symbol) ? "pinned" : "")"
-                                  @onclick:stopPropagation
-                                  @onclick="() => TogglePin(item.Symbol)">
-                                📌
-                            </span>
-
-                            <b>@item.Symbol</b>
-                            <span class="text-xs text-slate-400">
-                                (@st.Timeframe)
-                            </span>
-                        </div>
-
-                        <!-- EXPAND TF -->
-                        <span class="tf-chevron @(IsExpanded(item.Symbol) ? "open" : "")"
-                              @onclick="() => ToggleExpand(item.Symbol)">
+                <!-- AI BRAIN — LIVE NEURONS -->
+                <div class="ab-panel">
+                    <div class="ab-panel-hd">
+                        <span class="ab-panel-title">
+                            ⚡ LIVE NEURONS
+                            <span class="ab-count-badge">@BrainSymbols.Count symbols</span>
                         </span>
-                    </div>
-
-                    <!-- ===== STRONGEST TF INFO ===== -->
-                    <div class="telemetry">
-                        <span class="telemetry-item">
-                            Slope
-                            <b class="@(st.TrendSlopePercent >= 0 ? "text-emerald-400" : "text-red-400")">
-                                @(st.TrendSlopePercent >= 0 ? "↑" : "↓")
-                                @Math.Abs(st.TrendSlopePercent).ToString("F3")
-                            </b>
-                        </span>
-
-                        <span class="telemetry-item">
-                            Vol <b>@st.VolatilityPercent.ToString("F2")</b>
-                        </span>
-
-                        <span class="telemetry-item">
-                            ATR <b>@st.Atr.ToString("F2")</b>
-                        </span>
-                    </div>
-
-                    <div class="text-xs mt-2 flex items-center gap-2">
-                        <span>
-                            Confidence:
-                            <b>@st.Confidence.ToString("P0")</b>
-                        </span>
-
-                        <span class="status-pill @(NeuronLevel(NeuronPower(st)) switch {
-                            3 => "hot",
-                            2 => "active",
-                            1 => "watch",
-                            _ => "idle"
-                        })">
-                            @(NeuronLevel(NeuronPower(st)) switch {
-                                3 => "ACTIVE",
-                                2 => "THINKING",
-                                1 => "WATCHING",
-                                _ => "SLEEPING"
-                            })
-                        </span>
-                    </div>
-
-                    <!-- ===== EXPANDED TF LIST ===== -->
-                    @if (IsExpanded(item.Symbol))
-                    {
-                        <div class="tf-list">
-                            @foreach (var tf in item.All)
+                        <div class="ab-filter-row">
+                            @foreach (var f in _brainFilters)
                             {
-                                var isStrongest = tf == item.Strongest;
-
-                                <div class="tf-row @(isStrongest ? "strongest" : "")">
-                                    <span class="tf-name">@tf.Timeframe</span>
-
-                                    <span class="tf-state">
-                                        @if (isStrongest)
-                                        {
-                                            <span class="tf-badge">STRONG</span>
-                                        }
-                                        Conf @tf.Confidence.ToString("P0")
-                                    </span>
-
-                                    <span class="tf-slope">
-                                        @(tf.TrendSlopePercent >= 0 ? "↑" : "↓")
-                                        @Math.Abs(tf.TrendSlopePercent).ToString("F3")
-                                    </span>
-                                </div>
+                                <button class="ab-fchip @(_brainFilter == f ? "ab-fchip-on" : "")"
+                                        @onclick="() => { _brainFilter = f; }">
+                                    @f
+                                </button>
                             }
                         </div>
-                    }
-                </div>
-            }
+                    </div>
 
-}
-                
-      
+                    <div class="ab-neurons-grid">
+                        @foreach (var item in FilteredNeurons)
+                        {
+                            var st = item.Strongest;
+                            var lvl = NeuronLevel(NeuronPower(st));
+                            var pwr = NeuronPower(st);
+                            bool pinned = IsPinned(item.Symbol);
+                            bool expanded = IsExpanded(item.Symbol);
+
+                            <div class="ab-neuron lvl-@lvl @(pinned?"ab-pinned":"")"
+                                 id="brain-@item.Symbol">
+
+                                <!-- TOP ROW -->
+                                <div class="ab-n-top">
+                                    <div class="ab-n-left">
+                                        <div class="ab-n-pulse lvl-@lvl"></div>
+                                        <span class="ab-n-sym">@item.Symbol</span>
+                                        <span class="ab-n-tf">@TfShort(st.Timeframe)</span>
+                                    </div>
+                                    <div class="ab-n-right">
+                                        <span class="ab-status st-@lvl">@StatusLabel(lvl)</span>
+                                        <button class="ab-pin @(pinned?"ab-pin-on":"")"
+                                                @onclick="() => TogglePin(item.Symbol)"
+                                                @onclick:stopPropagation>
+                                            📌
+                                        </button>
+                                        <button class="ab-expand-btn @(expanded?"ab-exp-on":"")"
+                                                @onclick="() => ToggleExpand(item.Symbol)">
+                                            @(expanded ? "▲" : "▼")
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- POWER BAR -->
+                                <div class="ab-power-wrap">
+                                    <div class="ab-power-bar lvl-@lvl" style="width:@((pwr*100).ToString("F0"))%"></div>
+                                    <span class="ab-power-val">@((pwr*100).ToString("F0"))%</span>
+                                </div>
+
+                                <!-- METRICS -->
+                                <div class="ab-n-metrics">
+                                    <div class="ab-nm">
+                                        <span class="ab-nm-l">CONF</span>
+                                        <span class="ab-nm-v @(st.Confidence>=0.7m?"abg":st.Confidence>=0.5m?"abb":"abr")">
+                                            @st.Confidence.ToString("P0")
+                                        </span>
+                                    </div>
+                                    <div class="ab-nm">
+                                        <span class="ab-nm-l">SLOPE</span>
+                                        <span class="ab-nm-v @(st.TrendSlopePercent >= 0 ? "abg" : "abr")">
+                                            @(st.TrendSlopePercent >= 0 ? "↑" : "↓")@Math.Abs(st.TrendSlopePercent).ToString("F3")
+                                        </span>
+                                    </div>
+                                    <div class="ab-nm">
+                                        <span class="ab-nm-l">VOL</span>
+                                        <span class="ab-nm-v">@st.VolatilityPercent.ToString("F2")%</span>
+                                    </div>
+                                    <div class="ab-nm">
+                                        <span class="ab-nm-l">ATR</span>
+                                        <span class="ab-nm-v">@st.Atr.ToString("G4")</span>
+                                    </div>
+                                    @if (st.Price > 0)
+                                    {
+                                        <div class="ab-nm">
+                                            <span class="ab-nm-l">PRICE</span>
+                                            <span class="ab-nm-v mono">@FP(st.Price)</span>
+                                        </div>
+                                    }
+                                    <div class="ab-nm">
+                                        <span class="ab-nm-l">REGIME</span>
+                                        <span class="ab-nm-v @RegCls(st.Regime)">@RegShort(st.Regime)</span>
+                                    </div>
+                                </div>
+
+                                <!-- REASON TAG -->
+                                @if (!string.IsNullOrEmpty(st.Reason))
+                                {
+                                    <div class="ab-reason-tag">@st.Reason</div>
+                                }
+
+                                <!-- EXPANDED: all TF list -->
+                                @if (expanded && item.All.Count > 1)
+                                {
+                                    <div class="ab-tf-list">
+                                        @foreach (var tf in item.All)
+                                        {
+                                            var tPwr = NeuronPower(tf);
+                                            var isStr = tf == item.Strongest;
+                                            <div class="ab-tf-row @(isStr?"ab-tf-strong":"")">
+                                                <span class="ab-tf-name">@TfShort(tf.Timeframe)</span>
+                                                @if (isStr) { <span class="ab-tf-badge">BEST</span> }
+                                                <div class="ab-tf-bar-wrap">
+                                                    <div class="ab-tf-bar lvl-@NeuronLevel(tPwr)" style="width:@((tPwr*100).ToString("F0"))%"></div>
+                                                </div>
+                                                <span class="ab-tf-conf @(tf.Confidence>=0.7m?"abg":tf.Confidence>=0.5m?"abb":"abr")">
+                                                    @tf.Confidence.ToString("P0")
+                                                </span>
+                                                <span class="ab-tf-slope @(tf.TrendSlopePercent>=0?"abg":"abr")">
+                                                    @(tf.TrendSlopePercent >= 0 ? "↑" : "↓")@Math.Abs(tf.TrendSlopePercent).ToString("F3")
+                                                </span>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+
+                            </div>
+                        }
+
+                        @if (!BrainSymbols.Any())
+                        {
+                            <div class="ab-empty">
+                                <div style="font-size:40px">🔮</div>
+                                <div>AI Brain warming up...</div>
+                                <div class="ab-dim">Data appears as bot processes market states</div>
+                            </div>
+                        }
+                    </div>
+                </div>
 
             </div>
-        </div>
-    </div>
 
- <!-- ================= TRADES ================= -->
-<div class="p-5 bg-slate-900/50 rounded-xl border border-slate-700">
+            <!-- ═══ RIGHT ══════════════════════════════════════════════ -->
+            <div class="ab-right">
 
-    <div class="section-header">
-        <h3 class="font-bold text-xl">Последние сделки</h3>
-        <div class="chevron @(TradesOpen ? "open" : "")"
-             @onclick="ToggleTrades"></div>
-    </div>
-
-    @if (TradesOpen)
-    {
-        <div class="section-body">
-            <div class="trade-grid">
-
-                @if (Trades == null || Trades.Count == 0)
-                {
-                    <div class="text-slate-400 text-sm">
-                        Нет данных по сделкам
+                <!-- AI PERFORMANCE LEADERBOARD -->
+                <div class="ab-panel">
+                    <div class="ab-panel-hd">
+                        <span class="ab-panel-title">🏆 PERFORMANCE</span>
+                        <span class="ab-dim" style="font-size:11px">≥20 trades</span>
                     </div>
-                }
-                else
-                {
-                    @foreach (var t in Trades.OrderByDescending(x => x.Time).Take(30))
+
+                    @{
+                        var leaderboard = Stats.Symbols
+                            .Select(s => new {
+                                s.Symbol,
+                                Trades = s.Regimes.Sum(r => r.Trades),
+                                Wins   = s.Regimes.Sum(r => r.Wins)
+                            })
+                            .Where(x => x.Trades >= 20)
+                            .Select(x => new {
+                                x.Symbol, x.Trades,
+                                WinRate = x.Trades > 0 ? x.Wins * 100.0 / x.Trades : 0,
+                                Score   = (x.Trades > 0 ? x.Wins * 100.0 / x.Trades : 0) * Math.Min(1.0, x.Trades / 20.0)
+                            })
+                            .OrderByDescending(x => x.Score)
+                            .Take(15)
+                            .ToList();
+                    }
+
+                    @foreach (var s in leaderboard)
                     {
-                        var isWin = t.PnlPct >= 0;
-                        var ageSec = (DateTime.UtcNow - t.Time.ToUniversalTime()).TotalSeconds;
-
-                        <div class="trade-card">
-
-                            <!-- HEADER -->
-                            <div class="flex justify-between mb-2 items-center">
-                                <div class="flex items-center gap-2">
-                                    <span class="trade-symbol">@t.Symbol</span>
-
-                                    <span class="side-badge @(t.Side == SignalSide.Buy ? "buy-badge" : "sell-badge")">
-                                        @t.Side
-                                    </span>
-                                </div>
-
-                                <span class="@(isWin ? "text-emerald-400" : "text-red-400") font-semibold">
-                                    @(isWin ? "+" : "")
-                                    @((t.PnlPct * 100).ToString("F2")) %
-                                </span>
+                        var wCls = s.WinRate >= 60 ? "abg" : s.WinRate >= 40 ? "aby" : "abr";
+                        <div class="ab-lb-row" @onclick="() => FocusSymbol(s.Symbol)">
+                            <span class="ab-lb-sym">@s.Symbol.Replace("USDT","")</span>
+                            <div class="ab-lb-bar-wrap">
+                                <div class="ab-lb-bar @wCls" style="width:@s.WinRate%"></div>
                             </div>
-
-                            <!-- BODY -->
-                            <div class="text-xs space-y-1 text-slate-300">
-
-                                <div class="flex justify-between">
-                                    <span>Entry</span>
-                                    <b>@t.Entry.ToString("F4")</b>
-                                </div>
-
-                                <div class="flex justify-between">
-                                    <span>Exit</span>
-                                    <b>@t.Exit.ToString("F4")</b>
-                                </div>
-
-                                <div class="flex justify-between">
-                                    <span>Regime</span>
-                                    <b>@t.Regime</b>
-                                </div>
-
-                            </div>
-
-                            <!-- FOOTER -->
-                            <div class="flex justify-between items-center mt-2 text-xs text-slate-400">
-                                <span>@t.Time.ToLocalTime()</span>
-
-                                <span class="@LiveDotClass(t.Time)">
-                                    @(ageSec < 15 ? "LIVE" :
-                                      ageSec < 60 ? "recent" :
-                                      "archived")
-                                </span>
-                            </div>
-
+                            <span class="ab-lb-wr @wCls">@s.WinRate.ToString("F0")%</span>
+                            <span class="ab-dim ab-lb-t">@s.Trades</span>
                         </div>
                     }
-                }
+
+                    @if (!leaderboard.Any())
+                    {
+                        <div class="ab-empty-sm ab-dim">No symbols with ≥20 trades yet</div>
+                    }
+                </div>
+
+                <!-- TRADES -->
+                <div class="ab-panel">
+                    <div class="ab-panel-hd">
+                        <span class="ab-panel-title">📈 RECENT TRADES</span>
+                        <span class="ab-badge @(_totalWins > _totalLosses ? "ab-badge-ok" : "ab-badge-err")">
+                            @_winRatePct% WR
+                        </span>
+                    </div>
+
+                    <!-- Win/loss bar -->
+                    <div class="ab-wr-bar-wrap">
+                        <div class="ab-wr-w" style="width:@_winRatePct%">@_totalWins W</div>
+                        <div class="ab-wr-l" style="width:@(100-_winRatePct)%">@_totalLosses L</div>
+                    </div>
+
+                    <div class="ab-trades-list">
+                        @if (Trades == null || Trades.Count == 0)
+                        {
+                            <div class="ab-empty-sm ab-dim">No trade history yet</div>
+                        }
+                        else
+                        {
+                            @foreach (var t in Trades.OrderByDescending(x => x.Time).Take(20))
+                            {
+                                bool win = t.PnlPct >= 0;
+                                var age = (DateTime.UtcNow - t.Time.ToUniversalTime()).TotalSeconds;
+                                bool isLive = age < 15;
+
+                                <div class="ab-trade-row">
+                                    <div class="ab-tr-left">
+                                        @if (isLive) { <span class="ab-live-dot"></span> }
+                                        <span class="ab-tr-sym">@t.Symbol.Replace("USDT","")</span>
+                                        <span class="ab-tr-side @(t.Side == SignalSide.Buy ? "tr-l" : "tr-s")">
+                                            @(t.Side == SignalSide.Buy ? "L" : "S")
+                                        </span>
+                                    </div>
+                                    <div class="ab-tr-mid">
+                                        <span class="ab-dim ab-tr-time">@t.Time.ToLocalTime().ToString("HH:mm")</span>
+                                        <span class="ab-tr-regime ab-dim">@RegShort(t.Regime)</span>
+                                    </div>
+                                    <div class="ab-tr-pnl @(win ? "abg" : "abr")">
+                                        @(win ? "+" : "")@((t.PnlPct * 100).ToString("F2"))%
+                                    </div>
+                                </div>
+                            }
+                        }
+                    </div>
+                </div>
 
             </div>
         </div>
     }
 </div>
 
+<style>
+:root {
+    --bg:#0a0d12; --bg2:#111520; --bg3:#1a1f2e; --bdr:#1e2535;
+    --grn:#22c55e; --red:#ef4444; --acc:#3b82f6; --yel:#eab308;
+    --txt:#e2e8f0; --dim:#64748b;
+    --mono:'JetBrains Mono','Fira Code',monospace;
+    /* neuron colors */
+    --hot:#f97316; --think:#a855f7; --watch:#3b82f6; --idle:#334155;
+}
+html,body { background:var(--bg)!important; color:var(--txt); }
+.ab { font-family:'Inter','Segoe UI',sans-serif; background:var(--bg); min-height:100vh; padding-bottom:48px; }
+.abg{color:var(--grn)!important;} .abr{color:var(--red)!important;} .abb{color:var(--acc)!important;}
+.aby{color:var(--yel)!important;} .ab-dim{color:var(--dim)!important;} .mono{font-family:var(--mono)!important;}
 
-    }
+/* ── HEADER ──────────────────────────────────────────── */
+.ab-header { display:flex; align-items:center; justify-content:space-between; padding:16px 28px; background:var(--bg2); border-bottom:1px solid var(--bdr); }
+.ab-logo { display:flex; align-items:center; gap:16px; }
+.ab-logo-icon { position:relative; width:44px; height:44px; display:flex; align-items:center; justify-content:center; font-size:24px; }
+.ab-pulse-ring { position:absolute; width:44px; height:44px; border-radius:50%; border:2px solid var(--acc); animation:neuron-ring 2s ease-out infinite; }
+.ab-pr2 { animation-delay:.7s; }
+@@keyframes neuron-ring { 0%{transform:scale(.8);opacity:.8;} 100%{transform:scale(1.8);opacity:0;} }
+.ab-title { font-family:var(--mono); font-size:18px; font-weight:700; letter-spacing:3px; color:var(--acc); }
+.ab-sub { font-size:11px; color:var(--dim); margin-top:2px; }
+.ab-header-right { display:flex; align-items:center; gap:20px; }
+.ab-hstat { text-align:center; }
+.ab-hv { font-family:var(--mono); font-size:20px; font-weight:700; }
+.ab-hl { font-size:10px; color:var(--dim); letter-spacing:1px; margin-top:1px; }
+.ab-runtime { font-family:var(--mono); font-size:16px; color:var(--dim); }
 
-   
+/* ── LOADING ─────────────────────────────────────────── */
+.ab-loading { display:flex; align-items:center; gap:12px; padding:60px; color:var(--dim); }
+.ab-spin { width:20px; height:20px; border:2px solid var(--bdr); border-top-color:var(--acc); border-radius:50%; animation:spin .8s linear infinite; }
+@@keyframes spin{to{transform:rotate(360deg);}}
+.ab-empty { display:flex; flex-direction:column; align-items:center; gap:10px; padding:40px; color:var(--dim); text-align:center; }
+.ab-empty-sm { padding:16px; text-align:center; font-size:12px; }
 
-</div>
+/* ── BODY ────────────────────────────────────────────── */
+.ab-body { display:grid; grid-template-columns:1fr 300px; gap:12px; padding:12px; }
+.ab-left { display:flex; flex-direction:column; gap:12px; }
+.ab-right { display:flex; flex-direction:column; gap:12px; }
 
+/* ── PANEL ───────────────────────────────────────────── */
+.ab-panel { background:var(--bg2); border:1px solid var(--bdr); border-radius:8px; overflow:hidden; }
+.ab-panel-hd { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--bdr); flex-wrap:wrap; gap:8px; }
+.ab-panel-title { font-size:11px; font-weight:700; letter-spacing:2px; color:var(--dim); text-transform:uppercase; display:flex; align-items:center; gap:8px; }
+.ab-count-badge { font-size:11px; font-weight:400; background:var(--bg3); border:1px solid var(--bdr); border-radius:12px; padding:1px 8px; color:var(--dim); }
+
+/* ── NEURAL CANVAS ───────────────────────────────────── */
+.ab-neural { }
+.ab-canvas { width:100%; height:100px; display:block; background:#060810; }
+.ab-legend { display:flex; gap:12px; font-size:11px; }
+.ab-ld { display:flex; align-items:center; gap:4px; }
+.ab-ld-hot { color:var(--hot); } .ab-ld-think { color:var(--think); }
+.ab-ld-watch { color:var(--acc); } .ab-ld-idle { color:var(--idle); }
+
+/* ── FILTER CHIPS ────────────────────────────────────── */
+.ab-filter-row { display:flex; gap:4px; }
+.ab-fchip { padding:3px 10px; background:var(--bg3); border:1px solid var(--bdr); border-radius:12px; color:var(--dim); font-size:11px; cursor:pointer; transition:all .15s; }
+.ab-fchip:hover { border-color:var(--acc); color:var(--txt); }
+.ab-fchip-on { background:rgba(59,130,246,.15); border-color:var(--acc); color:var(--txt); }
+
+/* ── NEURONS GRID ────────────────────────────────────── */
+.ab-neurons-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:8px; padding:12px; }
+
+/* ── NEURON CARD ─────────────────────────────────────── */
+.ab-neuron {
+    background:var(--bg3); border:1px solid var(--bdr); border-radius:8px;
+    padding:12px; transition:all .2s; position:relative; overflow:hidden;
+}
+.ab-neuron::before {
+    content:''; position:absolute; top:0; left:0; right:0; height:2px;
+    border-radius:2px 2px 0 0;
+}
+.ab-neuron.lvl-3::before { background:linear-gradient(90deg,var(--hot),#fbbf24); animation:shimmer 2s linear infinite; }
+.ab-neuron.lvl-2::before { background:linear-gradient(90deg,var(--think),var(--acc)); }
+.ab-neuron.lvl-1::before { background:var(--acc); }
+.ab-neuron.lvl-0::before { background:var(--bdr); }
+@@keyframes shimmer { 0%{background-position:0%} 100%{background-position:200%} }
+.ab-neuron.lvl-3 { border-color:rgba(249,115,22,.3); }
+.ab-neuron.lvl-2 { border-color:rgba(168,85,247,.25); }
+.ab-neuron.lvl-1 { border-color:rgba(59,130,246,.2); }
+.ab-pinned { border-color:var(--yel)!important; box-shadow:0 0 12px rgba(234,179,8,.15); }
+.ab-neuron:hover { background:#1f2937; }
+
+/* NEURON TOP ROW */
+.ab-n-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+.ab-n-left { display:flex; align-items:center; gap:6px; }
+.ab-n-right { display:flex; align-items:center; gap:4px; }
+.ab-n-sym { font-family:var(--mono); font-size:14px; font-weight:700; }
+.ab-n-tf { font-size:10px; color:var(--dim); background:var(--bg2); padding:1px 5px; border-radius:3px; }
+
+/* PULSE DOT */
+.ab-n-pulse { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.ab-n-pulse.lvl-3 { background:var(--hot); box-shadow:0 0 6px var(--hot); animation:dot-pulse .6s ease-in-out infinite; }
+.ab-n-pulse.lvl-2 { background:var(--think); box-shadow:0 0 6px var(--think); animation:dot-pulse 1s ease-in-out infinite; }
+.ab-n-pulse.lvl-1 { background:var(--acc); animation:dot-pulse 2s ease-in-out infinite; }
+.ab-n-pulse.lvl-0 { background:var(--dim); }
+@@keyframes dot-pulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.5;transform:scale(.7);} }
+
+/* STATUS BADGE */
+.ab-status { font-size:10px; font-weight:700; padding:2px 7px; border-radius:10px; letter-spacing:.5px; }
+.st-3 { background:rgba(249,115,22,.15); color:var(--hot); border:1px solid rgba(249,115,22,.3); }
+.st-2 { background:rgba(168,85,247,.15); color:var(--think); border:1px solid rgba(168,85,247,.3); }
+.st-1 { background:rgba(59,130,246,.15); color:var(--acc); border:1px solid rgba(59,130,246,.2); }
+.st-0 { background:var(--bg2); color:var(--dim); border:1px solid var(--bdr); }
+
+/* PIN + EXPAND */
+.ab-pin,.ab-expand-btn { background:none; border:none; cursor:pointer; font-size:13px; opacity:.4; transition:opacity .15s; padding:2px 4px; }
+.ab-pin:hover,.ab-expand-btn:hover { opacity:1; }
+.ab-pin-on { opacity:1!important; }
+.ab-exp-on { opacity:1!important; color:var(--acc); }
+
+/* POWER BAR */
+.ab-power-wrap { display:flex; align-items:center; gap:6px; margin-bottom:8px; }
+.ab-power-bar { height:4px; border-radius:2px; transition:width .4s; }
+.ab-power-bar.lvl-3 { background:linear-gradient(90deg,var(--hot),#fbbf24); box-shadow:0 0 4px var(--hot); }
+.ab-power-bar.lvl-2 { background:var(--think); }
+.ab-power-bar.lvl-1 { background:var(--acc); }
+.ab-power-bar.lvl-0 { background:var(--dim); }
+.ab-power-val { font-family:var(--mono); font-size:10px; color:var(--dim); min-width:28px; }
+
+/* METRICS */
+.ab-n-metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; }
+.ab-nm { display:flex; flex-direction:column; gap:1px; }
+.ab-nm-l { font-size:9px; color:var(--dim); letter-spacing:1px; text-transform:uppercase; }
+.ab-nm-v { font-family:var(--mono); font-size:12px; font-weight:600; }
+
+/* REASON TAG */
+.ab-reason-tag { margin-top:6px; display:inline-block; font-size:10px; background:rgba(59,130,246,.1); border:1px solid rgba(59,130,246,.2); color:var(--acc); padding:1px 7px; border-radius:10px; }
+
+/* TF LIST */
+.ab-tf-list { margin-top:8px; border-top:1px solid var(--bdr); padding-top:8px; display:flex; flex-direction:column; gap:4px; }
+.ab-tf-row { display:flex; align-items:center; gap:6px; font-size:11px; padding:3px 0; }
+.ab-tf-strong { background:rgba(255,255,255,.03); border-radius:4px; padding:3px 4px; }
+.ab-tf-name { min-width:30px; color:var(--dim); font-family:var(--mono); }
+.ab-tf-badge { font-size:9px; background:var(--acc); color:#fff; padding:0 4px; border-radius:3px; font-weight:700; }
+.ab-tf-bar-wrap { flex:1; height:3px; background:var(--bg2); border-radius:2px; overflow:hidden; }
+.ab-tf-bar { height:100%; border-radius:2px; }
+.ab-tf-bar.lvl-3 { background:var(--hot); } .ab-tf-bar.lvl-2 { background:var(--think); }
+.ab-tf-bar.lvl-1 { background:var(--acc); } .ab-tf-bar.lvl-0 { background:var(--dim); }
+.ab-tf-conf,.ab-tf-slope { font-family:var(--mono); font-size:11px; min-width:36px; text-align:right; }
+
+/* ── RIGHT PANELS ────────────────────────────────────── */
+.ab-badge { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--bdr); }
+.ab-badge-ok  { color:var(--grn); border-color:rgba(34,197,94,.3); background:rgba(34,197,94,.1); }
+.ab-badge-err { color:var(--red); border-color:rgba(239,68,68,.3); background:rgba(239,68,68,.1); }
+
+/* LEADERBOARD */
+.ab-lb-row { display:flex; align-items:center; gap:8px; padding:7px 16px; border-bottom:1px solid rgba(30,37,53,.5); cursor:pointer; transition:background .1s; font-size:13px; }
+.ab-lb-row:hover { background:var(--bg3); }
+.ab-lb-row:last-child { border-bottom:none; }
+.ab-lb-sym { font-family:var(--mono); font-weight:700; min-width:72px; color:var(--acc); }
+.ab-lb-bar-wrap { flex:1; height:5px; background:var(--bdr); border-radius:3px; overflow:hidden; }
+.ab-lb-bar { height:100%; border-radius:3px; transition:width .5s; }
+.ab-lb-bar.abg { background:var(--grn); } .ab-lb-bar.aby { background:var(--yel); } .ab-lb-bar.abr { background:var(--red); }
+.ab-lb-wr { font-family:var(--mono); font-weight:700; font-size:13px; min-width:40px; text-align:right; }
+.ab-lb-t { font-size:11px; min-width:24px; text-align:right; }
+
+/* WIN/LOSS BAR */
+.ab-wr-bar-wrap { display:flex; height:24px; margin:0 16px 8px; border-radius:4px; overflow:hidden; gap:2px; }
+.ab-wr-w { background:var(--grn); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#000; border-radius:4px 0 0 4px; transition:width .5s; }
+.ab-wr-l { background:var(--red); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#fff; border-radius:0 4px 4px 0; transition:width .5s; min-width:24px; }
+
+/* TRADES */
+.ab-trades-list { max-height:320px; overflow-y:auto; }
+.ab-trades-list::-webkit-scrollbar { width:4px; } .ab-trades-list::-webkit-scrollbar-thumb { background:var(--bdr); border-radius:2px; }
+.ab-trade-row { display:flex; align-items:center; gap:8px; padding:7px 16px; border-bottom:1px solid rgba(30,37,53,.5); font-size:12px; }
+.ab-trade-row:last-child { border-bottom:none; }
+.ab-tr-left { display:flex; align-items:center; gap:6px; min-width:80px; }
+.ab-tr-sym { font-family:var(--mono); font-weight:700; font-size:13px; }
+.ab-tr-side { font-size:10px; font-weight:700; padding:1px 5px; border-radius:3px; }
+.tr-l { background:rgba(34,197,94,.12); color:var(--grn); }
+.tr-s { background:rgba(239,68,68,.12); color:var(--red); }
+.ab-tr-mid { flex:1; display:flex; flex-direction:column; gap:1px; }
+.ab-tr-time { font-family:var(--mono); font-size:11px; }
+.ab-tr-regime { font-size:10px; }
+.ab-tr-pnl { font-family:var(--mono); font-weight:700; font-size:13px; }
+.ab-live-dot { width:7px; height:7px; border-radius:50%; background:var(--grn); box-shadow:0 0 6px var(--grn); animation:dot-pulse .8s infinite; flex-shrink:0; }
+
+/* REGIME */
+.rc-bull{color:var(--grn)!important;} .rc-bear{color:var(--red)!important;} .rc-rng{color:var(--yel)!important;} .rc-sq{color:var(--acc)!important;}
+
+@@media(max-width:1100px){.ab-body{grid-template-columns:1fr;}.ab-neurons-grid{grid-template-columns:repeat(auto-fill,minmax(200px,1fr));}}
+@@media(max-width:700px){.ab-header{flex-direction:column;gap:12px;}.ab-header-right{flex-wrap:wrap;gap:12px;}}
+</style>
 
 @code {
-    class BrainSymbolGroup
-{
-    public string Symbol { get; set; } = "";
-    public AiSelfLearningService.MarketState Strongest { get; set; } = null!;
-    public List<AiSelfLearningService.MarketState> All { get; set; } = new();
-}
-
-    List<BrainSymbolGroup> BrainSymbols = new();
     AiRuntimeState? State => Runtime.Current;
 
-    bool BrainOpen = true;
-    bool TradesOpen = false;
-
+    List<BrainSymbolGroup> BrainSymbols = new();
     HashSet<string> PinnedSymbols = new();
-
     HashSet<string> ExpandedSymbols = new();
 
-    bool IsExpanded(string symbol) =>
-        ExpandedSymbols.Contains(symbol);
+    string _brainFilter = "All";
+    readonly string[] _brainFilters = { "All", "🔥 Hot", "💭 Thinking", "👁 Watching", "📌 Pinned" };
 
-    void ToggleExpand(string symbol)
-    {
-        if (!ExpandedSymbols.Add(symbol))
-            ExpandedSymbols.Remove(symbol);
-    }
+    int _hotCount, _thinkingCount, _watchCount, _totalWins, _totalLosses, _winRatePct;
+    int _runtimeSec;
 
-    void TogglePin(string symbol)
+    bool IsExpanded(string s) => ExpandedSymbols.Contains(s);
+    bool IsPinned(string s) => PinnedSymbols.Contains(s);
+
+    IEnumerable<BrainSymbolGroup> FilteredNeurons => _brainFilter switch
     {
-        if (!PinnedSymbols.Add(symbol))
-            PinnedSymbols.Remove(symbol);
-    }
+        "🔥 Hot"       => BrainSymbols.Where(x => NeuronLevel(NeuronPower(x.Strongest)) == 3),
+        "💭 Thinking"  => BrainSymbols.Where(x => NeuronLevel(NeuronPower(x.Strongest)) == 2),
+        "👁 Watching"  => BrainSymbols.Where(x => NeuronLevel(NeuronPower(x.Strongest)) == 1),
+        "📌 Pinned"    => BrainSymbols.Where(x => IsPinned(x.Symbol)),
+        _              => BrainSymbols
+    };
+
+    string StatusLabel(int lvl) => lvl switch
+    {
+        3 => "🔥 ACTIVE",
+        2 => "💭 THINKING",
+        1 => "👁 WATCHING",
+        _ => "😴 SLEEPING"
+    };
 
     protected override void OnInitialized()
     {
         Runtime.OnUpdated += Refresh;
+        Refresh();
     }
 
-    bool PerformanceOpen = true;
-    
-    async Task TogglePerformance()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        PerformanceOpen = !PerformanceOpen;
-        await JS.InvokeVoidAsync("uiState.set", "ai.performance.open", PerformanceOpen);
+        if (firstRender)
+            await DrawCanvas();
     }
-
-   const double AutoExpandConfidence = 0.45;
-
-    void AutoExpandStrongSignals()
-{
-    if (BrainSymbols.Count == 0) return;
-
-    foreach (var item in BrainSymbols)
-    {
-        var st = item.Strongest;
-        if (st == null) continue;
-
-        var level = NeuronLevel(NeuronPower(st));
-
-        if (level == 3 && (double)st.Confidence >= AutoExpandConfidence)
-        {
-            ExpandedSymbols.Add(item.Symbol);
-        }
-    }
-}
-
-    void RebuildBrainSymbols()
-    {
-        if (State == null || State.MarketStates.Count == 0)
-    {
-        BrainSymbols.Clear();
-        return;
-    }
-
-    BrainSymbols = State.MarketStates
-        .GroupBy(x => x.Symbol)
-        .Where(g => g.Any())
-        .Select(g =>
-        {
-            var strongest = g
-                .OrderByDescending(s => NeuronPower(s))
-                .FirstOrDefault();
-
-            if (strongest == null)
-                return null;
-
-            return new BrainSymbolGroup
-            {
-                Symbol = g.Key,
-                Strongest = strongest,
-                All = g
-                    .OrderByDescending(s => NeuronPower(s))
-                    .ToList()
-            };
-        })
-        .Where(x => x != null)
-        .OrderByDescending(x => NeuronPower(x!.Strongest))
-        .ToList()!;
-    }
-
-    async Task ToggleBrain()
-    {
-        BrainOpen = !BrainOpen;
-        await JS.InvokeVoidAsync("uiState.set", "ai.brain.open", BrainOpen);
-    }
-
-    async Task ToggleTrades()
-    {
-        TradesOpen = !TradesOpen;
-        await JS.InvokeVoidAsync("uiState.set", "ai.trades.open", TradesOpen);
-    }
-
-    bool IsPinned(string symbol) =>
-        PinnedSymbols.Contains(symbol); 
-  // || AutoPinnedSymbols.Contains(symbol);
 
     void Refresh()
     {
         RebuildBrainSymbols();
-    InvokeAsync(StateHasChanged);
+        CalcStats();
+        _runtimeSec = (int)(DateTime.UtcNow - (State?.LoadedAtUtc ?? DateTime.UtcNow)).TotalSeconds;
+        InvokeAsync(async () => { StateHasChanged(); await DrawCanvas(); });
     }
 
-    void FocusSymbol(string symbol)
+    void RebuildBrainSymbols()
     {
-        // pin
-        PinnedSymbols.Add(symbol);
+        if (State == null || State.MarketStates.Count == 0) { BrainSymbols.Clear(); return; }
+        BrainSymbols = State.MarketStates
+            .GroupBy(x => x.Symbol)
+            .Select(g =>
+            {
+                var strongest = g.OrderByDescending(s => NeuronPower(s)).First();
+                return new BrainSymbolGroup
+                {
+                    Symbol   = g.Key,
+                    Strongest = strongest,
+                    All = g.OrderByDescending(s => NeuronPower(s)).ToList()
+                };
+            })
+            .OrderByDescending(x => NeuronPower(x.Strongest))
+            .ToList();
 
-        // раскрыть TF
-        ExpandedSymbols.Add(symbol);
-
-        // открыть Brain
-        BrainOpen = true;
-
-        StateHasChanged();
-
-        // scroll
-        _ = JS.InvokeVoidAsync("uiScrollToSymbol", symbol);
+        _hotCount      = BrainSymbols.Count(x => NeuronLevel(NeuronPower(x.Strongest)) == 3);
+        _thinkingCount = BrainSymbols.Count(x => NeuronLevel(NeuronPower(x.Strongest)) == 2);
+        _watchCount    = BrainSymbols.Count(x => NeuronLevel(NeuronPower(x.Strongest)) == 1);
     }
 
-    bool _autoExpandedOnce = false;
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    void CalcStats()
     {
-        if (!firstRender) return;
+        if (State?.Trades == null) return;
+        _totalWins   = State.Trades.Count(t => t.PnlPct >= 0);
+        _totalLosses = State.Trades.Count(t => t.PnlPct < 0);
+        var total    = _totalWins + _totalLosses;
+        _winRatePct  = total > 0 ? (int)(_totalWins * 100.0 / total) : 0;
+    }
 
-        PerformanceOpen = await JS.InvokeAsync<bool>("uiState.get", "ai.performance.open", true);
-        BrainOpen = await JS.InvokeAsync<bool>("uiState.get", "ai.brain.open", true);
-        TradesOpen = await JS.InvokeAsync<bool>("uiState.get", "ai.trades.open", false);
-
-        if (!_autoExpandedOnce)
+    async Task DrawCanvas()
+    {
+        if (!BrainSymbols.Any()) return;
+        try
         {
-            AutoExpandStrongSignals();
-            _autoExpandedOnce = true;
-            StateHasChanged();
+            var pwrs = BrainSymbols.Select(x => NeuronPower(x.Strongest)).Take(60).ToArray();
+            await JS.InvokeVoidAsync("aiNeuralCanvas", "neuralCanvas", pwrs);
         }
+        catch { }
     }
 
-    public void Dispose()
+    void FocusSymbol(string s)
     {
-        Runtime.OnUpdated -= Refresh;
+        PinnedSymbols.Add(s);
+        ExpandedSymbols.Add(s);
+        _brainFilter = "All";
+        StateHasChanged();
+        _ = JS.InvokeVoidAsync("uiScrollToSymbol", s);
     }
 
-    /* ===== SUMMARY ===== */
- 
+    void TogglePin(string s) { if (!PinnedSymbols.Add(s)) PinnedSymbols.Remove(s); }
+    void ToggleExpand(string s) { if (!ExpandedSymbols.Add(s)) ExpandedSymbols.Remove(s); }
 
-    RenderFragment SummaryChip(string title, string value) => @<div class="summary-chip">
-        <span class="label">@title</span>
-        <span class="value">@value</span>
-    </div>;
-
-    RenderFragment RuntimeChip() => @<div class="summary-chip">
-        <span class="label">Runtime</span>
-        <span class="value">@((int)(DateTime.UtcNow - (State?.LoadedAtUtc ?? DateTime.UtcNow)).TotalSeconds)s</span>
-    </div>;
-
-    /* ===== NEURON HELPERS (без логических изменений) ===== */
-
+    // ── HELPERS ──────────────────────────────────────────
     double NeuronPower(AiSelfLearningService.MarketState s)
     {
-        var conf = Math.Clamp((double)s.Confidence, 0, 1);
+        var conf  = Math.Clamp((double)s.Confidence, 0, 1);
         var slope = Math.Min(Math.Abs((double)s.TrendSlopePercent) / 0.30, 1.0);
-        var vol = (double)s.VolatilityPercent;
-        var volScore = vol < 0.3 ? 0.5 : 1.0;
-        return Math.Clamp(conf * 0.6 + slope * 0.25 + volScore * 0.15, 0, 1);
+        var vol   = (double)s.VolatilityPercent;
+        var volSc = vol < 0.3 ? 0.5 : 1.0;
+        return Math.Clamp(conf * 0.6 + slope * 0.25 + volSc * 0.15, 0, 1);
     }
 
-    int NeuronLevel(double p) =>
-        p >= 0.75 ? 3 :
-        p >= 0.50 ? 2 :
-        p >= 0.25 ? 1 : 0;
+    int NeuronLevel(double p) => p >= 0.75 ? 3 : p >= 0.50 ? 2 : p >= 0.25 ? 1 : 0;
 
-    string PulseClass(int l) => l switch
+    string FP(decimal v) => v >= 1000 ? v.ToString("F2") : v >= 1 ? v.ToString("F4") : v.ToString("G5");
+
+    string RegCls(MarketRegime r) => r switch
     {
-        3 => "pulse-fast",
-        2 => "pulse-med",
-        1 => "pulse-slow",
-        _ => "pulse-off"
+        MarketRegime.StrongUpTrend or MarketRegime.UpTrend     => "rc-bull",
+        MarketRegime.StrongDownTrend or MarketRegime.DownTrend => "rc-bear",
+        MarketRegime.Range                                      => "rc-rng",
+        MarketRegime.Squeeze                                    => "rc-sq",
+        _ => "ab-dim"
     };
 
-    string GlowClass(int l) => l switch
+    string RegShort(MarketRegime r) => r switch
     {
-        3 => "glow-strong",
-        2 => "glow-med",
-        1 => "glow-weak",
-        _ => "glow-off"
+        MarketRegime.StrongUpTrend   => "↑↑",
+        MarketRegime.UpTrend         => "↑",
+        MarketRegime.StrongDownTrend => "↓↓",
+        MarketRegime.DownTrend       => "↓",
+        MarketRegime.Range           => "↔",
+        MarketRegime.Squeeze         => "⊞",
+        _ => "—"
     };
 
-    string LiveDotClass(DateTime t)
+    string TfShort(string tf) => tf switch
     {
-        var age = (DateTime.UtcNow - t.ToUniversalTime()).TotalSeconds;
-        if (age <= 10) return "dot-live";
-        if (age <= 30) return "dot-warm";
-        return "dot-cold";
-    }
+        "OneMinute" => "1m", "FiveMinutes" => "5m",
+        "FifteenMinutes" => "15m", "OneHour" => "1h",
+        "FourHour" => "4h", "OneDay" => "1D", _ => tf
+    };
 
-    string WinRateLabel(double wr, int trades)
+    class BrainSymbolGroup
     {
-        if (trades < 3) return "мало данных";
-        if (wr >= 60) return "стабильно";
-        if (wr >= 40) return "нестабильно";
-        return "слабо";
+        public string Symbol { get; set; } = "";
+        public AiSelfLearningService.MarketState Strongest { get; set; } = null!;
+        public List<AiSelfLearningService.MarketState> All { get; set; } = new();
     }
-
-    string WinRateColor(double wr)
-    {
-        if (wr >= 60) return "text-emerald-400";
-        if (wr >= 40) return "text-amber-400";
-        return "text-red-400";
-    }
-    RenderFragment MarketCard(AiSelfLearningService.MarketState st) => @<div class="market-card neuron
-        @(IsPinned(st.Symbol) ? "pinned" : "")
-        @PulseClass(NeuronLevel(NeuronPower(st)))
-        @GlowClass(NeuronLevel(NeuronPower(st)))">
-        <div class="flex justify-between items-center mb-2">
-            <div class="flex items-center gap-2">
-                <span class="pin-icon @(IsPinned(st.Symbol) ? "pinned" : "")"
-                      title="Pin symbol"
-                      @onclick:stopPropagation
-                      @onclick="() => TogglePin(st.Symbol)">📌</span>
-
-                <div>
-                    <b>@st.Symbol</b>
-                    <span class="text-slate-400 text-xs">(@st.Timeframe)</span>
-                </div>
-            </div>
-
-            <span class="reason-badge">@st.Reason</span>
-        </div>
-
-        <div class="telemetry">
-            <span class="telemetry-item">
-                Slope
-                <b class="@(st.TrendSlopePercent >= 0 ? "text-emerald-400" : "text-red-400")">
-                    @(st.TrendSlopePercent >= 0 ? "↑" : "↓")
-                    @Math.Abs(st.TrendSlopePercent).ToString("F3")
-                </b>
-            </span>
-
-            <span class="telemetry-item">
-                Vol <b>@st.VolatilityPercent.ToString("F3")</b>
-            </span>
-
-            <span class="telemetry-item">
-                ATR <b>@st.Atr.ToString("F2")</b>
-            </span>
-        </div>
-
-        <div class="timestamp">
-            @st.Time.ToLocalTime()
-        </div>
-    </div>;
-
 }
-
