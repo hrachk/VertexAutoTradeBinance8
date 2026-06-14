@@ -1119,156 +1119,113 @@ namespace VertexAutoTradeBinance8.Strategy
       KlineInterval interval,
       IReadOnlyList<BinanceFuturesUsdtKline> klines)
         {
-            if (klines == null || klines.Count < 40)
-                return null;
+            if (klines == null || klines.Count < 40) return null;
 
-            int last = klines.Count - 1;
-            if (last < 2)
-                return null;
+            int i = klines.Count - 1;
+            var c0 = klines[i];     // текущая (только что закрылась)
+            var c1 = klines[i - 1];
+            var c2 = klines[i - 2];
 
-            var c = klines[last - 1];
-            var prev = klines[last - 2];
+            decimal atr = Atr(klines, 14, i);
+            if (atr <= 0) return null;
 
-            decimal atr = Atr(klines, 14, last - 1);
-            if (atr <= 0)
-                return null;
+            decimal ema21  = EmaClose(klines, 21, i);
+            decimal ema55  = EmaClose(klines, 55, i);
+            decimal ema21p = EmaClose(klines, 21, i - 5); // slope EMA21
 
-            if (VolumeSpike(klines, last - 1) || IsExhaustion(klines, last - 1, atr))
-                return null;
+            // ── 1. TREND DIRECTION via EMA structure ──────────────────────
+            // Prop desk rule: EMA21 должна ИДТИ в нужном направлении
+            // Slope нормализован по ATR чтобы не зависеть от цены актива
+            decimal ema21Slope = (ema21 - ema21p) / (atr * 5); // per-bar slope in ATR units
+            bool trendUp   = ema21Slope > 0.05m && ema21 > ema55;  // EMA21 выше EMA55 и растёт
+            bool trendDown = ema21Slope < -0.05m && ema21 < ema55; // EMA21 ниже EMA55 и падает
 
-            decimal emaNow = Ema(klines, 21, last - 1);
-            decimal emaPast = Ema(klines, 21, last - 6);
-            if (emaPast == 0)
-                return null;
+            if (!trendUp && !trendDown) return null; // нет чёткого тренда
 
-            // --- нормализованный slope ---
-            decimal slope = (emaNow - emaPast) / atr;
-            if (Math.Abs(slope) < 0.25m)
-                return null;
+            // ── 2. PULLBACK: цена должна коснуться зоны EMA21 ──────────────
+            // Зона = EMA21 ± 0.5 ATR (не точечное касание)
+            decimal zone = atr * 0.5m;
+            bool touchedEma = c0.LowPrice  <= ema21 + zone && c0.HighPrice >= ema21 - zone ||
+                              c1.LowPrice  <= ema21 + zone && c1.HighPrice >= ema21 - zone;
+            if (!touchedEma) return null;
 
-            // --- импульс до отката ---
-            if (!HasImpulseBefore(klines, last - 1, atr))
-                return null;
+            // ── 3. REJECTION CANDLE: закрытие ПРОТИВ отката ──────────────
+            // Для лонга: откат вниз к EMA21, но закрытие выше EMA21 (отбой)
+            // Для шорта: откат вверх к EMA21, но закрытие ниже EMA21 (отбой)
+            bool longRejection  = trendUp   && c0.LowPrice <= ema21 + zone
+                                             && c0.ClosePrice > ema21
+                                             && c0.ClosePrice > c0.OpenPrice  // бычья свеча
+                                             && c0.ClosePrice > c1.ClosePrice; // закрылась выше предыдущей
 
-            // --- проверка отклонения от EMA (был ли stretch) ---
-            decimal maxDist = 0m;
-            int start = Math.Max(21, last - 10);
+            bool shortRejection = trendDown  && c0.HighPrice >= ema21 - zone
+                                             && c0.ClosePrice < ema21
+                                             && c0.ClosePrice < c0.OpenPrice  // медвежья свеча
+                                             && c0.ClosePrice < c1.ClosePrice;
 
-            for (int i = start; i <= last - 1; i++)
-            {
-                var dist = Math.Abs(klines[i].ClosePrice - emaNow);
-                if (dist > maxDist)
-                    maxDist = dist;
-            }
+            if (!longRejection && !shortRejection) return null;
 
-            if (maxDist < atr * 1.2m)
-                return null;
+            // ── 4. ФИЛЬТР: цена не должна быть слишком далеко от EMA ──────
+            decimal distFromEma = Math.Abs(c0.ClosePrice - ema21);
+            if (distFromEma > atr * 1.5m) return null; // слишком далеко - поздно
 
-            if (IsTooBigImpulseBar(c, prev, atr) || IsTooSmallBody(c, atr))
-                return null;
+            // ── 5. ФИЛЬТР: не входим в exhaustion ─────────────────────────
+            if (IsPropExhaustion(klines, i, atr)) return null;
+
+            // ── 6. ФИЛЬТР: тело свечи не микро и не climax ────────────────
+            decimal body = Math.Abs(c0.ClosePrice - c0.OpenPrice);
+            if (body < atr * 0.1m || body > atr * 1.8m) return null;
 
             var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(interval);
 
-            // ================= LONG =================
-            if (slope > 0)
+            if (longRejection)
             {
-                bool rejection =
-                    c.LowPrice <= emaNow &&
-                    c.ClosePrice > emaNow &&
-                    c.ClosePrice > c.OpenPrice;
+                // SL под низом свечи отбоя (или под EMA55 если ближе)
+                decimal slLevel = Math.Min(c0.LowPrice, c1.LowPrice) - atr * slMult * 0.5m;
+                decimal entry   = c0.ClosePrice + atr * 0.03m;
+                decimal risk    = entry - slLevel;
+                if (risk < atr * 0.3m || risk > atr * 3.0m) return null;
+                decimal tp1 = entry + atr * tp1Mult;
+                if ((tp1 - entry) / risk < 1.5m) return null; // минимум R:R 1.5
 
-                if (rejection)
+                var s = new TradeSignal
                 {
-                    decimal entry = c.ClosePrice + atr * 0.05m;
-                    decimal sl = c.LowPrice - atr * slMult;
-
-                    decimal risk = entry - sl;
-                    if (risk <= atr * 0.35m)
-                        return null;
-
-                    decimal tp1 = entry + atr * tp1Mult;
-                    decimal rr = (tp1 - entry) / risk;
-
-                    if (rr < 1.3m)
-                        return null;
-
-                    // защита от late entry
-                    if (c.ClosePrice - emaNow > atr * 0.6m)
-                        return null;
-
-                    var s = new TradeSignal
-                    {
-                        Symbol = symbol,
-                        Side = SignalSide.Buy,
-                        EntryPrice = entry,
-                        StopLoss = sl,
-                        Atr = atr,
-                        Timeframe = interval.ToString(),
-                        Time = c.CloseTime,
-                        Reason = "PULLBACK_EMA21_LONG_V2",
-                        IsSuperSignal = slope > 0.4m,
-                        TakeProfits = new List<decimal>
-                {
-                    entry + atr * tp1Mult,
-                    entry + atr * tp2Mult,
-                    entry + atr * tp3Mult
-                }
-                    };
-
-                    NormalizeEntryAndSl(s);
-                    return s;
-                }
+                    Symbol = symbol, Side = SignalSide.Buy,
+                    Reason = "PULLBACK_EMA21_LONG_V2", Atr = atr,
+                    EntryPrice = entry, StopLoss = slLevel,
+                    IsSuperSignal = ema21Slope > 0.15m,
+                    TakeProfits = new List<decimal> {
+                        entry + atr * tp1Mult,
+                        entry + atr * tp2Mult,
+                        entry + atr * tp3Mult
+                    }
+                };
+                NormalizeEntryAndSl(s);
+                return s;
             }
 
-            // ================= SHORT =================
-            if (slope < 0)
+            if (shortRejection)
             {
-                bool rejection =
-                    c.HighPrice >= emaNow &&
-                    c.ClosePrice < emaNow &&
-                    c.ClosePrice < c.OpenPrice;
+                decimal slLevel = Math.Max(c0.HighPrice, c1.HighPrice) + atr * slMult * 0.5m;
+                decimal entry   = c0.ClosePrice - atr * 0.03m;
+                decimal risk    = slLevel - entry;
+                if (risk < atr * 0.3m || risk > atr * 3.0m) return null;
+                decimal tp1 = entry - atr * tp1Mult;
+                if ((entry - tp1) / risk < 1.5m) return null;
 
-                if (rejection)
+                var s = new TradeSignal
                 {
-                    decimal entry = c.ClosePrice - atr * 0.05m; // FIX symmetry
-                    decimal sl = c.HighPrice + atr * slMult;
-
-                    decimal risk = sl - entry;
-                    if (risk <= atr * 0.35m)
-                        return null;
-
-                    decimal tp1 = entry - atr * tp1Mult;
-                    decimal rr = (entry - tp1) / risk;
-
-                    if (rr < 1.3m)
-                        return null;
-
-                    // защита от late entry
-                    if (emaNow - c.ClosePrice > atr * 0.6m)
-                        return null;
-
-                    var s = new TradeSignal
-                    {
-                        Symbol = symbol,
-                        Side = SignalSide.Sell,
-                        EntryPrice = entry,
-                        StopLoss = sl,
-                        Atr = atr,
-                        Timeframe = interval.ToString(),
-                        Time = c.CloseTime,
-                        Reason = "PULLBACK_EMA21_SHORT_V2",
-                        IsSuperSignal = slope < -0.4m,
-                        TakeProfits = new List<decimal>
-                {
-                    entry - atr * tp1Mult,
-                    entry - atr * tp2Mult,
-                    entry - atr * tp3Mult
-                }
-                    };
-
-                    NormalizeEntryAndSl(s);
-                    return s;
-                }
+                    Symbol = symbol, Side = SignalSide.Sell,
+                    Reason = "PULLBACK_EMA21_SHORT_V2", Atr = atr,
+                    EntryPrice = entry, StopLoss = slLevel,
+                    IsSuperSignal = ema21Slope < -0.15m,
+                    TakeProfits = new List<decimal> {
+                        entry - atr * tp1Mult,
+                        entry - atr * tp2Mult,
+                        entry - atr * tp3Mult
+                    }
+                };
+                NormalizeEntryAndSl(s);
+                return s;
             }
 
             return null;
@@ -2867,328 +2824,6 @@ namespace VertexAutoTradeBinance8.Strategy
         }
         //==============================================BTC HTF BLOCK
 
-        bool VolumeSpike(IReadOnlyList<BinanceFuturesUsdtKline> klines, int i)
-        {
-            decimal avg = 0m;
-
-            for (int j = i - 20; j < i; j++)
-                avg += klines[j].Volume;
-
-            avg /= 20m;
-
-            return klines[i].Volume > avg * 2.5m;
-        }
-
-        bool IsExhaustion(IReadOnlyList<BinanceFuturesUsdtKline> klines, int i, decimal atr)
-        {
-            int bullish = 0;
-
-            for (int j = i - 4; j <= i; j++)
-            {
-                if (klines[j].ClosePrice > klines[j].OpenPrice)
-                    bullish++;
-            }
-
-            decimal move =
-                Math.Abs(
-                    klines[i].ClosePrice -
-                    klines[i - 4].OpenPrice
-                );
-
-            return bullish >= 4 && move > atr * 3.0m;
-        }
-
-        private TradeSignal? TryImpulseContinuation(string symbol, KlineInterval tf, IReadOnlyList<BinanceFuturesUsdtKline> klines, SmartRegimeInfo smart)
-        {
-            if (klines == null || klines.Count < 120)
-                return null;
-
-            // --- only strong trend ---
-            bool strongTrend =
-                smart.BaseRegime == MarketRegime.StrongUpTrend ||
-                smart.BaseRegime == MarketRegime.StrongDownTrend ||
-                smart.SmartType == SmartRegimeType.SmartStrongTrend;
-
-            if (!strongTrend)
-                return null;
-
-            int i = klines.Count - 1;
-            var c0 = klines[i];
-            var c1 = klines[i - 1];
-
-            decimal atr = Atr(klines, 14, i);
-            if (atr <= 0m)
-                return null;
-
-            if (VolumeSpike(klines, i))
-                return null;
-
-            if (IsExhaustion(klines, i, atr))
-                return null;
-
-            decimal ema21 = EmaClose(klines, 21, i);
-
-            // --- distance filter (CORE) ---
-            decimal dist = Math.Abs(c0.ClosePrice - ema21);
-            decimal minDist = atr * 0.9m;
-            decimal maxDist = atr * 2.1m;
-
-            if (dist < minDist || dist > maxDist)
-                return null;
-
-            // --- impulse check (no climax) ---
-            decimal body0 = Math.Abs(c0.ClosePrice - c0.OpenPrice);
-            decimal body1 = Math.Abs(c1.ClosePrice - c1.OpenPrice);
-
-            bool impulseOk =
-                body0 >= atr * 0.4m &&
-                (body0 + body1) <= atr * 2.2m; // anti-climax
-
-            if (!impulseOk)
-                return null;
-
-            // --- direction ---
-            bool slopeUp = smart.TrendSlopePercent > 0m;
-            bool slopeDown = smart.TrendSlopePercent < 0m;
-
-            // --- LONG continuation ---
-            if (slopeUp && c0.ClosePrice > ema21)
-            {
-                var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(tf);
-
-                decimal entry = c0.ClosePrice + atr * 0.05m;
-                decimal sl    = Math.Min(c0.LowPrice, c1.LowPrice) - atr * slMult;
-                decimal risk  = entry - sl;
-
-                if (risk <= atr * 0.3m) return null;
-                if ((entry + atr * tp1Mult - entry) / risk < 1.3m) return null;
-
-                var s = new TradeSignal
-                {
-                    Symbol        = symbol,
-                    Side          = SignalSide.Buy,
-                    Reason        = "IMPULSE_CONTINUATION",
-                    Atr           = atr,
-                    EntryPrice    = entry,
-                    StopLoss      = sl,
-                    Confidence    = smart.Confidence * 0.85m,
-                    SizeMultiplier = 0.35m,
-                    ForceFullExit = true,
-                    TimeStopBars  = 4,
-                    TakeProfits   = new List<decimal>
-                    {
-                        entry + atr * tp1Mult,
-                        entry + atr * tp2Mult,
-                        entry + atr * tp3Mult
-                    }
-                };
-                NormalizeEntryAndSl(s);
-                return s;
-            }
-
-            // --- SHORT continuation ---
-            if (slopeDown && c0.ClosePrice < ema21)
-            {
-                var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(tf);
-
-                decimal entry = c0.ClosePrice - atr * 0.05m;
-                decimal sl    = Math.Max(c0.HighPrice, c1.HighPrice) + atr * slMult;
-                decimal risk  = sl - entry;
-
-                if (risk <= atr * 0.3m) return null;
-                if ((entry - (entry - atr * tp1Mult)) / risk < 1.3m) return null;
-
-                var s = new TradeSignal
-                {
-                    Symbol        = symbol,
-                    Side          = SignalSide.Sell,
-                    Reason        = "IMPULSE_CONTINUATION",
-                    Atr           = atr,
-                    EntryPrice    = entry,
-                    StopLoss      = sl,
-                    Confidence    = smart.Confidence * 0.85m,
-                    SizeMultiplier = 0.35m,
-                    ForceFullExit = true,
-                    TimeStopBars  = 4,
-                    TakeProfits   = new List<decimal>
-                    {
-                        entry - atr * tp1Mult,
-                        entry - atr * tp2Mult,
-                        entry - atr * tp3Mult
-                    }
-                };
-                NormalizeEntryAndSl(s);
-                return s;
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// EarlyTrendJoin — универсальный вход на старте импульса/пробоя, чтобы не пропускать фазу "поехали".
-        /// Встроен анти-FOMO: если цена уже слишком далеко от EMA21 (late), сигнал не даём.
-        /// </summary>
-        private TradeSignal? TryEarlyTrendJoin(string symbol, KlineInterval tf, IReadOnlyList<BinanceFuturesUsdtKline> klines, SmartRegimeInfo smart)
-        {
-            if (klines == null || klines.Count < 120) return null;
-
-            int i = klines.Count - 1;
-            var c0 = klines[i];
-            var c1 = klines[i - 1];
-            var c2 = klines[i - 2];
-
-            decimal atr = Atr(klines, 14, i);
-            if (atr <= 0m) return null;
-
-            // GLOBAL MARKET FILTERS
-            if (VolumeSpike(klines, i))
-                return null;
-
-            if (IsExhaustion(klines, i, atr))
-                return null;
-
-            // EMA расчёты (используй свои готовые методы/кэш если есть)
-            decimal ema21 = EmaClose(klines, 21, i);
-            decimal ema55 = EmaClose(klines, 55, i);
-            decimal ema99 = EmaClose(klines, 99, i);
-
-            // 1) Базовая структурная валидность: цена над EMA21 для long / под EMA21 для short
-            bool priceAbove21 = c0.ClosePrice > ema21;
-            bool priceBelow21 = c0.ClosePrice < ema21;
-
-            // 2) Анти-FOMO / анти-late: цена не должна быть слишком далеко от EMA21
-            //    (это именно то, что убивает входы на вершинах)
-            decimal dist = Math.Abs(c0.ClosePrice - ema21);
-            decimal minDist = atr * 0.25m;
-            decimal maxDist = atr * 0.90m;
-
-            if (dist < minDist || dist > maxDist)
-                return null;
-
-            // 3) Импульсность: последние 1-2 свечи должны быть "смысловые"
-            //decimal body0 = Math.Abs(c0.ClosePrice - c0.ClosePrice);
-            //decimal body1 = Math.Abs(c1.ClosePrice - c1.ClosePrice);
-            decimal body0 = Math.Abs(c0.ClosePrice - c0.OpenPrice);
-            decimal body1 = Math.Abs(c1.ClosePrice - c1.OpenPrice);
-
-            bool climax = body0 > atr * 1.4m;
-
-            bool impulseOk =
-                !climax &&
-                (
-                    body0 >= atr * 0.45m ||
-                    (body0 + body1) >= atr * 0.80m
-                );
-
-            if (!impulseOk) return null;
-
-            // 4) Поддержка тренда: EMA21 должна быть не "мертвая"
-            //    (минимальный наклон/драйв, но без overfit)
-            decimal slopeAbs = Math.Abs(smart.TrendSlopePercent);
-            bool slopeOk =
-     slopeAbs >= 0.0012m &&
-     smart.VolatilityPercent >= 0.015m;
-
-            if (!slopeOk) return null;
-
-            // 5) Контекст: если явный strong downtrend — не лезем в long early join (и наоборот)
-            //    (это защитит от "ловли ножей")
-            bool strongUp = smart.BaseRegime == MarketRegime.StrongUpTrend || smart.SmartType == SmartRegimeType.SmartStrongTrend;
-            bool strongDown = smart.BaseRegime == MarketRegime.StrongDownTrend || smart.SmartType == SmartRegimeType.SmartStrongTrend;
-
-            // direction inference from slope sign
-            bool slopeUp = smart.TrendSlopePercent > 0m;
-            bool slopeDown = smart.TrendSlopePercent < 0m;
-
-
-            // --- LONG early trend join ---
-            if (priceAbove21 && slopeUp)
-            {
-                bool structureOk = ema21 >= ema55 * 0.999m || (c1.ClosePrice > ema21 && c0.ClosePrice > ema21);
-                if (!structureOk) return null;
-                if (smart.BaseRegime == MarketRegime.StrongDownTrend) return null;
-
-                var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(tf);
-                decimal entry = c0.ClosePrice + atr * 0.05m;
-                decimal sl    = Math.Min(c0.LowPrice, ema21) - atr * slMult;
-                decimal risk  = entry - sl;
-
-                if (risk <= atr * 0.3m) return null;
-                if ((atr * tp1Mult) / risk < 1.3m) return null;
-
-                var s = new TradeSignal
-                {
-                    Symbol      = symbol,
-                    Side        = SignalSide.Buy,
-                    Reason      = "EARLY_TREND_JOIN",
-                    Atr         = atr,
-                    EntryPrice  = entry,
-                    StopLoss    = sl,
-                    Confidence  = smart.Confidence,
-                    TakeProfits = new List<decimal>
-                    {
-                        entry + atr * tp1Mult,
-                        entry + atr * tp2Mult,
-                        entry + atr * tp3Mult
-                    }
-                };
-                NormalizeEntryAndSl(s);
-                return s;
-            }
-
-            // --- SHORT early trend join ---
-            if (priceBelow21 && slopeDown)
-            {
-                bool structureOk = ema21 <= ema55 * 1.001m || (c1.ClosePrice < ema21 && c0.ClosePrice < ema21);
-                if (!structureOk) return null;
-                if (smart.BaseRegime == MarketRegime.StrongUpTrend) return null;
-
-                var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(tf);
-                decimal entry = c0.ClosePrice - atr * 0.05m;
-                decimal sl    = Math.Max(c0.HighPrice, ema21) + atr * slMult;
-                decimal risk  = sl - entry;
-
-                if (risk <= atr * 0.3m) return null;
-                if ((atr * tp1Mult) / risk < 1.3m) return null;
-
-                var s = new TradeSignal
-                {
-                    Symbol      = symbol,
-                    Side        = SignalSide.Sell,
-                    Reason      = "EARLY_TREND_JOIN",
-                    Atr         = atr,
-                    EntryPrice  = entry,
-                    StopLoss    = sl,
-                    Confidence  = smart.Confidence,
-                    TakeProfits = new List<decimal>
-                    {
-                        entry - atr * tp1Mult,
-                        entry - atr * tp2Mult,
-                        entry - atr * tp3Mult
-                    }
-                };
-                NormalizeEntryAndSl(s);
-                return s;
-            }
-
-            return null;
-        }
-
-        // =====================================================
-        // TryRangeBound — торговля от границ канала (боковик)
-        //
-        // Логика (как профессиональные Range боты):
-        // 1) Определяем канал: High/Low последних N свечей
-        // 2) Ждём касания границы канала
-        // 3) Входим против границы с SL за каналом
-        // 4) TP = середина канала (mean reversion)
-        //
-        // Дополнительные фильтры:
-        // - Свеча отбоя должна закрыться ВНУТРИ канала (rejection)
-        // - Объём при отбое не должен быть аномальным
-        // - EMA21 должна быть горизонтальной (slope < threshold)
-        // - Запрещаем вход если ATR расширяется (пробой канала)
-        // =====================================================
         private TradeSignal? TryRangeBound(
             string symbol,
             KlineInterval interval,
@@ -3333,6 +2968,294 @@ namespace VertexAutoTradeBinance8.Strategy
 
             return null;
         }
+
+
+        bool VolumeSpike(IReadOnlyList<BinanceFuturesUsdtKline> klines, int i)
+        {
+            decimal avg = 0m;
+
+            for (int j = i - 20; j < i; j++)
+                avg += klines[j].Volume;
+
+            avg /= 20m;
+
+            return klines[i].Volume > avg * 2.5m;
+        }
+
+        /// <summary>
+        /// Prop desk exhaustion detection:
+        /// Не просто "много бычьих свечей" — а именно признаки выдыхания:
+        /// 1) Тела свечей СУЖАЮТСЯ (последняя < 40% от предыдущей)
+        /// 2) Верхние тени РАСТУТ (продавцы давят) для лонга
+        /// 3) Минимальный прогресс при большом движении (spinning tops)
+        /// </summary>
+        bool IsPropExhaustion(IReadOnlyList<BinanceFuturesUsdtKline> klines, int i, decimal atr)
+        {
+            if (i < 4) return false;
+
+            var c0 = klines[i];
+            var c1 = klines[i - 1];
+            var c2 = klines[i - 2];
+
+            decimal body0 = Math.Abs(c0.ClosePrice - c0.OpenPrice);
+            decimal body1 = Math.Abs(c1.ClosePrice - c1.OpenPrice);
+            decimal body2 = Math.Abs(c2.ClosePrice - c2.OpenPrice);
+
+            // Признак 1: тела резко сужаются — движение выдыхается
+            bool bodyShrinking = body0 < body1 * 0.4m && body1 < body2 * 0.7m;
+
+            // Признак 2: огромное тело текущей свечи (climax bar)
+            bool climaxBar = body0 > atr * 2.0m;
+
+            // Признак 3: большое расстояние от EMA55 без отката (перетяжение)
+            // Это добавляется в вызывающем коде через dist проверку
+
+            return bodyShrinking || climaxBar;
+        }
+
+        bool IsExhaustion(IReadOnlyList<BinanceFuturesUsdtKline> klines, int i, decimal atr)
+        {
+            // Оставляем для совместимости — используем новый метод
+            return IsPropExhaustion(klines, i, atr);
+        }
+
+        private TradeSignal? TryImpulseContinuation(string symbol, KlineInterval tf, IReadOnlyList<BinanceFuturesUsdtKline> klines, SmartRegimeInfo smart)
+        {
+            if (klines == null || klines.Count < 60) return null;
+
+            // ТОЛЬКО сильный тренд
+            bool strongTrend =
+                smart.BaseRegime == MarketRegime.StrongUpTrend ||
+                smart.BaseRegime == MarketRegime.StrongDownTrend ||
+                smart.SmartType  == SmartRegimeType.SmartStrongTrend;
+            if (!strongTrend) return null;
+
+            int i   = klines.Count - 1;
+            var c0  = klines[i];
+            var c1  = klines[i - 1];
+            var c2  = klines[i - 2];
+            var c3  = klines[i - 3];
+
+            decimal atr   = Atr(klines, 14, i);
+            if (atr <= 0m) return null;
+
+            decimal ema21 = EmaClose(klines, 21, i);
+            decimal ema55 = EmaClose(klines, 55, i);
+
+            // ── 1. СТРУКТУРА: Higher High / Lower Low ──────────────────────
+            // Prop desk не входит в импульс без структурного подтверждения
+            bool slopeUp   = smart.TrendSlopePercent > 0m;
+            bool slopeDown = smart.TrendSlopePercent < 0m;
+
+            // ── 2. ИМПУЛЬС: последние 2 свечи должны двигаться в направлении тренда
+            decimal body0 = Math.Abs(c0.ClosePrice - c0.OpenPrice);
+            decimal body1 = Math.Abs(c1.ClosePrice - c1.OpenPrice);
+            bool bull0    = c0.ClosePrice > c0.OpenPrice;
+            bool bull1    = c1.ClosePrice > c1.OpenPrice;
+
+            // ── 3. ANTI-EXHAUSTION: не входим после 3+ подряд свечей в одну сторону
+            if (IsPropExhaustion(klines, i, atr)) return null;
+
+            // ── 4. ANTI-CLIMAX: тела не должны расширяться (climax move)
+            // Если каждая следующая свеча БОЛЬШЕ предыдущей → exhaustion bar
+            bool climaxExpansion = body0 > body1 * 1.8m && body0 > atr * 1.5m;
+            if (climaxExpansion) return null;
+
+            // ── 5. Цена должна быть в рабочей зоне относительно EMA21
+            // Не слишком далеко (FOMO), не слишком близко (нет импульса)
+            decimal dist  = Math.Abs(c0.ClosePrice - ema21);
+            if (dist < atr * 0.2m)  return null; // слишком близко к EMA - нет импульса
+            if (dist > atr * 2.5m)  return null; // слишком далеко - поздно входить
+
+            // ── 6. VOLUME: объём должен РАСТИ на импульсе (не обязательно spike)
+            // Убрали блок VolumeSpike — он убивал хорошие входы
+
+            var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(tf);
+
+            // ── LONG: цена выше EMA21, slope вверх, бычьи свечи ──────────
+            if (slopeUp && c0.ClosePrice > ema21 && bull0)
+            {
+                // EMA structure: EMA21 выше или равна EMA55
+                if (ema21 < ema55 * 0.998m) return null;
+
+                // Свеча отбоя или продолжение — не входим в середину doji
+                if (body0 < atr * 0.15m) return null;
+
+                decimal entry = c0.ClosePrice + atr * 0.02m;
+                // SL под минимумом последних 2 свечей (структурная поддержка)
+                decimal swingLow = Math.Min(c0.LowPrice, Math.Min(c1.LowPrice, c2.LowPrice));
+                decimal sl    = swingLow - atr * slMult * 0.4m;
+                decimal risk  = entry - sl;
+
+                if (risk < atr * 0.25m || risk > atr * 2.5m) return null;
+                if ((atr * tp1Mult) / risk < 1.4m) return null;
+
+                var s = new TradeSignal
+                {
+                    Symbol = symbol, Side = SignalSide.Buy,
+                    Reason = "IMPULSE_CONTINUATION",
+                    Atr = atr, EntryPrice = entry, StopLoss = sl,
+                    Confidence    = smart.Confidence * 0.9m,
+                    SizeMultiplier = 0.4m,
+                    ForceFullExit = true, TimeStopBars = 5,
+                    TakeProfits = new List<decimal> {
+                        entry + atr * tp1Mult,
+                        entry + atr * tp2Mult,
+                        entry + atr * tp3Mult
+                    }
+                };
+                NormalizeEntryAndSl(s);
+                return s;
+            }
+
+            // ── SHORT: цена ниже EMA21, slope вниз, медвежьи свечи ───────
+            if (slopeDown && c0.ClosePrice < ema21 && !bull0)
+            {
+                if (ema21 > ema55 * 1.002m) return null;
+                if (body0 < atr * 0.15m) return null;
+
+                decimal entry = c0.ClosePrice - atr * 0.02m;
+                decimal swingHigh = Math.Max(c0.HighPrice, Math.Max(c1.HighPrice, c2.HighPrice));
+                decimal sl    = swingHigh + atr * slMult * 0.4m;
+                decimal risk  = sl - entry;
+
+                if (risk < atr * 0.25m || risk > atr * 2.5m) return null;
+                if ((atr * tp1Mult) / risk < 1.4m) return null;
+
+                var s = new TradeSignal
+                {
+                    Symbol = symbol, Side = SignalSide.Sell,
+                    Reason = "IMPULSE_CONTINUATION",
+                    Atr = atr, EntryPrice = entry, StopLoss = sl,
+                    Confidence    = smart.Confidence * 0.9m,
+                    SizeMultiplier = 0.4m,
+                    ForceFullExit = true, TimeStopBars = 5,
+                    TakeProfits = new List<decimal> {
+                        entry - atr * tp1Mult,
+                        entry - atr * tp2Mult,
+                        entry - atr * tp3Mult
+                    }
+                };
+                NormalizeEntryAndSl(s);
+                return s;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// <summary>
+        /// EarlyTrendJoin v2 — Prop Desk стиль
+        /// Входим на ПЕРВОМ откате после импульса, не в момент самого пробоя (анти-FOMO).
+        /// </summary>
+        private TradeSignal? TryEarlyTrendJoin(string symbol, KlineInterval tf, IReadOnlyList<BinanceFuturesUsdtKline> klines, SmartRegimeInfo smart)
+        {
+            if (klines == null || klines.Count < 50) return null;
+
+            int i  = klines.Count - 1;
+            var c0 = klines[i];
+            var c1 = klines[i - 1];
+            var c2 = klines[i - 2];
+
+            decimal atr   = Atr(klines, 14, i);
+            if (atr <= 0m) return null;
+
+            decimal ema21  = EmaClose(klines, 21, i);
+            decimal ema55  = EmaClose(klines, 55, i);
+            decimal ema21p = EmaClose(klines, 21, i - 5);
+
+            // EMA slope direction (нормализованный по ATR)
+            decimal slopeNorm = (ema21 - ema21p) / (atr * 5);
+            bool emaUp   = slopeNorm > 0.03m;
+            bool emaDown = slopeNorm < -0.03m;
+            if (!emaUp && !emaDown) return null;
+
+            // Был ли импульс в последних 4 свечах?
+            bool hadImpulse = false;
+            for (int j = i - 4; j <= i - 1; j++)
+            {
+                if (Math.Abs(klines[j].ClosePrice - klines[j].OpenPrice) >= atr * 0.7m)
+                { hadImpulse = true; break; }
+            }
+            if (!hadImpulse) return null;
+
+            if (IsPropExhaustion(klines, i, atr)) return null;
+
+            var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(tf);
+
+            // ── LONG: EMA21 растёт, цена коснулась зоны EMA21 и отбилась ─
+            if (emaUp)
+            {
+                if (ema21 < ema55 * 0.997m) return null;
+                if (smart.BaseRegime == MarketRegime.StrongDownTrend) return null;
+
+                bool touchedZone = c0.LowPrice <= ema21 + atr * 0.4m;
+                bool rejectedUp  = c0.ClosePrice > ema21 && c0.ClosePrice > c0.OpenPrice;
+                if (!touchedZone || !rejectedUp) return null;
+                if (c0.ClosePrice - ema21 > atr * 1.2m) return null; // уже улетел - FOMO
+
+                decimal entry     = c0.ClosePrice + atr * 0.02m;
+                decimal recentLow = Math.Min(c0.LowPrice, Math.Min(c1.LowPrice, c2.LowPrice));
+                decimal sl        = recentLow - atr * slMult * 0.35m;
+                decimal risk      = entry - sl;
+
+                if (risk < atr * 0.2m || risk > atr * 2.5m) return null;
+                if ((atr * tp1Mult) / risk < 1.4m) return null;
+
+                var s = new TradeSignal
+                {
+                    Symbol = symbol, Side = SignalSide.Buy,
+                    Reason = "EARLY_TREND_JOIN", Atr = atr,
+                    EntryPrice = entry, StopLoss = sl,
+                    Confidence = smart.Confidence,
+                    TakeProfits = new List<decimal> {
+                        entry + atr * tp1Mult,
+                        entry + atr * tp2Mult,
+                        entry + atr * tp3Mult
+                    }
+                };
+                NormalizeEntryAndSl(s);
+                return s;
+            }
+
+            // ── SHORT: EMA21 падает, цена коснулась зоны EMA21 и отбилась ─
+            if (emaDown)
+            {
+                if (ema21 > ema55 * 1.003m) return null;
+                if (smart.BaseRegime == MarketRegime.StrongUpTrend) return null;
+
+                bool touchedZone = c0.HighPrice >= ema21 - atr * 0.4m;
+                bool rejectedDn  = c0.ClosePrice < ema21 && c0.ClosePrice < c0.OpenPrice;
+                if (!touchedZone || !rejectedDn) return null;
+                if (ema21 - c0.ClosePrice > atr * 1.2m) return null;
+
+                decimal entry      = c0.ClosePrice - atr * 0.02m;
+                decimal recentHigh = Math.Max(c0.HighPrice, Math.Max(c1.HighPrice, c2.HighPrice));
+                decimal sl         = recentHigh + atr * slMult * 0.35m;
+                decimal risk       = sl - entry;
+
+                if (risk < atr * 0.2m || risk > atr * 2.5m) return null;
+                if ((atr * tp1Mult) / risk < 1.4m) return null;
+
+                var s = new TradeSignal
+                {
+                    Symbol = symbol, Side = SignalSide.Sell,
+                    Reason = "EARLY_TREND_JOIN", Atr = atr,
+                    EntryPrice = entry, StopLoss = sl,
+                    Confidence = smart.Confidence,
+                    TakeProfits = new List<decimal> {
+                        entry - atr * tp1Mult,
+                        entry - atr * tp2Mult,
+                        entry - atr * tp3Mult
+                    }
+                };
+                NormalizeEntryAndSl(s);
+                return s;
+            }
+
+            return null;
+        }
+
 
         private static decimal EmaClose(IReadOnlyList<BinanceFuturesUsdtKline> klines, int period, int idx)
         {

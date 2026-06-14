@@ -1,6 +1,7 @@
 @page "/missed-trades"
 @using VertexAutoTradeBinance8.Web.Services
 @using VertexAutoTradeBinance8.Web.Models
+@using VertexAutoTradeBinance8.Models
 @inject MissedTradeFileService Svc
 @implements IDisposable
 
@@ -8,31 +9,38 @@
 
 <div class="sl">
 
-    <!-- TOP BAR -->
-    <div class="sl-bar">
-        <div class="sl-bar-left">
-            <span class="sl-title">SIGNAL LOG</span>
-            <span class="sl-count">@_filtered.Count signals</span>
+    <!-- ═══ HEADER ══════════════════════════════════════════════ -->
+    <div class="sl-header">
+        <div class="sl-header-left">
+            <div class="sl-title">📡 SIGNAL LOG</div>
+            <div class="sl-sub">Blocked & failed trade signals · Auto-refresh 5s</div>
         </div>
-        <div class="sl-bar-right">
-            <div class="sl-stat @(_all.Count(r=>r.Side=="Buy")>_all.Count(r=>r.Side=="Sell")?"sl-stat-up":"sl-stat-dn")">
-                <span>▲ @_all.Count(r=>r.Side=="Buy") Long</span>
+        <div class="sl-header-stats">
+            <div class="sl-hs">
+                <div class="sl-hs-val">@_all.Count</div>
+                <div class="sl-hs-lab">TOTAL</div>
             </div>
-            <div class="sl-stat sl-stat-dn">
-                <span>▼ @_all.Count(r=>r.Side=="Sell") Short</span>
+            <div class="sl-hs sl-hs-up">
+                <div class="sl-hs-val">@_all.Count(r=>r.Side=="Buy")</div>
+                <div class="sl-hs-lab">LONG ▲</div>
             </div>
-            <div class="sl-stat">
-                <span>🎯 @_all.Count(r=>r.Confidence>=70) High conf</span>
+            <div class="sl-hs sl-hs-dn">
+                <div class="sl-hs-val">@_all.Count(r=>r.Side=="Sell")</div>
+                <div class="sl-hs-lab">SHORT ▼</div>
             </div>
-            <div class="sl-stat sl-stat-err">
-                <span>⚠ @_all.Count(r=>r.Reason.Contains("Exec")||r.Reason.Contains("Failed")) Exec fail</span>
+            <div class="sl-hs sl-hs-hi">
+                <div class="sl-hs-val">@_all.Count(r=>r.Confidence>=70)</div>
+                <div class="sl-hs-lab">HIGH CONF</div>
+            </div>
+            <div class="sl-hs sl-hs-err">
+                <div class="sl-hs-val">@_execFail</div>
+                <div class="sl-hs-lab">EXEC FAIL</div>
             </div>
         </div>
     </div>
 
-    <!-- TOOLBAR -->
+    <!-- ═══ TOOLBAR ═════════════════════════════════════════════ -->
     <div class="sl-toolbar">
-        <!-- Filter chips -->
         <div class="sl-chips">
             @foreach (var f in _filters)
             {
@@ -43,141 +51,152 @@
                 </button>
             }
         </div>
-        <!-- Search + sort -->
         <div class="sl-tools">
             <div class="sl-search-box">
-                <span class="sl-search-icon">⌕</span>
-                <input class="sl-search" placeholder="symbol, reason..."
+                <span>⌕</span>
+                <input class="sl-search" placeholder="Search symbol or reason..."
                        value="@_q" @oninput="OnSearch" />
                 @if (!string.IsNullOrEmpty(_q) || !string.IsNullOrEmpty(_symFilter))
                 {
-                    <button class="sl-search-clear" @onclick="ClearSearch">✕</button>
+                    <button class="sl-clear" @onclick="ClearSearch">✕</button>
                 }
             </div>
             <select class="sl-select" @onchange="OnSort">
                 <option value="time">Newest first</option>
                 <option value="conf">Highest confidence</option>
-                <option value="sym">By symbol A→Z</option>
+                <option value="sym">By symbol</option>
             </select>
         </div>
     </div>
 
-    @if (_all.Count == 0)
+    <!-- ═══ BODY ═════════════════════════════════════════════════ -->
+    @if (!_all.Any())
     {
         <div class="sl-empty">
             <div class="sl-empty-icon">📭</div>
-            <div class="sl-empty-title">No signals recorded</div>
-            <div class="sl-empty-sub">Blocked and failed signals appear here automatically</div>
+            <div class="sl-empty-title">No signals recorded yet</div>
+            <div class="sl-empty-sub">Blocked and failed signals appear here automatically as the bot runs</div>
         </div>
     }
     else
     {
-        <div class="sl-body">
+        <div class="sl-layout">
 
-            <!-- SIGNAL CARDS -->
+            <!-- ── FEED ──────────────────────────── -->
             <div class="sl-feed">
-                @if (_symFilter != "")
+
+                <!-- Symbol filter banner -->
+                @if (!string.IsNullOrEmpty(_symFilter))
                 {
-                    <div class="sl-feed-banner">
-                        Filtering: <b>@_symFilter</b>
-                        <button @onclick="()=>{_symFilter=string.Empty;Refilter();}">✕ clear</button>
+                    <div class="sl-banner">
+                        Showing only <b>@_symFilter</b> — @_filtered.Count signals
+                        <button @onclick="()=>{_symFilter=string.Empty;Refilter();}">✕ Clear</button>
                     </div>
                 }
+
+                <div class="sl-feed-meta">
+                    Showing <b>@Math.Min(_filtered.Count, 60)</b> of <b>@_filtered.Count</b> signals
+                    @if (_filtered.Count > 60) { <span class="sl-dim"> · use filters to narrow down</span> }
+                </div>
 
                 @foreach (var r in _filtered.Take(60))
                 {
                     bool isLong = r.Side == "Buy";
                     bool isSel  = _selId == SigId(r);
-                    var  regStr = RegStr(r.Regime);
-                    var  confCls = r.Confidence >= 70 ? "c-hi" : r.Confidence >= 50 ? "c-mid" : "c-lo";
+                    string ccls = r.Confidence >= 70 ? "cc-hi" : r.Confidence >= 50 ? "cc-mid" : "cc-lo";
 
-                    <div class="sl-card @(isSel?"sl-card-sel":"") @(isLong?"sl-card-long":"sl-card-short")"
+                    <div class="sl-card @(isSel?"sl-sel":"") @(isLong?"sl-long":"sl-short")"
                          @onclick="()=>Toggle(r)">
 
-                        <!-- LINE 1: symbol · side · time · block reason -->
-                        <div class="sl-card-head">
-                            <span class="sl-csym @(isLong?"cu":"cd")">@r.Symbol</span>
-                            <span class="sl-cside @(isLong?"badge-l":"badge-s")">
-                                @(isLong?"▲ LONG":"▼ SHORT")
-                            </span>
-                            <span class="sl-cstage">@r.Stage</span>
-                            <div class="sl-head-right">
-                                <span class="sl-creason @ReasonCls(r.Reason)">@RShort(r.Reason)</span>
-                                <span class="sl-ctime">@r.Time.ToLocalTime().ToString("dd.MM.yy  HH:mm:ss")</span>
+                        <!-- ── ROW 1: Symbol + Side + Time + Reason ── -->
+                        <div class="sl-row1">
+                            <div class="sl-row1-left">
+                                <!-- Symbol — biggest text, most important -->
+                                <span class="sl-sym @(isLong?"sl-up":"sl-dn")">@r.Symbol</span>
+                                <!-- Side badge -->
+                                <span class="sl-side @(isLong?"side-l":"side-s")">
+                                    @(isLong ? "▲ LONG" : "▼ SHORT")
+                                </span>
+                                <!-- Stage -->
+                                <span class="sl-stage">@r.Stage</span>
+                            </div>
+                            <div class="sl-row1-right">
+                                <!-- Block reason — color coded -->
+                                <span class="sl-reason-badge @RCls(r.Reason)" title="@r.Reason">
+                                    @SR(r.Reason)
+                                </span>
+                                <!-- Time — readable size -->
+                                <span class="sl-time">@r.Time.ToLocalTime().ToString("dd.MM  HH:mm:ss")</span>
                             </div>
                         </div>
 
-                        <!-- LINE 2: confidence bar -->
-                        <div class="sl-conf-row">
-                            <div class="sl-conf-track">
-                                <div class="sl-conf-fill @confCls" style="width:@r.Confidence%"></div>
+                        <!-- ── ROW 2: Confidence bar + Regime ── -->
+                        <div class="sl-row2">
+                            <div class="sl-conf-wrap">
+                                <div class="sl-conf-track">
+                                    <div class="sl-conf-bar @ccls" style="width:@r.Confidence%"></div>
+                                </div>
+                                <span class="sl-conf-pct @ccls">@r.Confidence%</span>
                             </div>
-                            <span class="sl-conf-val @confCls">@r.Confidence%</span>
-                            <span class="sl-regime @RegimeCls(r.Regime)">@regStr</span>
+                            <span class="sl-regime @RegCls(r.Regime)">@RegStr(r.Regime)</span>
                         </div>
 
-                        <!-- LINE 3: key numbers -->
+                        <!-- ── ROW 3: Key numbers ── -->
                         <div class="sl-nums">
                             <div class="sl-num">
-                                <span class="sl-nl">Entry</span>
-                                <span class="sl-nv">@FP(r.Entry)</span>
+                                <div class="sl-nl">Entry Price</div>
+                                <div class="sl-nv">@FP(r.Entry)</div>
                             </div>
                             <div class="sl-num">
-                                <span class="sl-nl">SL</span>
-                                <span class="sl-nv cd">@FP(r.StopLoss)</span>
+                                <div class="sl-nl">Stop Loss</div>
+                                <div class="sl-nv sl-dn">@FP(r.StopLoss)</div>
                             </div>
                             @if (r.TakeProfits.Count > 0)
                             {
-                                var pct = r.Entry > 0
-                                    ? (Math.Abs(r.TakeProfits[0] - r.Entry) / r.Entry * 100m).ToString("F1") + "%"
-                                    : "";
+                                var tp1 = r.TakeProfits[0];
+                                var pct = r.Entry > 0 ? Math.Abs(tp1 - r.Entry) / r.Entry * 100m : 0m;
                                 <div class="sl-num">
-                                    <span class="sl-nl">TP1</span>
-                                    <span class="sl-nv cu">@FP(r.TakeProfits[0]) <span class="sl-tpct">+@pct</span></span>
+                                    <div class="sl-nl">TP1</div>
+                                    <div class="sl-nv sl-up">@FP(tp1) <span class="sl-tpct">+@pct.ToString("F1")%</span></div>
                                 </div>
                             }
                             <div class="sl-num">
-                                <span class="sl-nl">ATR</span>
-                                <span class="sl-nv">@r.ATR.ToString("G3")</span>
+                                <div class="sl-nl">ATR</div>
+                                <div class="sl-nv">@r.ATR.ToString("G3")</div>
                             </div>
                             <div class="sl-num">
-                                <span class="sl-nl">Vol%</span>
-                                <span class="sl-nv">@r.Vol.ToString("P1")</span>
+                                <div class="sl-nl">Volatility</div>
+                                <div class="sl-nv">@r.Vol.ToString("P1")</div>
                             </div>
                             <div class="sl-num">
-                                <span class="sl-nl">Balance</span>
-                                <span class="sl-nv @(r.FreeBalance<5?"cd":"")">$@r.FreeBalance.ToString("F1")</span>
+                                <div class="sl-nl">Balance</div>
+                                <div class="sl-nv @(r.FreeBalance<5?"sl-dn":"")">$@r.FreeBalance.ToString("F1")</div>
                             </div>
-                            @if (r.TakeProfits.Count > 1)
-                            {
-                                <div class="sl-num">
-                                    <span class="sl-nl">TPs</span>
-                                    <span class="sl-nv">@r.TakeProfits.Count</span>
-                                </div>
-                            }
                         </div>
 
-                        <!-- EXPANDED DETAIL -->
+                        <!-- ── EXPANDED DETAIL ── -->
                         @if (isSel)
                         {
                             <div class="sl-detail" @onclick:stopPropagation="true">
                                 <div class="sl-detail-grid">
-                                    <div class="sl-drow"><span class="sl-dl">Stage</span><span class="sl-dv">@r.Stage</span></div>
-                                    <div class="sl-drow"><span class="sl-dl">Regime</span><span class="sl-dv @RegimeCls(r.Regime)">@RegStr(r.Regime)</span></div>
-                                    <div class="sl-drow"><span class="sl-dl">Smart Type</span><span class="sl-dv">@(r.SmartType.Length>0?r.SmartType:"—")</span></div>
-                                    <div class="sl-drow"><span class="sl-dl">Slope</span><span class="sl-dv">@r.Slope.ToString("G3")</span></div>
-                                    <div class="sl-drow"><span class="sl-dl">Deviation</span><span class="sl-dv">@r.Deviation.ToString("G3")</span></div>
-                                    <div class="sl-drow"><span class="sl-dl">Notional</span><span class="sl-dv">$@r.AttemptNotional.ToString("F2")</span></div>
-                                    <div class="sl-drow"><span class="sl-dl">Min Notional</span><span class="sl-dv">$@r.RequiredMinNotional.ToString("F2")</span></div>
-                                    <div class="sl-drow"><span class="sl-dl">Block reason</span><span class="sl-dv @ReasonCls(r.Reason)">@r.Reason</span></div>
+                                    <div class="sl-dr"><span class="sl-dl">Block Reason</span><span class="sl-dv @RCls(r.Reason)">@r.Reason</span></div>
+                                    <div class="sl-dr"><span class="sl-dl">Regime</span><span class="sl-dv @RegCls(r.Regime)">@RegStr(r.Regime)</span></div>
+                                    <div class="sl-dr"><span class="sl-dl">Slope</span><span class="sl-dv mono">@r.Slope.ToString("G4")</span></div>
+                                    <div class="sl-dr"><span class="sl-dl">Deviation</span><span class="sl-dv mono">@r.Deviation.ToString("G3")</span></div>
+                                    <div class="sl-dr"><span class="sl-dl">Notional</span><span class="sl-dv mono">$@r.AttemptNotional.ToString("F2")</span></div>
+                                    <div class="sl-dr"><span class="sl-dl">Min Notional</span><span class="sl-dv mono">$@r.RequiredMinNotional.ToString("F2")</span></div>
+                                    <div class="sl-dr"><span class="sl-dl">Smart Type</span><span class="sl-dv">@(r.SmartType.Length > 0 ? r.SmartType : "—")</span></div>
+                                    <div class="sl-dr"><span class="sl-dl">Stage</span><span class="sl-dv">@r.Stage</span></div>
                                 </div>
                                 @if (r.TakeProfits.Count > 0)
                                 {
-                                    <div class="sl-tp-list">
-                                        @foreach (var (tp, i) in r.TakeProfits.Select((v,i)=>(v,i)))
+                                    <div class="sl-tps">
+                                        @foreach (var item in r.TakeProfits.Select((v, i) => new { v, i }))
                                         {
-                                            var p = r.Entry>0 ? $"+{Math.Abs(tp-r.Entry)/r.Entry*100m:F2}%" : "";
-                                            <span class="sl-tp-item">TP@(i+1) @FP(tp) <b>@p</b></span>
+                                            var p2 = r.Entry > 0 ? Math.Abs(item.v - r.Entry) / r.Entry * 100m : 0m;
+                                            <span class="sl-tp @(item.i==0?"sl-tp1":"")">
+                                                TP@(item.i+1) @FP(item.v) <b>+@p2.ToString("F2")%</b>
+                                            </span>
                                         }
                                     </div>
                                 }
@@ -187,50 +206,43 @@
 
                     </div>
                 }
-
-                @if (_filtered.Count > 60)
-                {
-                    <div class="sl-more">Showing 60 of @_filtered.Count · use filters to narrow down</div>
-                }
             </div>
 
-            <!-- RIGHT SIDEBAR -->
+            <!-- ── SIDEBAR ───────────────────────── -->
             <div class="sl-sidebar">
 
                 <!-- TOP SYMBOLS -->
-                <div class="sl-side-section">
-                    <div class="sl-side-title">TOP SYMBOLS</div>
-                    @foreach (var g in _bySymbol.Take(15))
+                <div class="sl-side-box">
+                    <div class="sl-side-title">📊 TOP SYMBOLS</div>
+                    @foreach (var g in _bySymbol.Take(12))
                     {
-                        var c = g.AvgConf;
                         var pct = _all.Count > 0 ? g.Count * 100.0 / _all.Count : 0;
-                        <div class="sl-sym-row @(_symFilter==g.Symbol?"sl-sym-sel":"")"
+                        var cc  = g.AvgConf >= 70 ? "cc-hi" : g.AvgConf >= 50 ? "cc-mid" : "cc-lo";
+                        <div class="sl-sr @(_symFilter==g.Symbol?"sl-sr-sel":"")"
                              @onclick="()=>ToggleSym(g.Symbol)">
-                            <span class="sl-sym-name">@g.Symbol</span>
-                            <div class="sl-sym-bar">
-                                <div class="sl-sym-fill @(c>=70?"c-hi":c>=50?"c-mid":"c-lo")"
-                                     style="width:@Math.Min(100.0,pct*4)%"></div>
+                            <span class="sl-sr-sym">@g.Symbol</span>
+                            <div class="sl-sr-track">
+                                <div class="sl-sr-bar @cc" style="width:@Math.Min(100.0,pct*4)%"></div>
                             </div>
-                            <span class="sl-sym-n">@g.Count</span>
-                            <span class="sl-sym-conf @(c>=70?"cu":c>=50?"sl-dim":"cd")">@c%</span>
+                            <span class="sl-sr-n">@g.Count</span>
+                            <span class="sl-sr-conf @cc">@g.AvgConf%</span>
                         </div>
                     }
                 </div>
 
                 <!-- BLOCK REASONS -->
-                <div class="sl-side-section">
-                    <div class="sl-side-title">BLOCK REASONS</div>
-                    @foreach (var g in _byReason.Take(12))
+                <div class="sl-side-box">
+                    <div class="sl-side-title">🚫 BLOCK REASONS</div>
+                    @foreach (var g in _byReason.Take(10))
                     {
                         var pct = _all.Count > 0 ? g.Count * 100.0 / _all.Count : 0;
-                        <div class="sl-reason-row">
-                            <span class="sl-reason-name @ReasonCls(g.Reason)" title="@g.Reason">
-                                @RShort(g.Reason)
-                            </span>
-                            <div class="sl-reason-bar">
-                                <div class="sl-reason-fill" style="width:@Math.Min(100.0,pct*4)%"></div>
+                        <div class="sl-rr">
+                            <span class="sl-rr-name @RCls(g.Reason)" title="@g.Reason">@SR(g.Reason)</span>
+                            <div class="sl-rr-track">
+                                <div class="sl-rr-fill @RFill(g.Reason)" style="width:@Math.Min(100.0,pct*4)%"></div>
                             </div>
-                            <span class="sl-reason-n sl-dim">@g.Count</span>
+                            <span class="sl-rr-pct sl-dim">@pct.ToString("F0")%</span>
+                            <span class="sl-rr-n">@g.Count</span>
                         </div>
                     }
                 </div>
@@ -238,184 +250,162 @@
             </div>
         </div>
     }
-
 </div>
 
 <style>
-:root {
-    --bg: #0a0d12; --bg2: #111520; --bg3: #1a1f2e; --bdr: #1e2535;
-    --acc: #3b82f6; --grn: #22c55e; --red: #ef4444; --yel: #eab308;
-    --txt: #e2e8f0; --dim: #64748b;
-    --mono: 'JetBrains Mono','Fira Code','Courier New',monospace;
+:root{
+    --bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--bdr:#30363d;
+    --grn:#3fb950;--red:#f85149;--acc:#1f6feb;--yel:#e3b341;
+    --txt:#e6edf3;--dim:#8b949e;
+    --mono:'JetBrains Mono','Fira Code',monospace;
 }
-html,body { background:var(--bg)!important; color:var(--txt); }
+html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
+.sl{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);min-height:100vh;padding-bottom:48px;}
+.sl-up{color:var(--grn)!important;}.sl-dn{color:var(--red)!important;}.sl-dim{color:var(--dim)!important;}.mono{font-family:var(--mono)!important;}
+.cc-hi{color:var(--grn)!important;}.cc-mid{color:var(--acc)!important;}.cc-lo{color:var(--red)!important;}
 
-.sl { font-family:'Inter','Segoe UI',sans-serif; background:var(--bg); min-height:100vh; }
-.cu { color:var(--grn)!important; }
-.cd { color:var(--red)!important; }
-.sl-dim { color:var(--dim)!important; }
-.c-hi  { color:var(--grn)!important; background:rgba(34,197,94,.15)!important; }
-.c-mid { color:var(--acc)!important; background:rgba(59,130,246,.15)!important; }
-.c-lo  { color:var(--red)!important; background:rgba(239,68,68,.15)!important; }
+/* HEADER */
+.sl-header{display:flex;align-items:center;justify-content:space-between;padding:20px 28px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
+.sl-title{font-size:20px;font-weight:700;letter-spacing:.5px;}
+.sl-sub{font-size:12px;color:var(--dim);margin-top:3px;}
+.sl-header-stats{display:flex;gap:20px;}
+.sl-hs{text-align:center;padding:8px 16px;background:var(--bg3);border:1px solid var(--bdr);border-radius:8px;min-width:80px;}
+.sl-hs-val{font-family:var(--mono);font-size:22px;font-weight:700;}
+.sl-hs-lab{font-size:10px;color:var(--dim);letter-spacing:1px;margin-top:2px;}
+.sl-hs-up .sl-hs-val{color:var(--grn);}
+.sl-hs-dn .sl-hs-val{color:var(--red);}
+.sl-hs-hi .sl-hs-val{color:var(--grn);}
+.sl-hs-err .sl-hs-val{color:var(--yel);}
 
-/* ── BAR ─────────────────────────────────────────────── */
-.sl-bar {
-    display:flex; align-items:center; justify-content:space-between;
-    padding:14px 24px; background:var(--bg2); border-bottom:1px solid var(--bdr);
-}
-.sl-bar-left { display:flex; align-items:baseline; gap:14px; }
-.sl-title { font-family:var(--mono); font-size:15px; font-weight:700; letter-spacing:2px; color:var(--acc); }
-.sl-count { font-size:12px; color:var(--dim); }
-.sl-bar-right { display:flex; gap:10px; flex-wrap:wrap; }
-.sl-stat { font-size:12px; padding:4px 12px; background:var(--bg3); border:1px solid var(--bdr); border-radius:20px; color:var(--dim); }
-.sl-stat-up { color:var(--grn); border-color:rgba(34,197,94,.3); }
-.sl-stat-dn { color:var(--red); border-color:rgba(239,68,68,.3); }
-.sl-stat-err { color:var(--yel); border-color:rgba(234,179,8,.3); }
+/* TOOLBAR */
+.sl-toolbar{display:flex;align-items:center;justify-content:space-between;padding:12px 28px;background:var(--bg2);border-bottom:1px solid var(--bdr);gap:12px;flex-wrap:wrap;}
+.sl-chips{display:flex;gap:6px;flex-wrap:wrap;}
+.sl-chip{display:inline-flex;align-items:center;gap:5px;padding:5px 14px;background:var(--bg3);border:1px solid var(--bdr);border-radius:20px;color:var(--dim);font-size:13px;cursor:pointer;transition:all .15s;}
+.sl-chip:hover{border-color:var(--acc);color:var(--txt);}
+.sl-chip-on{background:rgba(31,111,235,.15);border-color:var(--acc);color:var(--txt);}
+.sl-chip-n{font-family:var(--mono);font-size:11px;background:var(--bg);border-radius:10px;padding:1px 6px;}
+.sl-tools{display:flex;gap:8px;}
+.sl-search-box{display:flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid var(--bdr);border-radius:8px;padding:0 10px;}
+.sl-search{background:transparent;border:none;color:var(--txt);padding:7px 2px;font-size:13px;width:200px;outline:none;}
+.sl-search::placeholder{color:var(--dim);}
+.sl-clear{background:none;border:none;color:var(--dim);cursor:pointer;font-size:13px;padding:0 4px;}
+.sl-clear:hover{color:var(--red);}
+.sl-select{background:var(--bg3);border:1px solid var(--bdr);color:var(--txt);padding:7px 12px;border-radius:8px;font-size:13px;}
 
-/* ── TOOLBAR ─────────────────────────────────────────── */
-.sl-toolbar {
-    display:flex; align-items:center; gap:12px; padding:10px 24px;
-    background:var(--bg2); border-bottom:1px solid var(--bdr); flex-wrap:wrap;
-}
-.sl-chips { display:flex; gap:6px; flex-wrap:wrap; flex:1; }
-.sl-chip {
-    display:inline-flex; align-items:center; gap:5px; padding:4px 11px;
-    background:var(--bg3); border:1px solid var(--bdr); border-radius:20px;
-    color:var(--dim); font-size:12px; cursor:pointer; transition:all .15s;
-}
-.sl-chip:hover { border-color:var(--acc); color:var(--txt); }
-.sl-chip-on  { background:rgba(59,130,246,.12); border-color:var(--acc); color:var(--txt); }
-.sl-chip-n { font-family:var(--mono); font-size:10px; background:var(--bg); border-radius:10px; padding:0 5px; }
-.sl-tools { display:flex; gap:8px; }
-.sl-search-box {
-    position:relative; display:flex; align-items:center;
-    background:var(--bg3); border:1px solid var(--bdr); border-radius:6px; overflow:hidden;
-}
-.sl-search-icon { padding:0 8px; color:var(--dim); font-size:14px; }
-.sl-search { background:transparent; border:none; color:var(--txt); padding:5px 4px 5px 0; font-size:12px; width:180px; outline:none; }
-.sl-search::placeholder { color:var(--dim); }
-.sl-search-clear { background:none; border:none; color:var(--dim); padding:0 8px; cursor:pointer; font-size:12px; }
-.sl-search-clear:hover { color:var(--red); }
-.sl-select { background:var(--bg3); border:1px solid var(--bdr); color:var(--txt); padding:5px 10px; border-radius:6px; font-size:12px; }
+/* EMPTY */
+.sl-empty{display:flex;flex-direction:column;align-items:center;gap:12px;padding:80px 20px;color:var(--dim);text-align:center;}
+.sl-empty-icon{font-size:48px;}
+.sl-empty-title{font-size:18px;font-weight:600;color:var(--txt);}
+.sl-empty-sub{font-size:13px;}
 
-/* ── EMPTY ───────────────────────────────────────────── */
-.sl-empty { display:flex; flex-direction:column; align-items:center; gap:12px; padding:80px 20px; color:var(--dim); text-align:center; }
-.sl-empty-icon { font-size:44px; }
-.sl-empty-title { font-size:16px; font-weight:600; color:var(--txt); }
-.sl-empty-sub { font-size:13px; }
+/* LAYOUT */
+.sl-layout{display:grid;grid-template-columns:1fr 280px;min-height:calc(100vh - 130px);}
+.sl-feed{background:var(--bg);border-right:1px solid var(--bdr);}
+.sl-sidebar{background:var(--bg);}
 
-/* ── BODY ────────────────────────────────────────────── */
-.sl-body { display:grid; grid-template-columns:1fr 280px; min-height:calc(100vh - 108px); }
-.sl-feed { background:var(--bg); border-right:1px solid var(--bdr); }
+/* BANNER + META */
+.sl-banner{display:flex;align-items:center;gap:8px;padding:10px 20px;background:rgba(31,111,235,.08);border-bottom:1px solid var(--bdr);font-size:13px;color:var(--dim);}
+.sl-banner b{color:var(--acc);}
+.sl-banner button{background:none;border:1px solid var(--bdr);border-radius:10px;color:var(--dim);padding:1px 8px;font-size:12px;cursor:pointer;margin-left:auto;}
+.sl-feed-meta{padding:10px 20px 6px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--bdr);}
+.sl-feed-meta b{color:var(--txt);}
 
-.sl-feed-banner {
-    display:flex; align-items:center; gap:10px; padding:8px 16px;
-    background:rgba(59,130,246,.08); border-bottom:1px solid var(--bdr);
-    font-size:12px; color:var(--dim);
-}
-.sl-feed-banner b { color:var(--acc); }
-.sl-feed-banner button { background:none; border:1px solid var(--bdr); border-radius:10px; color:var(--dim); padding:1px 8px; font-size:11px; cursor:pointer; }
-
-/* ── CARDS ───────────────────────────────────────────── */
-.sl-card {
-    padding:12px 16px; border-bottom:1px solid var(--bdr);
-    cursor:pointer; transition:background .1s;
+/* ── SIGNAL CARD ──────────────────────────────── */
+.sl-card{
+    padding:14px 20px;border-bottom:1px solid var(--bdr);
+    cursor:pointer;transition:background .1s;
     border-left:3px solid transparent;
 }
-.sl-card:hover { background:var(--bg2); }
-.sl-card-long:hover  { border-left-color:rgba(34,197,94,.4); }
-.sl-card-short:hover { border-left-color:rgba(239,68,68,.4); }
-.sl-card-sel { background:var(--bg2)!important; }
-.sl-card-sel.sl-card-long  { border-left-color:var(--grn); }
-.sl-card-sel.sl-card-short { border-left-color:var(--red); }
+.sl-card:hover{background:rgba(255,255,255,.02);}
+.sl-sel{background:var(--bg2)!important;}
+.sl-long:hover,.sl-sel.sl-long{border-left-color:var(--grn);}
+.sl-short:hover,.sl-sel.sl-short{border-left-color:var(--red);}
 
-/* card head */
-.sl-card-head {
-    display:flex; align-items:center; gap:8px; margin-bottom:7px; flex-wrap:wrap;
-}
-.sl-csym { font-family:var(--mono); font-size:15px; font-weight:700; }
-.sl-cside { font-size:10px; font-weight:700; padding:2px 7px; border-radius:3px; letter-spacing:.5px; }
-.badge-l { background:rgba(34,197,94,.12); color:var(--grn); border:1px solid rgba(34,197,94,.2); }
-.badge-s { background:rgba(239,68,68,.12); color:var(--red); border:1px solid rgba(239,68,68,.2); }
-.sl-cstage { font-size:10px; color:var(--dim); background:var(--bg3); padding:1px 6px; border-radius:3px; }
-.sl-head-right { margin-left:auto; display:flex; align-items:center; gap:10px; }
-.sl-creason { font-size:11px; font-weight:600; padding:2px 8px; border-radius:4px; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.reason-exec  { background:rgba(239,68,68,.12); color:var(--red); }
-.reason-bal   { background:rgba(249,115,22,.1); color:#f97316; }
-.reason-min   { background:rgba(234,179,8,.1); color:var(--yel); }
-.reason-other { background:var(--bg3); color:var(--dim); }
+/* ROW 1 */
+.sl-row1{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px;}
+.sl-row1-left{display:flex;align-items:center;gap:10px;}
+.sl-row1-right{display:flex;align-items:center;gap:12px;}
 
-/* time — readable */
-.sl-ctime { font-family:var(--mono); font-size:12px; color:var(--txt); opacity:.7; white-space:nowrap; }
+/* Symbol — big and bold, most important */
+.sl-sym{font-family:var(--mono);font-size:18px;font-weight:700;}
 
-/* confidence */
-.sl-conf-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
-.sl-conf-track { flex:1; height:3px; background:var(--bdr); border-radius:2px; overflow:hidden; }
-.sl-conf-fill { height:100%; border-radius:2px; }
-.sl-conf-fill.c-hi  { background:var(--grn); }
-.sl-conf-fill.c-mid { background:var(--acc); }
-.sl-conf-fill.c-lo  { background:var(--red); }
-.sl-conf-val { font-family:var(--mono); font-size:11px; font-weight:700; padding:1px 6px; border-radius:3px; min-width:36px; text-align:center; }
-.sl-regime { font-size:11px; padding:1px 7px; border-radius:3px; background:var(--bg3); }
-.regime-bull { color:var(--grn)!important; }
-.regime-bear { color:var(--red)!important; }
-.regime-range { color:var(--yel)!important; }
-.regime-squeeze { color:var(--acc)!important; }
+/* Side badge */
+.sl-side{font-size:11px;font-weight:700;letter-spacing:.5px;padding:3px 10px;border-radius:4px;}
+.side-l{background:rgba(63,185,80,.12);color:var(--grn);border:1px solid rgba(63,185,80,.2);}
+.side-s{background:rgba(248,81,73,.12);color:var(--red);border:1px solid rgba(248,81,73,.2);}
 
-/* numbers */
-.sl-nums { display:flex; gap:20px; flex-wrap:wrap; }
-.sl-num { display:flex; flex-direction:column; gap:2px; }
-.sl-nl { font-size:9px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); font-weight:600; }
-.sl-nv { font-family:var(--mono); font-size:12px; font-weight:600; }
-.sl-tpct { font-size:10px; color:var(--grn); margin-left:3px; }
+/* Stage */
+.sl-stage{font-size:11px;color:var(--dim);background:var(--bg3);padding:2px 7px;border-radius:4px;}
 
-/* expanded detail */
-.sl-detail {
-    margin-top:12px; padding-top:12px;
-    border-top:1px dashed var(--bdr);
-}
-.sl-detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:0; margin-bottom:10px; }
-.sl-drow { display:flex; justify-content:space-between; padding:5px 6px; border-bottom:1px solid var(--bdr); gap:8px; }
-.sl-drow:nth-child(odd) { background:rgba(255,255,255,.01); }
-.sl-dl { font-size:11px; color:var(--dim); white-space:nowrap; }
-.sl-dv { font-family:var(--mono); font-size:11px; text-align:right; word-break:break-all; }
-.sl-tp-list { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
-.sl-tp-item { font-family:var(--mono); font-size:11px; background:rgba(34,197,94,.08); border:1px solid rgba(34,197,94,.2); color:var(--grn); padding:2px 8px; border-radius:4px; }
-.sl-tp-item b { color:var(--grn); margin-left:4px; }
-.sl-hint { font-size:11px; color:var(--dim); background:var(--bg3); border-radius:6px; padding:8px 10px; line-height:1.5; }
+/* Reason badge */
+.sl-reason-badge{font-size:12px;font-weight:600;padding:3px 10px;border-radius:6px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.rc-exec{background:rgba(248,81,73,.12);color:var(--red);border:1px solid rgba(248,81,73,.2);}
+.rc-bal{background:rgba(227,179,65,.1);color:var(--yel);border:1px solid rgba(227,179,65,.2);}
+.rc-min{background:rgba(227,179,65,.08);color:var(--yel);border:1px solid rgba(227,179,65,.15);}
+.rc-other{background:var(--bg3);color:var(--dim);border:1px solid var(--bdr);}
 
-.sl-more { text-align:center; padding:16px; font-size:12px; color:var(--dim); }
+/* Time — clear and readable */
+.sl-time{font-family:var(--mono);font-size:13px;color:var(--txt);opacity:.8;white-space:nowrap;letter-spacing:.3px;}
 
-/* ── SIDEBAR ─────────────────────────────────────────── */
-.sl-sidebar { background:var(--bg2); }
-.sl-side-section { padding:14px 16px; border-bottom:1px solid var(--bdr); }
-.sl-side-title { font-family:var(--mono); font-size:10px; letter-spacing:2px; color:var(--dim); font-weight:700; margin-bottom:10px; }
+/* ROW 2 - confidence */
+.sl-row2{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+.sl-conf-wrap{display:flex;align-items:center;gap:8px;flex:1;}
+.sl-conf-track{flex:1;height:5px;background:var(--bg3);border-radius:3px;overflow:hidden;}
+.sl-conf-bar{height:100%;border-radius:3px;transition:width .3s;}
+.sl-conf-bar.cc-hi{background:var(--grn);}
+.sl-conf-bar.cc-mid{background:var(--acc);}
+.sl-conf-bar.cc-lo{background:var(--red);}
+.sl-conf-pct{font-family:var(--mono);font-size:14px;font-weight:700;min-width:38px;text-align:right;}
+.sl-regime{font-size:12px;font-weight:600;padding:2px 8px;border-radius:4px;background:var(--bg3);white-space:nowrap;}
+.rc-bull{color:var(--grn)!important;}.rc-bear{color:var(--red)!important;}.rc-range{color:var(--yel)!important;}.rc-sq{color:var(--acc)!important;}
 
-/* symbol rows */
-.sl-sym-row {
-    display:flex; align-items:center; gap:8px; padding:5px 4px;
-    border-radius:4px; cursor:pointer; transition:background .1s;
-}
-.sl-sym-row:hover { background:var(--bg3); }
-.sl-sym-sel { background:rgba(59,130,246,.1)!important; }
-.sl-sym-name { font-family:var(--mono); font-size:12px; font-weight:700; color:var(--acc); min-width:90px; }
-.sl-sym-bar { flex:1; height:4px; background:var(--bdr); border-radius:2px; overflow:hidden; }
-.sl-sym-fill { height:100%; border-radius:2px; transition:width .4s; }
-.sl-sym-fill.c-hi  { background:var(--grn); }
-.sl-sym-fill.c-mid { background:var(--acc); }
-.sl-sym-fill.c-lo  { background:var(--red); }
-.sl-sym-n    { font-family:var(--mono); font-size:11px; min-width:24px; text-align:right; }
-.sl-sym-conf { font-family:var(--mono); font-size:11px; min-width:30px; text-align:right; }
+/* ROW 3 - numbers */
+.sl-nums{display:flex;gap:24px;flex-wrap:wrap;}
+.sl-num{display:flex;flex-direction:column;gap:2px;}
+.sl-nl{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);font-weight:600;}
+.sl-nv{font-family:var(--mono);font-size:14px;font-weight:600;}
+.sl-tpct{font-size:11px;color:var(--grn);margin-left:4px;}
 
-/* reason rows */
-.sl-reason-row { display:flex; align-items:center; gap:8px; padding:4px 0; }
-.sl-reason-name { font-size:11px; font-weight:600; min-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.sl-reason-bar { flex:1; height:4px; background:var(--bdr); border-radius:2px; overflow:hidden; }
-.sl-reason-fill { height:100%; background:var(--red); opacity:.65; border-radius:2px; }
-.sl-reason-n { font-family:var(--mono); font-size:11px; min-width:24px; text-align:right; }
+/* EXPANDED DETAIL */
+.sl-detail{margin-top:14px;padding-top:14px;border-top:1px dashed var(--bdr);}
+.sl-detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:0;margin-bottom:12px;border:1px solid var(--bdr);border-radius:6px;overflow:hidden;}
+.sl-dr{display:flex;justify-content:space-between;align-items:center;padding:7px 12px;border-bottom:1px solid var(--bdr);gap:8px;font-size:13px;}
+.sl-dr:nth-child(odd){background:rgba(255,255,255,.015);}
+.sl-dr:last-child,.sl-dr:nth-last-child(2):nth-child(odd){border-bottom:none;}
+.sl-dl{color:var(--dim);white-space:nowrap;}
+.sl-dv{font-family:var(--mono);font-size:12px;text-align:right;word-break:break-all;}
+.sl-tps{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}
+.sl-tp{font-family:var(--mono);font-size:12px;background:rgba(63,185,80,.08);border:1px solid rgba(63,185,80,.2);color:var(--grn);padding:3px 10px;border-radius:4px;}
+.sl-tp1{background:rgba(63,185,80,.15);font-weight:600;}
+.sl-tp b{color:var(--grn);margin-left:4px;}
+.sl-hint{font-size:12px;color:var(--dim);background:var(--bg3);border-radius:6px;padding:10px 12px;line-height:1.6;border:1px solid var(--bdr);}
 
-@@media(max-width:900px){ .sl-body { grid-template-columns:1fr; } }
-@@media(max-width:700px){ .sl-bar { flex-direction:column; gap:10px; } .sl-toolbar { flex-direction:column; } }
+/* SIDEBAR */
+.sl-side-box{padding:16px 18px;border-bottom:1px solid var(--bdr);}
+.sl-side-title{font-size:11px;font-weight:700;letter-spacing:2px;color:var(--dim);text-transform:uppercase;margin-bottom:12px;}
+
+/* Symbol rows */
+.sl-sr{display:flex;align-items:center;gap:8px;padding:7px 4px;border-radius:6px;cursor:pointer;transition:background .1s;font-size:13px;}
+.sl-sr:hover{background:var(--bg3);}
+.sl-sr-sel{background:rgba(31,111,235,.1)!important;}
+.sl-sr-sym{font-family:var(--mono);font-weight:700;font-size:13px;color:var(--acc);min-width:96px;}
+.sl-sr-track{flex:1;height:5px;background:var(--bdr);border-radius:3px;overflow:hidden;}
+.sl-sr-bar{height:100%;border-radius:3px;}
+.sl-sr-bar.cc-hi{background:var(--grn);}.sl-sr-bar.cc-mid{background:var(--acc);}.sl-sr-bar.cc-lo{background:var(--red);}
+.sl-sr-n{font-family:var(--mono);font-size:12px;color:var(--dim);min-width:26px;text-align:right;}
+.sl-sr-conf{font-family:var(--mono);font-size:12px;min-width:34px;text-align:right;}
+
+/* Reason rows */
+.sl-rr{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;}
+.sl-rr-name{font-weight:600;min-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;}
+.sl-rr-track{flex:1;height:5px;background:var(--bdr);border-radius:3px;overflow:hidden;}
+.sl-rr-fill{height:100%;border-radius:3px;opacity:.7;}
+.sl-rr-fill.rc-exec{background:var(--red);}.sl-rr-fill.rc-bal{background:var(--yel);}.sl-rr-fill.rc-other{background:var(--dim);}
+.sl-rr-pct{font-family:var(--mono);font-size:11px;min-width:28px;text-align:right;}
+.sl-rr-n{font-family:var(--mono);font-size:12px;font-weight:600;min-width:26px;text-align:right;}
+
+@@media(max-width:1000px){.sl-layout{grid-template-columns:1fr;}.sl-sidebar{border-top:1px solid var(--bdr);}}
+@@media(max-width:700px){.sl-header{flex-direction:column;gap:12px;}.sl-header-stats{flex-wrap:wrap;gap:8px;}.sl-toolbar{flex-direction:column;}}
 </style>
 
 @code {
@@ -428,23 +418,24 @@ html,body { background:var(--bg)!important; color:var(--txt); }
     List<SymG>    _bySymbol = new();
     List<ReasonG> _byReason = new();
     List<FDef>    _filters  = new();
+    int _execFail;
 
-    string _fKey = "ALL", _q = "", _symFilter = "", _sort = "time", _selId = "";
+    string _fKey = "ALL", _q = string.Empty, _symFilter = string.Empty, _sort = "time", _selId = string.Empty;
     System.Threading.Timer? _timer;
 
     protected override async Task OnInitializedAsync()
     {
         await Load();
         _timer = new System.Threading.Timer(async _ =>
-        {
-            await InvokeAsync(async () => { await Load(); StateHasChanged(); });
-        }, null, 5000, 5000);
+            await InvokeAsync(async () => { await Load(); StateHasChanged(); }),
+            null, 5000, 5000);
     }
 
     async Task Load()
     {
         var data = await Svc.LoadAsync();
-        _all = data ?? new();
+        _all = data?.ToList() ?? new();
+        _execFail = _all.Count(r => r.Reason.Contains("Exec") || r.Reason.Contains("EXEC") || r.Reason.Contains("Failed"));
         Rebuild();
     }
 
@@ -456,19 +447,19 @@ html,body { background:var(--bg)!important; color:var(--txt); }
             .OrderByDescending(g => g.Count).ToList();
 
         _byReason = _all
-            .GroupBy(r => r.Reason)
+            .GroupBy(r => string.IsNullOrEmpty(r.Reason) ? "Unknown" : r.Reason)
             .Select(g => new ReasonG(g.Key, g.Count()))
             .OrderByDescending(g => g.Count).ToList();
 
         _filters = new()
         {
-            new("ALL",   "All",         _all.Count),
-            new("LONG",  "▲ Long",      _all.Count(r => r.Side == "Buy")),
-            new("SHORT", "▼ Short",     _all.Count(r => r.Side == "Sell")),
-            new("HIGH",  "Conf ≥ 70",   _all.Count(r => r.Confidence >= 70)),
-            new("EXEC",  "Exec Failed", _all.Count(r => r.Reason.Contains("Exec") || r.Reason.Contains("Failed"))),
-            new("BAL",   "Low Balance", _all.Count(r => r.Reason.Contains("Balance") || r.Reason.Contains("balance"))),
-            new("MIN",   "Min Notional",_all.Count(r => r.Reason.Contains("Notional") || r.Reason.Contains("TOO_SMALL"))),
+            new("ALL",   "All",          _all.Count),
+            new("LONG",  "▲ Long",       _all.Count(r => r.Side == "Buy")),
+            new("SHORT", "▼ Short",      _all.Count(r => r.Side == "Sell")),
+            new("HIGH",  "Conf ≥ 70",    _all.Count(r => r.Confidence >= 70)),
+            new("EXEC",  "Exec Failed",  _execFail),
+            new("BAL",   "Low Balance",  _all.Count(r => r.Reason.Contains("Balance") || r.Reason.Contains("balance"))),
+            new("MIN",   "Min Notional", _all.Count(r => r.Reason.Contains("Notional") || r.Reason.Contains("TOO_SMALL"))),
         };
 
         Refilter();
@@ -477,28 +468,23 @@ html,body { background:var(--bg)!important; color:var(--txt); }
     void Refilter()
     {
         var q = _all.AsEnumerable();
-
         if (!string.IsNullOrEmpty(_symFilter))
             q = q.Where(r => r.Symbol == _symFilter);
         else if (!string.IsNullOrEmpty(_q))
         {
             var up = _q.ToUpperInvariant();
-            q = q.Where(r => r.Symbol.Contains(up) ||
-                              r.Reason.ToUpperInvariant().Contains(up) ||
-                              r.Stage.ToUpperInvariant().Contains(up));
+            q = q.Where(r => r.Symbol.Contains(up) || r.Reason.ToUpperInvariant().Contains(up) || r.Stage.ToUpperInvariant().Contains(up));
         }
-
         q = _fKey switch
         {
             "LONG"  => q.Where(r => r.Side == "Buy"),
             "SHORT" => q.Where(r => r.Side == "Sell"),
             "HIGH"  => q.Where(r => r.Confidence >= 70),
-            "EXEC"  => q.Where(r => r.Reason.Contains("Exec") || r.Reason.Contains("Failed")),
+            "EXEC"  => q.Where(r => r.Reason.Contains("Exec") || r.Reason.Contains("EXEC") || r.Reason.Contains("Failed")),
             "BAL"   => q.Where(r => r.Reason.Contains("Balance") || r.Reason.Contains("balance")),
             "MIN"   => q.Where(r => r.Reason.Contains("Notional") || r.Reason.Contains("TOO_SMALL")),
             _       => q
         };
-
         _filtered = (_sort switch
         {
             "conf" => q.OrderByDescending(r => r.Confidence),
@@ -507,15 +493,19 @@ html,body { background:var(--bg)!important; color:var(--txt); }
         }).ToList();
     }
 
-    void OnSearch(ChangeEventArgs e) { _q = e.Value?.ToString() ?? ""; _symFilter = ""; Refilter(); }
-    void OnSort(ChangeEventArgs e)   { _sort = e.Value?.ToString() ?? "time"; Refilter(); }
-    void ClearSearch() { _q = ""; _symFilter = ""; Refilter(); }
-    void ToggleSym(string s) { _symFilter = _symFilter == s ? "" : s; _fKey = "ALL"; Refilter(); }
-    void Toggle(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r) { var id = SigId(r); _selId = _selId == id ? "" : id; }
+    void OnSearch(ChangeEventArgs e) { _q = e.Value?.ToString() ?? string.Empty; _symFilter = string.Empty; Refilter(); }
+    void OnSort(ChangeEventArgs e) { _sort = e.Value?.ToString() ?? "time"; Refilter(); }
+    void ClearSearch() { _q = string.Empty; _symFilter = string.Empty; Refilter(); }
+    void ToggleSym(string s) { _symFilter = _symFilter == s ? string.Empty : s; _fKey = "ALL"; Refilter(); }
+    void Toggle(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r)
+    {
+        var id = SigId(r);
+        _selId = _selId == id ? string.Empty : id;
+    }
 
-    string SigId(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r) => $"{r.Symbol}_{r.Time:yyyyMMddHHmmssfff}";
+    string SigId(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r)
+        => $"{r.Symbol}_{r.Time:yyyyMMddHHmmssfff}";
 
-    // ── FORMAT ────────────────────────────────────────────
     string FP(decimal v)
     {
         if (v <= 0) return "—";
@@ -530,74 +520,75 @@ html,body { background:var(--bg)!important; color:var(--txt); }
         VertexAutoTradeBinance8.Models.MarketRegime.UpTrend         => "↑ Bull",
         VertexAutoTradeBinance8.Models.MarketRegime.StrongDownTrend => "↓↓ Strong Bear",
         VertexAutoTradeBinance8.Models.MarketRegime.DownTrend       => "↓ Bear",
-        VertexAutoTradeBinance8.Models.MarketRegime.Squeeze         => "⊞ Squeeze",
         VertexAutoTradeBinance8.Models.MarketRegime.Range           => "↔ Range",
-        _                            => "— Unknown"
+        VertexAutoTradeBinance8.Models.MarketRegime.Squeeze         => "⊞ Squeeze",
+        _ => "— Unknown"
     };
 
-    string RegimeCls(VertexAutoTradeBinance8.Models.MarketRegime r) => r switch
+    string RegCls(VertexAutoTradeBinance8.Models.MarketRegime r) => r switch
     {
-        VertexAutoTradeBinance8.Models.MarketRegime.StrongUpTrend or VertexAutoTradeBinance8.Models.MarketRegime.UpTrend       => "sl-regime regime-bull",
-        VertexAutoTradeBinance8.Models.MarketRegime.StrongDownTrend or VertexAutoTradeBinance8.Models.MarketRegime.DownTrend   => "sl-regime regime-bear",
-        VertexAutoTradeBinance8.Models.MarketRegime.Squeeze                                      => "sl-regime regime-squeeze",
-        VertexAutoTradeBinance8.Models.MarketRegime.Range                                        => "sl-regime regime-range",
-        _                                                         => "sl-regime sl-dim"
+        VertexAutoTradeBinance8.Models.MarketRegime.StrongUpTrend or VertexAutoTradeBinance8.Models.MarketRegime.UpTrend     => "rc-bull",
+        VertexAutoTradeBinance8.Models.MarketRegime.StrongDownTrend or VertexAutoTradeBinance8.Models.MarketRegime.DownTrend => "rc-bear",
+        VertexAutoTradeBinance8.Models.MarketRegime.Range           => "rc-range",
+        VertexAutoTradeBinance8.Models.MarketRegime.Squeeze         => "rc-sq",
+        _ => "sl-dim"
     };
 
-    string ReasonCls(string r)
+    string RCls(string r)
     {
-        if (r.Contains("Exec") || r.Contains("Failed") || r.Contains("ENTRY"))  return "sl-creason reason-exec";
-        if (r.Contains("Balance") || r.Contains("balance") || r.Contains("BAL")) return "sl-creason reason-bal";
-        if (r.Contains("Notional") || r.Contains("TOO_SMALL") || r.Contains("MIN")) return "sl-creason reason-min";
-        return "sl-creason reason-other";
+        if (r.Contains("Exec") || r.Contains("EXEC") || r.Contains("Failed")) return "rc-exec";
+        if (r.Contains("Balance") || r.Contains("balance"))                    return "rc-bal";
+        if (r.Contains("Notional") || r.Contains("TOO_SMALL"))                 return "rc-min";
+        return "rc-other";
     }
 
-    string RShort(string r) => r switch
+    string RFill(string r)
     {
-        _ when r.Contains("ExecFailed") || r.Contains("Exec Failed") || r.Contains("EXECUTION_FAILED") || r.Contains("ENTRY_FAILED") => "Exec Failed",
-        _ when r.Contains("Balance is zero") || r.Contains("BalanceZero")   => "Balance Zero",
+        if (r.Contains("Exec") || r.Contains("EXEC") || r.Contains("Failed")) return "rc-exec";
+        if (r.Contains("Balance") || r.Contains("Notional"))                   return "rc-bal";
+        return "rc-other";
+    }
+
+    string SR(string r) => r switch
+    {
+        _ when r.Contains("EXECUTION_FAILED") || r.Contains("ExecFailed") || r.Contains("ENTRY_FAILED") => "Exec Failed",
+        _ when r.Contains("Balance is zero")                          => "Balance Zero",
         _ when r.Contains("InsufficientBalance") || r.Contains("INSUFFICIENT") => "Insufficient Bal",
-        _ when r.Contains("MinNotional") || r.Contains("TOO_SMALL")         => "Min Notional",
-        _ when r.Contains("DRY_RUN")                                         => "Dry Run",
-        _ when r.Contains("COOLDOWN") || r.Contains("Cooldown")             => "Cooldown",
-        _ when r.Contains("LiquidityGuard")                                  => "Liq Guard",
-        _ when r.Contains("SIDE_NOT")                                        => "Side Blocked",
-        _ when r.Contains("AI_BLOCK") || r.Contains("AI_PNL")               => "AI Block",
-        _ when r.Contains("OrderBookImbalance")                              => "OB Imbalance",
-        _ when r.Contains("ADJUSTED_QTY")                                    => "Qty Adjusted",
-        _ when r.Contains("StaleLimit")                                      => "Stale Limit",
-        _ when r.Contains("EntryError") || r.Contains("ENTRY_FAILED")       => "Entry Error",
-        _ when r.Contains("TRAP")                                            => "Trap",
+        _ when r.Contains("MinNotional") || r.Contains("TOO_SMALL")  => "Min Notional",
+        _ when r.Contains("DRY_RUN")                                  => "Dry Run",
+        _ when r.Contains("COOLDOWN")                                 => "Cooldown",
+        _ when r.Contains("AI_BLOCK") || r.Contains("AI_PNL")        => "AI Block",
+        _ when r.Contains("SIDE_NOT")                                 => "Side Blocked",
+        _ when r.Contains("OrderBook")                                => "OB Imbalance",
+        _ when r.Contains("TRAP")                                     => "Trap Detected",
+        _ when string.IsNullOrEmpty(r)                                => "Unknown",
         _ => r.Length > 20 ? r[..20] + "…" : r
     };
 
     string Hint(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r)
     {
         var sb = new System.Text.StringBuilder();
-        if      (r.Confidence >= 80) sb.Append("Strong signal. ");
+        if      (r.Confidence >= 80) sb.Append("Strong signal setup. ");
         else if (r.Confidence >= 60) sb.Append("Decent setup. ");
-        else                          sb.Append("Weak signal. ");
-
+        else                          sb.Append("Weak signal — better to skip. ");
         sb.Append(r.Regime switch {
-            VertexAutoTradeBinance8.Models.MarketRegime.StrongUpTrend   => "Strong bull — momentum in favour. ",
+            VertexAutoTradeBinance8.Models.MarketRegime.StrongUpTrend   => "Strong bull trend — momentum in favour. ",
             VertexAutoTradeBinance8.Models.MarketRegime.UpTrend         => "Uptrend — direction clear. ",
-            VertexAutoTradeBinance8.Models.MarketRegime.StrongDownTrend => "Strong bear — shorting opportunity. ",
+            VertexAutoTradeBinance8.Models.MarketRegime.StrongDownTrend => "Strong bear trend — short opportunity. ",
             VertexAutoTradeBinance8.Models.MarketRegime.Range           => "Range market — mean reversion play. ",
-            VertexAutoTradeBinance8.Models.MarketRegime.Squeeze         => "Squeeze — breakout expected soon. ",
+            VertexAutoTradeBinance8.Models.MarketRegime.Squeeze         => "Squeeze — breakout expected. ",
             _ => ""
         });
-
         if      (r.Reason.Contains("Exec") || r.Reason.Contains("Failed"))
-            sb.Append("Blocked at execution — check API errors or balance.");
+            sb.Append("Blocked at execution — likely API or balance issue.");
         else if (r.Reason.Contains("Balance") || r.Reason.Contains("balance"))
-            sb.Append("Low balance — add USDT to capture similar setups.");
+            sb.Append("Insufficient balance — add USDT to capture this setup.");
         else if (r.Reason.Contains("Notional") || r.Reason.Contains("TOO_SMALL"))
-            sb.Append("Min notional not met — this symbol needs a larger position size.");
+            sb.Append("Min notional not met — this symbol requires larger position size.");
         else if (r.Reason.Contains("TRAP"))
-            sb.Append("AI detected a potential trap — entry was blocked to avoid false move.");
+            sb.Append("AI detected potential trap pattern — entry blocked to avoid false move.");
         else if (r.Reason.Contains("Cooldown"))
-            sb.Append("Symbol was in cooldown after a recent trade.");
-
+            sb.Append("Symbol in cooldown after recent trade.");
         return sb.ToString();
     }
 
