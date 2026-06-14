@@ -606,17 +606,81 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;}
     {
         try
         {
-            _positions = PosSvc.GetAll()
+            // Сначала берём из live кэша (WS данные)
+            var cached = PosSvc.GetAll()
                 .Where(p => p.SizeUsdt > 0)
-                .OrderByDescending(p => Math.Abs(p.Pnl))
                 .ToList();
+
+            // Всегда делаем REST запрос напрямую — получаем актуальные данные
+            // (кэш может не знать о позициях открытых вручную)
+            var client = Factory.TryCreateRestClient();
+            if (client != null)
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+                var res = await client.UsdFuturesApi.Account
+                    .GetPositionInformationAsync(ct: cts.Token);
+
+                if (res.Success && res.Data != null)
+                {
+                    var fresh = new List<PositionVm>();
+                    foreach (var p in res.Data.Where(p => p.Quantity != 0))
+                    {
+                        var side = p.Quantity > 0 ? "LONG" : "SHORT";
+                        var margin = p.MarginType == Binance.Net.Enums.FuturesMarginType.Isolated
+                            ? p.IsolatedMargin
+                            : Math.Abs(p.Quantity * p.EntryPrice) / Math.Max(p.Leverage, 1);
+                        var roi = p.EntryPrice > 0 && margin > 0
+                            ? p.UnrealizedPnl / margin
+                            : 0m;
+
+                        fresh.Add(new PositionVm
+                        {
+                            Symbol    = p.Symbol,
+                            Side      = side,
+                            Entry     = p.EntryPrice,
+                            Mark      = p.MarkPrice,
+                            SizeUsdt  = Math.Abs(p.Quantity * p.EntryPrice),
+                            Margin    = margin,
+                            LiqPrice  = p.LiquidationPrice,
+                            Leverage  = p.Leverage,
+                            Pnl       = p.UnrealizedPnl,
+                            Roi       = roi,
+                            LastUpdateUtc = DateTime.UtcNow
+                        });
+
+                        // Обновляем live кэш чтобы WS подхватил mark price
+                        PosSvc.Upsert(fresh[^1]);
+                    }
+
+                    // Убираем закрытые из кэша
+                    var openKeys = fresh.Select(x => x.Key).ToHashSet();
+                    foreach (var old in cached.Where(c => !openKeys.Contains(c.Key)))
+                        PosSvc.Remove(old.Symbol);
+
+                    _positions = fresh
+                        .OrderByDescending(p => Math.Abs(p.Pnl))
+                        .ToList();
+                }
+                else
+                {
+                    // Fallback: используем кэш
+                    _positions = cached
+                        .OrderByDescending(p => Math.Abs(p.Pnl))
+                        .ToList();
+                }
+            }
+            else
+            {
+                _positions = cached
+                    .OrderByDescending(p => Math.Abs(p.Pnl))
+                    .ToList();
+            }
 
             _totalPnl    = _positions.Sum(p => p.Pnl);
             _totalRoi    = _positions.Any() ? _positions.Average(p => p.Roi * 100m) : 0m;
             _marginRatio = _positions.Any() ? _positions.Average(p => p.MarginRatio) : 0m;
         }
         catch { }
-        await Task.CompletedTask;
     }
 
     async Task LoadOrders()
