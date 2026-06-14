@@ -57,7 +57,7 @@ builder.Services.AddSingleton<ConfigEditorService>();
 builder.Services.Configure<EngineConfigRoot>(
     builder.Configuration.GetSection("Runtime")); // future-ready
 
-builder.Services.Configure<BinanceOptions>(
+builder.Services.Configure<VertexAutoTradeBinance8.Configuration.BinanceOptions>(
     builder.Configuration.GetSection("Binance"));
 
 
