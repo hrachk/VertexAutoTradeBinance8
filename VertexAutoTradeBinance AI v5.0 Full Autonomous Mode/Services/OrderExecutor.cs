@@ -1460,13 +1460,33 @@ namespace VertexAutoTradeBinance8.Services
             }
             if (!entryRes.Success || entryRes.Data == null)
             {
-                var note = entryRes.Error != null
-                    ? $"code={entryRes.Error.Code}; msg={entryRes.Error.Message}"
-                    : "no_error_object";
+                var errCode = entryRes.Error?.Code;
+                var errMsg  = entryRes.Error?.Message ?? "no_error_object";
+                var note    = $"code={errCode}; msg={errMsg}";
+
+                // Переводим коды Binance в читаемые причины
+                string failReason = errCode switch
+                {
+                    -2010 => "INSUFFICIENT_MARGIN",
+                    -1013 => "QTY_BELOW_MIN_NOTIONAL",
+                    -1111 => "PRICE_PRECISION_ERROR",
+                    -1100 => "ILLEGAL_CHARS_IN_PARAM",
+                    -4003 => "QTY_BELOW_MIN",
+                    -4164 => "PRICE_FILTER_ERROR",
+                    -4015 => "REDUCE_ONLY_NO_POSITION",
+                    -1021 => "TIMESTAMP_OUT_OF_SYNC",
+                    -2011 => "UNKNOWN_ORDER",
+                    -3041 => "INSUFFICIENT_BALANCE",
+                    _ => $"ENTRY_FAILED:{errCode}"
+                };
+
+                _logger.LogError(
+                    "[ENTRY_FAIL][{symbol}] {reason} | {note}",
+                    signal.Symbol, failReason, note);
 
                 await _simulator.SimulateMissedTradeAsync(
                     signal,
-                    "EntryError",
+                    failReason,
                     note: note,
                     attemptNotional: Math.Max(notionalAtCreate, notional),
                     requiredMinNotional: 0m);
@@ -1478,7 +1498,7 @@ namespace VertexAutoTradeBinance8.Services
                     0,
                     0);
 
-                return OrderResult.Fail("ENTRY_FAILED");
+                return OrderResult.Fail(failReason, errCode, errMsg);
             }
 
             long entryOrderId = entryRes.Data.Id;

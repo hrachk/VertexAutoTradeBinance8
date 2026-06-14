@@ -1,5 +1,5 @@
 ﻿// ============================================================================
-// ORDER RESULT v5.0
+// ORDER RESULT v5.1
 // ============================================================================
 namespace VertexAutoTradeBinance8.Models
 {
@@ -8,15 +8,21 @@ namespace VertexAutoTradeBinance8.Models
         public bool Success { get; init; }
         public string Error { get; init; } = string.Empty;
 
+        // Детальная причина от Binance API
+        public int? BinanceErrorCode { get; init; }
+        public string? BinanceErrorMessage { get; init; }
+
         public decimal EntryPrice { get; init; }
         public decimal ExecutedQty { get; init; }
         public long OrderId { get; init; }
 
-        public static OrderResult Fail(string error)
+        public static OrderResult Fail(string error, int? code = null, string? binanceMsg = null)
             => new OrderResult
             {
                 Success = false,
-                Error = error
+                Error = error,
+                BinanceErrorCode = code,
+                BinanceErrorMessage = binanceMsg
             };
 
         public static OrderResult Successs(decimal entryPrice, decimal qty, long orderId)
