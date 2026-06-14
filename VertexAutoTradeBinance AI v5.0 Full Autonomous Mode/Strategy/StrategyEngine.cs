@@ -47,12 +47,12 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly TradingOptions _opt;
         private readonly TestModeOptions _test;
         private readonly ConfidenceResolver _confidenceCfg;
+        private readonly FundingRateService _fundingRate;
+
         // =====================================================
         // SLOPE THRESHOLDS для паттернов
-        // Было: 0.005 → бот пропускал слабые но реальные тренды
-        // Теперь: 0.001 → ловим более ранние движения
         // =====================================================
-        private const decimal MinSlopeForTrend = 0.001m;  // 0.1% на свечу = активный рынок
+        private const decimal MinSlopeForTrend = 0.001m;
 
         // Auto Range cache (Binance Grid Bot логика)
         private sealed class SymbolRange
