@@ -2135,6 +2135,48 @@ namespace VertexAutoTradeBinance8.Strategy
 
 
             // =========================
+            // MULTI-TIMEFRAME CONFIRMATION (prop desk standard)
+            // 1M тренд vs 5M тренд — если явно противоречат → не входим в тренд
+            // =========================
+            if (trendLike && !rangeLike && !squeezeLike && tf == KlineInterval.FiveMinutes)
+            {
+                try
+                {
+                    var klines1m = await _marketData.GetKlinesAsync(symbol, KlineInterval.OneMinute, need: 30, CancellationToken.None);
+                    if (klines1m != null && klines1m.Count >= 15)
+                    {
+                        decimal ema9_1m  = EmaClose(klines1m, 9,  klines1m.Count - 1);
+                        decimal ema21_1m = EmaClose(klines1m, 21, klines1m.Count - 1);
+                        decimal last1m   = klines1m[^1].ClosePrice;
+
+                        bool m1Bullish = last1m > ema9_1m && ema9_1m > ema21_1m;
+                        bool m1Bearish = last1m < ema9_1m && ema9_1m < ema21_1m;
+
+                        bool m5Bullish = smart.BaseRegime == MarketRegime.StrongUpTrend ||
+                                         smart.BaseRegime == MarketRegime.UpTrend;
+                        bool m5Bearish = smart.BaseRegime == MarketRegime.StrongDownTrend ||
+                                         smart.BaseRegime == MarketRegime.DownTrend;
+
+                        // Явный конфликт: 5M и 1M в разных направлениях
+                        if ((m5Bullish && m1Bearish) || (m5Bearish && m1Bullish))
+                        {
+                            _logger.LogInformation(
+                                "[MTF][{symbol}] 5M={m5} 1M={m1} conflict → skip",
+                                symbol,
+                                m5Bullish ? "BULL" : m5Bearish ? "BEAR" : "FLAT",
+                                m1Bullish ? "BULL" : m1Bearish ? "BEAR" : "FLAT");
+
+                            SafeRecordDecisionTrace(symbol, tf,
+                                SignalDecisionTrace.Fail("MTF_CONFLICT", "1M vs 5M direction mismatch"));
+
+                            return FastFailResult.Fail("MTF_CONFLICT", "1M vs 5M direction mismatch");
+                        }
+                    }
+                }
+                catch { /* non-critical, continue */ }
+            }
+
+            // =========================
             // PATTERNS
             // =========================
             TradeSignal? pullback = null;

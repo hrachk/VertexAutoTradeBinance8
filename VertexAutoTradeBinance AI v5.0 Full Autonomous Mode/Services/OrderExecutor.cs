@@ -1014,18 +1014,32 @@ namespace VertexAutoTradeBinance8.Services
 
 
 
-                    decimal buyThreshold = isToxicSymbol ? 0.45m : 0.40m;
-                    decimal sellThreshold = isToxicSymbol ? 0.55m : 0.60m;
+                    decimal buyThreshold  = isToxicSymbol ? 0.43m : 0.35m;  // было 0.40 — слишком жёстко
+                    decimal sellThreshold = isToxicSymbol ? 0.57m : 0.65m;  // было 0.60
 
-                    if (signal.Side == SignalSide.Buy && imbalance < buyThreshold)
+                    if (signal.Side == SignalSide.Buy  && imbalance < buyThreshold)
                         imbalanceBlock = true;
 
                     if (signal.Side == SignalSide.Sell && imbalance > sellThreshold)
                         imbalanceBlock = true;
-                   
 
-                    if (signal.Side == SignalSide.Sell && imbalance > 0.60m)
-                        imbalanceBlock = true;
+                    // ── Снимаем блок если тренд сильный и imbalance не экстремальный ──
+                    // imbalance 0.20-0.35 может быть нормальным для быстрого движения
+                    bool trendOverride =
+                        (signal.IsSuperSignal || signal.Confidence >= 0.70m) &&
+                        ((signal.Side == SignalSide.Buy  && imbalance >= 0.22m) ||
+                         (signal.Side == SignalSide.Sell && imbalance <= 0.78m));
+
+                    if (imbalanceBlock && trendOverride)
+                    {
+                        imbalanceBlock = false;
+                        _logger.LogInformation(
+                            "[IMBALANCE OVERRIDE][{symbol}] conf={conf:F2} imbalance={imb:F2} — entering on strong signal",
+                            signal.Symbol, signal.Confidence, imbalance);
+                    }
+
+                    if (signal.Side == SignalSide.Sell && imbalance > 0.68m)
+                        imbalanceBlock = true; // экстремальный перекос — не входим в шорт
 
                     if (!signal.IsSuperSignal)
                     {
