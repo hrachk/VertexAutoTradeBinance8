@@ -188,11 +188,11 @@ namespace VertexAutoTradeBinance8.Services
 
                 // Рассчитываем qty
                 decimal minQtyForMin = Math.Ceiling(minNotional / entry / step) * step;
-                decimal effectiveMinQty = Math.Max(minQty, minQtyForMin);
+                decimal effectiveMinQtyMicro = Math.Max(minQty, minQtyForMin);
 
                 decimal rawQtyMicro = targetNotional / entry;
                 decimal qtyMicro    = Math.Floor(rawQtyMicro / step) * step;
-                if (qtyMicro < effectiveMinQty) qtyMicro = effectiveMinQty;
+                if (qtyMicro < effectiveMinQtyMicro) qtyMicro = effectiveMinQtyMicro;
 
                 decimal actualNotional = qtyMicro * entry;
                 decimal actualRiskPct  = actualNotional > 0 && leverage > 0

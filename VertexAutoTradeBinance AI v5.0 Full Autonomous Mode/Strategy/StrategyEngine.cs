@@ -2142,7 +2142,8 @@ namespace VertexAutoTradeBinance8.Strategy
             {
                 try
                 {
-                    var klines1m = await _marketData.GetKlinesAsync(symbol, KlineInterval.OneMinute, need: 30, CancellationToken.None);
+                    var klines1m = _marketData?.GetKlinesAsync(symbol, KlineInterval.OneMinute, need: 30, CancellationToken.None)
+                                              .GetAwaiter().GetResult();
                     if (klines1m != null && klines1m.Count >= 15)
                     {
                         decimal ema9_1m  = EmaClose(klines1m, 9,  klines1m.Count - 1);
