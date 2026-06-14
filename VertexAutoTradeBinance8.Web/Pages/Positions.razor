@@ -496,12 +496,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                         ? p.IsolatedMargin
                         : size / Math.Max(p.Leverage, 1);
                     var roi    = margin > 0 ? p.UnrealizedPnl / margin : 0m;
-                    var mr     = p.Notional > 0 && p.MaintMargin > 0
-                        ? p.MaintMargin / (p.MaintMargin + p.IsolatedMargin) * 100m
-                        : 0m;
                     return new PosRow(p.Symbol, side, p.Leverage,
                         size, p.EntryPrice, p.MarkPrice, p.LiquidationPrice,
-                        margin, mr, p.UnrealizedPnl, roi);
+                        margin, 0m, p.UnrealizedPnl, roi);
                 })
                 .OrderByDescending(p => Math.Abs(p.Pnl))
                 .ToList();
@@ -583,7 +580,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                             results.Add(new HistRow(o.Id, o.Symbol,
                                 o.Type.ToString(),
                                 o.Side.ToString().ToUpperInvariant(),
-                                o.Price, o.AveragePrice ?? 0m,
+                                o.Price, o.AveragePrice,
                                 o.Quantity, o.QuantityFilled,
                                 o.Status.ToString().ToUpperInvariant(),
                                 o.UpdateTime));
