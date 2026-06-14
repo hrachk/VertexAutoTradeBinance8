@@ -217,7 +217,8 @@ namespace VertexAutoTradeBinance8.Services
                     _logger.LogError(ex, "[LIQ-RISK] Monitor error");
                 }
 
-                await Task.Delay(MonitorInterval, stoppingToken);
+                try { await Task.Delay(MonitorInterval, stoppingToken); }
+                catch (OperationCanceledException) { break; }
             }
         }
 

@@ -185,13 +185,26 @@ namespace VertexAutoTradeBinance8.Services.MarketData
                 {
                     await RefreshAllAsync(stoppingToken);
                 }
+                catch (OperationCanceledException)
+                {
+                    break; // нормальное завершение — не логируем как ошибку
+                }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "[FUNDING] Refresh error");
                 }
 
-                await Task.Delay(RestInterval, stoppingToken);
+                try
+                {
+                    await Task.Delay(RestInterval, stoppingToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
             }
+
+            _logger.LogInformation("[FUNDING] Service stopped");
         }
 
         private async Task RefreshAllAsync(CancellationToken ct)
@@ -205,13 +218,10 @@ namespace VertexAutoTradeBinance8.Services.MarketData
 
             using var client = _factory.CreateRestClient();
 
-            // Обновляем по одному — weight=1 каждый
-            // Все символы за один цикл = symbols.Count weight units
             foreach (var symbol in symbols)
             {
                 if (ct.IsCancellationRequested) break;
 
-                // Throttle: не чаще чем раз в RestInterval
                 if (_lastFetch.TryGetValue(symbol, out var last) &&
                     DateTime.UtcNow - last < RestInterval)
                     continue;
@@ -221,13 +231,23 @@ namespace VertexAutoTradeBinance8.Services.MarketData
                     await FetchAndUpdateAsync(client, symbol, ct);
                     _lastFetch[symbol] = DateTime.UtcNow;
                 }
+                catch (OperationCanceledException)
+                {
+                    break; // shutdown — выходим тихо
+                }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "[FUNDING] Failed to fetch {symbol}", symbol);
                 }
 
-                // Небольшая пауза между запросами — rate limit protection
-                await Task.Delay(200, ct);
+                try
+                {
+                    await Task.Delay(200, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
             }
         }
 
