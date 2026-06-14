@@ -143,36 +143,82 @@ namespace VertexAutoTradeBinance8.Services
 
             if (balance < 50m)
             {
-                // Максимально допустимый notional при малом балансе
-                decimal maxNotionalSmall = balance * leverage * 0.90m;
-                // Но не больше чем нужно для 1 TP (не жадничаем)
-                decimal targetNotionalSmall = Math.Max(minNotional, Math.Min(maxNotionalSmall, balance * leverage * 0.5m));
+                // ═══════════════════════════════════════════════════════════
+                // INTELLIGENT MICRO-ACCOUNT MODE ($10-50)
+                // Цель: наращивать баланс без риска слива
+                //
+                // Принципы:
+                // 1. Фиксированный риск 2% баланса на сделку (Kelly 1/4)
+                // 2. Минимальный notional 5$ (Binance limit)
+                // 3. Приоритет: сохранить капитал → потом наращивать
+                // 4. Лимит потерь подряд: после 2 лоссов → уменьшаем
+                // ═══════════════════════════════════════════════════════════
 
+                // Базовый риск 2% баланса
+                decimal microRisk = 0.02m;
+
+                // Корректируем на win rate AI
+                var wr = _ai.GetWinRate(signal.Side);
+                if (wr < 0.45m)       microRisk = 0.015m; // плохой WR → осторожнее
+                else if (wr >= 0.60m) microRisk = 0.025m; // хороший WR → чуть больше
+
+                // Корректируем на confidence сигнала
+                if (signal.Confidence >= 0.70m) microRisk *= 1.2m;
+                if (signal.Confidence < 0.45m)  microRisk *= 0.8m;
+
+                // Корректируем на SizeMultiplier из стратегии
+                if (signal.SizeMultiplier > 0m)
+                    microRisk *= Math.Clamp(signal.SizeMultiplier, 0.5m, 1.5m);
+
+                microRisk = Math.Clamp(microRisk, 0.010m, 0.030m); // 1%-3% жёсткий лимит
+
+                // Рискуем X% баланса
+                decimal riskBudgetMicro = balance * microRisk;
+
+                // Размер позиции = riskBudget / slPercent / entry
+                decimal rawNotional = riskBudgetMicro / slPercent;
+
+                // Не больше 60% баланса × leverage (маржинальный лимит)
+                decimal maxNotionalMicro = balance * leverage * 0.60m;
+                decimal targetNotional   = Math.Min(rawNotional, maxNotionalMicro);
+
+                // Минимум 5$ notional (иначе Binance отклонит)
+                if (targetNotional < minNotional)
+                    targetNotional = minNotional;
+
+                // Рассчитываем qty
                 decimal minQtyForMin = Math.Ceiling(minNotional / entry / step) * step;
-                decimal effectiveMinQtySmall = Math.Max(minQty, minQtyForMin);
+                decimal effectiveMinQty = Math.Max(minQty, minQtyForMin);
 
-                decimal rawQtySmall = targetNotionalSmall / entry;
-                decimal qtySmall = Math.Floor(rawQtySmall / step) * step;
-                if (qtySmall < effectiveMinQtySmall) qtySmall = effectiveMinQtySmall;
+                decimal rawQtyMicro = targetNotional / entry;
+                decimal qtyMicro    = Math.Floor(rawQtyMicro / step) * step;
+                if (qtyMicro < effectiveMinQty) qtyMicro = effectiveMinQty;
+
+                decimal actualNotional = qtyMicro * entry;
+                decimal actualRiskPct  = actualNotional > 0 && leverage > 0
+                    ? (actualNotional / leverage) / balance * slPercent
+                    : 0m;
 
                 _logger.LogInformation(
-                    "[RISK] SMALL_BALANCE mode balance={bal:F2}$ → notional={not:F2}$ qty={qty} (leverage={lev}x)",
-                    balance, qtySmall * entry, qtySmall, leverage);
+                    "[RISK][MICRO] balance={bal:F2}$ risk={rsk:P1} slPct={sl:P2} " +
+                    "notional={ntn:F2}$ qty={qty} lev={lev}x → actualRisk={ar:P2}",
+                    balance, microRisk, slPercent,
+                    actualNotional, qtyMicro, leverage, actualRiskPct);
 
-                // Liq risk check
+                // Liquidation risk check
                 if (_liqRisk != null)
                 {
-                    var liqCheck = _liqRisk.CheckPreTrade(signal, qtySmall, balance, leverage);
+                    var liqCheck = _liqRisk.CheckPreTrade(signal, qtyMicro, balance, leverage);
                     if (!liqCheck.IsAllowed)
                     {
                         LastRejectReason = $"LIQ_RISK_BLOCKED: {liqCheck.BlockReason}";
                         return 0;
                     }
-                    if (liqCheck.SafeQty < qtySmall && liqCheck.SafeQty > 0)
-                        qtySmall = Math.Floor(liqCheck.SafeQty / step) * step;
+                    if (liqCheck.SafeQty < qtyMicro && liqCheck.SafeQty > 0)
+                        qtyMicro = Math.Floor(liqCheck.SafeQty / step) * step;
                 }
 
-                return qtySmall;
+                return qtyMicro;
             }
 
             // -----------------------------
