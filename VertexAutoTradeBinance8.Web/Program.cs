@@ -57,8 +57,8 @@ builder.Services.AddSingleton<ConfigEditorService>();
 builder.Services.Configure<EngineConfigRoot>(
     builder.Configuration.GetSection("Runtime")); // future-ready
 
-//builder.Services.Configure<BinanceOptions>(
-//    builder.Configuration.GetSection("Binance"));
+builder.Services.Configure<BinanceOptions>(
+    builder.Configuration.GetSection("Binance"));
 
 
 builder.Services.AddSingleton<AiStopLossOptimizer>();
