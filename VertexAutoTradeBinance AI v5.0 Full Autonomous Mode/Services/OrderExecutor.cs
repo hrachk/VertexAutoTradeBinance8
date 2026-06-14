@@ -1982,26 +1982,55 @@ namespace VertexAutoTradeBinance8.Services
                     decimal tp1Qty = Math.Floor(quantity / step) * step;
                     tp1Qty = Math.Max(tp1Qty, filters.minQty);
 
+                    _logger.LogInformation(
+                        "[TP1_ATTEMPT][{symbol}] stopPrice={tp} qty={qty} markPrice={mark} side={side}",
+                        signal.Symbol, tp1Price, tp1Qty, markPrice, tpSide);
+
                     var tp1Res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                         symbol:                  signal.Symbol,
                         side:                    tpSide,
                         type:                    FuturesOrderType.TakeProfitMarket,
                         stopPrice:               tp1Price,
                         quantity:                tp1Qty,
-                        timeInForce:             TimeInForce.GoodTillCanceled,
+                        reduceOnly:              true,
                         positionSide:            isHedge ? posSide : null,
                         workingType:             WorkingType.Mark,
                         selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                         ct:                      ct);
 
                     if (tp1Res.Success)
+                    {
                         _logger.LogInformation(
-                            "[TP1_PLACED][{symbol}] stopPrice={price} qty={qty} (100% position)",
-                            signal.Symbol, tp1Price, tp1Qty);
+                            "[TP1_PLACED][{symbol}] stopPrice={price} qty={qty} orderId={id}",
+                            signal.Symbol, tp1Price, tp1Qty, tp1Res.Data?.Id);
+                    }
                     else
+                    {
                         _logger.LogWarning(
-                            "[TP1_FAIL][{symbol}] code={code} msg={msg} stopPrice={tp} markPrice={mark}",
+                            "[TP1_FAIL][{symbol}] code={code} msg={msg} stopPrice={tp} markPrice={mark} — retrying with CONTRACT_PRICE",
                             signal.Symbol, tp1Res.Error?.Code, tp1Res.Error?.Message, tp1Price, markPrice);
+
+                        // Retry с CONTRACT_PRICE (некоторые символы не принимают MARK)
+                        var tp1Retry = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                            symbol:       signal.Symbol,
+                            side:         tpSide,
+                            type:         FuturesOrderType.TakeProfitMarket,
+                            stopPrice:    tp1Price,
+                            quantity:     tp1Qty,
+                            reduceOnly:   true,
+                            positionSide: isHedge ? posSide : null,
+                            workingType:  WorkingType.Contract,
+                            ct:           ct);
+
+                        if (tp1Retry.Success)
+                            _logger.LogInformation(
+                                "[TP1_PLACED_CONTRACT][{symbol}] stopPrice={price} qty={qty}",
+                                signal.Symbol, tp1Price, tp1Qty);
+                        else
+                            _logger.LogError(
+                                "[TP1_FAIL_FINAL][{symbol}] code={code} msg={msg} — Supervisor will place emergency TP",
+                                signal.Symbol, tp1Retry.Error?.Code, tp1Retry.Error?.Message);
+                    }
                 }
             }
 
