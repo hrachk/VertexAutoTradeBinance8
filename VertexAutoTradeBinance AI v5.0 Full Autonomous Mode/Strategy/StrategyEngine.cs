@@ -2824,6 +2824,152 @@ namespace VertexAutoTradeBinance8.Strategy
         }
         //==============================================BTC HTF BLOCK
 
+        private TradeSignal? TryRangeBound(
+            string symbol,
+            KlineInterval interval,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            SmartRegimeInfo smart)
+        {
+            if (klines.Count < 50) return null;
+
+            int last  = klines.Count - 1;
+            var c0    = klines[last - 1]; // завершённая свеча
+            var c1    = klines[last - 2];
+
+            decimal atr = Atr(klines, 14, last - 1);
+            if (atr <= 0) return null;
+
+            // EMA slope — должна быть почти горизонтальной
+            decimal emaNow  = Ema(klines, 21, last - 1);
+            decimal emaPast = Ema(klines, 21, last - 6);
+            decimal slope   = emaPast > 0 ? Math.Abs(emaNow - emaPast) / atr : 1m;
+
+            // Если slope > 0.4 ATR — это уже тренд, не боковик
+            if (slope > 0.4m) return null;
+
+            // Запрет при аномальном объёме (пробой канала)
+            if (VolumeSpike(klines, last - 1)) return null;
+            if (IsExhaustion(klines, last - 1, atr)) return null;
+
+            // =====================================================
+            // Определяем канал по последним 30 свечам
+            // (не берём слишком много — канал мог сместиться)
+            // =====================================================
+            int lookback = Math.Min(30, last - 1);
+            int chanStart = last - 1 - lookback;
+
+            decimal chanHigh = decimal.MinValue;
+            decimal chanLow  = decimal.MaxValue;
+
+            for (int i = chanStart; i <= last - 1; i++)
+            {
+                if (klines[i].HighPrice > chanHigh) chanHigh = klines[i].HighPrice;
+                if (klines[i].LowPrice  < chanLow)  chanLow  = klines[i].LowPrice;
+            }
+
+            decimal chanHeight = chanHigh - chanLow;
+            decimal chanMid    = (chanHigh + chanLow) / 2m;
+
+            // Канал должен быть минимум 2 ATR (иначе это не канал а компрессия)
+            if (chanHeight < atr * 2.0m) return null;
+
+            // Канал не должен быть больше 8 ATR (иначе слишком широкий)
+            if (chanHeight > atr * 8.0m) return null;
+
+            decimal proximity = atr * 0.5m; // близость к границе
+
+            // =====================================================
+            // LONG от нижней границы канала
+            // Цена касается Low зоны + свеча закрылась выше Low
+            // =====================================================
+            bool nearLow = c0.LowPrice <= chanLow + proximity;
+            bool rejectedLow =
+                nearLow &&
+                c0.ClosePrice > c0.OpenPrice &&                    // бычья свеча
+                c0.ClosePrice > chanLow + atr * 0.2m &&            // закрылась выше Low зоны
+                c0.LowPrice   < chanLow + proximity &&             // касание нижней границы
+                Math.Abs(c0.ClosePrice - c0.OpenPrice) >= atr * 0.25m; // не дожи
+
+            if (rejectedLow)
+            {
+                var (slMult, tp1Mult, _, _) = GetAtrConfig(interval);
+
+                decimal entry = c0.ClosePrice + atr * 0.03m;
+                decimal sl    = chanLow - atr * slMult * 0.7m;   // за каналом, но не слишком далеко
+                decimal tp1   = chanMid;                           // TP1 = середина канала
+                decimal tp2   = chanHigh - atr * 0.5m;            // TP2 = верхняя зона
+
+                decimal risk = entry - sl;
+                if (risk <= atr * 0.2m) return null;
+
+                // R:R минимум 1.2 для range (меньше чем для тренда — нормально)
+                decimal rr = (tp1 - entry) / risk;
+                if (rr < 1.2m) return null;
+
+                var signal = new TradeSignal
+                {
+                    Symbol      = symbol,
+                    Side        = SignalSide.Buy,
+                    Reason      = "RANGE_BOUND_LONG",
+                    Atr         = atr,
+                    EntryPrice  = entry,
+                    StopLoss    = sl,
+                    Confidence  = smart.Confidence * 0.90m,
+                    SizeMultiplier = 0.70m,  // меньший размер в боковике
+                    TakeProfits = new List<decimal> { tp1, tp2 }
+                };
+
+                NormalizeEntryAndSl(signal);
+                return signal;
+            }
+
+            // =====================================================
+            // SHORT от верхней границы канала
+            // =====================================================
+            bool nearHigh = c0.HighPrice >= chanHigh - proximity;
+            bool rejectedHigh =
+                nearHigh &&
+                c0.ClosePrice < c0.OpenPrice &&                    // медвежья свеча
+                c0.ClosePrice < chanHigh - atr * 0.2m &&           // закрылась ниже High зоны
+                c0.HighPrice  > chanHigh - proximity &&            // касание верхней границы
+                Math.Abs(c0.ClosePrice - c0.OpenPrice) >= atr * 0.25m;
+
+            if (rejectedHigh)
+            {
+                var (slMult, tp1Mult, _, _) = GetAtrConfig(interval);
+
+                decimal entry = c0.ClosePrice - atr * 0.03m;
+                decimal sl    = chanHigh + atr * slMult * 0.7m;
+                decimal tp1   = chanMid;
+                decimal tp2   = chanLow + atr * 0.5m;
+
+                decimal risk = sl - entry;
+                if (risk <= atr * 0.2m) return null;
+
+                decimal rr = (entry - tp1) / risk;
+                if (rr < 1.2m) return null;
+
+                var signal = new TradeSignal
+                {
+                    Symbol      = symbol,
+                    Side        = SignalSide.Sell,
+                    Reason      = "RANGE_BOUND_SHORT",
+                    Atr         = atr,
+                    EntryPrice  = entry,
+                    StopLoss    = sl,
+                    Confidence  = smart.Confidence * 0.90m,
+                    SizeMultiplier = 0.70m,
+                    TakeProfits = new List<decimal> { tp1, tp2 }
+                };
+
+                NormalizeEntryAndSl(signal);
+                return signal;
+            }
+
+            return null;
+        }
+
+
         bool VolumeSpike(IReadOnlyList<BinanceFuturesUsdtKline> klines, int i)
         {
             decimal avg = 0m;
