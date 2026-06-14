@@ -305,7 +305,7 @@
                 </div>
                 @foreach (var (sym, cnt, avgConf) in _topSymbols.Take(10))
                 {
-                    var barW = _topSymbols.Any() ? cnt * 100.0 / _topSymbols[0].Count : 0;
+                    var barW = _topSymbols.Any() ? cnt * 100.0 / _topSymbols[0].Item2 : 0;
                     var cc = avgConf >= 70 ? "g" : avgConf >= 50 ? "b" : "r";
                     <div class="ov-sym-row">
                         <span class="ov-sr-sym">@sym</span>
