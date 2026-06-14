@@ -358,27 +358,83 @@ namespace VertexAutoTradeBinance8.Services
 
         public async Task<decimal> GetRealtimeBalanceAsync(CancellationToken ct)
         {
-            try
+            // ── Попытка 1: GetAccountInfoV3 (точный realtime) ────────────
+            for (int attempt = 1; attempt <= 3; attempt++)
             {
-                var client = _factory.CreateRestClient();
-                var account = await client.UsdFuturesApi.Account.GetAccountInfoV3Async(ct: ct).ConfigureAwait(false);
-
-                if (!account.Success || account.Data == null)
+                try
                 {
-                    _logger.LogWarning("GetRealtimeBalanceAsync: Failed to fetch account info. Success={Success}", account.Success);
-                    return 0m;
+                    var client = _factory.CreateRestClient();
+                    var account = await client.UsdFuturesApi.Account
+                        .GetAccountInfoV3Async(ct: ct)
+                        .ConfigureAwait(false);
+
+                    if (account.Success && account.Data != null)
+                    {
+                        var free = account.Data.Assets
+                            .FirstOrDefault(a => a.Asset == "USDT")?.AvailableBalance ?? 0m;
+                        free = Math.Max(free, 0m);
+                        LastBalanceUsdt = free;
+                        _logger.LogInformation(
+                            "[BALANCE] Fetched {bal:F4}$ USDT (attempt {a})",
+                            free, attempt);
+                        return free;
+                    }
+
+                    _logger.LogWarning(
+                        "[BALANCE] GetAccountInfoV3 failed attempt {a}/3: {code} {msg}",
+                        attempt,
+                        account.Error?.Code,
+                        account.Error?.Message);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "[BALANCE] Exception on attempt {a}/3", attempt);
                 }
 
-                var free = account.Data.Assets.FirstOrDefault(a => a.Asset == "USDT")?.AvailableBalance ?? 0m;
-                free = Math.Max(free, 0m);
-                LastBalanceUsdt = free;
-                return free;
+                if (attempt < 3)
+                    await Task.Delay(500 * attempt, ct);
             }
+
+            // ── Попытка 2: GetFuturesAccountBalancesAsync (легче) ─────────
+            try
+            {
+                var client2 = _factory.CreateRestClient();
+                var balances = await client2.UsdFuturesApi.Account
+                    .GetBalancesAsync(ct: ct)
+                    .ConfigureAwait(false);
+
+                if (balances.Success && balances.Data != null)
+                {
+                    var usdt = balances.Data.FirstOrDefault(b => b.Asset == "USDT");
+                    if (usdt != null)
+                    {
+                        var free = Math.Max(usdt.AvailableBalance, 0m);
+                        LastBalanceUsdt = free;
+                        _logger.LogInformation(
+                            "[BALANCE] Fallback GetBalances → {bal:F4}$", free);
+                        return free;
+                    }
+                }
+            }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "GetRealtimeBalanceAsync: Exception while fetching balance");
-                return 0m;
+                _logger.LogWarning(ex, "[BALANCE] Fallback GetBalances also failed");
             }
+
+            // ── Попытка 3: используем кэшированное значение ───────────────
+            if (LastBalanceUsdt > 0)
+            {
+                _logger.LogWarning(
+                    "[BALANCE] All API calls failed — using cached {bal:F4}$",
+                    LastBalanceUsdt);
+                return LastBalanceUsdt;
+            }
+
+            _logger.LogError("[BALANCE] Cannot determine balance — returning 0");
+            return 0m;
         }
 
         private decimal CalculateAdaptiveRisk(
