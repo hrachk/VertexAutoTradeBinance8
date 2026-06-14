@@ -286,7 +286,7 @@ namespace VertexAutoTradeBinance8.Services.MarketData
             snapshot.UpdatedAt       = DateTime.UtcNow;
             snapshot.PushPremium(premium);
             // Обновляем историю applied rates (LastFundingRate меняется раз в 8ч)
-            snapshot.PushFundingRate(data.LastFundingRate);
+            snapshot.PushFundingRate((decimal)data.FundingRate);
 
             if (snapshot.Risk >= FundingRisk.High || snapshot.InstantRisk >= FundingRisk.High)
             {

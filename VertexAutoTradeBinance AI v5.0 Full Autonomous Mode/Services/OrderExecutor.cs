@@ -1465,7 +1465,7 @@ namespace VertexAutoTradeBinance8.Services
                 var note    = $"code={errCode}; msg={errMsg}";
 
                 // Переводим коды Binance в читаемые причины
-                string failReason = errCode switch
+                failReason = errCode switch
                 {
                     -2010 => "INSUFFICIENT_MARGIN",
                     -1013 => "QTY_BELOW_MIN_NOTIONAL",

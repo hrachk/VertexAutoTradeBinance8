@@ -59,8 +59,8 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================
         // Пороги риска
         // =====================================================
-        private const decimal LIQBUFFER_WARN    = 0.15m;  // предупреждение если до ликвидации < 15%
-        private const decimal LIQBUFFER_DANGER  = 0.08m;  // опасность если < 8%
+        private const decimal LIQBUFFER_WARN = 0.15m;  // предупреждение если до ликвидации < 15%
+        private const decimal LIQBUFFER_DANGER = 0.08m;  // опасность если < 8%
         private const decimal LIQBUFFER_CRITICAL = 0.04m; // критично если < 4% → режем позицию
 
         // Интервал мониторинга
@@ -73,11 +73,11 @@ namespace VertexAutoTradeBinance8.Services
             FundingRateService fundingRate,
             PositionSupervisorService supervisor)
         {
-            _logger      = logger;
+            _logger = logger;
             _accountState = accountState;
-            _factory      = factory;
-            _fundingRate  = fundingRate;
-            _supervisor   = supervisor;
+            _factory = factory;
+            _fundingRate = fundingRate;
+            _supervisor = supervisor;
         }
 
         // =====================================================
@@ -89,17 +89,17 @@ namespace VertexAutoTradeBinance8.Services
         // ----------------------
         public sealed class PreTradeRiskResult
         {
-            public bool   IsAllowed          { get; init; }
-            public string BlockReason        { get; init; } = string.Empty;
+            public bool IsAllowed { get; init; }
+            public string BlockReason { get; init; } = string.Empty;
 
-            public decimal LiquidationPrice  { get; init; }
-            public decimal LiqBufferPct      { get; init; }  // расстояние до ликвидации в % от entry
-            public decimal SafeQty           { get; init; }  // безопасное количество
-            public decimal SafeNotional      { get; init; }
-            public decimal SafeMargin        { get; init; }
+            public decimal LiquidationPrice { get; init; }
+            public decimal LiqBufferPct { get; init; }  // расстояние до ликвидации в % от entry
+            public decimal SafeQty { get; init; }  // безопасное количество
+            public decimal SafeNotional { get; init; }
+            public decimal SafeMargin { get; init; }
             public decimal EffectiveLeverage { get; init; }
             public decimal MaintenanceMargin { get; init; }
-            public string  MmrTier           { get; init; } = string.Empty;
+            public string MmrTier { get; init; } = string.Empty;
         }
 
         // ----------------------
@@ -107,12 +107,12 @@ namespace VertexAutoTradeBinance8.Services
         // ----------------------
         public sealed class PositionLiqRisk
         {
-            public string  Symbol           { get; init; } = string.Empty;
-            public PositionSide Side        { get; init; }
-            public decimal MarkPrice        { get; init; }
+            public string Symbol { get; init; } = string.Empty;
+            public PositionSide Side { get; init; }
+            public decimal MarkPrice { get; init; }
             public decimal LiquidationPrice { get; init; }
-            public decimal LiqBufferPct     { get; init; }
-            public LiqRiskLevel RiskLevel   { get; init; }
+            public decimal LiqBufferPct { get; init; }
+            public LiqRiskLevel RiskLevel { get; init; }
             public decimal SuggestedReducePct { get; init; } // сколько % позиции срезать
         }
 
@@ -130,14 +130,14 @@ namespace VertexAutoTradeBinance8.Services
             decimal walletBalance,
             decimal leverage)
         {
-            decimal entry  = signal.EntryPrice;
-            decimal sl     = signal.StopLoss;
-            bool    isLong = signal.Side == SignalSide.Buy;
+            decimal entry = signal.EntryPrice;
+            decimal sl = signal.StopLoss;
+            bool isLong = signal.Side == SignalSide.Buy;
 
             if (entry <= 0 || qty <= 0 || walletBalance <= 0 || leverage <= 0)
                 return Allow(qty, entry, leverage, 0, 0, "INVALID_PARAMS");
 
-            decimal notional      = qty * entry;
+            decimal notional = qty * entry;
             decimal initialMargin = notional / leverage;
 
             // Получаем MMR для данного notional tier
@@ -162,7 +162,7 @@ namespace VertexAutoTradeBinance8.Services
             // То есть: |entry - sl| <= |entry - liq| * 0.80
             // Если SL ближе к ликвидации чем 20% — опасно
             // =====================================================
-            decimal slDistance  = Math.Abs(entry - sl);
+            decimal slDistance = Math.Abs(entry - sl);
             decimal liqDistance = Math.Abs(entry - liqPrice);
             decimal slVsLiqRatio = liqDistance > 0 ? slDistance / liqDistance : 1m;
 
@@ -175,16 +175,16 @@ namespace VertexAutoTradeBinance8.Services
 
                 return new PreTradeRiskResult
                 {
-                    IsAllowed          = safeQty > 0,
-                    BlockReason        = safeQty <= 0 ? "SL_TOO_CLOSE_TO_LIQUIDATION" : string.Empty,
-                    LiquidationPrice   = liqPrice,
-                    LiqBufferPct       = liqBuffer,
-                    SafeQty            = safeQty,
-                    SafeNotional       = safeQty * entry,
-                    SafeMargin         = safeQty * entry / leverage,
-                    EffectiveLeverage  = leverage,
-                    MaintenanceMargin  = maintenanceMargin,
-                    MmrTier            = $"MMR={mmr:P2} cum={cum:F0}"
+                    IsAllowed = safeQty > 0,
+                    BlockReason = safeQty <= 0 ? "SL_TOO_CLOSE_TO_LIQUIDATION" : string.Empty,
+                    LiquidationPrice = liqPrice,
+                    LiqBufferPct = liqBuffer,
+                    SafeQty = safeQty,
+                    SafeNotional = safeQty * entry,
+                    SafeMargin = safeQty * entry / leverage,
+                    EffectiveLeverage = leverage,
+                    MaintenanceMargin = maintenanceMargin,
+                    MmrTier = $"MMR={mmr:P2} cum={cum:F0}"
                 };
             }
 
@@ -238,26 +238,26 @@ namespace VertexAutoTradeBinance8.Services
                 // Если нет из WS — считаем сами
                 if (liqPrice <= 0)
                 {
-                    bool isLong     = pos.Side == PositionSide.Long;
+                    bool isLong = pos.Side == PositionSide.Long;
                     decimal notional = pos.Qty * pos.EntryPrice;
                     decimal leverage = pos.Leverage ?? 10;
-                    decimal margin   = notional / leverage;
-                    var (mmr, cum)   = GetMmrAndCum(notional);
-                    decimal mm       = notional * mmr - cum;
+                    decimal margin = notional / leverage;
+                    var (mmr, cum) = GetMmrAndCum(notional);
+                    decimal mm = notional * mmr - cum;
 
                     liqPrice = CalcLiqPrice(pos.EntryPrice, pos.Qty, margin, mm, isLong);
                 }
 
                 if (liqPrice <= 0) continue;
 
-                decimal mark      = pos.MarkPrice;
+                decimal mark = pos.MarkPrice;
                 decimal liqBuffer = liqPrice > 0 && mark > 0
                     ? Math.Abs(mark - liqPrice) / mark
                     : 1m;
 
-                var riskLevel = liqBuffer >= LIQBUFFER_WARN   ? LiqRiskLevel.Safe     :
-                                liqBuffer >= LIQBUFFER_DANGER  ? LiqRiskLevel.Warning  :
-                                liqBuffer >= LIQBUFFER_CRITICAL ? LiqRiskLevel.Danger  :
+                var riskLevel = liqBuffer >= LIQBUFFER_WARN ? LiqRiskLevel.Safe :
+                                liqBuffer >= LIQBUFFER_DANGER ? LiqRiskLevel.Warning :
+                                liqBuffer >= LIQBUFFER_CRITICAL ? LiqRiskLevel.Danger :
                                                                   LiqRiskLevel.Critical;
 
                 if (riskLevel == LiqRiskLevel.Safe) continue;
@@ -376,13 +376,13 @@ namespace VertexAutoTradeBinance8.Services
                     : Binance.Net.Enums.OrderSide.Buy;
 
                 var result = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol:                  pos.Symbol,
-                    side:                    closeSide,
-                    type:                    FuturesOrderType.Market,
-                    quantity:                roundedQty,
-                    positionSide:            pos.Side,
+                    symbol: pos.Symbol,
+                    side: closeSide,
+                    type: FuturesOrderType.Market,
+                    quantity: roundedQty,
+                    positionSide: pos.Side,
                     selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
-                    ct:                      ct);
+                    ct: ct);
 
                 if (result.Success)
                 {
@@ -408,8 +408,8 @@ namespace VertexAutoTradeBinance8.Services
             {
                 _logger.LogError(ex, "[LIQ-RISK] Emergency reduce exception {symbol}", pos.Symbol);
             }
-            }
         }
+
 
         // =====================================================
         // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
@@ -446,23 +446,23 @@ namespace VertexAutoTradeBinance8.Services
         {
             // Ищем qty при котором liqBuffer >= targetBuffer
             // Binary search между minQty и maxQty
-            decimal maxQty  = walletBalance * leverage / entry;
-            decimal minQty  = 0.001m;
+            decimal maxQty = walletBalance * leverage / entry;
+            decimal minQty = 0.001m;
             decimal safeQty = 0m;
 
             for (int i = 0; i < 50; i++) // 50 итераций достаточно
             {
-                decimal mid     = (minQty + maxQty) / 2m;
+                decimal mid = (minQty + maxQty) / 2m;
                 decimal notional = mid * entry;
-                decimal margin  = notional / leverage;
-                decimal mm      = notional * mmr - cum;
-                decimal liq     = CalcLiqPrice(entry, mid, margin, mm, isLong);
-                decimal buffer  = entry > 0 ? Math.Abs(liq - entry) / entry : 0m;
+                decimal margin = notional / leverage;
+                decimal mm = notional * mmr - cum;
+                decimal liq = CalcLiqPrice(entry, mid, margin, mm, isLong);
+                decimal buffer = entry > 0 ? Math.Abs(liq - entry) / entry : 0m;
 
                 if (buffer >= targetBuffer)
                 {
                     safeQty = mid;
-                    minQty  = mid;
+                    minQty = mid;
                 }
                 else
                 {
@@ -508,14 +508,14 @@ namespace VertexAutoTradeBinance8.Services
         {
             return new PreTradeRiskResult
             {
-                IsAllowed          = true,
-                BlockReason        = reason,
-                LiquidationPrice   = liqPrice,
-                LiqBufferPct       = liqBuffer,
-                SafeQty            = qty,
-                SafeNotional       = qty * entry,
-                SafeMargin         = qty * entry / (leverage > 0 ? leverage : 1m),
-                EffectiveLeverage  = leverage,
+                IsAllowed = true,
+                BlockReason = reason,
+                LiquidationPrice = liqPrice,
+                LiqBufferPct = liqBuffer,
+                SafeQty = qty,
+                SafeNotional = qty * entry,
+                SafeMargin = qty * entry / (leverage > 0 ? leverage : 1m),
+                EffectiveLeverage = leverage,
             };
         }
     }
