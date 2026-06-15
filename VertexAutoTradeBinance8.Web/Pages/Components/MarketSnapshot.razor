@@ -893,14 +893,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
 
-            Binance.Net.Objects.Models.Futures.BinanceFuturesPlacedOrder? order = null;
+            long? placedOrderId = null;
 
             if (_orderType == "Market")
             {
                 var r = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                     _activeSignal.Symbol, side,
                     FuturesOrderType.Market, qty, ct: cts.Token);
-                if (r.Success) order = r.Data;
+                if (r.Success) placedOrderId = r.Data?.Id;
                 else { _orderError = $"Error {r.Error?.Code}: {r.Error?.Message}"; return; }
             }
             else if (_orderType == "Limit")
@@ -911,21 +911,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                     price: _orderPrice,
                     timeInForce: TimeInForce.GoodTillCanceled,
                     ct: cts.Token);
-                if (r.Success) order = r.Data;
+                if (r.Success) placedOrderId = r.Data?.Id;
                 else { _orderError = $"Error {r.Error?.Code}: {r.Error?.Message}"; return; }
             }
-            else // StopLimit
+            else
             {
                 var r = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                     _activeSignal.Symbol, side,
                     FuturesOrderType.StopMarket, qty,
                     stopPrice: _orderPrice,
                     ct: cts.Token);
-                if (r.Success) order = r.Data;
+                if (r.Success) placedOrderId = r.Data?.Id;
                 else { _orderError = $"Error {r.Error?.Code}: {r.Error?.Message}"; return; }
             }
 
-            _orderSuccess = $"Order #{order?.Id} placed · {_orderType} · {qty} {_activeSignal.Symbol.Replace("USDT","")}";
+            _orderSuccess = $"Order #{placedOrderId} placed · {_orderType} · {qty} {_activeSignal.Symbol.Replace("USDT", "")}";
             _activeSignal = null;
         }
         catch (Exception ex) { _orderError = ex.Message; }
