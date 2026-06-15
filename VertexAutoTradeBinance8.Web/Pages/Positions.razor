@@ -4,469 +4,647 @@
 @inject BinanceClientFactory Factory
 @implements IDisposable
 
-<PageTitle>Positions & Orders — Vertex</PageTitle>
+<PageTitle>Positions — Vertex</PageTitle>
 
-<div class="bp">
+<div class="p-root">
 
-    <!-- ═══ HEADER ═══════════════════════════════════════════ -->
-    <div class="bp-header">
-        <div class="bp-header-left">
-            <span class="bp-title">Futures</span>
-            <span class="bp-sub">USDⓈ-M Perpetual</span>
-        </div>
-        <div class="bp-header-right">
-            <div class="bp-accsumm">
-                <div class="bp-as">
-                    <div class="bp-as-val @(_totalPnl >= 0 ? "bp-up" : "bp-dn")">
-                        @(_totalPnl >= 0 ? "+" : "")@_totalPnl.ToString("F4") USDT
-                    </div>
-                    <div class="bp-as-lab">Unrealized PnL</div>
-                </div>
-                <div class="bp-as">
-                    <div class="bp-as-val">@_positions.Count</div>
-                    <div class="bp-as-lab">Open Positions</div>
-                </div>
-                <div class="bp-as">
-                    <div class="bp-as-val">@_openOrders.Count</div>
-                    <div class="bp-as-lab">Open Orders</div>
-                </div>
+    <!-- ══════════ HERO HEADER ══════════════════════════════════════ -->
+    <div class="p-hero">
+        <div class="p-hero-left">
+            <div class="p-logo-mark"></div>
+            <div>
+                <div class="p-hero-title">USDⓈ-M Futures</div>
+                <div class="p-hero-sub">Perpetual · Cross Margin</div>
             </div>
-            <button class="bp-refresh @(_loading?"bp-spinning":"")" @onclick="RefreshAll" disabled="@_loading">⟳</button>
-            <span class="bp-ts">@_lastRefresh.ToLocalTime().ToString("HH:mm:ss")</span>
+        </div>
+        <div class="p-hero-stats">
+            <div class="p-hstat @(_totalPnl >= 0 ? "h-pos" : "h-neg")">
+                <div class="p-hstat-val">
+                    @(_totalPnl >= 0 ? "+" : "")@_totalPnl.ToString("F4")
+                    <span class="p-hstat-cur">USDT</span>
+                </div>
+                <div class="p-hstat-lab">Unrealized PnL</div>
+            </div>
+            <div class="p-hdiv"></div>
+            <div class="p-hstat">
+                <div class="p-hstat-val @(_positions.Count > 0 ? "h-active" : "")">
+                    @_positions.Count
+                </div>
+                <div class="p-hstat-lab">Open Positions</div>
+            </div>
+            <div class="p-hdiv"></div>
+            <div class="p-hstat">
+                <div class="p-hstat-val">@_openOrders.Count</div>
+                <div class="p-hstat-lab">Open Orders</div>
+            </div>
+        </div>
+        <div class="p-hero-actions">
+            <div class="p-ts">@_lastRefresh.ToLocalTime().ToString("HH:mm:ss")</div>
+            <button class="p-btn-refresh @(_loading ? "p-spin" : "")" @onclick="RefreshAll" disabled="@_loading" title="Refresh">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                    <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                </svg>
+            </button>
         </div>
     </div>
 
-    <!-- ═══ ERROR ════════════════════════════════════════════ -->
+    <!-- error -->
     @if (!string.IsNullOrEmpty(_error))
     {
-        <div class="bp-error">⚠ @_error</div>
+        <div class="p-alert">
+            <span class="p-alert-icon">⚠</span> @_error
+        </div>
     }
 
-    <!-- ═══ TABS ══════════════════════════════════════════════ -->
-    <div class="bp-tabs">
-        <button class="bp-tab @(_tab==0?"bp-tab-on":"")" @onclick="()=>SetTab(0)">
-            Positions @if(_positions.Any()){<span class="bp-badge">@_positions.Count</span>}
+    <!-- ══════════ TABS ══════════════════════════════════════════════ -->
+    <div class="p-tabs">
+        <button class="p-tab @(_tab==0?"p-tab-on":"")" @onclick="()=>SetTab(0)">
+            <span class="p-tab-label">Positions</span>
+            @if (_positions.Any()) { <span class="p-tab-chip">@_positions.Count</span> }
         </button>
-        <button class="bp-tab @(_tab==1?"bp-tab-on":"")" @onclick="()=>SetTab(1)">
-            Open Orders @if(_openOrders.Any()){<span class="bp-badge">@_openOrders.Count</span>}
+        <button class="p-tab @(_tab==1?"p-tab-on":"")" @onclick="()=>SetTab(1)">
+            <span class="p-tab-label">Open Orders</span>
+            @if (_openOrders.Any()) { <span class="p-tab-chip">@_openOrders.Count</span> }
         </button>
-        <button class="bp-tab @(_tab==2?"bp-tab-on":"")" @onclick="()=>SetTab(2)">
-            Order History
+        <button class="p-tab @(_tab==2?"p-tab-on":"")" @onclick="()=>SetTab(2)">
+            <span class="p-tab-label">Order History</span>
         </button>
-        <button class="bp-tab @(_tab==3?"bp-tab-on":"")" @onclick="()=>SetTab(3)">
-            P&amp;L History
+        <button class="p-tab @(_tab==3?"p-tab-on":"")" @onclick="()=>SetTab(3)">
+            <span class="p-tab-label">P&amp;L History</span>
         </button>
+        <div class="p-tabs-line"></div>
     </div>
 
-    <!-- ═══ LOADING ═══════════════════════════════════════════ -->
-    @if (_loading && !_positions.Any() && !_openOrders.Any())
-    {
-        <div class="bp-loading"><div class="bp-spin"></div> Connecting to Binance...</div>
-    }
-
-    <!-- ═══ TAB: POSITIONS ════════════════════════════════════ -->
+    <!-- ══════════ TAB 0: POSITIONS ═════════════════════════════════ -->
     @if (_tab == 0)
     {
-        <div class="bp-panel">
-            @if (!_loading && !_positions.Any())
-            {
-                <div class="bp-empty">
-                    <div style="font-size:44px">📭</div>
-                    <div>No open positions</div>
-                    <div class="bp-dim">Fetched directly from Binance USDⓈ-M Futures</div>
+        @if (_loading && !_positions.Any())
+        {
+            <div class="p-loader"><div class="p-spin-ring"></div><span>Loading positions…</span></div>
+        }
+        else if (!_positions.Any())
+        {
+            <div class="p-empty">
+                <div class="p-empty-icon">
+                    <svg viewBox="0 0 64 64" fill="none"><circle cx="32" cy="32" r="28" stroke="#1e2535" stroke-width="2"/><path d="M20 32h24M32 20v24" stroke="#30363d" stroke-width="2" stroke-linecap="round"/></svg>
                 </div>
-            }
-            else if (_positions.Any())
-            {
-                <div class="bp-pnl-strip @(_totalPnl>=0?"strip-up":"strip-dn")">
-                    <span class="bp-dim">Total Unrealized P&L</span>
-                    <span class="bp-pnl-big @(_totalPnl>=0?"bp-up":"bp-dn")">
-                        @(_totalPnl>=0?"+":"")@_totalPnl.ToString("F4") USDT
+                <div class="p-empty-title">No open positions</div>
+                <div class="p-empty-sub">Your USDⓈ-M positions will appear here in real time</div>
+            </div>
+        }
+        else
+        {
+            <!-- Total PnL banner -->
+            <div class="p-pnl-banner @(_totalPnl >= 0 ? "ban-pos" : "ban-neg")">
+                <div class="p-pnl-banner-left">
+                    <span class="p-pnl-label">Total Unrealized P&L</span>
+                    <span class="p-pnl-value @(_totalPnl >= 0 ? "v-pos" : "v-neg")">
+                        @(_totalPnl >= 0 ? "+" : "")@_totalPnl.ToString("F4") USDT
                     </span>
                 </div>
+                <div class="p-pnl-banner-right">
+                    <span class="p-pnl-count">@_positions.Count position@(_positions.Count != 1 ? "s" : "")</span>
+                </div>
+            </div>
 
-                <!-- TABLE -->
-                <div class="bp-tbl-wrap">
-                    <div class="bp-pos-grid bp-head">
-                        <div>Symbol</div><div>Size</div><div>Entry Price</div>
-                        <div>Mark Price</div><div>Liq. Price</div><div>Margin</div>
-                        <div>PnL (ROE%)</div><div>Action</div>
-                    </div>
+            <!-- Position cards -->
+            <div class="p-cards">
+                @foreach (var p in _positions)
+                {
+                    bool isL = p.Side == "LONG";
+                    bool pUp = p.Pnl >= 0;
+                    decimal roe = p.Roi * 100m;
+                    decimal liqDist = p.LiqPrice > 0 && p.Mark > 0
+                        ? Math.Abs(p.Mark - p.LiqPrice) / p.Mark * 100m : 0m;
+                    bool danger = liqDist > 0 && liqDist < 5m;
+                    bool warn   = liqDist >= 5m && liqDist < 12m;
+                    decimal move = p.Entry > 0 ? (p.Mark - p.Entry) / p.Entry * 100m * (isL ? 1 : -1) : 0m;
 
-                    @foreach (var p in _positions)
-                    {
-                        bool isL = p.Side == "LONG";
-                        bool pUp = p.Pnl >= 0;
-                        decimal liqDist = p.LiqPrice > 0 && p.Mark > 0
-                            ? Math.Abs(p.Mark - p.LiqPrice) / p.Mark * 100m : 0m;
-                        bool danger = liqDist > 0 && liqDist < 5m;
-                        bool warn   = liqDist >= 5m && liqDist < 12m;
+                    <div class="p-card @(isL ? "card-long" : "card-short") @(danger ? "card-danger" : "")">
 
-                        <div class="bp-pos-grid bp-row">
-                            <!-- Symbol -->
-                            <div>
-                                <div class="bp-sym">@p.Symbol.Replace("USDT","")<span class="bp-unit">USDT</span></div>
-                                <div style="display:flex;gap:5px;margin-top:3px;align-items:center">
-                                    <span class="bp-side @(isL?"side-l":"side-s")">@p.Side</span>
-                                    <span class="bp-lev">@p.Leverage×</span>
+                        <!-- Card Header -->
+                        <div class="p-card-head">
+                            <div class="p-card-sym-wrap">
+                                <div class="p-card-icon @(isL ? "icon-l" : "icon-s")">
+                                    @p.Symbol[0]
                                 </div>
-                            </div>
-                            <!-- Size -->
-                            <div class="mono">
-                                @p.SizeUsdt.ToString("F2")
-                                <span class="bp-dim"> USDT</span>
-                            </div>
-                            <!-- Entry -->
-                            <div class="mono">@FP(p.Entry)</div>
-                            <!-- Mark -->
-                            <div class="mono @(isL?(p.Mark>p.Entry?"bp-up":""):(p.Mark<p.Entry?"bp-up":""))">
-                                @FP(p.Mark)
-                            </div>
-                            <!-- Liq -->
-                            <div>
-                                <div class="mono @(danger?"bp-dn":warn?"bp-warn":"bp-dim")">@FP(p.LiqPrice)</div>
-                                @if (liqDist > 0)
-                                {
-                                    <div class="@(danger?"bp-dn":warn?"bp-warn":"bp-dim")" style="font-size:11px">
-                                        @(danger?"⚠ ":"")@liqDist.ToString("F1")% away
+                                <div>
+                                    <div class="p-card-sym">
+                                        @p.Symbol.Replace("USDT", "")
+                                        <span class="p-card-usdt">USDT</span>
                                     </div>
-                                }
-                            </div>
-                            <!-- Margin -->
-                            <div>
-                                <div class="mono">@p.Margin.ToString("F2") <span class="bp-dim">USDT</span></div>
-                                @if (p.MarginRatio > 0)
-                                {
-                                    <div class="@(p.MarginRatio>80?"bp-dn":p.MarginRatio>50?"bp-warn":"bp-dim")" style="font-size:11px">
-                                        @p.MarginRatio.ToString("F1")%
+                                    <div class="p-card-meta">
+                                        <span class="p-side-badge @(isL ? "sb-l" : "sb-s")">
+                                            @(isL ? "▲ LONG" : "▼ SHORT")
+                                        </span>
+                                        <span class="p-lev">@p.Leverage×</span>
+                                        <span class="p-perp">Perpetual</span>
                                     </div>
-                                }
-                            </div>
-                            <!-- PnL -->
-                            <div>
-                                <div class="mono @(pUp?"bp-up":"bp-dn")" style="font-weight:700">
-                                    @(pUp?"+":"")@p.Pnl.ToString("F4") USDT
-                                </div>
-                                <div class="@(pUp?"bp-up":"bp-dn")" style="font-size:12px">
-                                    @(pUp?"+":"")@((p.Roi*100m).ToString("F2"))%
                                 </div>
                             </div>
-    <!-- Action -->
-                            <div style="display:flex;align-items:center;padding-right:8px;">
-                                <button class="btn-close" @onclick="()=>_confirmPos=p">Close</button>
+                            <div class="p-card-pnl-wrap">
+                                <div class="p-card-pnl @(pUp ? "pnl-pos" : "pnl-neg")">
+                                    @(pUp ? "+" : "")@p.Pnl.ToString("F4")
+                                    <span style="font-size:12px;opacity:.7"> USDT</span>
+                                </div>
+                                <div class="p-card-roe @(pUp ? "pnl-pos" : "pnl-neg")">
+                                    @(pUp ? "+" : "")@roe.ToString("F2")% ROE
+                                </div>
                             </div>
                         </div>
 
+                        <!-- Progress bar - price move -->
+                        <div class="p-move-bar-wrap">
+                            <div class="p-move-bar @(move >= 0 ? "mb-pos" : "mb-neg")"
+                                 style="width:@(Math.Min(Math.Abs(move)*5,100))%"></div>
+                        </div>
+
+                        <!-- Key metrics grid -->
+                        <div class="p-card-grid">
+                            <div class="p-cg">
+                                <div class="p-cg-lab">Entry Price</div>
+                                <div class="p-cg-val mono">@FP(p.Entry)</div>
+                            </div>
+                            <div class="p-cg">
+                                <div class="p-cg-lab">Mark Price</div>
+                                <div class="p-cg-val mono @(isL?(p.Mark>p.Entry?"v-pos":""):(p.Mark<p.Entry?"v-pos":""))">@FP(p.Mark)</div>
+                            </div>
+                            <div class="p-cg">
+                                <div class="p-cg-lab">Size</div>
+                                <div class="p-cg-val mono">@p.SizeUsdt.ToString("F2")<span class="p-cg-cur"> USDT</span></div>
+                            </div>
+                            <div class="p-cg">
+                                <div class="p-cg-lab">Margin</div>
+                                <div class="p-cg-val mono">@p.Margin.ToString("F2")<span class="p-cg-cur"> USDT</span></div>
+                            </div>
+                            <div class="p-cg">
+                                <div class="p-cg-lab">Liq. Price</div>
+                                <div class="p-cg-val mono @(danger ? "v-danger" : warn ? "v-warn" : "v-dim")">
+                                    @FP(p.LiqPrice)
+                                    @if (liqDist > 0)
+                                    {
+                                        <span class="p-liq-dist">(@liqDist.ToString("F1")%)</span>
+                                    }
+                                </div>
+                            </div>
+                            <div class="p-cg">
+                                <div class="p-cg-lab">Move</div>
+                                <div class="p-cg-val mono @(move >= 0 ? "v-pos" : "v-neg")">
+                                    @(move >= 0 ? "+" : "")@move.ToString("F2")%
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Liq danger bar -->
                         @if (danger || warn)
                         {
-                            <div class="bp-liq-warn @(danger?"liq-d":"liq-w")">
-                                ⚠ Liquidation @FP(p.LiqPrice) — @liqDist.ToString("F1")% from mark
+                            <div class="p-liq-alert @(danger ? "la-danger" : "la-warn")">
+                                <span>@(danger ? "🚨" : "⚠")</span>
+                                Liquidation @FP(p.LiqPrice) — @liqDist.ToString("F1")% from mark price
                             </div>
                         }
-                    }
-                </div>
-            }
-        </div>
+
+                        <!-- Card footer -->
+                        <div class="p-card-foot">
+                            <div class="p-card-foot-info">
+                                <span class="v-dim" style="font-size:11px">Position value: @p.SizeUsdt.ToString("F2") USDT</span>
+                            </div>
+                            <button class="p-close-btn" @onclick="() => _confirmPos = p">
+                                Close Position
+                            </button>
+                        </div>
+
+                    </div>
+                }
+            </div>
+        }
     }
 
-    <!-- ═══ TAB: OPEN ORDERS ══════════════════════════════════ -->
+    <!-- ══════════ TAB 1: OPEN ORDERS ══════════════════════════════ -->
     @if (_tab == 1)
     {
-        <div class="bp-panel">
-            @if (_ordLoading) { <div class="bp-loading"><div class="bp-spin"></div> Loading...</div> }
-            else if (!_openOrders.Any())
-            {
-                <div class="bp-empty">
-                    <div style="font-size:44px">📋</div>
-                    <div>No open orders</div>
-                    <div class="bp-dim">TP, SL and pending orders appear here</div>
-                </div>
-            }
-            else
-            {
-                <div class="bp-tbl-wrap">
-                    <div class="bp-ord-grid bp-head">
-                        <div>Symbol</div><div>Type</div><div>Side</div>
-                        <div>Price</div><div>Qty</div><div>Filled</div>
-                        <div>Reduce</div><div>Time</div><div>Action</div>
-                    </div>
-                    @foreach (var o in _openOrders.OrderBy(x=>x.Symbol))
-                    {
-                        bool buy = o.Side == "BUY";
-                        decimal fpct = o.OrigQty>0 ? o.ExecutedQty/o.OrigQty*100m : 0m;
-                        <div class="bp-ord-grid bp-row">
-                            <div>
-                                <div class="bp-sym">@o.Symbol.Replace("USDT","")<span class="bp-unit">USDT</span></div>
-                            </div>
-                            <div><span class="bp-badge-type">@o.Type</span></div>
-                            <div>
-                                <span class="bp-side @(buy?"side-l":"side-s")">@o.Side</span>
-                                @if (o.PosSide != "BOTH") { <div class="bp-dim" style="font-size:10px">@o.PosSide</div> }
-                            </div>
-                            <div class="mono">
-                                @if (o.Price > 0) { <div>@FP(o.Price)</div> }
-                                @if (o.StopPrice > 0) { <div class="bp-dim" style="font-size:11px">Stop @FP(o.StopPrice)</div> }
-                            </div>
-                            <div class="mono">@o.OrigQty.ToString("G6")</div>
-                            <div>
-                                <div class="mono @(fpct>0?"bp-up":"bp-dim")">@o.ExecutedQty.ToString("G6")</div>
-                                @if (fpct > 0) {
-                                    <div class="fill-track"><div class="fill-bar" style="width:@fpct%"></div></div>
-                                }
-                            </div>
-                            <div class="@(o.ReduceOnly?"bp-up":"bp-dim")">@(o.ReduceOnly?"✓":"—")</div>
-                            <div class="mono bp-dim" style="font-size:11px">@o.Time.ToLocalTime().ToString("MM/dd HH:mm:ss")</div>
-                            <div><button class="btn-cancel" @onclick="()=>CancelOrder(o)">Cancel</button></div>
-                        </div>
-                    }
-                </div>
-            }
-        </div>
+        @if (_ordLoading) { <div class="p-loader"><div class="p-spin-ring"></div><span>Loading orders…</span></div> }
+        else if (!_openOrders.Any())
+        {
+            <div class="p-empty">
+                <div class="p-empty-icon"><svg viewBox="0 0 64 64" fill="none"><rect x="12" y="16" width="40" height="32" rx="4" stroke="#1e2535" stroke-width="2"/><line x1="20" y1="26" x2="44" y2="26" stroke="#30363d" stroke-width="2" stroke-linecap="round"/><line x1="20" y1="32" x2="36" y2="32" stroke="#30363d" stroke-width="2" stroke-linecap="round"/></svg></div>
+                <div class="p-empty-title">No open orders</div>
+                <div class="p-empty-sub">TP, SL and pending orders appear here</div>
+            </div>
+        }
+        else
+        {
+            <div class="p-table-wrap">
+                <table class="p-table">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th><th>Type</th><th>Side</th>
+                            <th>Price</th><th>Amount</th><th>Filled</th>
+                            <th>Reduce</th><th>Time</th><th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var o in _openOrders)
+                        {
+                            bool buy = o.Side == "BUY";
+                            decimal fp = o.OrigQty > 0 ? o.ExecutedQty / o.OrigQty * 100m : 0m;
+                            <tr>
+                                <td>
+                                    <div class="t-sym">@o.Symbol.Replace("USDT","")</div>
+                                    <div class="t-sub v-dim">@o.Symbol</div>
+                                </td>
+                                <td><span class="t-type">@o.Type</span></td>
+                                <td>
+                                    <span class="p-side-badge @(buy?"sb-l":"sb-s") sb-sm">@o.Side</span>
+                                    @if (o.PosSide != "BOTH") { <div class="t-sub v-dim">@o.PosSide</div> }
+                                </td>
+                                <td class="mono">
+                                    @if (o.Price > 0) { <div>@FP(o.Price)</div> }
+                                    @if (o.StopPrice > 0) { <div class="t-sub v-dim">Stop @FP(o.StopPrice)</div> }
+                                </td>
+                                <td class="mono">@o.OrigQty.ToString("G6")</td>
+                                <td>
+                                    <div class="mono @(fp>0?"v-pos":"v-dim")">@o.ExecutedQty.ToString("G6")</div>
+                                    @if (fp > 0) {
+                                        <div class="t-fill-track"><div class="t-fill-bar" style="width:@fp%"></div></div>
+                                    }
+                                </td>
+                                <td class="@(o.ReduceOnly?"v-pos":"v-dim")">@(o.ReduceOnly?"✓":"—")</td>
+                                <td class="mono v-dim t-time">@o.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
+                                <td><button class="t-cancel-btn" @onclick="()=>CancelOrder(o)">Cancel</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
     }
 
-    <!-- ═══ TAB: HISTORY ══════════════════════════════════════ -->
+    <!-- ══════════ TAB 2: ORDER HISTORY ════════════════════════════ -->
     @if (_tab == 2)
     {
-        <div class="bp-panel">
-            @if (_histLoading) { <div class="bp-loading"><div class="bp-spin"></div> Loading...</div> }
-            else if (!_histOrders.Any())
-            {
-                <div class="bp-empty">
-                    <div style="font-size:44px">📜</div>
-                    <div>No order history</div>
-                </div>
-            }
-            else
-            {
-                <div class="bp-tbl-wrap">
-                    <div class="bp-hist-grid bp-head">
-                        <div>Symbol</div><div>Type</div><div>Side</div>
-                        <div>Price</div><div>Qty / Filled</div><div>Status</div><div>Time</div>
-                    </div>
-                    @foreach (var o in _histOrders)
-                    {
-                        bool buy = o.Side == "BUY";
-                        string sc = o.Status switch {
-                            "FILLED" => "st-ok", "CANCELED" or "EXPIRED" => "st-can",
-                            "PARTIALLY_FILLED" => "st-part", _ => "bp-dim"
-                        };
-                        <div class="bp-hist-grid bp-row">
-                            <div class="bp-sym">@o.Symbol.Replace("USDT","")<span class="bp-unit">USDT</span></div>
-                            <div><span class="bp-badge-type">@o.Type</span></div>
-                            <div><span class="bp-side @(buy?"side-l":"side-s")">@o.Side</span></div>
-                            <div class="mono">@(o.AvgPrice>0?FP(o.AvgPrice):o.Price>0?FP(o.Price):"Market")</div>
-                            <div class="mono">@o.ExecutedQty.ToString("G6") / @o.OrigQty.ToString("G6")</div>
-                            <div><span class="bp-status @sc">@o.Status</span></div>
-                            <div class="mono bp-dim" style="font-size:11px">@o.Updated.ToLocalTime().ToString("MM/dd HH:mm")</div>
-                        </div>
-                    }
-                </div>
-            }
-        </div>
+        @if (_histLoading) { <div class="p-loader"><div class="p-spin-ring"></div><span>Loading history…</span></div> }
+        else if (!_histOrders.Any())
+        {
+            <div class="p-empty">
+                <div class="p-empty-icon"><svg viewBox="0 0 64 64" fill="none"><path d="M32 12v8M32 44v8M12 32h8M44 32h8" stroke="#1e2535" stroke-width="2" stroke-linecap="round"/><circle cx="32" cy="32" r="12" stroke="#30363d" stroke-width="2"/></svg></div>
+                <div class="p-empty-title">No order history</div>
+                <div class="p-empty-sub">Last 50 orders across tracked symbols</div>
+            </div>
+        }
+        else
+        {
+            <div class="p-table-wrap">
+                <table class="p-table">
+                    <thead>
+                        <tr><th>Symbol</th><th>Type</th><th>Side</th><th>Price</th><th>Qty / Filled</th><th>Status</th><th>Time</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var o in _histOrders)
+                        {
+                            bool buy = o.Side == "BUY";
+                            string sc = o.Status switch { "FILLED"=>"st-ok","CANCELED" or "EXPIRED"=>"st-can","PARTIALLY_FILLED"=>"st-part",_=>"v-dim" };
+                            <tr>
+                                <td><div class="t-sym">@o.Symbol.Replace("USDT","")</div></td>
+                                <td><span class="t-type">@o.Type</span></td>
+                                <td><span class="p-side-badge @(buy?"sb-l":"sb-s") sb-sm">@o.Side</span></td>
+                                <td class="mono">@(o.AvgPrice>0?FP(o.AvgPrice):o.Price>0?FP(o.Price):"Market")</td>
+                                <td class="mono">@o.ExecutedQty.ToString("G6") / @o.OrigQty.ToString("G6")</td>
+                                <td><span class="t-status @sc">@o.Status</span></td>
+                                <td class="mono v-dim t-time">@o.Updated.ToLocalTime().ToString("MM/dd HH:mm")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
     }
 
-    <!-- ═══ TAB: PNL HISTORY ══════════════════════════════════ -->
+    <!-- ══════════ TAB 3: P&L HISTORY ══════════════════════════════ -->
     @if (_tab == 3)
     {
-        <div class="bp-panel">
-            @if (_pnlLoading) { <div class="bp-loading"><div class="bp-spin"></div> Loading...</div> }
-            else if (!_pnlRows.Any())
-            {
-                <div class="bp-empty">
-                    <div style="font-size:44px">💰</div>
-                    <div>No trade history</div>
-                    <div class="bp-dim">Closed trades appear here</div>
-                </div>
-            }
-            else
-            {
-                <!-- Summary strip -->
-                <div class="bp-pnl-strip @(_pnlTotal>=0?"strip-up":"strip-dn")">
-                    <span class="bp-dim">Total Realized P&L (last @_pnlRows.Count trades)</span>
-                    <span class="bp-pnl-big @(_pnlTotal>=0?"bp-up":"bp-dn")">
+        @if (_pnlLoading) { <div class="p-loader"><div class="p-spin-ring"></div><span>Loading P&L…</span></div> }
+        else if (!_pnlRows.Any())
+        {
+            <div class="p-empty">
+                <div class="p-empty-icon"><svg viewBox="0 0 64 64" fill="none"><path d="M12 48L24 36l8 8 20-24" stroke="#30363d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+                <div class="p-empty-title">No trade history</div>
+                <div class="p-empty-sub">Closed trades appear here</div>
+            </div>
+        }
+        else
+        {
+            <!-- P&L Summary cards -->
+            <div class="p-pnl-summ">
+                <div class="p-pnl-sc @(_pnlTotal>=0?"ps-pos":"ps-neg")">
+                    <div class="p-pnl-sc-val @(_pnlTotal>=0?"v-pos":"v-neg")">
                         @(_pnlTotal>=0?"+":"")@_pnlTotal.ToString("F4") USDT
-                    </span>
-                    <span class="bp-dim" style="font-size:12px">
-                        @_pnlWins W / @(_pnlRows.Count-_pnlWins) L
-                        · WR @(_pnlRows.Count>0?(_pnlWins*100.0/_pnlRows.Count).ToString("F0"):"0")%
-                    </span>
-                </div>
-
-                <div class="bp-tbl-wrap">
-                    <div class="bp-pnl-grid bp-head">
-                        <div>Symbol</div><div>Side</div><div>Entry</div>
-                        <div>Exit</div><div>Qty</div><div>Realized P&L</div>
-                        <div>ROE%</div><div>Commission</div><div>Time</div>
                     </div>
-                    @foreach (var t in _pnlRows)
-                    {
-                        bool win = t.Pnl >= 0;
-                        <div class="bp-pnl-grid bp-row">
-                            <div class="bp-sym">@t.Symbol.Replace("USDT","")<span class="bp-unit">USDT</span></div>
-                            <div><span class="bp-side @(t.Side=="BUY"?"side-l":"side-s")">@t.Side</span></div>
-                            <div class="mono">@FP(t.Entry)</div>
-                            <div class="mono @(win?"bp-up":"bp-dn")">@FP(t.Exit)</div>
-                            <div class="mono">@t.Qty.ToString("G6")</div>
-                            <div class="mono @(win?"bp-up":"bp-dn")" style="font-weight:700">
-                                @(win?"+":"")@t.Pnl.ToString("F4")
-                            </div>
-                            <div class="@(win?"bp-up":"bp-dn")">
-                                @(win?"+":"")@t.Roe.ToString("F2")%
-                            </div>
-                            <div class="mono bp-dim">@t.Commission.ToString("F5")</div>
-                            <div class="mono bp-dim" style="font-size:11px">
-                                @t.Time.ToLocalTime().ToString("MM/dd HH:mm")
-                            </div>
-                        </div>
-                    }
+                    <div class="p-pnl-sc-lab">Realized P&L</div>
                 </div>
-            }
-        </div>
+                <div class="p-pnl-sc">
+                    <div class="p-pnl-sc-val v-pos">@_pnlWins</div>
+                    <div class="p-pnl-sc-lab">Wins</div>
+                </div>
+                <div class="p-pnl-sc">
+                    <div class="p-pnl-sc-val v-neg">@(_pnlRows.Count - _pnlWins)</div>
+                    <div class="p-pnl-sc-lab">Losses</div>
+                </div>
+                <div class="p-pnl-sc">
+                    <div class="p-pnl-sc-val @(_pnlRows.Count>0&&_pnlWins*100/_pnlRows.Count>=50?"v-pos":"v-neg")">
+                        @(_pnlRows.Count > 0 ? (_pnlWins * 100.0 / _pnlRows.Count).ToString("F0") : "0")%
+                    </div>
+                    <div class="p-pnl-sc-lab">Win Rate</div>
+                </div>
+            </div>
+
+            <div class="p-table-wrap">
+                <table class="p-table">
+                    <thead>
+                        <tr><th>Symbol</th><th>Side</th><th>Fill Price</th><th>Qty</th><th>Realized P&L</th><th>ROE%</th><th>Commission</th><th>Time</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var t in _pnlRows)
+                        {
+                            bool win = t.Pnl >= 0;
+                            <tr>
+                                <td><div class="t-sym">@t.Symbol.Replace("USDT","")</div></td>
+                                <td><span class="p-side-badge @(t.Side=="BUY"?"sb-l":"sb-s") sb-sm">@t.Side</span></td>
+                                <td class="mono">@FP(t.Entry)</td>
+                                <td class="mono">@t.Qty.ToString("G6")</td>
+                                <td class="mono @(win?"v-pos":"v-neg")" style="font-weight:700">
+                                    @(win?"+":"")@t.Pnl.ToString("F4")
+                                </td>
+                                <td class="@(win?"v-pos":"v-neg")">@(win?"+":"")@t.Roe.ToString("F2")%</td>
+                                <td class="mono v-dim">@t.Commission.ToString("F5")</td>
+                                <td class="mono v-dim t-time">@t.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
     }
 
-    <!-- ═══ CLOSE CONFIRM ═════════════════════════════════════ -->
+    <!-- ══════════ CLOSE DIALOG ═════════════════════════════════════ -->
     @if (_confirmPos != null)
     {
-        <div class="bp-overlay" @onclick="()=>_confirmPos=null">
-            <div class="bp-dialog" @onclick:stopPropagation>
-                <div class="bp-dlg-title">Close Position</div>
-                <div class="bp-dlg-body">
-                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
-                        <span class="bp-sym" style="font-size:20px">@_confirmPos.Symbol</span>
-                        <span class="bp-side @(_confirmPos.Side=="LONG"?"side-l":"side-s")">@_confirmPos.Side</span>
-                    </div>
-                    <div class="bp-dlg-row"><span class="bp-dim">Size</span><b>@_confirmPos.SizeUsdt.ToString("F2") USDT</b></div>
-                    <div class="bp-dlg-row"><span class="bp-dim">PnL</span>
-                        <b class="@(_confirmPos.Pnl>=0?"bp-up":"bp-dn")">
-                            @(_confirmPos.Pnl>=0?"+":"")@_confirmPos.Pnl.ToString("F4") USDT
-                        </b>
-                    </div>
-                    <div class="bp-dlg-warn">⚠ Market order will be placed to close immediately</div>
+        <div class="p-overlay" @onclick="()=>_confirmPos=null">
+            <div class="p-modal" @onclick:stopPropagation>
+                <div class="p-modal-top">
+                    <div class="p-modal-title">Close Position</div>
+                    <button class="p-modal-x" @onclick="()=>_confirmPos=null">✕</button>
                 </div>
-                <div class="bp-dlg-actions">
-                    <button class="btn-cancel-lg" @onclick="()=>_confirmPos=null">Cancel</button>
-                    <button class="btn-close-lg" @onclick="CloseConfirmed" disabled="@_actionLoading">
-                        @(_actionLoading?"Closing...":"Close Position")
+                <div class="p-modal-body">
+                    <div class="p-modal-sym">
+                        <div class="p-card-icon @(_confirmPos.Side=="LONG"?"icon-l":"icon-s") icon-lg">
+                            @_confirmPos.Symbol[0]
+                        </div>
+                        <div>
+                            <div class="p-modal-sym-name">@_confirmPos.Symbol</div>
+                            <span class="p-side-badge @(_confirmPos.Side=="LONG"?"sb-l":"sb-s")">
+                                @(_confirmPos.Side=="LONG"?"▲ LONG":"▼ SHORT")
+                            </span>
+                            <span class="p-lev" style="margin-left:6px">@_confirmPos.Leverage×</span>
+                        </div>
+                    </div>
+                    <div class="p-modal-rows">
+                        <div class="p-modal-row">
+                            <span class="v-dim">Position Size</span>
+                            <span class="mono">@_confirmPos.SizeUsdt.ToString("F2") USDT</span>
+                        </div>
+                        <div class="p-modal-row">
+                            <span class="v-dim">Entry Price</span>
+                            <span class="mono">@FP(_confirmPos.Entry)</span>
+                        </div>
+                        <div class="p-modal-row">
+                            <span class="v-dim">Mark Price</span>
+                            <span class="mono">@FP(_confirmPos.Mark)</span>
+                        </div>
+                        <div class="p-modal-row">
+                            <span class="v-dim">Unrealized P&L</span>
+                            <span class="mono @(_confirmPos.Pnl>=0?"v-pos":"v-neg")" style="font-weight:700">
+                                @(_confirmPos.Pnl>=0?"+":"")@_confirmPos.Pnl.ToString("F4") USDT
+                            </span>
+                        </div>
+                    </div>
+                    <div class="p-modal-warn">
+                        <svg viewBox="0 0 20 20" fill="currentColor" style="width:16px;flex-shrink:0"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+                        Market order will close the entire position immediately at current price
+                    </div>
+                </div>
+                <div class="p-modal-foot">
+                    <button class="p-modal-cancel" @onclick="()=>_confirmPos=null">Cancel</button>
+                    <button class="p-modal-confirm" @onclick="CloseConfirmed" disabled="@_actionLoading">
+                        @if (_actionLoading) { <span class="p-spin-sm"></span> } else { <span>Close Position</span> }
                     </button>
                 </div>
             </div>
         </div>
     }
 
-    <!-- TOAST -->
+    <!-- Toast -->
     @if (!string.IsNullOrEmpty(_toast))
     {
-        <div class="bp-toast @(_toastOk?"t-ok":"t-err")">@_toast</div>
+        <div class="p-toast @(_toastOk?"t-ok":"t-err")">
+            @(_toastOk ? "✓" : "✕") @_toast
+        </div>
     }
+
 </div>
 
 <style>
-:root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--bdr:#30363d;
-     --grn:#3fb950;--red:#f85149;--yel:#e3b341;--acc:#1f6feb;
-     --txt:#e6edf3;--dim:#8b949e;--mono:'JetBrains Mono','Fira Code',monospace;}
-html,body{background:var(--bg)!important;color:var(--txt);}
-.bp{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);min-height:100vh;}
-.bp-up{color:var(--grn)!important;}.bp-dn{color:var(--red)!important;}.bp-warn{color:var(--yel)!important;}.bp-dim{color:var(--dim)!important;}
+/* ── RESET / BASE ──────────────────────────────────────── */
+:root{
+    --bg:#080b10;--bg2:#0d1117;--bg3:#111720;--bg4:#161d27;
+    --bdr:#1a2232;--bdr2:#222d40;
+    --grn:#00d68f;--red:#ff4d6a;--acc:#4d9fff;--yel:#ffd166;
+    --txt:#dce8f5;--dim:#4a6080;--dim2:#2d3d52;
+    --mono:'JetBrains Mono','Fira Code','SF Mono',monospace;
+}
+html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;}
+*{box-sizing:border-box;}
 .mono{font-family:var(--mono)!important;}
+.v-pos{color:var(--grn)!important;}.v-neg{color:var(--red)!important;}
+.v-dim{color:var(--dim)!important;}.v-warn{color:var(--yel)!important;}
+.v-danger{color:var(--red)!important;font-weight:700;}
 
-/* HEADER */
-.bp-header{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
-.bp-title{font-size:18px;font-weight:700;margin-right:8px;}
-.bp-sub{font-size:12px;color:var(--dim);}
-.bp-header-right{display:flex;align-items:center;gap:20px;}
-.bp-accsumm{display:flex;gap:24px;}
-.bp-as{text-align:right;}
-.bp-as-val{font-family:var(--mono);font-size:16px;font-weight:700;}
-.bp-as-lab{font-size:10px;color:var(--dim);margin-top:2px;}
-.bp-refresh{background:var(--bg3);border:1px solid var(--bdr);color:var(--txt);width:32px;height:32px;border-radius:6px;cursor:pointer;font-size:16px;transition:all .15s;display:flex;align-items:center;justify-content:center;}
-.bp-refresh:hover{border-color:var(--acc);color:var(--acc);}
-.bp-spinning{animation:spin .7s linear infinite;}
+/* ── ROOT ──────────────────────────────────────────────── */
+.p-root{min-height:100vh;background:var(--bg);}
+
+/* ── HERO ──────────────────────────────────────────────── */
+.p-hero{display:flex;align-items:center;justify-content:space-between;padding:20px 28px;background:linear-gradient(135deg,#0d1420 0%,#080b10 100%);border-bottom:1px solid var(--bdr);}
+.p-hero-left{display:flex;align-items:center;gap:14px;}
+.p-logo-mark{width:36px;height:36px;background:linear-gradient(135deg,#1a4fff,#0090ff);border-radius:10px;flex-shrink:0;box-shadow:0 0 20px rgba(77,159,255,.3);}
+.p-hero-title{font-size:17px;font-weight:700;letter-spacing:.3px;}
+.p-hero-sub{font-size:11px;color:var(--dim);margin-top:2px;}
+.p-hero-stats{display:flex;align-items:center;gap:0;}
+.p-hstat{text-align:center;padding:0 28px;}
+.p-hstat-val{font-family:var(--mono);font-size:20px;font-weight:700;}
+.p-hstat-cur{font-size:12px;opacity:.6;margin-left:3px;}
+.p-hstat-lab{font-size:10px;color:var(--dim);letter-spacing:.8px;margin-top:3px;text-transform:uppercase;}
+.p-hdiv{width:1px;height:36px;background:var(--bdr);}
+.h-pos .p-hstat-val{color:var(--grn);}
+.h-neg .p-hstat-val{color:var(--red);}
+.h-active .p-hstat-val{color:var(--acc);}
+.p-hero-actions{display:flex;align-items:center;gap:12px;}
+.p-ts{font-family:var(--mono);font-size:12px;color:var(--dim);}
+.p-btn-refresh{width:36px;height:36px;background:var(--bg3);border:1px solid var(--bdr2);border-radius:8px;color:var(--dim);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .2s;padding:0;}
+.p-btn-refresh:hover{border-color:var(--acc);color:var(--acc);background:rgba(77,159,255,.08);}
+.p-btn-refresh svg{width:15px;height:15px;}
+.p-spin{animation:spin .7s linear infinite;}
 @@keyframes spin{to{transform:rotate(360deg);}}
-.bp-ts{font-family:var(--mono);font-size:12px;color:var(--dim);}
 
-/* ERROR */
-.bp-error{padding:12px 24px;background:rgba(248,81,73,.1);border-bottom:1px solid rgba(248,81,73,.3);color:var(--red);font-size:13px;}
+/* ── ALERT ─────────────────────────────────────────────── */
+.p-alert{display:flex;align-items:center;gap:10px;padding:12px 28px;background:rgba(255,77,106,.08);border-bottom:1px solid rgba(255,77,106,.2);color:var(--red);font-size:13px;}
+.p-alert-icon{font-size:16px;}
 
-/* TABS */
-.bp-tabs{display:flex;background:var(--bg2);border-bottom:2px solid var(--bdr);padding:0 24px;}
-.bp-tab{background:none;border:none;color:var(--dim);font-size:14px;font-weight:500;padding:12px 20px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;display:flex;align-items:center;gap:6px;transition:all .15s;}
-.bp-tab:hover{color:var(--txt);}
-.bp-tab-on{color:var(--acc);border-bottom-color:var(--acc);}
-.bp-badge{background:var(--acc);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;}
-.bp-panel{background:var(--bg);}
+/* ── TABS ──────────────────────────────────────────────── */
+.p-tabs{position:relative;display:flex;align-items:flex-end;padding:0 28px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
+.p-tab{background:none;border:none;color:var(--dim);font-size:13px;font-weight:500;padding:14px 20px 13px;cursor:pointer;display:flex;align-items:center;gap:8px;position:relative;transition:color .15s;}
+.p-tab:hover{color:var(--txt);}
+.p-tab-on{color:var(--acc)!important;}
+.p-tab-on::after{content:'';position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--acc);border-radius:2px 2px 0 0;}
+.p-tab-label{font-size:13px;}
+.p-tab-chip{background:var(--acc);color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;min-width:20px;text-align:center;}
 
-/* PNL STRIP */
-.bp-pnl-strip{display:flex;align-items:center;gap:12px;padding:10px 24px;border-bottom:1px solid var(--bdr);}
-.strip-up{background:rgba(63,185,80,.04);}.strip-dn{background:rgba(248,81,73,.04);}
-.bp-pnl-big{font-family:var(--mono);font-size:16px;font-weight:700;}
+/* ── LOADER / EMPTY ─────────────────────────────────────── */
+.p-loader{display:flex;align-items:center;gap:14px;padding:60px 28px;color:var(--dim);}
+.p-spin-ring{width:22px;height:22px;border:2px solid var(--bdr2);border-top-color:var(--acc);border-radius:50%;animation:spin .8s linear infinite;}
+.p-empty{display:flex;flex-direction:column;align-items:center;gap:14px;padding:80px 20px;color:var(--dim);text-align:center;}
+.p-empty-icon svg{width:64px;height:64px;}
+.p-empty-title{font-size:17px;font-weight:600;color:var(--txt);}
+.p-empty-sub{font-size:13px;}
 
-/* TABLE */
-.bp-tbl-wrap{overflow-x:auto;}
-.bp-pos-grid{display:grid;grid-template-columns:180px 120px 110px 110px 110px 120px 150px 80px;}
-.bp-ord-grid{display:grid;grid-template-columns:140px 120px 90px 110px 100px 110px 60px 130px 80px;}
-.bp-hist-grid{display:grid;grid-template-columns:140px 120px 90px 110px 140px 140px 130px;}
-.bp-head{background:var(--bg2);color:var(--dim);font-size:11px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;padding:9px 24px;border-bottom:1px solid var(--bdr);}
-.bp-head>div{padding:0 8px;}
-.bp-row{padding:12px 24px;border-bottom:1px solid rgba(48,54,61,.4);font-size:13px;align-items:center;transition:background .1s;}
-.bp-row>div{padding:0 8px;}
-.bp-row:hover{background:rgba(255,255,255,.02);}
+/* ── PNL BANNER ─────────────────────────────────────────── */
+.p-pnl-banner{display:flex;align-items:center;justify-content:space-between;padding:12px 28px;border-bottom:1px solid var(--bdr);}
+.ban-pos{background:linear-gradient(90deg,rgba(0,214,143,.06),transparent);}
+.ban-neg{background:linear-gradient(90deg,rgba(255,77,106,.06),transparent);}
+.p-pnl-banner-left{display:flex;align-items:center;gap:16px;}
+.p-pnl-label{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;}
+.p-pnl-value{font-family:var(--mono);font-size:17px;font-weight:700;}
+.v-pos{color:var(--grn)!important;}.v-neg{color:var(--red)!important;}
+.p-pnl-count{font-size:12px;color:var(--dim);}
 
-/* SYMBOL */
-.bp-sym{font-family:var(--mono);font-size:15px;font-weight:700;}
-.bp-unit{font-size:11px;color:var(--dim);margin-left:2px;}
+/* ── POSITION CARDS ─────────────────────────────────────── */
+.p-cards{display:flex;flex-direction:column;gap:1px;background:var(--bdr);}
+.p-card{background:var(--bg2);padding:0;border-left:3px solid transparent;transition:background .15s;}
+.p-card:hover{background:var(--bg3);}
+.card-long{border-left-color:var(--grn);}
+.card-short{border-left-color:var(--red);}
+.card-danger{border-left-color:var(--red);background:rgba(255,77,106,.04)!important;}
 
-/* SIDE BADGE */
-.bp-side{font-size:11px;font-weight:700;padding:2px 7px;border-radius:3px;display:inline-block;}
-.side-l{background:rgba(63,185,80,.15);color:var(--grn);}
-.side-s{background:rgba(248,81,73,.15);color:var(--red);}
-.bp-lev{font-size:11px;background:rgba(31,111,235,.12);color:var(--acc);padding:1px 5px;border-radius:3px;}
+/* Card header */
+.p-card-head{display:flex;align-items:center;justify-content:space-between;padding:16px 24px 10px;}
+.p-card-sym-wrap{display:flex;align-items:center;gap:12px;}
+.p-card-icon{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex-shrink:0;}
+.icon-l{background:rgba(0,214,143,.15);color:var(--grn);}
+.icon-s{background:rgba(255,77,106,.15);color:var(--red);}
+.icon-lg{width:48px;height:48px;font-size:20px;}
+.p-card-sym{font-size:17px;font-weight:700;font-family:var(--mono);}
+.p-card-usdt{font-size:12px;color:var(--dim);margin-left:3px;font-family:var(--mono);}
+.p-card-meta{display:flex;align-items:center;gap:6px;margin-top:4px;}
+.p-side-badge{font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;letter-spacing:.3px;}
+.sb-l{background:rgba(0,214,143,.15);color:var(--grn);}
+.sb-s{background:rgba(255,77,106,.15);color:var(--red);}
+.sb-sm{font-size:10px;padding:1px 6px;}
+.p-lev{font-size:11px;background:rgba(77,159,255,.12);color:var(--acc);padding:1px 6px;border-radius:4px;font-weight:600;}
+.p-perp{font-size:11px;color:var(--dim);}
+.p-card-pnl-wrap{text-align:right;}
+.p-card-pnl{font-family:var(--mono);font-size:20px;font-weight:700;}
+.p-card-roe{font-size:12px;margin-top:3px;font-family:var(--mono);}
+.pnl-pos{color:var(--grn);}
+.pnl-neg{color:var(--red);}
 
-/* LIQ WARNING */
-.bp-liq-warn{padding:6px 24px;font-size:12px;font-weight:600;border-left:3px solid;}
-.liq-d{background:rgba(248,81,73,.1);color:var(--red);border-color:var(--red);}
-.liq-w{background:rgba(227,179,65,.07);color:var(--yel);border-color:var(--yel);}
+/* Move bar */
+.p-move-bar-wrap{height:3px;background:var(--bdr2);margin:0 24px;}
+.p-move-bar{height:100%;border-radius:2px;transition:width .5s;}
+.mb-pos{background:linear-gradient(90deg,transparent,var(--grn));}
+.mb-neg{background:linear-gradient(90deg,transparent,var(--red));}
 
-/* FILL BAR */
-.fill-track{height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;margin-top:4px;}
-.fill-bar{height:100%;background:var(--grn);border-radius:2px;}
+/* Metrics grid */
+.p-card-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:0;padding:14px 24px;}
+.p-cg{padding:8px 12px;border-right:1px solid var(--bdr2);}
+.p-cg:last-child{border-right:none;}
+.p-cg-lab{font-size:10px;color:var(--dim);letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px;}
+.p-cg-val{font-family:var(--mono);font-size:13px;font-weight:500;}
+.p-cg-cur{font-size:10px;color:var(--dim);}
+.p-liq-dist{font-size:10px;margin-left:4px;opacity:.8;}
 
-/* BADGES */
-.bp-badge-type{font-size:10px;background:var(--bg3);border:1px solid var(--bdr);padding:2px 6px;border-radius:3px;color:var(--dim);}
-.bp-status{font-size:11px;padding:2px 8px;border-radius:3px;font-weight:600;}
-.st-ok{background:rgba(63,185,80,.12);color:var(--grn);}
-.st-can{background:var(--bg3);color:var(--dim);}
-.st-part{background:rgba(31,111,235,.12);color:var(--acc);}
+/* Liq alert */
+.p-liq-alert{display:flex;align-items:center;gap:8px;margin:0 24px 10px;padding:8px 14px;border-radius:6px;font-size:12px;font-weight:600;}
+.la-danger{background:rgba(255,77,106,.12);color:var(--red);border:1px solid rgba(255,77,106,.2);}
+.la-warn{background:rgba(255,209,102,.08);color:var(--yel);border:1px solid rgba(255,209,102,.15);}
 
-/* BUTTONS */
-.bp-pnl-grid{display:grid;grid-template-columns:120px 80px 100px 100px 90px 130px 80px 110px 120px;}
-.btn-close{background:transparent;border:1px solid var(--red);color:var(--red);padding:5px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap;width:100%;box-sizing:border-box;text-align:center;}
-.btn-close:hover{background:var(--red);color:#fff;}
-.btn-cancel{background:transparent;border:1px solid var(--bdr);color:var(--dim);padding:4px 10px;border-radius:4px;font-size:12px;cursor:pointer;transition:all .15s;}
-.btn-cancel:hover{border-color:var(--red);color:var(--red);}
+/* Card footer */
+.p-card-foot{display:flex;align-items:center;justify-content:space-between;padding:10px 24px 16px;}
+.p-card-foot-info{font-size:11px;}
+.p-close-btn{background:transparent;border:1px solid var(--red);color:var(--red);padding:7px 20px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;letter-spacing:.3px;}
+.p-close-btn:hover{background:var(--red);color:#fff;box-shadow:0 0 16px rgba(255,77,106,.3);}
 
-/* EMPTY / LOADING */
-.bp-empty{display:flex;flex-direction:column;align-items:center;gap:10px;padding:70px;color:var(--dim);text-align:center;}
-.bp-loading{display:flex;align-items:center;gap:10px;padding:40px 24px;color:var(--dim);}
-.bp-spin{width:18px;height:18px;border:2px solid var(--bdr);border-top-color:var(--acc);border-radius:50%;animation:spin .8s linear infinite;}
+/* ── TABLE (Orders / History / PnL) ─────────────────────── */
+.p-table-wrap{overflow-x:auto;padding:8px 0;}
+.p-table{width:100%;border-collapse:collapse;min-width:700px;}
+.p-table th{text-align:left;padding:11px 16px;font-size:10px;letter-spacing:.8px;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--bdr);font-weight:600;background:var(--bg2);}
+.p-table td{padding:12px 16px;border-bottom:1px solid var(--bdr);font-size:13px;vertical-align:middle;}
+.p-table tr:hover td{background:rgba(255,255,255,.015);}
+.p-table tr:last-child td{border-bottom:none;}
+.t-sym{font-family:var(--mono);font-size:14px;font-weight:700;}
+.t-sub{font-size:11px;margin-top:2px;}
+.t-type{font-size:10px;background:var(--bg4);border:1px solid var(--bdr2);padding:2px 7px;border-radius:3px;color:var(--dim);}
+.t-time{font-size:11px;}
+.t-cancel-btn{background:transparent;border:1px solid var(--bdr2);color:var(--dim);padding:5px 12px;border-radius:5px;font-size:11px;cursor:pointer;transition:all .15s;}
+.t-cancel-btn:hover{border-color:var(--red);color:var(--red);}
+.t-fill-track{height:3px;background:var(--bdr2);border-radius:2px;overflow:hidden;margin-top:5px;}
+.t-fill-bar{height:100%;background:var(--grn);border-radius:2px;}
+.t-status{font-size:11px;padding:2px 8px;border-radius:3px;font-weight:600;}
+.st-ok{background:rgba(0,214,143,.12);color:var(--grn);}
+.st-can{background:var(--bg4);color:var(--dim);}
+.st-part{background:rgba(77,159,255,.12);color:var(--acc);}
 
-/* DIALOG */
-.bp-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:9999;}
-.bp-dialog{background:var(--bg2);border:1px solid var(--bdr);border-radius:12px;width:380px;box-shadow:0 20px 60px rgba(0,0,0,.6);}
-.bp-dlg-title{padding:18px 20px;font-size:16px;font-weight:700;border-bottom:1px solid var(--bdr);}
-.bp-dlg-body{padding:18px 20px;}
-.bp-dlg-row{display:flex;justify-content:space-between;margin-bottom:10px;font-size:14px;color:var(--dim);}
-.bp-dlg-row b{color:var(--txt);}
-.bp-dlg-warn{font-size:12px;color:var(--yel);background:rgba(227,179,65,.08);border:1px solid rgba(227,179,65,.2);border-radius:6px;padding:10px 12px;margin-top:12px;}
-.bp-dlg-actions{display:flex;gap:10px;padding:14px 20px;border-top:1px solid var(--bdr);}
-.btn-cancel-lg{flex:1;background:var(--bg3);border:1px solid var(--bdr);color:var(--txt);padding:10px;border-radius:6px;font-size:14px;cursor:pointer;}
-.btn-close-lg{flex:1;background:var(--red);border:none;color:#fff;padding:10px;border-radius:6px;font-size:14px;font-weight:700;cursor:pointer;}
-.btn-close-lg:disabled{opacity:.5;cursor:not-allowed;}
+/* ── PNL SUMMARY ────────────────────────────────────────── */
+.p-pnl-summ{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--bdr);border-bottom:1px solid var(--bdr);}
+.p-pnl-sc{background:var(--bg2);padding:20px 24px;}
+.p-pnl-sc-val{font-family:var(--mono);font-size:22px;font-weight:700;}
+.p-pnl-sc-lab{font-size:11px;color:var(--dim);margin-top:4px;text-transform:uppercase;letter-spacing:.5px;}
+.ps-pos{background:linear-gradient(135deg,rgba(0,214,143,.05),var(--bg2));}
+.ps-neg{background:linear-gradient(135deg,rgba(255,77,106,.05),var(--bg2));}
 
-/* TOAST */
-.bp-toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:8px;font-size:14px;font-weight:600;z-index:10000;animation:slideUp .3s ease;}
-.t-ok{background:rgba(63,185,80,.15);border:1px solid var(--grn);color:var(--grn);}
-.t-err{background:rgba(248,81,73,.15);border:1px solid var(--red);color:var(--red);}
-@@keyframes slideUp{from{transform:translateY(16px);opacity:0;}to{transform:translateY(0);opacity:1;}}
+/* ── MODAL ──────────────────────────────────────────────── */
+.p-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:9999;animation:fadeIn .2s ease;}
+@@keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+.p-modal{background:var(--bg3);border:1px solid var(--bdr2);border-radius:16px;width:420px;box-shadow:0 24px 80px rgba(0,0,0,.6);animation:slideUp .25s ease;}
+@@keyframes slideUp{from{transform:translateY(20px);opacity:0;}to{transform:translateY(0);opacity:1;}}
+.p-modal-top{display:flex;align-items:center;justify-content:space-between;padding:20px 22px 16px;border-bottom:1px solid var(--bdr);}
+.p-modal-title{font-size:16px;font-weight:700;}
+.p-modal-x{background:none;border:none;color:var(--dim);cursor:pointer;font-size:16px;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:all .15s;}
+.p-modal-x:hover{background:var(--bg4);color:var(--txt);}
+.p-modal-body{padding:20px 22px;}
+.p-modal-sym{display:flex;align-items:center;gap:14px;margin-bottom:20px;}
+.p-modal-sym-name{font-size:19px;font-weight:700;font-family:var(--mono);margin-bottom:6px;}
+.p-modal-rows{display:flex;flex-direction:column;gap:0;border:1px solid var(--bdr);border-radius:8px;overflow:hidden;margin-bottom:16px;}
+.p-modal-row{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--bdr);font-size:13px;}
+.p-modal-row:last-child{border-bottom:none;}
+.p-modal-row:nth-child(odd){background:rgba(255,255,255,.015);}
+.p-modal-warn{display:flex;align-items:flex-start;gap:10px;padding:12px 14px;background:rgba(255,209,102,.06);border:1px solid rgba(255,209,102,.15);border-radius:8px;font-size:12px;color:var(--yel);line-height:1.5;}
+.p-modal-foot{display:flex;gap:10px;padding:16px 22px;border-top:1px solid var(--bdr);}
+.p-modal-cancel{flex:1;background:var(--bg4);border:1px solid var(--bdr2);color:var(--txt);padding:11px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:500;transition:all .15s;}
+.p-modal-cancel:hover{border-color:var(--bdr);}
+.p-modal-confirm{flex:1;background:linear-gradient(135deg,#ff3355,#ff6680);border:none;color:#fff;padding:11px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:8px;}
+.p-modal-confirm:hover{box-shadow:0 4px 20px rgba(255,51,85,.4);transform:translateY(-1px);}
+.p-modal-confirm:disabled{opacity:.5;cursor:not-allowed;transform:none;}
+.p-spin-sm{width:16px;height:16px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;}
+
+/* ── TOAST ──────────────────────────────────────────────── */
+.p-toast{position:fixed;bottom:28px;right:28px;padding:13px 22px;border-radius:10px;font-size:14px;font-weight:600;z-index:10000;animation:toastIn .3s ease;display:flex;align-items:center;gap:8px;box-shadow:0 8px 32px rgba(0,0,0,.4);}
+.t-ok{background:rgba(0,214,143,.15);border:1px solid rgba(0,214,143,.3);color:var(--grn);}
+.t-err{background:rgba(255,77,106,.15);border:1px solid rgba(255,77,106,.3);color:var(--red);}
+@@keyframes toastIn{from{transform:translateY(12px);opacity:0;}to{transform:translateY(0);opacity:1;}}
+
+@@media(max-width:1100px){.p-card-grid{grid-template-columns:repeat(3,1fr);}
+.p-hero-stats{display:none;}}
+@@media(max-width:700px){.p-hero{flex-wrap:wrap;gap:12px;}.p-card-grid{grid-template-columns:repeat(2,1fr);}.p-pnl-summ{grid-template-columns:repeat(2,1fr);}}
 </style>
 
 @code {
@@ -532,213 +710,139 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _loading = false;
     }
 
-    // ── POSITIONS (direct Binance REST) ───────────────────────
     async Task FetchPositions()
     {
         try
         {
             var client = Factory.TryCreateRestClient();
-            if (client == null)
-            {
-                _error = "No Binance API credentials configured.";
-                return;
-            }
+            if (client == null) { _error = "No Binance API credentials configured."; return; }
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-            var res = await client.UsdFuturesApi.Account
-                .GetPositionInformationAsync(ct: cts.Token);
+            var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: cts.Token);
 
-            if (!res.Success)
-            {
-                _error = $"Binance error: {res.Error?.Code} — {res.Error?.Message}";
-                return;
-            }
+            if (!res.Success) { _error = $"Binance error: {res.Error?.Code} — {res.Error?.Message}"; return; }
 
             _error = string.Empty;
             _positions = res.Data
                 .Where(p => p.Quantity != 0)
-                .Select(p =>
-                {
+                .Select(p => {
                     var side   = p.Quantity > 0 ? "LONG" : "SHORT";
                     var size   = Math.Abs(p.Quantity * p.EntryPrice);
                     var margin = p.MarginType == FuturesMarginType.Isolated
-                        ? p.IsolatedMargin
-                        : size / Math.Max(p.Leverage, 1);
+                        ? p.IsolatedMargin : size / Math.Max(p.Leverage, 1);
                     var roi    = margin > 0 ? p.UnrealizedPnl / margin : 0m;
-                    return new PosRow(p.Symbol, side, p.Leverage,
-                        size, p.EntryPrice, p.MarkPrice, p.LiquidationPrice,
+                    return new PosRow(p.Symbol, side, p.Leverage, size,
+                        p.EntryPrice, p.MarkPrice, p.LiquidationPrice,
                         margin, 0m, p.UnrealizedPnl, roi);
                 })
-                .OrderByDescending(p => Math.Abs(p.Pnl))
-                .ToList();
+                .OrderByDescending(p => Math.Abs(p.Pnl)).ToList();
 
             _totalPnl = _positions.Sum(p => p.Pnl);
         }
-        catch (OperationCanceledException)
-        {
-            _error = "Request timed out — Binance API slow to respond.";
-        }
-        catch (Exception ex)
-        {
-            _error = $"Error: {ex.Message}";
-        }
+        catch (OperationCanceledException) { _error = "Request timed out."; }
+        catch (Exception ex) { _error = $"Error: {ex.Message}"; }
     }
 
-    // ── OPEN ORDERS ───────────────────────────────────────────
     async Task FetchOrders()
     {
-        _ordLoading = true;
-        StateHasChanged();
+        _ordLoading = true; StateHasChanged();
         try
         {
             var client = Factory.TryCreateRestClient();
             if (client == null) return;
-
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-            var res = await client.UsdFuturesApi.Trading
-                .GetOpenOrdersAsync(ct: cts.Token);  // все символы сразу
-
+            var res = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(ct: cts.Token);
             if (res.Success && res.Data != null)
-            {
                 _openOrders = res.Data
-                    .Select(o => new OrdRow(
-                        o.Id, o.Symbol,
-                        o.Type.ToString(),
+                    .Select(o => new OrdRow(o.Id, o.Symbol, o.Type.ToString(),
                         o.Side.ToString().ToUpperInvariant(),
                         o.PositionSide.ToString().ToUpperInvariant(),
-                        o.Price, o.StopPrice ?? 0m,
-                        o.Quantity, o.QuantityFilled,
+                        o.Price, o.StopPrice ?? 0m, o.Quantity, o.QuantityFilled,
                         o.ReduceOnly, o.CreateTime))
-                    .OrderBy(o => o.Symbol)
-                    .ToList();
-            }
-            else
-            {
-                ShowToast($"Orders: {res.Error?.Message}", false);
-            }
+                    .OrderBy(o => o.Symbol).ToList();
+            else ShowToast($"Orders: {res.Error?.Message}", false);
         }
         catch (Exception ex) { ShowToast(ex.Message, false); }
         finally { _ordLoading = false; }
     }
 
-    // ── ORDER HISTORY ─────────────────────────────────────────
     async Task FetchHistory()
     {
-        _histLoading = true;
-        StateHasChanged();
+        _histLoading = true; StateHasChanged();
         try
         {
             var client = Factory.TryCreateRestClient();
             if (client == null) return;
-
-            var results = new List<HistRow>();
-            // Берём символы из открытых позиций + BTC/ETH для контекста
             var syms = _positions.Select(p => p.Symbol)
-                .Concat(new[]{"BTCUSDT","ETHUSDT"})
-                .Distinct().Take(8).ToList();
-
+                .Concat(new[]{"BTCUSDT","ETHUSDT"}).Distinct().Take(8).ToList();
+            var results = new List<HistRow>();
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             foreach (var sym in syms)
             {
                 try
                 {
-                    var r = await client.UsdFuturesApi.Trading
-                        .GetOrdersAsync(sym, limit: 20, ct: cts.Token);
+                    var r = await client.UsdFuturesApi.Trading.GetOrdersAsync(sym, limit: 20, ct: cts.Token);
                     if (r.Success && r.Data != null)
                         foreach (var o in r.Data)
-                            results.Add(new HistRow(o.Id, o.Symbol,
-                                o.Type.ToString(),
+                            results.Add(new HistRow(o.Id, o.Symbol, o.Type.ToString(),
                                 o.Side.ToString().ToUpperInvariant(),
-                                o.Price, o.AveragePrice,
-                                o.Quantity, o.QuantityFilled,
-                                o.Status.ToString().ToUpperInvariant(),
-                                o.UpdateTime));
-                }
-                catch { }
+                                o.Price, o.AveragePrice, o.Quantity, o.QuantityFilled,
+                                o.Status.ToString().ToUpperInvariant(), o.UpdateTime));
+                } catch { }
             }
-
-            _histOrders = results
-                .OrderByDescending(o => o.Updated)
-                .Take(50).ToList();
+            _histOrders = results.OrderByDescending(o => o.Updated).Take(50).ToList();
         }
         catch (Exception ex) { ShowToast(ex.Message, false); }
         finally { _histLoading = false; }
     }
 
-    // ── PNL HISTORY ───────────────────────────────────────────
     async Task FetchPnl()
     {
-        _pnlLoading = true;
-        StateHasChanged();
+        _pnlLoading = true; StateHasChanged();
         try
         {
             var client = Factory.TryCreateRestClient();
             if (client == null) return;
-
-            var results = new List<PnlRow>();
             var syms = _positions.Select(p => p.Symbol)
-                .Concat(new[] { "BTCUSDT", "ETHUSDT" })
-                .Distinct().Take(8).ToList();
-
+                .Concat(new[]{"BTCUSDT","ETHUSDT"}).Distinct().Take(8).ToList();
+            var results = new List<PnlRow>();
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
             foreach (var sym in syms)
             {
                 try
                 {
-                    var r = await client.UsdFuturesApi.Trading
-                        .GetUserTradesAsync(sym, limit: 30, ct: cts.Token);
+                    var r = await client.UsdFuturesApi.Trading.GetUserTradesAsync(sym, limit: 30, ct: cts.Token);
                     if (!r.Success || r.Data == null) continue;
-
-                    // Группируем по orderId — каждая сделка это fill
                     foreach (var t in r.Data.OrderByDescending(x => x.Timestamp))
                     {
-                        var side = t.Buyer ? "BUY" : "SELL";
-                        var roe  = t.Quantity > 0 && t.Price > 0
+                        var roe = t.Quantity > 0 && t.Price > 0
                             ? t.RealizedPnl / (t.Quantity * t.Price) * 100m : 0m;
-
-                        results.Add(new PnlRow(
-                            t.Symbol, side,
-                            t.Price, t.Price,  // entry=exit=fill price
-                            t.Quantity,
-                            t.RealizedPnl,
-                            roe,
-                            t.Fee,
-                            t.Timestamp));
+                        results.Add(new PnlRow(t.Symbol, t.Buyer ? "BUY" : "SELL",
+                            t.Price, t.Price, t.Quantity, t.RealizedPnl, roe, t.Fee, t.Timestamp));
                     }
-                }
-                catch { }
+                } catch { }
             }
-
-            _pnlRows = results
-                .OrderByDescending(r => r.Time)
-                .Take(100).ToList();
-
-            _pnlTotal = _pnlRows.Sum(r => r.Pnl);
-            _pnlWins  = _pnlRows.Count(r => r.Pnl > 0);
+            _pnlRows   = results.OrderByDescending(r => r.Time).Take(100).ToList();
+            _pnlTotal  = _pnlRows.Sum(r => r.Pnl);
+            _pnlWins   = _pnlRows.Count(r => r.Pnl > 0);
         }
         catch (Exception ex) { ShowToast(ex.Message, false); }
         finally { _pnlLoading = false; }
     }
 
-    // ── ACTIONS ───────────────────────────────────────────────
     async Task CloseConfirmed()
     {
         if (_confirmPos == null) return;
-        _actionLoading = true;
-        StateHasChanged();
+        _actionLoading = true; StateHasChanged();
         try
         {
             var client = Factory.TryCreateRestClient();
             if (client == null) { ShowToast("No API connection", false); return; }
-
             var p    = _confirmPos;
             var isL  = p.Side == "LONG";
             var side = isL ? OrderSide.Sell : OrderSide.Buy;
             var pos  = isL ? PositionSide.Long : PositionSide.Short;
-
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-
-            // Получаем stepSize для правильного округления qty
             decimal stepSize = 0.001m;
             try
             {
@@ -746,25 +850,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 if (ei.Success)
                 {
                     var sym = ei.Data.Symbols.FirstOrDefault(s => s.Name == p.Symbol);
-                    var lotFilter = sym?.LotSizeFilter;
-                    if (lotFilter != null && lotFilter.StepSize > 0)
-                        stepSize = lotFilter.StepSize;
+                    if (sym?.LotSizeFilter?.StepSize > 0) stepSize = sym.LotSizeFilter.StepSize;
                 }
-            }
-            catch { }
-
-            // qty = size_usdt / mark_price, округлено по stepSize
+            } catch { }
             decimal rawQty = p.SizeUsdt / (p.Mark > 0 ? p.Mark : p.Entry);
             decimal qty = Math.Floor(rawQty / stepSize) * stepSize;
-            // -1106: нельзя использовать reduceOnly вместе с positionSide в hedge mode
-            // Используем positionSide — Binance сам понимает что это закрытие
             var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol: p.Symbol, side: side,
-                type: FuturesOrderType.Market,
-                quantity: qty,
-                positionSide: pos,
-                ct: cts.Token);
-
+                symbol: p.Symbol, side: side, type: FuturesOrderType.Market,
+                quantity: qty, positionSide: pos, ct: cts.Token);
             if (res.Success)
             {
                 ShowToast($"✓ {p.Symbol} {p.Side} closed", true);
@@ -785,15 +878,13 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             var client = Factory.TryCreateRestClient();
             if (client == null) return;
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var res = await client.UsdFuturesApi.Trading
-                .CancelOrderAsync(o.Symbol, o.Id, ct: cts.Token);
-            if (res.Success) { ShowToast($"✓ Order cancelled", true); await FetchOrders(); }
+            var res = await client.UsdFuturesApi.Trading.CancelOrderAsync(o.Symbol, o.Id, ct: cts.Token);
+            if (res.Success) { ShowToast("✓ Order cancelled", true); await FetchOrders(); }
             else ShowToast($"Cancel failed: {res.Error?.Message}", false);
         }
         catch (Exception ex) { ShowToast(ex.Message, false); }
     }
 
-    // ── HELPERS ───────────────────────────────────────────────
     void ShowToast(string msg, bool ok)
     {
         _toast = msg; _toastOk = ok; InvokeAsync(StateHasChanged);
