@@ -554,6 +554,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-rtf{background:var(--bg3);padding:2px 6px;border-radius:3px;font-size:10px;color:var(--dim);}
 .mk-mono{font-family:var(--mono);font-size:12px;}
 
+.mk-hints{display:flex;gap:16px;padding:8px 4px 0;font-size:11px;color:var(--dim);flex-wrap:wrap;}
 @@media(max-width:1400px){.mk-stats{grid-template-columns:repeat(6,1fr);}}
 @@media(max-width:900px){.mk-stats{grid-template-columns:repeat(3,1fr);}.mk-header{flex-direction:column;gap:12px;}}
 </style>
@@ -930,11 +931,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         catch (Exception ex) { _orderError = ex.Message; }
         finally { _orderLoading = false; }
     }
+
+    public async ValueTask DisposeAsync()
     {
-        _cts.Cancel(); _timer?.Dispose();
+        _cts.Cancel();
+        _timer?.Dispose();
+        await Task.CompletedTask;
     }
 }
-
-<style>
-.mk-hints{display:flex;gap:16px;padding:8px 4px 0;font-size:11px;color:var(--dim);flex-wrap:wrap;}
-</style>
