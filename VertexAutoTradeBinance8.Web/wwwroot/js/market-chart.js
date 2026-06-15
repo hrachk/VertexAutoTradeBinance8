@@ -462,9 +462,9 @@ function resize(){
     [MC,RC,VC].forEach(c=>{
         if(!c) return;
         const parent=c.parentElement||c;
-        const w=parent.clientWidth||800;
-        const h=parent.clientHeight||300;
-        if(!w||!h) return;
+        const w=Math.max(parent.clientWidth||0, parent.offsetWidth||0, 100);
+        const h=Math.max(parent.clientHeight||0, parent.offsetHeight||0, 80);
+        if(w<10||h<10) return;  // не рисуем на невидимом canvas
         c.width=w*dpr; c.height=h*dpr;
         c.getContext('2d').setTransform(dpr,0,0,dpr,0,0);
     });
@@ -477,9 +477,20 @@ window.marketChart = {
         RC=document.getElementById(rsiId);
         VC=document.getElementById(volId);
         if(!MC) return;
-        resize();
-        new ResizeObserver(()=>{resize();drawAll();}).observe(MC.parentElement);
-        window.addEventListener('resize',()=>{resize();drawAll();});
+        // Wait for layout to complete before first resize
+        let roFired = false;
+        const ro = new ResizeObserver(()=>{
+            resize();
+            if(K.length>0){drawAll();}
+            roFired=true;
+        });
+        ro.observe(MC.parentElement);
+        window.addEventListener('resize',()=>{resize();if(K.length>0)drawAll();});
+        // Fallback init after 2 frames in case ResizeObserver fires too early
+        requestAnimationFrame(()=>requestAnimationFrame(()=>{
+            resize();
+            if(K.length>0) drawAll();
+        }));
         // Main canvas events
         MC.addEventListener('mousedown',onMouseDown);
         MC.addEventListener('mousemove',onMouseMove);
@@ -497,10 +508,19 @@ window.marketChart = {
     render(sym, tf, klines) {
         K=klines; derive();
         view.offset=0; view.yMin=null;
-        // Default candle width based on available width
-        const chartW=(W(MC)||800)-PL-PR;
-        view.candleW=Math.max(4,Math.min(14,Math.floor(chartW/80)));
-        drawAll();
+        function tryDraw(attempt) {
+            const w = W(MC);
+            if(w < 50 && attempt < 8) {
+                // Canvas not laid out yet — retry after next frame
+                requestAnimationFrame(()=>tryDraw(attempt+1));
+                return;
+            }
+            const chartW = (w||800)-PL-PR;
+            view.candleW=Math.max(4,Math.min(14,Math.floor(chartW/80)));
+            resize();
+            drawAll();
+        }
+        tryDraw(0);
     }
 };
 
