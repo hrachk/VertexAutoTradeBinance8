@@ -53,6 +53,9 @@
         <button class="bp-tab @(_tab==2?"bp-tab-on":"")" @onclick="()=>SetTab(2)">
             Order History
         </button>
+        <button class="bp-tab @(_tab==3?"bp-tab-on":"")" @onclick="()=>SetTab(3)">
+            P&amp;L History
+        </button>
     </div>
 
     <!-- ═══ LOADING ═══════════════════════════════════════════ -->
@@ -148,8 +151,8 @@
                                     @(pUp?"+":"")@((p.Roi*100m).ToString("F2"))%
                                 </div>
                             </div>
-                            <!-- Action -->
-                            <div>
+    <!-- Action -->
+                            <div style="display:flex;align-items:center;">
                                 <button class="btn-close" @onclick="()=>_confirmPos=p">Close</button>
                             </div>
                         </div>
@@ -255,6 +258,65 @@
                             <div class="mono">@o.ExecutedQty.ToString("G6") / @o.OrigQty.ToString("G6")</div>
                             <div><span class="bp-status @sc">@o.Status</span></div>
                             <div class="mono bp-dim" style="font-size:11px">@o.Updated.ToLocalTime().ToString("MM/dd HH:mm")</div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+
+    <!-- ═══ TAB: PNL HISTORY ══════════════════════════════════ -->
+    @if (_tab == 3)
+    {
+        <div class="bp-panel">
+            @if (_pnlLoading) { <div class="bp-loading"><div class="bp-spin"></div> Loading...</div> }
+            else if (!_pnlRows.Any())
+            {
+                <div class="bp-empty">
+                    <div style="font-size:44px">💰</div>
+                    <div>No trade history</div>
+                    <div class="bp-dim">Closed trades appear here</div>
+                </div>
+            }
+            else
+            {
+                <!-- Summary strip -->
+                <div class="bp-pnl-strip @(_pnlTotal>=0?"strip-up":"strip-dn")">
+                    <span class="bp-dim">Total Realized P&L (last @_pnlRows.Count trades)</span>
+                    <span class="bp-pnl-big @(_pnlTotal>=0?"bp-up":"bp-dn")">
+                        @(_pnlTotal>=0?"+":"")@_pnlTotal.ToString("F4") USDT
+                    </span>
+                    <span class="bp-dim" style="font-size:12px">
+                        @_pnlWins W / @(_pnlRows.Count-_pnlWins) L
+                        · WR @(_pnlRows.Count>0?(_pnlWins*100.0/_pnlRows.Count).ToString("F0"):"0")%
+                    </span>
+                </div>
+
+                <div class="bp-tbl-wrap">
+                    <div class="bp-pnl-grid bp-head">
+                        <div>Symbol</div><div>Side</div><div>Entry</div>
+                        <div>Exit</div><div>Qty</div><div>Realized P&L</div>
+                        <div>ROE%</div><div>Commission</div><div>Time</div>
+                    </div>
+                    @foreach (var t in _pnlRows)
+                    {
+                        bool win = t.Pnl >= 0;
+                        <div class="bp-pnl-grid bp-row">
+                            <div class="bp-sym">@t.Symbol.Replace("USDT","")<span class="bp-unit">USDT</span></div>
+                            <div><span class="bp-side @(t.Side=="BUY"?"side-l":"side-s")">@t.Side</span></div>
+                            <div class="mono">@FP(t.Entry)</div>
+                            <div class="mono @(win?"bp-up":"bp-dn")">@FP(t.Exit)</div>
+                            <div class="mono">@t.Qty.ToString("G6")</div>
+                            <div class="mono @(win?"bp-up":"bp-dn")" style="font-weight:700">
+                                @(win?"+":"")@t.Pnl.ToString("F4")
+                            </div>
+                            <div class="@(win?"bp-up":"bp-dn")">
+                                @(win?"+":"")@t.Roe.ToString("F2")%
+                            </div>
+                            <div class="mono bp-dim">@t.Commission.ToString("F5")</div>
+                            <div class="mono bp-dim" style="font-size:11px">
+                                @t.Time.ToLocalTime().ToString("MM/dd HH:mm")
+                            </div>
                         </div>
                     }
                 </div>
@@ -376,7 +438,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .st-part{background:rgba(31,111,235,.12);color:var(--acc);}
 
 /* BUTTONS */
-.btn-close{background:transparent;border:1px solid var(--red);color:var(--red);padding:4px 12px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;}
+.bp-pnl-grid{display:grid;grid-template-columns:120px 80px 100px 100px 90px 130px 80px 110px 120px;}
+.btn-close{background:transparent;border:1px solid var(--red);color:var(--red);padding:4px 12px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap;}
 .btn-close:hover{background:var(--red);color:#fff;}
 .btn-cancel{background:transparent;border:1px solid var(--bdr);color:var(--dim);padding:4px 10px;border-radius:4px;font-size:12px;cursor:pointer;transition:all .15s;}
 .btn-cancel:hover{border-color:var(--red);color:var(--red);}
@@ -420,9 +483,12 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         decimal Price, decimal AvgPrice, decimal OrigQty, decimal ExecutedQty,
         string Status, DateTime Updated);
 
+    record PnlRow(string Symbol, string Side, decimal Entry, decimal Exit,
+        decimal Qty, decimal Pnl, decimal Roe, decimal Commission, DateTime Time);
+
     // ── State ─────────────────────────────────────────────────
     int _tab;
-    bool _loading, _ordLoading, _histLoading, _actionLoading;
+    bool _loading, _ordLoading, _histLoading, _actionLoading, _pnlLoading;
     DateTime _lastRefresh;
     string _error = string.Empty;
     string _toast = string.Empty;
@@ -433,8 +499,10 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     List<PosRow>  _positions  = new();
     List<OrdRow>  _openOrders = new();
     List<HistRow> _histOrders = new();
+    List<PnlRow>  _pnlRows    = new();
 
-    decimal _totalPnl;
+    decimal _totalPnl, _pnlTotal;
+    int _pnlWins;
 
     protected override async Task OnInitializedAsync()
     {
@@ -449,6 +517,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _tab = t;
         if (t == 1 && !_openOrders.Any()) await FetchOrders();
         if (t == 2 && !_histOrders.Any()) await FetchHistory();
+        if (t == 3 && !_pnlRows.Any())   await FetchPnl();
     }
 
     async Task RefreshAll()
@@ -596,6 +665,61 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         finally { _histLoading = false; }
     }
 
+    // ── PNL HISTORY ───────────────────────────────────────────
+    async Task FetchPnl()
+    {
+        _pnlLoading = true;
+        StateHasChanged();
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return;
+
+            var results = new List<PnlRow>();
+            var syms = _positions.Select(p => p.Symbol)
+                .Concat(new[] { "BTCUSDT", "ETHUSDT" })
+                .Distinct().Take(8).ToList();
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+            foreach (var sym in syms)
+            {
+                try
+                {
+                    var r = await client.UsdFuturesApi.Trading
+                        .GetUserTradesAsync(sym, limit: 30, ct: cts.Token);
+                    if (!r.Success || r.Data == null) continue;
+
+                    // Группируем по orderId — каждая сделка это fill
+                    foreach (var t in r.Data.OrderByDescending(x => x.Timestamp))
+                    {
+                        var side = t.Buyer ? "BUY" : "SELL";
+                        var roe  = t.IsolatedMargin > 0
+                            ? t.RealizedPnl / t.IsolatedMargin * 100m : 0m;
+
+                        results.Add(new PnlRow(
+                            t.Symbol, side,
+                            t.Price, t.Price,  // entry=exit=fill price
+                            t.Quantity,
+                            t.RealizedPnl,
+                            roe,
+                            t.Fee,
+                            t.Timestamp));
+                    }
+                }
+                catch { }
+            }
+
+            _pnlRows = results
+                .OrderByDescending(r => r.Time)
+                .Take(100).ToList();
+
+            _pnlTotal = _pnlRows.Sum(r => r.Pnl);
+            _pnlWins  = _pnlRows.Count(r => r.Pnl > 0);
+        }
+        catch (Exception ex) { ShowToast(ex.Message, false); }
+        finally { _pnlLoading = false; }
+    }
+
     // ── ACTIONS ───────────────────────────────────────────────
     async Task CloseConfirmed()
     {
@@ -615,11 +739,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             var qty  = Math.Round(p.SizeUsdt / (p.Mark > 0 ? p.Mark : p.Entry), 3);
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+            // -1106: нельзя использовать reduceOnly вместе с positionSide в hedge mode
+            // Используем positionSide — Binance сам понимает что это закрытие
             var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: p.Symbol, side: side,
                 type: FuturesOrderType.Market,
-                quantity: qty, positionSide: pos,
-                reduceOnly: true, ct: cts.Token);
+                quantity: qty,
+                positionSide: pos,
+                ct: cts.Token);
 
             if (res.Success)
             {
