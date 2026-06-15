@@ -336,12 +336,12 @@
 
                     <!-- Submit -->
                     <div class="ord-actions">
-                        <button class="ord-cancel-btn" @onclick="()=>{_activeSignal=null;_orderError="";_orderSuccess="";}">Cancel</button>
+                        <button class="ord-cancel-btn" @onclick="CancelOrder">Cancel</button>
                         <button class="ord-submit-btn @(isBuy?"osb-buy":"osb-sell")"
                                 @onclick="PlaceManualOrder" disabled="@_orderLoading">
                             @if (_orderLoading) { <span class="ord-spin"></span> }
-                            @(_orderType == "Market" ? (isBuy ? "Buy Market" : "Sell Market")
-                                                     : (isBuy ? "Buy Limit" : "Sell Limit"))
+                            else if (_orderType == "Market") { @(isBuy ? "Buy Market" : "Sell Market") }
+                            else { @(isBuy ? "Buy Limit" : "Sell Limit") }
                         </button>
                     </div>
                 </div>
@@ -854,6 +854,13 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _orderError   = string.Empty;
         _orderSuccess = string.Empty;
         _orderType    = "Market";
+    }
+
+    void CancelOrder()
+    {
+        _activeSignal = null;
+        _orderError   = string.Empty;
+        _orderSuccess = string.Empty;
     }
 
     async Task PlaceManualOrder()
