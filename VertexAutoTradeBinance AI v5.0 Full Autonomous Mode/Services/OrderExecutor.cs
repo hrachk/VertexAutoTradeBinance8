@@ -1917,39 +1917,39 @@ namespace VertexAutoTradeBinance8.Services
             // =============================================================
             List<decimal> tps = new List<decimal>();
 
-            if (signal.TakeProfits?.Any() != true && signal.StopLoss > 0)
+            if (signal.TakeProfits?.Any() == true)
             {
-                // пример: один TP на RR = 1.5
-                decimal rrTarget = 1.5m;
-                decimal risk = Math.Abs(entryPrice - signal.StopLoss);
-                decimal tpPrice;
-
-                if (signal.Side == SignalSide.Buy)
-                    tpPrice = entryPrice + risk * rrTarget;
-                else
-                    tpPrice = entryPrice - risk * rrTarget;
-
-                // тик-квантование
-               
-                tpPrice = Quantize(tpPrice, tick);
-
-                tps.Add(tpPrice);
-            }
-            else if (signal.TakeProfits != null && signal.TakeProfits.Any())
-            {
-                // берем оригинальные TP и квантуем к тик-сайзу
-                 
+                // Сигнал уже имеет TP — квантуем к tick
                 tps = signal.TakeProfits
                     .Select(tp => Quantize(tp, tick))
                     .ToList();
             }
+            else
+            {
+                // TP нет — вычисляем из SL или из ATR
+                decimal risk = signal.StopLoss > 0
+                    ? Math.Abs(entryPrice - signal.StopLoss)
+                    : (signal.Atr ?? 0m) * 1.5m;    // fallback: ATR×1.5
 
-            // сохраняем в сигнал для последующего использования
+                if (risk <= 0)
+                    risk = entryPrice * 0.005m;       // абсолютный fallback: 0.5%
+
+                decimal rrTarget = 1.5m;
+                decimal tpPrice = signal.Side == SignalSide.Buy
+                    ? entryPrice + risk * rrTarget
+                    : entryPrice - risk * rrTarget;
+
+                tpPrice = Quantize(tpPrice, tick);
+                tps.Add(tpPrice);
+            }
+
             signal.TakeProfits = tps;
 
-            // лог для дебага
-            _logger.LogInformation("[TP_CALC][{symbol}] entry={entry} TP1={tp1} TP2={tp2}", signal.Symbol, entryPrice,
-                tps.Count > 0 ? tps[0] : 0, tps.Count > 1 ? tps[1] : 0);
+            _logger.LogInformation(
+                "[TP_CALC][{symbol}] entry={entry} SL={sl} ATR={atr} TP1={tp1} TP2={tp2}",
+                signal.Symbol, entryPrice, signal.StopLoss, signal.Atr,
+                tps.Count > 0 ? tps[0] : 0,
+                tps.Count > 1 ? tps[1] : 0);
 
             // =============================================================
             // =============================================================
