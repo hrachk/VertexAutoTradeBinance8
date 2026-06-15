@@ -693,8 +693,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                     foreach (var t in r.Data.OrderByDescending(x => x.Timestamp))
                     {
                         var side = t.Buyer ? "BUY" : "SELL";
-                        var roe  = t.IsolatedMargin > 0
-                            ? t.RealizedPnl / t.IsolatedMargin * 100m : 0m;
+                        var roe  = t.Quantity > 0 && t.Price > 0
+                            ? t.RealizedPnl / (t.Quantity * t.Price) * 100m : 0m;
 
                         results.Add(new PnlRow(
                             t.Symbol, side,
@@ -736,6 +736,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             var side = isL ? OrderSide.Sell : OrderSide.Buy;
             var pos  = isL ? PositionSide.Long : PositionSide.Short;
 
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+
             // Получаем stepSize для правильного округления qty
             decimal stepSize = 0.001m;
             try
@@ -754,8 +756,6 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             // qty = size_usdt / mark_price, округлено по stepSize
             decimal rawQty = p.SizeUsdt / (p.Mark > 0 ? p.Mark : p.Entry);
             decimal qty = Math.Floor(rawQty / stepSize) * stepSize;
-
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
             // -1106: нельзя использовать reduceOnly вместе с positionSide в hedge mode
             // Используем positionSide — Binance сам понимает что это закрытие
             var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
