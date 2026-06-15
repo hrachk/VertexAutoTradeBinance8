@@ -152,7 +152,7 @@
                                 </div>
                             </div>
     <!-- Action -->
-                            <div style="display:flex;align-items:center;">
+                            <div style="display:flex;align-items:center;padding-right:8px;">
                                 <button class="btn-close" @onclick="()=>_confirmPos=p">Close</button>
                             </div>
                         </div>
@@ -439,7 +439,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
 /* BUTTONS */
 .bp-pnl-grid{display:grid;grid-template-columns:120px 80px 100px 100px 90px 130px 80px 110px 120px;}
-.btn-close{background:transparent;border:1px solid var(--red);color:var(--red);padding:4px 12px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap;}
+.btn-close{background:transparent;border:1px solid var(--red);color:var(--red);padding:5px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap;width:100%;box-sizing:border-box;text-align:center;}
 .btn-close:hover{background:var(--red);color:#fff;}
 .btn-cancel{background:transparent;border:1px solid var(--bdr);color:var(--dim);padding:4px 10px;border-radius:4px;font-size:12px;cursor:pointer;transition:all .15s;}
 .btn-cancel:hover{border-color:var(--red);color:var(--red);}
@@ -693,8 +693,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                     foreach (var t in r.Data.OrderByDescending(x => x.Timestamp))
                     {
                         var side = t.Buyer ? "BUY" : "SELL";
-                        var roe  = t.IsolatedMargin > 0
-                            ? t.RealizedPnl / t.IsolatedMargin * 100m : 0m;
+                        var roe  = t.Quantity > 0 && t.Price > 0
+                            ? t.RealizedPnl / (t.Quantity * t.Price) * 100m : 0m;
 
                         results.Add(new PnlRow(
                             t.Symbol, side,
@@ -735,10 +735,27 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             var isL  = p.Side == "LONG";
             var side = isL ? OrderSide.Sell : OrderSide.Buy;
             var pos  = isL ? PositionSide.Long : PositionSide.Short;
-            // qty = size_usdt / mark_price, rounded to 3dp
-            var qty  = Math.Round(p.SizeUsdt / (p.Mark > 0 ? p.Mark : p.Entry), 3);
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+
+            // Получаем stepSize для правильного округления qty
+            decimal stepSize = 0.001m;
+            try
+            {
+                var ei = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync(cts.Token);
+                if (ei.Success)
+                {
+                    var sym = ei.Data.Symbols.FirstOrDefault(s => s.Name == p.Symbol);
+                    var lotFilter = sym?.LotSizeFilter;
+                    if (lotFilter != null && lotFilter.StepSize > 0)
+                        stepSize = lotFilter.StepSize;
+                }
+            }
+            catch { }
+
+            // qty = size_usdt / mark_price, округлено по stepSize
+            decimal rawQty = p.SizeUsdt / (p.Mark > 0 ? p.Mark : p.Entry);
+            decimal qty = Math.Floor(rawQty / stepSize) * stepSize;
             // -1106: нельзя использовать reduceOnly вместе с positionSide в hedge mode
             // Используем positionSide — Binance сам понимает что это закрытие
             var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(

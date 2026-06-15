@@ -350,9 +350,22 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         if (firstRender)
         {
             _jsReady = true;
+
+            // Даём браузеру завершить layout перед init canvas
+            await Task.Delay(50);
+
             await JS.InvokeVoidAsync("marketChart.init",
                 "priceChart", "rsiChart", "volumeChart",
                 "resizeHandle", "priceWrap");
+
+            // Ещё небольшая задержка чтобы ResizeObserver сработал
+            await Task.Delay(80);
+            await RenderCharts();
+        }
+        else if (_jsReady)
+        {
+            // Blazor может перерисовать DOM и затереть canvas —
+            // переотрисовываем после каждого render
             await RenderCharts();
         }
     }
