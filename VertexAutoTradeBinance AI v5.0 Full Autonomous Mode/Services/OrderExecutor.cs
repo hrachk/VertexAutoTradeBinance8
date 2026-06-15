@@ -1989,13 +1989,13 @@ namespace VertexAutoTradeBinance8.Services
         // Гарантирует что TP ставится независимо от пути (Market/Limit/Partial)
         // =====================================================================
         private async Task PlaceTpOrdersAsync(
-            IBinanceRestClient client,
+            BinanceRestClient client,
             TradeSignal signal,
             PositionSide posSide,
             bool isHedge,
             decimal entryPrice,
             decimal quantity,
-            (decimal minQty, decimal step, decimal tickSize, decimal minNotional) filters,
+            (decimal step, decimal minQty, decimal maxQty, decimal minNotional, decimal tickSize) filters,
             CancellationToken ct)
         {
             if (signal.TakeProfits == null || signal.TakeProfits.Count == 0) return;
