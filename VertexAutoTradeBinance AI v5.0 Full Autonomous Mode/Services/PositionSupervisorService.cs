@@ -2415,6 +2415,9 @@ namespace VertexAutoTradeBinance8.Services
                 if (signal?.TakeProfits != null && signal.TakeProfits.Count > 0)
                 {
                     trigger = signal.TakeProfits[0];
+                    _logger.LogInformation(
+                        "[SUPERVISOR][{symbol}][{side}] TP from signal: {tp}",
+                        symbol, side, trigger);
                 }
                 else
                 {
@@ -2424,9 +2427,25 @@ namespace VertexAutoTradeBinance8.Services
                     var atr = _marketData.CalculateAtr(kl, 14);
                     if (atr <= 0) return;
 
+                    // Получаем текущую mark price
+                    decimal markNow = 0m;
+                    try
+                    {
+                        var mk = await client.UsdFuturesApi.ExchangeData.GetMarkPriceAsync(symbol, ct);
+                        if (mk.Success) markNow = mk.Data.MarkPrice;
+                    }
+                    catch { }
+
+                    // TP считаем от mark price (позиция уже могла уйти от entry)
+                    // Используем ATR×2.0 — достаточно далеко чтобы не сработать сразу
+                    decimal basePrice = markNow > 0 ? markNow : entryPrice;
                     trigger = side == PositionSide.Long
-                        ? entryPrice + atr * 1.7m
-                        : entryPrice - atr * 1.7m;
+                        ? basePrice + atr * 2.0m
+                        : basePrice - atr * 2.0m;
+
+                    _logger.LogInformation(
+                        "[SUPERVISOR][{symbol}][{side}] TP from ATR: entry={entry} mark={mark} atr={atr} → tp={tp}",
+                        symbol, side, entryPrice, basePrice, atr, trigger);
                 }
 
                 // ==========================================================

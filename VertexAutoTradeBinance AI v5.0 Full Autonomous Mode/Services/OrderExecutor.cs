@@ -1537,6 +1537,9 @@ namespace VertexAutoTradeBinance8.Services
                 {
                     _logger.LogInformation("[LIMIT_PARTIAL_FILL] qty={0}", wait.Qty);
                     _entryTracker.RegisterEntry(signal.Symbol, posSide);
+                    // TP на частичное заполнение
+                    await PlaceTpOrdersAsync(client, signal, posSide, isHedge,
+                        wait.EntryPrice, wait.Qty, filters, ct);
                     return OrderResult.Successs(wait.EntryPrice, wait.Qty, entryOrderId);
                 }
 
@@ -1631,6 +1634,8 @@ namespace VertexAutoTradeBinance8.Services
                             signal.Symbol);
 
                         _entryTracker.RegisterEntry(signal.Symbol, posSide);
+                        await PlaceTpOrdersAsync(client, signal, posSide, isHedge,
+                            existing.EntryPrice, Math.Abs(existing.Quantity), filters, ct);
                         return OrderResult.Successs(existing.EntryPrice, Math.Abs(existing.Quantity), entryOrderId);
                     }
                 }
@@ -1706,7 +1711,9 @@ namespace VertexAutoTradeBinance8.Services
                         wait = retryWait;
                         entryOrderId = retryOrder.Data.Id;
                         _entryTracker.RegisterEntry(signal.Symbol, posSide);
-                    return OrderResult.Successs(wait.EntryPrice, wait.Qty, entryOrderId);
+                        await PlaceTpOrdersAsync(client, signal, posSide, isHedge,
+                            wait.EntryPrice, wait.Qty, filters, ct);
+                        return OrderResult.Successs(wait.EntryPrice, wait.Qty, entryOrderId);
                     }
                 }
                 // ========================================================
@@ -1945,93 +1952,13 @@ namespace VertexAutoTradeBinance8.Services
                 tps.Count > 0 ? tps[0] : 0, tps.Count > 1 ? tps[1] : 0);
 
             // =============================================================
-            // PLACE TP1 IMMEDIATELY AFTER POSITION OPEN
-            // Скальпинг: ставим TP1 (100% позиции) — быстрая фиксация.
-            // TP2 только если осталась часть позиции.
-            // SL ставит PositionSupervisorService.
+            // =============================================================
+            // PLACE TP IMMEDIATELY AFTER POSITION OPEN
             // =============================================================
             if (wait.HasPosition && tps.Count >= 1)
             {
-                var tpSide = signal.Side == SignalSide.Buy ? OrderSide.Sell : OrderSide.Buy;
-                bool isLong = signal.Side == SignalSide.Buy;
-
-                // Получаем mark price для валидации
-                decimal markPrice = 0m;
-                try
-                {
-                    var mark = await client.UsdFuturesApi.ExchangeData.GetMarkPriceAsync(signal.Symbol, ct);
-                    if (mark.Success) markPrice = mark.Data.MarkPrice;
-                }
-                catch { }
-
-                // TP1 — 100% позиции (скальпинг: всё в один выход)
-                decimal tp1Price = tps[0];
-                bool tp1Valid = markPrice <= 0 ||
-                    (isLong  && tp1Price > markPrice) ||
-                    (!isLong && tp1Price < markPrice);
-
-                if (!tp1Valid)
-                {
-                    _logger.LogWarning(
-                        "[TP1_SKIP][{symbol}] stopPrice={tp} invalid vs markPrice={mark}",
-                        signal.Symbol, tp1Price, markPrice);
-                }
-                else
-                {
-                    // TP1 = вся позиция
-                    decimal tp1Qty = Math.Floor(quantity / step) * step;
-                    tp1Qty = Math.Max(tp1Qty, filters.minQty);
-
-                    _logger.LogInformation(
-                        "[TP1_ATTEMPT][{symbol}] stopPrice={tp} qty={qty} markPrice={mark} side={side}",
-                        signal.Symbol, tp1Price, tp1Qty, markPrice, tpSide);
-
-                    var tp1Res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                        symbol:                  signal.Symbol,
-                        side:                    tpSide,
-                        type:                    FuturesOrderType.TakeProfitMarket,
-                        stopPrice:               tp1Price,
-                        quantity:                tp1Qty,
-                        reduceOnly:              true,
-                        positionSide:            isHedge ? posSide : null,
-                        workingType:             WorkingType.Mark,
-                        selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
-                        ct:                      ct);
-
-                    if (tp1Res.Success)
-                    {
-                        _logger.LogInformation(
-                            "[TP1_PLACED][{symbol}] stopPrice={price} qty={qty} orderId={id}",
-                            signal.Symbol, tp1Price, tp1Qty, tp1Res.Data?.Id);
-                    }
-                    else
-                    {
-                        _logger.LogWarning(
-                            "[TP1_FAIL][{symbol}] code={code} msg={msg} stopPrice={tp} markPrice={mark} — retrying with CONTRACT_PRICE",
-                            signal.Symbol, tp1Res.Error?.Code, tp1Res.Error?.Message, tp1Price, markPrice);
-
-                        // Retry с CONTRACT_PRICE (некоторые символы не принимают MARK)
-                        var tp1Retry = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                            symbol:       signal.Symbol,
-                            side:         tpSide,
-                            type:         FuturesOrderType.TakeProfitMarket,
-                            stopPrice:    tp1Price,
-                            quantity:     tp1Qty,
-                            reduceOnly:   true,
-                            positionSide: isHedge ? posSide : null,
-                            workingType:  WorkingType.Contract,
-                            ct:           ct);
-
-                        if (tp1Retry.Success)
-                            _logger.LogInformation(
-                                "[TP1_PLACED_CONTRACT][{symbol}] stopPrice={price} qty={qty}",
-                                signal.Symbol, tp1Price, tp1Qty);
-                        else
-                            _logger.LogError(
-                                "[TP1_FAIL_FINAL][{symbol}] code={code} msg={msg} — Supervisor will place emergency TP",
-                                signal.Symbol, tp1Retry.Error?.Code, tp1Retry.Error?.Message);
-                    }
-                }
+                await PlaceTpOrdersAsync(client, signal, posSide, isHedge,
+                    entryPrice, quantity, filters, ct);
             }
 
             _entryTracker.RegisterEntry(signal.Symbol, posSide);
@@ -2057,6 +1984,117 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         // WAIT FOR POSITION or ORDER FILL (dual-track)
         // =====================================================================
+        // =====================================================================
+        // PLACE TP ORDERS — вызывается из ВСЕХ путей после успешного входа
+        // Гарантирует что TP ставится независимо от пути (Market/Limit/Partial)
+        // =====================================================================
+        private async Task PlaceTpOrdersAsync(
+            IBinanceRestClient client,
+            TradeSignal signal,
+            PositionSide posSide,
+            bool isHedge,
+            decimal entryPrice,
+            decimal quantity,
+            (decimal minQty, decimal step, decimal tickSize, decimal minNotional) filters,
+            CancellationToken ct)
+        {
+            if (signal.TakeProfits == null || signal.TakeProfits.Count == 0) return;
+            if (entryPrice <= 0 || quantity <= 0) return;
+
+            var step = filters.step > 0 ? filters.step : 0.001m;
+            var tick = filters.tickSize > 0 ? filters.tickSize : 0.0001m;
+            var tpSide = signal.Side == SignalSide.Buy ? OrderSide.Sell : OrderSide.Buy;
+            bool isLong = signal.Side == SignalSide.Buy;
+
+            // Mark price для валидации
+            decimal markPrice = 0m;
+            try
+            {
+                var mk = await client.UsdFuturesApi.ExchangeData.GetMarkPriceAsync(signal.Symbol, ct);
+                if (mk.Success) markPrice = mk.Data.MarkPrice;
+            }
+            catch { }
+
+            // Квантуем TP к tick size
+            var tps = signal.TakeProfits
+                .Select(tp => tick > 0 ? Math.Round(tp / tick) * tick : tp)
+                .ToList();
+
+            decimal tp1Price = tps[0];
+
+            // Валидация: TP должен быть ВЫШЕ mark для лонга, НИЖЕ для шорта
+            bool valid = markPrice <= 0 ||
+                (isLong && tp1Price > markPrice) ||
+                (!isLong && tp1Price < markPrice);
+
+            if (!valid)
+            {
+                // Корректируем — ставим минимальный разумный TP
+                tp1Price = isLong
+                    ? markPrice + tick * 10
+                    : markPrice - tick * 10;
+                _logger.LogWarning(
+                    "[TP_ADJUSTED][{symbol}] TP invalid vs mark={mark} → adjusted to {tp}",
+                    signal.Symbol, markPrice, tp1Price);
+            }
+
+            decimal tp1Qty = Math.Floor(quantity / step) * step;
+            tp1Qty = Math.Max(tp1Qty, filters.minQty);
+
+            _logger.LogInformation(
+                "[TP_PLACE][{symbol}] price={tp} qty={qty} mark={mark} entry={entry}",
+                signal.Symbol, tp1Price, tp1Qty, markPrice, entryPrice);
+
+            // Попытка 1: WorkingType.Mark
+            var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol:       signal.Symbol,
+                side:         tpSide,
+                type:         FuturesOrderType.TakeProfitMarket,
+                stopPrice:    tp1Price,
+                quantity:     tp1Qty,
+                reduceOnly:   true,
+                positionSide: isHedge ? posSide : null,
+                workingType:  WorkingType.Mark,
+                selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
+                ct: ct);
+
+            if (res.Success)
+            {
+                _logger.LogInformation(
+                    "[TP_PLACED][{symbol}] orderId={id} price={tp} qty={qty} (Mark)",
+                    signal.Symbol, res.Data?.Id, tp1Price, tp1Qty);
+                return;
+            }
+
+            _logger.LogWarning(
+                "[TP_FAIL_MARK][{symbol}] code={code} msg={msg} → retry Contract",
+                signal.Symbol, res.Error?.Code, res.Error?.Message);
+
+            // Попытка 2: WorkingType.Contract
+            var res2 = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol:       signal.Symbol,
+                side:         tpSide,
+                type:         FuturesOrderType.TakeProfitMarket,
+                stopPrice:    tp1Price,
+                quantity:     tp1Qty,
+                reduceOnly:   true,
+                positionSide: isHedge ? posSide : null,
+                workingType:  WorkingType.Contract,
+                ct: ct);
+
+            if (res2.Success)
+            {
+                _logger.LogInformation(
+                    "[TP_PLACED_CONTRACT][{symbol}] orderId={id} price={tp} qty={qty}",
+                    signal.Symbol, res2.Data?.Id, tp1Price, tp1Qty);
+                return;
+            }
+
+            _logger.LogError(
+                "[TP_FAIL_FINAL][{symbol}] code={code} msg={msg} — Supervisor will place emergency TP",
+                signal.Symbol, res2.Error?.Code, res2.Error?.Message);
+        }
+
         private async Task<(bool HasPosition, decimal EntryPrice, decimal Qty, string Reason)> WaitForPositionOrOrderAsync(
             BinanceRestClient client,
             TradeSignal signal,
