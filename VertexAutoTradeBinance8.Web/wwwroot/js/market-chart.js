@@ -491,6 +491,16 @@ window.marketChart = {
         VC=document.getElementById(volId);
         if(!MC) return;
 
+        // Drag-scroll for ticker bar
+        const ticker = document.querySelector('.mk-ticker-bar');
+        if (ticker) {
+            let isDown=false, startX, scrollLeft;
+            ticker.addEventListener('mousedown', e=>{isDown=true;startX=e.pageX-ticker.offsetLeft;scrollLeft=ticker.scrollLeft;ticker.style.cursor='grabbing';});
+            ticker.addEventListener('mouseleave',()=>{isDown=false;ticker.style.cursor='grab';});
+            ticker.addEventListener('mouseup',  ()=>{isDown=false;ticker.style.cursor='grab';});
+            ticker.addEventListener('mousemove', e=>{if(!isDown)return;e.preventDefault();const x=e.pageX-ticker.offsetLeft;ticker.scrollLeft=scrollLeft-(x-startX);});
+        }
+
         // Debounced resize handler — prevents storm of resize calls
         let _roTimer = null;
         const debouncedResize = () => {
@@ -528,37 +538,31 @@ window.marketChart = {
         K = klines;
         derive();
 
-        // Reset view only on symbol/tf change
+        const w = W(MC);
+        const chartW = (w || 800) - PL - PR;
+
+        // Reset view on symbol/tf change
         if (sym !== window._lastChartSym || tf !== window._lastChartTf) {
             view.offset = 0;
             view.yMin = null;
             window._lastChartSym = sym;
             window._lastChartTf  = tf;
+            // Auto-fit: choose candleW so all candles fill the visible area
+            if (K.length > 0) {
+                const ideal = chartW / Math.min(K.length, 120);
+                view.candleW = Math.max(3, Math.min(20, ideal));
+            } else {
+                view.candleW = 8;
+            }
         }
 
-        // Always resize then draw
         resize();
 
-        const w = W(MC);
         if (w >= 50) {
-            const chartW = w - PL - PR;
-            if (!window._lastChartSym || view.candleW <= 0) {
-                view.candleW = Math.max(4, Math.min(14, Math.floor(chartW / 80)));
-            }
             drawAll();
         } else {
-            // Canvas not laid out yet - retry
-            let attempts = 0;
-            const retry = () => {
-                resize();
-                const rw = W(MC);
-                if (rw >= 50) {
-                    view.candleW = Math.max(4, Math.min(14, Math.floor((rw - PL - PR) / 80)));
-                    drawAll();
-                } else if (++attempts < 10) {
-                    requestAnimationFrame(retry);
-                }
-            };
+            let a = 0;
+            const retry = () => { resize(); if(W(MC)>=50){drawAll();}else if(++a<10){requestAnimationFrame(retry);} };
             requestAnimationFrame(retry);
         }
     }
