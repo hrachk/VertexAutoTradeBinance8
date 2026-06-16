@@ -57,4 +57,10 @@
         } catch {
             // ignore disconnect
         }
-        requestAnimationFr
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+    return { dispose: () => { running = false; } };
+}
