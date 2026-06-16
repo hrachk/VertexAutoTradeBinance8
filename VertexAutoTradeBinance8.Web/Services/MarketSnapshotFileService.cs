@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Text.Json;
 using VertexAutoTradeBinance8.Web.Models;
 
@@ -11,11 +11,13 @@ public sealed class MarketSnapshotFileService
     private IReadOnlyList<MarketSeries>? _cache;
     public MarketSnapshotFileService(IConfiguration cfg)
     {
-       // var root = cfg["SharedData:Root"]
-        //    ?? throw new InvalidOperationException("SharedData:Root missing");
-
-        // ❗ читаем именно bootstrap, который пишет engine
-        _file = Path.Combine(AppContext.BaseDirectory, "market", "klines_bootstrap.json");
+        // SharedData:Root = C:\Vertex\Engines\client_001  (engine writes here)
+        // AppContext.BaseDirectory = web bin folder (wrong!)
+        var root = cfg["SharedData:Root"];
+        if (!string.IsNullOrEmpty(root))
+            _file = Path.Combine(root, "market", "klines_bootstrap.json");
+        else
+            _file = Path.Combine(AppContext.BaseDirectory, "market", "klines_bootstrap.json");
     }
  
     private static decimal ReadDecimal(JsonElement el)

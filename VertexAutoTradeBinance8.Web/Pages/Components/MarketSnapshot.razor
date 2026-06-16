@@ -121,10 +121,8 @@
         </div>
     }
 
-    <!-- ═══ CANVAS — ALWAYS IN DOM, NEVER INSIDE @if ═══════════════
-         Canvas must never be destroyed/recreated by Blazor.
-         It is shown/hidden via CSS only. -->
-    <div class="mk-charts-area" style="@(Selected == null || Selected.Klines.Count < 5 ? "visibility:hidden;height:0;overflow:hidden" : "")">
+    <!-- ═══ CANVAS AREA — always visible, always sized correctly ════ -->
+    <div class="mk-charts-area" style="@(Selected == null || Selected.Klines.Count < 5 ? "display:none" : "")">
 
         <!-- Price chart -->
         <div class="mk-chart-head">
@@ -403,7 +401,7 @@
             </div>
         </div>
     </div> <!-- end mk-charts-area always-in-DOM -->
-</div>
+ 
 
 <style>
 :root{--bg:#0a0d12;--bg2:#111520;--bg3:#1a1f2e;--bdr:#1e2535;--acc:#3b82f6;--grn:#22c55e;--red:#ef4444;--yel:#eab308;--txt:#e2e8f0;--dim:#64748b;--mono:'JetBrains Mono','Fira Code',monospace;}
@@ -634,37 +632,33 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     }
 
     bool _chartInitDone;
-    string _lastRenderedSym   = "";
-    string _lastRenderedTf    = "";
-    int    _lastRenderedCount;
+    string _lastRenderedKey = "";
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
-            await Task.Delay(80);
+            // Small delay so browser paints the DOM before we measure canvas
+            await Task.Delay(150);
             try
             {
                 await JS.InvokeVoidAsync("marketChart.init",
                     "priceChart", "rsiChart", "volumeChart",
                     "resizeHandle", "priceWrap");
-                _chartInitDone = true;
-                _jsReady = true;
             }
             catch { }
+            _chartInitDone = true;
+            _jsReady = true;
         }
 
+        // Render whenever chart is ready and data changed
         if (_chartInitDone && Selected != null && Selected.Klines.Count >= 5)
         {
-            bool changed = Selected.Symbol    != _lastRenderedSym
-                        || Selected.Timeframe != _lastRenderedTf
-                        || Selected.Klines.Count != _lastRenderedCount;
-            if (changed)
+            var key = $"{Selected.Symbol}:{Selected.Timeframe}:{Selected.Klines.Count}";
+            if (key != _lastRenderedKey)
             {
-                _lastRenderedSym   = Selected.Symbol;
-                _lastRenderedTf    = Selected.Timeframe;
-                _lastRenderedCount = Selected.Klines.Count;
-                await RenderCharts();
+                _lastRenderedKey = key;
+                try { await RenderCharts(); } catch { }
             }
         }
     }
@@ -836,7 +830,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 volume   = (double)k.Volume
             }).ToArray();
 
-            _lastRenderTime = DateTime.UtcNow;
+            DateTime _lastRenderTime = DateTime.UtcNow;
             await JS.InvokeVoidAsync("marketChart.render",
                 Selected.Symbol, Selected.Timeframe, klines);
         }
