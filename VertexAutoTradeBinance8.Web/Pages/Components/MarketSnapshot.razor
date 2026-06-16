@@ -917,14 +917,17 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 var s = ei.Data.Symbols.FirstOrDefault(x => x.Name == sig.Symbol);
                 if (s != null)
                 {
-                    _symTickSize    = s.PriceFilter?.TickSize    ?? 0.0001m;
-                    _symStep        = s.LotSizeFilter?.StepSize  ?? 0.001m;
-                    _symMaxLev      = s.MaxLeverage > 0 ? s.MaxLeverage : 125;
-                    _symMinNotional = s.MinNotionalFilter?.Notional ?? 5m;
+                    _symTickSize    = s.PriceFilter?.TickSize   ?? 0.0001m;
+                    _symStep        = s.LotSizeFilter?.StepSize ?? 0.001m;
+                    _symMaxLev      = 125; // Binance.Net не экспортирует MaxLeverage напрямую
 
-                    // Clamp leverage to symbol max
-                    if (_orderLeverage > _symMaxLev)
-                        _orderLeverage = Math.Min(_symMaxLev, 20);
+                    // MinNotional из фильтров
+                    _symMinNotional = 5m;
+                    foreach (var f in s.Filters)
+                    {
+                        if (f is Binance.Net.Objects.Models.BinanceSymbolMinNotionalFilter mn)
+                        { _symMinNotional = mn.MinNotional; break; }
+                    }
                 }
             }
 
