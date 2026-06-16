@@ -633,27 +633,39 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _ = TickAsync();
     }
 
-    bool _renderPending;
-    DateTime _lastRenderTime;
+    bool _chartInitDone;
+    string _lastRenderedSym   = "";
+    string _lastRenderedTf    = "";
+    int    _lastRenderedCount;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
-            // Canvas теперь всегда в DOM — init вызывается один раз надёжно
-            await Task.Delay(50);
-            await JS.InvokeVoidAsync("marketChart.init",
-                "priceChart", "rsiChart", "volumeChart",
-                "resizeHandle", "priceWrap");
-            _jsReady = true;
             await Task.Delay(80);
-            await RenderCharts();
+            try
+            {
+                await JS.InvokeVoidAsync("marketChart.init",
+                    "priceChart", "rsiChart", "volumeChart",
+                    "resizeHandle", "priceWrap");
+                _chartInitDone = true;
+                _jsReady = true;
+            }
+            catch { }
         }
-        else if (_jsReady && Selected != null && Selected.Klines.Count >= 5)
+
+        if (_chartInitDone && Selected != null && Selected.Klines.Count >= 5)
         {
-            // После каждого StateHasChanged переотрисовываем
-            // (canvas в DOM не пересоздаётся — просто содержимое обновляется)
-            await RenderCharts();
+            bool changed = Selected.Symbol    != _lastRenderedSym
+                        || Selected.Timeframe != _lastRenderedTf
+                        || Selected.Klines.Count != _lastRenderedCount;
+            if (changed)
+            {
+                _lastRenderedSym   = Selected.Symbol;
+                _lastRenderedTf    = Selected.Timeframe;
+                _lastRenderedCount = Selected.Klines.Count;
+                await RenderCharts();
+            }
         }
     }
 
@@ -665,12 +677,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             {
                 if (Frozen) continue;
                 await LoadData();
-                // StateHasChanged обновляет UI (таблица, header)
-                // RenderCharts вызывается отдельно только если данные изменились
+                // StateHasChanged triggers OnAfterRenderAsync which calls
+                // RenderCharts only when data actually changed
                 await InvokeAsync(StateHasChanged);
-                // Небольшая пауза чтобы DOM обновился перед canvas render
-                await Task.Delay(30);
-                await InvokeAsync(RenderCharts);
             }
         }
         catch (OperationCanceledException) { }
@@ -819,7 +828,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             var klines = Selected.Klines.Select(k => new
             {
                 // JS needs unix ms timestamp, not DateTime string
-                openTime = new DateTimeOffset(k.OpenTime, TimeSpan.Zero).ToUnixTimeMilliseconds(),
+                openTime = k.OpenTime, // already unix ms
                 open     = (double)k.Open,
                 high     = (double)k.High,
                 low      = (double)k.Low,
