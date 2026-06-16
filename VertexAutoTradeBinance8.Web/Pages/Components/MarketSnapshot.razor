@@ -296,7 +296,7 @@
                                 <input class="ord-input mono" type="number"
                                        step="@(_symTickSize > 0 ? _symTickSize.ToString("G8") : "any")"
                                        value="@(_orderPrice > 0 ? _orderPrice.ToString("G8") : "")"
-                                       @onchange="e => { if (decimal.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v)) { _orderPrice = _symTickSize > 0 ? Math.Round(v / _symTickSize) * _symTickSize : v; } }" />
+                                       @onchange="OnPriceChange" />
                                 <span class="ord-input-sfx">USDT</span>
                             </div>
                         </div>
@@ -318,7 +318,7 @@
                             <input class="ord-input mono" type="number"
                                    step="@(_symStep > 0 ? _symStep.ToString("G8") : "any")"
                                    value="@(_orderQty > 0 ? _orderQty.ToString("G8") : "")"
-                                   @onchange="e => { if (decimal.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v) && _symStep > 0) _orderQty = Math.Floor(v / _symStep) * _symStep; else if (decimal.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v2)) _orderQty = v2; }" />
+                                   @onchange="OnQtyChange" />
                             <span class="ord-input-sfx">@_activeSignal!.Symbol.Replace("USDT","")</span>
                         </div>
                     </div>
@@ -983,6 +983,26 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             await InvokeAsync(StateHasChanged);
         }
         catch { }
+    }
+
+    void OnPriceChange(ChangeEventArgs e)
+    {
+        if (!decimal.TryParse(e.Value?.ToString(),
+            System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var v)) return;
+        _orderPrice = _symTickSize > 0
+            ? Math.Round(v / _symTickSize) * _symTickSize
+            : v;
+    }
+
+    void OnQtyChange(ChangeEventArgs e)
+    {
+        if (!decimal.TryParse(e.Value?.ToString(),
+            System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var v)) return;
+        _orderQty = _symStep > 0
+            ? Math.Floor(v / _symStep) * _symStep
+            : v;
     }
 
     void CancelOrder()
