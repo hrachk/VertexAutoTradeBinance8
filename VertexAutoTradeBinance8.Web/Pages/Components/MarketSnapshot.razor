@@ -94,8 +94,12 @@
             <div class="mk-dim" style="font-size:13px">Bot writes klines_bootstrap.json on startup</div>
         </div>
     }
-    else
-    {
+
+    <!-- CHART — always in DOM so canvas survives Blazor re-renders -->
+    <div style="@(Selected == null || Selected.Klines.Count < 5 ? "display:none" : "")">
+
+        @if (Selected != null)
+        {
         <!-- STATS BAR -->
         <div class="mk-stats">
             <div class="mk-s"><div class="mk-sl">PRICE</div><div class="mk-sv">@FmtP(_last)</div></div>
@@ -293,31 +297,33 @@
                         <div class="ord-row">
                             <label class="ord-label">@(_orderType == "StopLimit" ? "Stop Price" : "Limit Price")</label>
                             <div class="ord-input-wrap">
-                                <input class="ord-input mono" type="number" step="any"
-                                       @bind="_orderPrice" @bind:event="oninput" />
+                                <input class="ord-input mono" type="number"
+                                       step="@(_symTickSize > 0 ? _symTickSize.ToString("G8") : "any")"
+                                       value="@(_orderPrice > 0 ? _orderPrice.ToString("G8") : "")"
+                                       @onchange="OnPriceChange" />
                                 <span class="ord-input-sfx">USDT</span>
                             </div>
                         </div>
-                        @if (_orderType == "StopLimit")
-                        {
-                            <div class="ord-row">
-                                <label class="ord-label">Limit Price</label>
-                                <div class="ord-input-wrap">
-                                    <input class="ord-input mono" type="number" step="any"
-                                           @bind="_limitPrice" @bind:event="oninput" />
-                                    <span class="ord-input-sfx">USDT</span>
-                                </div>
-                            </div>
-                        }
                     }
 
-                    <!-- Quantity -->
+                    <!-- Quantity + notional hint -->
                     <div class="ord-row">
-                        <label class="ord-label">Quantity</label>
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <label class="ord-label">Quantity</label>
+                            @{ decimal notional = _orderQty * (_orderPrice > 0 ? _orderPrice : _activeSignal!.Entry); }
+                            @if (notional > 0)
+                            {
+                                <span class="ord-notional @(notional < _symMinNotional ? "ord-notional-warn" : "ord-notional-ok")">
+                                    ≈ @notional.ToString("F2") USDT @(notional < _symMinNotional ? $"(min {_symMinNotional:F0})" : "")
+                                </span>
+                            }
+                        </div>
                         <div class="ord-input-wrap">
-                            <input class="ord-input mono" type="number" step="any"
-                                   @bind="_orderQty" @bind:event="oninput" />
-                            <span class="ord-input-sfx">@_activeSignal.Symbol.Replace("USDT","")</span>
+                            <input class="ord-input mono" type="number"
+                                   step="@(_symStep > 0 ? _symStep.ToString("G8") : "any")"
+                                   value="@(_orderQty > 0 ? _orderQty.ToString("G8") : "")"
+                                   @onchange="OnQtyChange" />
+                            <span class="ord-input-sfx">@_activeSignal!.Symbol.Replace("USDT","")</span>
                         </div>
                     </div>
 
@@ -404,7 +410,8 @@
                 </table>
             </div>
         </div>
-    }
+        } <!-- end @if Selected != null -->
+    </div> <!-- end always-in-DOM chart wrapper -->
 </div>
 
 <style>
@@ -542,6 +549,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .ord-lev-ticks{display:flex;justify-content:space-between;}
 .ord-lev-tick{font-size:11px;color:var(--dim);cursor:pointer;padding:2px 6px;border-radius:4px;transition:all .15s;font-family:var(--mono);}
 .ord-lev-tick:hover{color:var(--txt);}
+.ord-notional{font-size:11px;font-family:var(--mono);}
+.ord-notional-ok{color:var(--grn);}
+.ord-notional-warn{color:var(--yel);}
 .ord-lev-max{font-size:11px;color:var(--dim);font-weight:400;margin-left:4px;}
 .otk-on{color:var(--acc)!important;background:rgba(59,130,246,.15);font-weight:700;}
 .ord-body{padding:16px 18px;display:flex;flex-direction:column;gap:12px;}
@@ -632,27 +642,26 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _ = TickAsync();
     }
 
+    bool _renderPending;
+    DateTime _lastRenderTime;
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
-            _jsReady = true;
-
-            // Даём браузеру завершить layout перед init canvas
+            // Canvas теперь всегда в DOM — init вызывается один раз надёжно
             await Task.Delay(50);
-
             await JS.InvokeVoidAsync("marketChart.init",
                 "priceChart", "rsiChart", "volumeChart",
                 "resizeHandle", "priceWrap");
-
-            // Ещё небольшая задержка чтобы ResizeObserver сработал
+            _jsReady = true;
             await Task.Delay(80);
             await RenderCharts();
         }
-        else if (_jsReady)
+        else if (_jsReady && Selected != null && Selected.Klines.Count >= 5)
         {
-            // Blazor может перерисовать DOM и затереть canvas —
-            // переотрисовываем после каждого render
+            // После каждого StateHasChanged переотрисовываем
+            // (canvas в DOM не пересоздаётся — просто содержимое обновляется)
             await RenderCharts();
         }
     }
@@ -665,8 +674,12 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             {
                 if (Frozen) continue;
                 await LoadData();
+                // StateHasChanged обновляет UI (таблица, header)
+                // RenderCharts вызывается отдельно только если данные изменились
                 await InvokeAsync(StateHasChanged);
-                await RenderCharts();
+                // Небольшая пауза чтобы DOM обновился перед canvas render
+                await Task.Delay(30);
+                await InvokeAsync(RenderCharts);
             }
         }
         catch (OperationCanceledException) { }
@@ -814,7 +827,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             var klines = Selected.Klines.Select(k => new
             {
-                openTime = k.OpenTime,
+                // JS needs unix ms timestamp, not DateTime string
+                openTime = new DateTimeOffset(k.OpenTime, TimeSpan.Zero).ToUnixTimeMilliseconds(),
                 open     = (double)k.Open,
                 high     = (double)k.High,
                 low      = (double)k.Low,
@@ -822,6 +836,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 volume   = (double)k.Volume
             }).ToArray();
 
+            _lastRenderTime = DateTime.UtcNow;
             await JS.InvokeVoidAsync("marketChart.render",
                 Selected.Symbol, Selected.Timeframe, klines);
         }
@@ -910,29 +925,47 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
 
-            // 1) Exchange info → tickSize, stepSize, maxLeverage, minNotional
+            // 1) Exchange info → tickSize, stepSize, minNotional
             var ei = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync(cts.Token);
             if (ei.Success)
             {
                 var s = ei.Data.Symbols.FirstOrDefault(x => x.Name == sig.Symbol);
                 if (s != null)
                 {
-                    _symTickSize    = s.PriceFilter?.TickSize    ?? 0.0001m;
-                    _symStep        = s.LotSizeFilter?.StepSize  ?? 0.001m;
-                    _symMaxLev      = s.MaxLeverage > 0 ? s.MaxLeverage : 125;
-                    _symMinNotional = s.MinNotionalFilter?.Notional ?? 5m;
-
-                    // Clamp leverage to symbol max
-                    if (_orderLeverage > _symMaxLev)
-                        _orderLeverage = Math.Min(_symMaxLev, 20);
+                    _symTickSize    = s.PriceFilter?.TickSize   ?? 0.0001m;
+                    _symStep        = s.LotSizeFilter?.StepSize ?? 0.001m;
+                    _symMinNotional = 5m;
+                    foreach (var f in s.Filters)
+                    {
+                        if (f is Binance.Net.Objects.Models.Spot.BinanceSymbolMinNotionalFilter mn)
+                        { _symMinNotional = mn.MinNotional; break; }
+                    }
                 }
             }
 
-            // 2) Round price to tickSize
+            // 2) Real MaxLeverage via GetBracketsAsync
+            try
+            {
+                var br = await client.UsdFuturesApi.Account
+                    .GetBracketsAsync(sig.Symbol, ct: cts.Token);
+                if (br.Success && br.Data != null)
+                {
+                    var sb = br.Data.FirstOrDefault(b => b.Symbol == sig.Symbol);
+                    if (sb?.Brackets?.Length > 0)
+                    {
+                        _symMaxLev = sb.Brackets.Max(b => b.InitialLeverage);
+                        if (_orderLeverage > _symMaxLev)
+                            _orderLeverage = Math.Min(_symMaxLev, 20);
+                    }
+                }
+            }
+            catch { }
+
+            // 3) Round price to tickSize
             if (_symTickSize > 0 && sig.Entry > 0)
                 _orderPrice = Math.Round(sig.Entry / _symTickSize) * _symTickSize;
 
-            // 3) Suggest qty from balance with 2% risk
+            // 4) Suggest qty from balance with 2% risk
             var bal = await client.UsdFuturesApi.Account.GetBalancesAsync(ct: cts.Token);
             if (bal.Success && bal.Data != null)
             {
@@ -940,18 +973,15 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 if (usdt != null && usdt.AvailableBalance > 0 && sig.Entry > 0)
                 {
                     decimal balance  = usdt.AvailableBalance;
-                    decimal riskUsdt = balance * 0.02m;   // 2% баланса под риск
+                    decimal riskUsdt = balance * 0.02m;
                     decimal stopDist = sig.StopLoss > 0
                         ? Math.Abs(sig.Entry - sig.StopLoss)
                         : (sig.ATR > 0 ? sig.ATR * 1.5m : sig.Entry * 0.01m);
 
                     decimal rawQty = stopDist > 0 ? riskUsdt / stopDist : 0m;
-
-                    // Гарантируем minNotional
-                    decimal minQty = _symMinNotional / sig.Entry;
+                    decimal minQty = sig.Entry > 0 ? _symMinNotional / sig.Entry : 0m;
                     rawQty = Math.Max(rawQty, minQty);
 
-                    // Округляем по step
                     decimal step = _symStep > 0 ? _symStep : 0.001m;
                     _orderQty = Math.Floor(rawQty / step) * step;
                 }
@@ -960,6 +990,26 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             await InvokeAsync(StateHasChanged);
         }
         catch { }
+    }
+
+    void OnPriceChange(ChangeEventArgs e)
+    {
+        if (!decimal.TryParse(e.Value?.ToString(),
+            System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var v)) return;
+        _orderPrice = _symTickSize > 0
+            ? Math.Round(v / _symTickSize) * _symTickSize
+            : v;
+    }
+
+    void OnQtyChange(ChangeEventArgs e)
+    {
+        if (!decimal.TryParse(e.Value?.ToString(),
+            System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var v)) return;
+        _orderQty = _symStep > 0
+            ? Math.Floor(v / _symStep) * _symStep
+            : v;
     }
 
     void CancelOrder()
@@ -977,6 +1027,15 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
         if (_orderQty <= 0)                                   { _orderError = "Enter quantity"; return; }
         if (_orderType != "Market" && _orderPrice <= 0)       { _orderError = "Enter price"; return; }
+
+        // Notional check: qty × price >= minNotional
+        decimal checkPrice = _orderPrice > 0 ? _orderPrice : _activeSignal.Entry;
+        decimal checkNotional = _orderQty * checkPrice;
+        if (checkNotional < _symMinNotional)
+        {
+            _orderError = $"Notional {checkNotional:F2} USDT too small — minimum is {_symMinNotional:F0} USDT. Increase quantity.";
+            return;
+        }
 
         _orderLoading = true;
         StateHasChanged();

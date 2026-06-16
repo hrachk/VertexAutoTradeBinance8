@@ -80,14 +80,19 @@ function derive() {
 }
 
 // ── CANVAS SETUP ──────────────────────────────────────────
+let _lastW = 0, _lastH = 0; // track last known size
+
 function setupCanvas(el) {
+    if (!el) return null;
     dpr = window.devicePixelRatio || 1;
-    // Always use parent element for dimensions (canvas 100% fills parent)
     const parent = el.parentElement || el;
-    const w = parent.clientWidth  || el.offsetWidth  || 800;
-    const h = parent.clientHeight || el.offsetHeight || 300;
-    el.width  = w * dpr;
-    el.height = h * dpr;
+    const w = Math.max(parent.clientWidth || 0, parent.offsetWidth || 0, 1);
+    const h = Math.max(parent.clientHeight || 0, parent.offsetHeight || 0, 1);
+    // Only resize if dimensions actually changed (prevents flicker)
+    if (el.width !== Math.round(w * dpr) || el.height !== Math.round(h * dpr)) {
+        el.width  = Math.round(w * dpr);
+        el.height = Math.round(h * dpr);
+    }
     const ctx = el.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     return ctx;
@@ -136,10 +141,13 @@ function yFor(p, yMin, yMax, cH, cPT=PT, cPB=PB) {
 // ── DRAW ──────────────────────────────────────────────────
 function drawAll() {
     if (!MC || !K.length) return;
+    // Guard: don't draw on zero-size canvas (causes blank screen)
+    const w = W(MC), h = H(MC);
+    if (w < 50 || h < 50) return;
     const { yMin, yMax } = autoY();
     drawMain(yMin, yMax);
-    if (RC && RC.offsetHeight > 0) drawRsi();
-    if (VC && VC.offsetHeight > 0) drawVol();
+    if (RC && H(RC) > 20) drawRsi();
+    if (VC && H(VC) > 20) drawVol();
 }
 
 function drawMain(yMin, yMax) {
@@ -458,16 +466,21 @@ function fmtV(v){if(v>=1e6)return (v/1e6).toFixed(2)+'M';if(v>=1e3)return (v/1e3
 
 // ── RESIZE OBSERVER ───────────────────────────────────────
 function resize(){
-    dpr=window.devicePixelRatio||1;
+    dpr = window.devicePixelRatio || 1;
+    let anyChange = false;
     [MC,RC,VC].forEach(c=>{
         if(!c) return;
-        const parent=c.parentElement||c;
-        const w=Math.max(parent.clientWidth||0, parent.offsetWidth||0, 100);
-        const h=Math.max(parent.clientHeight||0, parent.offsetHeight||0, 80);
-        if(w<10||h<10) return;  // не рисуем на невидимом canvas
-        c.width=w*dpr; c.height=h*dpr;
-        c.getContext('2d').setTransform(dpr,0,0,dpr,0,0);
+        const parent = c.parentElement || c;
+        const w = Math.round((Math.max(parent.clientWidth||0, parent.offsetWidth||0)) * dpr);
+        const h = Math.round((Math.max(parent.clientHeight||0, parent.offsetHeight||0)) * dpr);
+        if(w < 10 || h < 10) return; // skip invisible canvas
+        if(c.width !== w || c.height !== h) {
+            c.width = w; c.height = h;
+            c.getContext('2d').setTransform(dpr,0,0,dpr,0,0);
+            anyChange = true;
+        }
     });
+    return anyChange;
 }
 
 // ── PUBLIC API ────────────────────────────────────────────
@@ -477,19 +490,25 @@ window.marketChart = {
         RC=document.getElementById(rsiId);
         VC=document.getElementById(volId);
         if(!MC) return;
-        // Wait for layout to complete before first resize
-        let roFired = false;
-        const ro = new ResizeObserver(()=>{
-            resize();
-            if(K.length>0){drawAll();}
-            roFired=true;
-        });
+
+        // Debounced resize handler — prevents storm of resize calls
+        let _roTimer = null;
+        const debouncedResize = () => {
+            clearTimeout(_roTimer);
+            _roTimer = setTimeout(() => {
+                resize();
+                if(K.length > 0) drawAll();
+            }, 40);
+        };
+
+        const ro = new ResizeObserver(debouncedResize);
         ro.observe(MC.parentElement);
-        window.addEventListener('resize',()=>{resize();if(K.length>0)drawAll();});
-        // Fallback init after 2 frames in case ResizeObserver fires too early
+        window.addEventListener('resize', debouncedResize);
+
+        // Initial layout after 2 frames
         requestAnimationFrame(()=>requestAnimationFrame(()=>{
             resize();
-            if(K.length>0) drawAll();
+            if(K.length > 0) drawAll();
         }));
         // Main canvas events
         MC.addEventListener('mousedown',onMouseDown);
@@ -506,18 +525,30 @@ window.marketChart = {
         initResizeY(document.getElementById(resizeHandleId), document.getElementById(resizeWrapId));
     },
     render(sym, tf, klines) {
-        K=klines; derive();
-        view.offset=0; view.yMin=null;
+        const sameSymbol = (K.length > 0 && sym === window._lastChartSym && tf === window._lastChartTf);
+        K = klines;
+        derive();
+        // Only reset view when symbol/tf changes, not on live data updates
+        if (!sameSymbol) {
+            view.offset = 0;
+            view.yMin = null;
+            const chartW = (W(MC)||800) - PL - PR;
+            view.candleW = Math.max(4, Math.min(14, Math.floor(chartW/80)));
+        }
+        window._lastChartSym = sym;
+        window._lastChartTf  = tf;
+
         function tryDraw(attempt) {
             const w = W(MC);
-            if(w < 50 && attempt < 8) {
-                // Canvas not laid out yet — retry after next frame
+            if (w < 50 && attempt < 8) {
                 requestAnimationFrame(()=>tryDraw(attempt+1));
                 return;
             }
-            const chartW = (w||800)-PL-PR;
-            view.candleW=Math.max(4,Math.min(14,Math.floor(chartW/80)));
-            resize();
+            if (!sameSymbol) {
+                const cW = (w||800) - PL - PR;
+                view.candleW = Math.max(4, Math.min(14, Math.floor(cW/80)));
+                resize();
+            }
             drawAll();
         }
         tryDraw(0);
