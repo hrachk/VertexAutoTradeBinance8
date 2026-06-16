@@ -293,31 +293,33 @@
                         <div class="ord-row">
                             <label class="ord-label">@(_orderType == "StopLimit" ? "Stop Price" : "Limit Price")</label>
                             <div class="ord-input-wrap">
-                                <input class="ord-input mono" type="number" step="any"
-                                       @bind="_orderPrice" @bind:event="oninput" />
+                                <input class="ord-input mono" type="number"
+                                       step="@(_symTickSize > 0 ? _symTickSize.ToString("G8") : "any")"
+                                       value="@(_orderPrice > 0 ? _orderPrice.ToString("G8") : "")"
+                                       @onchange="e => { if (decimal.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v)) { _orderPrice = _symTickSize > 0 ? Math.Round(v / _symTickSize) * _symTickSize : v; } }" />
                                 <span class="ord-input-sfx">USDT</span>
                             </div>
                         </div>
-                        @if (_orderType == "StopLimit")
-                        {
-                            <div class="ord-row">
-                                <label class="ord-label">Limit Price</label>
-                                <div class="ord-input-wrap">
-                                    <input class="ord-input mono" type="number" step="any"
-                                           @bind="_limitPrice" @bind:event="oninput" />
-                                    <span class="ord-input-sfx">USDT</span>
-                                </div>
-                            </div>
-                        }
                     }
 
-                    <!-- Quantity -->
+                    <!-- Quantity + notional hint -->
                     <div class="ord-row">
-                        <label class="ord-label">Quantity</label>
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <label class="ord-label">Quantity</label>
+                            @{ decimal notional = _orderQty * (_orderPrice > 0 ? _orderPrice : _activeSignal!.Entry); }
+                            @if (notional > 0)
+                            {
+                                <span class="ord-notional @(notional < _symMinNotional ? "ord-notional-warn" : "ord-notional-ok")">
+                                    ≈ @notional.ToString("F2") USDT @(notional < _symMinNotional ? $"(min {_symMinNotional:F0})" : "")
+                                </span>
+                            }
+                        </div>
                         <div class="ord-input-wrap">
-                            <input class="ord-input mono" type="number" step="any"
-                                   @bind="_orderQty" @bind:event="oninput" />
-                            <span class="ord-input-sfx">@_activeSignal.Symbol.Replace("USDT","")</span>
+                            <input class="ord-input mono" type="number"
+                                   step="@(_symStep > 0 ? _symStep.ToString("G8") : "any")"
+                                   value="@(_orderQty > 0 ? _orderQty.ToString("G8") : "")"
+                                   @onchange="e => { if (decimal.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v) && _symStep > 0) _orderQty = Math.Floor(v / _symStep) * _symStep; else if (decimal.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v2)) _orderQty = v2; }" />
+                            <span class="ord-input-sfx">@_activeSignal!.Symbol.Replace("USDT","")</span>
                         </div>
                     </div>
 
@@ -542,6 +544,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .ord-lev-ticks{display:flex;justify-content:space-between;}
 .ord-lev-tick{font-size:11px;color:var(--dim);cursor:pointer;padding:2px 6px;border-radius:4px;transition:all .15s;font-family:var(--mono);}
 .ord-lev-tick:hover{color:var(--txt);}
+.ord-notional{font-size:11px;font-family:var(--mono);}
+.ord-notional-ok{color:var(--grn);}
+.ord-notional-warn{color:var(--yel);}
 .ord-lev-max{font-size:11px;color:var(--dim);font-weight:400;margin-left:4px;}
 .otk-on{color:var(--acc)!important;background:rgba(59,130,246,.15);font-weight:700;}
 .ord-body{padding:16px 18px;display:flex;flex-direction:column;gap:12px;}
@@ -992,6 +997,15 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
         if (_orderQty <= 0)                                   { _orderError = "Enter quantity"; return; }
         if (_orderType != "Market" && _orderPrice <= 0)       { _orderError = "Enter price"; return; }
+
+        // Notional check: qty × price >= minNotional
+        decimal checkPrice = _orderPrice > 0 ? _orderPrice : _activeSignal.Entry;
+        decimal checkNotional = _orderQty * checkPrice;
+        if (checkNotional < _symMinNotional)
+        {
+            _orderError = $"Notional {checkNotional:F2} USDT too small — minimum is {_symMinNotional:F0} USDT. Increase quantity.";
+            return;
+        }
 
         _orderLoading = true;
         StateHasChanged();
