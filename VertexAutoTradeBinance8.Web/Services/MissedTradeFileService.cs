@@ -27,12 +27,10 @@ namespace VertexAutoTradeBinance8.Web.Services
         public MissedTradeFileService(IWebHostEnvironment env, IConfiguration cfg,
             ILogger<MissedTradeFileService> logger)
         {
-
-          //_filePath = Path.Combine( AppContext.BaseDirectory, "missed_trades.json");
-           // var root = cfg["SharedData:Root"]
-      //?? throw new InvalidOperationException("SharedData:Root not configured");
-
-            _filePath = Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
+            var root = cfg["SharedData:Root"];
+            _filePath = !string.IsNullOrEmpty(root)
+                ? Path.Combine(root, "missed_trades.json")
+                : Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
 
             _logger = logger;
         }

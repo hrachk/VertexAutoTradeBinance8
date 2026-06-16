@@ -634,36 +634,26 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     }
 
     bool _chartInitDone;
-    string _lastRenderedSym   = "";
-    string _lastRenderedTf    = "";
-    int    _lastRenderedCount;
+    string _lastRenderedKey = "";
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
-            await Task.Delay(80);
-            try
-            {
-                await JS.InvokeVoidAsync("marketChart.init",
-                    "priceChart", "rsiChart", "volumeChart",
-                    "resizeHandle", "priceWrap");
-                _chartInitDone = true;
-                _jsReady = true;
-            }
-            catch { }
+            await Task.Delay(100);
+            await JS.InvokeVoidAsync("marketChart.init",
+                "priceChart", "rsiChart", "volumeChart",
+                "resizeHandle", "priceWrap");
+            _chartInitDone = true;
+            _jsReady = true;
         }
 
         if (_chartInitDone && Selected != null && Selected.Klines.Count >= 5)
         {
-            bool changed = Selected.Symbol    != _lastRenderedSym
-                        || Selected.Timeframe != _lastRenderedTf
-                        || Selected.Klines.Count != _lastRenderedCount;
-            if (changed)
+            var key = $"{Selected.Symbol}:{Selected.Timeframe}:{Selected.Klines.Count}";
+            if (key != _lastRenderedKey)
             {
-                _lastRenderedSym   = Selected.Symbol;
-                _lastRenderedTf    = Selected.Timeframe;
-                _lastRenderedCount = Selected.Klines.Count;
+                _lastRenderedKey = key;
                 await RenderCharts();
             }
         }
