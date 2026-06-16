@@ -255,17 +255,36 @@
                 <!-- Order type tabs -->
                 <div class="ord-type-tabs">
                     <button class="ord-tt @(_orderType=="Market"?"ott-on":"")" @onclick='()=>_orderType="Market"'>
-                        Market
+                        <span class="ord-tt-icon">⚡</span> Market
                     </button>
                     <button class="ord-tt @(_orderType=="Limit"?"ott-on":"")" @onclick='()=>_orderType="Limit"'>
-                        Limit
+                        <span class="ord-tt-icon">📋</span> Limit
                     </button>
                     <button class="ord-tt @(_orderType=="StopLimit"?"ott-on":"")" @onclick='()=>_orderType="StopLimit"'>
-                        Stop-Limit
+                        <span class="ord-tt-icon">🛡</span> Stop
                     </button>
                 </div>
 
                 <div class="ord-body">
+                    <!-- Leverage row -->
+                    <div class="ord-row">
+                        <div class="ord-lev-head">
+                            <label class="ord-label">Leverage</label>
+                            <span class="ord-lev-val">@_orderLeverage×</span>
+                        </div>
+                        <div class="ord-lev-slider-wrap">
+                            <input type="range" min="1" max="50" step="1"
+                                   class="ord-lev-slider"
+                                   @bind="_orderLeverage" @bind:event="oninput" />
+                            <div class="ord-lev-ticks">
+                                @foreach (var v in new[]{1,5,10,20,30,50})
+                                {
+                                    <span class="ord-lev-tick @(_orderLeverage==v?"otk-on":"")"
+                                          @onclick="()=>_orderLeverage=v">@v×</span>
+                                }
+                            </div>
+                        </div>
+                    </div>
                     <!-- Price row (hidden for Market) -->
                     @if (_orderType != "Market")
                     {
@@ -508,10 +527,20 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .ord-sym{font-family:var(--mono);font-size:16px;font-weight:700;}
 .ord-close-x{background:none;border:none;color:var(--dim);font-size:16px;cursor:pointer;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:all .15s;}
 .ord-close-x:hover{background:var(--bdr);color:var(--txt);}
-.ord-type-tabs{display:flex;background:var(--bg2);border-bottom:1px solid var(--bdr);}
-.ord-tt{flex:1;background:none;border:none;color:var(--dim);padding:10px;font-size:13px;font-weight:500;cursor:pointer;transition:all .15s;border-bottom:2px solid transparent;}
-.ord-tt:hover{color:var(--txt);}
-.ott-on{color:var(--acc)!important;border-bottom-color:var(--acc)!important;}
+.ord-type-tabs{display:flex;background:var(--bg2);border-bottom:1px solid var(--bdr);gap:4px;padding:8px 12px;}
+.ord-tt{flex:1;background:var(--bg3);border:1px solid var(--bdr);color:var(--dim);padding:10px 6px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;border-radius:8px;display:flex;align-items:center;justify-content:center;gap:5px;letter-spacing:.2px;}
+.ord-tt:hover{color:var(--txt);border-color:var(--bdr2);background:var(--bg4);}
+.ott-on{color:#fff!important;border-color:var(--acc)!important;background:linear-gradient(135deg,rgba(59,130,246,.3),rgba(59,130,246,.15))!important;box-shadow:0 0 12px rgba(59,130,246,.2);}
+.ord-tt-icon{font-size:14px;}
+/* Leverage */
+.ord-lev-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+.ord-lev-val{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--acc);}
+.ord-lev-slider-wrap{display:flex;flex-direction:column;gap:6px;}
+.ord-lev-slider{width:100%;accent-color:var(--acc);height:4px;cursor:pointer;}
+.ord-lev-ticks{display:flex;justify-content:space-between;}
+.ord-lev-tick{font-size:11px;color:var(--dim);cursor:pointer;padding:2px 6px;border-radius:4px;transition:all .15s;font-family:var(--mono);}
+.ord-lev-tick:hover{color:var(--txt);}
+.otk-on{color:var(--acc)!important;background:rgba(59,130,246,.15);font-weight:700;}
 .ord-body{padding:16px 18px;display:flex;flex-direction:column;gap:12px;}
 .ord-row{display:flex;flex-direction:column;gap:5px;}
 .ord-label{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;}
@@ -841,6 +870,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     decimal _orderPrice;
     decimal _limitPrice;
     decimal _orderQty;
+    int _orderLeverage = 10;
     bool _orderLoading;
     string _orderError = string.Empty;
     string _orderSuccess = string.Empty;
@@ -854,6 +884,10 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _orderError   = string.Empty;
         _orderSuccess = string.Empty;
         _orderType    = "Market";
+
+        // Switch chart to signal's symbol
+        if (_activeSignal != null)
+            PickSym(sig.Symbol);
     }
 
     void CancelOrder()
@@ -899,6 +933,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             decimal qty = Math.Floor(_orderQty / step) * step;
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+
+            // Устанавливаем кредитное плечо
+            try
+            {
+                await client.UsdFuturesApi.Account.ChangeInitialLeverageAsync(
+                    _activeSignal.Symbol, _orderLeverage, ct: cts.Token);
+            }
+            catch { /* не критично если не удалось */ }
 
             long? placedOrderId = null;
 
