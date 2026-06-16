@@ -403,7 +403,7 @@
             </div>
         </div>
     </div> <!-- end mk-charts-area always-in-DOM -->
-</div>
+ 
 
 <style>
 :root{--bg:#0a0d12;--bg2:#111520;--bg3:#1a1f2e;--bdr:#1e2535;--acc:#3b82f6;--grn:#22c55e;--red:#ef4444;--yel:#eab308;--txt:#e2e8f0;--dim:#64748b;--mono:'JetBrains Mono','Fira Code',monospace;}
@@ -836,7 +836,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 volume   = (double)k.Volume
             }).ToArray();
 
-            _lastRenderTime = DateTime.UtcNow;
+            DateTime _lastRenderTime = DateTime.UtcNow;
             await JS.InvokeVoidAsync("marketChart.render",
                 Selected.Symbol, Selected.Timeframe, klines);
         }
