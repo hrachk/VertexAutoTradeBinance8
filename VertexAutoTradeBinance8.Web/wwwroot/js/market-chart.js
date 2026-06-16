@@ -525,33 +525,42 @@ window.marketChart = {
         initResizeY(document.getElementById(resizeHandleId), document.getElementById(resizeWrapId));
     },
     render(sym, tf, klines) {
-        const sameSymbol = (K.length > 0 && sym === window._lastChartSym && tf === window._lastChartTf);
         K = klines;
         derive();
-        // Only reset view when symbol/tf changes, not on live data updates
-        if (!sameSymbol) {
+
+        // Reset view only on symbol/tf change
+        if (sym !== window._lastChartSym || tf !== window._lastChartTf) {
             view.offset = 0;
             view.yMin = null;
-            const chartW = (W(MC)||800) - PL - PR;
-            view.candleW = Math.max(4, Math.min(14, Math.floor(chartW/80)));
+            window._lastChartSym = sym;
+            window._lastChartTf  = tf;
         }
-        window._lastChartSym = sym;
-        window._lastChartTf  = tf;
 
-        function tryDraw(attempt) {
-            const w = W(MC);
-            if (w < 50 && attempt < 8) {
-                requestAnimationFrame(()=>tryDraw(attempt+1));
-                return;
-            }
-            if (!sameSymbol) {
-                const cW = (w||800) - PL - PR;
-                view.candleW = Math.max(4, Math.min(14, Math.floor(cW/80)));
-                resize();
+        // Always resize then draw
+        resize();
+
+        const w = W(MC);
+        if (w >= 50) {
+            const chartW = w - PL - PR;
+            if (!window._lastChartSym || view.candleW <= 0) {
+                view.candleW = Math.max(4, Math.min(14, Math.floor(chartW / 80)));
             }
             drawAll();
+        } else {
+            // Canvas not laid out yet - retry
+            let attempts = 0;
+            const retry = () => {
+                resize();
+                const rw = W(MC);
+                if (rw >= 50) {
+                    view.candleW = Math.max(4, Math.min(14, Math.floor((rw - PL - PR) / 80)));
+                    drawAll();
+                } else if (++attempts < 10) {
+                    requestAnimationFrame(retry);
+                }
+            };
+            requestAnimationFrame(retry);
         }
-        tryDraw(0);
     }
 };
 
