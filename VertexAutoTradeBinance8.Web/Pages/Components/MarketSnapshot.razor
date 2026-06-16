@@ -637,29 +637,26 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _ = TickAsync();
     }
 
+    bool _renderPending;
+    DateTime _lastRenderTime;
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
             _jsReady = true;
 
-            // Даём браузеру завершить layout перед init canvas
-            await Task.Delay(50);
+            await Task.Delay(60);
 
             await JS.InvokeVoidAsync("marketChart.init",
                 "priceChart", "rsiChart", "volumeChart",
                 "resizeHandle", "priceWrap");
 
-            // Ещё небольшая задержка чтобы ResizeObserver сработал
-            await Task.Delay(80);
+            await Task.Delay(100);
             await RenderCharts();
         }
-        else if (_jsReady)
-        {
-            // Blazor может перерисовать DOM и затереть canvas —
-            // переотрисовываем после каждого render
-            await RenderCharts();
-        }
+        // НЕ вызываем RenderCharts на каждый render —
+        // это порождает лавину вызовов при StateHasChanged
     }
 
     async Task TickAsync()
@@ -670,8 +667,12 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             {
                 if (Frozen) continue;
                 await LoadData();
+                // StateHasChanged обновляет UI (таблица, header)
+                // RenderCharts вызывается отдельно только если данные изменились
                 await InvokeAsync(StateHasChanged);
-                await RenderCharts();
+                // Небольшая пауза чтобы DOM обновился перед canvas render
+                await Task.Delay(30);
+                await InvokeAsync(RenderCharts);
             }
         }
         catch (OperationCanceledException) { }
@@ -819,7 +820,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             var klines = Selected.Klines.Select(k => new
             {
-                openTime = k.OpenTime,
+                // JS needs unix ms timestamp, not DateTime string
+                openTime = new DateTimeOffset(k.OpenTime, TimeSpan.Zero).ToUnixTimeMilliseconds(),
                 open     = (double)k.Open,
                 high     = (double)k.High,
                 low      = (double)k.Low,
@@ -827,6 +829,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 volume   = (double)k.Volume
             }).ToArray();
 
+            _lastRenderTime = DateTime.UtcNow;
             await JS.InvokeVoidAsync("marketChart.render",
                 Selected.Symbol, Selected.Timeframe, klines);
         }
