@@ -94,8 +94,12 @@
             <div class="mk-dim" style="font-size:13px">Bot writes klines_bootstrap.json on startup</div>
         </div>
     }
-    else
-    {
+
+    <!-- CHART — always in DOM so canvas survives Blazor re-renders -->
+    <div style="@(Selected == null || Selected.Klines.Count < 5 ? "display:none" : "")">
+
+        @if (Selected != null)
+        {
         <!-- STATS BAR -->
         <div class="mk-stats">
             <div class="mk-s"><div class="mk-sl">PRICE</div><div class="mk-sv">@FmtP(_last)</div></div>
@@ -406,7 +410,8 @@
                 </table>
             </div>
         </div>
-    }
+        } <!-- end @if Selected != null -->
+    </div> <!-- end always-in-DOM chart wrapper -->
 </div>
 
 <style>
@@ -644,19 +649,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     {
         if (firstRender)
         {
-            _jsReady = true;
-
-            await Task.Delay(60);
-
+            // Canvas теперь всегда в DOM — init вызывается один раз надёжно
+            await Task.Delay(50);
             await JS.InvokeVoidAsync("marketChart.init",
                 "priceChart", "rsiChart", "volumeChart",
                 "resizeHandle", "priceWrap");
-
-            await Task.Delay(100);
+            _jsReady = true;
+            await Task.Delay(80);
             await RenderCharts();
         }
-        // НЕ вызываем RenderCharts на каждый render —
-        // это порождает лавину вызовов при StateHasChanged
+        else if (_jsReady && Selected != null && Selected.Klines.Count >= 5)
+        {
+            // После каждого StateHasChanged переотрисовываем
+            // (canvas в DOM не пересоздаётся — просто содержимое обновляется)
+            await RenderCharts();
+        }
     }
 
     async Task TickAsync()
