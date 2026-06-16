@@ -94,12 +94,8 @@
             <div class="mk-dim" style="font-size:13px">Bot writes klines_bootstrap.json on startup</div>
         </div>
     }
-
-    <!-- CHART — always in DOM so canvas survives Blazor re-renders -->
-    <div style="@(Selected == null || Selected.Klines.Count < 5 ? "display:none" : "")">
-
-        @if (Selected != null)
-        {
+    else
+    {
         <!-- STATS BAR -->
         <div class="mk-stats">
             <div class="mk-s"><div class="mk-sl">PRICE</div><div class="mk-sv">@FmtP(_last)</div></div>
@@ -123,60 +119,56 @@
             <div class="mk-s"><div class="mk-sl">BARS</div><div class="mk-sv mk-dim">@Selected.Klines.Count</div></div>
             <div class="mk-s"><div class="mk-sl">VOLUME</div><div class="mk-sv mk-dim">@FmtV(Selected.Klines[^1].Volume)</div></div>
         </div>
+    }
 
-        <!-- CHART AREA -->
-        <div class="mk-charts-area">
+    <!-- ═══ CANVAS — ALWAYS IN DOM, NEVER INSIDE @if ═══════════════
+         Canvas must never be destroyed/recreated by Blazor.
+         It is shown/hidden via CSS only. -->
+    <div class="mk-charts-area" style="@(Selected == null || Selected.Klines.Count < 5 ? "visibility:hidden;height:0;overflow:hidden" : "")">
 
-            <!-- Price chart label -->
-            <div class="mk-chart-head">
-                <div class="mk-chart-title">CANDLESTICK · @Selected.Symbol · @TfLabel(Selected.Timeframe)</div>
-                <div class="mk-legend">
-                    <span style="color:#38bdf8">── EMA21</span>
-                    <span style="color:#a855f7">── EMA55</span>
-                    <span style="color:#eab308">╌╌ VWAP</span>
-                    <span style="color:rgba(59,130,246,0.5)">╌╌ BB(20)</span>
-                </div>
+        <!-- Price chart -->
+        <div class="mk-chart-head">
+            <div class="mk-chart-title">CANDLESTICK · @(Selected?.Symbol ?? "") · @TfLabel(Selected?.Timeframe ?? "")</div>
+            <div class="mk-legend">
+                <span style="color:#38bdf8">── EMA21</span>
+                <span style="color:#a855f7">── EMA55</span>
+                <span style="color:#eab308">╌╌ VWAP</span>
+                <span style="color:rgba(59,130,246,0.5)">╌╌ BB(20)</span>
             </div>
-            <div class="mk-canvas-wrap mk-canvas-price" id="priceWrap">
-                <canvas id="priceChart" style="cursor:crosshair"></canvas>
-                <div class="mk-resize-handle" id="resizeHandle"
-                     title="Drag to resize · Ctrl+Wheel to zoom Y · Scroll to zoom X · Shift+Scroll to zoom price">
-                    <div class="mk-resize-dots">⋯</div>
-                </div>
+        </div>
+        <div class="mk-canvas-wrap mk-canvas-price" id="priceWrap">
+            <canvas id="priceChart" style="cursor:crosshair"></canvas>
+            <div class="mk-resize-handle" id="resizeHandle">
+                <div class="mk-resize-dots">⋯</div>
             </div>
+        </div>
 
-            <!-- RSI label -->
-            <div class="mk-chart-head" style="padding-top:4px">
-                <div class="mk-chart-title">RSI(14)</div>
-                <div class="mk-legend">
-                    <span style="color:#ef4444">── OB 70</span>
-                    <span style="color:#22c55e">── OS 30</span>
-                </div>
+        <!-- RSI -->
+        <div class="mk-chart-head" style="padding-top:4px">
+            <div class="mk-chart-title">RSI(14)</div>
+            <div class="mk-legend">
+                <span style="color:#ef4444">── OB 70</span>
+                <span style="color:#22c55e">── OS 30</span>
             </div>
-            <div class="mk-canvas-wrap mk-canvas-rsi">
-                <canvas id="rsiChart"></canvas>
-            </div>
+        </div>
+        <div class="mk-canvas-wrap mk-canvas-rsi">
+            <canvas id="rsiChart"></canvas>
+        </div>
 
-            <!-- Volume label -->
-            <div class="mk-chart-head" style="padding-top:4px">
-                <div class="mk-chart-title">VOLUME</div>
-                <div class="mk-legend">
-                    <span style="color:#38bdf8">● Spike ×2.2</span>
-                </div>
-            </div>
-            <div class="mk-canvas-wrap mk-canvas-vol">
-                <canvas id="volumeChart"></canvas>
-            </div>
+        <!-- Volume -->
+        <div class="mk-chart-head" style="padding-top:4px">
+            <div class="mk-chart-title">VOLUME</div>
+        </div>
+        <div class="mk-canvas-wrap mk-canvas-vol">
+            <canvas id="volumeChart"></canvas>
+        </div>
 
-            <!-- Controls hint -->
-            <div class="mk-hints">
-                <span>🖱 Drag to pan</span>
-                <span>⚲ Scroll to zoom X</span>
-                <span>⇧+Scroll to zoom Y</span>
-                <span>↕ Drag handle to resize</span>
-                <span>2× click to reset</span>
-            </div>
-
+        <div class="mk-hints">
+            <span>🖱 Drag to pan</span>
+            <span>⚲ Scroll to zoom X</span>
+            <span>⇧+Scroll to zoom Y</span>
+            <span>↕ Drag handle to resize</span>
+            <span>2× click to reset</span>
         </div>
 
         <!-- SIGNAL PANEL -->
@@ -410,8 +402,7 @@
                 </table>
             </div>
         </div>
-        } <!-- end @if Selected != null -->
-    </div> <!-- end always-in-DOM chart wrapper -->
+    </div> <!-- end mk-charts-area always-in-DOM -->
 </div>
 
 <style>
