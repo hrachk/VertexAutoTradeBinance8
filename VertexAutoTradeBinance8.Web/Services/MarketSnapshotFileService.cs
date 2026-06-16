@@ -65,7 +65,11 @@ public sealed class MarketSnapshotFileService
     public async Task<IReadOnlyList<MarketSeries>> LoadAsync()
     {
         if (!File.Exists(_file))
+        {
+            Console.WriteLine($"[MarketSnapshotFileService] FILE NOT FOUND: {_file}");
             return Array.Empty<MarketSeries>();
+        }
+        Console.WriteLine($"[MarketSnapshotFileService] Loading from: {_file}");
 
         var wt = File.GetLastWriteTimeUtc(_file);
         if (_cache != null && wt == _lastWrite)
