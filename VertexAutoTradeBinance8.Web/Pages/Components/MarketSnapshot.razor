@@ -86,15 +86,7 @@
         </div>
     }
 
-    @if (Selected == null || Selected.Klines.Count < 5)
-    {
-        <div class="mk-empty">
-            <div style="font-size:48px">📊</div>
-            <div style="font-size:16px;font-weight:600">Waiting for market data</div>
-            <div class="mk-dim" style="font-size:13px">Bot writes klines_bootstrap.json on startup</div>
-        </div>
-    }
-    else
+    @if (Selected != null && Selected.Klines.Count >= 5)
     {
         <!-- STATS BAR -->
         <div class="mk-stats">
@@ -121,8 +113,18 @@
         </div>
     }
 
-    <!-- ═══ CANVAS AREA — always visible, always sized correctly ════ -->
-    <div class="mk-charts-area" style="@(Selected == null || Selected.Klines.Count < 5 ? "display:none" : "")">
+        <!-- ═══ CANVAS AREA — always rendered so canvas has real dimensions ═══ -->
+    <div class="mk-charts-area">
+
+        <!-- No-data overlay (canvas still renders behind for correct sizing) -->
+        @if (Selected == null || Selected.Klines.Count < 5)
+        {
+            <div class="mk-no-data-overlay">
+                <div style="font-size:36px">📊</div>
+                <div style="font-size:15px;font-weight:600;margin-top:8px">Waiting for market data</div>
+                <div class="mk-dim" style="font-size:11px;margin-top:4px">Engine writes klines_bootstrap.json on startup</div>
+            </div>
+        }
 
         <!-- Price chart -->
         <div class="mk-chart-head">
@@ -450,7 +452,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-sv{font-family:var(--mono);font-size:14px;font-weight:700;margin-top:4px;}
 
 /* CHARTS */
-.mk-charts-area{background:var(--bg2);padding:16px 20px;border-bottom:1px solid var(--bdr);}
+.mk-charts-area{background:var(--bg2);padding:16px 20px;border-bottom:1px solid var(--bdr);position:relative;}
 .mk-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
 .mk-chart-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
 .mk-legend{display:flex;gap:14px;font-size:11px;color:var(--dim);}
@@ -468,6 +470,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-tk-price{font-family:var(--mono);font-size:11px;color:var(--dim);}
 
 /* CANVAS */
+.mk-no-data-overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(10,13,18,.9);z-index:10;color:var(--dim);}
 .mk-canvas-wrap{position:relative;background:#070a0f;border-radius:4px;margin-bottom:2px;overflow:hidden;}
 .mk-canvas-wrap canvas{display:block;width:100%!important;height:100%!important;position:absolute;top:0;left:0;}
 .mk-canvas-price{height:300px;}
