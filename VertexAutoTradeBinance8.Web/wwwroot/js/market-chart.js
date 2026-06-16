@@ -86,10 +86,13 @@ function setupCanvas(el) {
     if (!el) return null;
     dpr = window.devicePixelRatio || 1;
     const parent = el.parentElement || el;
-    const w = Math.max(parent.clientWidth || parent.offsetWidth || 0, 1);
-    const h = Math.max(parent.clientHeight || parent.offsetHeight || 0, 1);
-    el.width  = Math.round(w * dpr);
-    el.height = Math.round(h * dpr);
+    const w = Math.max(parent.clientWidth || 0, parent.offsetWidth || 0, 1);
+    const h = Math.max(parent.clientHeight || 0, parent.offsetHeight || 0, 1);
+    // Only resize if dimensions actually changed (prevents flicker)
+    if (el.width !== Math.round(w * dpr) || el.height !== Math.round(h * dpr)) {
+        el.width  = Math.round(w * dpr);
+        el.height = Math.round(h * dpr);
+    }
     const ctx = el.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     return ctx;
@@ -463,9 +466,9 @@ function resize(){
     dpr = window.devicePixelRatio || 1;
     [MC,RC,VC].forEach(c=>{
         if(!c) return;
-        const p = c.parentElement || c;
-        const w = Math.round(Math.max(p.clientWidth||p.offsetWidth||0, 1) * dpr);
-        const h = Math.round(Math.max(p.clientHeight||p.offsetHeight||0, 1) * dpr);
+        const parent = c.parentElement || c;
+        const w = Math.round(Math.max(parent.clientWidth||0, parent.offsetWidth||0, 1) * dpr);
+        const h = Math.round(Math.max(parent.clientHeight||0, parent.offsetHeight||0, 1) * dpr);
         c.width = w; c.height = h;
         c.getContext('2d').setTransform(dpr,0,0,dpr,0,0);
     });
@@ -523,23 +526,36 @@ window.marketChart = {
         initResizeY(document.getElementById(resizeHandleId), document.getElementById(resizeWrapId));
     },
     render(sym, tf, klines) {
-        if (!MC) return;
         K = klines;
         derive();
 
+        const w = W(MC);
+        const chartW = (w || 800) - PL - PR;
+
+        // Reset view on symbol/tf change
         if (sym !== window._lastChartSym || tf !== window._lastChartTf) {
             view.offset = 0;
             view.yMin = null;
             window._lastChartSym = sym;
             window._lastChartTf  = tf;
-            const cw = W(MC) - PL - PR;
-            view.candleW = K.length > 0
-                ? Math.max(3, Math.min(20, cw / Math.min(K.length, 120)))
-                : 8;
+            // Auto-fit: choose candleW so all candles fill the visible area
+            if (K.length > 0) {
+                const ideal = chartW / Math.min(K.length, 120);
+                view.candleW = Math.max(3, Math.min(20, ideal));
+            } else {
+                view.candleW = 8;
+            }
         }
 
         resize();
-        drawAll();
+
+        if (w >= 50) {
+            drawAll();
+        } else {
+            let a = 0;
+            const retry = () => { resize(); if(W(MC)>=50){drawAll();}else if(++a<10){requestAnimationFrame(retry);} };
+            requestAnimationFrame(retry);
+        }
     }
 };
 
