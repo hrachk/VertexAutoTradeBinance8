@@ -1,7 +1,11 @@
 @page "/market"
 @using VertexAutoTradeBinance8.Web.Models
 @using VertexAutoTradeBinance8.Web.Services
+@using Binance.Net.Enums
+@using VertexAutoTradeBinance8.Services
 @inject MarketSnapshotFileService Service
+@inject MissedTradeFileService SignalSvc
+@inject BinanceClientFactory Factory
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
@@ -171,6 +175,198 @@
 
         </div>
 
+        <!-- SIGNAL PANEL -->
+        @if (_signals.Any())
+        {
+            <div class="sig-panel">
+                <div class="sig-panel-head">
+                    <div class="sig-panel-title">
+                        <span class="sig-dot"></span>
+                        LIVE SIGNALS
+                        <span class="sig-count">@_signals.Count</span>
+                    </div>
+                    <div class="sig-panel-sub">Click a signal to trade manually</div>
+                </div>
+                <div class="sig-cards">
+                    @foreach (var sig in _signals.Take(6))
+                    {
+                        bool isBuy = sig.Side?.ToUpper() == "BUY" || sig.Side?.ToUpper() == "LONG";
+                        bool isActive = _activeSignal == sig;
+                        decimal tp1 = sig.TakeProfits?.FirstOrDefault() ?? 0m;
+                        decimal rr = sig.StopLoss > 0 && sig.Entry > 0 && tp1 > 0
+                            ? Math.Abs(tp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry)
+                            : 0m;
+                        int conf = sig.Confidence;
+
+                        <div class="sig-card @(isBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "")"
+                             @onclick="() => SelectSignal(sig)">
+                            <!-- Card top -->
+                            <div class="sc-top">
+                                <div class="sc-sym-wrap">
+                                    <span class="sc-sym">@sig.Symbol.Replace("USDT","")</span>
+                                    <span class="sc-usdt">USDT</span>
+                                </div>
+                                <span class="sc-side @(isBuy ? "sc-side-b" : "sc-side-s")">
+                                    @(isBuy ? "▲ LONG" : "▼ SHORT")
+                                </span>
+                            </div>
+                            <!-- Confidence bar -->
+                            <div class="sc-conf-wrap">
+                                <div class="sc-conf-bar" style="width:@conf%"
+                                     style2="background:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")"></div>
+                            </div>
+                            <!-- Prices -->
+                            <div class="sc-prices">
+                                <div class="sc-p"><span class="sc-pl">Entry</span><span class="sc-pv mono">@FmtP(sig.Entry)</span></div>
+                                <div class="sc-p"><span class="sc-pl">SL</span><span class="sc-pv mono dn">@FmtP(sig.StopLoss)</span></div>
+                                @if (tp1 > 0) {
+                                    <div class="sc-p"><span class="sc-pl">TP1</span><span class="sc-pv mono up">@FmtP(tp1)</span></div>
+                                }
+                            </div>
+                            <!-- Footer -->
+                            <div class="sc-foot">
+                                <span class="sc-conf @(conf>=60?"up":conf>=45?"yel":"dn")">@conf%</span>
+                                @if (rr > 0) { <span class="sc-rr">RR @rr.ToString("F1")</span> }
+                                <span class="sc-atr mk-dim">ATR @FmtP(sig.ATR)</span>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+
+        <!-- TRADE ORDER PANEL (appears when signal selected) -->
+        @if (_activeSignal != null)
+        {
+            bool isBuy = _activeSignal.Side?.ToUpper() == "BUY" || _activeSignal.Side?.ToUpper() == "LONG";
+            decimal tp1 = _activeSignal.TakeProfits?.FirstOrDefault() ?? 0m;
+
+            <div class="ord-panel">
+                <div class="ord-head">
+                    <div class="ord-title">
+                        <span class="sc-side @(isBuy?"sc-side-b":"sc-side-s") ord-badge">
+                            @(isBuy ? "▲ LONG" : "▼ SHORT")
+                        </span>
+                        <span class="ord-sym">@_activeSignal.Symbol</span>
+                    </div>
+                    <button class="ord-close-x" @onclick="()=>_activeSignal=null">✕</button>
+                </div>
+
+                <!-- Order type tabs -->
+                <div class="ord-type-tabs">
+                    <button class="ord-tt @(_orderType=="Market"?"ott-on":"")" @onclick='()=>_orderType="Market"'>
+                        <span class="ord-tt-icon">⚡</span> Market
+                    </button>
+                    <button class="ord-tt @(_orderType=="Limit"?"ott-on":"")" @onclick='()=>_orderType="Limit"'>
+                        <span class="ord-tt-icon">📋</span> Limit
+                    </button>
+                    <button class="ord-tt @(_orderType=="StopLimit"?"ott-on":"")" @onclick='()=>_orderType="StopLimit"'>
+                        <span class="ord-tt-icon">🛡</span> Stop
+                    </button>
+                </div>
+
+                <div class="ord-body">
+                    <!-- Leverage row -->
+                    <div class="ord-row">
+                        <div class="ord-lev-head">
+                            <label class="ord-label">Leverage</label>
+                            <span class="ord-lev-val">@_orderLeverage×</span>
+                        </div>
+                        <div class="ord-lev-slider-wrap">
+                            <input type="range" min="1" max="50" step="1"
+                                   class="ord-lev-slider"
+                                   @bind="_orderLeverage" @bind:event="oninput" />
+                            <div class="ord-lev-ticks">
+                                @foreach (var v in new[]{1,5,10,20,30,50})
+                                {
+                                    <span class="ord-lev-tick @(_orderLeverage==v?"otk-on":"")"
+                                          @onclick="()=>_orderLeverage=v">@v×</span>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Price row (hidden for Market) -->
+                    @if (_orderType != "Market")
+                    {
+                        <div class="ord-row">
+                            <label class="ord-label">@(_orderType == "StopLimit" ? "Stop Price" : "Limit Price")</label>
+                            <div class="ord-input-wrap">
+                                <input class="ord-input mono" type="number" step="any"
+                                       @bind="_orderPrice" @bind:event="oninput" />
+                                <span class="ord-input-sfx">USDT</span>
+                            </div>
+                        </div>
+                        @if (_orderType == "StopLimit")
+                        {
+                            <div class="ord-row">
+                                <label class="ord-label">Limit Price</label>
+                                <div class="ord-input-wrap">
+                                    <input class="ord-input mono" type="number" step="any"
+                                           @bind="_limitPrice" @bind:event="oninput" />
+                                    <span class="ord-input-sfx">USDT</span>
+                                </div>
+                            </div>
+                        }
+                    }
+
+                    <!-- Quantity -->
+                    <div class="ord-row">
+                        <label class="ord-label">Quantity</label>
+                        <div class="ord-input-wrap">
+                            <input class="ord-input mono" type="number" step="any"
+                                   @bind="_orderQty" @bind:event="oninput" />
+                            <span class="ord-input-sfx">@_activeSignal.Symbol.Replace("USDT","")</span>
+                        </div>
+                    </div>
+
+                    <!-- Signal levels reference -->
+                    <div class="ord-levels">
+                        <div class="ord-lev">
+                            <span class="ord-lev-l">Signal Entry</span>
+                            <span class="ord-lev-v mono" @onclick="()=>_orderPrice=_activeSignal.Entry" title="Click to use">
+                                @FmtP(_activeSignal.Entry) <span class="ord-lev-use">↑</span>
+                            </span>
+                        </div>
+                        @if (_activeSignal.StopLoss > 0)
+                        {
+                            <div class="ord-lev">
+                                <span class="ord-lev-l">Stop Loss</span>
+                                <span class="ord-lev-v mono dn">@FmtP(_activeSignal.StopLoss)</span>
+                            </div>
+                        }
+                        @if (tp1 > 0)
+                        {
+                            <div class="ord-lev">
+                                <span class="ord-lev-l">Take Profit</span>
+                                <span class="ord-lev-v mono up">@FmtP(tp1)</span>
+                            </div>
+                        }
+                    </div>
+
+                    <!-- Error -->
+                    @if (!string.IsNullOrEmpty(_orderError))
+                    {
+                        <div class="ord-error">⚠ @_orderError</div>
+                    }
+                    @if (!string.IsNullOrEmpty(_orderSuccess))
+                    {
+                        <div class="ord-ok">✓ @_orderSuccess</div>
+                    }
+
+                    <!-- Submit -->
+                    <div class="ord-actions">
+                        <button class="ord-cancel-btn" @onclick="CancelOrder">Cancel</button>
+                        <button class="ord-submit-btn @(isBuy?"osb-buy":"osb-sell")"
+                                @onclick="PlaceManualOrder" disabled="@_orderLoading">
+                            @if (_orderLoading) { <span class="ord-spin"></span> }
+                            else if (_orderType == "Market") { @(isBuy ? "Buy Market" : "Sell Market") }
+                            else { @(isBuy ? "Buy Limit" : "Sell Limit") }
+                        </button>
+                    </div>
+                </div>
+            </div>
+        }
+
         <!-- SYMBOL TABLE -->
         <div class="mk-tbl-wrap">
             <div class="mk-tbl-title">ALL INSTRUMENTS</div>
@@ -285,6 +481,93 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-resize-handle:hover{background:rgba(59,130,246,0.2);}
 .mk-resize-dots{font-size:12px;color:var(--dim);letter-spacing:2px;line-height:1;}
 
+/* SIGNAL PANEL */
+.sig-panel{padding:16px 20px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
+.sig-panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
+.sig-panel-title{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:2px;color:var(--txt);}
+.sig-dot{width:7px;height:7px;border-radius:50%;background:var(--grn);animation:pulse 1.5s infinite;}
+@@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(34,197,94,.4);}50%{box-shadow:0 0 0 6px rgba(34,197,94,0);}}
+.sig-count{background:var(--acc);color:#fff;font-size:10px;padding:1px 6px;border-radius:8px;font-family:sans-serif;}
+.sig-panel-sub{font-size:11px;color:var(--dim);}
+.sig-cards{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin;}
+.sig-cards::-webkit-scrollbar{height:3px;}
+.sig-cards::-webkit-scrollbar-thumb{background:var(--bdr);}
+
+/* Signal card */
+.sig-card{flex-shrink:0;width:175px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:12px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.sig-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;}
+.sc-buy::before{background:var(--grn);}
+.sc-sell::before{background:var(--red);}
+.sig-card:hover{border-color:var(--acc);transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.3);}
+.sc-active{border-color:var(--acc)!important;background:rgba(59,130,246,.08)!important;}
+.sc-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;}
+.sc-sym-wrap{display:flex;flex-direction:column;}
+.sc-sym{font-family:var(--mono);font-size:15px;font-weight:700;}
+.sc-usdt{font-size:10px;color:var(--dim);}
+.sc-side{font-size:10px;font-weight:700;padding:2px 6px;border-radius:3px;white-space:nowrap;}
+.sc-side-b{background:rgba(34,197,94,.15);color:var(--grn);}
+.sc-side-s{background:rgba(239,68,68,.15);color:var(--red);}
+.sc-conf-wrap{height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;margin-bottom:10px;}
+.sc-conf-bar{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--acc),var(--grn));}
+.sc-prices{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
+.sc-p{display:flex;justify-content:space-between;align-items:center;}
+.sc-pl{font-size:10px;color:var(--dim);}
+.sc-pv{font-size:11px;}
+.sc-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.sc-conf{font-family:var(--mono);font-size:12px;font-weight:700;}
+.sc-rr{font-size:10px;background:rgba(59,130,246,.12);color:var(--acc);padding:1px 5px;border-radius:3px;}
+.sc-atr{font-size:10px;}
+.yel{color:var(--yel)!important;}
+
+/* ORDER PANEL */
+.ord-panel{margin:0 20px 16px;background:var(--bg3);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;}
+.ord-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
+.ord-title{display:flex;align-items:center;gap:10px;}
+.ord-badge{font-size:12px;}
+.ord-sym{font-family:var(--mono);font-size:16px;font-weight:700;}
+.ord-close-x{background:none;border:none;color:var(--dim);font-size:16px;cursor:pointer;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:all .15s;}
+.ord-close-x:hover{background:var(--bdr);color:var(--txt);}
+.ord-type-tabs{display:flex;background:var(--bg2);border-bottom:1px solid var(--bdr);gap:4px;padding:8px 12px;}
+.ord-tt{flex:1;background:var(--bg3);border:1px solid var(--bdr);color:var(--dim);padding:10px 6px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;border-radius:8px;display:flex;align-items:center;justify-content:center;gap:5px;letter-spacing:.2px;}
+.ord-tt:hover{color:var(--txt);border-color:var(--bdr2);background:var(--bg4);}
+.ott-on{color:#fff!important;border-color:var(--acc)!important;background:linear-gradient(135deg,rgba(59,130,246,.3),rgba(59,130,246,.15))!important;box-shadow:0 0 12px rgba(59,130,246,.2);}
+.ord-tt-icon{font-size:14px;}
+/* Leverage */
+.ord-lev-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+.ord-lev-val{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--acc);}
+.ord-lev-slider-wrap{display:flex;flex-direction:column;gap:6px;}
+.ord-lev-slider{width:100%;accent-color:var(--acc);height:4px;cursor:pointer;}
+.ord-lev-ticks{display:flex;justify-content:space-between;}
+.ord-lev-tick{font-size:11px;color:var(--dim);cursor:pointer;padding:2px 6px;border-radius:4px;transition:all .15s;font-family:var(--mono);}
+.ord-lev-tick:hover{color:var(--txt);}
+.otk-on{color:var(--acc)!important;background:rgba(59,130,246,.15);font-weight:700;}
+.ord-body{padding:16px 18px;display:flex;flex-direction:column;gap:12px;}
+.ord-row{display:flex;flex-direction:column;gap:5px;}
+.ord-label{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;}
+.ord-input-wrap{display:flex;align-items:center;background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;overflow:hidden;transition:border-color .15s;}
+.ord-input-wrap:focus-within{border-color:var(--acc);}
+.ord-input{flex:1;background:transparent;border:none;color:var(--txt);padding:9px 12px;font-family:var(--mono);font-size:14px;outline:none;}
+.ord-input-sfx{padding:0 12px;color:var(--dim);font-size:12px;border-left:1px solid var(--bdr);}
+.ord-levels{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:10px 0;border-top:1px solid var(--bdr);border-bottom:1px solid var(--bdr);}
+.ord-lev{display:flex;flex-direction:column;gap:3px;}
+.ord-lev-l{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;}
+.ord-lev-v{font-size:12px;cursor:pointer;transition:opacity .15s;}
+.ord-lev-v:hover{opacity:.7;}
+.ord-lev-use{font-size:9px;opacity:.5;}
+.ord-error{padding:8px 12px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.2);border-radius:6px;font-size:12px;color:var(--red);}
+.ord-ok{padding:8px 12px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2);border-radius:6px;font-size:12px;color:var(--grn);}
+.ord-actions{display:flex;gap:8px;}
+.ord-cancel-btn{flex:1;background:var(--bg2);border:1px solid var(--bdr);color:var(--dim);padding:10px;border-radius:7px;font-size:13px;cursor:pointer;transition:all .15s;}
+.ord-cancel-btn:hover{color:var(--txt);border-color:var(--bdr);}
+.ord-submit-btn{flex:2;border:none;padding:10px;border-radius:7px;font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:8px;}
+.osb-buy{background:linear-gradient(135deg,#059669,#10b981);color:#fff;}
+.osb-buy:hover{box-shadow:0 4px 16px rgba(16,185,129,.4);}
+.osb-sell{background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff;}
+.osb-sell:hover{box-shadow:0 4px 16px rgba(239,68,68,.4);}
+.ord-submit-btn:disabled{opacity:.5;cursor:not-allowed;box-shadow:none;}
+.ord-spin{width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;}
+@@keyframes spin{to{transform:rotate(360deg);}}
+
 /* TABLE */
 .mk-tbl-wrap{padding:20px 28px;}
 .mk-tbl-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--bdr);}
@@ -300,6 +583,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-rtf{background:var(--bg3);padding:2px 6px;border-radius:3px;font-size:10px;color:var(--dim);}
 .mk-mono{font-family:var(--mono);font-size:12px;}
 
+.mk-hints{display:flex;gap:16px;padding:8px 4px 0;font-size:11px;color:var(--dim);flex-wrap:wrap;}
 @@media(max-width:1400px){.mk-stats{grid-template-columns:repeat(6,1fr);}}
 @@media(max-width:900px){.mk-stats{grid-template-columns:repeat(3,1fr);}.mk-header{flex-direction:column;gap:12px;}}
 </style>
@@ -392,6 +676,20 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             var fresh = await Service.LoadAsync();
             if (fresh == null || fresh.Count == 0) return;
             Series = fresh.ToList();
+
+            // Load recent signals (last 24h, not blocked by exchange)
+            try
+            {
+                var allSigs = await SignalSvc.LoadAsync();
+                _signals = allSigs
+                    .Where(s => s.Entry > 0 && s.StopLoss > 0
+                                && s.Time >= DateTime.UtcNow.AddHours(-24)
+                                && s.Stage != "BLOCKED")
+                    .OrderByDescending(s => s.Time)
+                    .Take(12)
+                    .ToList();
+            }
+            catch { }
 
             // Rebuild symbol list (unique, ordered by count)
             _symbols = Series
@@ -565,12 +863,128 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         return v.ToString("F2");
     }
 
+    // ── Signals ───────────────────────────────────────────────
+    List<MissedTradeRecord> _signals = new();
+    MissedTradeRecord? _activeSignal;
+    string _orderType = "Market";
+    decimal _orderPrice;
+    decimal _limitPrice;
+    decimal _orderQty;
+    int _orderLeverage = 10;
+    bool _orderLoading;
+    string _orderError = string.Empty;
+    string _orderSuccess = string.Empty;
+
+    void SelectSignal(MissedTradeRecord sig)
+    {
+        _activeSignal = _activeSignal == sig ? null : sig;
+        _orderPrice   = sig.Entry;
+        _limitPrice   = sig.Entry;
+        _orderQty     = 0;
+        _orderError   = string.Empty;
+        _orderSuccess = string.Empty;
+        _orderType    = "Market";
+
+        // Switch chart to signal's symbol
+        if (_activeSignal != null)
+            PickSym(sig.Symbol);
+    }
+
+    void CancelOrder()
+    {
+        _activeSignal = null;
+        _orderError   = string.Empty;
+        _orderSuccess = string.Empty;
+    }
+
+    async Task PlaceManualOrder()
+    {
+        if (_activeSignal == null) return;
+        _orderError = string.Empty;
+        _orderSuccess = string.Empty;
+
+        if (_orderQty <= 0) { _orderError = "Enter quantity"; return; }
+        if (_orderType != "Market" && _orderPrice <= 0) { _orderError = "Enter price"; return; }
+
+        _orderLoading = true;
+        StateHasChanged();
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) { _orderError = "No API credentials configured"; return; }
+
+            bool isBuy = _activeSignal.Side?.ToUpper() == "BUY" ||
+                         _activeSignal.Side?.ToUpper() == "LONG";
+            var side = isBuy ? OrderSide.Buy : OrderSide.Sell;
+
+            // Get stepSize for rounding
+            decimal step = 0.001m;
+            try
+            {
+                using var cts2 = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var ei = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync(cts2.Token);
+                if (ei.Success)
+                {
+                    var sym = ei.Data.Symbols.FirstOrDefault(s => s.Name == _activeSignal.Symbol);
+                    if (sym?.LotSizeFilter?.StepSize > 0) step = sym.LotSizeFilter.StepSize;
+                }
+            } catch { }
+
+            decimal qty = Math.Floor(_orderQty / step) * step;
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+
+            // Устанавливаем кредитное плечо
+            try
+            {
+                await client.UsdFuturesApi.Account.ChangeInitialLeverageAsync(
+                    _activeSignal.Symbol, _orderLeverage, ct: cts.Token);
+            }
+            catch { /* не критично если не удалось */ }
+
+            long? placedOrderId = null;
+
+            if (_orderType == "Market")
+            {
+                var r = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    _activeSignal.Symbol, side,
+                    FuturesOrderType.Market, qty, ct: cts.Token);
+                if (r.Success) placedOrderId = r.Data?.Id;
+                else { _orderError = $"Error {r.Error?.Code}: {r.Error?.Message}"; return; }
+            }
+            else if (_orderType == "Limit")
+            {
+                var r = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    _activeSignal.Symbol, side,
+                    FuturesOrderType.Limit, qty,
+                    price: _orderPrice,
+                    timeInForce: TimeInForce.GoodTillCanceled,
+                    ct: cts.Token);
+                if (r.Success) placedOrderId = r.Data?.Id;
+                else { _orderError = $"Error {r.Error?.Code}: {r.Error?.Message}"; return; }
+            }
+            else
+            {
+                var r = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    _activeSignal.Symbol, side,
+                    FuturesOrderType.StopMarket, qty,
+                    stopPrice: _orderPrice,
+                    ct: cts.Token);
+                if (r.Success) placedOrderId = r.Data?.Id;
+                else { _orderError = $"Error {r.Error?.Code}: {r.Error?.Message}"; return; }
+            }
+
+            _orderSuccess = $"Order #{placedOrderId} placed · {_orderType} · {qty} {_activeSignal.Symbol.Replace("USDT", "")}";
+            _activeSignal = null;
+        }
+        catch (Exception ex) { _orderError = ex.Message; }
+        finally { _orderLoading = false; }
+    }
+
     public async ValueTask DisposeAsync()
     {
-        _cts.Cancel(); _timer?.Dispose();
+        _cts.Cancel();
+        _timer?.Dispose();
+        await Task.CompletedTask;
     }
 }
-
-<style>
-.mk-hints{display:flex;gap:16px;padding:8px 4px 0;font-size:11px;color:var(--dim);flex-wrap:wrap;}
-</style>
