@@ -538,16 +538,18 @@ window.marketChart = {
         K = klines;
         derive();
 
-        const w = W(MC);
+        console.log('[chart] render:', klines.length, 'klines MC=', MC?'ok':'NULL', 'size=', W(MC)+'x'+H(MC));
+
+        if (!MC) { console.error('[chart] MC null'); return; }
+
+        const w = W(MC), h = H(MC);
         const chartW = (w || 800) - PL - PR;
 
-        // Reset view on symbol/tf change
         if (sym !== window._lastChartSym || tf !== window._lastChartTf) {
             view.offset = 0;
             view.yMin = null;
             window._lastChartSym = sym;
             window._lastChartTf  = tf;
-            // Auto-fit: choose candleW so all candles fill the visible area
             if (K.length > 0) {
                 const ideal = chartW / Math.min(K.length, 120);
                 view.candleW = Math.max(3, Math.min(20, ideal));
@@ -557,14 +559,8 @@ window.marketChart = {
         }
 
         resize();
-
-        if (w >= 50) {
-            drawAll();
-        } else {
-            let a = 0;
-            const retry = () => { resize(); if(W(MC)>=50){drawAll();}else if(++a<10){requestAnimationFrame(retry);} };
-            requestAnimationFrame(retry);
-        }
+        console.log('[chart] after resize:', MC.width+'x'+MC.height, 'drawAll guard w='+w+' h='+h);
+        drawAll();
     }
 };
 
