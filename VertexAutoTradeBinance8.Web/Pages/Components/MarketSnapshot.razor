@@ -910,7 +910,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
 
-            // 1) Exchange info → tickSize, stepSize, maxLeverage, minNotional
+            // 1) Exchange info → tickSize, stepSize, minNotional
             var ei = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync(cts.Token);
             if (ei.Success)
             {
@@ -919,23 +919,38 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 {
                     _symTickSize    = s.PriceFilter?.TickSize   ?? 0.0001m;
                     _symStep        = s.LotSizeFilter?.StepSize ?? 0.001m;
-                    _symMaxLev      = 125; // Binance.Net не экспортирует MaxLeverage напрямую
-
-                    // MinNotional из фильтров
                     _symMinNotional = 5m;
                     foreach (var f in s.Filters)
                     {
-                        if (f is Binance.Net.Objects.Models.BinanceSymbolMinNotionalFilter mn)
+                        if (f is Binance.Net.Objects.Models.Spot.BinanceSymbolMinNotionalFilter mn)
                         { _symMinNotional = mn.MinNotional; break; }
                     }
                 }
             }
 
-            // 2) Round price to tickSize
+            // 2) Real MaxLeverage via GetBracketsAsync
+            try
+            {
+                var br = await client.UsdFuturesApi.Account
+                    .GetBracketsAsync(sig.Symbol, ct: cts.Token);
+                if (br.Success && br.Data != null)
+                {
+                    var sb = br.Data.FirstOrDefault(b => b.Symbol == sig.Symbol);
+                    if (sb?.Brackets?.Length > 0)
+                    {
+                        _symMaxLev = sb.Brackets.Max(b => b.InitialLeverage);
+                        if (_orderLeverage > _symMaxLev)
+                            _orderLeverage = Math.Min(_symMaxLev, 20);
+                    }
+                }
+            }
+            catch { }
+
+            // 3) Round price to tickSize
             if (_symTickSize > 0 && sig.Entry > 0)
                 _orderPrice = Math.Round(sig.Entry / _symTickSize) * _symTickSize;
 
-            // 3) Suggest qty from balance with 2% risk
+            // 4) Suggest qty from balance with 2% risk
             var bal = await client.UsdFuturesApi.Account.GetBalancesAsync(ct: cts.Token);
             if (bal.Success && bal.Data != null)
             {
@@ -943,18 +958,15 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 if (usdt != null && usdt.AvailableBalance > 0 && sig.Entry > 0)
                 {
                     decimal balance  = usdt.AvailableBalance;
-                    decimal riskUsdt = balance * 0.02m;   // 2% баланса под риск
+                    decimal riskUsdt = balance * 0.02m;
                     decimal stopDist = sig.StopLoss > 0
                         ? Math.Abs(sig.Entry - sig.StopLoss)
                         : (sig.ATR > 0 ? sig.ATR * 1.5m : sig.Entry * 0.01m);
 
                     decimal rawQty = stopDist > 0 ? riskUsdt / stopDist : 0m;
-
-                    // Гарантируем minNotional
-                    decimal minQty = _symMinNotional / sig.Entry;
+                    decimal minQty = sig.Entry > 0 ? _symMinNotional / sig.Entry : 0m;
                     rawQty = Math.Max(rawQty, minQty);
 
-                    // Округляем по step
                     decimal step = _symStep > 0 ? _symStep : 0.001m;
                     _orderQty = Math.Floor(rawQty / step) * step;
                 }
