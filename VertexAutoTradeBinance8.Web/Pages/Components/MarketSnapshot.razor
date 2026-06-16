@@ -270,14 +270,16 @@
                     <div class="ord-row">
                         <div class="ord-lev-head">
                             <label class="ord-label">Leverage</label>
-                            <span class="ord-lev-val">@_orderLeverage×</span>
+                            <span class="ord-lev-val">@_orderLeverage×
+                                <span class="ord-lev-max">/ @_symMaxLev× max</span>
+                            </span>
                         </div>
                         <div class="ord-lev-slider-wrap">
-                            <input type="range" min="1" max="50" step="1"
+                            <input type="range" min="1" max="@_symMaxLev" step="1"
                                    class="ord-lev-slider"
                                    @bind="_orderLeverage" @bind:event="oninput" />
                             <div class="ord-lev-ticks">
-                                @foreach (var v in new[]{1,5,10,20,30,50})
+                                @foreach (var v in new[]{1,5,10,20,30,50}.Where(v => v <= _symMaxLev))
                                 {
                                     <span class="ord-lev-tick @(_orderLeverage==v?"otk-on":"")"
                                           @onclick="()=>_orderLeverage=v">@v×</span>
@@ -540,6 +542,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .ord-lev-ticks{display:flex;justify-content:space-between;}
 .ord-lev-tick{font-size:11px;color:var(--dim);cursor:pointer;padding:2px 6px;border-radius:4px;transition:all .15s;font-family:var(--mono);}
 .ord-lev-tick:hover{color:var(--txt);}
+.ord-lev-max{font-size:11px;color:var(--dim);font-weight:400;margin-left:4px;}
 .otk-on{color:var(--acc)!important;background:rgba(59,130,246,.15);font-weight:700;}
 .ord-body{padding:16px 18px;display:flex;flex-direction:column;gap:12px;}
 .ord-row{display:flex;flex-direction:column;gap:5px;}
@@ -875,19 +878,88 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     string _orderError = string.Empty;
     string _orderSuccess = string.Empty;
 
+    // ── Symbol exchange info cache ────────────────────────────
+    decimal _symTickSize    = 0m;
+    decimal _symStep        = 0m;
+    int     _symMaxLev      = 125;
+    decimal _symMinNotional = 5m;
+
     void SelectSignal(MissedTradeRecord sig)
     {
-        _activeSignal = _activeSignal == sig ? null : sig;
-        _orderPrice   = sig.Entry;
-        _limitPrice   = sig.Entry;
-        _orderQty     = 0;
-        _orderError   = string.Empty;
-        _orderSuccess = string.Empty;
-        _orderType    = "Market";
+        _activeSignal  = _activeSignal == sig ? null : sig;
+        _orderError    = string.Empty;
+        _orderSuccess  = string.Empty;
+        _orderType     = "Market";
+        _orderLeverage = 10;
+        _orderQty      = 0;
+        _orderPrice    = sig.Entry;
 
-        // Switch chart to signal's symbol
         if (_activeSignal != null)
+        {
             PickSym(sig.Symbol);
+            _ = LoadSymbolInfoAndSuggestQty(sig);
+        }
+    }
+
+    async Task LoadSymbolInfoAndSuggestQty(MissedTradeRecord sig)
+    {
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return;
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+
+            // 1) Exchange info → tickSize, stepSize, maxLeverage, minNotional
+            var ei = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync(cts.Token);
+            if (ei.Success)
+            {
+                var s = ei.Data.Symbols.FirstOrDefault(x => x.Name == sig.Symbol);
+                if (s != null)
+                {
+                    _symTickSize    = s.PriceFilter?.TickSize    ?? 0.0001m;
+                    _symStep        = s.LotSizeFilter?.StepSize  ?? 0.001m;
+                    _symMaxLev      = s.MaxLeverage > 0 ? s.MaxLeverage : 125;
+                    _symMinNotional = s.MinNotionalFilter?.Notional ?? 5m;
+
+                    // Clamp leverage to symbol max
+                    if (_orderLeverage > _symMaxLev)
+                        _orderLeverage = Math.Min(_symMaxLev, 20);
+                }
+            }
+
+            // 2) Round price to tickSize
+            if (_symTickSize > 0 && sig.Entry > 0)
+                _orderPrice = Math.Round(sig.Entry / _symTickSize) * _symTickSize;
+
+            // 3) Suggest qty from balance with 2% risk
+            var bal = await client.UsdFuturesApi.Account.GetBalancesAsync(ct: cts.Token);
+            if (bal.Success && bal.Data != null)
+            {
+                var usdt = bal.Data.FirstOrDefault(b => b.Asset == "USDT");
+                if (usdt != null && usdt.AvailableBalance > 0 && sig.Entry > 0)
+                {
+                    decimal balance  = usdt.AvailableBalance;
+                    decimal riskUsdt = balance * 0.02m;   // 2% баланса под риск
+                    decimal stopDist = sig.StopLoss > 0
+                        ? Math.Abs(sig.Entry - sig.StopLoss)
+                        : (sig.ATR > 0 ? sig.ATR * 1.5m : sig.Entry * 0.01m);
+
+                    decimal rawQty = stopDist > 0 ? riskUsdt / stopDist : 0m;
+
+                    // Гарантируем minNotional
+                    decimal minQty = _symMinNotional / sig.Entry;
+                    rawQty = Math.Max(rawQty, minQty);
+
+                    // Округляем по step
+                    decimal step = _symStep > 0 ? _symStep : 0.001m;
+                    _orderQty = Math.Floor(rawQty / step) * step;
+                }
+            }
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { }
     }
 
     void CancelOrder()
@@ -900,11 +972,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     async Task PlaceManualOrder()
     {
         if (_activeSignal == null) return;
-        _orderError = string.Empty;
+        _orderError   = string.Empty;
         _orderSuccess = string.Empty;
 
-        if (_orderQty <= 0) { _orderError = "Enter quantity"; return; }
-        if (_orderType != "Market" && _orderPrice <= 0) { _orderError = "Enter price"; return; }
+        if (_orderQty <= 0)                                   { _orderError = "Enter quantity"; return; }
+        if (_orderType != "Market" && _orderPrice <= 0)       { _orderError = "Enter price"; return; }
 
         _orderLoading = true;
         StateHasChanged();
@@ -913,72 +985,73 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             var client = Factory.TryCreateRestClient();
             if (client == null) { _orderError = "No API credentials configured"; return; }
 
-            bool isBuy = _activeSignal.Side?.ToUpper() == "BUY" ||
-                         _activeSignal.Side?.ToUpper() == "LONG";
-            var side = isBuy ? OrderSide.Buy : OrderSide.Sell;
+            bool isBuy  = _activeSignal.Side?.ToUpper() == "BUY" ||
+                          _activeSignal.Side?.ToUpper() == "LONG";
+            var side    = isBuy ? OrderSide.Buy : OrderSide.Sell;
+            var posSide = isBuy ? PositionSide.Long : PositionSide.Short;
 
-            // Get stepSize for rounding
-            decimal step = 0.001m;
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+            // Round qty to stepSize
+            decimal step = _symStep > 0 ? _symStep : 0.001m;
+            decimal qty  = Math.Floor(_orderQty / step) * step;
+            if (qty <= 0) { _orderError = "Quantity too small after rounding"; return; }
+
+            // Round price to tickSize
+            decimal tick  = _symTickSize > 0 ? _symTickSize : 0.0001m;
+            decimal price = tick > 0 ? Math.Round(_orderPrice / tick) * tick : _orderPrice;
+
+            // Set leverage
+            try { await client.UsdFuturesApi.Account.ChangeInitialLeverageAsync(
+                _activeSignal.Symbol, _orderLeverage, ct: cts.Token); }
+            catch { }
+
+            // Detect hedge mode
+            bool isHedge = false;
             try
             {
-                using var cts2 = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                var ei = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync(cts2.Token);
-                if (ei.Success)
-                {
-                    var sym = ei.Data.Symbols.FirstOrDefault(s => s.Name == _activeSignal.Symbol);
-                    if (sym?.LotSizeFilter?.StepSize > 0) step = sym.LotSizeFilter.StepSize;
-                }
-            } catch { }
-
-            decimal qty = Math.Floor(_orderQty / step) * step;
-
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-
-            // Устанавливаем кредитное плечо
-            try
-            {
-                await client.UsdFuturesApi.Account.ChangeInitialLeverageAsync(
-                    _activeSignal.Symbol, _orderLeverage, ct: cts.Token);
+                var pm = await client.UsdFuturesApi.Account.GetPositionModeAsync(ct: cts.Token);
+                isHedge = pm.Success && pm.Data?.IsHedgeMode == true;
             }
-            catch { /* не критично если не удалось */ }
+            catch { }
 
-            long? placedOrderId = null;
+            long? orderId = null;
 
             if (_orderType == "Market")
             {
                 var r = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    _activeSignal.Symbol, side,
-                    FuturesOrderType.Market, qty, ct: cts.Token);
-                if (r.Success) placedOrderId = r.Data?.Id;
+                    symbol: _activeSignal.Symbol, side: side,
+                    type: FuturesOrderType.Market, quantity: qty,
+                    positionSide: isHedge ? posSide : null, ct: cts.Token);
+                if (r.Success) orderId = r.Data?.Id;
                 else { _orderError = $"Error {r.Error?.Code}: {r.Error?.Message}"; return; }
             }
             else if (_orderType == "Limit")
             {
                 var r = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    _activeSignal.Symbol, side,
-                    FuturesOrderType.Limit, qty,
-                    price: _orderPrice,
-                    timeInForce: TimeInForce.GoodTillCanceled,
-                    ct: cts.Token);
-                if (r.Success) placedOrderId = r.Data?.Id;
+                    symbol: _activeSignal.Symbol, side: side,
+                    type: FuturesOrderType.Limit, quantity: qty,
+                    price: price, timeInForce: TimeInForce.GoodTillCanceled,
+                    positionSide: isHedge ? posSide : null, ct: cts.Token);
+                if (r.Success) orderId = r.Data?.Id;
                 else { _orderError = $"Error {r.Error?.Code}: {r.Error?.Message}"; return; }
             }
-            else
+            else // Stop
             {
                 var r = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    _activeSignal.Symbol, side,
-                    FuturesOrderType.StopMarket, qty,
-                    stopPrice: _orderPrice,
-                    ct: cts.Token);
-                if (r.Success) placedOrderId = r.Data?.Id;
+                    symbol: _activeSignal.Symbol, side: side,
+                    type: FuturesOrderType.StopMarket, quantity: qty,
+                    stopPrice: price,
+                    positionSide: isHedge ? posSide : null, ct: cts.Token);
+                if (r.Success) orderId = r.Data?.Id;
                 else { _orderError = $"Error {r.Error?.Code}: {r.Error?.Message}"; return; }
             }
 
-            _orderSuccess = $"Order #{placedOrderId} placed · {_orderType} · {qty} {_activeSignal.Symbol.Replace("USDT", "")}";
+            _orderSuccess = $"Order #{orderId} placed · {_orderType} · {qty} {_activeSignal.Symbol.Replace("USDT","")}";
             _activeSignal = null;
         }
         catch (Exception ex) { _orderError = ex.Message; }
-        finally { _orderLoading = false; }
+        finally { _orderLoading = false; StateHasChanged(); }
     }
 
     public async ValueTask DisposeAsync()
