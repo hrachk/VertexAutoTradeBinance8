@@ -226,6 +226,7 @@
                         bool isRemoving = _expiredSignals.ContainsKey(SignalKey(sig));
 
                         <div class="sig-card @(isBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "")"
+                             @key="SignalKey(sig)"
                              @onclick="() => SelectSignal(sig)">
                             <!-- Card top -->
                             <div class="sc-top">
