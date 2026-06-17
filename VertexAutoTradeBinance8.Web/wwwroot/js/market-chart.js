@@ -129,22 +129,33 @@ function autoY() {
     let hi = Math.max(...vis.map(k=>k.high));
     const bbSlice = derived.bb.slice(start, end);
     bbSlice.forEach(b => { if(b.up>hi) hi=b.up; if(b.dn<lo) lo=b.dn; });
+    if (!isFinite(lo) || !isFinite(hi) || hi <= lo) {
+        // Degenerate range (flat price or bad data) - use a sane fallback
+        const mid = isFinite(lo) ? lo : 1;
+        return { yMin: mid * 0.98, yMax: mid * 1.02 || 1 };
+    }
     const pad = (hi-lo)*0.07;
     return { yMin:lo-pad, yMax:hi+pad };
 }
 
 function yFor(p, yMin, yMax, cH, cPT=PT, cPB=PB) {
     const ch = cH - cPT - cPB;
-    return cPT + ch - (p - yMin) / (yMax - yMin) * ch;
+    const range = yMax - yMin;
+    if (!range || !isFinite(range)) return cPT + ch / 2; // fallback: center
+    return cPT + ch - (p - yMin) / range * ch;
 }
 
 // ── DRAW ──────────────────────────────────────────────────
 function drawAll() {
     if (!MC || !K.length) return;
-    const { yMin, yMax } = autoY();
-    drawMain(yMin, yMax);
-    if (RC) drawRsi();
-    if (VC) drawVol();
+    try {
+        const { yMin, yMax } = autoY();
+        drawMain(yMin, yMax);
+        if (RC) drawRsi();
+        if (VC) drawVol();
+    } catch (e) {
+        console.error('[market-chart] draw error:', e);
+    }
 }
 
 function drawMain(yMin, yMax) {
@@ -153,13 +164,6 @@ function drawMain(yMin, yMax) {
     const cW = W(MC), cH = H(MC);
     ctx.clearRect(0,0,cW,cH);
     ctx.fillStyle = T.bg; ctx.fillRect(0,0,cW,cH);
-
-    // DEBUG MARKER - remove after confirming canvas works
-    ctx.fillStyle = '#ff0000';
-    ctx.fillRect(0, 0, 30, 30);
-    ctx.fillStyle = '#00ff00';
-    ctx.font = '10px monospace';
-    ctx.fillText(`K=${K.length} cW=${cW} cH=${cH}`, 35, 15);
 
     const { start, end } = visRange();
     const chartH = cH - PT - PB;
