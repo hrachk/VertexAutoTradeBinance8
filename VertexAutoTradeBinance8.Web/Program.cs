@@ -6,6 +6,7 @@ using VertexAutoTradeBinance8.Services.Interface;
 using VertexAutoTradeBinance8.Services.State;
 using VertexAutoTradeBinance8.Web.Confs;
 using VertexAutoTradeBinance8.Web.Data;
+using VertexAutoTradeBinance8.Web.Hubs;
  
 using VertexAutoTradeBinance8.Web.Services;
 using VertexAutoTradeBinance8.Web.Services.Runtime;
@@ -36,6 +37,7 @@ builder.Services.AddSingleton<AiRuntimeDataProvider>();
 builder.Services.AddSingleton<SymbolRegistryService>();
 builder.Services.AddSingleton<TradePermissionFileService>();
 builder.Services.AddSingleton<MarketSnapshotFileService>();
+builder.Services.AddSingleton<MarketDataLiveState>();
 builder.Services.AddSingleton<DecisionMarkersFileService>();
 
 builder.Services.AddSingleton<IAiPulseEngine, AiPulseEngine>();
@@ -157,6 +159,7 @@ app.MapControllers();   // API маршруты
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
 app.MapHub<ExecutedSignalsHub>("/hubs/executedSignals");
+app.MapHub<MarketDataHub>("/hubs/marketData");
  
 ExecutedSignalService.ExecutedSignalsChanged += async () =>
 {

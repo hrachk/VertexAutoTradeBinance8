@@ -269,6 +269,7 @@ public class Program
                     services.AddHostedService<TradingWorker>();
                     services.AddHostedService<BinanceUserDataHostedService>();
                     services.AddHostedService<KlineSnapshotLiveSaver>();
+                    services.AddHostedService<MarketDataPushClient>();
                     services.AddHostedService<DecisionMarkersPersistenceHostedService>();
 
 
