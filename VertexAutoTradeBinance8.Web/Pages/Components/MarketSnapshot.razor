@@ -4,6 +4,7 @@
 @using Binance.Net.Enums
 @using VertexAutoTradeBinance8.Services
 @inject MarketSnapshotFileService Service
+@inject MarketDataLiveState LiveState
 @inject MissedTradeFileService SignalSvc
 @inject BinanceClientFactory Factory
 @inject IJSRuntime JS
@@ -707,9 +708,75 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     protected override async Task OnInitializedAsync()
     {
+        LiveState.PriceTicked += OnLivePriceTicked;
+        LiveState.KlineClosed += OnLiveKlineClosed;
+
         await LoadData();
         _timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
         _ = TickAsync();
+    }
+
+    // ===== LIVE PUSH (from Engine via MarketDataHub) =====
+    DateTime _lastLiveRender = DateTime.MinValue;
+    static readonly TimeSpan LiveRenderThrottle = TimeSpan.FromMilliseconds(200);
+
+    void OnLivePriceTicked(string symbol, decimal price)
+    {
+        var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == _activeTf);
+        if (idx < 0 || Series[idx].Klines.Count == 0) return;
+
+        var last = Series[idx].Klines[^1];
+        var updated = last with
+        {
+            High = Math.Max(last.High, price),
+            Low = Math.Min(last.Low, price),
+            Close = price
+        };
+
+        var klines = Series[idx].Klines.ToList();
+        klines[^1] = updated;
+        Series[idx] = Series[idx] with { Klines = klines };
+
+        if (symbol != _activeSym) return; // only re-render the chart actually on screen
+
+        var now = DateTime.UtcNow;
+        if (now - _lastLiveRender < LiveRenderThrottle) return;
+        _lastLiveRender = now;
+
+        ResolveSelected();
+        CalcStats();
+        _ = InvokeAsync(async () =>
+        {
+            try { await RenderCharts(); } catch { }
+            StateHasChanged();
+        });
+    }
+
+    void OnLiveKlineClosed(string symbol, string timeframe, KlineDto kline)
+    {
+        var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == timeframe);
+        if (idx < 0) return;
+
+        var klines = Series[idx].Klines.ToList();
+        if (klines.Count > 0 && klines[^1].OpenTime == kline.OpenTime)
+            klines[^1] = kline;          // finalize the candle that was forming live
+        else
+            klines.Add(kline);           // new bar
+
+        if (klines.Count > 500)
+            klines.RemoveRange(0, klines.Count - 500);
+
+        Series[idx] = Series[idx] with { Klines = klines };
+
+        if (symbol != _activeSym || timeframe != _activeTf) return;
+
+        ResolveSelected();
+        CalcStats();
+        _ = InvokeAsync(async () =>
+        {
+            try { await RenderCharts(); } catch { }
+            StateHasChanged();
+        });
     }
 
     bool _chartInitDone;
@@ -798,13 +865,34 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         catch (OperationCanceledException) { }
     }
 
+    // Keep live-updated series unless the file snapshot has a strictly newer
+    // closed candle (e.g. symbol the Engine isn't live-pushing, or cold state
+    // right after a Web restart). Prevents the slower ~45s file snapshot from
+    // reverting candles we've already live-updated via SignalR.
+    static List<MarketSeries> MergeWithLive(List<MarketSeries> current, IReadOnlyList<MarketSeries> fresh)
+    {
+        var result = new List<MarketSeries>(fresh.Count);
+        foreach (var f in fresh)
+        {
+            var existing = current.FirstOrDefault(s => s.Symbol == f.Symbol && s.Timeframe == f.Timeframe);
+            if (existing == null || existing.Klines.Count == 0 || f.Klines.Count == 0)
+            {
+                result.Add(f);
+                continue;
+            }
+
+            result.Add(f.Klines[^1].OpenTime > existing.Klines[^1].OpenTime ? f : existing);
+        }
+        return result;
+    }
+
     async Task LoadData()
     {
         try
         {
             var fresh = await Service.LoadAsync();
             if (fresh == null || fresh.Count == 0) return;
-            Series = fresh.ToList();
+            Series = MergeWithLive(Series, fresh);
 
             // Load recent signals (last 24h, not blocked by exchange)
             try
@@ -1342,6 +1430,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     public async ValueTask DisposeAsync()
     {
+        LiveState.PriceTicked -= OnLivePriceTicked;
+        LiveState.KlineClosed -= OnLiveKlineClosed;
         _cts.Cancel();
         _timer?.Dispose();
         await Task.CompletedTask;
