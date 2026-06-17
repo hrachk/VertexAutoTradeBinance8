@@ -601,3 +601,15 @@ window.marketChart = {
 };
 
 })();
+
+// Smoothly scrolls the LIVE SIGNALS card strip to the given page.
+// Independent of the chart IIFE above — purely a UI convenience for the
+// horizontal-scroll signal panel, added without touching chart logic.
+window.vertexScrollSignalsToPage = function (el, page, pageSize) {
+    if (!el || !el.children || el.children.length === 0) return;
+    const idx = Math.max(0, page * pageSize);
+    const target = el.children[Math.min(idx, el.children.length - 1)];
+    if (!target) return;
+    const targetLeft = target.offsetLeft - el.offsetLeft;
+    el.scrollTo({ left: targetLeft, behavior: "smooth" });
+};
