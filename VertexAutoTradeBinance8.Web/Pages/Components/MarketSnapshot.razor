@@ -125,6 +125,20 @@
                 <div class="mk-dim" style="font-size:11px;margin-top:4px">Engine writes klines_bootstrap.json on startup</div>
             </div>
         }
+        else if (!_chartInitDone)
+        {
+            <div class="mk-no-data-overlay">
+                <div style="font-size:24px">⏳</div>
+                <div style="font-size:13px;margin-top:8px">Initializing chart… (attempt @_initAttempts)</div>
+            </div>
+        }
+        @if (!string.IsNullOrEmpty(_chartInitError))
+        {
+            <div class="mk-no-data-overlay" style="background:rgba(40,10,10,.92)">
+                <div style="font-size:24px">⚠</div>
+                <div style="font-size:13px;margin-top:8px;color:#ff4d6a">@_chartInitError</div>
+            </div>
+        }
 
         <!-- Price chart -->
         <div class="mk-chart-head">
@@ -638,21 +652,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     bool _chartInitDone;
     string _lastRenderedKey = "";
 
+    string _chartInitError = "";
+    int _initAttempts = 0;
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
-            try
-            {
-                // JS-side waits for #priceChart to exist with real size
-                // before wiring up canvas — robust against F5/cold-start timing
-                await JS.InvokeVoidAsync("marketChart.waitAndInit",
-                    "priceChart", "rsiChart", "volumeChart",
-                    "resizeHandle", "priceWrap");
-            }
-            catch { }
-            _chartInitDone = true;
-            _jsReady = true;
+            _ = InitChartWithRetry();
         }
 
         // Render whenever chart is ready and data changed
@@ -665,6 +672,50 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 try { await RenderCharts(); } catch { }
             }
         }
+    }
+
+    async Task InitChartWithRetry()
+    {
+        for (int i = 0; i < 20; i++) // up to 20 × 150ms = 3s
+        {
+            _initAttempts = i + 1;
+            try
+            {
+                // Ask JS if the canvas element actually exists with real size
+                var ok = await JS.InvokeAsync<bool>("marketChart.elementReady", "priceChart");
+                if (ok)
+                {
+                    await JS.InvokeVoidAsync("marketChart.init",
+                        "priceChart", "rsiChart", "volumeChart",
+                        "resizeHandle", "priceWrap");
+                    _chartInitDone = true;
+                    _jsReady = true;
+                    _chartInitError = "";
+                    await InvokeAsync(StateHasChanged);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                _chartInitError = $"Init attempt {i+1} failed: {ex.Message}";
+            }
+            await Task.Delay(150);
+        }
+
+        // Failed after all retries — force init anyway and surface the error
+        try
+        {
+            await JS.InvokeVoidAsync("marketChart.init",
+                "priceChart", "rsiChart", "volumeChart",
+                "resizeHandle", "priceWrap");
+            _chartInitDone = true;
+            _jsReady = true;
+        }
+        catch (Exception ex)
+        {
+            _chartInitError = $"Chart init failed after {_initAttempts} attempts: {ex.Message}";
+        }
+        await InvokeAsync(StateHasChanged);
     }
 
     async Task TickAsync()
