@@ -642,11 +642,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     {
         if (firstRender)
         {
-            // Small delay so browser paints the DOM before we measure canvas
-            await Task.Delay(150);
             try
             {
-                await JS.InvokeVoidAsync("marketChart.init",
+                // JS-side waits for #priceChart to exist with real size
+                // before wiring up canvas — robust against F5/cold-start timing
+                await JS.InvokeVoidAsync("marketChart.waitAndInit",
                     "priceChart", "rsiChart", "volumeChart",
                     "resizeHandle", "priceWrap");
             }
