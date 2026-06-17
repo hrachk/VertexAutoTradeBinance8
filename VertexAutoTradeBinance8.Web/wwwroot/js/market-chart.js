@@ -154,6 +154,13 @@ function drawMain(yMin, yMax) {
     ctx.clearRect(0,0,cW,cH);
     ctx.fillStyle = T.bg; ctx.fillRect(0,0,cW,cH);
 
+    // DEBUG MARKER - remove after confirming canvas works
+    ctx.fillStyle = '#ff0000';
+    ctx.fillRect(0, 0, 30, 30);
+    ctx.fillStyle = '#00ff00';
+    ctx.font = '10px monospace';
+    ctx.fillText(`K=${K.length} cW=${cW} cH=${cH}`, 35, 15);
+
     const { start, end } = visRange();
     const chartH = cH - PT - PB;
     const chartW = cW - PL - PR;
