@@ -814,7 +814,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                     .Where(s => s.Entry > 0 && s.StopLoss > 0
                                 && s.Time >= DateTime.UtcNow.AddHours(-SignalLookbackHours)
                                 && s.Stage != "BLOCKED"
-                                && !_expiredSignals.ContainsKey(SignalKey(s)))
+                                && !_expiredSignals.ContainsKey(SignalKey(s))
+                                && !GetSignalTtl(s).IsExpired)
                     .GroupBy(s => s.Symbol)
                     .Select(g => g.OrderByDescending(s => s.Time).First())
                     .OrderByDescending(s => s.Time)
