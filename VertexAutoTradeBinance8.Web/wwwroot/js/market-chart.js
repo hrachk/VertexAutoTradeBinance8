@@ -491,6 +491,37 @@ let _activeResizeListener = null;
 let _lastSym = null, _lastTf = null;
 
 window.marketChart = {
+    // Polls until #mainId exists in DOM AND has a real (non-zero) size,
+    // then calls init(). Robust against F5/cold-start race conditions
+    // where Blazor's first OnAfterRenderAsync can fire before the
+    // browser has finished painting layout.
+    waitAndInit(mainId, rsiId, volId, resizeHandleId, resizeWrapId) {
+        return new Promise((resolve) => {
+            let attempts = 0;
+            const tryInit = () => {
+                attempts++;
+                const el = document.getElementById(mainId);
+                const parent = el ? (el.parentElement || el) : null;
+                const w = parent ? (parent.clientWidth || parent.offsetWidth || 0) : 0;
+                const h = parent ? (parent.clientHeight || parent.offsetHeight || 0) : 0;
+
+                if (el && w > 10 && h > 10) {
+                    window.marketChart.init(mainId, rsiId, volId, resizeHandleId, resizeWrapId);
+                    resolve();
+                } else if (attempts < 60) {
+                    // retry every 50ms, up to 3 seconds total
+                    setTimeout(tryInit, 50);
+                } else {
+                    // Give up waiting for ideal size, init anyway —
+                    // resize() inside init will fix sizing once layout settles
+                    window.marketChart.init(mainId, rsiId, volId, resizeHandleId, resizeWrapId);
+                    resolve();
+                }
+            };
+            tryInit();
+        });
+    },
+
     init(mainId, rsiId, volId, resizeHandleId, resizeWrapId) {
         // Disconnect previous observer/listener if init() called again
         // (happens on Blazor component re-mount without full page reload)
