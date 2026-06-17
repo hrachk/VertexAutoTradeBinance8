@@ -223,7 +223,7 @@
                         int conf = sig.Confidence;
 
                         var ttl = GetSignalTtl(sig);
-                        bool isRemoving = _expiredSignals.Contains(sig);
+                        bool isRemoving = _expiredSignals.ContainsKey(SignalKey(sig));
 
                         <div class="sig-card @(isBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "")"
                              @onclick="() => SelectSignal(sig)">
@@ -806,8 +806,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 var allSigs = await SignalSvc.LoadAsync();
                 _signals = allSigs
                     .Where(s => s.Entry > 0 && s.StopLoss > 0
-                                && s.Time >= DateTime.UtcNow.AddHours(-24)
-                                && s.Stage != "BLOCKED")
+                                && s.Time >= DateTime.UtcNow.AddHours(-SignalLookbackHours)
+                                && s.Stage != "BLOCKED"
+                                && !_expiredSignals.ContainsKey(SignalKey(s)))
                     .OrderByDescending(s => s.Time)
                     .Take(12)
                     .ToList();
@@ -989,8 +990,20 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     }
 
     // ── Signals ───────────────────────────────────────────────
+    const int SignalLookbackHours = 24;
+
     List<MissedTradeRecord> _signals = new();
-    HashSet<MissedTradeRecord> _expiredSignals = new();
+
+    // Keyed by Symbol+Time (not object identity/equality, which we don't
+    // control on MissedTradeRecord). Value is the signal's own Time, used
+    // only for pruning. An entry here means "already faded out locally" —
+    // it doubles as the sc-removing CSS check while still rendered, and as
+    // a permanent filter in LoadData() so the server can never resurrect a
+    // signal we've already dismissed within its own lookback window.
+    Dictionary<string, DateTime> _expiredSignals = new();
+
+    static string SignalKey(MissedTradeRecord s) => $"{s.Symbol}|{s.Time:O}";
+
     MissedTradeRecord? _activeSignal;
     string _orderType = "Market";
     decimal _orderPrice;
@@ -1061,21 +1074,39 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     // Called on every 5s tick: marks fully-expired signals so they fade out,
     // then removes them a moment later once the fade transition has played.
+    // Dismissed keys are kept (not cleared) so a concurrent/later LoadData()
+    // can never bring the same signal back at full opacity.
     void SweepExpiredSignals()
     {
+        // Anything this old can never reappear from LoadData() anyway
+        // (same lookback window), so it's safe to forget.
+        var cutoff = DateTime.UtcNow.AddHours(-SignalLookbackHours);
+        foreach (var k in _expiredSignals.Where(kv => kv.Value < cutoff).Select(kv => kv.Key).ToList())
+        {
+            _expiredSignals.Remove(k);
+        }
+
         var nowExpired = _signals.Where(s => GetSignalTtl(s).IsExpired).ToList();
-        var newlyMarked = nowExpired.Where(s => !_expiredSignals.Contains(s)).ToList();
-        foreach (var s in nowExpired) _expiredSignals.Add(s);
+        var newlyMarked = nowExpired.Where(s => !_expiredSignals.ContainsKey(SignalKey(s))).ToList();
 
         if (newlyMarked.Count == 0) return;
 
+        // Mark immediately, not just after the fade delay below — otherwise
+        // a LoadData() that lands mid-fade would still re-add the signal.
+        foreach (var s in newlyMarked)
+        {
+            _expiredSignals[SignalKey(s)] = s.Time;
+        }
+
+        var keysToRemove = newlyMarked.Select(SignalKey).ToHashSet();
+
         // Give the CSS fade-out transition a moment to play, then drop them
-        // from the live list entirely (and from the tracking set).
+        // from the live list entirely.
         _ = Task.Run(async () =>
         {
             await Task.Delay(900);
-            _signals = _signals.Where(s => !newlyMarked.Contains(s)).ToList();
-            foreach (var s in newlyMarked) _expiredSignals.Remove(s);
+            _signals = _signals.Where(s => !keysToRemove.Contains(SignalKey(s))).ToList();
+            _sigPage = Math.Clamp(_sigPage, 0, _sigPageCount - 1);
             await InvokeAsync(StateHasChanged);
         });
     }
