@@ -1814,14 +1814,17 @@ namespace VertexAutoTradeBinance8.Strategy
                 adaptiveFloor *= 0.85m;
 
             decimal absoluteFloor = cfg.MinEntry;
-            // decimal finalFloor = Math.Max(absoluteFloor, adaptiveFloor);
 
-            // finalFloor = Math.Clamp(finalFloor, 0.10m, 0.85m);
-
-            decimal finalFloor = adaptiveFloor;
-
-            if (finalFloor < absoluteFloor)
-                finalFloor = (finalFloor + absoluteFloor) * 0.5m;
+            // FIX: MinEntry is meant to be a hard absolute floor — the adaptive
+            // (regime-based) threshold should only ever raise the bar above it,
+            // never pull it down. The previous version averaged the two whenever
+            // adaptiveFloor < absoluteFloor, which is the NORMAL case for
+            // non-BTC/ETH symbols (GetAdaptiveThreshold typically returns
+            // 28-46% vs a configured 52% Default floor) — so the effective
+            // entry threshold was silently running ~5-7 points below the
+            // configured minimum for most signals, letting borderline
+            // (47-56%) signals through that the config was set up to reject.
+            decimal finalFloor = Math.Max(absoluteFloor, adaptiveFloor);
 
             if (finalConfidence < finalFloor)
             {
