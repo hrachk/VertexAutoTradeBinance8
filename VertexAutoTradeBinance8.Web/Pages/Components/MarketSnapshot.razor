@@ -186,19 +186,30 @@
         </div>
 
         <!-- SIGNAL PANEL -->
-        @if (_signals.Any())
-        {
-            <div class="sig-panel">
+        <div class="sig-panel">
                 <div class="sig-panel-head">
                     <div class="sig-panel-title">
                         <span class="sig-dot"></span>
                         LIVE SIGNALS
                         <span class="sig-count">@_signals.Count</span>
                     </div>
-                    <div class="sig-panel-sub">Click a signal to trade manually</div>
+                    <div class="sig-panel-right">
+                        <div class="sig-panel-sub">Click a signal to trade manually</div>
+                        <div class="sig-pager @(_signals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
+                            @for (int p = 0; p < _sigPageCount; p++)
+                            {
+                                int pageIdx = p;
+                                <span class="sig-pager-dot @(pageIdx == _sigPage ? "active" : "")"
+                                      @onclick="() => GoToSigPage(pageIdx)"></span>
+                            }
+                            <span class="sig-pager-label">@(_sigPage+1)/@_sigPageCount</span>
+                        </div>
+                    </div>
                 </div>
-                <div class="sig-cards">
-                    @foreach (var sig in _signals.Take(6))
+                @if (_signals.Any())
+                {
+                <div class="sig-cards" id="sigCardsScroll" @ref="_sigCardsEl">
+                    @foreach (var sig in _signals)
                     {
                         bool isBuy = sig.Side?.ToUpper() == "BUY" || sig.Side?.ToUpper() == "LONG";
                         bool isActive = _activeSignal == sig;
@@ -208,7 +219,11 @@
                             : 0m;
                         int conf = sig.Confidence;
 
-                        <div class="sig-card @(isBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "")"
+                        var ttl = GetSignalTtl(sig);
+                        bool isRemoving = _expiredSignals.ContainsKey(SignalKey(sig));
+
+                        <div class="sig-card @(isBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "")"
+                             @key="SignalKey(sig)"
                              @onclick="() => SelectSignal(sig)">
                             <!-- Card top -->
                             <div class="sc-top">
@@ -219,6 +234,11 @@
                                 <span class="sc-side @(isBuy ? "sc-side-b" : "sc-side-s")">
                                     @(isBuy ? "▲ LONG" : "▼ SHORT")
                                 </span>
+                            </div>
+                            <!-- Time + freshness -->
+                            <div class="sc-time-row">
+                                <span class="sc-time mk-dim">@sig.Time.ToLocalTime().ToString("HH:mm")</span>
+                                <span class="sc-ago">@FmtAgo(sig.Time)</span>
                             </div>
                             <!-- Confidence bar -->
                             <div class="sc-conf-wrap">
@@ -239,11 +259,23 @@
                                 @if (rr > 0) { <span class="sc-rr">RR @rr.ToString("F1")</span> }
                                 <span class="sc-atr mk-dim">ATR @FmtP(sig.ATR)</span>
                             </div>
+                            <!-- Relevance / TTL -->
+                            <div class="sc-ttl-row" title="Estimated relevance window based on volatility (ATR)">
+                                <div class="sc-ttl-bar-wrap">
+                                    <div class="sc-ttl-bar @(ttl.IsExpiring ? "ttl-low" : ttl.Pct < 50 ? "ttl-mid" : "ttl-high")"
+                                         style="width:@(ttl.Pct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                                </div>
+                                <span class="sc-ttl-label mk-dim">@ttl.Label</span>
+                            </div>
                         </div>
                     }
                 </div>
+                }
+                else
+                {
+                    <div class="sig-empty">No live signals right now — scanning the market...</div>
+                }
             </div>
-        }
 
         <!-- TRADE ORDER PANEL (appears when signal selected) -->
         @if (_activeSignal != null)
@@ -510,7 +542,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .sig-cards::-webkit-scrollbar-thumb{background:var(--bdr);}
 
 /* Signal card */
-.sig-card{flex-shrink:0;width:175px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:12px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.sig-card{flex-shrink:0;width:175px;min-height:188px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:12px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
 .sig-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;}
 .sc-buy::before{background:var(--grn);}
 .sc-sell::before{background:var(--red);}
@@ -529,11 +561,42 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .sc-p{display:flex;justify-content:space-between;align-items:center;}
 .sc-pl{font-size:10px;color:var(--dim);}
 .sc-pv{font-size:11px;}
-.sc-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
-.sc-conf{font-family:var(--mono);font-size:12px;font-weight:700;}
-.sc-rr{font-size:10px;background:rgba(59,130,246,.12);color:var(--acc);padding:1px 5px;border-radius:3px;}
-.sc-atr{font-size:10px;}
+.sc-foot{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;}
+.sc-conf{font-family:var(--mono);font-size:12px;font-weight:700;flex-shrink:0;}
+.sc-rr{font-size:10px;background:rgba(59,130,246,.12);color:var(--acc);padding:1px 5px;border-radius:3px;flex-shrink:0;}
+.sc-atr{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
 .yel{color:var(--yel)!important;}
+
+/* Time row */
+.sc-time-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-size:10px;}
+.sc-time{font-family:var(--mono);}
+.sc-ago{color:#94a3b8;font-weight:500;}
+
+/* Empty state — same min-height as a card row so the panel never jumps */
+.sig-empty{display:flex;align-items:center;justify-content:center;min-height:188px;color:var(--dim);font-size:12px;border:1px dashed var(--bdr);border-radius:10px;background:var(--bg3);}
+
+/* TTL / relevance bar */
+.sc-ttl-row{display:flex;align-items:center;gap:6px;margin-top:10px;padding-top:8px;border-top:1px dashed var(--bdr);}
+.sc-ttl-bar-wrap{flex:1;height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;}
+.sc-ttl-bar{height:100%;border-radius:2px;transition:width 1s linear;}
+.ttl-high{background:var(--grn);}
+.ttl-mid{background:var(--yel);}
+.ttl-low{background:var(--red);}
+.sc-ttl-label{font-size:9px;white-space:nowrap;}
+
+/* Fade-out when expiring */
+.sig-card{transition:opacity .2s,transform .2s,border-color .2s,background .2s,max-width .6s ease,margin .6s ease,padding .6s ease;}
+.sc-fading{opacity:.35;}
+.sig-card.sc-removing{opacity:0!important;max-width:0!important;padding-left:0!important;padding-right:0!important;margin:0!important;overflow:hidden;border-width:0;}
+
+/* Pager */
+.sig-panel-right{display:flex;align-items:center;gap:12px;}
+.sig-pager{display:flex;align-items:center;gap:5px;}
+.sig-pager-hidden{visibility:hidden;}
+.sig-pager-dot{width:6px;height:6px;border-radius:50%;background:var(--bdr);cursor:pointer;transition:background .2s,transform .2s;}
+.sig-pager-dot:hover{background:var(--dim);}
+.sig-pager-dot.active{background:var(--acc);transform:scale(1.3);}
+.sig-pager-label{font-size:10px;color:var(--dim);font-family:var(--mono);margin-left:2px;}
 
 /* ORDER PANEL */
 .ord-panel{margin:0 20px 16px;background:var(--bg3);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;}
@@ -726,6 +789,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             {
                 if (Frozen) continue;
                 await LoadData();
+                SweepExpiredSignals();
                 // StateHasChanged triggers OnAfterRenderAsync which calls
                 // RenderCharts only when data actually changed
                 await InvokeAsync(StateHasChanged);
@@ -748,8 +812,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 var allSigs = await SignalSvc.LoadAsync();
                 _signals = allSigs
                     .Where(s => s.Entry > 0 && s.StopLoss > 0
-                                && s.Time >= DateTime.UtcNow.AddHours(-24)
-                                && s.Stage != "BLOCKED")
+                                && s.Time >= DateTime.UtcNow.AddHours(-SignalLookbackHours)
+                                && s.Stage != "BLOCKED"
+                                && !_expiredSignals.ContainsKey(SignalKey(s)))
+                    .GroupBy(s => s.Symbol)
+                    .Select(g => g.OrderByDescending(s => s.Time).First())
                     .OrderByDescending(s => s.Time)
                     .Take(12)
                     .ToList();
@@ -931,7 +998,20 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     }
 
     // ── Signals ───────────────────────────────────────────────
+    const int SignalLookbackHours = 24;
+
     List<MissedTradeRecord> _signals = new();
+
+    // Keyed by Symbol+Time (not object identity/equality, which we don't
+    // control on MissedTradeRecord). Value is the signal's own Time, used
+    // only for pruning. An entry here means "already faded out locally" —
+    // it doubles as the sc-removing CSS check while still rendered, and as
+    // a permanent filter in LoadData() so the server can never resurrect a
+    // signal we've already dismissed within its own lookback window.
+    Dictionary<string, DateTime> _expiredSignals = new();
+
+    static string SignalKey(MissedTradeRecord s) => $"{s.Symbol}|{s.Time:O}";
+
     MissedTradeRecord? _activeSignal;
     string _orderType = "Market";
     decimal _orderPrice;
@@ -941,6 +1021,103 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     bool _orderLoading;
     string _orderError = string.Empty;
     string _orderSuccess = string.Empty;
+
+    // Pagination for signal cards (horizontal scroll-by-page)
+    ElementReference _sigCardsEl;
+    int _sigPage = 0;
+    const int _sigPageSize = 6;
+    int _sigPageCount => Math.Max(1, (int)Math.Ceiling(_signals.Count / (double)_sigPageSize));
+
+    async void GoToSigPage(int page)
+    {
+        _sigPage = Math.Clamp(page, 0, _sigPageCount - 1);
+        try
+        {
+            await JS.InvokeVoidAsync("vertexScrollSignalsToPage", _sigCardsEl, _sigPage, _sigPageSize);
+        }
+        catch { /* JS not ready yet — ignore */ }
+    }
+
+    // Relevance / TTL of a signal, derived from its volatility (ATR) rather than a fixed duration.
+    // Higher ATR relative to entry price => market moving faster => signal goes stale sooner.
+    record SignalTtlInfo(double Pct, string Label, bool IsExpiring, bool IsExpired);
+
+    SignalTtlInfo GetSignalTtl(MissedTradeRecord sig)
+    {
+        var ageMin = (DateTime.UtcNow - sig.Time.ToUniversalTime()).TotalMinutes;
+        if (ageMin < 0) ageMin = 0;
+
+        // Relative volatility: ATR as a fraction of entry price.
+        decimal relAtr = sig.Entry > 0 ? sig.ATR / sig.Entry : 0.003m;
+        if (relAtr <= 0) relAtr = 0.003m;
+
+        // More volatile symbols invalidate faster; calmer symbols stay relevant longer.
+        // Tuned so a "typical" ~0.3% ATR signal lives ~25 min, scaling inversely with volatility.
+        double lifeMinutes = (double)(0.075m / relAtr);
+        lifeMinutes = Math.Clamp(lifeMinutes, 6, 90);
+
+        double remaining = lifeMinutes - ageMin;
+        double pct = Math.Clamp(remaining / lifeMinutes * 100.0, 0, 100);
+
+        bool isExpired  = remaining <= 0;
+        bool isExpiring = remaining > 0 && remaining <= lifeMinutes * 0.15;
+
+        string label = isExpired
+            ? "expired"
+            : remaining >= 60
+                ? $"~{(remaining / 60).ToString("F1", System.Globalization.CultureInfo.InvariantCulture)}h left"
+                : $"~{Math.Max(1, (int)remaining)}m left";
+
+        return new SignalTtlInfo(pct, label, isExpiring || isExpired, isExpired);
+    }
+
+    string FmtAgo(DateTime t)
+    {
+        var span = DateTime.UtcNow - t.ToUniversalTime();
+        if (span.TotalMinutes < 1)  return "just now";
+        if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes}m ago";
+        if (span.TotalHours < 24)   return $"{(int)span.TotalHours}h ago";
+        return $"{(int)span.TotalDays}d ago";
+    }
+
+    // Called on every 5s tick: marks fully-expired signals so they fade out,
+    // then removes them a moment later once the fade transition has played.
+    // Dismissed keys are kept (not cleared) so a concurrent/later LoadData()
+    // can never bring the same signal back at full opacity.
+    void SweepExpiredSignals()
+    {
+        // Anything this old can never reappear from LoadData() anyway
+        // (same lookback window), so it's safe to forget.
+        var cutoff = DateTime.UtcNow.AddHours(-SignalLookbackHours);
+        foreach (var k in _expiredSignals.Where(kv => kv.Value < cutoff).Select(kv => kv.Key).ToList())
+        {
+            _expiredSignals.Remove(k);
+        }
+
+        var nowExpired = _signals.Where(s => GetSignalTtl(s).IsExpired).ToList();
+        var newlyMarked = nowExpired.Where(s => !_expiredSignals.ContainsKey(SignalKey(s))).ToList();
+
+        if (newlyMarked.Count == 0) return;
+
+        // Mark immediately, not just after the fade delay below — otherwise
+        // a LoadData() that lands mid-fade would still re-add the signal.
+        foreach (var s in newlyMarked)
+        {
+            _expiredSignals[SignalKey(s)] = s.Time;
+        }
+
+        var keysToRemove = newlyMarked.Select(SignalKey).ToHashSet();
+
+        // Give the CSS fade-out transition a moment to play, then drop them
+        // from the live list entirely.
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(900);
+            _signals = _signals.Where(s => !keysToRemove.Contains(SignalKey(s))).ToList();
+            _sigPage = Math.Clamp(_sigPage, 0, _sigPageCount - 1);
+            await InvokeAsync(StateHasChanged);
+        });
+    }
 
     // ── Symbol exchange info cache ────────────────────────────
     decimal _symTickSize    = 0m;
