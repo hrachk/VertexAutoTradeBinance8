@@ -486,8 +486,26 @@ function resize(){
 }
 
 // ── PUBLIC API ────────────────────────────────────────────
+let _activeRO = null;          // current ResizeObserver instance
+let _activeResizeListener = null;
+let _lastSym = null, _lastTf = null;
+
 window.marketChart = {
     init(mainId, rsiId, volId, resizeHandleId, resizeWrapId) {
+        // Disconnect previous observer/listener if init() called again
+        // (happens on Blazor component re-mount without full page reload)
+        if (_activeRO) { try { _activeRO.disconnect(); } catch{} _activeRO = null; }
+        if (_activeResizeListener) { try { window.removeEventListener('resize', _activeResizeListener); } catch{} _activeResizeListener = null; }
+
+        // Reset module state — this is a fresh chart instance
+        K = [];
+        derived = {};
+        view.offset = 0;
+        view.yMin = null;
+        view.candleW = 10;
+        _lastSym = null;
+        _lastTf  = null;
+
         MC=document.getElementById(mainId);
         RC=document.getElementById(rsiId);
         VC=document.getElementById(volId);
@@ -495,7 +513,8 @@ window.marketChart = {
 
         // Drag-scroll for ticker bar
         const ticker = document.querySelector('.mk-ticker-bar');
-        if (ticker) {
+        if (ticker && !ticker._dragBound) {
+            ticker._dragBound = true;
             let isDown=false, startX, scrollLeft;
             ticker.addEventListener('mousedown', e=>{isDown=true;startX=e.pageX-ticker.offsetLeft;scrollLeft=ticker.scrollLeft;ticker.style.cursor='grabbing';});
             ticker.addEventListener('mouseleave',()=>{isDown=false;ticker.style.cursor='grab';});
@@ -513,8 +532,9 @@ window.marketChart = {
             }, 40);
         };
 
-        const ro = new ResizeObserver(debouncedResize);
-        ro.observe(MC.parentElement);
+        _activeRO = new ResizeObserver(debouncedResize);
+        _activeRO.observe(MC.parentElement);
+        _activeResizeListener = debouncedResize;
         window.addEventListener('resize', debouncedResize);
 
         // Initial layout after 2 frames
@@ -544,11 +564,11 @@ window.marketChart = {
         const chartW = (w || 800) - PL - PR;
 
         // Reset view on symbol/tf change
-        if (sym !== window._lastChartSym || tf !== window._lastChartTf) {
+        if (sym !== _lastSym || tf !== _lastTf) {
             view.offset = 0;
             view.yMin = null;
-            window._lastChartSym = sym;
-            window._lastChartTf  = tf;
+            _lastSym = sym;
+            _lastTf  = tf;
             // Auto-fit: choose candleW so all candles fill the visible area
             if (K.length > 0) {
                 const ideal = chartW / Math.min(K.length, 120);
