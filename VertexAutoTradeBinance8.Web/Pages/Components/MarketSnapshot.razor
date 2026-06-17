@@ -186,9 +186,7 @@
         </div>
 
         <!-- SIGNAL PANEL -->
-        @if (_signals.Any())
-        {
-            <div class="sig-panel">
+        <div class="sig-panel">
                 <div class="sig-panel-head">
                     <div class="sig-panel-title">
                         <span class="sig-dot"></span>
@@ -211,6 +209,8 @@
                         }
                     </div>
                 </div>
+                @if (_signals.Any())
+                {
                 <div class="sig-cards" id="sigCardsScroll" @ref="_sigCardsEl">
                     @foreach (var sig in _signals)
                     {
@@ -240,7 +240,7 @@
                             <!-- Time + freshness -->
                             <div class="sc-time-row">
                                 <span class="sc-time mk-dim">@sig.Time.ToLocalTime().ToString("HH:mm")</span>
-                                <span class="sc-ago mk-dim">@FmtAgo(sig.Time)</span>
+                                <span class="sc-ago">@FmtAgo(sig.Time)</span>
                             </div>
                             <!-- Confidence bar -->
                             <div class="sc-conf-wrap">
@@ -272,8 +272,12 @@
                         </div>
                     }
                 </div>
+                }
+                else
+                {
+                    <div class="sig-empty">No live signals right now — scanning the market...</div>
+                }
             </div>
-        }
 
         <!-- TRADE ORDER PANEL (appears when signal selected) -->
         @if (_activeSignal != null)
@@ -540,7 +544,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .sig-cards::-webkit-scrollbar-thumb{background:var(--bdr);}
 
 /* Signal card */
-.sig-card{flex-shrink:0;width:175px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:12px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.sig-card{flex-shrink:0;width:175px;min-height:188px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:12px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
 .sig-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;}
 .sc-buy::before{background:var(--grn);}
 .sc-sell::before{background:var(--red);}
@@ -568,7 +572,10 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 /* Time row */
 .sc-time-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-size:10px;}
 .sc-time{font-family:var(--mono);}
-.sc-ago{font-style:italic;}
+.sc-ago{color:#94a3b8;font-weight:500;}
+
+/* Empty state — same min-height as a card row so the panel never jumps */
+.sig-empty{display:flex;align-items:center;justify-content:center;min-height:188px;color:var(--dim);font-size:12px;border:1px dashed var(--bdr);border-radius:10px;background:var(--bg3);}
 
 /* TTL / relevance bar */
 .sc-ttl-row{display:flex;align-items:center;gap:6px;margin-top:10px;padding-top:8px;border-top:1px dashed var(--bdr);}
