@@ -195,18 +195,15 @@
                     </div>
                     <div class="sig-panel-right">
                         <div class="sig-panel-sub">Click a signal to trade manually</div>
-                        @if (_signals.Count > _sigPageSize)
-                        {
-                            <div class="sig-pager">
-                                @for (int p = 0; p < _sigPageCount; p++)
-                                {
-                                    int pageIdx = p;
-                                    <span class="sig-pager-dot @(pageIdx == _sigPage ? "active" : "")"
-                                          @onclick="() => GoToSigPage(pageIdx)"></span>
-                                }
-                                <span class="sig-pager-label">@(_sigPage+1)/@_sigPageCount</span>
-                            </div>
-                        }
+                        <div class="sig-pager @(_signals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
+                            @for (int p = 0; p < _sigPageCount; p++)
+                            {
+                                int pageIdx = p;
+                                <span class="sig-pager-dot @(pageIdx == _sigPage ? "active" : "")"
+                                      @onclick="() => GoToSigPage(pageIdx)"></span>
+                            }
+                            <span class="sig-pager-label">@(_sigPage+1)/@_sigPageCount</span>
+                        </div>
                     </div>
                 </div>
                 @if (_signals.Any())
@@ -564,10 +561,10 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .sc-p{display:flex;justify-content:space-between;align-items:center;}
 .sc-pl{font-size:10px;color:var(--dim);}
 .sc-pv{font-size:11px;}
-.sc-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
-.sc-conf{font-family:var(--mono);font-size:12px;font-weight:700;}
-.sc-rr{font-size:10px;background:rgba(59,130,246,.12);color:var(--acc);padding:1px 5px;border-radius:3px;}
-.sc-atr{font-size:10px;}
+.sc-foot{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;}
+.sc-conf{font-family:var(--mono);font-size:12px;font-weight:700;flex-shrink:0;}
+.sc-rr{font-size:10px;background:rgba(59,130,246,.12);color:var(--acc);padding:1px 5px;border-radius:3px;flex-shrink:0;}
+.sc-atr{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
 .yel{color:var(--yel)!important;}
 
 /* Time row */
@@ -595,6 +592,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 /* Pager */
 .sig-panel-right{display:flex;align-items:center;gap:12px;}
 .sig-pager{display:flex;align-items:center;gap:5px;}
+.sig-pager-hidden{visibility:hidden;}
 .sig-pager-dot{width:6px;height:6px;border-radius:50%;background:var(--bdr);cursor:pointer;transition:background .2s,transform .2s;}
 .sig-pager-dot:hover{background:var(--dim);}
 .sig-pager-dot.active{background:var(--acc);transform:scale(1.3);}
