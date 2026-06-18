@@ -795,7 +795,10 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         // Render whenever chart is ready and data changed
         if (_chartInitDone && Selected != null && Selected.Klines.Count >= 5)
         {
-            var key = $"{Selected.Symbol}:{Selected.Timeframe}:{Selected.Klines.Count}";
+            var lastK = Selected.Klines[^1];
+            // Include last bar's OHLCV so live price ticks trigger a redraw,
+            // not just when a brand new bar/candle count appears
+            var key = $"{Selected.Symbol}:{Selected.Timeframe}:{Selected.Klines.Count}:{lastK.OpenTime}:{lastK.Close}:{lastK.High}:{lastK.Low}:{lastK.Volume}";
             if (key != _lastRenderedKey)
             {
                 _lastRenderedKey = key;
