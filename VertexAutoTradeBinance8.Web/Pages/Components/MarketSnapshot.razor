@@ -354,6 +354,60 @@
                         }
                     </div>
                 </div>
+
+                @if (_currentPosition != null)
+                {
+                    @{
+                        bool posIsLong = _currentPosition.Side == "LONG";
+                        decimal liqDist = _currentPosition.LiqPrice > 0 && _currentPosition.MarkPrice > 0
+                            ? Math.Abs(_currentPosition.LiqPrice - _currentPosition.MarkPrice) / _currentPosition.MarkPrice * 100m
+                            : 0m;
+                    }
+                    <div class="ord-position-box">
+                        <div class="ord-position-head">
+                            <span class="ord-position-title">📊 Открытая позиция</span>
+                            <span class="sc-side @(posIsLong ? "sc-side-b" : "sc-side-s") ord-badge">
+                                @(posIsLong ? "▲ LONG" : "▼ SHORT") @_currentPosition.Leverage×
+                            </span>
+                        </div>
+                        <div class="ord-position-grid">
+                            <div class="ord-position-cell">
+                                <span class="ord-position-l">ENTRY</span>
+                                <span class="ord-position-v mono">@FmtP(_currentPosition.EntryPrice)</span>
+                            </div>
+                            <div class="ord-position-cell">
+                                <span class="ord-position-l">MARK</span>
+                                <span class="ord-position-v mono">@FmtP(_currentPosition.MarkPrice)</span>
+                            </div>
+                            <div class="ord-position-cell">
+                                <span class="ord-position-l">SIZE</span>
+                                <span class="ord-position-v mono">@_currentPosition.Size.ToString("F2") USDT</span>
+                            </div>
+                            <div class="ord-position-cell">
+                                <span class="ord-position-l">MARGIN</span>
+                                <span class="ord-position-v mono">@_currentPosition.Margin.ToString("F2") USDT</span>
+                            </div>
+                        </div>
+                        <div class="ord-position-pnl-row">
+                            <span class="ord-position-pnl @(_currentPosition.Pnl >= 0 ? "up" : "dn")">
+                                @(_currentPosition.Pnl >= 0 ? "+" : "")@_currentPosition.Pnl.ToString("F4") USDT
+                            </span>
+                            <span class="ord-position-roi @(_currentPosition.Roi >= 0 ? "up" : "dn")">
+                                (@(_currentPosition.Roi >= 0 ? "+" : "")@((_currentPosition.Roi * 100).ToString("F2"))% ROI)
+                            </span>
+                        </div>
+                        @if (_currentPosition.LiqPrice > 0)
+                        {
+                            <div class="ord-position-liq-warn">
+                                ⚠ Liquidation @FmtP(_currentPosition.LiqPrice) — @liqDist.ToString("F1")% от mark price
+                            </div>
+                        }
+                        <button class="ord-position-close-btn" @onclick="CloseCurrentPosition" disabled="@_orderLoading">
+                            @if (_orderLoading) { <span class="ord-spin"></span> }
+                            else { @("✕ Close Position") }
+                        </button>
+                    </div>
+                }
             </div>
         </div> <!-- end mk-charts-col-side -->
         }
@@ -752,6 +806,22 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .ord-spin{width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;}
 @@keyframes spin{to{transform:rotate(360deg);}}
 
+.ord-position-box{margin-top:4px;padding:14px 16px;background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;display:flex;flex-direction:column;gap:10px;}
+.ord-position-head{display:flex;align-items:center;justify-content:space-between;}
+.ord-position-title{font-size:11px;letter-spacing:1px;color:var(--dim);font-weight:700;text-transform:uppercase;}
+.ord-position-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;}
+.ord-position-cell{display:flex;flex-direction:column;gap:2px;}
+.ord-position-l{font-size:10px;color:var(--dim);letter-spacing:.5px;}
+.ord-position-v{font-size:13px;color:var(--txt);}
+.ord-position-pnl-row{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;}
+.ord-position-pnl.up,.ord-position-roi.up{color:var(--grn);}
+.ord-position-pnl.dn,.ord-position-roi.dn{color:var(--red);}
+.ord-position-roi{font-size:12px;font-weight:600;}
+.ord-position-liq-warn{padding:7px 10px;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.25);border-radius:6px;font-size:11px;color:#f59e0b;}
+.ord-position-close-btn{border:1px solid rgba(239,68,68,.4);background:rgba(239,68,68,.08);color:var(--red);padding:9px;border-radius:7px;font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:8px;}
+.ord-position-close-btn:hover:not(:disabled){background:rgba(239,68,68,.18);box-shadow:0 4px 14px rgba(239,68,68,.25);}
+.ord-position-close-btn:disabled{opacity:.5;cursor:not-allowed;}
+
 /* TABLE */
 .mk-tbl-wrap{padding:20px 28px;}
 .mk-tbl-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--bdr);}
@@ -978,6 +1048,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 if (Frozen) continue;
                 await LoadData();
                 SweepExpiredSignals();
+                if (_activeSignal != null)
+                    await LoadCurrentPositionAsync(_activeSignal.Symbol);
                 // StateHasChanged triggers OnAfterRenderAsync which calls
                 // RenderCharts only when data actually changed
                 await InvokeAsync(StateHasChanged);
@@ -1297,6 +1369,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     static string SignalKey(MissedTradeRecord s) => $"{s.Symbol}|{s.Time:O}";
 
     MissedTradeRecord? _activeSignal;
+    ActivePositionInfo? _currentPosition;
     string _orderType = "Market";
     decimal _orderPrice;
     decimal _limitPrice;
@@ -1512,6 +1585,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             PickSym(sig.Symbol);
             _ = LoadSymbolInfoAndSuggestQty(sig);
+            _ = LoadCurrentPositionAsync(sig.Symbol);
+        }
+        else
+        {
+            _currentPosition = null;
         }
     }
 
@@ -1591,6 +1669,97 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         catch { }
     }
 
+    async Task LoadCurrentPositionAsync(string symbol)
+    {
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return;
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol: symbol, ct: cts.Token);
+            if (!res.Success || res.Data == null) { _currentPosition = null; return; }
+
+            var p = res.Data.FirstOrDefault(x => x.Quantity != 0);
+            if (p == null) { _currentPosition = null; return; }
+
+            var side   = p.Quantity > 0 ? "LONG" : "SHORT";
+            var size   = Math.Abs(p.Quantity * p.EntryPrice);
+            var margin = p.MarginType == FuturesMarginType.Isolated
+                ? p.IsolatedMargin : size / Math.Max(p.Leverage, 1);
+            var roi    = margin > 0 ? p.UnrealizedPnl / margin : 0m;
+
+            _currentPosition = new ActivePositionInfo
+            {
+                Symbol     = p.Symbol,
+                Side       = side,
+                Leverage   = p.Leverage,
+                Size       = size,
+                Qty        = Math.Abs(p.Quantity),
+                EntryPrice = p.EntryPrice,
+                MarkPrice  = p.MarkPrice,
+                LiqPrice   = p.LiquidationPrice,
+                Margin     = margin,
+                Pnl        = p.UnrealizedPnl,
+                Roi        = roi
+            };
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { }
+    }
+
+    async Task CloseCurrentPosition()
+    {
+        if (_currentPosition == null) return;
+
+        _orderLoading = true;
+        _orderError   = string.Empty;
+        _orderSuccess = string.Empty;
+        StateHasChanged();
+
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) { _orderError = "No API credentials configured"; return; }
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+            bool isLong  = _currentPosition.Side == "LONG";
+            var side     = isLong ? OrderSide.Sell : OrderSide.Buy; // opposite side flattens it
+            var posSide  = isLong ? PositionSide.Long : PositionSide.Short;
+
+            bool isHedge = false;
+            try
+            {
+                var pm = await client.UsdFuturesApi.Account.GetPositionModeAsync(ct: cts.Token);
+                isHedge = pm.Success && pm.Data?.IsHedgeMode == true;
+            }
+            catch { }
+
+            var r = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: _currentPosition.Symbol,
+                side: side,
+                type: FuturesOrderType.Market,
+                quantity: _currentPosition.Qty,
+                reduceOnly: isHedge ? null : true,
+                positionSide: isHedge ? posSide : null,
+                ct: cts.Token);
+
+            if (r.Success)
+            {
+                _orderSuccess    = $"Position closed · {_currentPosition.Symbol} · {_currentPosition.Qty}";
+                _currentPosition = null;
+            }
+            else
+            {
+                _orderError = $"Close failed {r.Error?.Code}: {r.Error?.Message}";
+            }
+        }
+        catch (Exception ex) { _orderError = ex.Message; }
+        finally { _orderLoading = false; StateHasChanged(); }
+    }
+
     void OnPriceChange(ChangeEventArgs e)
     {
         if (!decimal.TryParse(e.Value?.ToString(),
@@ -1614,6 +1783,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     void CancelOrder()
     {
         _activeSignal = null;
+        _currentPosition = null;
         _orderError   = string.Empty;
         _orderSuccess = string.Empty;
         _ = JS.InvokeVoidAsync("marketChart.clearPriceLine");
@@ -1622,6 +1792,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     void ClosePanel()
     {
         _activeSignal = null;
+        _currentPosition = null;
         _ = JS.InvokeVoidAsync("marketChart.clearPriceLine");
     }
 
@@ -1739,5 +1910,20 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _timer?.Dispose();
         _dotNetRef?.Dispose();
         await Task.CompletedTask;
+    }
+
+    sealed class ActivePositionInfo
+    {
+        public string Symbol = "";
+        public string Side = "";
+        public int Leverage;
+        public decimal Size;
+        public decimal Qty;
+        public decimal EntryPrice;
+        public decimal MarkPrice;
+        public decimal LiqPrice;
+        public decimal Margin;
+        public decimal Pnl;
+        public decimal Roi;
     }
 }
