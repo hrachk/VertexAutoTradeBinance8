@@ -227,10 +227,15 @@ namespace VertexAutoTradeBinance8.Services
                 foreach (var sym in target)
                 {
                     // Keep WS subscriptions alive (best-effort)
+                    // NOTE: must cover every interval the /market dashboard's TF
+                    // selector offers, or that TF silently never gets live pushes
+                    // and falls back to the ~45s file snapshot.
                     _ = EnsureWsSubscribed(sym, KlineInterval.OneMinute, CancellationToken.None);
                     _ = EnsureWsSubscribed(sym, KlineInterval.FiveMinutes, CancellationToken.None);
                     _ = EnsureWsSubscribed(sym, KlineInterval.FifteenMinutes, CancellationToken.None);
+                    _ = EnsureWsSubscribed(sym, KlineInterval.ThirtyMinutes, CancellationToken.None);
                     _ = EnsureWsSubscribed(sym, KlineInterval.OneHour, CancellationToken.None);
+                    _ = EnsureWsSubscribed(sym, KlineInterval.FourHour, CancellationToken.None);
                     _ = EnsureWsSubscribed(sym, KlineInterval.OneDay, CancellationToken.None);
 
                 }

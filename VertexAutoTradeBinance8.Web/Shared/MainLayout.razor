@@ -5,7 +5,7 @@
 
 <header class="vertex-header">
     <div class="vertex-left">
-        <button class="menu-toggle" @onclick="ToggleMenu" aria-label="Menu">
+        <button class="menu-toggle" @onclick="ToggleMobileMenu" aria-label="Menu">
             <span class="burger"></span>
         </button>
 
@@ -37,16 +37,16 @@
 
 <div class="app-body">
     <div class="page">
-        <aside class="sidebar @(ShowSidebar ? "sidebar-open" : "")">
-            <NavMenu />
+        <aside class="sidebar vertex-sidebar @(ShowMobileSidebar ? "sidebar-open" : "") @(SidebarCollapsed ? "sidebar-collapsed vertex-sidebar-collapsed" : "")">
+            <NavMenu Collapsed="SidebarCollapsed" CollapsedChanged="OnCollapsedChanged" />
         </aside>
 
-        @if (ShowSidebar)
+        @if (ShowMobileSidebar)
         {
-            <div class="sidebar-backdrop" @onclick="ToggleMenu"></div>
+            <div class="sidebar-backdrop" @onclick="ToggleMobileMenu"></div>
         }
 
-        <main class="main-content">
+        <main class="main-content vertex-main @(SidebarCollapsed ? "main-content-expanded vertex-main-expanded" : "")">
             <article class="content px-4">
                 @Body
             </article>
@@ -55,6 +55,7 @@
 </div>
 
 @inject Microsoft.Extensions.Options.IOptions<ClientOptions> ClientOptions
+@inject Microsoft.JSInterop.IJSRuntime JS
 
 @code {
     ClientOptions Client => ClientOptions.Value;
@@ -63,6 +64,42 @@
     public string EngineStatus { get; set; } = "Loading...";
     public string TradingMode { get; set; } = "Detecting...";
 
-    private bool ShowSidebar;
-    void ToggleMenu() => ShowSidebar = !ShowSidebar;
+    private bool ShowMobileSidebar;
+    private bool SidebarCollapsed;
+
+    void ToggleMobileMenu() => ShowMobileSidebar = !ShowMobileSidebar;
+
+    void OnCollapsedChanged(bool collapsed)
+    {
+        SidebarCollapsed = collapsed;
+        _ = PersistCollapsed(collapsed);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                var saved = await JS.InvokeAsync<string>("eval",
+                    "window.localStorage ? localStorage.getItem('vertex_sidebar_collapsed') : null");
+                if (saved == "1")
+                {
+                    SidebarCollapsed = true;
+                    StateHasChanged();
+                }
+            }
+            catch { }
+        }
+    }
+
+    async Task PersistCollapsed(bool collapsed)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("eval",
+                $"window.localStorage && localStorage.setItem('vertex_sidebar_collapsed', '{(collapsed ? "1" : "0")}')");
+        }
+        catch { }
+    }
 }
