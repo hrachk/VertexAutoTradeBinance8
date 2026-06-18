@@ -357,17 +357,11 @@
 
                 @if (_currentPosition != null)
                 {
-                    @{
-                        bool posIsLong = _currentPosition.Side == "LONG";
-                        decimal liqDist = _currentPosition.LiqPrice > 0 && _currentPosition.MarkPrice > 0
-                            ? Math.Abs(_currentPosition.LiqPrice - _currentPosition.MarkPrice) / _currentPosition.MarkPrice * 100m
-                            : 0m;
-                    }
                     <div class="ord-position-box">
                         <div class="ord-position-head">
                             <span class="ord-position-title">📊 Открытая позиция</span>
-                            <span class="sc-side @(posIsLong ? "sc-side-b" : "sc-side-s") ord-badge">
-                                @(posIsLong ? "▲ LONG" : "▼ SHORT") @_currentPosition.Leverage×
+                            <span class="sc-side @(PosIsLong ? "sc-side-b" : "sc-side-s") ord-badge">
+                                @(PosIsLong ? "▲ LONG" : "▼ SHORT") @_currentPosition.Leverage×
                             </span>
                         </div>
                         <div class="ord-position-grid">
@@ -399,7 +393,7 @@
                         @if (_currentPosition.LiqPrice > 0)
                         {
                             <div class="ord-position-liq-warn">
-                                ⚠ Liquidation @FmtP(_currentPosition.LiqPrice) — @liqDist.ToString("F1")% от mark price
+                                ⚠ Liquidation @FmtP(_currentPosition.LiqPrice) — @PosLiqDistPercent.ToString("F1")% от mark price
                             </div>
                         }
                         <button class="ord-position-close-btn" @onclick="CloseCurrentPosition" disabled="@_orderLoading">
@@ -1370,6 +1364,13 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     MissedTradeRecord? _activeSignal;
     ActivePositionInfo? _currentPosition;
+
+    bool PosIsLong => _currentPosition?.Side == "LONG";
+
+    decimal PosLiqDistPercent =>
+        _currentPosition != null && _currentPosition.LiqPrice > 0 && _currentPosition.MarkPrice > 0
+            ? Math.Abs(_currentPosition.LiqPrice - _currentPosition.MarkPrice) / _currentPosition.MarkPrice * 100m
+            : 0m;
     string _orderType = "Market";
     decimal _orderPrice;
     decimal _limitPrice;
