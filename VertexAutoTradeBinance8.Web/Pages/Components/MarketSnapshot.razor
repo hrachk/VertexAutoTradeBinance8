@@ -55,7 +55,7 @@
                 var first = best?.Klines.Count > 1 ? best.Klines[0].Close  : last;
                 var chg   = first > 0 ? (last - first) / first * 100m : 0m;
                 var isSel = sym == _activeSym;
-                <button class="mk-tk @(isSel?"mk-tk-on":"")" @onclick="()=>PickSym(sym)">
+                <button class="mk-tk @(isSel?"mk-tk-on":"")" @onclick="()=>PickSymAndTrade(sym, last)">
                     <span class="mk-tk-sym">@sym</span>
                     @if (last > 0)
                     {
@@ -289,9 +289,19 @@
             <div class="ord-panel">
                 <div class="ord-head">
                     <div class="ord-title">
-                        <span class="sc-side @(isBuy?"sc-side-b":"sc-side-s") ord-badge">
-                            @(isBuy ? "▲ LONG" : "▼ SHORT")
-                        </span>
+                        @if (_activeSignal.Confidence > 0)
+                        {
+                            <span class="sc-side @(isBuy?"sc-side-b":"sc-side-s") ord-badge">
+                                @(isBuy ? "▲ LONG" : "▼ SHORT")
+                            </span>
+                        }
+                        else
+                        {
+                            <div class="ord-side-toggle">
+                                <button class="ord-side-btn @(isBuy?"ost-buy-on":"")" @onclick="()=>_activeSignal.Side=\"BUY\"">▲ Buy</button>
+                                <button class="ord-side-btn @(!isBuy?"ost-sell-on":"")" @onclick="()=>_activeSignal.Side=\"SELL\"">▼ Sell</button>
+                            </div>
+                        }
                         <span class="ord-sym">@_activeSignal.Symbol</span>
                     </div>
                     <button class="ord-close-x" @onclick="()=>_activeSignal=null">✕</button>
@@ -368,10 +378,10 @@
                         </div>
                     </div>
 
-                    <!-- Signal levels reference -->
+                    <!-- Reference levels -->
                     <div class="ord-levels">
                         <div class="ord-lev">
-                            <span class="ord-lev-l">Signal Entry</span>
+                            <span class="ord-lev-l">@(_activeSignal.Confidence > 0 ? "Signal Entry" : "Last Price")</span>
                             <span class="ord-lev-v mono" @onclick="()=>_orderPrice=_activeSignal.Entry" title="Click to use">
                                 @FmtP(_activeSignal.Entry) <span class="ord-lev-use">↑</span>
                             </span>
@@ -605,6 +615,10 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .ord-panel{margin:0 20px 16px;background:var(--bg3);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;}
 .ord-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
 .ord-title{display:flex;align-items:center;gap:10px;}
+.ord-side-toggle{display:flex;gap:4px;background:var(--bg2);border-radius:7px;padding:3px;}
+.ord-side-btn{background:transparent;border:none;color:var(--dim);padding:5px 12px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;}
+.ost-buy-on{background:rgba(34,197,94,.18);color:var(--grn);}
+.ost-sell-on{background:rgba(239,68,68,.18);color:var(--red);}
 .ord-badge{font-size:12px;}
 .ord-sym{font-family:var(--mono);font-size:16px;font-weight:700;}
 .ord-close-x{background:none;border:none;color:var(--dim);font-size:16px;cursor:pointer;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:all .15s;}
@@ -982,6 +996,28 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         CalcStats();
         StateHasChanged();
         _ = RenderCharts();
+    }
+
+    // Clicking a ticker symbol switches the chart AND opens the order panel,
+    // same trading flow as clicking a signal card — but built from the live
+    // price instead of a strategy signal (no SL/TP/confidence available).
+    void PickSymAndTrade(string sym, decimal lastPrice)
+    {
+        PickSym(sym);
+
+        var manualSignal = new MissedTradeRecord
+        {
+            Symbol      = sym,
+            Side        = "BUY",
+            Entry       = lastPrice,
+            StopLoss    = 0,
+            TakeProfits = new List<decimal>(),
+            Time        = DateTime.UtcNow,
+            Confidence  = 0,
+            ATR         = _atr,
+        };
+
+        SelectSignal(manualSignal);
     }
 
     void PickTf(string tf)

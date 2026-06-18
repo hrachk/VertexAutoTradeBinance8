@@ -66,14 +66,32 @@ public sealed class MarketDataPushClient : BackgroundService
             .WithAutomaticReconnect()
             .Build();
 
+        connection.Closed += async (error) =>
+        {
+            _logger.LogWarning(error, "[DashboardPush] Connection CLOSED (state={state}) — will auto-reconnect", connection.State);
+            await Task.CompletedTask;
+        };
+        connection.Reconnecting += (error) =>
+        {
+            _logger.LogWarning(error, "[DashboardPush] Reconnecting...");
+            return Task.CompletedTask;
+        };
+        connection.Reconnected += (id) =>
+        {
+            _logger.LogInformation("[DashboardPush] Reconnected, connectionId={id}", id);
+            return Task.CompletedTask;
+        };
+
         Action<string, decimal> onPrice = (symbol, price) =>
         {
             Interlocked.Increment(ref _ticksQueued);
-            _outbox.Writer.TryWrite(async c =>
+            var wrote = _outbox.Writer.TryWrite(async c =>
             {
                 await c.InvokeAsync("PushPrice", symbol, price);
                 Interlocked.Increment(ref _ticksSent);
             });
+            if (!wrote)
+                _logger.LogWarning("[DashboardPush] Outbox FULL — tick dropped for {symbol}", symbol);
         };
 
         Action<string, KlineInterval, BinanceFuturesUsdtKline> onClosedKline = (symbol, tf, k) =>
@@ -103,7 +121,7 @@ public sealed class MarketDataPushClient : BackgroundService
                 "[DashboardPush] heartbeat: state={state} queued={queued} ticksSent={ticksSent} klinesSent={klinesSent} failures={failures}",
                 connection.State, Interlocked.Read(ref _ticksQueued), Interlocked.Read(ref _ticksSent),
                 Interlocked.Read(ref _klinesSent), Interlocked.Read(ref _sendFailures));
-        }, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+        }, null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
 
         try
         {
@@ -126,7 +144,10 @@ public sealed class MarketDataPushClient : BackgroundService
             await foreach (var send in _outbox.Reader.ReadAllAsync(ct))
             {
                 if (connection.State != HubConnectionState.Connected)
+                {
+                    _logger.LogWarning("[DashboardPush] Dropping message — connection state is {state}", connection.State);
                     continue; // drop silently — chart falls back to file snapshot
+                }
 
                 try
                 {
