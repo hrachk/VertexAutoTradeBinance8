@@ -143,7 +143,9 @@
 
         <!-- Price chart -->
         <div class="mk-chart-head">
-            <div class="mk-chart-title">CANDLESTICK · @(Selected?.Symbol ?? "") · @TfLabel(Selected?.Timeframe ?? "")</div>
+            <div class="mk-chart-title">CANDLESTICK · @(Selected?.Symbol ?? "") · @TfLabel(Selected?.Timeframe ?? "")
+                <span style="color:#22c55e;margin-left:12px">⚡ ticks:@_liveTickCount klines:@_liveKlineCount last:@_lastTickSymbol@@@(_lastTickTime==DateTime.MinValue?"-":_lastTickTime.ToString("HH:mm:ss"))</span>
+            </div>
             <div class="mk-legend">
                 <span style="color:#38bdf8">── EMA21</span>
                 <span style="color:#a855f7">── EMA55</span>
@@ -720,10 +722,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     DateTime _lastLiveRender = DateTime.MinValue;
     static readonly TimeSpan LiveRenderThrottle = TimeSpan.FromMilliseconds(200);
 
+    int _liveTickCount = 0;
+    int _liveKlineCount = 0;
+    string _lastTickSymbol = "";
+    DateTime _lastTickTime = DateTime.MinValue;
+
     void OnLivePriceTicked(string symbol, decimal price)
     {
+        _liveTickCount++;
+        _lastTickSymbol = symbol;
+        _lastTickTime = DateTime.UtcNow;
+
         _ = InvokeAsync(async () =>
         {
+            await InvokeAsync(StateHasChanged); // always show updated tick counter
+
             var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == _activeTf);
             if (idx < 0 || Series[idx].Klines.Count == 0) return;
 
@@ -754,6 +767,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     void OnLiveKlineClosed(string symbol, string timeframe, KlineDto kline)
     {
+        _liveKlineCount++;
         _ = InvokeAsync(async () =>
         {
             var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == timeframe);
