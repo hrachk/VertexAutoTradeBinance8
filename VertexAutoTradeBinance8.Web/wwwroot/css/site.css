@@ -2659,3 +2659,55 @@ compact-card {
     gap: 6px;
 }
  
+/* ============================================================
+   VERTEX SIDEBAR — modern unified definition (appended last
+   so it wins the cascade over the legacy scattered .sidebar
+   rules above, without having to surgically remove them).
+   Uses unique vertex- prefixed classes so old .sidebar/.menu-item
+   rules elsewhere keep working for any page that still relies
+   on them, while this is the single source of truth going forward.
+   ============================================================ */
+:root {
+    --vertex-sidebar-w: 248px;
+    --vertex-sidebar-w-collapsed: 68px;
+}
+
+.vertex-sidebar {
+    width: var(--vertex-sidebar-w) !important;
+    flex: 0 0 var(--vertex-sidebar-w) !important;
+    background: #0d1117 !important;
+    background-image: none !important;
+    border-right: 1px solid #1e2535;
+    box-shadow: none !important;
+    transition: width .2s ease, flex-basis .2s ease;
+    overflow: hidden;
+}
+
+.vertex-sidebar-collapsed {
+    width: var(--vertex-sidebar-w-collapsed) !important;
+    flex: 0 0 var(--vertex-sidebar-w-collapsed) !important;
+}
+
+.vertex-main {
+    transition: margin-left .2s ease, width .2s ease;
+}
+
+@media (min-width: 981px) {
+    .vertex-main-expanded {
+        /* No fixed sidebar on desktop (it's part of the flex row),
+           so the chart area simply gets more width automatically
+           once .vertex-sidebar-collapsed shrinks the flex-basis above.
+           This rule exists for any page that needs an explicit hook. */
+        width: 100%;
+    }
+}
+
+@media (max-width: 980px) {
+    /* Collapse-to-rail only applies on desktop; on mobile the sidebar
+       is an overlay (existing .sidebar-open behavior), so force it
+       back to full width/overlay mode regardless of collapsed state. */
+    .vertex-sidebar.vertex-sidebar-collapsed {
+        width: 240px !important;
+        flex: 0 0 240px !important;
+    }
+}
