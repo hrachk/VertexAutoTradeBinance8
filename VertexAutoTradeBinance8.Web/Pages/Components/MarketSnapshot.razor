@@ -368,7 +368,7 @@
                         <span class="sig-count">@_signals.Count</span>
                     </div>
                     <div class="sig-panel-right">
-                        <div class="sig-panel-sub">Click a signal to trade manually</div>
+                        <div class="sig-panel-sub">@(_signals.Any() ? "Click a signal to trade manually" : "Live signals will appear here when found")</div>
                         <div class="sig-pager @(_signals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
                             @for (int p = 0; p < _sigPageCount; p++)
                             {
@@ -447,7 +447,29 @@
                 }
                 else
                 {
-                    <div class="sig-empty">No live signals right now — scanning the market...</div>
+                    <div class="sig-scanning">
+                        <div class="sig-scan-radar">
+                            <div class="sig-scan-ring sig-scan-ring-1"></div>
+                            <div class="sig-scan-ring sig-scan-ring-2"></div>
+                            <div class="sig-scan-ring sig-scan-ring-3"></div>
+                            <div class="sig-scan-core"></div>
+                        </div>
+                        <div class="sig-scan-text">
+                            <span class="sig-scan-title">Scanning the market<span class="sig-scan-dots"><span>.</span><span>.</span><span>.</span></span></span>
+                            <span class="sig-scan-sub">
+                                Analyzing
+                                @if (_symbols.Any())
+                                {
+                                    <span class="sig-scan-symbol">@_symbols[_scanSymIdx % _symbols.Count]</span>
+                                }
+                                else
+                                {
+                                    <span class="sig-scan-symbol">market data</span>
+                                }
+                                for entry setups
+                            </span>
+                        </div>
+                    </div>
                 }
         </div> <!-- end sig-panel -->
 
@@ -616,7 +638,41 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .sc-ago{color:#94a3b8;font-weight:500;}
 
 /* Empty state — same min-height as a card row so the panel never jumps */
-.sig-empty{display:flex;align-items:center;justify-content:center;min-height:188px;color:var(--dim);font-size:12px;border:1px dashed var(--bdr);border-radius:10px;background:var(--bg3);}
+/* ── Scanning animation (empty signals state) ── */
+.sig-scanning{display:flex;align-items:center;justify-content:center;gap:20px;min-height:188px;border:1px dashed var(--bdr);border-radius:10px;background:var(--bg3);}
+
+.sig-scan-radar{position:relative;width:56px;height:56px;flex-shrink:0;}
+.sig-scan-ring{position:absolute;inset:0;border:1.5px solid rgba(56,189,248,0.5);border-radius:50%;animation:sigScanPulse 2.4s ease-out infinite;}
+.sig-scan-ring-1{animation-delay:0s;}
+.sig-scan-ring-2{animation-delay:0.8s;}
+.sig-scan-ring-3{animation-delay:1.6s;}
+.sig-scan-core{position:absolute;top:50%;left:50%;width:9px;height:9px;margin:-4.5px;border-radius:50%;background:#38bdf8;box-shadow:0 0 10px 2px rgba(56,189,248,0.7);animation:sigScanCore 2.4s ease-in-out infinite;}
+
+@@keyframes sigScanPulse{
+    0%   { transform:scale(0.25); opacity:0.9; }
+    100% { transform:scale(1.4);  opacity:0; }
+}
+@@keyframes sigScanCore{
+    0%,100% { opacity:0.7; transform:translate(-50%,-50%) scale(1); }
+    50%     { opacity:1;   transform:translate(-50%,-50%) scale(1.25); }
+}
+
+.sig-scan-text{display:flex;flex-direction:column;gap:4px;}
+.sig-scan-title{font-size:13px;font-weight:600;color:var(--txt);}
+.sig-scan-dots span{animation:sigScanDot 1.4s infinite; opacity:0;}
+.sig-scan-dots span:nth-child(1){animation-delay:0s;}
+.sig-scan-dots span:nth-child(2){animation-delay:0.2s;}
+.sig-scan-dots span:nth-child(3){animation-delay:0.4s;}
+@@keyframes sigScanDot{
+    0%,80%,100% { opacity:0; }
+    40%         { opacity:1; }
+}
+.sig-scan-sub{font-size:12px;color:var(--dim);}
+.sig-scan-symbol{color:#38bdf8;font-family:var(--mono);font-weight:600;animation:sigScanFade 1.4s ease;}
+@@keyframes sigScanFade{
+    0%   { opacity:0; transform:translateY(2px); }
+    100% { opacity:1; transform:translateY(0); }
+}
 
 /* TTL / relevance bar */
 .sc-ttl-row{display:flex;align-items:center;gap:6px;margin-top:10px;padding-top:8px;border-top:1px dashed var(--bdr);}
@@ -724,6 +780,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     string _activeSym = "";
     string _activeTf  = "";
     List<string> _symbols = new();
+    int _scanSymIdx = 0;
 
     // All standard TFs in TradingView order
     record TfDef(string Key, string Label);
@@ -758,6 +815,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         await LoadData();
         _timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
         _ = TickAsync();
+        _ = ScanCycleAsync();
     }
 
     // ===== LIVE PUSH (from Engine via MarketDataHub) =====
@@ -923,6 +981,26 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 // StateHasChanged triggers OnAfterRenderAsync which calls
                 // RenderCharts only when data actually changed
                 await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    // Cycles the "Analyzing SYMBOL..." text in the empty-signals scanning
+    // animation, independent of the slower 5s data timer, so the panel
+    // feels alive even when nothing else has changed.
+    async Task ScanCycleAsync()
+    {
+        try
+        {
+            while (!_cts.Token.IsCancellationRequested)
+            {
+                await Task.Delay(1400, _cts.Token);
+                if (!_signals.Any() && _symbols.Count > 0)
+                {
+                    _scanSymIdx = (_scanSymIdx + 1) % _symbols.Count;
+                    await InvokeAsync(StateHasChanged);
+                }
             }
         }
         catch (OperationCanceledException) { }
