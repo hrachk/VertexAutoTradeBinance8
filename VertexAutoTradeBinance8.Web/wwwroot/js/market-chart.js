@@ -16,6 +16,8 @@ let drag = { active: false, startX: 0, startOffset: 0 };
 let resizeY = { active: false, startY: 0, startH: 0 };
 let resizeX = { active: false, startX: 0, startW: 0 };
 let hoverI = -1;
+let hoverY = -1;          // raw mouse Y in canvas CSS px (for price picking)
+let priceLine = null;     // user-picked price line { price } or null
 
 // ── CANVASES ──────────────────────────────────────────────
 let MC, RC, VC; // canvas elements
@@ -145,6 +147,15 @@ function yFor(p, yMin, yMax, cH, cPT=PT, cPB=PB) {
     return cPT + ch - (p - yMin) / range * ch;
 }
 
+// Inverse of yFor — converts a mouse Y pixel back to a real price.
+// Needed for "click chart to pick a price" trading UX.
+function priceForY(y, yMin, yMax, cH, cPT=PT, cPB=PB) {
+    const ch = cH - cPT - cPB;
+    const range = yMax - yMin;
+    if (!range || !isFinite(range)) return yMin;
+    return yMin + (cPT + ch - y) / ch * range;
+}
+
 // ── DRAW ──────────────────────────────────────────────────
 function drawAll() {
     if (!MC || !K.length) return;
@@ -252,6 +263,34 @@ function drawMain(yMin, yMax) {
         const d=new Date(K[i].openTime);
         ctx.fillText(d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0'),
             xFor(i), cH-4);
+    }
+
+    // ── Price-pick line: follows mouse Y, shows the real price there ──
+    // (separate from the candle-close crosshair above — this one
+    // reflects whatever price is literally under the cursor)
+    if (hoverY >= PT && hoverY <= cH - PB) {
+        const pickedPrice = priceForY(hoverY, yMin, yMax, cH);
+        ctx.strokeStyle = 'rgba(234,179,8,0.6)'; ctx.lineWidth = 1; ctx.setLineDash([2,2]);
+        ctx.beginPath(); ctx.moveTo(PL, hoverY); ctx.lineTo(cW-PR, hoverY); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#eab308';
+        ctx.fillRect(cW-PR+1, hoverY-9, PR-2, 18);
+        ctx.fillStyle = '#0a0d12'; ctx.font = 'bold 10px JetBrains Mono,monospace'; ctx.textAlign = 'left';
+        ctx.fillText(fmtP(pickedPrice), cW-PR+4, hoverY+4);
+    }
+
+    // ── Persistent picked price line (after click/double-click) ──
+    if (priceLine !== null) {
+        const py = Y(priceLine);
+        if (py >= PT && py <= cH - PB) {
+            ctx.strokeStyle = '#22c55e'; ctx.lineWidth = 1.5; ctx.setLineDash([6,3]);
+            ctx.beginPath(); ctx.moveTo(PL, py); ctx.lineTo(cW-PR, py); ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = '#22c55e';
+            ctx.fillRect(cW-PR+1, py-9, PR-2, 18);
+            ctx.fillStyle = '#06170d'; ctx.font = 'bold 10px JetBrains Mono,monospace'; ctx.textAlign = 'left';
+            ctx.fillText(fmtP(priceLine), cW-PR+4, py+4);
+        }
     }
 
     // ── Crosshair + tooltip ──
@@ -413,6 +452,8 @@ function onMouseDown(e) {
 function onMouseMove(e) {
     const rect=MC.getBoundingClientRect();
     const mx=e.clientX-rect.left;
+    const my=e.clientY-rect.top;
+    hoverY = my;
     if(mx>=PL&&mx<=W(MC)-PR) hoverI=xToIdx(mx); else hoverI=-1;
     if(drag.active){
         const dx=e.clientX-drag.startX;
@@ -501,6 +542,13 @@ window.marketChart = {
         return w > 10 && h > 10;
     },
 
+    // Clears the green persistent price-pick line (e.g. after the
+    // order panel closes or the price field is edited manually).
+    clearPriceLine() {
+        priceLine = null;
+        if (K.length) drawAll();
+    },
+
     init(mainId, rsiId, volId, resizeHandleId, resizeWrapId) {
         // Disconnect previous observer/listener if init() called again
         // (happens on Blazor component re-mount without full page reload)
@@ -515,6 +563,8 @@ window.marketChart = {
         view.candleW = 10;
         _lastSym = null;
         _lastTf  = null;
+        priceLine = null;
+        hoverY = -1;
 
         MC=document.getElementById(mainId);
         RC=document.getElementById(rsiId);
@@ -559,6 +609,20 @@ window.marketChart = {
         MC.addEventListener('mouseleave',onMouseLeave);
         MC.addEventListener('wheel',onWheel,{passive:false});
         MC.addEventListener('dblclick',()=>{view.offset=0;view.yMin=null;view.candleW=10;drawAll();});
+        // Right-click on the chart = pick the price under the cursor for trading.
+        // (left-click/drag stays reserved for pan, double-click for zoom reset)
+        MC.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            if (!K.length) return;
+            const rect = MC.getBoundingClientRect();
+            const my = e.clientY - rect.top;
+            const cH = H(MC);
+            const { yMin, yMax } = autoY();
+            const price = priceForY(my, yMin, yMax, cH);
+            priceLine = price;
+            drawAll();
+            if (window._onPricePicked) window._onPricePicked(price);
+        });
         MC.addEventListener('touchstart',onTouchStart,{passive:false});
         MC.addEventListener('touchmove',onTouchMove,{passive:false});
         MC.addEventListener('touchend',onTouchEnd);

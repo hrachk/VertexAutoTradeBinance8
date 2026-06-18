@@ -216,7 +216,7 @@
                         }
                         <span class="ord-sym">@_activeSignal.Symbol</span>
                     </div>
-                    <button class="ord-close-x" @onclick="()=>_activeSignal=null">✕</button>
+                    <button class="ord-close-x" @onclick="ClosePanel">✕</button>
                 </div>
 
                 <!-- Order type tabs -->
@@ -266,6 +266,7 @@
                                        @onchange="OnPriceChange" />
                                 <span class="ord-input-sfx">USDT</span>
                             </div>
+                            <div class="ord-price-hint">🖱️ Right-click the chart to pick a price — qty & leverage auto-adjust</div>
                         </div>
                     }
 
@@ -644,6 +645,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .ord-panel{margin:0;background:var(--bg3);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;position:sticky;top:16px;}
 .ord-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
 .ord-title{display:flex;align-items:center;gap:10px;}
+.ord-price-hint{font-size:10px;color:var(--dim);margin-top:5px;font-style:italic;}
 .ord-manual-badge{font-size:11px;font-weight:700;color:var(--dim);background:var(--bg2);padding:3px 9px;border-radius:5px;letter-spacing:.3px;}
 .ord-badge{font-size:12px;}
 .ord-sym{font-family:var(--mono);font-size:16px;font-weight:700;}
@@ -863,6 +865,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     async Task InitChartWithRetry()
     {
+        _dotNetRef ??= DotNetObjectReference.Create(this);
+
         for (int i = 0; i < 20; i++) // up to 20 × 150ms = 3s
         {
             _initAttempts = i + 1;
@@ -875,6 +879,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                     await JS.InvokeVoidAsync("marketChart.init",
                         "priceChart", "rsiChart", "volumeChart",
                         "resizeHandle", "priceWrap");
+                    await RegisterPricePickCallback();
                     _chartInitDone = true;
                     _jsReady = true;
                     _chartInitError = "";
@@ -895,6 +900,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             await JS.InvokeVoidAsync("marketChart.init",
                 "priceChart", "rsiChart", "volumeChart",
                 "resizeHandle", "priceWrap");
+            await RegisterPricePickCallback();
             _chartInitDone = true;
             _jsReady = true;
         }
@@ -1325,6 +1331,95 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     int     _symMaxLev      = 125;
     decimal _symMinNotional = 5m;
 
+    DotNetObjectReference<MarketSnapshot>? _dotNetRef;
+
+    async Task RegisterPricePickCallback()
+    {
+        try
+        {
+            _dotNetRef ??= DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("marketChartBridge.bindPricePicked", _dotNetRef);
+        }
+        catch { }
+    }
+
+    // Called from JS (right-click on the chart) with the price under the cursor.
+    // Fills the order price field and re-runs the AI sizing suggestion against
+    // that price, current balance, stop distance and leverage — exactly like
+    // picking a signal, but driven by the user's own chosen entry.
+    [JSInvokable]
+    public async Task OnPricePicked(decimal price)
+    {
+        if (_activeSignal == null || price <= 0) return;
+
+        // Picking a price only makes sense for Limit/Stop orders
+        if (_orderType == "Market") _orderType = "Limit";
+
+        _orderPrice = _symTickSize > 0
+            ? Math.Round(price / _symTickSize) * _symTickSize
+            : price;
+
+        await SuggestQtyForPrice(_orderPrice);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    // AI sizing: given an entry price (chart-picked or signal default),
+    // current free balance and the symbol's max leverage, suggest both
+    // a sensible quantity AND bump leverage if the balance is too small
+    // to comfortably afford the position at the current leverage.
+    async Task SuggestQtyForPrice(decimal entryPrice)
+    {
+        if (_activeSignal == null || entryPrice <= 0) return;
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return;
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+
+            var bal = await client.UsdFuturesApi.Account.GetBalancesAsync(ct: cts.Token);
+            decimal balance = 0m;
+            if (bal.Success && bal.Data != null)
+            {
+                var usdt = bal.Data.FirstOrDefault(b => b.Asset == "USDT");
+                if (usdt != null) balance = usdt.AvailableBalance;
+            }
+            if (balance <= 0) return;
+
+            decimal stopDist = _activeSignal.StopLoss > 0
+                ? Math.Abs(entryPrice - _activeSignal.StopLoss)
+                : (_activeSignal.ATR > 0 ? _activeSignal.ATR * 1.5m : entryPrice * 0.01m);
+
+            decimal riskUsdt = balance * 0.02m; // 2% of balance at risk
+            decimal rawQty   = stopDist > 0 ? riskUsdt / stopDist : 0m;
+
+            // Minimum quantity to satisfy exchange minNotional.
+            decimal minQtyForNotional = _symMinNotional / entryPrice;
+            decimal qty = Math.Max(rawQty, minQtyForNotional);
+
+            decimal step = _symStep > 0 ? _symStep : 0.001m;
+            qty = Math.Floor(qty / step) * step;
+            if (qty <= 0) qty = step;
+
+            // Margin needed at the CURRENT leverage setting.
+            decimal notional     = qty * entryPrice;
+            decimal marginNeeded = notional / Math.Max(_orderLeverage, 1);
+
+            // If the position would eat up almost the whole balance as margin,
+            // the leverage is too low for this balance size — raise it
+            // (capped at the symbol's real max) so margin usage settles
+            // around ~50%, instead of letting the order fail on insufficient
+            // margin or forcing the user to manually drag the slider.
+            if (marginNeeded > balance * 0.9m)
+            {
+                int neededLev = (int)Math.Ceiling(notional / (balance * 0.5m));
+                _orderLeverage = Math.Clamp(neededLev, _orderLeverage, _symMaxLev);
+            }
+
+            _orderQty = qty;
+        }
+        catch { }
+    }
+
     void SelectSignal(MissedTradeRecord sig)
     {
         _activeSignal  = _activeSignal == sig ? null : sig;
@@ -1443,6 +1538,13 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _activeSignal = null;
         _orderError   = string.Empty;
         _orderSuccess = string.Empty;
+        _ = JS.InvokeVoidAsync("marketChart.clearPriceLine");
+    }
+
+    void ClosePanel()
+    {
+        _activeSignal = null;
+        _ = JS.InvokeVoidAsync("marketChart.clearPriceLine");
     }
 
     async Task PlaceManualOrderBuy()
@@ -1557,6 +1659,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         LiveState.KlineClosed -= OnLiveKlineClosed;
         _cts.Cancel();
         _timer?.Dispose();
+        _dotNetRef?.Dispose();
         await Task.CompletedTask;
     }
 }
