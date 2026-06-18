@@ -722,31 +722,31 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     void OnLivePriceTicked(string symbol, decimal price)
     {
-        var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == _activeTf);
-        if (idx < 0 || Series[idx].Klines.Count == 0) return;
-
-        var last = Series[idx].Klines[^1];
-        var updated = last with
-        {
-            High = Math.Max(last.High, price),
-            Low = Math.Min(last.Low, price),
-            Close = price
-        };
-
-        var klines = Series[idx].Klines.ToList();
-        klines[^1] = updated;
-        Series[idx] = Series[idx] with { Klines = klines };
-
-        if (symbol != _activeSym) return; // only re-render the chart actually on screen
-
-        var now = DateTime.UtcNow;
-        if (now - _lastLiveRender < LiveRenderThrottle) return;
-        _lastLiveRender = now;
-
-        ResolveSelected();
-        CalcStats();
         _ = InvokeAsync(async () =>
         {
+            var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == _activeTf);
+            if (idx < 0 || Series[idx].Klines.Count == 0) return;
+
+            var last = Series[idx].Klines[^1];
+            var updated = last with
+            {
+                High = Math.Max(last.High, price),
+                Low = Math.Min(last.Low, price),
+                Close = price
+            };
+
+            var klines = Series[idx].Klines.ToList();
+            klines[^1] = updated;
+            Series[idx] = Series[idx] with { Klines = klines };
+
+            if (symbol != _activeSym) return; // only re-render the chart actually on screen
+
+            var now = DateTime.UtcNow;
+            if (now - _lastLiveRender < LiveRenderThrottle) return;
+            _lastLiveRender = now;
+
+            ResolveSelected();
+            CalcStats();
             try { await RenderCharts(); } catch { }
             StateHasChanged();
         });
@@ -754,26 +754,26 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     void OnLiveKlineClosed(string symbol, string timeframe, KlineDto kline)
     {
-        var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == timeframe);
-        if (idx < 0) return;
-
-        var klines = Series[idx].Klines.ToList();
-        if (klines.Count > 0 && klines[^1].OpenTime == kline.OpenTime)
-            klines[^1] = kline;          // finalize the candle that was forming live
-        else
-            klines.Add(kline);           // new bar
-
-        if (klines.Count > 500)
-            klines.RemoveRange(0, klines.Count - 500);
-
-        Series[idx] = Series[idx] with { Klines = klines };
-
-        if (symbol != _activeSym || timeframe != _activeTf) return;
-
-        ResolveSelected();
-        CalcStats();
         _ = InvokeAsync(async () =>
         {
+            var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == timeframe);
+            if (idx < 0) return;
+
+            var klines = Series[idx].Klines.ToList();
+            if (klines.Count > 0 && klines[^1].OpenTime == kline.OpenTime)
+                klines[^1] = kline;          // finalize the candle that was forming live
+            else
+                klines.Add(kline);           // new bar
+
+            if (klines.Count > 500)
+                klines.RemoveRange(0, klines.Count - 500);
+
+            Series[idx] = Series[idx] with { Klines = klines };
+
+            if (symbol != _activeSym || timeframe != _activeTf) return;
+
+            ResolveSelected();
+            CalcStats();
             try { await RenderCharts(); } catch { }
             StateHasChanged();
         });
