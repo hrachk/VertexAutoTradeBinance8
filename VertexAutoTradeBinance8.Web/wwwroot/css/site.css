@@ -2711,3 +2711,68 @@ compact-card {
         flex: 0 0 240px !important;
     }
 }
+
+/* ============================================================
+   VERTEX SIDEBAR — mobile-specific fixes
+   On screens <=980px the sidebar becomes a fixed full-height
+   overlay (legacy .sidebar-open behavior). It must have an
+   explicit width here, otherwise it can stretch to fill the
+   fixed-position containing block at 100% width.
+   ============================================================ */
+@media (max-width: 980px) {
+    .vertex-sidebar {
+        width: 280px !important;
+        max-width: 86vw !important;
+        flex: none !important;
+        background: #0d1117 !important;
+        background-image: none !important;
+    }
+}
+
+/* ============================================================
+   NAV ICON SIZE — non-scoped safety net.
+   NavMenu.razor.css sets .nv-icon to 19px via Blazor's scoped
+   CSS isolation, which only applies after a successful publish
+   regenerates the scoped bundle. These plain (non-scoped) rules
+   guarantee correct icon sizing even if that bundle is stale,
+   since plain site.css always wins by simply being more current.
+   ============================================================ */
+.nv-icon, .nv-icon svg {
+    width: 19px !important;
+    height: 19px !important;
+    max-width: 19px !important;
+    max-height: 19px !important;
+    flex-shrink: 0 !important;
+}
+
+.nv-link {
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+    height: 42px !important;
+    padding: 0 12px !important;
+    border-radius: 8px !important;
+    color: #8b97ab !important;
+    text-decoration: none !important;
+    font-size: 13.5px !important;
+    font-weight: 500 !important;
+    white-space: nowrap !important;
+}
+
+.nv-link:hover {
+    background: rgba(255,255,255,0.06) !important;
+    color: #e2e8f0 !important;
+}
+
+.nv-link.active {
+    background: linear-gradient(90deg, rgba(59,130,246,0.18), rgba(59,130,246,0.04)) !important;
+    color: #fff !important;
+    box-shadow: inset 2px 0 0 #3b82f6 !important;
+}
+
+.nv-nav {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 2px !important;
+    padding: 0 10px !important;
+}
