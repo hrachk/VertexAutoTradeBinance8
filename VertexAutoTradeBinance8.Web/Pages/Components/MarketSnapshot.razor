@@ -298,8 +298,8 @@
                         else
                         {
                             <div class="ord-side-toggle">
-                                <button class="ord-side-btn @(isBuy?"ost-buy-on":"")" @onclick="()=>_activeSignal.Side=\"BUY\"">▲ Buy</button>
-                                <button class="ord-side-btn @(!isBuy?"ost-sell-on":"")" @onclick="()=>_activeSignal.Side=\"SELL\"">▼ Sell</button>
+                                <button class="ord-side-btn @(isBuy?"ost-buy-on":"")" @onclick="SetSideBuy">▲ Buy</button>
+                                <button class="ord-side-btn @(!isBuy?"ost-sell-on":"")" @onclick="SetSideSell">▼ Sell</button>
                             </div>
                         }
                         <span class="ord-sym">@_activeSignal.Symbol</span>
@@ -1001,6 +1001,16 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // Clicking a ticker symbol switches the chart AND opens the order panel,
     // same trading flow as clicking a signal card — but built from the live
     // price instead of a strategy signal (no SL/TP/confidence available).
+    void SetSideBuy()
+    {
+        if (_activeSignal != null) _activeSignal.Side = "BUY";
+    }
+
+    void SetSideSell()
+    {
+        if (_activeSignal != null) _activeSignal.Side = "SELL";
+    }
+
     void PickSymAndTrade(string sym, decimal lastPrice)
     {
         PickSym(sym);
