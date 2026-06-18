@@ -141,6 +141,9 @@
             </div>
         }
 
+        <div class="mk-charts-grid @(_activeSignal != null ? "mk-charts-grid-with-panel" : "")">
+        <div class="mk-charts-col-main">
+
         <!-- Price chart -->
         <div class="mk-chart-head">
             <div class="mk-chart-title">CANDLESTICK · @(Selected?.Symbol ?? "") · @TfLabel(Selected?.Timeframe ?? "")
@@ -188,104 +191,16 @@
             <span>2× click to reset</span>
         </div>
 
-        <!-- SIGNAL PANEL -->
-        <div class="sig-panel">
-                <div class="sig-panel-head">
-                    <div class="sig-panel-title">
-                        <span class="sig-dot"></span>
-                        LIVE SIGNALS
-                        <span class="sig-count">@_signals.Count</span>
-                    </div>
-                    <div class="sig-panel-right">
-                        <div class="sig-panel-sub">Click a signal to trade manually</div>
-                        <div class="sig-pager @(_signals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
-                            @for (int p = 0; p < _sigPageCount; p++)
-                            {
-                                int pageIdx = p;
-                                <span class="sig-pager-dot @(pageIdx == _sigPage ? "active" : "")"
-                                      @onclick="() => GoToSigPage(pageIdx)"></span>
-                            }
-                            <span class="sig-pager-label">@(_sigPage+1)/@_sigPageCount</span>
-                        </div>
-                    </div>
-                </div>
-                @if (_signals.Any())
-                {
-                <div class="sig-cards" id="sigCardsScroll" @ref="_sigCardsEl">
-                    @foreach (var sig in _signals)
-                    {
-                        bool isBuy = sig.Side?.ToUpper() == "BUY" || sig.Side?.ToUpper() == "LONG";
-                        bool isActive = _activeSignal == sig;
-                        decimal tp1 = sig.TakeProfits?.FirstOrDefault() ?? 0m;
-                        decimal rr = sig.StopLoss > 0 && sig.Entry > 0 && tp1 > 0
-                            ? Math.Abs(tp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry)
-                            : 0m;
-                        int conf = sig.Confidence;
+        </div> <!-- end mk-charts-col-main -->
 
-                        var ttl = GetSignalTtl(sig);
-                        bool isRemoving = _expiredSignals.ContainsKey(SignalKey(sig));
-
-                        <div class="sig-card @(isBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "")"
-                             @key="SignalKey(sig)"
-                             @onclick="() => SelectSignal(sig)">
-                            <!-- Card top -->
-                            <div class="sc-top">
-                                <div class="sc-sym-wrap">
-                                    <span class="sc-sym">@sig.Symbol.Replace("USDT","")</span>
-                                    <span class="sc-usdt">USDT</span>
-                                </div>
-                                <span class="sc-side @(isBuy ? "sc-side-b" : "sc-side-s")">
-                                    @(isBuy ? "▲ LONG" : "▼ SHORT")
-                                </span>
-                            </div>
-                            <!-- Time + freshness -->
-                            <div class="sc-time-row">
-                                <span class="sc-time mk-dim">@sig.Time.ToLocalTime().ToString("HH:mm")</span>
-                                <span class="sc-ago">@FmtAgo(sig.Time)</span>
-                            </div>
-                            <!-- Confidence bar -->
-                            <div class="sc-conf-wrap">
-                                <div class="sc-conf-bar" style="width:@conf%"
-                                     style2="background:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")"></div>
-                            </div>
-                            <!-- Prices -->
-                            <div class="sc-prices">
-                                <div class="sc-p"><span class="sc-pl">Entry</span><span class="sc-pv mono">@FmtP(sig.Entry)</span></div>
-                                <div class="sc-p"><span class="sc-pl">SL</span><span class="sc-pv mono dn">@FmtP(sig.StopLoss)</span></div>
-                                @if (tp1 > 0) {
-                                    <div class="sc-p"><span class="sc-pl">TP1</span><span class="sc-pv mono up">@FmtP(tp1)</span></div>
-                                }
-                            </div>
-                            <!-- Footer -->
-                            <div class="sc-foot">
-                                <span class="sc-conf @(conf>=60?"up":conf>=45?"yel":"dn")">@conf%</span>
-                                @if (rr > 0) { <span class="sc-rr">RR @rr.ToString("F1")</span> }
-                                <span class="sc-atr mk-dim">ATR @FmtP(sig.ATR)</span>
-                            </div>
-                            <!-- Relevance / TTL -->
-                            <div class="sc-ttl-row" title="Estimated relevance window based on volatility (ATR)">
-                                <div class="sc-ttl-bar-wrap">
-                                    <div class="sc-ttl-bar @(ttl.IsExpiring ? "ttl-low" : ttl.Pct < 50 ? "ttl-mid" : "ttl-high")"
-                                         style="width:@(ttl.Pct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
-                                </div>
-                                <span class="sc-ttl-label mk-dim">@ttl.Label</span>
-                            </div>
-                        </div>
-                    }
-                </div>
-                }
-                else
-                {
-                    <div class="sig-empty">No live signals right now — scanning the market...</div>
-                }
-            </div>
-
-        <!-- TRADE ORDER PANEL (appears when signal selected) -->
         @if (_activeSignal != null)
         {
+        <div class="mk-charts-col-side">
+        <!-- TRADE ORDER PANEL (right sidebar, exchange-style) -->
+        @{
             bool isBuy = _activeSignal.Side?.ToUpper() == "BUY" || _activeSignal.Side?.ToUpper() == "LONG";
             decimal tp1 = _activeSignal.TakeProfits?.FirstOrDefault() ?? 0m;
-
+        }
             <div class="ord-panel">
                 <div class="ord-head">
                     <div class="ord-title">
@@ -297,10 +212,7 @@
                         }
                         else
                         {
-                            <div class="ord-side-toggle">
-                                <button class="ord-side-btn @(isBuy?"ost-buy-on":"")" @onclick="SetSideBuy">▲ Buy</button>
-                                <button class="ord-side-btn @(!isBuy?"ost-sell-on":"")" @onclick="SetSideSell">▼ Sell</button>
-                            </div>
+                            <span class="ord-manual-badge">Manual Trade</span>
                         }
                         <span class="ord-sym">@_activeSignal.Symbol</span>
                     </div>
@@ -415,16 +327,128 @@
                     <!-- Submit -->
                     <div class="ord-actions">
                         <button class="ord-cancel-btn" @onclick="CancelOrder">Cancel</button>
-                        <button class="ord-submit-btn @(isBuy?"osb-buy":"osb-sell")"
-                                @onclick="PlaceManualOrder" disabled="@_orderLoading">
-                            @if (_orderLoading) { <span class="ord-spin"></span> }
-                            else if (_orderType == "Market") { @(isBuy ? "Buy Market" : "Sell Market") }
-                            else { @(isBuy ? "Buy Limit" : "Sell Limit") }
-                        </button>
+                        @if (_activeSignal.Confidence > 0)
+                        {
+                            <!-- Strategy signal: direction is fixed, single submit button -->
+                            <button class="ord-submit-btn @(isBuy?"osb-buy":"osb-sell")"
+                                    @onclick="PlaceManualOrder" disabled="@_orderLoading">
+                                @if (_orderLoading) { <span class="ord-spin"></span> }
+                                else if (_orderType == "Market") { @(isBuy ? "Buy Market" : "Sell Market") }
+                                else { @(isBuy ? "Buy Limit" : "Sell Limit") }
+                            </button>
+                        }
+                        else
+                        {
+                            <!-- Manual trade: user picks direction at submit time -->
+                            <button class="ord-submit-btn osb-buy"
+                                    @onclick="PlaceManualOrderBuy" disabled="@_orderLoading">
+                                @if (_orderLoading && isBuy) { <span class="ord-spin"></span> }
+                                else { @(_orderType == "Market" ? "Buy Market" : "Buy Limit") }
+                            </button>
+                            <button class="ord-submit-btn osb-sell"
+                                    @onclick="PlaceManualOrderSell" disabled="@_orderLoading">
+                                @if (_orderLoading && !isBuy) { <span class="ord-spin"></span> }
+                                else { @(_orderType == "Market" ? "Sell Market" : "Sell Limit") }
+                            </button>
+                        }
                     </div>
                 </div>
             </div>
+        </div> <!-- end mk-charts-col-side -->
         }
+        </div> <!-- end mk-charts-grid -->
+
+        <!-- SIGNAL PANEL (full width, below the chart/order grid) -->
+        <div class="sig-panel">
+                <div class="sig-panel-head">
+                    <div class="sig-panel-title">
+                        <span class="sig-dot"></span>
+                        LIVE SIGNALS
+                        <span class="sig-count">@_signals.Count</span>
+                    </div>
+                    <div class="sig-panel-right">
+                        <div class="sig-panel-sub">Click a signal to trade manually</div>
+                        <div class="sig-pager @(_signals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
+                            @for (int p = 0; p < _sigPageCount; p++)
+                            {
+                                int pageIdx = p;
+                                <span class="sig-pager-dot @(pageIdx == _sigPage ? "active" : "")"
+                                      @onclick="() => GoToSigPage(pageIdx)"></span>
+                            }
+                            <span class="sig-pager-label">@(_sigPage+1)/@_sigPageCount</span>
+                        </div>
+                    </div>
+                </div>
+                @if (_signals.Any())
+                {
+                <div class="sig-cards" id="sigCardsScroll" @ref="_sigCardsEl">
+                    @foreach (var sig in _signals)
+                    {
+                        bool sigIsBuy = sig.Side?.ToUpper() == "BUY" || sig.Side?.ToUpper() == "LONG";
+                        bool isActive = _activeSignal == sig;
+                        decimal sigTp1 = sig.TakeProfits?.FirstOrDefault() ?? 0m;
+                        decimal rr = sig.StopLoss > 0 && sig.Entry > 0 && sigTp1 > 0
+                            ? Math.Abs(sigTp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry)
+                            : 0m;
+                        int conf = sig.Confidence;
+
+                        var ttl = GetSignalTtl(sig);
+                        bool isRemoving = _expiredSignals.ContainsKey(SignalKey(sig));
+
+                        <div class="sig-card @(sigIsBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "")"
+                             @key="SignalKey(sig)"
+                             @onclick="() => SelectSignal(sig)">
+                            <!-- Card top -->
+                            <div class="sc-top">
+                                <div class="sc-sym-wrap">
+                                    <span class="sc-sym">@sig.Symbol.Replace("USDT","")</span>
+                                    <span class="sc-usdt">USDT</span>
+                                </div>
+                                <span class="sc-side @(sigIsBuy ? "sc-side-b" : "sc-side-s")">
+                                    @(sigIsBuy ? "▲ LONG" : "▼ SHORT")
+                                </span>
+                            </div>
+                            <!-- Time + freshness -->
+                            <div class="sc-time-row">
+                                <span class="sc-time mk-dim">@sig.Time.ToLocalTime().ToString("HH:mm")</span>
+                                <span class="sc-ago">@FmtAgo(sig.Time)</span>
+                            </div>
+                            <!-- Confidence bar -->
+                            <div class="sc-conf-wrap">
+                                <div class="sc-conf-bar" style="width:@conf%"
+                                     style2="background:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")"></div>
+                            </div>
+                            <!-- Prices -->
+                            <div class="sc-prices">
+                                <div class="sc-p"><span class="sc-pl">Entry</span><span class="sc-pv mono">@FmtP(sig.Entry)</span></div>
+                                <div class="sc-p"><span class="sc-pl">SL</span><span class="sc-pv mono dn">@FmtP(sig.StopLoss)</span></div>
+                                @if (sigTp1 > 0) {
+                                    <div class="sc-p"><span class="sc-pl">TP1</span><span class="sc-pv mono up">@FmtP(sigTp1)</span></div>
+                                }
+                            </div>
+                            <!-- Footer -->
+                            <div class="sc-foot">
+                                <span class="sc-conf @(conf>=60?"up":conf>=45?"yel":"dn")">@conf%</span>
+                                @if (rr > 0) { <span class="sc-rr">RR @rr.ToString("F1")</span> }
+                                <span class="sc-atr mk-dim">ATR @FmtP(sig.ATR)</span>
+                            </div>
+                            <!-- Relevance / TTL -->
+                            <div class="sc-ttl-row" title="Estimated relevance window based on volatility (ATR)">
+                                <div class="sc-ttl-bar-wrap">
+                                    <div class="sc-ttl-bar @(ttl.IsExpiring ? "ttl-low" : ttl.Pct < 50 ? "ttl-mid" : "ttl-high")"
+                                         style="width:@(ttl.Pct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                                </div>
+                                <span class="sc-ttl-label mk-dim">@ttl.Label</span>
+                            </div>
+                        </div>
+                    }
+                </div>
+                }
+                else
+                {
+                    <div class="sig-empty">No live signals right now — scanning the market...</div>
+                }
+        </div> <!-- end sig-panel -->
 
         <!-- SYMBOL TABLE -->
         <div class="mk-tbl-wrap">
@@ -444,7 +468,7 @@
                             var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
                             var open = s.Klines.Count > 0 ? s.Klines[0].Close  : 0m;
                             var chg  = open > 0 ? (last - open) / open * 100m  : 0m;
-                            <tr @onclick="()=>Pick(s)"
+                            <tr @onclick="()=>PickAndTrade(s)"
                                 class="@(s==Selected?"mk-row-sel":"")">
                                 <td class="mk-rsym">@s.Symbol</td>
                                 <td><span class="mk-rtf">@TfLabel(s.Timeframe)</span></td>
@@ -513,6 +537,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
 /* CHARTS */
 .mk-charts-area{background:var(--bg2);padding:16px 20px;border-bottom:1px solid var(--bdr);position:relative;}
+.mk-charts-grid{display:grid;grid-template-columns:1fr;gap:16px;}
+.mk-charts-grid-with-panel{grid-template-columns:1fr 320px;}
+.mk-charts-col-main{min-width:0;}
+.mk-charts-col-side{min-width:0;}
+@@media(max-width:1000px){.mk-charts-grid-with-panel{grid-template-columns:1fr;}}
 .mk-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
 .mk-chart-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
 .mk-legend{display:flex;gap:14px;font-size:11px;color:var(--dim);}
@@ -612,13 +641,10 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .sig-pager-label{font-size:10px;color:var(--dim);font-family:var(--mono);margin-left:2px;}
 
 /* ORDER PANEL */
-.ord-panel{margin:0 20px 16px;background:var(--bg3);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;}
+.ord-panel{margin:0;background:var(--bg3);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;position:sticky;top:16px;}
 .ord-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
 .ord-title{display:flex;align-items:center;gap:10px;}
-.ord-side-toggle{display:flex;gap:4px;background:var(--bg2);border-radius:7px;padding:3px;}
-.ord-side-btn{background:transparent;border:none;color:var(--dim);padding:5px 12px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;}
-.ost-buy-on{background:rgba(34,197,94,.18);color:var(--grn);}
-.ost-sell-on{background:rgba(239,68,68,.18);color:var(--red);}
+.ord-manual-badge{font-size:11px;font-weight:700;color:var(--dim);background:var(--bg2);padding:3px 9px;border-radius:5px;letter-spacing:.3px;}
 .ord-badge{font-size:12px;}
 .ord-sym{font-family:var(--mono);font-size:16px;font-weight:700;}
 .ord-close-x{background:none;border:none;color:var(--dim);font-size:16px;cursor:pointer;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:all .15s;}
@@ -1121,6 +1147,28 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _ = RenderCharts();
     }
 
+    // Row click in the ALL INSTRUMENTS table: same as ticker click —
+    // switch chart AND open the order panel for a manual trade.
+    void PickAndTrade(MarketSeries s)
+    {
+        Pick(s);
+        var lastPrice = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
+
+        var manualSignal = new MissedTradeRecord
+        {
+            Symbol      = s.Symbol,
+            Side        = "BUY",
+            Entry       = lastPrice,
+            StopLoss    = 0,
+            TakeProfits = new List<decimal>(),
+            Time        = DateTime.UtcNow,
+            Confidence  = 0,
+            ATR         = _atr,
+        };
+
+        SelectSignal(manualSignal);
+    }
+
     void ToggleFreeze() => Frozen = !Frozen;
 
     string TfLabel(string tf) => tf switch
@@ -1395,6 +1443,18 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _activeSignal = null;
         _orderError   = string.Empty;
         _orderSuccess = string.Empty;
+    }
+
+    async Task PlaceManualOrderBuy()
+    {
+        if (_activeSignal != null) _activeSignal.Side = "BUY";
+        await PlaceManualOrder();
+    }
+
+    async Task PlaceManualOrderSell()
+    {
+        if (_activeSignal != null) _activeSignal.Side = "SELL";
+        await PlaceManualOrder();
     }
 
     async Task PlaceManualOrder()
