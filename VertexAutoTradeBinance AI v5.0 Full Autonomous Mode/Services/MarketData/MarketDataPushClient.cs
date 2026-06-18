@@ -22,11 +22,16 @@ public sealed class MarketDataPushClient : BackgroundService
     private readonly IConfiguration _cfg;
     private readonly ILogger<MarketDataPushClient> _logger;
 
-    private readonly Channel<Action<HubConnection>> _outbox =
-        Channel.CreateBounded<Action<HubConnection>>(new BoundedChannelOptions(2000)
+    private readonly Channel<Func<HubConnection, Task>> _outbox =
+        Channel.CreateBounded<Func<HubConnection, Task>>(new BoundedChannelOptions(2000)
         {
             FullMode = BoundedChannelFullMode.DropOldest
         });
+
+    private long _ticksQueued;
+    private long _ticksSent;
+    private long _klinesSent;
+    private long _sendFailures;
 
     public MarketDataPushClient(
         WsKlineSubscriber ws,
@@ -63,25 +68,42 @@ public sealed class MarketDataPushClient : BackgroundService
 
         Action<string, decimal> onPrice = (symbol, price) =>
         {
-            _outbox.Writer.TryWrite(c => _ = c.InvokeAsync("PushPrice", symbol, price));
+            Interlocked.Increment(ref _ticksQueued);
+            _outbox.Writer.TryWrite(async c =>
+            {
+                await c.InvokeAsync("PushPrice", symbol, price);
+                Interlocked.Increment(ref _ticksSent);
+            });
         };
 
         Action<string, KlineInterval, BinanceFuturesUsdtKline> onClosedKline = (symbol, tf, k) =>
         {
-            _outbox.Writer.TryWrite(c => _ = c.InvokeAsync(
-                "PushKlineClosed",
-                symbol,
-                tf.ToString(),
-                ToUnixMs(k.OpenTime),
-                k.OpenPrice,
-                k.HighPrice,
-                k.LowPrice,
-                k.ClosePrice,
-                k.Volume));
+            _outbox.Writer.TryWrite(async c =>
+            {
+                await c.InvokeAsync(
+                    "PushKlineClosed",
+                    symbol,
+                    tf.ToString(),
+                    ToUnixMs(k.OpenTime),
+                    k.OpenPrice,
+                    k.HighPrice,
+                    k.LowPrice,
+                    k.ClosePrice,
+                    k.Volume);
+                Interlocked.Increment(ref _klinesSent);
+            });
         };
 
         _ws.OnPrice += onPrice;
         _ws.OnClosedKline += onClosedKline;
+
+        using var heartbeat = new Timer(_ =>
+        {
+            _logger.LogInformation(
+                "[DashboardPush] heartbeat: state={state} queued={queued} ticksSent={ticksSent} klinesSent={klinesSent} failures={failures}",
+                connection.State, Interlocked.Read(ref _ticksQueued), Interlocked.Read(ref _ticksSent),
+                Interlocked.Read(ref _klinesSent), Interlocked.Read(ref _sendFailures));
+        }, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
 
         try
         {
@@ -106,8 +128,15 @@ public sealed class MarketDataPushClient : BackgroundService
                 if (connection.State != HubConnectionState.Connected)
                     continue; // drop silently — chart falls back to file snapshot
 
-                try { send(connection); }
-                catch (Exception ex) { _logger.LogWarning(ex, "[DashboardPush] Push failed (non-fatal)"); }
+                try
+                {
+                    await send(connection);
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref _sendFailures);
+                    _logger.LogWarning(ex, "[DashboardPush] Push failed (non-fatal)");
+                }
             }
         }
         catch (OperationCanceledException)
