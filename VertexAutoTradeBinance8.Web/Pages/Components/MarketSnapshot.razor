@@ -564,7 +564,6 @@
                     </div>
                 }
             </div>
-        </div> <!-- end ord-panel -->
 
         <!-- ALL INSTRUMENTS — compact, scrollable, lives in the sidebar now -->
         <div class="mk-side-tbl">
@@ -590,6 +589,7 @@
         }
         </div> <!-- end mk-body-grid -->
      </div>
+    </div> <!-- end mk-charts-area always-in-DOM -->
  
 
 <style>
@@ -1901,6 +1901,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             StateHasChanged();
         }
     }
+    void OnPriceChange(ChangeEventArgs e)
     {
         if (!decimal.TryParse(e.Value?.ToString(),
             System.Globalization.NumberStyles.Any,
