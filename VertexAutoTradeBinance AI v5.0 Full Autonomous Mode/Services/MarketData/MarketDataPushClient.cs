@@ -66,10 +66,38 @@ public sealed class MarketDataPushClient : BackgroundService
             .WithAutomaticReconnect()
             .Build();
 
+        async Task ConnectWithRetryAsync()
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    await connection.StartAsync(ct);
+                    _logger.LogInformation("[DashboardPush] Connected to {url}", url);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[DashboardPush] Connect failed, retrying in 5s");
+                    await Task.Delay(TimeSpan.FromSeconds(5), ct);
+                }
+            }
+        }
+
         connection.Closed += async (error) =>
         {
-            _logger.LogWarning(error, "[DashboardPush] Connection CLOSED (state={state}) — will auto-reconnect", connection.State);
-            await Task.CompletedTask;
+            _logger.LogWarning(error, "[DashboardPush] Connection CLOSED (state={state})", connection.State);
+
+            if (ct.IsCancellationRequested)
+                return;
+
+            // WithAutomaticReconnect() only retries a handful of times with
+            // increasing delays, then gives up and fires Closed for good -
+            // leaving the connection permanently Disconnected with nothing
+            // ever trying again. Restart the whole connect cycle here so a
+            // long Web outage doesn't kill the feed forever.
+            await Task.Delay(TimeSpan.FromSeconds(2), CancellationToken.None);
+            await ConnectWithRetryAsync();
         };
         connection.Reconnecting += (error) =>
         {
@@ -126,20 +154,7 @@ public sealed class MarketDataPushClient : BackgroundService
         try
         {
             // Connect with retry — Web may start after Engine, or restart independently
-            while (!ct.IsCancellationRequested)
-            {
-                try
-                {
-                    await connection.StartAsync(ct);
-                    _logger.LogInformation("[DashboardPush] Connected to {url}", url);
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "[DashboardPush] Connect failed, retrying in 5s");
-                    await Task.Delay(TimeSpan.FromSeconds(5), ct);
-                }
-            }
+            await ConnectWithRetryAsync();
 
             await foreach (var send in _outbox.Reader.ReadAllAsync(ct))
             {
