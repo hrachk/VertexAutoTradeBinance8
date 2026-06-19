@@ -19,6 +19,7 @@ using VertexAutoTradeBinance8.Services.Recovery;
 using VertexAutoTradeBinance8.Services.State;
 using VertexAutoTradeBinance8.Services.Ws;
 using VertexAutoTradeBinance8.Strategy;
+using VertexAutoTradeBinance8.Strategy.MeanReversion;
 using static VertexAutoTradeBinance8.Services.OrderExecutor;
 // остальные using как у тебя
 
@@ -251,6 +252,33 @@ public class Program
                     services.AddSingleton<ReverseProbeEngine>();
                     services.AddSingleton<IAccountStateService, AccountStateService>();
 
+                    // ===== STRATEGY v9: MEAN-REVERSION + ROUTER =====
+                    // StrategyEngine above is the existing trend-following
+                    // engine — untouched. These new pieces add a parallel
+                    // mean-reversion strategy plus a thin router that
+                    // decides which engine's signals reach the order
+                    // pipeline (regime-based auto, or a manual override —
+                    // see Strategy:Mode in appsettings.json / the Web UI
+                    // toggle for live switching without a restart).
+                    services.Configure<MeanReversionOptions>(
+                        ctx.Configuration.GetSection("MeanReversion"));
+                    services.AddSingleton(sp =>
+                        sp.GetRequiredService<IOptions<MeanReversionOptions>>().Value);
+                    services.AddSingleton<MeanReversionEngine>();
+                    services.AddSingleton(sp =>
+                    {
+                        // NOTE: uses "StrategyRouting:Mode", NOT "Strategy:Mode" —
+                        // that path is already used by the existing pullback
+                        // config (Strategy:Mode="Pullback"), unrelated to this
+                        // Auto/TrendOnly/MeanReversionOnly routing setting.
+                        var startupMode = ctx.Configuration["StrategyRouting:Mode"];
+                        var parsed = Enum.TryParse<StrategyMode>(startupMode, ignoreCase: true, out var m)
+                            ? m
+                            : StrategyMode.Auto;
+                        return new StrategyModeState(parsed);
+                    });
+                    services.AddSingleton<StrategyRouter>();
+
 
                     // ===== SUPERVISOR / STATE =====
                     services.AddSingleton<PositionSupervisorService>();
@@ -271,6 +299,7 @@ public class Program
                     services.AddHostedService<KlineSnapshotLiveSaver>();
                     services.AddHostedService<MarketDataPushClient>();
                     services.AddHostedService<DecisionMarkersPersistenceHostedService>();
+                    services.AddHostedService<StrategyModeFileWatcher>();
 
 
 

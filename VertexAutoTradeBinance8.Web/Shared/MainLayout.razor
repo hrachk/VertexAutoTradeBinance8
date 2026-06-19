@@ -22,6 +22,15 @@
     </div>
 
     <div class="vertex-right">
+        <div class="strategy-mode-pill">
+            <span class="strategy-mode-icon">⚙</span>
+            <select class="strategy-mode-select" value="@_strategyMode" @onchange="OnStrategyModeChanged">
+                <option value="Auto">Auto (Regime-based)</option>
+                <option value="TrendOnly">Trend Only</option>
+                <option value="MeanReversionOnly">Mean-Reversion Only</option>
+            </select>
+        </div>
+
         <div class="status-pill">
             <span class="vertex-status-dot @(EngineStatus == "Running" ? "ok" : "bad")"></span>
             <span class="vertex-status-text">@EngineStatus</span>
@@ -56,6 +65,7 @@
 
 @inject Microsoft.Extensions.Options.IOptions<ClientOptions> ClientOptions
 @inject Microsoft.JSInterop.IJSRuntime JS
+@inject VertexAutoTradeBinance8.Web.Services.StrategyModeFileService StrategyModeService
 
 @code {
     ClientOptions Client => ClientOptions.Value;
@@ -66,6 +76,7 @@
 
     private bool ShowMobileSidebar;
     private bool SidebarCollapsed;
+    private string _strategyMode = "Auto";
 
     void ToggleMobileMenu() => ShowMobileSidebar = !ShowMobileSidebar;
 
@@ -73,6 +84,22 @@
     {
         SidebarCollapsed = collapsed;
         _ = PersistCollapsed(collapsed);
+    }
+
+    async Task OnStrategyModeChanged(ChangeEventArgs e)
+    {
+        var newMode = e.Value?.ToString() ?? "Auto";
+        _strategyMode = newMode;
+        await StrategyModeService.SetModeAsync(newMode);
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _strategyMode = await StrategyModeService.ReadCurrentModeAsync();
+        }
+        catch { }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
