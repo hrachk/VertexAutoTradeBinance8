@@ -2218,7 +2218,8 @@ compact-card {
 }
 
 .status-pill,
-.meta-pill {
+.meta-pill,
+.strategy-mode-pill {
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -2226,6 +2227,26 @@ compact-card {
     border-radius: 12px;
     border: 1px solid rgba(255,255,255,0.10);
     background: rgba(255,255,255,0.06);
+}
+
+.strategy-mode-icon {
+    font-size: 13px;
+    opacity: 0.8;
+}
+
+.strategy-mode-select {
+    background: transparent;
+    border: none;
+    color: #e2e8f0;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+}
+
+.strategy-mode-select option {
+    background: #111520;
+    color: #e2e8f0;
 }
 
 .vertex-status-dot {

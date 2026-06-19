@@ -48,6 +48,7 @@ namespace VertexAutoTradeBinance8
         private readonly MarketDataService _market;
         private readonly MarketDataFacade _marketDataFacade;
         private readonly StrategyEngine _strategy;
+        private readonly StrategyRouter _strategyRouter;
         private readonly RiskManager _risk;
         private readonly OrderExecutor _executor;
         private readonly BinanceClientFactory _factory;
@@ -130,6 +131,7 @@ namespace VertexAutoTradeBinance8
             MarketDataService market,
             MarketDataFacade marketDataFacade,
             StrategyEngine strategy,
+            StrategyRouter strategyRouter,
             RiskManager risk,
             OrderExecutor executor,
             BinanceClientFactory factory,
@@ -158,6 +160,7 @@ namespace VertexAutoTradeBinance8
             _market = market;
             _marketDataFacade = marketDataFacade;
             _strategy = strategy;
+            _strategyRouter = strategyRouter;
             _risk = risk;
             _executor = executor;
             _factory = factory;
@@ -458,11 +461,18 @@ namespace VertexAutoTradeBinance8
             }
 
             // 4) BIND STRATEGY AFTER MARKETDATA READY
-            _strategy.BindReactive(_marketDataFacade);
+            //    v9: StrategyEngine is no longer bound/subscribed directly.
+            //    StrategyRouter now owns binding BOTH the trend-following
+            //    StrategyEngine and the new MeanReversionEngine to live
+            //    market data, and decides per-signal which one reaches the
+            //    channel below (regime-based auto routing, or a manual
+            //    override toggle — see StrategyModeState). StrategyEngine's
+            //    own internal logic is completely unchanged; only WHO
+            //    subscribes to its signal stream changed.
+            _strategyRouter.BindAll();
 
-
-            // 🔥 STRATEGY → WORKER(PUSH - ONLY)
-            _strategy.OnSignalGenerated += signal =>
+            // 🔥 ROUTER → WORKER (PUSH-ONLY)
+            _strategyRouter.OnSignalGenerated += signal =>
             {
                 if (signal == null) return;
                 _signalChannel.Writer.TryWrite(signal);

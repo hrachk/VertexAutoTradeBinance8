@@ -85,6 +85,7 @@ builder.Services.AddSingleton<AiCorrelationService>();
 // Учебный модуль
 builder.Services.AddSingleton<AiLearningFileService>();
 builder.Services.AddSingleton<MissedTradeFileService>();
+builder.Services.AddSingleton<StrategyModeFileService>();
 builder.Services.AddSingleton<EngineStateService>();
 
 builder.Services.AddSingleton<ExecutedSignalUiService>();

@@ -712,6 +712,47 @@ namespace VertexAutoTradeBinance8.Services
                 }
 
                 // =====================================================
+                // 📌 MEAN-REVERSION TIME-STOP (v9, fully isolated)
+                // =====================================================
+                // Mean-reversion's thesis is "price reverts to the mean
+                // within a short, bounded window". If it hasn't happened
+                // after TimeStopBars closed candles, the thesis didn't
+                // play out — close now regardless of current PnL rather
+                // than let it sit indefinitely waiting on the original
+                // SL/TP (which trend-following positions are fine doing,
+                // but is wrong for this strategy's risk profile).
+                //
+                // Gated strictly on signal.Reason starting with "MEANREV_"
+                // so trend-following positions (signal == null or any
+                // other Reason) are completely unaffected — this branch
+                // is a pure addition, it cannot change existing behavior.
+                bool isMeanReversionPos = signal?.Reason?.StartsWith("MEANREV_", StringComparison.OrdinalIgnoreCase) == true;
+
+                if (isMeanReversionPos && signal!.TimeStopBars.HasValue && signal.TimeStopBars.Value > 0)
+                {
+                    var mrKey = BuildPosGuardKey(symbol, side, entry, qtyAbs);
+                    int bars = _lifecycle.IncBars(mrKey);
+
+                    if (bars >= (int)signal.TimeStopBars.Value)
+                    {
+                        _logger.LogWarning(
+                            "[MEANREV][TIME-STOP][{symbol}][{side}] {bars} bars elapsed without reverting to mean — closing now",
+                            symbol, side, bars);
+
+                        try
+                        {
+                            await ClosePartialAsync(client, symbol, side, qtyAbs, pos, ct);
+                        }
+                        finally
+                        {
+                            _lifecycle.Clear(mrKey);
+                        }
+
+                        return;
+                    }
+                }
+
+                // =====================================================
                 // 📌 ПРОСТО ЧИТАЕМ ОРДЕРА (БЕЗ ВМЕШАТЕЛЬСТВА)
                 // =====================================================
                 var orders = allOrders.Where(o => o.PositionSide == side).ToList();
