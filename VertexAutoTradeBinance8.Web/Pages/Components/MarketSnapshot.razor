@@ -817,22 +817,22 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .sig-cards::-webkit-scrollbar-thumb{background:var(--bdr);}
 
 /* Signal card */
-.sig-card{flex-shrink:0;width:175px;min-height:188px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:12px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.sig-card{flex-shrink:0;width:175px;min-height:140px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:10px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
 .sig-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;}
 .sc-buy::before{background:var(--grn);}
 .sc-sell::before{background:var(--red);}
 .sig-card:hover{border-color:var(--acc);transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.3);}
 .sc-active{border-color:var(--acc)!important;background:rgba(59,130,246,.08)!important;}
-.sc-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;}
+.sc-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px;}
 .sc-sym-wrap{display:flex;flex-direction:column;}
 .sc-sym{font-family:var(--mono);font-size:15px;font-weight:700;}
 .sc-usdt{font-size:10px;color:var(--dim);}
 .sc-side{font-size:10px;font-weight:700;padding:2px 6px;border-radius:3px;white-space:nowrap;}
 .sc-side-b{background:rgba(34,197,94,.15);color:var(--grn);}
 .sc-side-s{background:rgba(239,68,68,.15);color:var(--red);}
-.sc-conf-wrap{height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;margin-bottom:10px;}
+.sc-conf-wrap{height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;margin-bottom:6px;}
 .sc-conf-bar{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--acc),var(--grn));}
-.sc-prices{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
+.sc-prices{display:flex;flex-direction:column;gap:2px;margin-bottom:6px;}
 .sc-p{display:flex;justify-content:space-between;align-items:center;}
 .sc-pl{font-size:10px;color:var(--dim);}
 .sc-pv{font-size:11px;}
@@ -843,15 +843,15 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .yel{color:var(--yel)!important;}
 
 /* Time row */
-.sc-time-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-size:10px;}
+.sc-time-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;font-size:10px;}
 .sc-time{font-family:var(--mono);}
 .sc-ago{color:#94a3b8;font-weight:500;}
 
 /* Empty state — same min-height as a card row so the panel never jumps */
 /* ── Scanning animation (empty signals state) ── */
-.sig-scanning{display:flex;align-items:center;justify-content:center;gap:20px;min-height:188px;border:1px dashed var(--bdr);border-radius:10px;background:var(--bg3);}
+.sig-scanning{display:flex;align-items:center;justify-content:flex-start;gap:12px;min-height:36px;padding:6px 14px;border:1px dashed var(--bdr);border-radius:8px;background:var(--bg3);}
 
-.sig-scan-radar{position:relative;width:56px;height:56px;flex-shrink:0;}
+.sig-scan-radar{position:relative;width:22px;height:22px;flex-shrink:0;}
 .sig-scan-ring{position:absolute;inset:0;border:1.5px solid rgba(56,189,248,0.5);border-radius:50%;animation:sigScanPulse 2.4s ease-out infinite;}
 .sig-scan-ring-1{animation-delay:0s;}
 .sig-scan-ring-2{animation-delay:0.8s;}
@@ -867,8 +867,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     50%     { opacity:1;   transform:translate(-50%,-50%) scale(1.25); }
 }
 
-.sig-scan-text{display:flex;flex-direction:column;gap:4px;}
-.sig-scan-title{font-size:13px;font-weight:600;color:var(--txt);}
+.sig-scan-text{display:flex;align-items:center;gap:8px;}
+.sig-scan-title{font-size:12px;font-weight:600;color:var(--txt);}
 .sig-scan-dots span{animation:sigScanDot 1.4s infinite; opacity:0;}
 .sig-scan-dots span:nth-child(1){animation-delay:0s;}
 .sig-scan-dots span:nth-child(2){animation-delay:0.2s;}
@@ -877,7 +877,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     0%,80%,100% { opacity:0; }
     40%         { opacity:1; }
 }
-.sig-scan-sub{font-size:12px;color:var(--dim);}
+.sig-scan-sub{font-size:11px;color:var(--dim);padding-left:8px;border-left:1px solid var(--bdr);}
 .sig-scan-symbol{color:#38bdf8;font-family:var(--mono);font-weight:600;animation:sigScanFade 1.4s ease;}
 @@keyframes sigScanFade{
     0%   { opacity:0; transform:translateY(2px); }
@@ -885,7 +885,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 }
 
 /* TTL / relevance bar */
-.sc-ttl-row{display:flex;align-items:center;gap:6px;margin-top:10px;padding-top:8px;border-top:1px dashed var(--bdr);}
+.sc-ttl-row{display:flex;align-items:center;gap:6px;margin-top:6px;padding-top:6px;border-top:1px dashed var(--bdr);}
 .sc-ttl-bar-wrap{flex:1;height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;}
 .sc-ttl-bar{height:100%;border-radius:2px;transition:width 1s linear;}
 .ttl-high{background:var(--grn);}
@@ -908,7 +908,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .sig-pager-label{font-size:10px;color:var(--dim);font-family:var(--mono);margin-left:2px;}
 
 /* ORDER PANEL */
-.ord-panel{margin:0;background:var(--bg3);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;position:sticky;top:16px;}
+.ord-panel{margin:0;background:var(--bg3);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;}
 .ord-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
 .ord-title{display:flex;align-items:center;gap:10px;}
 .ord-price-hint{font-size:10px;color:var(--dim);margin-top:5px;font-style:italic;}
@@ -980,7 +980,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
 .mk-side-tbl{margin-top:4px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;overflow:hidden;}
 .mk-side-tbl-title{font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--dim);font-weight:700;padding:10px 14px 8px;}
-.mk-side-tbl-scroll{max-height:280px;overflow-y:auto;}
+.mk-side-tbl-scroll{max-height:280px;overflow-y:auto;scrollbar-width:none;}
+.mk-side-tbl-scroll::-webkit-scrollbar{display:none;}
 .mk-side-row{display:flex;align-items:center;gap:8px;padding:7px 14px;cursor:pointer;transition:background .1s;border-top:1px solid var(--bdr);}
 .mk-side-row:first-child{border-top:none;}
 .mk-side-row:hover{background:var(--bg2);}

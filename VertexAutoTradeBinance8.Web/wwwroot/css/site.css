@@ -2776,3 +2776,41 @@ compact-card {
     gap: 2px !important;
     padding: 0 10px !important;
 }
+
+/* ============================================================
+   COLLAPSED SIDEBAR — temporary hover-expand as an OVERLAY.
+   When collapsed, content always starts right after the narrow
+   68px rail (no gap). Hovering the rail temporarily expands it
+   to full width ON TOP of the content (position:absolute) instead
+   of pushing/resizing main — so the page layout never jumps.
+   It shrinks back the moment the mouse leaves.
+   ============================================================ */
+@media (min-width: 981px) {
+    .vertex-sidebar.vertex-sidebar-collapsed {
+        position: relative;
+        z-index: 50;
+    }
+
+    .vertex-sidebar.vertex-sidebar-collapsed:hover {
+        width: var(--vertex-sidebar-w) !important;
+        position: absolute !important;
+        top: 0;
+        left: 0;
+        height: 100%;
+        box-shadow: 4px 0 24px rgba(0,0,0,0.5);
+        z-index: 60;
+    }
+
+    /* While the rail is hover-expanded, hide the collapsed icon-only
+       state and show full nav text/labels again, exactly like the
+       expanded sidebar — purely visual, doesn't touch SidebarCollapsed
+       in C# so the persisted preference is untouched. */
+    .vertex-sidebar.vertex-sidebar-collapsed:hover .nv-text {
+        display: inline !important;
+    }
+
+    .vertex-sidebar.vertex-sidebar-collapsed:hover .nv-link {
+        justify-content: flex-start !important;
+        padding: 0 12px !important;
+    }
+}
