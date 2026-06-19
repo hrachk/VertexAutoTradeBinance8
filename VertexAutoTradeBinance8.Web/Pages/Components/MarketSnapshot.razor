@@ -310,7 +310,7 @@
         <!-- OPEN POSITIONS — Binance-style strip right under the chart -->
         <div class="mk-oo-panel">
             <div class="mk-oo-head">
-                <span class="mk-oo-title">OPEN POSITIONS</span>
+                <span class="mk-oo-title">OPEN POSITIONS @(_positionsLoading ? "⟳" : "")</span>
                 <span class="mk-oo-count">@_allPositions.Count</span>
             </div>
             @if (_allPositions.Count == 0)
@@ -334,7 +334,7 @@
                                     @onclick="() => SelectPosition(pos)">
                                     <td class="mk-oo-sym">@pos.Symbol</td>
                                     <td class="@(pos.Side == "LONG" ? "up" : "dn")">@pos.Side</td>
-                                    <td class="mk-dim">@pos.Leverage&times;</td>
+                                    <td class="mk-dim">@pos.Leverage×</td>
                                     <td class="mk-mono">@FmtP(pos.EntryPrice)</td>
                                     <td class="mk-mono">@FmtP(pos.MarkPrice)</td>
                                     <td class="mk-mono">@pos.Size.ToString("F2")</td>
@@ -639,7 +639,7 @@
         <!-- POSITION DETAILS (right sidebar) — shown when a row in the
              OPEN POSITIONS table below the chart is clicked -->
         @{
-            var pos = _selectedPosition;
+            var pos = _selectedPosition!;
             bool posIsLong = pos.Side == "LONG";
             decimal liqDistPct = pos.LiqPrice > 0 && pos.MarkPrice > 0
                 ? Math.Abs(pos.LiqPrice - pos.MarkPrice) / pos.MarkPrice * 100m
