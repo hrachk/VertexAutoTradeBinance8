@@ -141,105 +141,9 @@
             </div>
         }
 
-        <div class="mk-body-grid @(_activeSignal != null ? "mk-body-grid-with-panel" : "")">
-        <!-- LEFT: chart + RSI + Volume, then LIVE SIGNALS, then ALL INSTRUMENTS — all share this one column's width -->
+        <div class="mk-body-grid @(_activeSignal != null || _selectedPosition != null ? "mk-body-grid-with-panel" : "")">
+        <!-- LEFT: LIVE SIGNALS first, then chart + RSI + Volume, then OPEN POSITIONS, then OPEN ORDERS — all share this one column's width -->
         <div class="mk-main-col">
-        <div class="mk-charts-col-main">
-
-        <!-- Price chart -->
-        <div class="mk-chart-head">
-            <div class="mk-chart-title">CANDLESTICK · @(Selected?.Symbol ?? "") · @TfLabel(Selected?.Timeframe ?? "")
-                <span style="color:#22c55e;margin-left:12px">⚡ ticks:@_liveTickCount klines:@_liveKlineCount last:@_lastTickSymbol@@@(_lastTickTime==DateTime.MinValue?"-":_lastTickTime.ToString("HH:mm:ss"))</span>
-            </div>
-            <div class="mk-legend">
-                <span style="color:#38bdf8">── EMA21</span>
-                <span style="color:#a855f7">── EMA55</span>
-                <span style="color:#eab308">╌╌ VWAP</span>
-                <span style="color:rgba(59,130,246,0.5)">╌╌ BB(20)</span>
-            </div>
-        </div>
-        <div class="mk-canvas-wrap mk-canvas-price" id="priceWrap">
-            <canvas id="priceChart" style="cursor:crosshair"></canvas>
-            <div class="mk-resize-handle" id="resizeHandle">
-                <div class="mk-resize-dots">⋯</div>
-            </div>
-        </div>
-
-        <!-- RSI -->
-        <div class="mk-chart-head" style="padding-top:4px">
-            <div class="mk-chart-title">RSI(14)</div>
-            <div class="mk-legend">
-                <span style="color:#ef4444">── OB 70</span>
-                <span style="color:#22c55e">── OS 30</span>
-            </div>
-        </div>
-        <div class="mk-canvas-wrap mk-canvas-rsi">
-            <canvas id="rsiChart"></canvas>
-        </div>
-
-        <!-- Volume -->
-        <div class="mk-chart-head" style="padding-top:4px">
-            <div class="mk-chart-title">VOLUME</div>
-        </div>
-        <div class="mk-canvas-wrap mk-canvas-vol">
-            <canvas id="volumeChart"></canvas>
-        </div>
-
-        <div class="mk-hints">
-            <span>🖱 Drag to pan</span>
-            <span>⚲ Scroll to zoom X</span>
-            <span>⇧+Scroll to zoom Y</span>
-            <span>↕ Drag handle to resize</span>
-            <span>2× click to reset</span>
-        </div>
-
-        </div> <!-- end mk-charts-col-main -->
-
-        <!-- OPEN ORDERS — compact, Binance-style strip right under the chart -->
-        <div class="mk-oo-panel">
-            <div class="mk-oo-head">
-                <span class="mk-oo-title">OPEN ORDERS</span>
-                <span class="mk-oo-count">@_openOrders.Count</span>
-            </div>
-            @if (_openOrders.Count == 0)
-            {
-                <div class="mk-oo-empty">No open orders</div>
-            }
-            else
-            {
-                <div class="mk-oo-scroll">
-                    <table class="mk-oo-tbl">
-                        <thead>
-                            <tr>
-                                <th>Symbol</th><th>Side</th><th>Type</th>
-                                <th>Price</th><th>Qty</th><th>Filled</th><th></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var o in _openOrders)
-                            {
-                                <tr>
-                                    <td class="mk-oo-sym">@o.Symbol</td>
-                                    <td class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</td>
-                                    <td class="mk-dim">@o.Type @(o.ReduceOnly ? "(R)" : "")</td>
-                                    <td class="mk-mono">@(o.Price > 0 ? FmtP(o.Price) : "Market")</td>
-                                    <td class="mk-mono">@o.Qty.ToString("G8")</td>
-                                    <td class="mk-mono mk-dim">@o.Filled.ToString("G8")</td>
-                                    <td>
-                                        <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
-                                                @onclick="() => CancelOpenOrderAsync(o)">
-                                            @(_cancellingOrderId == o.OrderId ? "…" : "✕")
-                                        </button>
-                                    </td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
-            }
-        </div>
-
-        <!-- SIGNAL PANEL — now inside the main column so it matches the chart's width -->
         <div class="sig-panel">
                 <div class="sig-panel-head">
                     <div class="sig-panel-title">
@@ -352,6 +256,148 @@
                     </div>
                 }
         </div> <!-- end sig-panel -->
+        <div class="mk-charts-col-main">
+
+        <!-- Price chart -->
+        <div class="mk-chart-head">
+            <div class="mk-chart-title">CANDLESTICK · @(Selected?.Symbol ?? "") · @TfLabel(Selected?.Timeframe ?? "")
+                <span style="color:#22c55e;margin-left:12px">⚡ ticks:@_liveTickCount klines:@_liveKlineCount last:@_lastTickSymbol@@@(_lastTickTime==DateTime.MinValue?"-":_lastTickTime.ToString("HH:mm:ss"))</span>
+            </div>
+            <div class="mk-legend">
+                <span style="color:#38bdf8">── EMA21</span>
+                <span style="color:#a855f7">── EMA55</span>
+                <span style="color:#eab308">╌╌ VWAP</span>
+                <span style="color:rgba(59,130,246,0.5)">╌╌ BB(20)</span>
+            </div>
+        </div>
+        <div class="mk-canvas-wrap mk-canvas-price" id="priceWrap">
+            <canvas id="priceChart" style="cursor:crosshair"></canvas>
+            <div class="mk-resize-handle" id="resizeHandle">
+                <div class="mk-resize-dots">⋯</div>
+            </div>
+        </div>
+
+        <!-- RSI -->
+        <div class="mk-chart-head" style="padding-top:4px">
+            <div class="mk-chart-title">RSI(14)</div>
+            <div class="mk-legend">
+                <span style="color:#ef4444">── OB 70</span>
+                <span style="color:#22c55e">── OS 30</span>
+            </div>
+        </div>
+        <div class="mk-canvas-wrap mk-canvas-rsi">
+            <canvas id="rsiChart"></canvas>
+        </div>
+
+        <!-- Volume -->
+        <div class="mk-chart-head" style="padding-top:4px">
+            <div class="mk-chart-title">VOLUME</div>
+        </div>
+        <div class="mk-canvas-wrap mk-canvas-vol">
+            <canvas id="volumeChart"></canvas>
+        </div>
+
+        <div class="mk-hints">
+            <span>🖱 Drag to pan</span>
+            <span>⚲ Scroll to zoom X</span>
+            <span>⇧+Scroll to zoom Y</span>
+            <span>↕ Drag handle to resize</span>
+            <span>2× click to reset</span>
+        </div>
+
+        </div> <!-- end mk-charts-col-main -->
+
+        <!-- OPEN POSITIONS — Binance-style strip right under the chart -->
+        <div class="mk-oo-panel">
+            <div class="mk-oo-head">
+                <span class="mk-oo-title">OPEN POSITIONS @(_positionsLoading ? "⟳" : "")</span>
+                <span class="mk-oo-count">@_allPositions.Count</span>
+            </div>
+            @if (_allPositions.Count == 0)
+            {
+                <div class="mk-oo-empty">No open positions</div>
+            }
+            else
+            {
+                <div class="mk-oo-scroll">
+                    <table class="mk-oo-tbl">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th><th>Side</th><th>Lev</th>
+                                <th>Entry</th><th>Mark</th><th>Size</th><th>PnL</th><th>ROI</th><th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var pos in _allPositions)
+                            {
+                                <tr class="mk-pos-row @(_selectedPosition == pos ? "mk-pos-row-sel" : "")"
+                                    @onclick="() => SelectPosition(pos)">
+                                    <td class="mk-oo-sym">@pos.Symbol</td>
+                                    <td class="@(pos.Side == "LONG" ? "up" : "dn")">@pos.Side</td>
+                                    <td class="mk-dim">@pos.Leverage×</td>
+                                    <td class="mk-mono">@FmtP(pos.EntryPrice)</td>
+                                    <td class="mk-mono">@FmtP(pos.MarkPrice)</td>
+                                    <td class="mk-mono">@pos.Size.ToString("F2")</td>
+                                    <td class="mk-mono @(pos.Pnl >= 0 ? "up" : "dn")">@(pos.Pnl >= 0 ? "+" : "")@pos.Pnl.ToString("F2")</td>
+                                    <td class="mk-mono @(pos.Roi >= 0 ? "up" : "dn")">@(pos.Roi >= 0 ? "+" : "")@((pos.Roi * 100).ToString("F1"))%</td>
+                                    <td>
+                                        <button class="mk-oo-cancel" disabled="@_orderLoading"
+                                                @onclick="() => ClosePositionRow(pos)" @onclick:stopPropagation="true">
+                                            @(_orderLoading ? "…" : "Close")
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <!-- OPEN ORDERS — compact, Binance-style strip right under the chart -->
+        <div class="mk-oo-panel">
+            <div class="mk-oo-head">
+                <span class="mk-oo-title">OPEN ORDERS</span>
+                <span class="mk-oo-count">@_openOrders.Count</span>
+            </div>
+            @if (_openOrders.Count == 0)
+            {
+                <div class="mk-oo-empty">No open orders</div>
+            }
+            else
+            {
+                <div class="mk-oo-scroll">
+                    <table class="mk-oo-tbl">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th><th>Side</th><th>Type</th>
+                                <th>Price</th><th>Qty</th><th>Filled</th><th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var o in _openOrders)
+                            {
+                                <tr>
+                                    <td class="mk-oo-sym">@o.Symbol</td>
+                                    <td class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</td>
+                                    <td class="mk-dim">@o.Type @(o.ReduceOnly ? "(R)" : "")</td>
+                                    <td class="mk-mono">@(o.Price > 0 ? FmtP(o.Price) : "Market")</td>
+                                    <td class="mk-mono">@o.Qty.ToString("G8")</td>
+                                    <td class="mk-mono mk-dim">@o.Filled.ToString("G8")</td>
+                                    <td>
+                                        <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
+                                                @onclick="() => CancelOpenOrderAsync(o)">
+                                            @(_cancellingOrderId == o.OrderId ? "…" : "✕")
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
         </div> <!-- end mk-main-col -->
 
         @if (_activeSignal != null)
@@ -586,6 +632,89 @@
             </div>
         </div> <!-- end mk-side-tbl -->
         </div> <!-- end mk-charts-col-side -->
+        }
+        else if (_selectedPosition != null)
+        {
+        <div class="mk-charts-col-side">
+        <!-- POSITION DETAILS (right sidebar) — shown when a row in the
+             OPEN POSITIONS table below the chart is clicked -->
+        @{
+            var pos = _selectedPosition!;
+            bool posIsLong = pos.Side == "LONG";
+            decimal liqDistPct = pos.LiqPrice > 0 && pos.MarkPrice > 0
+                ? Math.Abs(pos.LiqPrice - pos.MarkPrice) / pos.MarkPrice * 100m
+                : 0m;
+        }
+            <div class="ord-panel">
+                <div class="ord-head">
+                    <div class="ord-title">
+                        <span class="sc-side @(posIsLong?"sc-side-b":"sc-side-s") ord-badge">
+                            @(posIsLong ? "▲ LONG" : "▼ SHORT") @pos.Leverage×
+                        </span>
+                        <span class="ord-sym">@pos.Symbol</span>
+                    </div>
+                    <button class="ord-close-x" @onclick="() => _selectedPosition = null">✕</button>
+                </div>
+
+                <div class="ord-body">
+                    <div class="ord-position-box" style="margin:0;border:none;padding:0;">
+                        <div class="ord-position-grid">
+                            <div class="ord-position-cell">
+                                <span class="ord-position-l">Entry Price</span>
+                                <span class="ord-position-v mono">@FmtP(pos.EntryPrice)</span>
+                            </div>
+                            <div class="ord-position-cell">
+                                <span class="ord-position-l">Mark Price</span>
+                                <span class="ord-position-v mono">@FmtP(pos.MarkPrice)</span>
+                            </div>
+                            <div class="ord-position-cell">
+                                <span class="ord-position-l">Size</span>
+                                <span class="ord-position-v mono">@pos.Size.ToString("F2") USDT</span>
+                            </div>
+                            <div class="ord-position-cell">
+                                <span class="ord-position-l">Margin</span>
+                                <span class="ord-position-v mono">@pos.Margin.ToString("F2") USDT</span>
+                            </div>
+                            <div class="ord-position-cell">
+                                <span class="ord-position-l">Quantity</span>
+                                <span class="ord-position-v mono">@pos.Qty.ToString("G8")</span>
+                            </div>
+                            @if (pos.LiqPrice > 0)
+                            {
+                                <div class="ord-position-cell">
+                                    <span class="ord-position-l">Liq. Price</span>
+                                    <span class="ord-position-v mono dn">@FmtP(pos.LiqPrice)</span>
+                                </div>
+                            }
+                        </div>
+
+                        <div class="ord-position-pnl-row">
+                            <span class="ord-position-pnl @(pos.Pnl >= 0 ? "up" : "dn")">
+                                @(pos.Pnl >= 0 ? "+" : "")@pos.Pnl.ToString("F4") USDT
+                            </span>
+                            <span class="ord-position-roi @(pos.Roi >= 0 ? "up" : "dn")">
+                                (@(pos.Roi >= 0 ? "+" : "")@((pos.Roi * 100).ToString("F2"))% ROI)
+                            </span>
+                        </div>
+
+                        @if (pos.LiqPrice > 0)
+                        {
+                            <div class="ord-position-liq-warn">
+                                ⚠ Liquidation @FmtP(pos.LiqPrice) — @liqDistPct.ToString("F1")% от mark price
+                            </div>
+                        }
+                    </div>
+
+                    <div class="ord-actions" style="margin-top:16px;">
+                        <button class="ord-cancel-btn" @onclick="() => _selectedPosition = null">Close Panel</button>
+                        <button class="ord-submit-btn osb-sell" disabled="@_orderLoading"
+                                @onclick="() => ClosePositionRow(pos)">
+                            @if (_orderLoading) { <span class="ord-spin"></span> } else { @("Close Position") }
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div> <!-- end mk-charts-col-side (position details) -->
         }
         </div> <!-- end mk-body-grid -->
      </div>
@@ -887,6 +1016,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-oo-tbl{width:100%;border-collapse:collapse;}
 .mk-oo-tbl th{position:sticky;top:0;background:var(--bg2);text-align:left;padding:4px 10px;font-size:9px;letter-spacing:.5px;color:var(--dim);border-bottom:1px solid var(--bdr);white-space:nowrap;}
 .mk-oo-tbl td{padding:5px 10px;font-size:12px;border-bottom:1px solid var(--bdr);white-space:nowrap;}
+.mk-pos-row{cursor:pointer;transition:background .12s;}
+.mk-pos-row:hover{background:rgba(255,255,255,0.04);}
+.mk-pos-row-sel{background:rgba(59,130,246,0.1);box-shadow:inset 2px 0 0 var(--acc);}
 .mk-oo-sym{font-family:var(--mono);font-weight:700;color:var(--acc);}
 .mk-oo-cancel{background:none;border:1px solid var(--bdr);color:var(--dim);width:22px;height:22px;border-radius:5px;cursor:pointer;font-size:11px;line-height:1;}
 .mk-oo-cancel:hover:not(:disabled){border-color:var(--red);color:var(--red);}
@@ -938,6 +1070,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
         await LoadData();
         _ = LoadOpenOrdersAsync();
+        _ = LoadAllOpenPositionsAsync();
         _timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
         _ = TickAsync();
         _ = ScanCycleAsync();
@@ -1106,6 +1239,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 if (_activeSignal != null)
                     await LoadCurrentPositionAsync(_activeSignal.Symbol);
                 await LoadOpenOrdersAsync();
+                await LoadAllOpenPositionsAsync();
                 // StateHasChanged triggers OnAfterRenderAsync which calls
                 // RenderCharts only when data actually changed
                 await InvokeAsync(StateHasChanged);
@@ -1435,6 +1569,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     MissedTradeRecord? _activeSignal;
     bool _orderPanelDismissed;
     ActivePositionInfo? _currentPosition;
+    List<ActivePositionInfo> _allPositions = new();
+    bool _positionsLoading;
 
     bool PosIsLong => _currentPosition?.Side == "LONG";
 
@@ -1741,6 +1877,102 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             await InvokeAsync(StateHasChanged);
         }
         catch { }
+    }
+
+    // Fetches ALL open positions (no symbol filter), so the positions
+    // table under the chart always shows everything regardless of
+    // which symbol happens to be selected on the chart.
+    async Task LoadAllOpenPositionsAsync()
+    {
+        _positionsLoading = true;
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return;
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: cts.Token);
+            if (!res.Success || res.Data == null) { _allPositions = new(); return; }
+
+            _allPositions = res.Data
+                .Where(p => p.Quantity != 0)
+                .Select(p =>
+                {
+                    var side   = p.Quantity > 0 ? "LONG" : "SHORT";
+                    var size   = Math.Abs(p.Quantity * p.EntryPrice);
+                    var margin = p.MarginType == FuturesMarginType.Isolated
+                        ? p.IsolatedMargin : size / Math.Max(p.Leverage, 1);
+                    var roi    = margin > 0 ? p.UnrealizedPnl / margin : 0m;
+
+                    return new ActivePositionInfo
+                    {
+                        Symbol     = p.Symbol,
+                        Side       = side,
+                        Leverage   = p.Leverage,
+                        Size       = size,
+                        Qty        = Math.Abs(p.Quantity),
+                        EntryPrice = p.EntryPrice,
+                        MarkPrice  = p.MarkPrice,
+                        LiqPrice   = p.LiquidationPrice,
+                        Margin     = margin,
+                        Pnl        = p.UnrealizedPnl,
+                        Roi        = roi
+                    };
+                })
+                .OrderByDescending(p => Math.Abs(p.Pnl))
+                .ToList();
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { }
+        finally { _positionsLoading = false; }
+    }
+
+    // Selecting a row in the positions table shows its details in the
+    // right-side panel — same ActivePositionInfo shape the order panel
+    // already uses, just driven by a table click instead of a signal.
+    ActivePositionInfo? _selectedPosition;
+
+    void SelectPosition(ActivePositionInfo pos)
+    {
+        _selectedPosition = _selectedPosition == pos ? null : pos;
+    }
+
+    async Task ClosePositionRow(ActivePositionInfo pos)
+    {
+        _orderLoading = true;
+        StateHasChanged();
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return;
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            bool isLong = pos.Side == "LONG";
+            var posSide = isLong ? PositionSide.Long : PositionSide.Short;
+
+            bool isHedge = false;
+            try
+            {
+                var pm = await client.UsdFuturesApi.Account.GetPositionModeAsync(ct: cts.Token);
+                isHedge = pm.Success && pm.Data?.IsHedgeMode == true;
+            }
+            catch { }
+
+            await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: pos.Symbol,
+                side: isLong ? OrderSide.Sell : OrderSide.Buy,
+                type: FuturesOrderType.Market,
+                quantity: pos.Qty,
+                reduceOnly: isHedge ? null : true,
+                positionSide: isHedge ? posSide : null,
+                ct: cts.Token);
+
+            if (_selectedPosition == pos) _selectedPosition = null;
+            await LoadAllOpenPositionsAsync();
+        }
+        catch { }
+        finally { _orderLoading = false; }
     }
 
     async Task LoadCurrentPositionAsync(string symbol)
