@@ -146,7 +146,7 @@
     <!-- ROW 1: SYMBOL TICKER -->
     <div class="mk-ticker-bar">
         <div class="mk-ticker-scroll">
-            @foreach (var sym in _symbols)
+            @foreach (var sym in OrderedTickerSymbols)
             {
                 var symSeries = Series.Where(s => s.Symbol == sym).ToList();
                 var best = symSeries.OrderByDescending(s => s.Klines.Count).FirstOrDefault();
@@ -253,23 +253,49 @@
                 <span style="color:#a855f7">── EMA55</span>
                 <span style="color:#ef4444">RSI · ── OB 70 / OS 30</span>
             </div>
-            <button class="mk-chart-maximize" @onclick="ToggleChartMaximized" title="@(_chartMaximized ? "Restore" : "Maximize chart")">
-                @if (_chartMaximized)
-                {
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                }
-                else
-                {
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                }
+            <button class="mk-chart-maximize" @onclick="ToggleChartMaximized" title="Maximize chart">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
         </div>
-        <div class="mk-chart-container-wrap @(_chartMaximized ? "mk-chart-maximized" : "")">
-            <div id="chartContainer-@_chartInstanceId" style="width:100%;height:100%;"></div>
-        </div>
+
         @if (_chartMaximized)
         {
             <div class="mk-chart-maximize-backdrop" @onclick="ToggleChartMaximized"></div>
+            <div class="mk-chart-container-wrap mk-chart-maximized">
+                <!-- Floating header — lives INSIDE the overlay (the
+                     normal mk-chart-head stays behind the backdrop and
+                     would otherwise be invisible/unreachable) -->
+                <div class="mk-max-bar">
+                    <div class="mk-max-sym">
+                        @(Selected?.Symbol ?? "")
+                        <span class="mk-max-tf">@TfLabel(Selected?.Timeframe ?? "")</span>
+                    </div>
+                    <div class="mk-max-price @(_chg >= 0 ? "up" : "dn")">@FmtP(_last)</div>
+
+                    <!-- Quick trade — same qty/leverage state as the
+                         regular order panel, just reachable without
+                         leaving fullscreen -->
+                    <div class="mk-max-trade">
+                        <input class="mk-max-qty mono" type="number" title="Quantity"
+                               value="@(_orderQty > 0 ? _orderQty.ToString("G8") : "")"
+                               @onchange="OnQtyChange" placeholder="Qty" />
+                        <button class="mk-max-buy" disabled="@_orderLoading" @onclick="() => QuickMarketOrder(true)">Buy</button>
+                        <button class="mk-max-sell" disabled="@_orderLoading" @onclick="() => QuickMarketOrder(false)">Sell</button>
+                    </div>
+
+                    <button class="mk-max-restore" @onclick="ToggleChartMaximized" title="Restore">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        Restore
+                    </button>
+                </div>
+                <div id="chartContainer-@_chartInstanceId" style="width:100%;height:calc(100% - 52px);"></div>
+            </div>
+        }
+        else
+        {
+            <div class="mk-chart-container-wrap">
+                <div id="chartContainer-@_chartInstanceId" style="width:100%;height:100%;"></div>
+            </div>
         }
 
         <div class="mk-hints">
@@ -632,7 +658,7 @@
                     var open = s.Klines.Count > 0 ? s.Klines[0].Close  : 0m;
                     var chg  = open > 0 ? (last - open) / open * 100m  : 0m;
                     bool isTop12 = string.IsNullOrWhiteSpace(_instrumentSearch) && rank <= 12;
-                    <div class="mk-side-row @(s.Symbol==_activeSym?"mk-side-row-sel":"")" @onclick="()=>PickAndTrade(s)">
+                    <div class="mk-side-row @(s.Symbol==_activeSym?"mk-side-row-sel":"")" id="sideRow-@s.Symbol" @onclick="()=>PickAndTrade(s)">
                         @if (isTop12)
                         {
                             <span class="mk-side-rank">@rank</span>
@@ -827,7 +853,28 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-chart-maximize svg{width:15px;height:15px;}
 
 .mk-chart-container-wrap{width:100%;height:480px;transition:none;}
-.mk-chart-maximized{position:fixed;top:60px;left:20px;right:20px;bottom:20px;z-index:1000;height:auto;background:var(--bg);border:1px solid var(--acc);border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.6);padding:8px;}
+.mk-chart-maximized{position:fixed;top:60px;left:20px;right:20px;bottom:20px;z-index:1000;height:auto;background:var(--bg);border:1px solid var(--acc);border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.6);padding:8px;display:flex;flex-direction:column;}
+
+.mk-max-bar{display:flex;align-items:center;gap:14px;padding:8px 12px;height:52px;flex-shrink:0;}
+.mk-max-sym{font-family:var(--mono);font-size:16px;font-weight:700;display:flex;align-items:baseline;gap:8px;}
+.mk-max-tf{font-size:11px;color:var(--dim);background:var(--bg3);padding:2px 8px;border-radius:5px;}
+.mk-max-price{font-family:var(--mono);font-size:16px;font-weight:700;}
+.mk-max-trade{display:flex;align-items:center;gap:6px;margin-left:auto;}
+.mk-max-qty{width:100px;background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;padding:7px 10px;color:var(--txt);font-size:12.5px;}
+.mk-max-buy{background:var(--grn);border:none;color:#fff;padding:8px 18px;border-radius:6px;font-size:12.5px;font-weight:700;cursor:pointer;}
+.mk-max-buy:hover:not(:disabled){opacity:.88;}
+.mk-max-sell{background:var(--red);border:none;color:#fff;padding:8px 18px;border-radius:6px;font-size:12.5px;font-weight:700;cursor:pointer;}
+.mk-max-sell:hover:not(:disabled){opacity:.88;}
+.mk-max-buy:disabled,.mk-max-sell:disabled{opacity:.5;cursor:not-allowed;}
+.mk-max-restore{display:flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid var(--bdr);color:var(--dim);padding:8px 14px;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer;transition:all .15s;}
+.mk-max-restore:hover{color:var(--txt);border-color:var(--acc);}
+.mk-max-restore svg{width:14px;height:14px;}
+
+@@media(max-width:900px){
+    .mk-max-bar{flex-wrap:wrap;height:auto;gap:8px;}
+    .mk-max-trade{margin-left:0;width:100%;}
+    .mk-max-qty{flex:1;}
+}
 .mk-chart-maximize-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999;animation:mkFadeIn .15s ease;}
 @@keyframes mkFadeIn{from{opacity:0;}to{opacity:1;}}
 
@@ -1079,6 +1126,15 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     void ClearInstrumentSearch() => _instrumentSearch = "";
     string _activeTf  = "";
     List<string> _symbols = new();
+
+    // Puts the currently-active symbol first in the ticker bar display
+    // order, without touching the underlying _symbols list itself
+    // (which gets periodically rebuilt by the refresh timer and would
+    // otherwise undo any direct reordering within a couple seconds).
+    IEnumerable<string> OrderedTickerSymbols =>
+        string.IsNullOrEmpty(_activeSym) || !_symbols.Contains(_activeSym)
+            ? _symbols
+            : new[] { _activeSym }.Concat(_symbols.Where(s => s != _activeSym));
     int _scanSymIdx = 0;
 
     // All standard TFs in TradingView order
@@ -1991,8 +2047,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         // Switch the main chart to this position's symbol so the user
         // can see the actual price action behind the position they
         // just clicked, not whatever symbol happened to be on screen.
+        // Also: bring it to the front of the ticker bar (via
+        // OrderedTickerSymbols) and scroll the ALL INSTRUMENTS sidebar
+        // list to reveal the matching row.
         if (!wasSelected)
+        {
             PickSym(pos.Symbol);
+            _ = JS.InvokeVoidAsync("tickerDragScroll.scrollSymbolIntoView", pos.Symbol);
+        }
     }
 
     async Task ClosePositionRow(ActivePositionInfo pos)
@@ -2234,6 +2296,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _currentPosition     = null;
         _orderPanelDismissed = true;
         _ = JS.InvokeVoidAsync("marketChart.clearPriceLine", $"chartContainer-{_chartInstanceId}");
+    }
+
+    async Task QuickMarketOrder(bool isBuy)
+    {
+        // Quick-trade from inside the maximized chart. Reuses the exact
+        // same order-placing logic as the regular order panel (qty
+        // rounding, notional checks, leverage, API call) — this is
+        // just a fast path to get there without leaving fullscreen.
+        if (_activeSignal == null || _activeSignal.Symbol != _activeSym)
+        {
+            OpenManualPanelFor(_activeSym, _last);
+        }
+        _orderType = "Market";
+        _activeSignal!.Side = isBuy ? "BUY" : "SELL";
+        await PlaceManualOrder();
     }
 
     async Task PlaceManualOrderBuy()

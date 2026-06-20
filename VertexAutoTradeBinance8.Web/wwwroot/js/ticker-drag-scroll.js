@@ -26,5 +26,16 @@ window.tickerDragScroll = {
             const x = e.pageX - ticker.offsetLeft;
             ticker.scrollLeft = scrollLeft - (x - startX);
         });
+    },
+
+    // Scrolls the ALL INSTRUMENTS row for the given symbol into view
+    // within its scrollable container, without affecting page scroll.
+    // Used when a position is selected so the corresponding row in the
+    // sidebar list is visible without the user needing to hunt for it.
+    scrollSymbolIntoView(symbol) {
+        const row = document.getElementById('sideRow-' + symbol);
+        if (row) {
+            row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
     }
 };
