@@ -86,6 +86,7 @@ builder.Services.AddSingleton<AiCorrelationService>();
 builder.Services.AddSingleton<AiLearningFileService>();
 builder.Services.AddSingleton<MissedTradeFileService>();
 builder.Services.AddSingleton<StrategyModeFileService>();
+builder.Services.AddSingleton<RuntimeConfigService>();
 builder.Services.AddSingleton<EngineStateService>();
 
 builder.Services.AddSingleton<ExecutedSignalUiService>();

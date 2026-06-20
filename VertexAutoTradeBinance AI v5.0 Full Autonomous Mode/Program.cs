@@ -93,6 +93,35 @@ public class Program
                 .ConfigureAppConfiguration((ctx, config) =>
                 {
                     config.AddUserSecrets<Program>(optional: true);
+
+                    // =====================================================
+                    // v9: LIVE SETTINGS OVERLAY
+                    // =====================================================
+                    // Adds appsettings.runtime.json (under SharedData:Root)
+                    // as an EXTRA config source layered on top of the base
+                    // appsettings.json. Whatever value exists in this file
+                    // overrides the matching key from appsettings.json —
+                    // same section/key structure, just a sparse subset of
+                    // whatever the Web Settings page has been used to edit.
+                    //
+                    // reloadOnChange: true is .NET's BUILT-IN file-watcher —
+                    // no custom BackgroundService/polling needed for this
+                    // particular mechanism. Any IOptionsMonitor<T> consumer
+                    // (not IOptions<T>, which snapshots once at startup)
+                    // automatically picks up changes within ~1-2 seconds of
+                    // the file being saved, no engine restart required.
+                    //
+                    // We need SharedData:Root from the config to know WHERE
+                    // this file lives, but that section is itself defined
+                    // in appsettings.json — so we do a small first-pass
+                    // build of just the sources added so far to resolve it.
+                    var partial = config.Build();
+                    var sharedRoot = partial["SharedData:Root"];
+                    if (!string.IsNullOrWhiteSpace(sharedRoot))
+                    {
+                        var runtimePath = Path.Combine(sharedRoot, "appsettings.runtime.json");
+                        config.AddJsonFile(runtimePath, optional: true, reloadOnChange: true);
+                    }
                 })
                  .ConfigureLogging(logging =>
                  {
@@ -262,9 +291,9 @@ public class Program
                     // toggle for live switching without a restart).
                     services.Configure<MeanReversionOptions>(
                         ctx.Configuration.GetSection("MeanReversion"));
-                    services.AddSingleton(sp =>
-                        sp.GetRequiredService<IOptions<MeanReversionOptions>>().Value);
                     services.AddSingleton<MeanReversionEngine>();
+                    services.Configure<SymbolSelectionOptions>(
+                        ctx.Configuration.GetSection("SymbolSelection"));
                     services.AddSingleton(sp =>
                     {
                         // NOTE: uses "StrategyRouting:Mode", NOT "Strategy:Mode" —

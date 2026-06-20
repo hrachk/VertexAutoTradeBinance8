@@ -1,5 +1,6 @@
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
+using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
@@ -36,7 +37,8 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
         private readonly ILogger<MeanReversionEngine> _logger;
         private readonly SmartRegimeService _smartRegimeService;
         private readonly AiCorrelationService _correlationService;
-        private readonly MeanReversionOptions _opt;
+        private readonly IOptionsMonitor<MeanReversionOptions> _optMonitor;
+        private MeanReversionOptions _opt => _optMonitor.CurrentValue;
 
         public event Action<TradeSignal>? OnSignalGenerated;
 
@@ -51,12 +53,12 @@ namespace VertexAutoTradeBinance8.Strategy.MeanReversion
             ILogger<MeanReversionEngine> logger,
             SmartRegimeService smartRegimeService,
             AiCorrelationService correlationService,
-            MeanReversionOptions opt)
+            IOptionsMonitor<MeanReversionOptions> optMonitor)
         {
             _logger = logger;
             _smartRegimeService = smartRegimeService;
             _correlationService = correlationService;
-            _opt = opt;
+            _optMonitor = optMonitor;
         }
 
         /// <summary>

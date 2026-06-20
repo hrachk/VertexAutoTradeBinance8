@@ -86,6 +86,10 @@ let _lastW = 0, _lastH = 0; // track last known size
 
 function setupCanvas(el) {
     if (!el) return null;
+    if (!document.contains(el)) {
+        console.warn('[chart] setupCanvas called with a detached element (should not happen — drawAll refreshes references first):', el.id);
+        return null;
+    }
     dpr = window.devicePixelRatio || 1;
     const parent = el.parentElement || el;
     const w = Math.max(parent.clientWidth || 0, parent.offsetWidth || 0, 1);
@@ -157,13 +161,37 @@ function priceForY(y, yMin, yMax, cH, cPT=PT, cPB=PB) {
 }
 
 // ── DRAW ──────────────────────────────────────────────────
-function drawAll() {
-    if (!MC || !K.length) return;
+function drawAll(retriesLeft = 8) {
+    // Always re-fetch the live canvas elements right before drawing.
+    // This is the single source of truth for "is our reference stale" —
+    // no dependency on render()'s timing, no dependency on Blazor's
+    // firstRender/OnAfterRenderAsync sequencing being whatever we assume
+    // it is. getElementById is cheap enough to do on every draw call.
+    const livePrice = document.getElementById('priceChart');
+    const liveRsi   = document.getElementById('rsiChart');
+    const liveVol   = document.getElementById('volumeChart');
+
+    if (livePrice && livePrice !== MC) { MC = livePrice; }
+    if (liveRsi   && liveRsi   !== RC) { RC = liveRsi; }
+    if (liveVol   && liveVol   !== VC) { VC = liveVol; }
+
+    if (!K.length) return;
+
+    if (!MC || !document.contains(MC)) {
+        // Canvas not in the DOM yet (Blazor still finishing its render
+        // pass after a navigation) — retry shortly instead of silently
+        // giving up. A few rAF retries comfortably covers this window.
+        if (retriesLeft > 0) {
+            requestAnimationFrame(() => drawAll(retriesLeft - 1));
+        }
+        return;
+    }
+
     try {
         const { yMin, yMax } = autoY();
         drawMain(yMin, yMax);
-        if (RC) drawRsi();
-        if (VC) drawVol();
+        if (RC && document.contains(RC)) drawRsi();
+        if (VC && document.contains(VC)) drawVol();
     } catch (e) {
         console.error('[market-chart] draw error:', e);
     }
@@ -176,7 +204,13 @@ function drawMain(yMin, yMax) {
     ctx.clearRect(0,0,cW,cH);
     ctx.fillStyle = T.bg; ctx.fillRect(0,0,cW,cH);
 
+    // TEMP DIAGNOSTIC: bright marker to confirm canvas drawing is visible
+    ctx.fillStyle = '#ff00ff';
+    ctx.fillRect(10, 10, 40, 40);
+
     const { start, end } = visRange();
+    console.log('[drawMain]', 'yMin=', yMin, 'yMax=', yMax, 'start=', start, 'end=', end,
+        'candleW=', view.candleW, 'cW=', cW, 'cH=', cH, 'K.length=', K.length);
     const chartH = cH - PT - PB;
     const chartW = cW - PL - PR;
 
@@ -587,8 +621,10 @@ window.marketChart = {
         const debouncedResize = () => {
             clearTimeout(_roTimer);
             _roTimer = setTimeout(() => {
+                console.log('[chart] debouncedResize fired, K.length=', K.length);
+                if (K.length === 0) return; // nothing to draw yet — don't clear the canvas for no reason
                 resize();
-                if(K.length > 0) drawAll();
+                drawAll();
             }, 40);
         };
 
@@ -631,11 +667,26 @@ window.marketChart = {
         initResizeY(document.getElementById(resizeHandleId), document.getElementById(resizeWrapId));
     },
     render(sym, tf, klines) {
+        // Refresh canvas references up front so resize()/auto-fit below
+        // operate on the actual live DOM elements, not stale ones from
+        // a previous page visit (drawAll() does this again right before
+        // drawing as a second safety net, but doing it here too avoids
+        // wasted resize() calls against a detached element).
+        const livePrice = document.getElementById('priceChart');
+        const liveRsi   = document.getElementById('rsiChart');
+        const liveVol   = document.getElementById('volumeChart');
+        if (livePrice && livePrice !== MC) MC = livePrice;
+        if (liveRsi   && liveRsi   !== RC) RC = liveRsi;
+        if (liveVol   && liveVol   !== VC) VC = liveVol;
+
         K = klines;
         derive();
 
         const w = W(MC);
         const chartW = (w || 800) - PL - PR;
+
+        console.log('[chart] render', sym, tf, 'K.length=', K.length,
+            'candleW=', view.candleW, 'w=', w, 'MC=', MC ? 'ok' : 'NULL');
 
         // Reset view on symbol/tf change
         if (sym !== _lastSym || tf !== _lastTf) {
