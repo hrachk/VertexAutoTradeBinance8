@@ -9,9 +9,14 @@ public sealed class TradePermissionFileService
 
     public TradePermissionFileService(IConfiguration cfg)
     {
-        
-
-        _traceDir = Path.Combine(AppContext.BaseDirectory, "ai-models", "decision-trace");
+        // Engine writes decision_trace_*.jsonl under SharedData:Root —
+        // AppContext.BaseDirectory here points at the Web app's OWN bin
+        // folder, which is a different physical path from where the
+        // Engine process actually runs and writes these files.
+        var root = cfg["SharedData:Root"];
+        _traceDir = !string.IsNullOrWhiteSpace(root)
+            ? Path.Combine(root, "ai-models", "decision-trace")
+            : Path.Combine(AppContext.BaseDirectory, "ai-models", "decision-trace");
     }
 
     public async Task<IReadOnlyList<TradePermissionEvent>> LoadLatestAsync()
