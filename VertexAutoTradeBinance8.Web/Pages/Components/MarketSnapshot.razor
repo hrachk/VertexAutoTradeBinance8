@@ -1150,16 +1150,34 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
         for (int i = 0; i < 20; i++) // up to 20 × 150ms = 3s
         {
+            // CRITICAL: if this component instance was disposed (e.g. the
+            // user navigated away from /market before this retry loop
+            // finished), stop immediately. Without this check, a "zombie"
+            // retry loop from a PREVIOUS visit can keep running in the
+            // background and eventually call marketChart.init() — which
+            // wipes the JS module's canvas/K/view state — AFTER a NEW
+            // component instance (from navigating back to /market) has
+            // already successfully initialized and rendered the chart.
+            // That's the exact bug: chart renders correctly for a moment,
+            // then a late-arriving zombie init() call from the old visit
+            // resets everything to empty, with no error anywhere because
+            // it's not failing — it's "succeeding" at the wrong time.
+            if (_cts.IsCancellationRequested) return;
+
             _initAttempts = i + 1;
             try
             {
                 // Ask JS if the canvas element actually exists with real size
                 var ok = await JS.InvokeAsync<bool>("marketChart.elementReady", "priceChart");
+                if (_cts.IsCancellationRequested) return;
+
                 if (ok)
                 {
                     await JS.InvokeVoidAsync("marketChart.init",
                         "priceChart", "rsiChart", "volumeChart",
                         "resizeHandle", "priceWrap");
+                    if (_cts.IsCancellationRequested) return;
+
                     await RegisterPricePickCallback();
                     _chartInitDone = true;
                     _jsReady = true;
@@ -1172,8 +1190,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             {
                 _chartInitError = $"Init attempt {i+1} failed: {ex.Message}";
             }
-            await Task.Delay(150);
+            try { await Task.Delay(150, _cts.Token); }
+            catch (OperationCanceledException) { return; }
         }
+
+        if (_cts.IsCancellationRequested) return;
 
         // Failed after all retries — force init anyway and surface the error
         try
@@ -1181,6 +1202,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             await JS.InvokeVoidAsync("marketChart.init",
                 "priceChart", "rsiChart", "volumeChart",
                 "resizeHandle", "priceWrap");
+            if (_cts.IsCancellationRequested) return;
+
             await RegisterPricePickCallback();
             _chartInitDone = true;
             _jsReady = true;
