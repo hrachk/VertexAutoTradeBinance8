@@ -106,7 +106,7 @@
             <div class="st-card-sub">Used by the trend engine's entry timing. Type and EMA period.</div>
             <div class="st-field">
                 <label>Pullback Type</label>
-                <select class="st-select" value="@GetStr("Strategy:PullbackType","CandleNearEma")"
+                <select title="Pullback Type" class="st-select" value="@GetStr("Strategy:PullbackType","CandleNearEma")"
                         @onchange="OnPullbackTypeChanged">
                     <option value="CandleNearEma">CandleNearEma</option>
                     <option value="RsiReclaim">RsiReclaim</option>
@@ -114,12 +114,12 @@
             </div>
             <div class="st-field">
                 <label>EMA Period</label>
-                <input class="st-input" type="number" value="@GetInt("Strategy:EmaPeriod",21)"
+                <input title="EMA Period" class="st-input" type="number" value="@GetInt("Strategy:EmaPeriod",21)"
                        @onchange="OnEmaPeriodChanged" />
             </div>
             <div class="st-field">
                 <label>EMA Zone %</label>
-                <input class="st-input" type="number" step="0.0001" value="@GetDecimal("Strategy:EmaZonePercent",0.002m)"
+                <input title="EMA Zone %" class="st-input" type="number" step="0.0001" value="@GetDecimal("Strategy:EmaZonePercent",0.002m)"
                        @onchange="OnEmaZonePercentChanged" />
             </div>
         </div>
@@ -150,25 +150,25 @@
 
                 <div class="st-field">
                     <label>Leverage <span class="st-field-hint">automatically synced to the exchange's real per-symbol max before every order</span></label>
-                    <input class="st-input" type="number" value="@GetInt($"{profileKey}:Leverage", 10)"
+                    <input title="Leverage automatically synced to the exchange's real per-symbol max before every order" class="st-input" type="number" value="@GetInt($"{profileKey}:Leverage", 10)"
                            @onchange="@((ChangeEventArgs e) => OnLeverageChanged(profileKey, e))" />
                 </div>
 
                 <div class="st-field">
                     <label>Risk Per Trade (fraction of balance, e.g. 0.03 = 3%)</label>
-                    <input class="st-input" type="number" step="0.001" value="@GetDecimal($"{profileKey}:RiskPerTrade", 0.03m)"
+                    <input title="Risk Per Trade (fraction of balance, e.g. 0.03 = 3%)" class="st-input" type="number" step="0.001" value="@GetDecimal($"{profileKey}:RiskPerTrade", 0.03m)"
                            @onchange="@((ChangeEventArgs e) => OnRiskPerTradeChanged(profileKey, e))" />
                 </div>
 
                 <div class="st-field-row">
                     <div class="st-field">
                         <label>Min Notional ($)</label>
-                        <input class="st-input" type="number" value="@GetDecimal($"{profileKey}:MinNotional", 10m)"
+                        <input title="Min Notional ($)" class="st-input" type="number" value="@GetDecimal($"{profileKey}:MinNotional", 10m)"
                                @onchange="@((ChangeEventArgs e) => OnMinNotionalChanged(profileKey, e))" />
                     </div>
                     <div class="st-field">
                         <label>Cooldown (seconds)</label>
-                        <input class="st-input" type="number" value="@GetInt($"{profileKey}:CooldownSeconds", 90)"
+                        <input title="Cooldown (seconds)" class="st-input" type="number" value="@GetInt($"{profileKey}:CooldownSeconds", 90)"
                                @onchange="@((ChangeEventArgs e) => OnCooldownSecondsChanged(profileKey, e))" />
                     </div>
                 </div>
@@ -181,12 +181,12 @@
             <div class="st-field-row">
                 <div class="st-field">
                     <label>Base Risk % (Default profile)</label>
-                    <input class="st-input" type="number" step="0.001" value="@GetDecimal("Trading:BaseRiskPercent", 0m)"
+                    <input title="Base Risk % (Default profile)" class="st-input" type="number" step="0.001" value="@GetDecimal("Trading:BaseRiskPercent", 0m)"
                            @onchange="OnBaseRiskPercentChanged" />
                 </div>
                 <div class="st-field">
                     <label>Min Notional Guard %</label>
-                    <input class="st-input" type="number" step="0.001" value="@GetDecimal("Trading:MinNotionalGuardPercent", 0m)"
+                    <input title="Min Notional Guard %" class="st-input" type="number" step="0.001" value="@GetDecimal("Trading:MinNotionalGuardPercent", 0m)"
                            @onchange="OnMinNotionalGuardPercentChanged" />
                 </div>
             </div>
@@ -214,15 +214,15 @@
             <div class="st-field-row">
                 <div class="st-field">
                     <label>Rolling Window (bars)</label>
-                    <input class="st-input" type="number" value="@GetInt("MeanReversion:Window", 20)" @onchange="OnMrWindowChanged" />
+                    <input title="Rolling Window (bars)" class="st-input" type="number" value="@GetInt("MeanReversion:Window", 20)" @onchange="OnMrWindowChanged" />
                 </div>
                 <div class="st-field">
                     <label>Entry Sigma (|Z| threshold)</label>
-                    <input class="st-input" type="number" step="0.1" value="@GetDecimal("MeanReversion:EntrySigma", 2.0m)" @onchange="OnMrEntrySigmaChanged" />
+                    <input title="Entry Sigma (|Z| threshold)" class="st-input" type="number" step="0.1" value="@GetDecimal("MeanReversion:EntrySigma", 2.0m)" @onchange="OnMrEntrySigmaChanged" />
                 </div>
                 <div class="st-field">
                     <label>Timeframe</label>
-                    <select class="st-select" value="@GetStr("MeanReversion:Timeframe","FifteenMinutes")" @onchange="OnMrTimeframeChanged">
+                    <select title="Timeframe" class="st-select" value="@GetStr("MeanReversion:Timeframe","FifteenMinutes")" @onchange="OnMrTimeframeChanged">
                         <option value="FiveMinutes">5m</option>
                         <option value="FifteenMinutes">15m</option>
                         <option value="ThirtyMinutes">30m</option>
@@ -237,11 +237,11 @@
             <div class="st-card-sub">Filters out low-liquidity noise spikes.</div>
             <div class="st-field">
                 <label>Volume Avg Period (bars)</label>
-                <input class="st-input" type="number" value="@GetInt("MeanReversion:VolumeAvgPeriod", 50)" @onchange="OnMrVolAvgChanged" />
+                <input title="Volume Avg Period (bars)" class="st-input" type="number" value="@GetInt("MeanReversion:VolumeAvgPeriod", 50)" @onchange="OnMrVolAvgChanged" />
             </div>
             <div class="st-field">
                 <label>Surge Multiplier (× average)</label>
-                <input class="st-input" type="number" step="0.1" value="@GetDecimal("MeanReversion:VolumeSurgeMultiplier", 1.5m)" @onchange="OnMrVolMultChanged" />
+                <input title="Surge Multiplier (× average)" class="st-input" type="number" step="0.1" value="@GetDecimal("MeanReversion:VolumeSurgeMultiplier", 1.5m)" @onchange="OnMrVolMultChanged" />
             </div>
         </div>
 
@@ -255,7 +255,11 @@
             </div>
             <div class="st-field">
                 <label>Reversal Lookback (bars)</label>
-                <input class="st-input" type="number" value="@GetInt("MeanReversion:ReversalLookback", 5)" @onchange="OnMrReversalLookbackChanged" />
+                <input title="Require reversal confirmation
+                
+            
+            
+                Reversal Lookback (bars)" class="st-input" type="number" value="@GetInt("MeanReversion:ReversalLookback", 5)" @onchange="OnMrReversalLookbackChanged" />
             </div>
             <div class="st-toggle-row">
                 <label class="st-toggle">
@@ -275,7 +279,21 @@
             </div>
             <div class="st-field">
                 <label>Correlation Threshold</label>
-                <input class="st-input" type="number" step="0.05" value="@GetDecimal("MeanReversion:BtcCorrelationThreshold", 0.6m)" @onchange="OnMrBtcThresholdChanged" />
+                <input title="Only trade in Range/Squeeze regime
+                
+            
+        
+
+        
+            BTC Correlation Guard
+            
+                
+                    
+                    Skip if BTC itself is at a matching extreme
+                
+            
+            
+                Correlation Threshold" class="st-input" type="number" step="0.05" value="@GetDecimal("MeanReversion:BtcCorrelationThreshold", 0.6m)" @onchange="OnMrBtcThresholdChanged" />
             </div>
         </div>
 
@@ -283,15 +301,15 @@
             <div class="st-card-head"><div class="st-card-title">Exit & Risk</div></div>
             <div class="st-field">
                 <label>Stop ATR Padding</label>
-                <input class="st-input" type="number" step="0.05" value="@GetDecimal("MeanReversion:StopAtrPad", 0.3m)" @onchange="OnMrStopAtrPadChanged" />
+                <input title="Stop ATR Padding" class="st-input" type="number" step="0.05" value="@GetDecimal("MeanReversion:StopAtrPad", 0.3m)" @onchange="OnMrStopAtrPadChanged" />
             </div>
             <div class="st-field">
                 <label>Min Reward/Risk Ratio</label>
-                <input class="st-input" type="number" step="0.1" value="@GetDecimal("MeanReversion:MinRewardRiskRatio", 1.2m)" @onchange="OnMrMinRrChanged" />
+                <input title="Min Reward/Risk Ratio" class="st-input" type="number" step="0.1" value="@GetDecimal("MeanReversion:MinRewardRiskRatio", 1.2m)" @onchange="OnMrMinRrChanged" />
             </div>
             <div class="st-field">
                 <label>Time-Stop (bars) <span class="st-field-hint">force-close if the mean hasn't been reached</span></label>
-                <input class="st-input" type="number" value="@GetInt("MeanReversion:TimeStopBars", 12)" @onchange="OnMrTimeStopChanged" />
+                <input title="Time-Stop (bars) force-close if the mean hasn't been reached" class="st-input" type="number" value="@GetInt("MeanReversion:TimeStopBars", 12)" @onchange="OnMrTimeStopChanged" />
             </div>
         </div>
 
@@ -345,7 +363,7 @@
             <div class="st-card-head"><div class="st-card-title">Selection Mode</div></div>
             <div class="st-field">
                 <label>Mode</label>
-                <select class="st-select" value="@GetStr("SymbolSelection:Mode","Auto")" @onchange="OnSymModeChanged">
+                <select title="Mode" class="st-select" value="@GetStr("SymbolSelection:Mode","Auto")" @onchange="OnSymModeChanged">
                     <option value="Auto">Auto</option>
                     <option value="Manual">Manual (pinned only)</option>
                 </select>
@@ -357,21 +375,21 @@
             <div class="st-field-row">
                 <div class="st-field">
                     <label>Top Volume Count</label>
-                    <input class="st-input" type="number" value="@GetInt("SymbolSelection:Auto:TopVolumeCount", 12)" @onchange="OnTopVolumeCountChanged" />
+                    <input title="Top Volume Count" class="st-input" type="number" value="@GetInt("SymbolSelection:Auto:TopVolumeCount", 12)" @onchange="OnTopVolumeCountChanged" />
                 </div>
                 <div class="st-field">
                     <label>Final Universe Cap</label>
-                    <input class="st-input" type="number" value="@GetInt("SymbolSelection:Auto:FinalUniverseCap", 10)" @onchange="OnFinalUniverseCapChanged" />
+                    <input title="Final Universe Cap" class="st-input" type="number" value="@GetInt("SymbolSelection:Auto:FinalUniverseCap", 10)" @onchange="OnFinalUniverseCapChanged" />
                 </div>
             </div>
             <div class="st-field-row">
                 <div class="st-field">
                     <label>Min Price ($)</label>
-                    <input class="st-input" type="number" step="0.001" value="@GetDecimal("SymbolSelection:Auto:MinPrice", 0.045m)" @onchange="OnMinPriceChanged" />
+                    <input title="Min Price ($)" class="st-input" type="number" step="0.001" value="@GetDecimal("SymbolSelection:Auto:MinPrice", 0.045m)" @onchange="OnMinPriceChanged" />
                 </div>
                 <div class="st-field">
                     <label>Min 24h Volume (Long)</label>
-                    <input class="st-input" type="number" value="@GetDecimal("SymbolSelection:Auto:Min24hVolumeLong", 1800000m)" @onchange="OnMin24hVolLongChanged" />
+                    <input title="Min 24h Volume (Long)" class="st-input" type="number" value="@GetDecimal("SymbolSelection:Auto:Min24hVolumeLong", 1800000m)" @onchange="OnMin24hVolLongChanged" />
                 </div>
             </div>
         </div>
@@ -387,11 +405,16 @@
             <div class="st-field-row">
                 <div class="st-field">
                     <label>Dump Threshold (%)</label>
-                    <input class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcDumpThreshold", -1.8m)" @onchange="OnBtcDumpThresholdChanged" />
+                    <input title="Enable BTC dump/squeeze filter
+                
+            
+            
+                
+                    Dump Threshold (%)" class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcDumpThreshold", -1.8m)" @onchange="OnBtcDumpThresholdChanged" />
                 </div>
                 <div class="st-field">
                     <label>Squeeze Threshold (%)</label>
-                    <input class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcSqueezeThreshold", 1.8m)" @onchange="OnBtcSqueezeThresholdChanged" />
+                    <input title="Squeeze Threshold (%)" class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcSqueezeThreshold", 1.8m)" @onchange="OnBtcSqueezeThresholdChanged" />
                 </div>
             </div>
         </div>
@@ -448,24 +471,24 @@
             <div class="st-card-head"><div class="st-card-title">TakeProfit (legacy, unwired)</div></div>
             <div class="st-field">
                 <label>ATR Period</label>
-                <input class="st-input" type="number" value="@GetInt("TakeProfit:AtrPeriod", 14)" @onchange="OnTpAtrPeriodChanged" />
+                <input title="ATR Period" class="st-input" type="number" value="@GetInt("TakeProfit:AtrPeriod", 14)" @onchange="OnTpAtrPeriodChanged" />
             </div>
             <div class="st-field-row">
-                <div class="st-field"><label>TP1 × ATR</label><input class="st-input" type="number" step="0.05" value="@GetDecimal("TakeProfit:Tp1Multiplier", 0.85m)" @onchange="OnTp1MultChanged" /></div>
-                <div class="st-field"><label>TP2 × ATR</label><input class="st-input" type="number" step="0.05" value="@GetDecimal("TakeProfit:Tp2Multiplier", 1.5m)" @onchange="OnTp2MultChanged" /></div>
-                <div class="st-field"><label>TP3 × ATR</label><input class="st-input" type="number" step="0.05" value="@GetDecimal("TakeProfit:Tp3Multiplier", 2.0m)" @onchange="OnTp3MultChanged" /></div>
+                <div class="st-field"><label>TP1 × ATR</label><input title="TP1 × ATR" class="st-input" type="number" step="0.05" value="@GetDecimal("TakeProfit:Tp1Multiplier", 0.85m)" @onchange="OnTp1MultChanged" /></div>
+                <div class="st-field"><label>TP2 × ATR</label><input title="TP2 × ATR" class="st-input" type="number" step="0.05" value="@GetDecimal("TakeProfit:Tp2Multiplier", 1.5m)" @onchange="OnTp2MultChanged" /></div>
+                <div class="st-field"><label>TP3 × ATR</label><input title="TP3 × ATR" class="st-input" type="number" step="0.05" value="@GetDecimal("TakeProfit:Tp3Multiplier", 2.0m)" @onchange="OnTp3MultChanged" /></div>
             </div>
         </div>
 
         <div class="st-card">
             <div class="st-card-head"><div class="st-card-title">Position Supervisor (legacy, unwired)</div></div>
             <div class="st-field-row">
-                <div class="st-field"><label>Stage 1 % (Major)</label><input class="st-input" type="number" step="0.01" value="@GetDecimal("PositionSupervisor:Stage1PercentMajor", 0.45m)" @onchange="OnPsStage1MajorChanged" /></div>
-                <div class="st-field"><label>Stage 1 % (Minor)</label><input class="st-input" type="number" step="0.01" value="@GetDecimal("PositionSupervisor:Stage1PercentMinor", 0.35m)" @onchange="OnPsStage1MinorChanged" /></div>
+                <div class="st-field"><label>Stage 1 % (Major)</label><input title="Stage 1 % (Major)" class="st-input" type="number" step="0.01" value="@GetDecimal("PositionSupervisor:Stage1PercentMajor", 0.45m)" @onchange="OnPsStage1MajorChanged" /></div>
+                <div class="st-field"><label>Stage 1 % (Minor)</label><input title="Stage 1 % (Minor)" class="st-input" type="number" step="0.01" value="@GetDecimal("PositionSupervisor:Stage1PercentMinor", 0.35m)" @onchange="OnPsStage1MinorChanged" /></div>
             </div>
             <div class="st-field-row">
-                <div class="st-field"><label>BE Trigger R (Major)</label><input class="st-input" type="number" step="0.05" value="@GetDecimal("PositionSupervisor:BeTriggerRMajor", 1.3m)" @onchange="OnPsBeTriggerMajorChanged" /></div>
-                <div class="st-field"><label>BE Trigger R (Minor)</label><input class="st-input" type="number" step="0.05" value="@GetDecimal("PositionSupervisor:BeTriggerRMinor", 0.55m)" @onchange="OnPsBeTriggerMinorChanged" /></div>
+                <div class="st-field"><label>BE Trigger R (Major)</label><input title="BE Trigger R (Major)" class="st-input" type="number" step="0.05" value="@GetDecimal("PositionSupervisor:BeTriggerRMajor", 1.3m)" @onchange="OnPsBeTriggerMajorChanged" /></div>
+                <div class="st-field"><label>BE Trigger R (Minor)</label><input title="BE Trigger R (Minor)" class="st-input" type="number" step="0.05" value="@GetDecimal("PositionSupervisor:BeTriggerRMinor", 0.55m)" @onchange="OnPsBeTriggerMinorChanged" /></div>
             </div>
         </div>
 
