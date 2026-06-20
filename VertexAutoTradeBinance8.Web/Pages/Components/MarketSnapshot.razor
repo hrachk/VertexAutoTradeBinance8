@@ -255,10 +255,10 @@
                 <span style="color:rgba(59,130,246,0.5)">╌╌ BB(20)</span>
             </div>
         </div>
-        <div class="mk-canvas-wrap mk-canvas-price" id="priceWrap">
-            <canvas id="priceChart" style="cursor:crosshair"></canvas>
+        <div class="mk-canvas-wrap mk-canvas-price" id="priceWrap-@_chartInstanceId">
+            <canvas id="priceChart-@_chartInstanceId" style="cursor:crosshair"></canvas>
             <div id="chartDebugBadge" style="position:absolute;top:4px;left:4px;z-index:999;background:rgba(0,0,0,0.85);color:#0f0;font-family:monospace;font-size:11px;padding:4px 8px;border-radius:4px;pointer-events:none;white-space:pre;"></div>
-            <div class="mk-resize-handle" id="resizeHandle">
+            <div class="mk-resize-handle" id="resizeHandle-@_chartInstanceId">
                 <div class="mk-resize-dots">⋯</div>
             </div>
         </div>
@@ -272,7 +272,7 @@
             </div>
         </div>
         <div class="mk-canvas-wrap mk-canvas-rsi">
-            <canvas id="rsiChart"></canvas>
+            <canvas id="rsiChart-@_chartInstanceId"></canvas>
         </div>
 
         <!-- Volume -->
@@ -280,7 +280,7 @@
             <div class="mk-chart-title">VOLUME</div>
         </div>
         <div class="mk-canvas-wrap mk-canvas-vol">
-            <canvas id="volumeChart"></canvas>
+            <canvas id="volumeChart-@_chartInstanceId"></canvas>
         </div>
 
         <div class="mk-hints">
@@ -1031,6 +1031,16 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     protected override async Task OnInitializedAsync()
     {
+        // Unique per-mount suffix for the chart canvas ids. If Blazor's
+        // diffing ever decides this component instance is "the same" as
+        // a previous mount and tries to reuse DOM nodes (which we now
+        // suspect is happening, since the JS-side generationId never
+        // advances past 1 even after navigating away and back), giving
+        // the canvas a genuinely different id each time it's created
+        // makes that reuse structurally impossible — the diffing
+        // algorithm can't match elements with different ids.
+        _chartInstanceId = Guid.NewGuid().ToString("N")[..8];
+
         LiveState.PriceTicked += OnLivePriceTicked;
         LiveState.KlineClosed += OnLiveKlineClosed;
 
@@ -1121,6 +1131,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     string _lastRenderedKey = "";
 
     string _chartInitError = "";
+    string _chartInstanceId = "";
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -1145,7 +1156,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             // "never".
             try
             {
-                var stillBound = await JS.InvokeAsync<bool>("marketChart.isBoundToLiveCanvas");
+                var stillBound = await JS.InvokeAsync<bool>("marketChart.isBoundToLiveCanvas", $"priceChart-{_chartInstanceId}");
                 if (!stillBound)
                 {
                     await InitChartAsync();
@@ -1185,8 +1196,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         try
         {
             await JS.InvokeVoidAsync("marketChart.init",
-                "priceChart", "rsiChart", "volumeChart",
-                "resizeHandle", "priceWrap");
+                $"priceChart-{_chartInstanceId}", $"rsiChart-{_chartInstanceId}", $"volumeChart-{_chartInstanceId}",
+                $"resizeHandle-{_chartInstanceId}", $"priceWrap-{_chartInstanceId}");
             await RegisterPricePickCallback();
             _chartInitDone = true;
             _jsReady = true;

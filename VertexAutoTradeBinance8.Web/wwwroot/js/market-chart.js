@@ -55,6 +55,7 @@ let dpr = window.devicePixelRatio || 1;
 // the observer fired.
 let _domWatcherStarted = false;
 let _lastInitIds = null;
+let _curMainId = 'priceChart', _curRsiId = 'rsiChart', _curVolId = 'volumeChart';
 function ensureDomWatcher() {
     if (_domWatcherStarted) return;
     _domWatcherStarted = true;
@@ -63,7 +64,7 @@ function ensureDomWatcher() {
     const observer = new MutationObserver(() => {
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
-            const live = document.getElementById('priceChart');
+            const live = document.getElementById(_curMainId);
             if (live && live !== MC && _lastInitIds) {
                 console.log('[chart] MutationObserver detected new #priceChart element, re-initializing');
                 window.marketChart.init(..._lastInitIds);
@@ -216,9 +217,9 @@ function drawAll(retriesLeft = 8) {
     // no dependency on render()'s timing, no dependency on Blazor's
     // firstRender/OnAfterRenderAsync sequencing being whatever we assume
     // it is. getElementById is cheap enough to do on every draw call.
-    const livePrice = document.getElementById('priceChart');
-    const liveRsi   = document.getElementById('rsiChart');
-    const liveVol   = document.getElementById('volumeChart');
+    const livePrice = document.getElementById(_curMainId);
+    const liveRsi   = document.getElementById(_curRsiId);
+    const liveVol   = document.getElementById(_curVolId);
 
     if (livePrice && livePrice !== MC) { MC = livePrice; }
     if (liveRsi   && liveRsi   !== RC) { RC = liveRsi; }
@@ -618,8 +619,8 @@ window.marketChart = {
     // no longer matches the live element, the caller knows it needs to
     // re-run init() right now instead of assuming the original
     // initialization is still valid.
-    isBoundToLiveCanvas() {
-        const live = document.getElementById('priceChart');
+    isBoundToLiveCanvas(expectedId) {
+        const live = document.getElementById(expectedId);
         return !!live && live === MC && document.contains(MC);
     },
 
@@ -642,6 +643,7 @@ window.marketChart = {
 
     init(mainId, rsiId, volId, resizeHandleId, resizeWrapId) {
         _lastInitIds = [mainId, rsiId, volId, resizeHandleId, resizeWrapId];
+        _curMainId = mainId; _curRsiId = rsiId; _curVolId = volId;
         ensureDomWatcher();
 
         // Bump the generation FIRST, before anything else. Any async
@@ -755,9 +757,9 @@ window.marketChart = {
         // a previous page visit (drawAll() does this again right before
         // drawing as a second safety net, but doing it here too avoids
         // wasted resize() calls against a detached element).
-        const livePrice = document.getElementById('priceChart');
-        const liveRsi   = document.getElementById('rsiChart');
-        const liveVol   = document.getElementById('volumeChart');
+        const livePrice = document.getElementById(_curMainId);
+        const liveRsi   = document.getElementById(_curRsiId);
+        const liveVol   = document.getElementById(_curVolId);
         if (livePrice && livePrice !== MC) MC = livePrice;
         if (liveRsi   && liveRsi   !== RC) RC = liveRsi;
         if (liveVol   && liveVol   !== VC) VC = liveVol;
@@ -806,7 +808,7 @@ window.marketChart = {
 setInterval(() => {
     const badge = document.getElementById('chartDebugBadge');
     if (!badge) return;
-    const liveEl = document.getElementById('priceChart');
+    const liveEl = document.getElementById(_curMainId);
     const boundMatch = liveEl && liveEl === MC;
     const inDoc = MC ? document.contains(MC) : false;
     const parentSize = MC ? `${MC.parentElement.clientWidth}x${MC.parentElement.clientHeight}` : 'n/a';
