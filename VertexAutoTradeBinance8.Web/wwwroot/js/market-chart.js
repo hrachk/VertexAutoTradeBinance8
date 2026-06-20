@@ -620,6 +620,8 @@ window.marketChart = {
         MC=document.getElementById(mainId);
         RC=document.getElementById(rsiId);
         VC=document.getElementById(volId);
+        console.log('[chart] init() called, gen=', myGen, 'MC found=', !!MC,
+            'parent size=', MC ? MC.parentElement.clientWidth + 'x' + MC.parentElement.clientHeight : 'n/a');
         if(!MC) return;
 
         // Drag-scroll for ticker bar
@@ -690,6 +692,7 @@ window.marketChart = {
     },
     render(sym, tf, klines) {
         const myGen = generationId;
+        console.log('[chart] render() called, gen=', myGen, 'klines.length=', klines ? klines.length : 'null', 'MC=', !!MC);
 
         // Refresh canvas references up front so resize()/auto-fit below
         // operate on the actual live DOM elements, not stale ones from
