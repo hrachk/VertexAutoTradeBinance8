@@ -799,6 +799,23 @@ window.marketChart = {
     }
 };
 
+// On-page visible debug badge — updates every 500ms with the chart
+// module's real internal state. This exists so diagnosis doesn't
+// require opening DevTools at all: the person can just look at the
+// top-left corner of the chart and read it directly off the screen.
+setInterval(() => {
+    const badge = document.getElementById('chartDebugBadge');
+    if (!badge) return;
+    const liveEl = document.getElementById('priceChart');
+    const boundMatch = liveEl && liveEl === MC;
+    const inDoc = MC ? document.contains(MC) : false;
+    const parentSize = MC ? `${MC.parentElement.clientWidth}x${MC.parentElement.clientHeight}` : 'n/a';
+    badge.textContent =
+        `gen=${generationId} K=${K.length}\n` +
+        `MC bound=${boundMatch} inDOM=${inDoc}\n` +
+        `parent=${parentSize}`;
+}, 500);
+
 })();
 
 // Smoothly scrolls the LIVE SIGNALS card strip to the given page.
