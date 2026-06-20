@@ -87,7 +87,8 @@ let _lastW = 0, _lastH = 0; // track last known size
 function setupCanvas(el) {
     if (!el) return null;
     if (!document.contains(el)) {
-        console.error('[chart] setupCanvas: element is DETACHED from document!', el.id);
+        console.warn('[chart] setupCanvas called with a detached element (should not happen — drawAll refreshes references first):', el.id);
+        return null;
     }
     dpr = window.devicePixelRatio || 1;
     const parent = el.parentElement || el;
@@ -160,13 +161,37 @@ function priceForY(y, yMin, yMax, cH, cPT=PT, cPB=PB) {
 }
 
 // ── DRAW ──────────────────────────────────────────────────
-function drawAll() {
-    if (!MC || !K.length) return;
+function drawAll(retriesLeft = 8) {
+    // Always re-fetch the live canvas elements right before drawing.
+    // This is the single source of truth for "is our reference stale" —
+    // no dependency on render()'s timing, no dependency on Blazor's
+    // firstRender/OnAfterRenderAsync sequencing being whatever we assume
+    // it is. getElementById is cheap enough to do on every draw call.
+    const livePrice = document.getElementById('priceChart');
+    const liveRsi   = document.getElementById('rsiChart');
+    const liveVol   = document.getElementById('volumeChart');
+
+    if (livePrice && livePrice !== MC) { MC = livePrice; }
+    if (liveRsi   && liveRsi   !== RC) { RC = liveRsi; }
+    if (liveVol   && liveVol   !== VC) { VC = liveVol; }
+
+    if (!K.length) return;
+
+    if (!MC || !document.contains(MC)) {
+        // Canvas not in the DOM yet (Blazor still finishing its render
+        // pass after a navigation) — retry shortly instead of silently
+        // giving up. A few rAF retries comfortably covers this window.
+        if (retriesLeft > 0) {
+            requestAnimationFrame(() => drawAll(retriesLeft - 1));
+        }
+        return;
+    }
+
     try {
         const { yMin, yMax } = autoY();
         drawMain(yMin, yMax);
-        if (RC) drawRsi();
-        if (VC) drawVol();
+        if (RC && document.contains(RC)) drawRsi();
+        if (VC && document.contains(VC)) drawVol();
     } catch (e) {
         console.error('[market-chart] draw error:', e);
     }
@@ -642,20 +667,17 @@ window.marketChart = {
         initResizeY(document.getElementById(resizeHandleId), document.getElementById(resizeWrapId));
     },
     render(sym, tf, klines) {
-        // Self-heal: if our cached canvas references are stale (the
-        // component was re-mounted on a Blazor SPA navigation back to
-        // /market without a full page reload, so the DOM elements are
-        // NEW even though this JS module's state survived), re-init
-        // against the live elements instead of drawing into detached
-        // canvases nobody can see. This removes any dependency on the
-        // C# side correctly tracking whether init() already ran.
-        const livePriceEl = document.getElementById('priceChart');
-        if (!MC || MC !== livePriceEl || !document.contains(MC)) {
-            console.log('[chart] stale canvas reference detected on render() — re-initializing');
-            if (livePriceEl) {
-                window.marketChart.init('priceChart', 'rsiChart', 'volumeChart', 'resizeHandle', 'priceWrap');
-            }
-        }
+        // Refresh canvas references up front so resize()/auto-fit below
+        // operate on the actual live DOM elements, not stale ones from
+        // a previous page visit (drawAll() does this again right before
+        // drawing as a second safety net, but doing it here too avoids
+        // wasted resize() calls against a detached element).
+        const livePrice = document.getElementById('priceChart');
+        const liveRsi   = document.getElementById('rsiChart');
+        const liveVol   = document.getElementById('volumeChart');
+        if (livePrice && livePrice !== MC) MC = livePrice;
+        if (liveRsi   && liveRsi   !== RC) RC = liveRsi;
+        if (liveVol   && liveVol   !== VC) VC = liveVol;
 
         K = klines;
         derive();
