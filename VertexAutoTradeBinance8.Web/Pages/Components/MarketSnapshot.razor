@@ -1127,6 +1127,31 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             await InitChartAsync();
         }
+        else if (_chartInitDone)
+        {
+            // CONFIRMED BUG (via diagnostic logs): navigating away from
+            // /market and back through the sidebar does NOT reliably
+            // trigger firstRender=true again for this component — Blazor
+            // can reuse the same component instance across that
+            // navigation, so _chartInitDone stays true from the ORIGINAL
+            // visit and InitChartAsync() never runs again, even though
+            // the <canvas> elements in the DOM may have been recreated.
+            // Fix: on every NON-first render, cheaply ask JS whether the
+            // canvas it's currently bound to is still the one actually in
+            // the document. If not, re-run init() right here — this check
+            // runs every render cycle, so it catches the mismatch on the
+            // very next render after navigating back, not "eventually" or
+            // "never".
+            try
+            {
+                var stillBound = await JS.InvokeAsync<bool>("marketChart.isBoundToLiveCanvas");
+                if (!stillBound)
+                {
+                    await InitChartAsync();
+                }
+            }
+            catch { }
+        }
 
         // Render whenever chart is ready and data changed
         if (_chartInitDone && Selected != null && Selected.Klines.Count >= 5)

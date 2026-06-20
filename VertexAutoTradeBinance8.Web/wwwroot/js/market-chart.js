@@ -570,6 +570,20 @@ let _activeResizeListener = null;
 let _lastSym = null, _lastTf = null;
 
 window.marketChart = {
+    // Is the module's current MC reference still the SAME DOM node that
+    // is actually in the document right now under id="priceChart"?
+    // This is the cheap check OnAfterRenderAsync calls on every non-first
+    // render to detect "Blazor reused this component instance across a
+    // navigation without re-running firstRender logic" — confirmed via
+    // diagnostic logging to actually happen for this component. If MC
+    // no longer matches the live element, the caller knows it needs to
+    // re-run init() right now instead of assuming the original
+    // initialization is still valid.
+    isBoundToLiveCanvas() {
+        const live = document.getElementById('priceChart');
+        return !!live && live === MC && document.contains(MC);
+    },
+
     // Simple synchronous check - does the element exist with real size?
     elementReady(mainId) {
         const el = document.getElementById(mainId);
