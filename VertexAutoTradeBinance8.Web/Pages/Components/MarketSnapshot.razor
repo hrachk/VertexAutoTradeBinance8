@@ -443,7 +443,7 @@
                         </div>
                         <div class="ord-lev-slider-wrap">
                             <input type="range" min="1" max="@_symMaxLev" step="1"
-                                   class="ord-lev-slider"
+                                   class="ord-lev-slider" title="Leverage"
                                    @bind="_orderLeverage" @bind:event="oninput" />
                             <div class="ord-lev-ticks">
                                 @foreach (var v in new[]{1,5,10,20,30,50}.Where(v => v <= _symMaxLev))
@@ -460,7 +460,7 @@
                         <div class="ord-row">
                             <label class="ord-label">@(_orderType == "StopLimit" ? "Stop Price" : "Limit Price")</label>
                             <div class="ord-input-wrap">
-                                <input class="ord-input mono" type="number"
+                                <input class="ord-input mono" type="number" title="@(_orderType == "StopLimit" ? "Stop Price" : "Limit Price")"
                                        step="@(_symTickSize > 0 ? _symTickSize.ToString("G8") : "any")"
                                        value="@(_orderPrice > 0 ? _orderPrice.ToString("G8") : "")"
                                        @onchange="OnPriceChange" />
@@ -483,7 +483,7 @@
                             }
                         </div>
                         <div class="ord-input-wrap">
-                            <input class="ord-input mono" type="number"
+                            <input class="ord-input mono" type="number" title="Quantity"
                                    step="@(_symStep > 0 ? _symStep.ToString("G8") : "any")"
                                    value="@(_orderQty > 0 ? _orderQty.ToString("G8") : "")"
                                    @onchange="OnQtyChange" />
@@ -798,7 +798,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-canvas-vol{height:90px;}
 
 /* RESIZE HANDLE */
-.mk-resize-handle{position:absolute;bottom:0;left:0;right:0;height:10px;cursor:ns-resize;display:flex;align-items:center;justify-content:center;background:rgba(30,37,53,0.5);transition:background .15s;z-index:10;user-select:none;}
+.mk-resize-handle{position:absolute;bottom:0;left:0;right:0;height:10px;cursor:ns-resize;display:flex;align-items:center;justify-content:center;background:rgba(30,37,53,0.5);transition:background .15s;z-index:10;-webkit-user-select:none;user-select:none;}
 .mk-resize-handle:hover{background:rgba(59,130,246,0.2);}
 .mk-resize-dots{font-size:12px;color:var(--dim);letter-spacing:2px;line-height:1;}
 
@@ -1150,16 +1150,34 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
         for (int i = 0; i < 20; i++) // up to 20 × 150ms = 3s
         {
+            // CRITICAL: if this component instance was disposed (e.g. the
+            // user navigated away from /market before this retry loop
+            // finished), stop immediately. Without this check, a "zombie"
+            // retry loop from a PREVIOUS visit can keep running in the
+            // background and eventually call marketChart.init() — which
+            // wipes the JS module's canvas/K/view state — AFTER a NEW
+            // component instance (from navigating back to /market) has
+            // already successfully initialized and rendered the chart.
+            // That's the exact bug: chart renders correctly for a moment,
+            // then a late-arriving zombie init() call from the old visit
+            // resets everything to empty, with no error anywhere because
+            // it's not failing — it's "succeeding" at the wrong time.
+            if (_cts.IsCancellationRequested) return;
+
             _initAttempts = i + 1;
             try
             {
                 // Ask JS if the canvas element actually exists with real size
                 var ok = await JS.InvokeAsync<bool>("marketChart.elementReady", "priceChart");
+                if (_cts.IsCancellationRequested) return;
+
                 if (ok)
                 {
                     await JS.InvokeVoidAsync("marketChart.init",
                         "priceChart", "rsiChart", "volumeChart",
                         "resizeHandle", "priceWrap");
+                    if (_cts.IsCancellationRequested) return;
+
                     await RegisterPricePickCallback();
                     _chartInitDone = true;
                     _jsReady = true;
@@ -1172,8 +1190,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             {
                 _chartInitError = $"Init attempt {i+1} failed: {ex.Message}";
             }
-            await Task.Delay(150);
+            try { await Task.Delay(150, _cts.Token); }
+            catch (OperationCanceledException) { return; }
         }
+
+        if (_cts.IsCancellationRequested) return;
 
         // Failed after all retries — force init anyway and surface the error
         try
@@ -1181,6 +1202,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             await JS.InvokeVoidAsync("marketChart.init",
                 "priceChart", "rsiChart", "volumeChart",
                 "resizeHandle", "priceWrap");
+            if (_cts.IsCancellationRequested) return;
+
             await RegisterPricePickCallback();
             _chartInitDone = true;
             _jsReady = true;
