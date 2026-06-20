@@ -86,6 +86,9 @@ let _lastW = 0, _lastH = 0; // track last known size
 
 function setupCanvas(el) {
     if (!el) return null;
+    if (!document.contains(el)) {
+        console.error('[chart] setupCanvas: element is DETACHED from document!', el.id);
+    }
     dpr = window.devicePixelRatio || 1;
     const parent = el.parentElement || el;
     const w = Math.max(parent.clientWidth || 0, parent.offsetWidth || 0, 1);
@@ -593,8 +596,10 @@ window.marketChart = {
         const debouncedResize = () => {
             clearTimeout(_roTimer);
             _roTimer = setTimeout(() => {
+                console.log('[chart] debouncedResize fired, K.length=', K.length);
+                if (K.length === 0) return; // nothing to draw yet — don't clear the canvas for no reason
                 resize();
-                if(K.length > 0) drawAll();
+                drawAll();
             }, 40);
         };
 
