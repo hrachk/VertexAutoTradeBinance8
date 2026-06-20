@@ -642,6 +642,21 @@ window.marketChart = {
         initResizeY(document.getElementById(resizeHandleId), document.getElementById(resizeWrapId));
     },
     render(sym, tf, klines) {
+        // Self-heal: if our cached canvas references are stale (the
+        // component was re-mounted on a Blazor SPA navigation back to
+        // /market without a full page reload, so the DOM elements are
+        // NEW even though this JS module's state survived), re-init
+        // against the live elements instead of drawing into detached
+        // canvases nobody can see. This removes any dependency on the
+        // C# side correctly tracking whether init() already ran.
+        const livePriceEl = document.getElementById('priceChart');
+        if (!MC || MC !== livePriceEl || !document.contains(MC)) {
+            console.log('[chart] stale canvas reference detected on render() — re-initializing');
+            if (livePriceEl) {
+                window.marketChart.init('priceChart', 'rsiChart', 'volumeChart', 'resizeHandle', 'priceWrap');
+            }
+        }
+
         K = klines;
         derive();
 
