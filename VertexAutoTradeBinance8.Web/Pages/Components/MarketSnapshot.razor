@@ -24,18 +24,6 @@
             </div>
         </div>
 
-        @if (!_signals.Any())
-        {
-            <div class="mk-header-scan">
-                <span class="mk-header-scan-dot"></span>
-                Scanning
-                @if (_symbols.Any())
-                {
-                    <span class="mk-header-scan-sym">@_symbols[_scanSymIdx % _symbols.Count]</span>
-                }
-            </div>
-        }
-
         <div class="mk-hright">
             @if (Selected != null)
             {
@@ -165,7 +153,21 @@
                         <span class="sig-count">@_signals.Count</span>
                     </div>
                     <div class="sig-panel-right">
-                        <div class="sig-panel-sub">@(_signals.Any() ? "Click a signal to trade manually" : "Live signals will appear here when found")</div>
+                        @if (_signals.Any())
+                        {
+                            <div class="sig-panel-sub">Click a signal to trade manually</div>
+                        }
+                        else
+                        {
+                            <div class="mk-header-scan">
+                                <span class="mk-header-scan-dot"></span>
+                                Detecting
+                                @if (_symbols.Any())
+                                {
+                                    <span class="mk-header-scan-sym">@_symbols[_scanSymIdx % _symbols.Count]</span>
+                                }
+                            </div>
+                        }
                         <div class="sig-pager @(_signals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
                             @for (int p = 0; p < _sigPageCount; p++)
                             {
@@ -196,7 +198,7 @@
                         <div class="sig-card @(sigIsBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "")"
                              @key="SignalKey(sig)"
                              @onclick="() => SelectSignal(sig)">
-                            <!-- Card top -->
+                            <!-- Top row: symbol, side, time -->
                             <div class="sc-top">
                                 <div class="sc-sym-wrap">
                                     <span class="sc-sym">@sig.Symbol.Replace("USDT","")</span>
@@ -205,34 +207,30 @@
                                 <span class="sc-side @(sigIsBuy ? "sc-side-b" : "sc-side-s")">
                                     @(sigIsBuy ? "▲ LONG" : "▼ SHORT")
                                 </span>
-                            </div>
-                            <!-- Time + freshness -->
-                            <div class="sc-time-row">
-                                <span class="sc-time mk-dim">@sig.Time.ToLocalTime().ToString("HH:mm")</span>
                                 <span class="sc-ago">@FmtAgo(sig.Time)</span>
                             </div>
+
                             <!-- Confidence bar -->
                             <div class="sc-conf-wrap">
                                 <div class="sc-conf-bar" style="width:@conf%"
                                      style2="background:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")"></div>
                             </div>
-                            <!-- Prices -->
-                            <div class="sc-prices">
+
+                            <!-- Prices, all inline -->
+                            <div class="sc-prices-row">
                                 <div class="sc-p"><span class="sc-pl">Entry</span><span class="sc-pv mono">@FmtP(sig.Entry)</span></div>
                                 <div class="sc-p"><span class="sc-pl">SL</span><span class="sc-pv mono dn">@FmtP(sig.StopLoss)</span></div>
                                 @if (sigTp1 > 0) {
                                     <div class="sc-p"><span class="sc-pl">TP1</span><span class="sc-pv mono up">@FmtP(sigTp1)</span></div>
                                 }
                             </div>
-                            <!-- Footer -->
+
+                            <!-- Footer: confidence/RR/ATR + TTL bar combined in one slim row -->
                             <div class="sc-foot">
                                 <span class="sc-conf @(conf>=60?"up":conf>=45?"yel":"dn")">@conf%</span>
                                 @if (rr > 0) { <span class="sc-rr">RR @rr.ToString("F1")</span> }
                                 <span class="sc-atr mk-dim">ATR @FmtP(sig.ATR)</span>
-                            </div>
-                            <!-- Relevance / TTL -->
-                            <div class="sc-ttl-row" title="Estimated relevance window based on volatility (ATR)">
-                                <div class="sc-ttl-bar-wrap">
+                                <div class="sc-ttl-bar-wrap" title="Estimated relevance window based on volatility (ATR)">
                                     <div class="sc-ttl-bar @(ttl.IsExpiring ? "ttl-low" : ttl.Pct < 50 ? "ttl-mid" : "ttl-high")"
                                          style="width:@(ttl.Pct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
                                 </div>
@@ -241,10 +239,6 @@
                         </div>
                     }
                 </div>
-                }
-                else
-                {
-                    <div class="sig-empty">No live signals right now — see scanning status above</div>
                 }
         </div> <!-- end sig-panel -->
         <div class="mk-charts-col-main">
@@ -821,81 +815,39 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .sig-cards::-webkit-scrollbar-thumb{background:var(--bdr);}
 
 /* Signal card */
-.sig-card{flex-shrink:0;width:175px;min-height:188px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:12px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.sig-card{flex-shrink:0;width:260px;min-height:100px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
 .sig-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;}
 .sc-buy::before{background:var(--grn);}
 .sc-sell::before{background:var(--red);}
 .sig-card:hover{border-color:var(--acc);transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.3);}
 .sc-active{border-color:var(--acc)!important;background:rgba(59,130,246,.08)!important;}
-.sc-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;}
-.sc-sym-wrap{display:flex;flex-direction:column;}
-.sc-sym{font-family:var(--mono);font-size:15px;font-weight:700;}
-.sc-usdt{font-size:10px;color:var(--dim);}
+.sc-top{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
+.sc-sym-wrap{display:flex;align-items:baseline;gap:3px;}
+.sc-sym{font-family:var(--mono);font-size:14px;font-weight:700;}
+.sc-usdt{font-size:9px;color:var(--dim);}
 .sc-side{font-size:10px;font-weight:700;padding:2px 6px;border-radius:3px;white-space:nowrap;}
 .sc-side-b{background:rgba(34,197,94,.15);color:var(--grn);}
 .sc-side-s{background:rgba(239,68,68,.15);color:var(--red);}
-.sc-conf-wrap{height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;margin-bottom:10px;}
+.sc-ago{margin-left:auto;color:#94a3b8;font-weight:500;font-size:10px;}
+.sc-conf-wrap{height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;margin-bottom:8px;}
 .sc-conf-bar{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--acc),var(--grn));}
-.sc-prices{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
-.sc-p{display:flex;justify-content:space-between;align-items:center;}
-.sc-pl{font-size:10px;color:var(--dim);}
-.sc-pv{font-size:11px;}
+.sc-prices-row{display:flex;align-items:center;gap:14px;margin-bottom:6px;}
+.sc-p{display:flex;align-items:center;gap:5px;}
+.sc-pl{font-size:9px;color:var(--dim);}
+.sc-pv{font-size:11.5px;}
 .sc-foot{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;}
 .sc-conf{font-family:var(--mono);font-size:12px;font-weight:700;flex-shrink:0;}
 .sc-rr{font-size:10px;background:rgba(59,130,246,.12);color:var(--acc);padding:1px 5px;border-radius:3px;flex-shrink:0;}
-.sc-atr{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+.sc-atr{font-size:10px;flex-shrink:0;white-space:nowrap;}
 .yel{color:var(--yel)!important;}
 
-/* Time row */
-.sc-time-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-size:10px;}
-.sc-time{font-family:var(--mono);}
-.sc-ago{color:#94a3b8;font-weight:500;}
-
-/* Empty state — same min-height as a card row so the panel never jumps */
-/* ── Scanning animation (empty signals state) ── */
-.sig-scanning{display:flex;align-items:center;justify-content:flex-start;gap:12px;min-height:36px;padding:6px 14px;border:1px dashed var(--bdr);border-radius:8px;background:var(--bg3);}
-
-.sig-scan-radar{position:relative;width:22px;height:22px;flex-shrink:0;}
-.sig-scan-ring{position:absolute;inset:0;border:1.5px solid rgba(56,189,248,0.5);border-radius:50%;animation:sigScanPulse 2.4s ease-out infinite;}
-.sig-scan-ring-1{animation-delay:0s;}
-.sig-scan-ring-2{animation-delay:0.8s;}
-.sig-scan-ring-3{animation-delay:1.6s;}
-.sig-scan-core{position:absolute;top:50%;left:50%;width:9px;height:9px;margin:-4.5px;border-radius:50%;background:#38bdf8;box-shadow:0 0 10px 2px rgba(56,189,248,0.7);animation:sigScanCore 2.4s ease-in-out infinite;}
-
-@@keyframes sigScanPulse{
-    0%   { transform:scale(0.25); opacity:0.9; }
-    100% { transform:scale(1.4);  opacity:0; }
-}
-@@keyframes sigScanCore{
-    0%,100% { opacity:0.7; transform:translate(-50%,-50%) scale(1); }
-    50%     { opacity:1;   transform:translate(-50%,-50%) scale(1.25); }
-}
-
-.sig-scan-text{display:flex;align-items:center;gap:8px;}
-.sig-scan-title{font-size:12px;font-weight:600;color:var(--txt);}
-.sig-scan-dots span{animation:sigScanDot 1.4s infinite; opacity:0;}
-.sig-scan-dots span:nth-child(1){animation-delay:0s;}
-.sig-scan-dots span:nth-child(2){animation-delay:0.2s;}
-.sig-scan-dots span:nth-child(3){animation-delay:0.4s;}
-@@keyframes sigScanDot{
-    0%,80%,100% { opacity:0; }
-    40%         { opacity:1; }
-}
-.sig-scan-sub{font-size:11px;color:var(--dim);padding-left:8px;border-left:1px solid var(--bdr);}
-.sig-scan-symbol{color:#38bdf8;font-family:var(--mono);font-weight:600;animation:sigScanFade 1.4s ease;}
-@@keyframes sigScanFade{
-    0%   { opacity:0; transform:translateY(2px); }
-    100% { opacity:1; transform:translateY(0); }
-}
-
-/* TTL / relevance bar */
-.sc-ttl-row{display:flex;align-items:center;gap:6px;margin-top:10px;padding-top:8px;border-top:1px dashed var(--bdr);}
-.sc-ttl-bar-wrap{flex:1;height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;}
+/* TTL bar lives inline in the footer now, no longer its own row */
+.sc-ttl-bar-wrap{flex:1;height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;min-width:24px;}
 .sc-ttl-bar{height:100%;border-radius:2px;transition:width 1s linear;}
 .ttl-high{background:var(--grn);}
 .ttl-mid{background:var(--yel);}
 .ttl-low{background:var(--red);}
-.sc-ttl-label{font-size:9px;white-space:nowrap;}
+.sc-ttl-label{font-size:9px;white-space:nowrap;color:var(--dim);flex-shrink:0;}
 
 /* Fade-out when expiring */
 .sig-card{transition:opacity .2s,transform .2s,border-color .2s,background .2s,max-width .6s ease,margin .6s ease,padding .6s ease;}
