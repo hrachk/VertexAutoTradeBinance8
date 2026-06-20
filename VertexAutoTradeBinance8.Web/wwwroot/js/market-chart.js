@@ -31,6 +31,8 @@
     function disposeSession(containerId) {
         const s = sessions.get(containerId);
         if (!s) return;
+        if (s.previewBox && s.previewBox.parentNode) s.previewBox.remove();
+        if (s.previewVLine && s.previewVLine.parentNode) s.previewVLine.remove();
         try { s.chart.remove(); } catch (e) { /* already gone */ }
         sessions.delete(containerId);
     }
@@ -170,104 +172,146 @@
                 entryLine: null, slLine: null, tpLine: null,
                 entryPrice: 0, side: 'LONG', qty: 0,
                 onSlChanged: null, onTpChanged: null,
-                dragTarget: null, // 'sl' | 'tp' | null while dragging
+                tpSlArmed: false,   // true after clicking the TP/SL button — "Drag to set TP/SL" mode
+                dragging: false,
+                previewLine: null, previewBox: null, previewVLine: null,
             };
             sessions.set(containerId, session);
 
-            // ── Draggable SL/TP lines ──────────────────────────────
+            // ── Bybit-style drag-to-set TP/SL ───────────────────────
             // Lightweight Charts v5's core API does not expose a
-            // built-in draggable price line (it's an open feature
-            // request, github.com/tradingview/lightweight-charts/
-            // issues/1086 — implemented only as third-party plugins so
-            // far). This implements the same interaction manually using
-            // the library's own coordinateToPrice/priceToCoordinate,
-            // which is the standard documented approach for this.
-            const HIT_TOLERANCE_PX = 8;
+            // built-in draggable price line (open feature request,
+            // github.com/tradingview/lightweight-charts/issues/1086),
+            // so this reimplements the exact interaction observed on
+            // Bybit's own chart: after arming TP/SL mode (the small
+            // toggle button on the entry line), pressing anywhere on
+            // the chart and dragging shows a live "Expected Profit/
+            // Loss" preview with a vertical connector back to the
+            // entry price — exactly matching Bybit's UI — and releases
+            // into a real TP (if dragged above entry for a long) or SL
+            // (if below), rather than requiring the user to grab one
+            // specific pre-existing line.
+            function fmt(p) { return fmtPrice(p); }
 
-            function priceLineY(line) {
-                if (!line) return null;
-                try { return candleSeries.priceToCoordinate(line.options().price); }
-                catch (e) { return null; }
+            function removePreview() {
+                if (session.previewLine) { try { candleSeries.removePriceLine(session.previewLine); } catch (e) {} session.previewLine = null; }
+                if (session.previewBox && session.previewBox.parentNode) session.previewBox.remove();
+                session.previewBox = null;
+                if (session.previewVLine && session.previewVLine.parentNode) session.previewVLine.remove();
+                session.previewVLine = null;
             }
 
-            function pnlText(currentPrice) {
-                if (!session.entryPrice || !session.qty) return '';
-                const dir = session.side === 'LONG' ? 1 : -1;
-                const pnl = (currentPrice - session.entryPrice) * dir * session.qty;
-                const sign = pnl >= 0 ? '+' : '';
-                return `  PnL ${sign}${pnl.toFixed(2)}`;
+            function ensurePreviewBox() {
+                if (session.previewBox) return session.previewBox;
+                const box = document.createElement('div');
+                box.style.position = 'absolute';
+                box.style.padding = '4px 10px';
+                box.style.borderRadius = '4px';
+                box.style.fontSize = '11px';
+                box.style.fontWeight = '600';
+                box.style.fontFamily = 'monospace';
+                box.style.pointerEvents = 'none';
+                box.style.zIndex = '6';
+                box.style.whiteSpace = 'nowrap';
+                container.style.position = container.style.position || 'relative';
+                container.appendChild(box);
+                session.previewBox = box;
+                return box;
+            }
+
+            function ensurePreviewVLine(x) {
+                if (session.previewVLine) return session.previewVLine;
+                const vline = document.createElement('div');
+                vline.style.position = 'absolute';
+                vline.style.width = '1px';
+                vline.style.pointerEvents = 'none';
+                vline.style.zIndex = '5';
+                container.appendChild(vline);
+                session.previewVLine = vline;
+                return vline;
             }
 
             container.addEventListener('mousedown', (e) => {
-                if (!session.slLine && !session.tpLine) return;
-                const rect = container.getBoundingClientRect();
-                const y = e.clientY - rect.top;
-                const slY = priceLineY(session.slLine);
-                const tpY = priceLineY(session.tpLine);
-                if (slY != null && Math.abs(y - slY) <= HIT_TOLERANCE_PX) {
-                    session.dragTarget = 'sl';
-                    container.style.cursor = 'grabbing';
-                    e.preventDefault();
-                } else if (tpY != null && Math.abs(y - tpY) <= HIT_TOLERANCE_PX) {
-                    session.dragTarget = 'tp';
-                    container.style.cursor = 'grabbing';
-                    e.preventDefault();
-                }
+                if (!session.tpSlArmed) return;
+                session.dragging = true;
+                container.style.cursor = 'grabbing';
+                e.preventDefault();
             });
 
             container.addEventListener('mousemove', (e) => {
-                const rect = container.getBoundingClientRect();
-                const y = e.clientY - rect.top;
+                if (!session.tpSlArmed) return;
 
-                // Hover feedback even when not dragging, so the lines
-                // feel grabbable before the user commits to a drag.
-                if (!session.dragTarget) {
-                    const slY = priceLineY(session.slLine);
-                    const tpY = priceLineY(session.tpLine);
-                    const nearLine = (slY != null && Math.abs(y - slY) <= HIT_TOLERANCE_PX) ||
-                                      (tpY != null && Math.abs(y - tpY) <= HIT_TOLERANCE_PX);
-                    container.style.cursor = nearLine ? 'grab' : 'crosshair';
+                if (!session.dragging) {
+                    container.style.cursor = 'crosshair';
                     return;
                 }
 
+                const rect = container.getBoundingClientRect();
+                const y = e.clientY - rect.top;
+                const x = e.clientX - rect.left;
                 const price = candleSeries.coordinateToPrice(y);
-                if (price == null) return;
+                if (price == null || !session.entryPrice) return;
 
-                if (session.dragTarget === 'sl' && session.slLine) {
-                    try { candleSeries.removePriceLine(session.slLine); } catch (err) {}
-                    session.slLine = candleSeries.createPriceLine({
-                        price, color: '#ef4444', lineWidth: 2,
-                        lineStyle: LightweightCharts.LineStyle.Solid,
-                        axisLabelVisible: true,
-                        title: `SL ${price.toFixed(6).replace(/0+$/,'').replace(/\.$/,'')}`,
-                    });
-                } else if (session.dragTarget === 'tp' && session.tpLine) {
-                    try { candleSeries.removePriceLine(session.tpLine); } catch (err) {}
-                    session.tpLine = candleSeries.createPriceLine({
-                        price, color: '#22c55e', lineWidth: 2,
-                        lineStyle: LightweightCharts.LineStyle.Solid,
-                        axisLabelVisible: true,
-                        title: `TP ${price.toFixed(6).replace(/0+$/,'').replace(/\.$/,'')}`,
-                    });
+                const isLong = session.side === 'LONG';
+                // Which side of entry decides TP vs SL, same as a
+                // single unified drag gesture on Bybit: above entry for
+                // a long (or below for a short) = profit direction = TP;
+                // the opposite = loss direction = SL.
+                const isProfitSide = isLong ? price > session.entryPrice : price < session.entryPrice;
+                const dir = isLong ? 1 : -1;
+                const pnl = (price - session.entryPrice) * dir * session.qty;
+
+                if (session.previewLine) { try { candleSeries.removePriceLine(session.previewLine); } catch (err) {} }
+                session.previewLine = candleSeries.createPriceLine({
+                    price, color: isProfitSide ? '#22c55e' : '#ef4444', lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    axisLabelVisible: true,
+                    title: `${isProfitSide ? 'TP' : 'SL'} ${fmt(price)}`,
+                });
+
+                const entryY = candleSeries.priceToCoordinate(session.entryPrice);
+                const vline = ensurePreviewVLine(x);
+                if (entryY != null) {
+                    const top = Math.min(entryY, y);
+                    const height = Math.abs(entryY - y);
+                    vline.style.left = x + 'px';
+                    vline.style.top = top + 'px';
+                    vline.style.height = height + 'px';
+                    vline.style.background = isProfitSide ? 'rgba(34,197,94,0.5)' : 'rgba(239,68,68,0.5)';
                 }
+
+                const box = ensurePreviewBox();
+                box.style.left = (x + 10) + 'px';
+                box.style.top = (Math.min(entryY ?? y, y) - 10) + 'px';
+                box.style.background = isProfitSide ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)';
+                box.style.border = `1px solid ${isProfitSide ? '#22c55e' : '#ef4444'}`;
+                box.style.color = isProfitSide ? '#22c55e' : '#ef4444';
+                box.textContent = `Expected ${isProfitSide ? 'Profit' : 'Loss'} ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)}`;
             });
 
             container.addEventListener('mouseup', (e) => {
-                if (!session.dragTarget) return;
+                if (!session.tpSlArmed || !session.dragging) return;
+                session.dragging = false;
+                container.style.cursor = 'crosshair';
+
                 const rect = container.getBoundingClientRect();
                 const y = e.clientY - rect.top;
                 const price = candleSeries.coordinateToPrice(y);
-                const target = session.dragTarget;
-                session.dragTarget = null;
-                container.style.cursor = 'crosshair';
-                if (price == null) return;
+                removePreview();
+                if (price == null || !session.entryPrice) return;
 
-                if (target === 'sl' && session.onSlChanged) session.onSlChanged(price);
-                if (target === 'tp' && session.onTpChanged) session.onTpChanged(price);
+                const isLong = session.side === 'LONG';
+                const isProfitSide = isLong ? price > session.entryPrice : price < session.entryPrice;
+
+                if (isProfitSide) {
+                    if (session.onTpChanged) session.onTpChanged(price);
+                } else {
+                    if (session.onSlChanged) session.onSlChanged(price);
+                }
             });
 
             container.addEventListener('mouseleave', () => {
-                session.dragTarget = null;
+                if (session.dragging) { session.dragging = false; removePreview(); }
             });
 
             container.addEventListener('contextmenu', (e) => {
@@ -353,28 +397,42 @@
         // there's something to grab and drag into a real order, same
         // idea as before, just now gated behind an explicit click
         // instead of always-on.
+        // Draws the EXISTING TP/SL as solid lines if real orders are
+        // set, with no placeholder dashed line anymore — Bybit doesn't
+        // show a guess line for a TP/SL that was never set, it just
+        // shows nothing there until the user drags one in via armed
+        // mode (setTpSlArmed below).
         showTpSlLines(containerId, entry, sl, tp, side) {
             const s = sessions.get(containerId);
             if (!s) return;
             this.hideTpSlLines(containerId);
 
-            const isLong = side === 'LONG';
-            const placeholderDist = entry * 0.02;
-            const slPrice = sl > 0 ? sl : (isLong ? entry - placeholderDist : entry + placeholderDist);
-            const tpPrice = tp > 0 ? tp : (isLong ? entry + placeholderDist : entry - placeholderDist);
+            if (sl > 0) {
+                s.slLine = s.candleSeries.createPriceLine({
+                    price: sl, color: '#ef4444', lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true, title: `SL ${fmtPrice(sl)}`,
+                });
+            }
+            if (tp > 0) {
+                s.tpLine = s.candleSeries.createPriceLine({
+                    price: tp, color: '#22c55e', lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true, title: `TP ${fmtPrice(tp)}`,
+                });
+            }
+        },
 
-            s.slLine = s.candleSeries.createPriceLine({
-                price: slPrice, color: '#ef4444', lineWidth: 2,
-                lineStyle: sl > 0 ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
-                axisLabelVisible: true,
-                title: sl > 0 ? `SL ${fmtPrice(slPrice)}` : `SL (drag to set)`,
-            });
-            s.tpLine = s.candleSeries.createPriceLine({
-                price: tpPrice, color: '#22c55e', lineWidth: 2,
-                lineStyle: tp > 0 ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
-                axisLabelVisible: true,
-                title: tp > 0 ? `TP ${fmtPrice(tpPrice)}` : `TP (drag to set)`,
-            });
+        // Arms/disarms the "Drag to set TP/SL" mode — toggled by the
+        // TP/SL button on the entry line, matching Bybit's exact
+        // gesture: once armed, pressing and dragging ANYWHERE on the
+        // chart creates a TP (drag toward profit) or SL (drag toward
+        // loss) with a live Expected Profit/Loss preview, instead of
+        // needing to grab one specific existing line.
+        setTpSlArmed(containerId, armed) {
+            const s = sessions.get(containerId);
+            if (!s) return;
+            s.tpSlArmed = armed;
         },
 
         hideTpSlLines(containerId) {
@@ -403,6 +461,13 @@
             if (!s) return;
             if (s.entryLine) { try { s.candleSeries.removePriceLine(s.entryLine); } catch (e) {} s.entryLine = null; }
             this.hideTpSlLines(containerId);
+            this.setTpSlArmed(containerId, false);
+            if (s.previewLine) { try { s.candleSeries.removePriceLine(s.previewLine); } catch (e) {} s.previewLine = null; }
+            if (s.previewBox && s.previewBox.parentNode) s.previewBox.remove();
+            s.previewBox = null;
+            if (s.previewVLine && s.previewVLine.parentNode) s.previewVLine.remove();
+            s.previewVLine = null;
+            s.dragging = false;
             s.entryPrice = 0;
             s.qty = 0;
         },
