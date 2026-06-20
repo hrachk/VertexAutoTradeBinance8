@@ -245,50 +245,19 @@
 
         <!-- Price chart -->
         <div class="mk-chart-head">
-            <div class="mk-chart-title">CANDLESTICK · @(Selected?.Symbol ?? "") · @TfLabel(Selected?.Timeframe ?? "")
-                <span style="color:#22c55e;margin-left:12px">⚡ ticks:@_liveTickCount klines:@_liveKlineCount last:@_lastTickSymbol@@@(_lastTickTime==DateTime.MinValue?"-":_lastTickTime.ToString("HH:mm:ss"))</span>
-            </div>
+            <div class="mk-chart-title">CANDLESTICK · @(Selected?.Symbol ?? "") · @TfLabel(Selected?.Timeframe ?? "")</div>
             <div class="mk-legend">
                 <span style="color:#38bdf8">── EMA21</span>
                 <span style="color:#a855f7">── EMA55</span>
-                <span style="color:#eab308">╌╌ VWAP</span>
-                <span style="color:rgba(59,130,246,0.5)">╌╌ BB(20)</span>
+                <span style="color:#ef4444">RSI · ── OB 70 / OS 30</span>
             </div>
         </div>
-        <div class="mk-canvas-wrap mk-canvas-price" id="priceWrap-@_chartInstanceId">
-            <canvas id="priceChart-@_chartInstanceId" style="cursor:crosshair"></canvas>
-            <div id="chartDebugBadge" style="position:absolute;top:4px;left:4px;z-index:999;background:rgba(0,0,0,0.85);color:#0f0;font-family:monospace;font-size:11px;padding:4px 8px;border-radius:4px;pointer-events:none;white-space:pre;"></div>
-            <div class="mk-resize-handle" id="resizeHandle-@_chartInstanceId">
-                <div class="mk-resize-dots">⋯</div>
-            </div>
-        </div>
-
-        <!-- RSI -->
-        <div class="mk-chart-head" style="padding-top:4px">
-            <div class="mk-chart-title">RSI(14)</div>
-            <div class="mk-legend">
-                <span style="color:#ef4444">── OB 70</span>
-                <span style="color:#22c55e">── OS 30</span>
-            </div>
-        </div>
-        <div class="mk-canvas-wrap mk-canvas-rsi">
-            <canvas id="rsiChart-@_chartInstanceId"></canvas>
-        </div>
-
-        <!-- Volume -->
-        <div class="mk-chart-head" style="padding-top:4px">
-            <div class="mk-chart-title">VOLUME</div>
-        </div>
-        <div class="mk-canvas-wrap mk-canvas-vol">
-            <canvas id="volumeChart-@_chartInstanceId"></canvas>
-        </div>
+        <div id="chartContainer-@_chartInstanceId" style="width:100%;height:480px;"></div>
 
         <div class="mk-hints">
             <span>🖱 Drag to pan</span>
-            <span>⚲ Scroll to zoom X</span>
-            <span>⇧+Scroll to zoom Y</span>
-            <span>↕ Drag handle to resize</span>
-            <span>2× click to reset</span>
+            <span>⚲ Scroll to zoom</span>
+            <span>🖱 Right-click to pick a price</span>
         </div>
 
         </div> <!-- end mk-charts-col-main -->
@@ -1139,31 +1108,6 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             await InitChartAsync();
         }
-        else if (_chartInitDone)
-        {
-            // CONFIRMED BUG (via diagnostic logs): navigating away from
-            // /market and back through the sidebar does NOT reliably
-            // trigger firstRender=true again for this component — Blazor
-            // can reuse the same component instance across that
-            // navigation, so _chartInitDone stays true from the ORIGINAL
-            // visit and InitChartAsync() never runs again, even though
-            // the <canvas> elements in the DOM may have been recreated.
-            // Fix: on every NON-first render, cheaply ask JS whether the
-            // canvas it's currently bound to is still the one actually in
-            // the document. If not, re-run init() right here — this check
-            // runs every render cycle, so it catches the mismatch on the
-            // very next render after navigating back, not "eventually" or
-            // "never".
-            try
-            {
-                var stillBound = await JS.InvokeAsync<bool>("marketChart.isBoundToLiveCanvas", $"priceChart-{_chartInstanceId}");
-                if (!stillBound)
-                {
-                    await InitChartAsync();
-                }
-            }
-            catch { }
-        }
 
         // Render whenever chart is ready and data changed
         if (_chartInitDone && Selected != null && Selected.Klines.Count >= 5)
@@ -1180,28 +1124,30 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         }
     }
 
-    // Initializes the chart exactly once per component instance. No retry
-    // loop, no polling, no cancellation-token bookkeeping needed on this
-    // side — market-chart.js's init() now owns its own generation counter
-    // (bumped on every call) and its own double-requestAnimationFrame wait
-    // for real layout dimensions internally. Calling init() here is fire-
-    // and-forget safe: even if THIS await is somehow still pending when
-    // the component gets disposed and a new one mounts and calls init()
-    // again, the new call's generation bump makes any leftover deferred
-    // work from this one a guaranteed no-op — there is no longer a "zombie
-    // retry loop" possible because there is no retry loop, period.
+    // Initializes the chart. Lightweight Charts' own marketChart.init()
+    // (JS side) disposes any previous chart instance bound to this
+    // container id before creating a new one — so even in the worst
+    // case (Blazor somehow calling this twice, or reusing a component
+    // instance across navigation in a way that re-triggers firstRender),
+    // there is never more than one live chart per container, and no
+    // stale-reference bookkeeping is needed on this side at all.
     async Task InitChartAsync()
     {
         _dotNetRef ??= DotNetObjectReference.Create(this);
         try
         {
-            await JS.InvokeVoidAsync("marketChart.init",
-                $"priceChart-{_chartInstanceId}", $"rsiChart-{_chartInstanceId}", $"volumeChart-{_chartInstanceId}",
-                $"resizeHandle-{_chartInstanceId}", $"priceWrap-{_chartInstanceId}");
-            await RegisterPricePickCallback();
-            _chartInitDone = true;
-            _jsReady = true;
-            _chartInitError = "";
+            var ok = await JS.InvokeAsync<bool>("marketChart.init", $"chartContainer-{_chartInstanceId}");
+            if (ok)
+            {
+                await RegisterPricePickCallback();
+                _chartInitDone = true;
+                _jsReady = true;
+                _chartInitError = "";
+            }
+            else
+            {
+                _chartInitError = "Chart container not found in DOM yet";
+            }
         }
         catch (Exception ex)
         {
@@ -1480,9 +1426,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 volume   = (double)k.Volume
             }).ToArray();
 
-            DateTime _lastRenderTime = DateTime.UtcNow;
-            await JS.InvokeVoidAsync("marketChart.render",
-                Selected.Symbol, Selected.Timeframe, klines);
+            await JS.InvokeVoidAsync("marketChart.setData", $"chartContainer-{_chartInstanceId}", klines);
         }
         catch { }
     }
@@ -1680,7 +1624,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         try
         {
             _dotNetRef ??= DotNetObjectReference.Create(this);
-            await JS.InvokeVoidAsync("marketChartBridge.bindPricePicked", _dotNetRef);
+            await JS.InvokeVoidAsync("marketChart.bindPricePicked", $"chartContainer-{_chartInstanceId}", _dotNetRef);
         }
         catch { }
     }
@@ -2151,7 +2095,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     {
         _orderError   = string.Empty;
         _orderSuccess = string.Empty;
-        _ = JS.InvokeVoidAsync("marketChart.clearPriceLine");
+        _ = JS.InvokeVoidAsync("marketChart.clearPriceLine", $"chartContainer-{_chartInstanceId}");
 
         // Panel stays visible by default — Cancel just resets the form back
         // to a clean manual-trade state for whatever symbol is active.
@@ -2166,7 +2110,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _activeSignal        = null;
         _currentPosition     = null;
         _orderPanelDismissed = true;
-        _ = JS.InvokeVoidAsync("marketChart.clearPriceLine");
+        _ = JS.InvokeVoidAsync("marketChart.clearPriceLine", $"chartContainer-{_chartInstanceId}");
     }
 
     async Task PlaceManualOrderBuy()
