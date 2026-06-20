@@ -253,8 +253,24 @@
                 <span style="color:#a855f7">── EMA55</span>
                 <span style="color:#ef4444">RSI · ── OB 70 / OS 30</span>
             </div>
+            <button class="mk-chart-maximize" @onclick="ToggleChartMaximized" title="@(_chartMaximized ? "Restore" : "Maximize chart")">
+                @if (_chartMaximized)
+                {
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                }
+                else
+                {
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                }
+            </button>
         </div>
-        <div id="chartContainer-@_chartInstanceId" style="width:100%;height:480px;"></div>
+        <div class="mk-chart-container-wrap @(_chartMaximized ? "mk-chart-maximized" : "")">
+            <div id="chartContainer-@_chartInstanceId" style="width:100%;height:100%;"></div>
+        </div>
+        @if (_chartMaximized)
+        {
+            <div class="mk-chart-maximize-backdrop" @onclick="ToggleChartMaximized"></div>
+        }
 
         <div class="mk-hints">
             <span>🖱 Drag to pan</span>
@@ -780,7 +796,18 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-charts-col-main{min-width:0;}
 .mk-charts-col-side{min-width:0;}
 @@media(max-width:1000px){.mk-body-grid-with-panel{grid-template-columns:1fr;}}
-.mk-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.mk-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px;}
+
+.mk-chart-maximize{flex-shrink:0;width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;color:var(--dim);cursor:pointer;transition:all .15s;}
+.mk-chart-maximize:hover{color:var(--txt);border-color:var(--acc);}
+.mk-chart-maximize svg{width:15px;height:15px;}
+
+.mk-chart-container-wrap{width:100%;height:480px;transition:none;}
+.mk-chart-maximized{position:fixed;top:60px;left:20px;right:20px;bottom:20px;z-index:1000;height:auto;background:var(--bg);border:1px solid var(--acc);border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.6);padding:8px;}
+.mk-chart-maximize-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999;animation:mkFadeIn .15s ease;}
+@@keyframes mkFadeIn{from{opacity:0;}to{opacity:1;}}
+
+@@media(max-width:700px){.mk-chart-maximized{top:8px;left:8px;right:8px;bottom:8px;}}
 .mk-chart-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
 .mk-legend{display:flex;gap:14px;font-size:11px;color:var(--dim);}
 /* TICKER BAR */
@@ -1153,6 +1180,20 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     string _chartInitError = "";
     string _chartInstanceId = "";
+    bool _chartMaximized = false;
+
+    async Task ToggleChartMaximized()
+    {
+        _chartMaximized = !_chartMaximized;
+        StateHasChanged();
+        // Give the browser a frame to apply the new CSS size before
+        // asking Lightweight Charts to re-measure — autoSize's own
+        // ResizeObserver normally catches this on its own, but a
+        // deliberate nudge here avoids any one-frame flash of the old
+        // size while the transition is mid-flight.
+        await Task.Delay(50);
+        try { await JS.InvokeVoidAsync("marketChart.resize", $"chartContainer-{_chartInstanceId}"); } catch { }
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {

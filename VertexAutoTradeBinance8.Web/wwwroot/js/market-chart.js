@@ -215,6 +215,22 @@
         dispose(containerId) {
             disposeSession(containerId);
         },
+
+        // Manually triggers a resize. autoSize's own ResizeObserver
+        // normally handles this automatically when the container's CSS
+        // size changes, but calling this explicitly after a deliberate
+        // layout change (like the maximize toggle) guarantees there's
+        // no single-frame flash of stale dimensions.
+        resize(containerId) {
+            const s = sessions.get(containerId);
+            if (!s) return;
+            try {
+                const container = document.getElementById(containerId);
+                if (container) {
+                    s.chart.resize(container.clientWidth, container.clientHeight);
+                }
+            } catch (e) { /* autoSize will catch up regardless */ }
+        },
     };
 
 })();
