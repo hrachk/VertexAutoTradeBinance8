@@ -45,6 +45,104 @@
         </div>
     </div>
 
+    <!-- LIVE SIGNALS — moved above the ticker bar -->
+    <div class="sig-panel">
+            <div class="sig-panel-head">
+                <div class="sig-panel-title">
+                    <span class="sig-dot"></span>
+                    LIVE SIGNALS
+                    <span class="sig-count">@_signals.Count</span>
+                </div>
+                <div class="sig-panel-right">
+                    @if (_signals.Any())
+                    {
+                        <div class="sig-panel-sub">Click a signal to trade manually</div>
+                    }
+                    else
+                    {
+                        <div class="mk-header-scan">
+                            <span class="mk-header-scan-dot"></span>
+                            Detecting
+                            @if (_symbols.Any())
+                            {
+                                <span class="mk-header-scan-sym">@_symbols[_scanSymIdx % _symbols.Count]</span>
+                            }
+                        </div>
+                    }
+                    <div class="sig-pager @(_signals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
+                        @for (int p = 0; p < _sigPageCount; p++)
+                        {
+                            int pageIdx = p;
+                            <span class="sig-pager-dot @(pageIdx == _sigPage ? "active" : "")"
+                                  @onclick="() => GoToSigPage(pageIdx)"></span>
+                        }
+                        <span class="sig-pager-label">@(_sigPage+1)/@_sigPageCount</span>
+                    </div>
+                </div>
+            </div>
+            @if (_signals.Any())
+            {
+            <div class="sig-cards" id="sigCardsScroll" @ref="_sigCardsEl">
+                @foreach (var sig in _signals)
+                {
+                    bool sigIsBuy = sig.Side?.ToUpper() == "BUY" || sig.Side?.ToUpper() == "LONG";
+                    bool isActive = _activeSignal == sig;
+                    decimal sigTp1 = sig.TakeProfits?.FirstOrDefault() ?? 0m;
+                    decimal rr = sig.StopLoss > 0 && sig.Entry > 0 && sigTp1 > 0
+                        ? Math.Abs(sigTp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry)
+                        : 0m;
+                    int conf = sig.Confidence;
+
+                    var ttl = GetSignalTtl(sig);
+                    bool isRemoving = _expiredSignals.ContainsKey(SignalKey(sig));
+
+                    <div class="sig-card @(sigIsBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "")"
+                         @key="SignalKey(sig)"
+                         @onclick="() => SelectSignal(sig)">
+                        <!-- Top row: symbol, side, time -->
+                        <div class="sc-top">
+                            <div class="sc-sym-wrap">
+                                <span class="sc-sym">@sig.Symbol.Replace("USDT","")</span>
+                                <span class="sc-usdt">USDT</span>
+                            </div>
+                            <span class="sc-side @(sigIsBuy ? "sc-side-b" : "sc-side-s")">
+                                @(sigIsBuy ? "▲ LONG" : "▼ SHORT")
+                            </span>
+                            <span class="sc-ago">@FmtAgo(sig.Time)</span>
+                        </div>
+
+                        <!-- Confidence bar -->
+                        <div class="sc-conf-wrap">
+                            <div class="sc-conf-bar" style="width:@conf%"
+                                 style2="background:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")"></div>
+                        </div>
+
+                        <!-- Prices, all inline -->
+                        <div class="sc-prices-row">
+                            <div class="sc-p"><span class="sc-pl">Entry</span><span class="sc-pv mono">@FmtP(sig.Entry)</span></div>
+                            <div class="sc-p"><span class="sc-pl">SL</span><span class="sc-pv mono dn">@FmtP(sig.StopLoss)</span></div>
+                            @if (sigTp1 > 0) {
+                                <div class="sc-p"><span class="sc-pl">TP1</span><span class="sc-pv mono up">@FmtP(sigTp1)</span></div>
+                            }
+                        </div>
+
+                        <!-- Footer: confidence/RR/ATR + TTL bar combined in one slim row -->
+                        <div class="sc-foot">
+                            <span class="sc-conf @(conf>=60?"up":conf>=45?"yel":"dn")">@conf%</span>
+                            @if (rr > 0) { <span class="sc-rr">RR @rr.ToString("F1")</span> }
+                            <span class="sc-atr mk-dim">ATR @FmtP(sig.ATR)</span>
+                            <div class="sc-ttl-bar-wrap" title="Estimated relevance window based on volatility (ATR)">
+                                <div class="sc-ttl-bar @(ttl.IsExpiring ? "ttl-low" : ttl.Pct < 50 ? "ttl-mid" : "ttl-high")"
+                                     style="width:@(ttl.Pct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                            </div>
+                            <span class="sc-ttl-label mk-dim">@ttl.Label</span>
+                        </div>
+                    </div>
+                }
+            </div>
+            }
+    </div> <!-- end sig-panel -->
+
     <!-- ROW 1: SYMBOL TICKER -->
     <div class="mk-ticker-bar">
         <div class="mk-ticker-scroll">
@@ -143,104 +241,8 @@
         }
 
         <div class="mk-body-grid @(_activeSignal != null || _selectedPosition != null ? "mk-body-grid-with-panel" : "")">
-        <!-- LEFT: LIVE SIGNALS first, then chart + RSI + Volume, then OPEN POSITIONS, then OPEN ORDERS — all share this one column's width -->
+        <!-- LEFT: chart + RSI + Volume, then OPEN POSITIONS, then OPEN ORDERS — all share this one column's width -->
         <div class="mk-main-col">
-        <div class="sig-panel">
-                <div class="sig-panel-head">
-                    <div class="sig-panel-title">
-                        <span class="sig-dot"></span>
-                        LIVE SIGNALS
-                        <span class="sig-count">@_signals.Count</span>
-                    </div>
-                    <div class="sig-panel-right">
-                        @if (_signals.Any())
-                        {
-                            <div class="sig-panel-sub">Click a signal to trade manually</div>
-                        }
-                        else
-                        {
-                            <div class="mk-header-scan">
-                                <span class="mk-header-scan-dot"></span>
-                                Detecting
-                                @if (_symbols.Any())
-                                {
-                                    <span class="mk-header-scan-sym">@_symbols[_scanSymIdx % _symbols.Count]</span>
-                                }
-                            </div>
-                        }
-                        <div class="sig-pager @(_signals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
-                            @for (int p = 0; p < _sigPageCount; p++)
-                            {
-                                int pageIdx = p;
-                                <span class="sig-pager-dot @(pageIdx == _sigPage ? "active" : "")"
-                                      @onclick="() => GoToSigPage(pageIdx)"></span>
-                            }
-                            <span class="sig-pager-label">@(_sigPage+1)/@_sigPageCount</span>
-                        </div>
-                    </div>
-                </div>
-                @if (_signals.Any())
-                {
-                <div class="sig-cards" id="sigCardsScroll" @ref="_sigCardsEl">
-                    @foreach (var sig in _signals)
-                    {
-                        bool sigIsBuy = sig.Side?.ToUpper() == "BUY" || sig.Side?.ToUpper() == "LONG";
-                        bool isActive = _activeSignal == sig;
-                        decimal sigTp1 = sig.TakeProfits?.FirstOrDefault() ?? 0m;
-                        decimal rr = sig.StopLoss > 0 && sig.Entry > 0 && sigTp1 > 0
-                            ? Math.Abs(sigTp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry)
-                            : 0m;
-                        int conf = sig.Confidence;
-
-                        var ttl = GetSignalTtl(sig);
-                        bool isRemoving = _expiredSignals.ContainsKey(SignalKey(sig));
-
-                        <div class="sig-card @(sigIsBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "")"
-                             @key="SignalKey(sig)"
-                             @onclick="() => SelectSignal(sig)">
-                            <!-- Top row: symbol, side, time -->
-                            <div class="sc-top">
-                                <div class="sc-sym-wrap">
-                                    <span class="sc-sym">@sig.Symbol.Replace("USDT","")</span>
-                                    <span class="sc-usdt">USDT</span>
-                                </div>
-                                <span class="sc-side @(sigIsBuy ? "sc-side-b" : "sc-side-s")">
-                                    @(sigIsBuy ? "▲ LONG" : "▼ SHORT")
-                                </span>
-                                <span class="sc-ago">@FmtAgo(sig.Time)</span>
-                            </div>
-
-                            <!-- Confidence bar -->
-                            <div class="sc-conf-wrap">
-                                <div class="sc-conf-bar" style="width:@conf%"
-                                     style2="background:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")"></div>
-                            </div>
-
-                            <!-- Prices, all inline -->
-                            <div class="sc-prices-row">
-                                <div class="sc-p"><span class="sc-pl">Entry</span><span class="sc-pv mono">@FmtP(sig.Entry)</span></div>
-                                <div class="sc-p"><span class="sc-pl">SL</span><span class="sc-pv mono dn">@FmtP(sig.StopLoss)</span></div>
-                                @if (sigTp1 > 0) {
-                                    <div class="sc-p"><span class="sc-pl">TP1</span><span class="sc-pv mono up">@FmtP(sigTp1)</span></div>
-                                }
-                            </div>
-
-                            <!-- Footer: confidence/RR/ATR + TTL bar combined in one slim row -->
-                            <div class="sc-foot">
-                                <span class="sc-conf @(conf>=60?"up":conf>=45?"yel":"dn")">@conf%</span>
-                                @if (rr > 0) { <span class="sc-rr">RR @rr.ToString("F1")</span> }
-                                <span class="sc-atr mk-dim">ATR @FmtP(sig.ATR)</span>
-                                <div class="sc-ttl-bar-wrap" title="Estimated relevance window based on volatility (ATR)">
-                                    <div class="sc-ttl-bar @(ttl.IsExpiring ? "ttl-low" : ttl.Pct < 50 ? "ttl-mid" : "ttl-high")"
-                                         style="width:@(ttl.Pct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
-                                </div>
-                                <span class="sc-ttl-label mk-dim">@ttl.Label</span>
-                            </div>
-                        </div>
-                    }
-                </div>
-                }
-        </div> <!-- end sig-panel -->
         <div class="mk-charts-col-main">
 
         <!-- Price chart -->
@@ -577,20 +579,55 @@
         <!-- ALL INSTRUMENTS — compact, scrollable, lives in the sidebar now -->
         <div class="mk-side-tbl">
             <div class="mk-side-tbl-title">ALL INSTRUMENTS</div>
-            <div class="mk-side-tbl-scroll">
-                @foreach (var s in Series
-                    .GroupBy(x => x.Symbol)
-                    .Select(g => g.OrderByDescending(x => x.Klines.Count).First())
-                    .OrderBy(x => x.Symbol))
+            <div class="mk-side-search-wrap">
+                <span class="mk-side-search-icon">🔍</span>
+                <input class="mk-side-search" type="text" placeholder="Search symbol…" title="Search instruments"
+                       value="@_instrumentSearch" @oninput="OnInstrumentSearchChanged" />
+                @if (!string.IsNullOrEmpty(_instrumentSearch))
                 {
+                    <button class="mk-side-search-clear" @onclick="ClearInstrumentSearch" title="Clear search">✕</button>
+                }
+            </div>
+            <div class="mk-side-tbl-scroll">
+                @{
+                    var allInstruments = Series
+                        .GroupBy(x => x.Symbol)
+                        .Select(g => g.OrderByDescending(x => x.Klines.Count).First())
+                        .ToList();
+
+                    var filtered = string.IsNullOrWhiteSpace(_instrumentSearch)
+                        ? allInstruments
+                        : allInstruments.Where(s => s.Symbol.Contains(_instrumentSearch, StringComparison.OrdinalIgnoreCase)).ToList();
+
+                    // Top 12 by total visible volume first, then the rest alphabetically —
+                    // only when not actively searching (search shows plain matches).
+                    var ordered = string.IsNullOrWhiteSpace(_instrumentSearch)
+                        ? filtered.OrderByDescending(s => s.Klines.Sum(k => k.Volume)).Take(12)
+                            .Concat(filtered.OrderByDescending(s => s.Klines.Sum(k => k.Volume)).Skip(12).OrderBy(s => s.Symbol))
+                        : filtered.OrderBy(s => s.Symbol);
+
+                    int rank = 0;
+                }
+                @foreach (var s in ordered)
+                {
+                    rank++;
                     var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
                     var open = s.Klines.Count > 0 ? s.Klines[0].Close  : 0m;
                     var chg  = open > 0 ? (last - open) / open * 100m  : 0m;
+                    bool isTop12 = string.IsNullOrWhiteSpace(_instrumentSearch) && rank <= 12;
                     <div class="mk-side-row @(s.Symbol==_activeSym?"mk-side-row-sel":"")" @onclick="()=>PickAndTrade(s)">
+                        @if (isTop12)
+                        {
+                            <span class="mk-side-rank">@rank</span>
+                        }
                         <span class="mk-side-sym">@s.Symbol</span>
                         <span class="mk-side-price mono">@FmtP(last)</span>
                         <span class="mk-side-chg @(chg>=0?"up":"dn")">@(chg>=0?"+":"")@chg.ToString("F1")%</span>
                     </div>
+                }
+                @if (!ordered.Any())
+                {
+                    <div class="mk-side-empty">No instruments match "@_instrumentSearch"</div>
                 }
             </div>
         </div> <!-- end mk-side-tbl -->
@@ -906,6 +943,17 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
 .mk-side-tbl{margin-top:4px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;overflow:hidden;}
 .mk-side-tbl-title{font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--dim);font-weight:700;padding:10px 14px 8px;}
+
+.mk-side-search-wrap{display:flex;align-items:center;gap:6px;margin:0 14px 8px;padding:6px 10px;background:var(--bg);border:1px solid var(--bdr);border-radius:8px;}
+.mk-side-search-icon{font-size:11px;opacity:.5;flex-shrink:0;}
+.mk-side-search{flex:1;background:none;border:none;color:var(--txt);font-size:12px;outline:none;min-width:0;}
+.mk-side-search::placeholder{color:var(--dim);}
+.mk-side-search-clear{background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px;padding:0 2px;flex-shrink:0;}
+.mk-side-search-clear:hover{color:var(--txt);}
+
+.mk-side-rank{font-family:var(--mono);font-size:10px;color:var(--acc);font-weight:700;width:16px;flex-shrink:0;text-align:center;}
+.mk-side-empty{padding:16px 14px;text-align:center;color:var(--dim);font-size:12px;}
+
 .mk-side-tbl-scroll{max-height:280px;overflow-y:auto;scrollbar-width:none;}
 .mk-side-tbl-scroll::-webkit-scrollbar{display:none;}
 .mk-side-row{display:flex;align-items:center;gap:8px;padding:7px 14px;cursor:pointer;transition:background .1s;border-top:1px solid var(--bdr);}
@@ -969,6 +1017,10 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     // Symbol + TF selection
     string _activeSym = "";
+    string _instrumentSearch = "";
+
+    void OnInstrumentSearchChanged(ChangeEventArgs e) => _instrumentSearch = e.Value?.ToString() ?? "";
+    void ClearInstrumentSearch() => _instrumentSearch = "";
     string _activeTf  = "";
     List<string> _symbols = new();
     int _scanSymIdx = 0;
@@ -1153,6 +1205,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             _chartInitError = $"Chart init failed: {ex.Message}";
         }
+        try { await JS.InvokeVoidAsync("tickerDragScroll.bind"); } catch { }
         await InvokeAsync(StateHasChanged);
     }
 
