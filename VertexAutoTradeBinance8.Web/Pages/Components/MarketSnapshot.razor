@@ -2426,7 +2426,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                     // already uses. Without this, every conditional order
                     // displayed as "Market" with no visible trigger price,
                     // which looked like they weren't showing up at all.
-                    Price      = o.StopPrice > 0 ? o.StopPrice : o.Price,
+                    Price      = o.StopPrice.HasValue && o.StopPrice.Value > 0 ? o.StopPrice.Value : o.Price,
                     Qty        = o.Quantity,
                     Filled     = o.QuantityFilled,
                     ReduceOnly = o.ReduceOnly,
