@@ -813,8 +813,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-resize-dots{font-size:12px;color:var(--dim);letter-spacing:2px;line-height:1;}
 
 /* SIGNAL PANEL */
-.sig-panel{padding:16px 20px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
-.sig-panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
+.sig-panel{padding:10px 20px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
+.sig-panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
 .sig-panel-title{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:2px;color:var(--txt);}
 .sig-dot{width:7px;height:7px;border-radius:50%;background:var(--grn);animation:pulse 1.5s infinite;}
 @@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(34,197,94,.4);}50%{box-shadow:0 0 0 6px rgba(34,197,94,0);}}
@@ -857,9 +857,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
 /* Empty state — same min-height as a card row so the panel never jumps */
 /* ── Scanning animation (empty signals state) ── */
-.sig-scanning{display:flex;align-items:center;justify-content:center;gap:20px;min-height:188px;border:1px dashed var(--bdr);border-radius:10px;background:var(--bg3);}
+.sig-scanning{display:flex;align-items:center;justify-content:flex-start;gap:12px;min-height:36px;padding:6px 14px;border:1px dashed var(--bdr);border-radius:8px;background:var(--bg3);}
 
-.sig-scan-radar{position:relative;width:56px;height:56px;flex-shrink:0;}
+.sig-scan-radar{position:relative;width:22px;height:22px;flex-shrink:0;}
 .sig-scan-ring{position:absolute;inset:0;border:1.5px solid rgba(56,189,248,0.5);border-radius:50%;animation:sigScanPulse 2.4s ease-out infinite;}
 .sig-scan-ring-1{animation-delay:0s;}
 .sig-scan-ring-2{animation-delay:0.8s;}
@@ -875,8 +875,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     50%     { opacity:1;   transform:translate(-50%,-50%) scale(1.25); }
 }
 
-.sig-scan-text{display:flex;flex-direction:column;gap:4px;}
-.sig-scan-title{font-size:13px;font-weight:600;color:var(--txt);}
+.sig-scan-text{display:flex;align-items:center;gap:8px;}
+.sig-scan-title{font-size:12px;font-weight:600;color:var(--txt);}
 .sig-scan-dots span{animation:sigScanDot 1.4s infinite; opacity:0;}
 .sig-scan-dots span:nth-child(1){animation-delay:0s;}
 .sig-scan-dots span:nth-child(2){animation-delay:0.2s;}
@@ -885,7 +885,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     0%,80%,100% { opacity:0; }
     40%         { opacity:1; }
 }
-.sig-scan-sub{font-size:12px;color:var(--dim);}
+.sig-scan-sub{font-size:11px;color:var(--dim);padding-left:8px;border-left:1px solid var(--bdr);}
 .sig-scan-symbol{color:#38bdf8;font-family:var(--mono);font-weight:600;animation:sigScanFade 1.4s ease;}
 @@keyframes sigScanFade{
     0%   { opacity:0; transform:translateY(2px); }
@@ -1028,7 +1028,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-oo-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
 .mk-oo-count{background:var(--bg3);color:var(--txt);font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;}
 .mk-oo-empty{font-size:12px;color:var(--dim);padding:10px 2px;}
-.mk-oo-scroll{max-height:170px;overflow-y:auto;}
+.mk-oo-scroll{max-height:170px;overflow-y:auto;scrollbar-width:none;}
+.mk-oo-scroll::-webkit-scrollbar{display:none;}
 .mk-oo-tbl{width:100%;border-collapse:collapse;}
 .mk-oo-tbl th{position:sticky;top:0;background:var(--bg2);text-align:left;padding:4px 10px;font-size:9px;letter-spacing:.5px;color:var(--dim);border-bottom:1px solid var(--bdr);white-space:nowrap;}
 .mk-oo-tbl td{padding:5px 10px;font-size:12px;border-bottom:1px solid var(--bdr);white-space:nowrap;}

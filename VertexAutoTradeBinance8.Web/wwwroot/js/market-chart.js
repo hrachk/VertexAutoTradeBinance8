@@ -177,6 +177,8 @@ function drawMain(yMin, yMax) {
     ctx.fillStyle = T.bg; ctx.fillRect(0,0,cW,cH);
 
     const { start, end } = visRange();
+    console.log('[drawMain]', 'yMin=', yMin, 'yMax=', yMax, 'start=', start, 'end=', end,
+        'candleW=', view.candleW, 'cW=', cW, 'cH=', cH, 'K.length=', K.length);
     const chartH = cH - PT - PB;
     const chartW = cW - PL - PR;
 
@@ -636,6 +638,9 @@ window.marketChart = {
 
         const w = W(MC);
         const chartW = (w || 800) - PL - PR;
+
+        console.log('[chart] render', sym, tf, 'K.length=', K.length,
+            'candleW=', view.candleW, 'w=', w, 'MC=', MC ? 'ok' : 'NULL');
 
         // Reset view on symbol/tf change
         if (sym !== _lastSym || tf !== _lastTf) {
