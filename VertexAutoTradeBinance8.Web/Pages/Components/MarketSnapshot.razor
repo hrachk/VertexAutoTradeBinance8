@@ -307,94 +307,102 @@
 
         </div> <!-- end mk-charts-col-main -->
 
-        <!-- OPEN POSITIONS — Binance-style strip right under the chart -->
+        <!-- OPEN POSITIONS / OPEN ORDERS — tabbed, share one panel -->
         <div class="mk-oo-panel">
-            <div class="mk-oo-head">
-                <span class="mk-oo-title">OPEN POSITIONS @(_positionsLoading ? "⟳" : "")</span>
-                <span class="mk-oo-count">@_allPositions.Count</span>
+            <div class="mk-oo-tabs">
+                <button class="mk-oo-tab @(_ooActiveTab == "positions" ? "mk-oo-tab-on" : "")"
+                        @onclick="ShowPositionsTab">
+                    Open Positions
+                    <span class="mk-oo-count">@_allPositions.Count</span>
+                    @if (_positionsLoading) { <span class="mk-oo-spin">⟳</span> }
+                </button>
+                <button class="mk-oo-tab @(_ooActiveTab == "orders" ? "mk-oo-tab-on" : "")"
+                        @onclick="ShowOrdersTab">
+                    Open Orders
+                    <span class="mk-oo-count">@_openOrders.Count</span>
+                </button>
             </div>
-            @if (_allPositions.Count == 0)
-            {
-                <div class="mk-oo-empty">No open positions</div>
-            }
-            else
-            {
-                <div class="mk-oo-scroll">
-                    <table class="mk-oo-tbl">
-                        <thead>
-                            <tr>
-                                <th>Symbol</th><th>Side</th><th>Lev</th>
-                                <th>Entry</th><th>Mark</th><th>Size</th><th>PnL</th><th>ROI</th><th></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var pos in _allPositions)
-                            {
-                                <tr class="mk-pos-row @(_selectedPosition == pos ? "mk-pos-row-sel" : "")"
-                                    @onclick="() => SelectPosition(pos)">
-                                    <td class="mk-oo-sym">@pos.Symbol</td>
-                                    <td class="@(pos.Side == "LONG" ? "up" : "dn")">@pos.Side</td>
-                                    <td class="mk-dim">@pos.Leverage×</td>
-                                    <td class="mk-mono">@FmtP(pos.EntryPrice)</td>
-                                    <td class="mk-mono">@FmtP(pos.MarkPrice)</td>
-                                    <td class="mk-mono">@pos.Size.ToString("F2")</td>
-                                    <td class="mk-mono @(pos.Pnl >= 0 ? "up" : "dn")">@(pos.Pnl >= 0 ? "+" : "")@pos.Pnl.ToString("F2")</td>
-                                    <td class="mk-mono @(pos.Roi >= 0 ? "up" : "dn")">@(pos.Roi >= 0 ? "+" : "")@((pos.Roi * 100).ToString("F1"))%</td>
-                                    <td>
-                                        <button class="mk-oo-cancel" disabled="@_orderLoading"
-                                                @onclick="() => ClosePositionRow(pos)" @onclick:stopPropagation="true">
-                                            @(_orderLoading ? "…" : "Close")
-                                        </button>
-                                    </td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
-            }
-        </div>
 
-        <!-- OPEN ORDERS — compact, Binance-style strip right under the chart -->
-        <div class="mk-oo-panel">
-            <div class="mk-oo-head">
-                <span class="mk-oo-title">OPEN ORDERS</span>
-                <span class="mk-oo-count">@_openOrders.Count</span>
-            </div>
-            @if (_openOrders.Count == 0)
+            @if (_ooActiveTab == "positions")
             {
-                <div class="mk-oo-empty">No open orders</div>
+                @if (_allPositions.Count == 0)
+                {
+                    <div class="mk-oo-empty">No open positions</div>
+                }
+                else
+                {
+                    <div class="mk-oo-scroll">
+                        <table class="mk-oo-tbl">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th><th>Side</th><th>Lev</th>
+                                    <th>Entry</th><th>Mark</th><th>Size</th><th>PnL</th><th>ROI</th><th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var pos in _allPositions)
+                                {
+                                    <tr class="mk-pos-row @(_selectedPosition == pos ? "mk-pos-row-sel" : "")"
+                                        @onclick="() => SelectPosition(pos)">
+                                        <td class="mk-oo-sym">@pos.Symbol</td>
+                                        <td class="@(pos.Side == "LONG" ? "up" : "dn")">@pos.Side</td>
+                                        <td class="mk-dim">@pos.Leverage×</td>
+                                        <td class="mk-mono">@FmtP(pos.EntryPrice)</td>
+                                        <td class="mk-mono">@FmtP(pos.MarkPrice)</td>
+                                        <td class="mk-mono">@pos.Size.ToString("F2")</td>
+                                        <td class="mk-mono @(pos.Pnl >= 0 ? "up" : "dn")">@(pos.Pnl >= 0 ? "+" : "")@pos.Pnl.ToString("F2")</td>
+                                        <td class="mk-mono @(pos.Roi >= 0 ? "up" : "dn")">@(pos.Roi >= 0 ? "+" : "")@((pos.Roi * 100).ToString("F1"))%</td>
+                                        <td>
+                                            <button class="mk-oo-cancel" disabled="@_orderLoading"
+                                                    @onclick="() => ClosePositionRow(pos)" @onclick:stopPropagation="true">
+                                                @(_orderLoading ? "…" : "Close")
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
             }
             else
             {
-                <div class="mk-oo-scroll">
-                    <table class="mk-oo-tbl">
-                        <thead>
-                            <tr>
-                                <th>Symbol</th><th>Side</th><th>Type</th>
-                                <th>Price</th><th>Qty</th><th>Filled</th><th></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var o in _openOrders)
-                            {
+                @if (_openOrders.Count == 0)
+                {
+                    <div class="mk-oo-empty">No open orders</div>
+                }
+                else
+                {
+                    <div class="mk-oo-scroll">
+                        <table class="mk-oo-tbl">
+                            <thead>
                                 <tr>
-                                    <td class="mk-oo-sym">@o.Symbol</td>
-                                    <td class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</td>
-                                    <td class="mk-dim">@o.Type @(o.ReduceOnly ? "(R)" : "")</td>
-                                    <td class="mk-mono">@(o.Price > 0 ? FmtP(o.Price) : "Market")</td>
-                                    <td class="mk-mono">@o.Qty.ToString("G8")</td>
-                                    <td class="mk-mono mk-dim">@o.Filled.ToString("G8")</td>
-                                    <td>
-                                        <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
-                                                @onclick="() => CancelOpenOrderAsync(o)">
-                                            @(_cancellingOrderId == o.OrderId ? "…" : "✕")
-                                        </button>
-                                    </td>
+                                    <th>Symbol</th><th>Side</th><th>Type</th>
+                                    <th>Price</th><th>Qty</th><th>Filled</th><th></th>
                                 </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
+                            </thead>
+                            <tbody>
+                                @foreach (var o in _openOrders)
+                                {
+                                    <tr>
+                                        <td class="mk-oo-sym">@o.Symbol</td>
+                                        <td class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</td>
+                                        <td class="mk-dim">@o.Type @(o.ReduceOnly ? "(R)" : "")</td>
+                                        <td class="mk-mono">@(o.Price > 0 ? FmtP(o.Price) : "Market")</td>
+                                        <td class="mk-mono">@o.Qty.ToString("G8")</td>
+                                        <td class="mk-mono mk-dim">@o.Filled.ToString("G8")</td>
+                                        <td>
+                                            <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
+                                                    @onclick="() => CancelOpenOrderAsync(o)">
+                                                @(_cancellingOrderId == o.OrderId ? "…" : "✕")
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
             }
         </div>
 
@@ -908,7 +916,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .sig-pager-label{font-size:10px;color:var(--dim);font-family:var(--mono);margin-left:2px;}
 
 /* ORDER PANEL */
-.ord-panel{margin:0;background:var(--bg3);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;position:sticky;top:16px;}
+.ord-panel{margin:0;background:var(--bg3);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;}
 .ord-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
 .ord-title{display:flex;align-items:center;gap:10px;}
 .ord-price-hint{font-size:10px;color:var(--dim);margin-top:5px;font-style:italic;}
@@ -980,7 +988,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
 .mk-side-tbl{margin-top:4px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;overflow:hidden;}
 .mk-side-tbl-title{font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--dim);font-weight:700;padding:10px 14px 8px;}
-.mk-side-tbl-scroll{max-height:280px;overflow-y:auto;}
+.mk-side-tbl-scroll{max-height:280px;overflow-y:auto;scrollbar-width:none;}
+.mk-side-tbl-scroll::-webkit-scrollbar{display:none;}
 .mk-side-row{display:flex;align-items:center;gap:8px;padding:7px 14px;cursor:pointer;transition:background .1s;border-top:1px solid var(--bdr);}
 .mk-side-row:first-child{border-top:none;}
 .mk-side-row:hover{background:var(--bg2);}
@@ -1008,6 +1017,13 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
 /* OPEN ORDERS — compact strip under the chart */
 .mk-oo-panel{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:12px 16px;}
+.mk-oo-tabs{display:flex;gap:4px;margin-bottom:10px;border-bottom:1px solid var(--bdr);padding-bottom:0;}
+.mk-oo-tab{display:flex;align-items:center;gap:6px;background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:11px;letter-spacing:1px;font-weight:700;padding:8px 4px 10px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s;}
+.mk-oo-tab:hover{color:var(--txt);}
+.mk-oo-tab-on{color:var(--acc);border-bottom-color:var(--acc);}
+.mk-oo-spin{color:var(--acc);animation:mkSpin 1s linear infinite;}
+@@keyframes mkSpin{to{transform:rotate(360deg);}}
+.mk-oo-count{background:var(--bg3);color:var(--txt);font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;}
 .mk-oo-head{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
 .mk-oo-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
 .mk-oo-count{background:var(--bg3);color:var(--txt);font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;}
@@ -2079,6 +2095,10 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     }
 
     List<OpenOrderRow> _openOrders = new();
+    string _ooActiveTab = "positions";
+
+    void ShowPositionsTab() => _ooActiveTab = "positions";
+    void ShowOrdersTab() => _ooActiveTab = "orders";
     bool _openOrdersLoading;
     long? _cancellingOrderId;
 
