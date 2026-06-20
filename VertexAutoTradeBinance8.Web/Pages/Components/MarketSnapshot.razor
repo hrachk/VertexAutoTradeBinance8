@@ -298,6 +298,16 @@
                 </div>
             }
             <div id="chartContainer-@_chartInstanceId" @key="_chartInstanceId" style="width:100%;height:@(_chartMaximized ? "calc(100% - 52px)" : "100%");"></div>
+
+            @if (_selectedPosition != null)
+            {
+                <div class="mk-tpsl-overlay">
+                    <button class="mk-tpsl-btn @(_tpSlEditMode ? "mk-tpsl-btn-on" : "")" @onclick="ToggleTpSlEdit">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6M9 8h6M17 16h6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        TP/SL
+                    </button>
+                </div>
+            }
         </div>
 
         <div class="mk-hints">
@@ -855,7 +865,13 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-chart-maximize:hover{color:var(--txt);border-color:var(--acc);}
 .mk-chart-maximize svg{width:15px;height:15px;}
 
-.mk-chart-container-wrap{width:100%;height:480px;transition:none;}
+.mk-chart-container-wrap{width:100%;height:480px;transition:none;position:relative;}
+
+.mk-tpsl-overlay{position:absolute;top:36px;left:8px;z-index:5;pointer-events:none;}
+.mk-tpsl-btn{pointer-events:auto;display:flex;align-items:center;gap:6px;background:rgba(10,13,18,0.92);border:1px solid var(--bdr);color:var(--dim);padding:5px 12px;border-radius:6px;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .15s;backdrop-filter:blur(4px);}
+.mk-tpsl-btn svg{width:13px;height:13px;}
+.mk-tpsl-btn:hover{color:var(--txt);border-color:var(--acc);}
+.mk-tpsl-btn-on{background:rgba(59,130,246,0.15);border-color:var(--acc);color:var(--acc);}
 .mk-chart-maximized{position:fixed;top:60px;left:20px;right:20px;bottom:20px;z-index:1000;height:auto;background:var(--bg);border:1px solid var(--acc);border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.6);padding:8px;display:flex;flex-direction:column;}
 
 .mk-max-bar{display:flex;align-items:center;gap:14px;padding:8px 12px;height:52px;flex-shrink:0;}
@@ -1938,17 +1954,54 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         if (_selectedPosition == null)
         {
             try { await JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}"); } catch { }
+            _tpSlEditMode = false;
             return;
         }
 
+        var pos = _selectedPosition;
+        try
+        {
+            await JS.InvokeVoidAsync("marketChart.showPositionLines",
+                $"chartContainer-{_chartInstanceId}", pos.EntryPrice, pos.Side, pos.Qty);
+        }
+        catch { }
+
+        // If TP/SL editing was already open (e.g. after a drag just
+        // replaced an order), keep it open and refresh the lines to
+        // reflect the new state rather than closing it.
+        if (_tpSlEditMode) await ShowTpSlLinesAsync();
+    }
+
+    // Matches Binance's actual interaction: the entry/PnL line is
+    // always shown once a position is selected, but the SL/TP lines
+    // only appear after the user explicitly clicks the "TP/SL" toggle
+    // — they are not drawn automatically just from selecting a position.
+    bool _tpSlEditMode;
+
+    async Task ToggleTpSlEdit()
+    {
+        _tpSlEditMode = !_tpSlEditMode;
+        if (_tpSlEditMode)
+        {
+            await ShowTpSlLinesAsync();
+        }
+        else
+        {
+            try { await JS.InvokeVoidAsync("marketChart.hideTpSlLines", $"chartContainer-{_chartInstanceId}"); } catch { }
+        }
+    }
+
+    async Task ShowTpSlLinesAsync()
+    {
+        if (_selectedPosition == null) return;
         var pos = _selectedPosition;
         var sl = _openOrders.FirstOrDefault(o => o.Symbol == pos.Symbol && o.Type.Contains("STOP"))?.Price ?? 0m;
         var tp = _openOrders.FirstOrDefault(o => o.Symbol == pos.Symbol && o.Type.Contains("TAKE_PROFIT"))?.Price ?? 0m;
 
         try
         {
-            await JS.InvokeVoidAsync("marketChart.showPositionLines",
-                $"chartContainer-{_chartInstanceId}", pos.EntryPrice, sl, tp, pos.Side, pos.Qty);
+            await JS.InvokeVoidAsync("marketChart.showTpSlLines",
+                $"chartContainer-{_chartInstanceId}", pos.EntryPrice, sl, tp, pos.Side);
         }
         catch { }
     }

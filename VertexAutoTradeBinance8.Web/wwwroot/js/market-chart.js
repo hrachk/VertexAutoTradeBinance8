@@ -35,6 +35,10 @@
         sessions.delete(containerId);
     }
 
+    function fmtPrice(p) {
+        return p.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
+    }
+
     function toCandle(k) {
         return { time: Math.floor(k.openTime / 1000), open: k.open, high: k.high, low: k.low, close: k.close };
     }
@@ -317,13 +321,14 @@
             s.priceLine = null;
         },
 
-        // Draws the Entry/SL/TP lines for the currently selected open
-        // position. entry/sl/tp are plain numbers; sl/tp of 0 means
-        // "no real order yet" — a placeholder line is still drawn
-        // (a sensible default distance from entry) so there's always
-        // something visible to grab and drag into a real TP/SL,
-        // exactly like Bybit/Binance's chart-based position editor.
-        showPositionLines(containerId, entry, sl, tp, side, qty) {
+        // Draws ONLY the entry line for the currently selected position
+        // — this is the persistent reference line with the live-PnL
+        // caption, always visible while a position is selected. SL/TP
+        // lines are a SEPARATE, explicit action (showTpSlLines below),
+        // matching Binance's actual UX: the entry/PnL line is always
+        // there, but TP/SL lines only appear once you click the
+        // "TP/SL" button on it.
+        showPositionLines(containerId, entry, side, qty) {
             const s = sessions.get(containerId);
             if (!s) return;
             this.hidePositionLines(containerId);
@@ -332,23 +337,28 @@
             s.side = side;
             s.qty = qty;
 
-            const isLong = side === 'LONG';
-            const fmt = (p) => p.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
-
             if (entry > 0) {
                 s.entryLine = s.candleSeries.createPriceLine({
                     price: entry, color: '#3b82f6', lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Dotted,
-                    axisLabelVisible: true, title: `Entry ${fmt(entry)}`,
+                    axisLabelVisible: true, title: `Entry ${fmtPrice(entry)}`,
                 });
             }
+        },
 
-            // Placeholder distance when no real SL/TP exists yet: 2%
-            // of entry price in the protective direction. Purely a
-            // starting position for the user to drag from — has no
-            // effect on the exchange until they actually drag it
-            // (which fires onSlChanged/onTpChanged) or it stays
-            // untouched (in which case nothing was ever placed).
+        // Shows the draggable SL/TP lines — called only when the user
+        // clicks the TP/SL button, not automatically on position
+        // selection. sl/tp of 0 means "no real order yet": a dashed
+        // placeholder line is drawn at a sensible default distance so
+        // there's something to grab and drag into a real order, same
+        // idea as before, just now gated behind an explicit click
+        // instead of always-on.
+        showTpSlLines(containerId, entry, sl, tp, side) {
+            const s = sessions.get(containerId);
+            if (!s) return;
+            this.hideTpSlLines(containerId);
+
+            const isLong = side === 'LONG';
             const placeholderDist = entry * 0.02;
             const slPrice = sl > 0 ? sl : (isLong ? entry - placeholderDist : entry + placeholderDist);
             const tpPrice = tp > 0 ? tp : (isLong ? entry + placeholderDist : entry - placeholderDist);
@@ -357,14 +367,22 @@
                 price: slPrice, color: '#ef4444', lineWidth: 2,
                 lineStyle: sl > 0 ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
                 axisLabelVisible: true,
-                title: sl > 0 ? `SL ${fmt(slPrice)}` : `SL (drag to set)`,
+                title: sl > 0 ? `SL ${fmtPrice(slPrice)}` : `SL (drag to set)`,
             });
             s.tpLine = s.candleSeries.createPriceLine({
                 price: tpPrice, color: '#22c55e', lineWidth: 2,
                 lineStyle: tp > 0 ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
                 axisLabelVisible: true,
-                title: tp > 0 ? `TP ${fmt(tpPrice)}` : `TP (drag to set)`,
+                title: tp > 0 ? `TP ${fmtPrice(tpPrice)}` : `TP (drag to set)`,
             });
+        },
+
+        hideTpSlLines(containerId) {
+            const s = sessions.get(containerId);
+            if (!s) return;
+            for (const key of ['slLine', 'tpLine']) {
+                if (s[key]) { try { s.candleSeries.removePriceLine(s[key]); } catch (e) {} s[key] = null; }
+            }
         },
 
         // Refreshes just the entry line's title with live PnL, called
@@ -375,18 +393,16 @@
             const dir = s.side === 'LONG' ? 1 : -1;
             const pnl = (currentPrice - s.entryPrice) * dir * s.qty;
             const sign = pnl >= 0 ? '+' : '';
-            const fmt = (p) => p.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
             try {
-                s.entryLine.applyOptions({ title: `Entry ${fmt(s.entryPrice)}  ·  PnL ${sign}${pnl.toFixed(2)}` });
+                s.entryLine.applyOptions({ title: `Entry ${fmtPrice(s.entryPrice)}  ·  PnL ${sign}${pnl.toFixed(2)}` });
             } catch (e) {}
         },
 
         hidePositionLines(containerId) {
             const s = sessions.get(containerId);
             if (!s) return;
-            for (const key of ['entryLine', 'slLine', 'tpLine']) {
-                if (s[key]) { try { s.candleSeries.removePriceLine(s[key]); } catch (e) {} s[key] = null; }
-            }
+            if (s.entryLine) { try { s.candleSeries.removePriceLine(s.entryLine); } catch (e) {} s.entryLine = null; }
+            this.hideTpSlLines(containerId);
             s.entryPrice = 0;
             s.qty = 0;
         },
@@ -394,9 +410,9 @@
         // Binds the C# callbacks that fire once a drag is committed
         // (mouseup), so the actual exchange order can be replaced.
         // Doesn't fire on every mousemove — only once the user lets go,
-        // matching the "drag, then it actually applies" feel of Bybit's
-        // chart-based SL/TP editor rather than firing an API call per
-        // pixel of mouse movement.
+        // matching the "drag, then it actually applies" feel of
+        // Binance/Bybit's chart-based SL/TP editor rather than firing
+        // an API call per pixel of mouse movement.
         bindSlTpCallbacks(containerId, dotNetRef) {
             const s = sessions.get(containerId);
             if (!s) return;
