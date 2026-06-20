@@ -309,7 +309,7 @@
                             <thead>
                                 <tr>
                                     <th>Symbol</th><th>Side</th><th>Lev</th>
-                                    <th>Entry</th><th>Mark</th><th>Size</th><th>PnL</th><th>ROI</th><th></th>
+                                    <th>Entry</th><th>Mark</th><th>Liq</th><th>Size</th><th>PnL</th><th>ROI</th><th></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -322,6 +322,7 @@
                                         <td class="mk-dim">@pos.Leverage×</td>
                                         <td class="mk-mono">@FmtP(pos.EntryPrice)</td>
                                         <td class="mk-mono">@FmtP(pos.MarkPrice)</td>
+                                        <td class="mk-mono mk-liq">@(pos.LiqPrice > 0 ? FmtP(pos.LiqPrice) : "—")</td>
                                         <td class="mk-mono">@pos.Size.ToString("F2")</td>
                                         <td class="mk-mono @(pos.Pnl >= 0 ? "up" : "dn")">@(pos.Pnl >= 0 ? "+" : "")@pos.Pnl.ToString("F2")</td>
                                         <td class="mk-mono @(pos.Roi >= 0 ? "up" : "dn")">@(pos.Roi >= 0 ? "+" : "")@((pos.Roi * 100).ToString("F1"))%</td>
@@ -367,7 +368,7 @@
                                         <td>
                                             <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
                                                     @onclick="() => CancelOpenOrderAsync(o)">
-                                                @(_cancellingOrderId == o.OrderId ? "…" : "✕")
+                                                @(_cancellingOrderId == o.OrderId ? "…" : "Cancel")
                                             </button>
                                         </td>
                                     </tr>
@@ -672,6 +673,29 @@
                     <button class="ord-close-x" @onclick="() => _selectedPosition = null">✕</button>
                 </div>
 
+                @{
+                    var posOrders = _openOrders.Where(o => o.Symbol == pos.Symbol).ToList();
+                }
+                @if (posOrders.Any())
+                {
+                    <div class="ord-pos-orders">
+                        <div class="ord-pos-orders-title">Open Orders for @pos.Symbol</div>
+                        @foreach (var o in posOrders)
+                        {
+                            <div class="ord-pos-order-row">
+                                <span class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</span>
+                                <span class="mk-dim">@o.Type @(o.ReduceOnly ? "(R)" : "")</span>
+                                <span class="mono">@(o.Price > 0 ? FmtP(o.Price) : "Market")</span>
+                                <span class="mono mk-dim">@o.Qty.ToString("G8")</span>
+                                <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
+                                        @onclick="() => CancelOpenOrderAsync(o)">
+                                    @(_cancellingOrderId == o.OrderId ? "…" : "Cancel")
+                                </button>
+                            </div>
+                        }
+                    </div>
+                }
+
                 <div class="ord-body">
                     <div class="ord-position-box" style="margin:0;border:none;padding:0;">
                         <div class="ord-position-grid">
@@ -900,6 +924,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 /* ORDER PANEL */
 .ord-panel{margin:0;background:var(--bg3);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;}
 .ord-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
+
+.ord-pos-orders{padding:12px 18px;border-bottom:1px solid var(--bdr);background:rgba(59,130,246,0.04);}
+.ord-pos-orders-title{font-size:10px;letter-spacing:1px;color:var(--dim);font-weight:700;margin-bottom:8px;text-transform:uppercase;}
+.ord-pos-order-row{display:grid;grid-template-columns:auto 1fr auto auto auto;align-items:center;gap:10px;padding:6px 0;font-size:12px;}
+.ord-pos-order-row+.ord-pos-order-row{border-top:1px solid var(--bdr);}
 .ord-title{display:flex;align-items:center;gap:10px;}
 .ord-price-hint{font-size:10px;color:var(--dim);margin-top:5px;font-style:italic;}
 .ord-manual-badge{font-size:11px;font-weight:700;color:var(--dim);background:var(--bg2);padding:3px 9px;border-radius:5px;letter-spacing:.3px;}
@@ -1008,29 +1037,29 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
 .mk-hints{display:flex;gap:16px;padding:8px 4px 0;font-size:11px;color:var(--dim);flex-wrap:wrap;}
 
-/* OPEN ORDERS — compact strip under the chart */
-.mk-oo-panel{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:12px 16px;}
-.mk-oo-tabs{display:flex;gap:4px;margin-bottom:10px;border-bottom:1px solid var(--bdr);padding-bottom:0;}
-.mk-oo-tab{display:flex;align-items:center;gap:6px;background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:11px;letter-spacing:1px;font-weight:700;padding:8px 4px 10px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s;}
+/* OPEN ORDERS / POSITIONS — sized like a real exchange panel, not a compact strip */
+.mk-oo-panel{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:18px 20px;}
+.mk-oo-tabs{display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--bdr);padding-bottom:0;}
+.mk-oo-tab{display:flex;align-items:center;gap:8px;background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:13px;letter-spacing:.5px;font-weight:700;padding:10px 6px 12px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s;}
 .mk-oo-tab:hover{color:var(--txt);}
 .mk-oo-tab-on{color:var(--acc);border-bottom-color:var(--acc);}
 .mk-oo-spin{color:var(--acc);animation:mkSpin 1s linear infinite;}
 @@keyframes mkSpin{to{transform:rotate(360deg);}}
-.mk-oo-count{background:var(--bg3);color:var(--txt);font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;}
+.mk-oo-count{background:var(--bg3);color:var(--txt);font-size:12px;font-weight:700;padding:2px 9px;border-radius:10px;}
 .mk-oo-head{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
 .mk-oo-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
-.mk-oo-count{background:var(--bg3);color:var(--txt);font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;}
-.mk-oo-empty{font-size:12px;color:var(--dim);padding:10px 2px;}
-.mk-oo-scroll{max-height:170px;overflow-y:auto;scrollbar-width:none;}
+.mk-oo-empty{font-size:13px;color:var(--dim);padding:24px 2px;text-align:center;}
+.mk-oo-scroll{max-height:280px;overflow-y:auto;scrollbar-width:none;}
 .mk-oo-scroll::-webkit-scrollbar{display:none;}
 .mk-oo-tbl{width:100%;border-collapse:collapse;}
-.mk-oo-tbl th{position:sticky;top:0;background:var(--bg2);text-align:left;padding:4px 10px;font-size:9px;letter-spacing:.5px;color:var(--dim);border-bottom:1px solid var(--bdr);white-space:nowrap;}
-.mk-oo-tbl td{padding:5px 10px;font-size:12px;border-bottom:1px solid var(--bdr);white-space:nowrap;}
+.mk-oo-tbl th{position:sticky;top:0;background:var(--bg2);text-align:left;padding:8px 14px;font-size:11px;letter-spacing:.5px;color:var(--dim);border-bottom:1px solid var(--bdr);white-space:nowrap;font-weight:600;}
+.mk-oo-tbl td{padding:11px 14px;font-size:13.5px;border-bottom:1px solid var(--bdr);white-space:nowrap;}
 .mk-pos-row{cursor:pointer;transition:background .12s;}
 .mk-pos-row:hover{background:rgba(255,255,255,0.04);}
 .mk-pos-row-sel{background:rgba(59,130,246,0.1);box-shadow:inset 2px 0 0 var(--acc);}
-.mk-oo-sym{font-family:var(--mono);font-weight:700;color:var(--acc);}
-.mk-oo-cancel{background:none;border:1px solid var(--bdr);color:var(--dim);width:22px;height:22px;border-radius:5px;cursor:pointer;font-size:11px;line-height:1;}
+.mk-oo-sym{font-family:var(--mono);font-weight:700;color:var(--acc);font-size:13.5px;}
+.mk-liq{color:#f59e0b;}
+.mk-oo-cancel{background:none;border:1px solid var(--bdr);color:var(--dim);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;line-height:1;white-space:nowrap;}
 .mk-oo-cancel:hover:not(:disabled){border-color:var(--red);color:var(--red);}
 .mk-oo-cancel:disabled{opacity:.5;cursor:not-allowed;}
 
