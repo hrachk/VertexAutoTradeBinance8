@@ -261,10 +261,21 @@
         @if (_chartMaximized)
         {
             <div class="mk-chart-maximize-backdrop" @onclick="ToggleChartMaximized"></div>
-            <div class="mk-chart-container-wrap mk-chart-maximized">
-                <!-- Floating header — lives INSIDE the overlay (the
-                     normal mk-chart-head stays behind the backdrop and
-                     would otherwise be invisible/unreachable) -->
+        }
+
+        <!-- SINGLE persistent chart container — never destroyed or
+             recreated by the maximize toggle. Only the wrapping CSS
+             class changes (adds position:fixed etc), which Lightweight
+             Charts' own autoSize ResizeObserver picks up on its own.
+             Previously this used two separate container elements in
+             an if/else branch, which meant Blazor actually destroyed
+             and recreated the DOM node on every toggle — Lightweight
+             Charts kept its session bound to the now-detached old
+             node, leaving the chart blank until a full page reload
+             forced re-initialization from scratch. -->
+        <div class="mk-chart-container-wrap @(_chartMaximized ? "mk-chart-maximized" : "")">
+            @if (_chartMaximized)
+            {
                 <div class="mk-max-bar">
                     <div class="mk-max-sym">
                         @(Selected?.Symbol ?? "")
@@ -272,9 +283,6 @@
                     </div>
                     <div class="mk-max-price @(_chg >= 0 ? "up" : "dn")">@FmtP(_last)</div>
 
-                    <!-- Quick trade — same qty/leverage state as the
-                         regular order panel, just reachable without
-                         leaving fullscreen -->
                     <div class="mk-max-trade">
                         <input class="mk-max-qty mono" type="number" title="Quantity"
                                value="@(_orderQty > 0 ? _orderQty.ToString("G8") : "")"
@@ -288,15 +296,9 @@
                         Restore
                     </button>
                 </div>
-                <div id="chartContainer-@_chartInstanceId" style="width:100%;height:calc(100% - 52px);"></div>
-            </div>
-        }
-        else
-        {
-            <div class="mk-chart-container-wrap">
-                <div id="chartContainer-@_chartInstanceId" style="width:100%;height:100%;"></div>
-            </div>
-        }
+            }
+            <div id="chartContainer-@_chartInstanceId" @key="_chartInstanceId" style="width:100%;height:@(_chartMaximized ? "calc(100% - 52px)" : "100%");"></div>
+        </div>
 
         <div class="mk-hints">
             <span>🖱 Drag to pan</span>
@@ -689,6 +691,7 @@
                 : 0m;
         }
             <div class="ord-panel">
+                <div class="ord-selected-label">Selected Position</div>
                 <div class="ord-head">
                     <div class="ord-title">
                         <span class="sc-side @(posIsLong?"sc-side-b":"sc-side-s") ord-badge">
@@ -696,7 +699,7 @@
                         </span>
                         <span class="ord-sym">@pos.Symbol</span>
                     </div>
-                    <button class="ord-close-x" @onclick="() => _selectedPosition = null">✕</button>
+                    <button class="ord-close-x" @onclick="() => SelectPosition(pos)">✕</button>
                 </div>
 
                 @{
@@ -970,6 +973,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
 /* ORDER PANEL */
 .ord-panel{margin:0;background:var(--bg3);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;}
+.ord-selected-label{font-size:10px;letter-spacing:1.5px;color:var(--acc);font-weight:700;text-transform:uppercase;padding:10px 18px 0;background:var(--bg2);}
 .ord-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
 
 .ord-pos-orders{padding:12px 18px;border-bottom:1px solid var(--bdr);background:rgba(59,130,246,0.04);}
@@ -1828,6 +1832,119 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         await InvokeAsync(StateHasChanged);
     }
 
+    // Fired from JS once a Bybit-style chart-drag of the SL/TP line is
+    // committed (mouseup). Replaces whatever protective order currently
+    // exists for this position with a new one at the dragged price —
+    // cancel-then-place, same two-call pattern already used everywhere
+    // else in this file for order changes (no new order-placement
+    // primitive was invented for this).
+    bool _slTpDragBusy;
+
+    [JSInvokable]
+    public async Task OnSlDragged(decimal price)
+    {
+        if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
+        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: true, newPrice: price);
+    }
+
+    [JSInvokable]
+    public async Task OnTpDragged(decimal price)
+    {
+        if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
+        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false, newPrice: price);
+    }
+
+    async Task ReplaceProtectiveOrderAsync(ActivePositionInfo pos, bool isStopLoss, decimal newPrice)
+    {
+        _slTpDragBusy = true;
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) { return; }
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+
+            // Round to the symbol's tick size if known, otherwise leave
+            // as-is — better to place a slightly-off-tick order than to
+            // silently snap to a wrong precision.
+            decimal price = _symTickSize > 0 ? Math.Round(newPrice / _symTickSize) * _symTickSize : newPrice;
+
+            bool isLong = pos.Side == "LONG";
+            var closeSide = isLong ? OrderSide.Sell : OrderSide.Buy;
+            var posSide = isLong ? PositionSide.Long : PositionSide.Short;
+
+            // Find and cancel the existing protective order of the same
+            // kind for this symbol, if one exists.
+            var existing = _openOrders.FirstOrDefault(o =>
+                o.Symbol == pos.Symbol &&
+                (isStopLoss ? o.Type.Contains("STOP") : o.Type.Contains("TAKE_PROFIT")));
+
+            if (existing != null)
+            {
+                await client.UsdFuturesApi.Trading.CancelOrderAsync(pos.Symbol, existing.OrderId, ct: cts.Token);
+            }
+
+            // Same conditional-order pattern the Engine itself uses for
+            // placing SL/TP (see PositionSupervisorService.cs) — trigger
+            // price against the Mark price, with price protection
+            // enabled, rather than a plain stop order.
+            var clientOrderId = $"MANUAL_{(isStopLoss ? "SL" : "TP")}_{pos.Symbol}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+
+            var r = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                symbol: pos.Symbol,
+                side: closeSide,
+                type: isStopLoss ? ConditionalOrderType.StopMarket : ConditionalOrderType.TakeProfitMarket,
+                quantity: pos.Qty,
+                positionSide: posSide,
+                triggerPrice: price,
+                workingType: WorkingType.Mark,
+                clientOrderId: clientOrderId,
+                priceProtect: true,
+                ct: cts.Token);
+
+            if (!r.Success)
+            {
+                // Surface the failure where the order-panel error
+                // message already shows up, rather than failing silently.
+                _orderError = $"{(isStopLoss ? "SL" : "TP")} update failed: {r.Error?.Message}";
+            }
+
+            await LoadOpenOrdersAsync();
+            await RefreshPositionLines();
+        }
+        catch (Exception ex)
+        {
+            _orderError = $"{(isStopLoss ? "SL" : "TP")} update failed: {ex.Message}";
+        }
+        finally
+        {
+            _slTpDragBusy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    // Re-draws the entry/SL/TP lines on the chart from the currently
+    // selected position's matching open orders, after any change.
+    async Task RefreshPositionLines()
+    {
+        if (_selectedPosition == null)
+        {
+            try { await JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}"); } catch { }
+            return;
+        }
+
+        var pos = _selectedPosition;
+        var sl = _openOrders.FirstOrDefault(o => o.Symbol == pos.Symbol && o.Type.Contains("STOP"))?.Price ?? 0m;
+        var tp = _openOrders.FirstOrDefault(o => o.Symbol == pos.Symbol && o.Type.Contains("TAKE_PROFIT"))?.Price ?? 0m;
+
+        try
+        {
+            await JS.InvokeVoidAsync("marketChart.showPositionLines",
+                $"chartContainer-{_chartInstanceId}", pos.EntryPrice, sl, tp, pos.Side);
+        }
+        catch { }
+    }
+
     // AI sizing: given an entry price (chart-picked or signal default),
     // current free balance and the symbol's max leverage, suggest both
     // a sensible quantity AND bump leverage if the balance is too small
@@ -2039,7 +2156,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // already uses, just driven by a table click instead of a signal.
     ActivePositionInfo? _selectedPosition;
 
-    void SelectPosition(ActivePositionInfo pos)
+    async Task SelectPosition(ActivePositionInfo pos)
     {
         bool wasSelected = _selectedPosition == pos;
         _selectedPosition = wasSelected ? null : pos;
@@ -2054,6 +2171,18 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             PickSym(pos.Symbol);
             _ = JS.InvokeVoidAsync("tickerDragScroll.scrollSymbolIntoView", pos.Symbol);
+
+            // Bybit-style draggable Entry/SL/TP lines for the position
+            // just selected — drawn fresh against whatever protective
+            // orders currently exist for this symbol.
+            await LoadOpenOrdersAsync();
+            _dotNetRef ??= DotNetObjectReference.Create(this);
+            try { await JS.InvokeVoidAsync("marketChart.bindSlTpCallbacks", $"chartContainer-{_chartInstanceId}", _dotNetRef); } catch { }
+            await RefreshPositionLines();
+        }
+        else
+        {
+            try { await JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}"); } catch { }
         }
     }
 
