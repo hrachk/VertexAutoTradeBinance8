@@ -1,41 +1,6 @@
 // ============================================================
 // VERTEX TRADING CHART v5 — Professional Exchange Style
 // ============================================================
-// ── DOM-LEVEL SAFETY NET ──────────────────────────────────
-// Completely independent of Blazor's component lifecycle (which has
-// been confirmed, via diagnostic logging, to NOT reliably re-trigger
-// OnAfterRenderAsync — neither firstRender=true nor even a plain
-// re-render — when navigating back to /market through the sidebar).
-// This MutationObserver watches the whole document body for ANY DOM
-// change and, on every mutation batch, cheaply checks whether the
-// #priceChart element currently in the document is still the one this
-// module is bound to (MC). If a NEW #priceChart node appears (Blazor
-// re-rendered the page content even without calling our C# lifecycle
-// hooks) and it doesn't match MC, this re-runs init() directly —
-// no waiting for any Blazor callback at all. Started once, the first
-// time init() ever runs, and kept running for the lifetime of the
-// page/tab.
-let _domWatcherStarted = false;
-function ensureDomWatcher() {
-    if (_domWatcherStarted) return;
-    _domWatcherStarted = true;
-
-    let debounceTimer = null;
-    const observer = new MutationObserver(() => {
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-            const live = document.getElementById('priceChart');
-            if (live && live !== MC && _lastInitIds) {
-                console.log('[chart] MutationObserver detected new #priceChart element, re-initializing');
-                window.marketChart.init(..._lastInitIds);
-            }
-        }, 80);
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-}
-
-let _lastInitIds = null;
-
 (function () {
 'use strict';
 
@@ -68,6 +33,45 @@ let priceLine = null;     // user-picked price line { price } or null
 let MC, RC, VC; // canvas elements
 let Mx, Rx, Vx; // 2d contexts
 let dpr = window.devicePixelRatio || 1;
+
+// ── DOM-LEVEL SAFETY NET ──────────────────────────────────
+// Completely independent of Blazor's component lifecycle (which has
+// been confirmed, via diagnostic logging, to NOT reliably re-trigger
+// OnAfterRenderAsync — neither firstRender=true nor even a plain
+// re-render — when navigating back to /market through the sidebar).
+// This MutationObserver watches the whole document body for ANY DOM
+// change and, on every mutation batch, cheaply checks whether the
+// #priceChart element currently in the document is still the one this
+// module is bound to (MC). If a NEW #priceChart node appears (Blazor
+// re-rendered the page content even without calling our C# lifecycle
+// hooks) and it doesn't match MC, this re-runs init() directly —
+// no waiting for any Blazor callback at all. Started once, the first
+// time init() ever runs, and kept running for the lifetime of the
+// page/tab.
+//
+// NOTE: this MUST live inside this IIFE (not at module top-level
+// outside it) because it references MC, which is only declared in
+// this scope — putting it outside caused a ReferenceError every time
+// the observer fired.
+let _domWatcherStarted = false;
+let _lastInitIds = null;
+function ensureDomWatcher() {
+    if (_domWatcherStarted) return;
+    _domWatcherStarted = true;
+
+    let debounceTimer = null;
+    const observer = new MutationObserver(() => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+            const live = document.getElementById('priceChart');
+            if (live && live !== MC && _lastInitIds) {
+                console.log('[chart] MutationObserver detected new #priceChart element, re-initializing');
+                window.marketChart.init(..._lastInitIds);
+            }
+        }, 80);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+}
 
 // ── THEME ─────────────────────────────────────────────────
 const T = {
