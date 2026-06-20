@@ -155,11 +155,16 @@
                 // Bybit-style draggable position lines (entry/SL/TP).
                 // entryLine is informational only (not draggable —
                 // entry price of an already-open position can't be
-                // changed). slLine/tpLine ARE draggable: dragging one
-                // updates it live on the chart, and on mouseup fires
-                // onSlChanged/onTpChanged with the new price so the C#
-                // side can actually replace the order on the exchange.
+                // changed), but its title is refreshed continuously
+                // with live PnL via updatePnl(). slLine/tpLine ARE
+                // draggable, and ALWAYS exist once a position is
+                // selected — even with no real order behind them yet
+                // (placeholder position above/below entry) — because
+                // there has to be something visible to grab in order
+                // to create a TP/SL that doesn't exist yet, not just
+                // to move one that already does.
                 entryLine: null, slLine: null, tpLine: null,
+                entryPrice: 0, side: 'LONG', qty: 0,
                 onSlChanged: null, onTpChanged: null,
                 dragTarget: null, // 'sl' | 'tp' | null while dragging
             };
@@ -168,17 +173,25 @@
             // ── Draggable SL/TP lines ──────────────────────────────
             // Lightweight Charts v5's core API does not expose a
             // built-in draggable price line (it's an open feature
-            // request — github.com/tradingview/lightweight-charts/
+            // request, github.com/tradingview/lightweight-charts/
             // issues/1086 — implemented only as third-party plugins so
             // far). This implements the same interaction manually using
             // the library's own coordinateToPrice/priceToCoordinate,
             // which is the standard documented approach for this.
-            const HIT_TOLERANCE_PX = 6;
+            const HIT_TOLERANCE_PX = 8;
 
             function priceLineY(line) {
                 if (!line) return null;
                 try { return candleSeries.priceToCoordinate(line.options().price); }
                 catch (e) { return null; }
+            }
+
+            function pnlText(currentPrice) {
+                if (!session.entryPrice || !session.qty) return '';
+                const dir = session.side === 'LONG' ? 1 : -1;
+                const pnl = (currentPrice - session.entryPrice) * dir * session.qty;
+                const sign = pnl >= 0 ? '+' : '';
+                return `  PnL ${sign}${pnl.toFixed(2)}`;
             }
 
             container.addEventListener('mousedown', (e) => {
@@ -189,50 +202,48 @@
                 const tpY = priceLineY(session.tpLine);
                 if (slY != null && Math.abs(y - slY) <= HIT_TOLERANCE_PX) {
                     session.dragTarget = 'sl';
-                    container.style.cursor = 'ns-resize';
+                    container.style.cursor = 'grabbing';
                     e.preventDefault();
                 } else if (tpY != null && Math.abs(y - tpY) <= HIT_TOLERANCE_PX) {
                     session.dragTarget = 'tp';
-                    container.style.cursor = 'ns-resize';
+                    container.style.cursor = 'grabbing';
                     e.preventDefault();
                 }
             });
 
             container.addEventListener('mousemove', (e) => {
+                const rect = container.getBoundingClientRect();
+                const y = e.clientY - rect.top;
+
                 // Hover feedback even when not dragging, so the lines
                 // feel grabbable before the user commits to a drag.
                 if (!session.dragTarget) {
-                    const rect = container.getBoundingClientRect();
-                    const y = e.clientY - rect.top;
                     const slY = priceLineY(session.slLine);
                     const tpY = priceLineY(session.tpLine);
                     const nearLine = (slY != null && Math.abs(y - slY) <= HIT_TOLERANCE_PX) ||
                                       (tpY != null && Math.abs(y - tpY) <= HIT_TOLERANCE_PX);
-                    container.style.cursor = nearLine ? 'ns-resize' : 'crosshair';
+                    container.style.cursor = nearLine ? 'grab' : 'crosshair';
                     return;
                 }
-                const rect = container.getBoundingClientRect();
-                const y = e.clientY - rect.top;
+
                 const price = candleSeries.coordinateToPrice(y);
                 if (price == null) return;
 
                 if (session.dragTarget === 'sl' && session.slLine) {
-                    try {
-                        candleSeries.removePriceLine(session.slLine);
-                    } catch (err) {}
+                    try { candleSeries.removePriceLine(session.slLine); } catch (err) {}
                     session.slLine = candleSeries.createPriceLine({
                         price, color: '#ef4444', lineWidth: 2,
                         lineStyle: LightweightCharts.LineStyle.Solid,
-                        axisLabelVisible: true, title: 'SL',
+                        axisLabelVisible: true,
+                        title: `SL ${price.toFixed(6).replace(/0+$/,'').replace(/\.$/,'')}`,
                     });
                 } else if (session.dragTarget === 'tp' && session.tpLine) {
-                    try {
-                        candleSeries.removePriceLine(session.tpLine);
-                    } catch (err) {}
+                    try { candleSeries.removePriceLine(session.tpLine); } catch (err) {}
                     session.tpLine = candleSeries.createPriceLine({
                         price, color: '#22c55e', lineWidth: 2,
                         lineStyle: LightweightCharts.LineStyle.Solid,
-                        axisLabelVisible: true, title: 'TP',
+                        axisLabelVisible: true,
+                        title: `TP ${price.toFixed(6).replace(/0+$/,'').replace(/\.$/,'')}`,
                     });
                 }
             });
@@ -306,38 +317,68 @@
             s.priceLine = null;
         },
 
-        // Draws the Entry (static)/SL/TP lines for the currently
-        // selected open position. Called whenever a position is
-        // selected/deselected in the side panel. entry/sl/tp are plain
-        // numbers; pass 0 or null to skip drawing that particular line
-        // (e.g. a position with no TP set yet).
-        showPositionLines(containerId, entry, sl, tp, side) {
+        // Draws the Entry/SL/TP lines for the currently selected open
+        // position. entry/sl/tp are plain numbers; sl/tp of 0 means
+        // "no real order yet" — a placeholder line is still drawn
+        // (a sensible default distance from entry) so there's always
+        // something visible to grab and drag into a real TP/SL,
+        // exactly like Bybit/Binance's chart-based position editor.
+        showPositionLines(containerId, entry, sl, tp, side, qty) {
             const s = sessions.get(containerId);
             if (!s) return;
             this.hidePositionLines(containerId);
 
+            s.entryPrice = entry;
+            s.side = side;
+            s.qty = qty;
+
             const isLong = side === 'LONG';
+            const fmt = (p) => p.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
+
             if (entry > 0) {
                 s.entryLine = s.candleSeries.createPriceLine({
                     price: entry, color: '#3b82f6', lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Dotted,
-                    axisLabelVisible: true, title: 'Entry',
+                    axisLabelVisible: true, title: `Entry ${fmt(entry)}`,
                 });
             }
-            if (sl > 0) {
-                s.slLine = s.candleSeries.createPriceLine({
-                    price: sl, color: '#ef4444', lineWidth: 2,
-                    lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: true, title: 'SL',
-                });
-            }
-            if (tp > 0) {
-                s.tpLine = s.candleSeries.createPriceLine({
-                    price: tp, color: '#22c55e', lineWidth: 2,
-                    lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: true, title: 'TP',
-                });
-            }
+
+            // Placeholder distance when no real SL/TP exists yet: 2%
+            // of entry price in the protective direction. Purely a
+            // starting position for the user to drag from — has no
+            // effect on the exchange until they actually drag it
+            // (which fires onSlChanged/onTpChanged) or it stays
+            // untouched (in which case nothing was ever placed).
+            const placeholderDist = entry * 0.02;
+            const slPrice = sl > 0 ? sl : (isLong ? entry - placeholderDist : entry + placeholderDist);
+            const tpPrice = tp > 0 ? tp : (isLong ? entry + placeholderDist : entry - placeholderDist);
+
+            s.slLine = s.candleSeries.createPriceLine({
+                price: slPrice, color: '#ef4444', lineWidth: 2,
+                lineStyle: sl > 0 ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
+                axisLabelVisible: true,
+                title: sl > 0 ? `SL ${fmt(slPrice)}` : `SL (drag to set)`,
+            });
+            s.tpLine = s.candleSeries.createPriceLine({
+                price: tpPrice, color: '#22c55e', lineWidth: 2,
+                lineStyle: tp > 0 ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
+                axisLabelVisible: true,
+                title: tp > 0 ? `TP ${fmt(tpPrice)}` : `TP (drag to set)`,
+            });
+        },
+
+        // Refreshes just the entry line's title with live PnL, called
+        // on every price tick without needing to redraw SL/TP too.
+        updatePnl(containerId, currentPrice) {
+            const s = sessions.get(containerId);
+            if (!s || !s.entryLine || !s.entryPrice) return;
+            const dir = s.side === 'LONG' ? 1 : -1;
+            const pnl = (currentPrice - s.entryPrice) * dir * s.qty;
+            const sign = pnl >= 0 ? '+' : '';
+            const fmt = (p) => p.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
+            try {
+                s.entryLine.applyOptions({ title: `Entry ${fmt(s.entryPrice)}  ·  PnL ${sign}${pnl.toFixed(2)}` });
+            } catch (e) {}
         },
 
         hidePositionLines(containerId) {
@@ -346,6 +387,8 @@
             for (const key of ['entryLine', 'slLine', 'tpLine']) {
                 if (s[key]) { try { s.candleSeries.removePriceLine(s[key]); } catch (e) {} s[key] = null; }
             }
+            s.entryPrice = 0;
+            s.qty = 0;
         },
 
         // Binds the C# callbacks that fire once a drag is committed

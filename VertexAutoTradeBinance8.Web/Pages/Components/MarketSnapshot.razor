@@ -1232,6 +1232,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             ResolveSelected();
             CalcStats();
             try { await RenderCharts(); } catch { }
+
+            // Live PnL caption on the entry line, if a position on this
+            // symbol is currently selected.
+            if (_selectedPosition != null && _selectedPosition.Symbol == symbol)
+            {
+                try { await JS.InvokeVoidAsync("marketChart.updatePnl", $"chartContainer-{_chartInstanceId}", price); } catch { }
+            }
+
             StateHasChanged();
         });
     }
@@ -1940,7 +1948,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         try
         {
             await JS.InvokeVoidAsync("marketChart.showPositionLines",
-                $"chartContainer-{_chartInstanceId}", pos.EntryPrice, sl, tp, pos.Side);
+                $"chartContainer-{_chartInstanceId}", pos.EntryPrice, sl, tp, pos.Side, pos.Qty);
         }
         catch { }
     }
