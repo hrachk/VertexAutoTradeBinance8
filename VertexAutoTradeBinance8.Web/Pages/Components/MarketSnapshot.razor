@@ -2473,26 +2473,38 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             }
 
             using var doc = System.Text.Json.JsonDocument.Parse(body);
-            // Response shape: { "total": N, "orders": [ {...}, ... ] }
-            if (!doc.RootElement.TryGetProperty("orders", out var ordersEl))
+            // CONFIRMED via official Binance docs: the response is a
+            // plain top-level JSON array, NOT wrapped in an "orders"
+            // property as initially assumed — that wrong assumption
+            // was the actual bug (JsonException: "requires an element
+            // of type 'Object', but the target element has type
+            // 'Array'" — TryGetProperty on an array root throws
+            // exactly this).
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
             {
-                _lastAlgoOrdersDebug = $"No 'orders' property in response: {body}";
+                _lastAlgoOrdersDebug = $"Unexpected response shape (not an array): {body}";
                 return result;
             }
 
-            foreach (var o in ordersEl.EnumerateArray())
+            foreach (var o in doc.RootElement.EnumerateArray())
             {
                 decimal GetDec(string name) =>
                     o.TryGetProperty(name, out var v) && decimal.TryParse(v.GetString(), System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0m;
                 string GetStr(string name) => o.TryGetProperty(name, out var v) ? (v.GetString() ?? "") : "";
-                long GetLong(string name) => o.TryGetProperty(name, out var v) && v.TryGetInt64(out var l) ? l : 0L;
+                long GetLong(string name) =>
+                    o.TryGetProperty(name, out var v)
+                        ? (v.ValueKind == System.Text.Json.JsonValueKind.Number && v.TryGetInt64(out var l) ? l
+                           : long.TryParse(v.GetString(), out var l2) ? l2 : 0L)
+                        : 0L;
 
                 result.Add(new OpenOrderRow
                 {
                     OrderId    = GetLong("algoId"),
                     Symbol     = GetStr("symbol"),
                     Side       = GetStr("side").ToUpperInvariant(),
-                    Type       = GetStr("type"),
+                    // Real field name confirmed via docs is "orderType"
+                    // (e.g. "TAKE_PROFIT"/"STOP"), not "type".
+                    Type       = GetStr("orderType"),
                     Price      = GetDec("triggerPrice"),
                     Qty        = GetDec("quantity"),
                     Filled     = GetDec("executedQty"),
