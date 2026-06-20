@@ -30,23 +30,24 @@ public sealed class SignalConfidenceSettings
 
 public sealed class ConfidenceResolver
 {
-    private readonly SignalConfidenceSettings _cfg;
+    private readonly IOptionsMonitor<SignalConfidenceSettings> _options;
 
-    public ConfidenceResolver(IOptions<SignalConfidenceSettings> options)
+    public ConfidenceResolver(IOptionsMonitor<SignalConfidenceSettings> options)
     {
-        _cfg = options.Value;
+        _options = options;
     }
 
     public SignalConfidenceSettings.ConfidenceProfile Resolve(string symbol)
     {
         symbol = symbol.ToUpperInvariant();
+        var cfg = _options.CurrentValue;
 
         if (symbol.StartsWith("BTC"))
-            return _cfg.BTC;
+            return cfg.BTC;
 
         if (symbol.StartsWith("ETH"))
-            return _cfg.ETH;
+            return cfg.ETH;
 
-        return _cfg.Default;
+        return cfg.Default;
     }
 }

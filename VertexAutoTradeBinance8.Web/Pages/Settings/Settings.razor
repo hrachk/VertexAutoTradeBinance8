@@ -1,0 +1,803 @@
+@page "/settings"
+@using System.Text.Json.Nodes
+@using VertexAutoTradeBinance8.Web.Services
+@inject RuntimeConfigService Cfg
+@inject StrategyModeFileService StrategyModeSvc
+@inject IJSRuntime JS
+
+<PageTitle>Settings — Vertex AI</PageTitle>
+
+<div class="st">
+
+    <!-- ══ HEADER ══════════════════════════════════════════════ -->
+    <div class="st-header">
+        <div class="st-header-left">
+            <div class="st-icon-wrap">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" class="st-gear">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+                </svg>
+            </div>
+            <div>
+                <div class="st-title">Settings</div>
+                <div class="st-subtitle">Live engine configuration — changes apply within seconds, no restart</div>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_saveToast))
+        {
+            <div class="st-toast @(_saveToastIsError ? "st-toast-err" : "")">
+                <span class="st-toast-dot"></span>@_saveToast
+            </div>
+        }
+    </div>
+
+    <!-- ══ TABS ════════════════════════════════════════════════ -->
+    <div class="st-tabs">
+        @foreach (var tab in _tabs)
+        {
+            <button class="st-tab @(_activeTab == tab.Id ? "st-tab-on" : "")" @onclick="() => _activeTab = tab.Id">
+                <span class="st-tab-icon">@tab.Icon</span>
+                @tab.Label
+                @if (tab.LiveBadge)
+                {
+                    <span class="st-tab-live">●</span>
+                }
+            </button>
+        }
+    </div>
+
+    <div class="st-body">
+
+        @if (_loading)
+        {
+            <div class="st-loading">
+                <div class="st-spin"></div>
+                Loading current configuration…
+            </div>
+        }
+        else
+        {
+            @switch (_activeTab)
+            {
+                case "strategy": { @StrategyTab() break; }
+                case "risk":     { @RiskTab() break; }
+                case "symbols":  { @SymbolsTab() break; }
+                case "meanrev":  { @MeanRevTab() break; }
+                case "exits":    { @ExitsTab() break; }
+                case "engine":   { @EngineTab() break; }
+            }
+        }
+
+    </div>
+</div>
+
+@code {
+    private RenderFragment StrategyTab() => @<div class="st-grid">
+
+        <div class="st-card st-card-wide">
+            <div class="st-card-head">
+                <div class="st-card-title">Strategy Routing Mode</div>
+                <span class="st-live-pill">● live</span>
+            </div>
+            <div class="st-card-sub">Decides whether the trend-following engine, the mean-reversion engine, or both (regime-based) generate trade signals.</div>
+
+            <div class="st-mode-grid">
+                @foreach (var (val, label, desc) in new[]
+                {
+                    ("Auto", "Auto (Regime-based)", "Trend engine fires in Trend/StrongTrend regimes, Mean-Reversion fires in Range/Squeeze. Recommended default."),
+                    ("TrendOnly", "Trend Only", "Only the original trend-following engine runs. Mean-Reversion is fully disabled — identical to pre-v9 behavior."),
+                    ("MeanReversionOnly", "Mean-Reversion Only", "Only the Z-Score mean-reversion engine runs, regardless of detected regime.")
+                })
+                {
+                    <div class="st-mode-option @(_strategyMode == val ? "st-mode-on" : "")" @onclick="() => SetStrategyMode(val)">
+                        <div class="st-mode-radio">@(_strategyMode == val ? "●" : "○")</div>
+                        <div>
+                            <div class="st-mode-label">@label</div>
+                            <div class="st-mode-desc">@desc</div>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head"><div class="st-card-title">Pullback Entry (legacy)</div></div>
+            <div class="st-card-sub">Used by the trend engine's entry timing. Type and EMA period.</div>
+            <div class="st-field">
+                <label>Pullback Type</label>
+                <select class="st-select" value="@GetStr("Strategy:PullbackType","CandleNearEma")"
+                        @onchange="OnPullbackTypeChanged">
+                    <option value="CandleNearEma">CandleNearEma</option>
+                    <option value="RsiReclaim">RsiReclaim</option>
+                </select>
+            </div>
+            <div class="st-field">
+                <label>EMA Period</label>
+                <input class="st-input" type="number" value="@GetInt("Strategy:EmaPeriod",21)"
+                       @onchange="OnEmaPeriodChanged" />
+            </div>
+            <div class="st-field">
+                <label>EMA Zone %</label>
+                <input class="st-input" type="number" step="0.0001" value="@GetDecimal("Strategy:EmaZonePercent",0.002m)"
+                       @onchange="OnEmaZonePercentChanged" />
+            </div>
+        </div>
+
+    </div>;
+
+    private Task OnPullbackTypeChanged(ChangeEventArgs e) => SetAsync("Strategy:PullbackType", e.Value?.ToString() ?? "CandleNearEma");
+    private Task OnEmaPeriodChanged(ChangeEventArgs e) => SetAsync("Strategy:EmaPeriod", ParseIntOr(e.Value, 21));
+    private Task OnEmaZonePercentChanged(ChangeEventArgs e) => SetAsync("Strategy:EmaZonePercent", ParseDecimalOr(e.Value, 0.002m));
+
+    private static readonly (string Key, string Label)[] TradingProfiles =
+    {
+        ("Trading", "Default (all other symbols)"),
+        ("Trading:BTC", "BTCUSDT"),
+        ("Trading:ETH", "ETHUSDT"),
+    };
+
+    private RenderFragment RiskTab() => @<div class="st-grid">
+
+        @foreach (var profile in TradingProfiles)
+        {
+            var profileKey = profile.Key;
+            <div class="st-card">
+                <div class="st-card-head">
+                    <div class="st-card-title">@profile.Label</div>
+                    <span class="st-live-pill">● live</span>
+                </div>
+
+                <div class="st-field">
+                    <label>Leverage <span class="st-field-hint">automatically synced to the exchange's real per-symbol max before every order</span></label>
+                    <input class="st-input" type="number" value="@GetInt($"{profileKey}:Leverage", 10)"
+                           @onchange="@((ChangeEventArgs e) => OnLeverageChanged(profileKey, e))" />
+                </div>
+
+                <div class="st-field">
+                    <label>Risk Per Trade (fraction of balance, e.g. 0.03 = 3%)</label>
+                    <input class="st-input" type="number" step="0.001" value="@GetDecimal($"{profileKey}:RiskPerTrade", 0.03m)"
+                           @onchange="@((ChangeEventArgs e) => OnRiskPerTradeChanged(profileKey, e))" />
+                </div>
+
+                <div class="st-field-row">
+                    <div class="st-field">
+                        <label>Min Notional ($)</label>
+                        <input class="st-input" type="number" value="@GetDecimal($"{profileKey}:MinNotional", 10m)"
+                               @onchange="@((ChangeEventArgs e) => OnMinNotionalChanged(profileKey, e))" />
+                    </div>
+                    <div class="st-field">
+                        <label>Cooldown (seconds)</label>
+                        <input class="st-input" type="number" value="@GetInt($"{profileKey}:CooldownSeconds", 90)"
+                               @onchange="@((ChangeEventArgs e) => OnCooldownSecondsChanged(profileKey, e))" />
+                    </div>
+                </div>
+            </div>
+        }
+
+        <div class="st-card st-card-wide st-card-muted">
+            <div class="st-card-head"><div class="st-card-title">Base Risk / Notional Guards</div></div>
+            <div class="st-card-sub">Safety-net minimums for small balances. Currently set to 0 across all profiles (intentionally disabled per your prior decision).</div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>Base Risk % (Default profile)</label>
+                    <input class="st-input" type="number" step="0.001" value="@GetDecimal("Trading:BaseRiskPercent", 0m)"
+                           @onchange="OnBaseRiskPercentChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Min Notional Guard %</label>
+                    <input class="st-input" type="number" step="0.001" value="@GetDecimal("Trading:MinNotionalGuardPercent", 0m)"
+                           @onchange="OnMinNotionalGuardPercentChanged" />
+                </div>
+            </div>
+        </div>
+
+    </div>;
+
+    private Task OnLeverageChanged(string profileKey, ChangeEventArgs e) => SetAsync($"{profileKey}:Leverage", ParseIntOr(e.Value, 10));
+    private Task OnRiskPerTradeChanged(string profileKey, ChangeEventArgs e) => SetAsync($"{profileKey}:RiskPerTrade", ParseDecimalOr(e.Value, 0.03m));
+    private Task OnMinNotionalChanged(string profileKey, ChangeEventArgs e) => SetAsync($"{profileKey}:MinNotional", ParseDecimalOr(e.Value, 10m));
+    private Task OnCooldownSecondsChanged(string profileKey, ChangeEventArgs e) => SetAsync($"{profileKey}:CooldownSeconds", ParseIntOr(e.Value, 90));
+
+    private Task OnBaseRiskPercentChanged(ChangeEventArgs e) => SetAsync("Trading:BaseRiskPercent", ParseDecimalOr(e.Value, 0m));
+    private Task OnMinNotionalGuardPercentChanged(ChangeEventArgs e) => SetAsync("Trading:MinNotionalGuardPercent", ParseDecimalOr(e.Value, 0m));
+
+    private RenderFragment MeanRevTab() => @<div class="st-grid">
+
+        <div class="st-card st-card-wide">
+            <div class="st-card-head">
+                <div class="st-card-title">Entry Trigger</div>
+                <span class="st-live-pill">● live</span>
+            </div>
+            <div class="st-card-sub">Z-Score is computed over a rolling window of closes — entry fires when price deviates this many standard deviations from the mean.</div>
+
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>Rolling Window (bars)</label>
+                    <input class="st-input" type="number" value="@GetInt("MeanReversion:Window", 20)" @onchange="OnMrWindowChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Entry Sigma (|Z| threshold)</label>
+                    <input class="st-input" type="number" step="0.1" value="@GetDecimal("MeanReversion:EntrySigma", 2.0m)" @onchange="OnMrEntrySigmaChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Timeframe</label>
+                    <select class="st-select" value="@GetStr("MeanReversion:Timeframe","FifteenMinutes")" @onchange="OnMrTimeframeChanged">
+                        <option value="FiveMinutes">5m</option>
+                        <option value="FifteenMinutes">15m</option>
+                        <option value="ThirtyMinutes">30m</option>
+                        <option value="OneHour">1h</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head"><div class="st-card-title">Volume Confirmation</div></div>
+            <div class="st-card-sub">Filters out low-liquidity noise spikes.</div>
+            <div class="st-field">
+                <label>Volume Avg Period (bars)</label>
+                <input class="st-input" type="number" value="@GetInt("MeanReversion:VolumeAvgPeriod", 50)" @onchange="OnMrVolAvgChanged" />
+            </div>
+            <div class="st-field">
+                <label>Surge Multiplier (× average)</label>
+                <input class="st-input" type="number" step="0.1" value="@GetDecimal("MeanReversion:VolumeSurgeMultiplier", 1.5m)" @onchange="OnMrVolMultChanged" />
+            </div>
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head"><div class="st-card-title">Reversal & Regime Guards</div></div>
+            <div class="st-toggle-row">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("MeanReversion:RequireReversalConfirmation", true)" @onchange="OnMrReversalToggle" />
+                    <span>Require reversal confirmation</span>
+                </label>
+            </div>
+            <div class="st-field">
+                <label>Reversal Lookback (bars)</label>
+                <input class="st-input" type="number" value="@GetInt("MeanReversion:ReversalLookback", 5)" @onchange="OnMrReversalLookbackChanged" />
+            </div>
+            <div class="st-toggle-row">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("MeanReversion:RequireRangeRegime", true)" @onchange="OnMrRangeRegimeToggle" />
+                    <span>Only trade in Range/Squeeze regime</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head"><div class="st-card-title">BTC Correlation Guard</div></div>
+            <div class="st-toggle-row">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("MeanReversion:UseBtcCorrelationGuard", true)" @onchange="OnMrBtcGuardToggle" />
+                    <span>Skip if BTC itself is at a matching extreme</span>
+                </label>
+            </div>
+            <div class="st-field">
+                <label>Correlation Threshold</label>
+                <input class="st-input" type="number" step="0.05" value="@GetDecimal("MeanReversion:BtcCorrelationThreshold", 0.6m)" @onchange="OnMrBtcThresholdChanged" />
+            </div>
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head"><div class="st-card-title">Exit & Risk</div></div>
+            <div class="st-field">
+                <label>Stop ATR Padding</label>
+                <input class="st-input" type="number" step="0.05" value="@GetDecimal("MeanReversion:StopAtrPad", 0.3m)" @onchange="OnMrStopAtrPadChanged" />
+            </div>
+            <div class="st-field">
+                <label>Min Reward/Risk Ratio</label>
+                <input class="st-input" type="number" step="0.1" value="@GetDecimal("MeanReversion:MinRewardRiskRatio", 1.2m)" @onchange="OnMrMinRrChanged" />
+            </div>
+            <div class="st-field">
+                <label>Time-Stop (bars) <span class="st-field-hint">force-close if the mean hasn't been reached</span></label>
+                <input class="st-input" type="number" value="@GetInt("MeanReversion:TimeStopBars", 12)" @onchange="OnMrTimeStopChanged" />
+            </div>
+        </div>
+
+    </div>;
+
+    private Task OnMrWindowChanged(ChangeEventArgs e) => SetAsync("MeanReversion:Window", ParseIntOr(e.Value, 20));
+    private Task OnMrEntrySigmaChanged(ChangeEventArgs e) => SetAsync("MeanReversion:EntrySigma", ParseDecimalOr(e.Value, 2.0m));
+    private Task OnMrTimeframeChanged(ChangeEventArgs e) => SetAsync("MeanReversion:Timeframe", e.Value?.ToString() ?? "FifteenMinutes");
+    private Task OnMrVolAvgChanged(ChangeEventArgs e) => SetAsync("MeanReversion:VolumeAvgPeriod", ParseIntOr(e.Value, 50));
+    private Task OnMrVolMultChanged(ChangeEventArgs e) => SetAsync("MeanReversion:VolumeSurgeMultiplier", ParseDecimalOr(e.Value, 1.5m));
+    private Task OnMrReversalToggle(ChangeEventArgs e) => SetAsync("MeanReversion:RequireReversalConfirmation", (bool)(e.Value ?? true));
+    private Task OnMrReversalLookbackChanged(ChangeEventArgs e) => SetAsync("MeanReversion:ReversalLookback", ParseIntOr(e.Value, 5));
+    private Task OnMrRangeRegimeToggle(ChangeEventArgs e) => SetAsync("MeanReversion:RequireRangeRegime", (bool)(e.Value ?? true));
+    private Task OnMrBtcGuardToggle(ChangeEventArgs e) => SetAsync("MeanReversion:UseBtcCorrelationGuard", (bool)(e.Value ?? true));
+    private Task OnMrBtcThresholdChanged(ChangeEventArgs e) => SetAsync("MeanReversion:BtcCorrelationThreshold", ParseDecimalOr(e.Value, 0.6m));
+    private Task OnMrStopAtrPadChanged(ChangeEventArgs e) => SetAsync("MeanReversion:StopAtrPad", ParseDecimalOr(e.Value, 0.3m));
+    private Task OnMrMinRrChanged(ChangeEventArgs e) => SetAsync("MeanReversion:MinRewardRiskRatio", ParseDecimalOr(e.Value, 1.2m));
+    private Task OnMrTimeStopChanged(ChangeEventArgs e) => SetAsync("MeanReversion:TimeStopBars", ParseIntOr(e.Value, 12));
+
+    private string _newSymbolInput = "";
+
+    private void OnNewSymbolInputChanged(ChangeEventArgs e) => _newSymbolInput = e.Value?.ToString() ?? "";
+
+    private RenderFragment SymbolsTab() => @<div class="st-grid">
+
+        <div class="st-card st-card-wide">
+            <div class="st-card-head">
+                <div class="st-card-title">Pinned Symbols</div>
+                <span class="st-live-pill">● live</span>
+            </div>
+            <div class="st-card-sub">Always included in the tracked universe, regardless of the Auto-selection scanner's ranking.</div>
+
+            <div class="st-tag-list">
+                @foreach (var sym in GetStrList("SymbolSelection:Pinned"))
+                {
+                    <span class="st-tag">
+                        @sym
+                        <button class="st-tag-x" @onclick="() => RemovePinnedSymbol(sym)">✕</button>
+                    </span>
+                }
+            </div>
+
+            <div class="st-add-row">
+                <input class="st-input" placeholder="e.g. DOGEUSDT" value="@_newSymbolInput"
+                       @onchange="OnNewSymbolInputChanged" />
+                <button class="st-btn-add" @onclick="AddPinnedSymbol">+ Add</button>
+            </div>
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head"><div class="st-card-title">Selection Mode</div></div>
+            <div class="st-field">
+                <label>Mode</label>
+                <select class="st-select" value="@GetStr("SymbolSelection:Mode","Auto")" @onchange="OnSymModeChanged">
+                    <option value="Auto">Auto</option>
+                    <option value="Manual">Manual (pinned only)</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head"><div class="st-card-title">Auto-Selection Universe</div></div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>Top Volume Count</label>
+                    <input class="st-input" type="number" value="@GetInt("SymbolSelection:Auto:TopVolumeCount", 12)" @onchange="OnTopVolumeCountChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Final Universe Cap</label>
+                    <input class="st-input" type="number" value="@GetInt("SymbolSelection:Auto:FinalUniverseCap", 10)" @onchange="OnFinalUniverseCapChanged" />
+                </div>
+            </div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>Min Price ($)</label>
+                    <input class="st-input" type="number" step="0.001" value="@GetDecimal("SymbolSelection:Auto:MinPrice", 0.045m)" @onchange="OnMinPriceChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Min 24h Volume (Long)</label>
+                    <input class="st-input" type="number" value="@GetDecimal("SymbolSelection:Auto:Min24hVolumeLong", 1800000m)" @onchange="OnMin24hVolLongChanged" />
+                </div>
+            </div>
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head"><div class="st-card-title">BTC Market Filter</div></div>
+            <div class="st-toggle-row">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("SymbolSelection:Auto:EnableBtcFilter", true)" @onchange="OnBtcFilterToggle" />
+                    <span>Enable BTC dump/squeeze filter</span>
+                </label>
+            </div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>Dump Threshold (%)</label>
+                    <input class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcDumpThreshold", -1.8m)" @onchange="OnBtcDumpThresholdChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Squeeze Threshold (%)</label>
+                    <input class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcSqueezeThreshold", 1.8m)" @onchange="OnBtcSqueezeThresholdChanged" />
+                </div>
+            </div>
+        </div>
+
+    </div>;
+
+    private async Task AddPinnedSymbol()
+    {
+        var sym = _newSymbolInput.Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(sym)) return;
+
+        var list = GetStrList("SymbolSelection:Pinned");
+        if (!list.Contains(sym))
+        {
+            list.Add(sym);
+            await SetListAsync("SymbolSelection:Pinned", list);
+        }
+        _newSymbolInput = "";
+    }
+
+    private async Task RemovePinnedSymbol(string sym)
+    {
+        var list = GetStrList("SymbolSelection:Pinned");
+        list.Remove(sym);
+        await SetListAsync("SymbolSelection:Pinned", list);
+    }
+
+    private Task OnSymModeChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Mode", e.Value?.ToString() ?? "Auto");
+    private Task OnTopVolumeCountChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:TopVolumeCount", ParseIntOr(e.Value, 12));
+    private Task OnFinalUniverseCapChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:FinalUniverseCap", ParseIntOr(e.Value, 10));
+    private Task OnMinPriceChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:MinPrice", ParseDecimalOr(e.Value, 0.045m));
+    private Task OnMin24hVolLongChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:Min24hVolumeLong", ParseDecimalOr(e.Value, 1800000m));
+    private Task OnBtcFilterToggle(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:EnableBtcFilter", (bool)(e.Value ?? true));
+    private Task OnBtcDumpThresholdChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:BtcDumpThreshold", ParseDecimalOr(e.Value, -1.8m));
+    private Task OnBtcSqueezeThresholdChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:BtcSqueezeThreshold", ParseDecimalOr(e.Value, 1.8m));
+
+    private RenderFragment ExitsTab() => @<div class="st-grid">
+
+        <div class="st-card st-card-wide st-card-warn">
+            <div class="st-card-head">
+                <div class="st-card-title">⚠ Not Currently Wired to the Engine</div>
+            </div>
+            <div class="st-card-sub">
+                The <code>TakeProfit</code> and <code>PositionSupervisor</code> config sections exist in
+                appsettings.json but no Engine code currently reads these specific values — exits are
+                actually governed by the SL/TP placed directly on each signal at entry time, plus the
+                Mean-Reversion time-stop (editable in the Mean-Reversion tab). Editing these fields below
+                will persist the values, but they won't change live behavior until a future update wires
+                them into the supervisor. Shown here for visibility, not because they're active.
+            </div>
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head"><div class="st-card-title">TakeProfit (legacy, unwired)</div></div>
+            <div class="st-field">
+                <label>ATR Period</label>
+                <input class="st-input" type="number" value="@GetInt("TakeProfit:AtrPeriod", 14)" @onchange="OnTpAtrPeriodChanged" />
+            </div>
+            <div class="st-field-row">
+                <div class="st-field"><label>TP1 × ATR</label><input class="st-input" type="number" step="0.05" value="@GetDecimal("TakeProfit:Tp1Multiplier", 0.85m)" @onchange="OnTp1MultChanged" /></div>
+                <div class="st-field"><label>TP2 × ATR</label><input class="st-input" type="number" step="0.05" value="@GetDecimal("TakeProfit:Tp2Multiplier", 1.5m)" @onchange="OnTp2MultChanged" /></div>
+                <div class="st-field"><label>TP3 × ATR</label><input class="st-input" type="number" step="0.05" value="@GetDecimal("TakeProfit:Tp3Multiplier", 2.0m)" @onchange="OnTp3MultChanged" /></div>
+            </div>
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head"><div class="st-card-title">Position Supervisor (legacy, unwired)</div></div>
+            <div class="st-field-row">
+                <div class="st-field"><label>Stage 1 % (Major)</label><input class="st-input" type="number" step="0.01" value="@GetDecimal("PositionSupervisor:Stage1PercentMajor", 0.45m)" @onchange="OnPsStage1MajorChanged" /></div>
+                <div class="st-field"><label>Stage 1 % (Minor)</label><input class="st-input" type="number" step="0.01" value="@GetDecimal("PositionSupervisor:Stage1PercentMinor", 0.35m)" @onchange="OnPsStage1MinorChanged" /></div>
+            </div>
+            <div class="st-field-row">
+                <div class="st-field"><label>BE Trigger R (Major)</label><input class="st-input" type="number" step="0.05" value="@GetDecimal("PositionSupervisor:BeTriggerRMajor", 1.3m)" @onchange="OnPsBeTriggerMajorChanged" /></div>
+                <div class="st-field"><label>BE Trigger R (Minor)</label><input class="st-input" type="number" step="0.05" value="@GetDecimal("PositionSupervisor:BeTriggerRMinor", 0.55m)" @onchange="OnPsBeTriggerMinorChanged" /></div>
+            </div>
+        </div>
+
+    </div>;
+
+    private Task OnTpAtrPeriodChanged(ChangeEventArgs e) => SetAsync("TakeProfit:AtrPeriod", ParseIntOr(e.Value, 14));
+    private Task OnTp1MultChanged(ChangeEventArgs e) => SetAsync("TakeProfit:Tp1Multiplier", ParseDecimalOr(e.Value, 0.85m));
+    private Task OnTp2MultChanged(ChangeEventArgs e) => SetAsync("TakeProfit:Tp2Multiplier", ParseDecimalOr(e.Value, 1.5m));
+    private Task OnTp3MultChanged(ChangeEventArgs e) => SetAsync("TakeProfit:Tp3Multiplier", ParseDecimalOr(e.Value, 2.0m));
+    private Task OnPsStage1MajorChanged(ChangeEventArgs e) => SetAsync("PositionSupervisor:Stage1PercentMajor", ParseDecimalOr(e.Value, 0.45m));
+    private Task OnPsStage1MinorChanged(ChangeEventArgs e) => SetAsync("PositionSupervisor:Stage1PercentMinor", ParseDecimalOr(e.Value, 0.35m));
+    private Task OnPsBeTriggerMajorChanged(ChangeEventArgs e) => SetAsync("PositionSupervisor:BeTriggerRMajor", ParseDecimalOr(e.Value, 1.3m));
+    private Task OnPsBeTriggerMinorChanged(ChangeEventArgs e) => SetAsync("PositionSupervisor:BeTriggerRMinor", ParseDecimalOr(e.Value, 0.55m));
+
+    private RenderFragment EngineTab() => @<div class="st-grid">
+
+        <div class="st-card st-card-wide">
+            <div class="st-card-head"><div class="st-card-title">Live-Reload Architecture</div></div>
+            <div class="st-card-sub">
+                This Settings page writes to <code>appsettings.runtime.json</code> under the Engine's
+                SharedData:Root folder. The Engine layers that file on top of its base appsettings.json
+                using .NET's built-in config reload (no restart needed). Values consumed via
+                <code>IOptionsMonitor&lt;T&gt;</code> or direct <code>IConfiguration</code> reads pick up
+                changes within a few seconds; classes still using a startup <code>IOptions&lt;T&gt;</code>
+                snapshot do not (flagged per-tab above where relevant).
+            </div>
+        </div>
+
+        <div class="st-card st-card-warn">
+            <div class="st-card-head"><div class="st-card-title">⚠ Execution</div></div>
+            <div class="st-card-sub">
+                appsettings.json currently has this under <code>SignalOnlyMode:EnableExecution</code>,
+                but the Engine's TradingOptions binding actually reads <code>Trading:EnableExecution</code> —
+                a path mismatch that means the JSON value is silently ignored and defaults to enabled.
+                This toggle writes to the path the Engine ACTUALLY reads.
+            </div>
+            <div class="st-toggle-row">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("Trading:EnableExecution", true)" @onchange="OnEnableExecutionToggle" />
+                    <span>Enable real order execution (off = signal-only / dry-run)</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="st-card st-card-muted">
+            <div class="st-card-head"><div class="st-card-title">Debug (not currently read by Engine)</div></div>
+            <div class="st-toggle-row">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("Debug:EnableStrategyDebug", true)" @onchange="OnDebugToggle" />
+                    <span>Enable verbose strategy debug logging</span>
+                </label>
+            </div>
+        </div>
+
+    </div>;
+
+    private Task OnEnableExecutionToggle(ChangeEventArgs e) => SetAsync("Trading:EnableExecution", (bool)(e.Value ?? true));
+    private Task OnDebugToggle(ChangeEventArgs e) => SetAsync("Debug:EnableStrategyDebug", (bool)(e.Value ?? true));
+
+
+    // ── Tab definitions ──────────────────────────────────────
+    private sealed record TabDef(string Id, string Label, string Icon, bool LiveBadge);
+
+    private readonly List<TabDef> _tabs = new()
+    {
+        new("strategy", "Strategy Routing", "🧭", true),
+        new("meanrev",  "Mean-Reversion",   "📉", true),
+        new("risk",     "Risk & Leverage",  "⚖️", true),
+        new("symbols",  "Symbol Selection", "🪙", true),
+        new("exits",    "Exits & TP/SL",    "🎯", false),
+        new("engine",   "Engine Info",      "🖥️", false),
+    };
+
+    private string _activeTab = "strategy";
+    private string _strategyMode = "Auto";
+
+    private static int? ParseIntOr(object? raw, int fallback)
+        => int.TryParse(raw?.ToString(), out var v) ? v : fallback;
+
+    private static decimal? ParseDecimalOr(object? raw, decimal fallback)
+        => decimal.TryParse(raw?.ToString(), System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : fallback;
+
+    private async Task SetStrategyMode(string mode)
+    {
+        _strategyMode = mode;
+        try
+        {
+            await StrategyModeSvc.SetModeAsync(mode);
+            ShowToast($"Strategy mode → {mode}");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Failed to set mode: {ex.Message}", isError: true);
+        }
+    }
+    private bool _loading = true;
+    private JsonObject _effective = new();
+
+    private string _saveToast = "";
+    private bool _saveToastIsError;
+    private System.Threading.Timer? _toastTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _effective = await Cfg.GetEffectiveConfigAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Failed to load config: {ex.Message}", isError: true);
+            _effective = new JsonObject();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ShowToast(string message, bool isError = false)
+    {
+        _saveToast = message;
+        _saveToastIsError = isError;
+        _toastTimer?.Dispose();
+        _toastTimer = new System.Threading.Timer(_ =>
+        {
+            _saveToast = "";
+            InvokeAsync(StateHasChanged);
+        }, null, 3500, System.Threading.Timeout.Infinite);
+        StateHasChanged();
+    }
+
+    // ── Generic helpers for reading/writing a config path ───────
+    private string GetStr(string path, string fallback = "")
+    {
+        var node = GetNode(path);
+        return node?.GetValue<string>() ?? fallback;
+    }
+
+    private decimal GetDecimal(string path, decimal fallback = 0)
+    {
+        var node = GetNode(path);
+        if (node == null) return fallback;
+        try { return node.GetValue<decimal>(); } catch { return fallback; }
+    }
+
+    private int GetInt(string path, int fallback = 0)
+    {
+        var node = GetNode(path);
+        if (node == null) return fallback;
+        try { return node.GetValue<int>(); } catch { return fallback; }
+    }
+
+    private bool GetBool(string path, bool fallback = false)
+    {
+        var node = GetNode(path);
+        if (node == null) return fallback;
+        try { return node.GetValue<bool>(); } catch { return fallback; }
+    }
+
+    private List<string> GetStrList(string path)
+    {
+        var node = GetNode(path);
+        if (node is not JsonArray arr) return new();
+        return arr.Select(n => n?.GetValue<string>() ?? "").Where(s => s != "").ToList();
+    }
+
+    private JsonNode? GetNode(string path)
+    {
+        var segments = path.Split(':', StringSplitOptions.RemoveEmptyEntries);
+        JsonNode? current = _effective;
+        foreach (var seg in segments)
+        {
+            if (current is not JsonObject obj) return null;
+            current = obj[seg];
+        }
+        return current;
+    }
+
+    private async Task SetAsync(string path, object? value)
+    {
+        try
+        {
+            await Cfg.SetValueAsync(path, value);
+            // optimistic local update so the UI reflects the change
+            // immediately without waiting for a full reload
+            SetLocalNode(path, value);
+            ShowToast($"Saved — applies within a few seconds");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", isError: true);
+        }
+    }
+
+    private async Task SetListAsync(string path, List<string> items)
+    {
+        try
+        {
+            await Cfg.SetArrayAsync(path, items);
+            await ReloadAsync();
+            ShowToast("Saved — applies within a few seconds");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", isError: true);
+        }
+    }
+
+    private void SetLocalNode(string path, object? value)
+    {
+        var segments = path.Split(':', StringSplitOptions.RemoveEmptyEntries);
+        JsonObject current = _effective;
+        for (int i = 0; i < segments.Length - 1; i++)
+        {
+            if (current[segments[i]] is not JsonObject child)
+            {
+                child = new JsonObject();
+                current[segments[i]] = child;
+            }
+            current = child;
+        }
+
+        JsonNode? node = value switch
+        {
+            null => null,
+            bool b => JsonValue.Create(b),
+            int i => JsonValue.Create(i),
+            decimal d => JsonValue.Create(d),
+            string s => JsonValue.Create(s),
+            _ => JsonValue.Create(value.ToString())
+        };
+        current[segments[^1]] = node;
+    }
+}
+
+<style>
+:root{--st-bg:#0a0d12;--st-bg2:#111520;--st-bg3:#1a1f2e;--st-bdr:#1e2535;--st-acc:#3b82f6;--st-grn:#22c55e;--st-red:#ef4444;--st-yel:#eab308;--st-txt:#e2e8f0;--st-dim:#64748b;--st-mono:'JetBrains Mono','Fira Code',monospace;}
+
+.st{font-family:'Inter','Segoe UI',sans-serif;background:var(--st-bg);min-height:100vh;color:var(--st-txt);padding:0 0 60px;}
+
+/* ── HEADER ── */
+.st-header{display:flex;align-items:center;justify-content:space-between;padding:24px 32px;background:linear-gradient(180deg,var(--st-bg2),var(--st-bg));border-bottom:1px solid var(--st-bdr);position:relative;overflow:hidden;}
+.st-header::before{content:'';position:absolute;top:-60%;right:-10%;width:340px;height:340px;background:radial-gradient(circle,rgba(59,130,246,0.12),transparent 70%);pointer-events:none;}
+.st-header-left{display:flex;align-items:center;gap:16px;}
+.st-icon-wrap{width:48px;height:48px;border-radius:14px;background:linear-gradient(135deg,rgba(59,130,246,0.18),rgba(59,130,246,0.04));border:1px solid rgba(59,130,246,0.3);display:flex;align-items:center;justify-content:center;color:var(--st-acc);}
+.st-gear{width:24px;height:24px;animation:stGearSpin 12s linear infinite;}
+@@keyframes stGearSpin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+.st-title{font-family:var(--st-mono);font-size:22px;font-weight:700;letter-spacing:.5px;}
+.st-subtitle{font-size:12.5px;color:var(--st-dim);margin-top:2px;}
+
+.st-toast{display:flex;align-items:center;gap:8px;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.35);color:#86efac;padding:8px 16px;border-radius:10px;font-size:13px;font-weight:600;animation:stToastIn .25s ease;}
+.st-toast-err{background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.35);color:#fca5a5;}
+.st-toast-dot{width:7px;height:7px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px #22c55e;flex-shrink:0;}
+.st-toast-err .st-toast-dot{background:#ef4444;box-shadow:0 0 8px #ef4444;}
+@@keyframes stToastIn{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:translateY(0);}}
+
+/* ── TABS ── */
+.st-tabs{display:flex;gap:2px;padding:0 32px;background:var(--st-bg2);border-bottom:1px solid var(--st-bdr);overflow-x:auto;}
+.st-tab{display:flex;align-items:center;gap:8px;padding:16px 18px;background:none;border:none;color:var(--st-dim);font-size:13.5px;font-weight:600;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:all .15s;}
+.st-tab:hover{color:var(--st-txt);}
+.st-tab-on{color:var(--st-acc);border-bottom-color:var(--st-acc);}
+.st-tab-icon{font-size:15px;}
+.st-tab-live{color:var(--st-grn);font-size:9px;animation:stPulse 1.8s ease-in-out infinite;}
+@@keyframes stPulse{0%,100%{opacity:1;}50%{opacity:.3;}}
+
+/* ── BODY / GRID ── */
+.st-body{padding:28px 32px;}
+.st-loading{display:flex;align-items:center;gap:12px;color:var(--st-dim);font-size:14px;padding:60px 0;justify-content:center;}
+.st-spin{width:18px;height:18px;border:2px solid var(--st-bdr);border-top-color:var(--st-acc);border-radius:50%;animation:stSpin .7s linear infinite;}
+@@keyframes stSpin{to{transform:rotate(360deg);}}
+
+.st-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:18px;}
+
+.st-card{background:var(--st-bg2);border:1px solid var(--st-bdr);border-radius:14px;padding:20px;transition:border-color .2s;}
+.st-card:hover{border-color:#2a3347;}
+.st-card-wide{grid-column:1 / -1;}
+.st-card-muted{opacity:.7;}
+.st-card-warn{background:rgba(234,179,8,0.05);border-color:rgba(234,179,8,0.25);}
+
+.st-card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;}
+.st-card-title{font-size:14.5px;font-weight:700;}
+.st-card-sub{font-size:12.5px;color:var(--st-dim);line-height:1.5;margin-bottom:16px;}
+.st-card-sub code{background:var(--st-bg3);padding:1px 5px;border-radius:4px;font-family:var(--st-mono);font-size:11.5px;color:#a5b4fc;}
+
+.st-live-pill{font-size:10px;font-weight:700;color:var(--st-grn);background:rgba(34,197,94,0.12);padding:3px 9px;border-radius:20px;display:flex;align-items:center;gap:4px;animation:stPulse 1.8s ease-in-out infinite;}
+
+/* ── STRATEGY MODE SELECTOR ── */
+.st-mode-grid{display:flex;flex-direction:column;gap:10px;}
+.st-mode-option{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:10px;background:var(--st-bg3);border:1px solid var(--st-bdr);cursor:pointer;transition:all .15s;}
+.st-mode-option:hover{border-color:#3b4863;}
+.st-mode-on{border-color:var(--st-acc);background:rgba(59,130,246,0.08);}
+.st-mode-radio{font-size:14px;color:var(--st-acc);flex-shrink:0;margin-top:1px;}
+.st-mode-label{font-size:13.5px;font-weight:700;margin-bottom:3px;}
+.st-mode-desc{font-size:12px;color:var(--st-dim);line-height:1.45;}
+
+/* ── FIELDS ── */
+.st-field{margin-bottom:14px;}
+.st-field:last-child{margin-bottom:0;}
+.st-field-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;}
+.st-field-row:last-child{margin-bottom:0;}
+.st-field label{display:block;font-size:11.5px;color:var(--st-dim);margin-bottom:6px;font-weight:600;letter-spacing:.2px;}
+.st-field-hint{font-weight:400;font-style:italic;color:#4b5870;}
+
+.st-input,.st-select{width:100%;background:var(--st-bg3);border:1px solid var(--st-bdr);border-radius:8px;padding:9px 12px;color:var(--st-txt);font-size:13.5px;font-family:var(--st-mono);transition:border-color .15s;}
+.st-input:focus,.st-select:focus{outline:none;border-color:var(--st-acc);}
+.st-select{cursor:pointer;}
+
+.st-toggle-row{margin-bottom:14px;}
+.st-toggle{display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;}
+.st-toggle input{width:16px;height:16px;accent-color:var(--st-acc);cursor:pointer;}
+
+/* ── TAGS (pinned symbols) ── */
+.st-tag-list{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;}
+.st-tag{display:flex;align-items:center;gap:6px;background:var(--st-bg3);border:1px solid var(--st-bdr);border-radius:20px;padding:6px 6px 6px 12px;font-family:var(--st-mono);font-size:12px;font-weight:600;}
+.st-tag-x{background:none;border:none;color:var(--st-dim);cursor:pointer;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;transition:all .15s;}
+.st-tag-x:hover{background:rgba(239,68,68,0.2);color:#fca5a5;}
+
+.st-add-row{display:flex;gap:8px;}
+.st-add-row .st-input{flex:1;}
+.st-btn-add{background:var(--st-acc);border:none;color:#fff;padding:9px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;transition:opacity .15s;}
+.st-btn-add:hover{opacity:.88;}
+
+@@media(max-width:700px){
+    .st-header{flex-direction:column;align-items:flex-start;gap:12px;padding:20px;}
+    .st-body{padding:20px;}
+    .st-field-row{grid-template-columns:1fr;}
+}
+</style>

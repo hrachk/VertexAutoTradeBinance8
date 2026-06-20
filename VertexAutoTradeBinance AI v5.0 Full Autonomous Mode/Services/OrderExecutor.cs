@@ -232,6 +232,61 @@ namespace VertexAutoTradeBinance8.Services
         {
             using var client = _factory.CreateRestClient();
 
+            // =============================================================
+            // v9: SYNC LEVERAGE WITH THE EXCHANGE BEFORE ANY MARGIN MATH
+            // =============================================================
+            // Previously, `leverage` here came straight from appsettings
+            // (Trading.Leverage / Trading:BTC.Leverage etc.) and was used
+            // for all the notional/margin calculations below, but the
+            // exchange's ACTUAL per-symbol max leverage was never queried
+            // and ChangeInitialLeverageAsync was never called — so the
+            // account's leverage for that symbol stayed whatever it was
+            // last set to manually (or Binance's default), regardless of
+            // what the config assumed. For symbols with a low exchange cap
+            // (e.g. NVDAUSDT tops out at 10x while Trading.Leverage=19),
+            // this could silently desync the bot's margin math from what
+            // the exchange would actually do with the order.
+            //
+            // Fix: query the real bracket-based max leverage for this
+            // symbol, clamp our configured leverage to it, then explicitly
+            // push that leverage to the exchange via ChangeInitialLeverageAsync
+            // so the account state matches the math below exactly.
+            try
+            {
+                var brackets = await client.UsdFuturesApi.Account.GetBracketsAsync(signal.Symbol, ct: ct);
+                if (brackets.Success && brackets.Data != null)
+                {
+                    var symBracket = brackets.Data.FirstOrDefault(b => b.Symbol == signal.Symbol);
+                    var exchangeMaxLeverage = symBracket?.Brackets?.Length > 0
+                        ? symBracket.Brackets.Max(b => b.InitialLeverage)
+                        : (int?)null;
+
+                    if (exchangeMaxLeverage.HasValue && leverage > exchangeMaxLeverage.Value)
+                    {
+                        _logger.LogWarning(
+                            "[LEVERAGE][{symbol}] configured leverage {configured}x exceeds exchange max {max}x — clamping",
+                            signal.Symbol, leverage, exchangeMaxLeverage.Value);
+                        leverage = exchangeMaxLeverage.Value;
+                    }
+                }
+
+                var setLevResult = await client.UsdFuturesApi.Account.ChangeInitialLeverageAsync(
+                    signal.Symbol, (int)leverage, ct: ct);
+
+                if (!setLevResult.Success)
+                {
+                    _logger.LogWarning(
+                        "[LEVERAGE][{symbol}] ChangeInitialLeverageAsync failed: {err} — proceeding with account's current leverage setting",
+                        signal.Symbol, setLevResult.Error?.Message);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "[LEVERAGE][{symbol}] leverage sync failed — proceeding with config value {leverage}x, account setting may be stale",
+                    signal.Symbol, leverage);
+            }
+
             bool isToxicSymbol =
                 _tradingSettings.CurrentValue.ToxicSymbols
                 .Contains(signal.Symbol);
