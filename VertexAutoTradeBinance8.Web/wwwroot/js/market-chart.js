@@ -176,6 +176,10 @@ function drawMain(yMin, yMax) {
     ctx.clearRect(0,0,cW,cH);
     ctx.fillStyle = T.bg; ctx.fillRect(0,0,cW,cH);
 
+    // TEMP DIAGNOSTIC: bright marker to confirm canvas drawing is visible
+    ctx.fillStyle = '#ff00ff';
+    ctx.fillRect(10, 10, 40, 40);
+
     const { start, end } = visRange();
     console.log('[drawMain]', 'yMin=', yMin, 'yMax=', yMax, 'start=', start, 'end=', end,
         'candleW=', view.candleW, 'cW=', cW, 'cH=', cH, 'K.length=', K.length);
