@@ -302,14 +302,11 @@
             @if (_selectedPosition != null)
             {
                 <div class="mk-tpsl-overlay">
-                    <button class="mk-tpsl-btn @(_tpSlEditMode ? "mk-tpsl-btn-on" : "")" @onclick="ToggleTpSlEdit">
+                    <button class="mk-tpsl-btn @(_tpSlEditMode ? "mk-tpsl-btn-on" : "")" @onclick="ToggleTpSlEdit" title="Show/hide existing TP/SL lines">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6M9 8h6M17 16h6" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         TP/SL
                     </button>
-                    @if (_tpSlEditMode)
-                    {
-                        <span class="mk-tpsl-hint">Drag to set TP/SL</span>
-                    }
+                    <span class="mk-tpsl-hint">Drag near entry line to set TP/SL</span>
                 </div>
             }
         </div>
@@ -1973,15 +1970,10 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
         // If TP/SL editing was already open (e.g. after a drag just
         // replaced an order), keep it open and refresh the lines to
-        // reflect the new state rather than closing it. showPositionLines
-        // (JS) internally calls hidePositionLines first, which resets
-        // the armed-drag flag as a side effect — re-arm it here so a
-        // user can keep dragging to adjust further without needing to
-        // click the TP/SL button again after every single change.
+        // reflect the new state rather than closing it.
         if (_tpSlEditMode)
         {
             await ShowTpSlLinesAsync();
-            try { await JS.InvokeVoidAsync("marketChart.setTpSlArmed", $"chartContainer-{_chartInstanceId}", true); } catch { }
         }
     }
 
@@ -1997,11 +1989,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         if (_tpSlEditMode)
         {
             await ShowTpSlLinesAsync();
-            try { await JS.InvokeVoidAsync("marketChart.setTpSlArmed", $"chartContainer-{_chartInstanceId}", true); } catch { }
         }
         else
         {
-            try { await JS.InvokeVoidAsync("marketChart.setTpSlArmed", $"chartContainer-{_chartInstanceId}", false); } catch { }
             try { await JS.InvokeVoidAsync("marketChart.hideTpSlLines", $"chartContainer-{_chartInstanceId}"); } catch { }
         }
     }
@@ -2428,7 +2418,15 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                     Symbol     = o.Symbol,
                     Side       = o.Side.ToString().ToUpperInvariant(),
                     Type       = o.Type.ToString(),
-                    Price      = o.Price,
+                    // Conditional orders (STOP_MARKET / TAKE_PROFIT_MARKET,
+                    // the ones our own TP/SL drag feature creates) store
+                    // their trigger price in StopPrice — Price is 0 for
+                    // these since they execute at market once triggered.
+                    // Same fallback the Engine's own OrderCleanerService.cs
+                    // already uses. Without this, every conditional order
+                    // displayed as "Market" with no visible trigger price,
+                    // which looked like they weren't showing up at all.
+                    Price      = o.StopPrice > 0 ? o.StopPrice : o.Price,
                     Qty        = o.Quantity,
                     Filled     = o.QuantityFilled,
                     ReduceOnly = o.ReduceOnly,

@@ -231,18 +231,31 @@
                 return vline;
             }
 
+            const NEAR_LINE_PX = 10;
+
+            function nearEntryLine(y) {
+                if (!session.entryPrice) return false;
+                const entryY = candleSeries.priceToCoordinate(session.entryPrice);
+                return entryY != null && Math.abs(y - entryY) <= NEAR_LINE_PX;
+            }
+
             container.addEventListener('mousedown', (e) => {
-                if (!session.tpSlArmed) return;
+                if (!session.entryPrice) return;
+                const rect = container.getBoundingClientRect();
+                const y = e.clientY - rect.top;
+                if (!nearEntryLine(y)) return; // let normal chart pan/zoom/crosshair through elsewhere
                 session.dragging = true;
                 container.style.cursor = 'grabbing';
                 e.preventDefault();
             });
 
             container.addEventListener('mousemove', (e) => {
-                if (!session.tpSlArmed) return;
+                if (!session.entryPrice) return;
 
                 if (!session.dragging) {
-                    container.style.cursor = 'crosshair';
+                    const rect = container.getBoundingClientRect();
+                    const y = e.clientY - rect.top;
+                    container.style.cursor = nearEntryLine(y) ? 'grab' : 'crosshair';
                     return;
                 }
 
@@ -290,7 +303,7 @@
             });
 
             container.addEventListener('mouseup', (e) => {
-                if (!session.tpSlArmed || !session.dragging) return;
+                if (!session.entryPrice || !session.dragging) return;
                 session.dragging = false;
                 container.style.cursor = 'crosshair';
 
