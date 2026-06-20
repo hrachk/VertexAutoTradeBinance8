@@ -4,6 +4,8 @@
 @using Binance.Net.Enums
 @using VertexAutoTradeBinance8.Services
 @inject MarketSnapshotFileService Service
+@inject IHttpClientFactory HttpClientFactory
+@inject Microsoft.Extensions.Options.IOptionsMonitor<VertexAutoTradeBinance8.Configuration.BinanceOptions> BinanceOpts
 @inject MarketDataLiveState LiveState
 @inject MissedTradeFileService SignalSvc
 @inject BinanceClientFactory Factory
@@ -1907,7 +1909,10 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
             if (existing != null)
             {
-                await client.UsdFuturesApi.Trading.CancelOrderAsync(pos.Symbol, existing.OrderId, ct: cts.Token);
+                if (existing.IsAlgo)
+                    await CancelAlgoOrderRawAsync(pos.Symbol, existing.OrderId);
+                else
+                    await client.UsdFuturesApi.Trading.CancelOrderAsync(pos.Symbol, existing.OrderId, ct: cts.Token);
             }
 
             // Same conditional-order pattern the Engine itself uses for
@@ -2390,6 +2395,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         public decimal Qty;
         public decimal Filled;
         public bool ReduceOnly;
+        public bool IsAlgo;
     }
 
     List<OpenOrderRow> _openOrders = new();
@@ -2399,6 +2405,87 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     void ShowOrdersTab() => _ooActiveTab = "orders";
     bool _openOrdersLoading;
     long? _cancellingOrderId;
+
+    // Conditional/algo orders (STOP_MARKET, TAKE_PROFIT_MARKET — the
+    // exact types our TP/SL drag feature and Binance's own UI both
+    // create) are NOT returned by GetOpenOrdersAsync at all. Since
+    // Binance's December 2025 mandatory migration, these live in a
+    // completely separate "Algo Order" service with its own dedicated
+    // endpoint (GET /fapi/v1/openAlgoOrders) — the regular open-orders
+    // endpoint genuinely does not know about them. This is the real
+    // root cause of them never showing up, regardless of how Price vs
+    // StopPrice was mapped (that fix was real but insufficient on its
+    // own, since the orders weren't even being fetched in the first
+    // place). Binance.Net 12.13.0 doesn't yet expose a typed method
+    // for this endpoint, so this calls it directly via raw signed HTTP
+    // — the EXACT same signing approach the Engine's own
+    // PositionSupervisorService.BinanceAlgoOrderRaw already uses
+    // successfully for PLACING these orders, just for reading instead.
+    async Task<List<OpenOrderRow>> LoadAlgoOpenOrdersRawAsync(string? symbol = null)
+    {
+        var result = new List<OpenOrderRow>();
+        try
+        {
+            var opt = BinanceOpts.CurrentValue;
+            if (string.IsNullOrWhiteSpace(opt.ApiKey) || string.IsNullOrWhiteSpace(opt.SecretKey))
+                return result;
+
+            var http = HttpClientFactory.CreateClient("AlgoOrdersRaw");
+            http.Timeout = TimeSpan.FromSeconds(8);
+
+            var baseUrl = (opt.UseTestnet ? "https://testnet.binancefuture.com" : "https://fapi.binance.com");
+            var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            var q = new List<KeyValuePair<string, string>>
+            {
+                new("timestamp", ts.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            };
+            if (!string.IsNullOrEmpty(symbol)) q.Add(new("symbol", symbol));
+
+            var raw = string.Join("&", q.Select(kv => $"{kv.Key}={kv.Value}"));
+            var encoded = string.Join("&", q.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
+
+            using var hmac = new System.Security.Cryptography.HMACSHA256(System.Text.Encoding.UTF8.GetBytes(opt.SecretKey));
+            var hash = hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(raw));
+            var sig = string.Concat(hash.Select(b => b.ToString("x2")));
+
+            var url = $"{baseUrl}/fapi/v1/openAlgoOrders?{encoded}&signature={sig}";
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", opt.ApiKey);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            using var resp = await http.SendAsync(req, cts.Token);
+            var body = await resp.Content.ReadAsStringAsync(cts.Token);
+            if (!resp.IsSuccessStatusCode) return result;
+
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            // Response shape: { "total": N, "orders": [ {...}, ... ] }
+            if (!doc.RootElement.TryGetProperty("orders", out var ordersEl)) return result;
+
+            foreach (var o in ordersEl.EnumerateArray())
+            {
+                decimal GetDec(string name) =>
+                    o.TryGetProperty(name, out var v) && decimal.TryParse(v.GetString(), System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0m;
+                string GetStr(string name) => o.TryGetProperty(name, out var v) ? (v.GetString() ?? "") : "";
+                long GetLong(string name) => o.TryGetProperty(name, out var v) && v.TryGetInt64(out var l) ? l : 0L;
+
+                result.Add(new OpenOrderRow
+                {
+                    OrderId    = GetLong("algoId"),
+                    Symbol     = GetStr("symbol"),
+                    Side       = GetStr("side").ToUpperInvariant(),
+                    Type       = GetStr("type"),
+                    Price      = GetDec("triggerPrice"),
+                    Qty        = GetDec("quantity"),
+                    Filled     = GetDec("executedQty"),
+                    ReduceOnly = o.TryGetProperty("reduceOnly", out var ro) && ro.GetBoolean(),
+                    IsAlgo     = true,
+                });
+            }
+        }
+        catch { /* algo orders are a nice-to-have addition; never block the regular orders list on this failing */ }
+        return result;
+    }
 
     async Task LoadOpenOrdersAsync()
     {
@@ -2411,7 +2498,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             var res = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(ct: cts.Token);
             if (!res.Success || res.Data == null) return;
 
-            _openOrders = res.Data
+            var regularOrders = res.Data
                 .Select(o => new OpenOrderRow
                 {
                     OrderId    = o.Id,
@@ -2423,14 +2510,23 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                     // their trigger price in StopPrice — Price is 0 for
                     // these since they execute at market once triggered.
                     // Same fallback the Engine's own OrderCleanerService.cs
-                    // already uses. Without this, every conditional order
-                    // displayed as "Market" with no visible trigger price,
-                    // which looked like they weren't showing up at all.
+                    // already uses.
                     Price      = o.StopPrice.HasValue && o.StopPrice.Value > 0 ? o.StopPrice.Value : o.Price,
                     Qty        = o.Quantity,
                     Filled     = o.QuantityFilled,
                     ReduceOnly = o.ReduceOnly,
                 })
+                .ToList();
+
+            // Algo (conditional) orders live in a completely separate
+            // Binance service since Dec 2025 — fetched via dedicated
+            // raw HTTP call, see LoadAlgoOpenOrdersRawAsync above.
+            var algoOrders = await LoadAlgoOpenOrdersRawAsync();
+
+            _openOrders = regularOrders
+                .Concat(algoOrders)
+                .GroupBy(o => o.OrderId)
+                .Select(g => g.First())
                 .OrderBy(o => o.Symbol)
                 .ToList();
 
@@ -2445,11 +2541,18 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         StateHasChanged();
         try
         {
-            var client = Factory.TryCreateRestClient();
-            if (client == null) return;
+            if (row.IsAlgo)
+            {
+                await CancelAlgoOrderRawAsync(row.Symbol, row.OrderId);
+            }
+            else
+            {
+                var client = Factory.TryCreateRestClient();
+                if (client == null) return;
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-            await client.UsdFuturesApi.Trading.CancelOrderAsync(row.Symbol, row.OrderId, ct: cts.Token);
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                await client.UsdFuturesApi.Trading.CancelOrderAsync(row.Symbol, row.OrderId, ct: cts.Token);
+            }
             await LoadOpenOrdersAsync();
         }
         catch { }
@@ -2458,6 +2561,41 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             _cancellingOrderId = null;
             StateHasChanged();
         }
+    }
+
+    // Algo orders (the ones returned by LoadAlgoOpenOrdersRawAsync) use
+    // a different id space (algoId) and a different cancel endpoint
+    // (DELETE /fapi/v1/algoOrder) than regular orders — same signing
+    // pattern as everywhere else here, reused once more.
+    async Task CancelAlgoOrderRawAsync(string symbol, long algoId)
+    {
+        var opt = BinanceOpts.CurrentValue;
+        if (string.IsNullOrWhiteSpace(opt.ApiKey) || string.IsNullOrWhiteSpace(opt.SecretKey)) return;
+
+        var http = HttpClientFactory.CreateClient("AlgoOrdersRaw");
+        http.Timeout = TimeSpan.FromSeconds(8);
+
+        var baseUrl = opt.UseTestnet ? "https://testnet.binancefuture.com" : "https://fapi.binance.com";
+        var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var q = new List<KeyValuePair<string, string>>
+        {
+            new("algoId", algoId.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            new("timestamp", ts.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+        };
+        var raw = string.Join("&", q.Select(kv => $"{kv.Key}={kv.Value}"));
+        var encoded = string.Join("&", q.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
+
+        using var hmac = new System.Security.Cryptography.HMACSHA256(System.Text.Encoding.UTF8.GetBytes(opt.SecretKey));
+        var hash = hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(raw));
+        var sig = string.Concat(hash.Select(b => b.ToString("x2")));
+
+        var url = $"{baseUrl}/fapi/v1/algoOrder?{encoded}&signature={sig}";
+        using var req = new HttpRequestMessage(HttpMethod.Delete, url);
+        req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", opt.ApiKey);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        try { await http.SendAsync(req, cts.Token); } catch { }
     }
     void OnPriceChange(ChangeEventArgs e)
     {
