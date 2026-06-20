@@ -382,6 +382,10 @@
             }
             else
             {
+                @if (!string.IsNullOrEmpty(_lastAlgoOrdersDebug))
+                {
+                    <div class="mk-algo-debug">⚙ Algo orders fetch: @_lastAlgoOrdersDebug</div>
+                }
                 @if (_openOrders.Count == 0)
                 {
                     <div class="mk-oo-empty">No open orders</div>
@@ -1120,6 +1124,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-oo-head{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
 .mk-oo-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
 .mk-oo-empty{font-size:13px;color:var(--dim);padding:24px 2px;text-align:center;}
+.mk-algo-debug{font-size:11px;color:var(--acc);background:rgba(59,130,246,0.08);padding:6px 10px;border-radius:6px;margin-bottom:10px;word-break:break-all;}
 .mk-oo-scroll{max-height:280px;overflow-y:auto;scrollbar-width:none;}
 .mk-oo-scroll::-webkit-scrollbar{display:none;}
 .mk-oo-tbl{width:100%;border-collapse:collapse;}
@@ -2399,6 +2404,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     }
 
     List<OpenOrderRow> _openOrders = new();
+    string _lastAlgoOrdersDebug = "";
     string _ooActiveTab = "positions";
 
     void ShowPositionsTab() => _ooActiveTab = "positions";
@@ -2428,7 +2434,10 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             var opt = BinanceOpts.CurrentValue;
             if (string.IsNullOrWhiteSpace(opt.ApiKey) || string.IsNullOrWhiteSpace(opt.SecretKey))
+            {
+                _lastAlgoOrdersDebug = "No API credentials configured";
                 return result;
+            }
 
             var http = HttpClientFactory.CreateClient("AlgoOrdersRaw");
             http.Timeout = TimeSpan.FromSeconds(8);
@@ -2456,11 +2465,20 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
             using var resp = await http.SendAsync(req, cts.Token);
             var body = await resp.Content.ReadAsStringAsync(cts.Token);
-            if (!resp.IsSuccessStatusCode) return result;
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                _lastAlgoOrdersDebug = $"HTTP {(int)resp.StatusCode}: {body}";
+                return result;
+            }
 
             using var doc = System.Text.Json.JsonDocument.Parse(body);
             // Response shape: { "total": N, "orders": [ {...}, ... ] }
-            if (!doc.RootElement.TryGetProperty("orders", out var ordersEl)) return result;
+            if (!doc.RootElement.TryGetProperty("orders", out var ordersEl))
+            {
+                _lastAlgoOrdersDebug = $"No 'orders' property in response: {body}";
+                return result;
+            }
 
             foreach (var o in ordersEl.EnumerateArray())
             {
@@ -2482,8 +2500,12 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                     IsAlgo     = true,
                 });
             }
+            _lastAlgoOrdersDebug = $"OK — {result.Count} algo order(s) found";
         }
-        catch { /* algo orders are a nice-to-have addition; never block the regular orders list on this failing */ }
+        catch (Exception ex)
+        {
+            _lastAlgoOrdersDebug = $"Exception: {ex.Message}";
+        }
         return result;
     }
 
