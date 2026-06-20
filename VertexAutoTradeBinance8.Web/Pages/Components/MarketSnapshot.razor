@@ -131,7 +131,7 @@
         {
             <div class="mk-no-data-overlay">
                 <div style="font-size:24px">⏳</div>
-                <div style="font-size:13px;margin-top:8px">Initializing chart… (attempt @_initAttempts)</div>
+                <div style="font-size:13px;margin-top:8px">Initializing chart…</div>
             </div>
         }
         @if (!string.IsNullOrEmpty(_chartInitError))
@@ -1120,13 +1120,37 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     string _lastRenderedKey = "";
 
     string _chartInitError = "";
-    int _initAttempts = 0;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
-            _ = InitChartWithRetry();
+            await InitChartAsync();
+        }
+        else if (_chartInitDone)
+        {
+            // CONFIRMED BUG (via diagnostic logs): navigating away from
+            // /market and back through the sidebar does NOT reliably
+            // trigger firstRender=true again for this component — Blazor
+            // can reuse the same component instance across that
+            // navigation, so _chartInitDone stays true from the ORIGINAL
+            // visit and InitChartAsync() never runs again, even though
+            // the <canvas> elements in the DOM may have been recreated.
+            // Fix: on every NON-first render, cheaply ask JS whether the
+            // canvas it's currently bound to is still the one actually in
+            // the document. If not, re-run init() right here — this check
+            // runs every render cycle, so it catches the mismatch on the
+            // very next render after navigating back, not "eventually" or
+            // "never".
+            try
+            {
+                var stillBound = await JS.InvokeAsync<bool>("marketChart.isBoundToLiveCanvas");
+                if (!stillBound)
+                {
+                    await InitChartAsync();
+                }
+            }
+            catch { }
         }
 
         // Render whenever chart is ready and data changed
@@ -1144,73 +1168,32 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         }
     }
 
-    async Task InitChartWithRetry()
+    // Initializes the chart exactly once per component instance. No retry
+    // loop, no polling, no cancellation-token bookkeeping needed on this
+    // side — market-chart.js's init() now owns its own generation counter
+    // (bumped on every call) and its own double-requestAnimationFrame wait
+    // for real layout dimensions internally. Calling init() here is fire-
+    // and-forget safe: even if THIS await is somehow still pending when
+    // the component gets disposed and a new one mounts and calls init()
+    // again, the new call's generation bump makes any leftover deferred
+    // work from this one a guaranteed no-op — there is no longer a "zombie
+    // retry loop" possible because there is no retry loop, period.
+    async Task InitChartAsync()
     {
         _dotNetRef ??= DotNetObjectReference.Create(this);
-
-        for (int i = 0; i < 20; i++) // up to 20 × 150ms = 3s
-        {
-            // CRITICAL: if this component instance was disposed (e.g. the
-            // user navigated away from /market before this retry loop
-            // finished), stop immediately. Without this check, a "zombie"
-            // retry loop from a PREVIOUS visit can keep running in the
-            // background and eventually call marketChart.init() — which
-            // wipes the JS module's canvas/K/view state — AFTER a NEW
-            // component instance (from navigating back to /market) has
-            // already successfully initialized and rendered the chart.
-            // That's the exact bug: chart renders correctly for a moment,
-            // then a late-arriving zombie init() call from the old visit
-            // resets everything to empty, with no error anywhere because
-            // it's not failing — it's "succeeding" at the wrong time.
-            if (_cts.IsCancellationRequested) return;
-
-            _initAttempts = i + 1;
-            try
-            {
-                // Ask JS if the canvas element actually exists with real size
-                var ok = await JS.InvokeAsync<bool>("marketChart.elementReady", "priceChart");
-                if (_cts.IsCancellationRequested) return;
-
-                if (ok)
-                {
-                    await JS.InvokeVoidAsync("marketChart.init",
-                        "priceChart", "rsiChart", "volumeChart",
-                        "resizeHandle", "priceWrap");
-                    if (_cts.IsCancellationRequested) return;
-
-                    await RegisterPricePickCallback();
-                    _chartInitDone = true;
-                    _jsReady = true;
-                    _chartInitError = "";
-                    await InvokeAsync(StateHasChanged);
-                    return;
-                }
-            }
-            catch (Exception ex)
-            {
-                _chartInitError = $"Init attempt {i+1} failed: {ex.Message}";
-            }
-            try { await Task.Delay(150, _cts.Token); }
-            catch (OperationCanceledException) { return; }
-        }
-
-        if (_cts.IsCancellationRequested) return;
-
-        // Failed after all retries — force init anyway and surface the error
         try
         {
             await JS.InvokeVoidAsync("marketChart.init",
                 "priceChart", "rsiChart", "volumeChart",
                 "resizeHandle", "priceWrap");
-            if (_cts.IsCancellationRequested) return;
-
             await RegisterPricePickCallback();
             _chartInitDone = true;
             _jsReady = true;
+            _chartInitError = "";
         }
         catch (Exception ex)
         {
-            _chartInitError = $"Chart init failed after {_initAttempts} attempts: {ex.Message}";
+            _chartInitError = $"Chart init failed: {ex.Message}";
         }
         await InvokeAsync(StateHasChanged);
     }

@@ -5,6 +5,16 @@
 'use strict';
 
 // ── STATE ─────────────────────────────────────────────────
+// generationId is THE single source of truth for "is this call still
+// relevant". Every time init() runs (new component mount), it bumps
+// this counter. Any in-flight async work (retries, delays, callbacks)
+// captures the generation it started with and checks it again before
+// touching shared module state or calling back into Blazor. If the
+// generation changed in the meantime (component was disposed and a
+// new one mounted), the stale call is a no-op — full stop, no
+// exceptions, no partial writes, nothing to race against.
+let generationId = 0;
+
 let K = [];                   // klines array
 let derived = {};             // computed indicators
 let view = {
@@ -204,13 +214,7 @@ function drawMain(yMin, yMax) {
     ctx.clearRect(0,0,cW,cH);
     ctx.fillStyle = T.bg; ctx.fillRect(0,0,cW,cH);
 
-    // TEMP DIAGNOSTIC: bright marker to confirm canvas drawing is visible
-    ctx.fillStyle = '#ff00ff';
-    ctx.fillRect(10, 10, 40, 40);
-
     const { start, end } = visRange();
-    console.log('[drawMain]', 'yMin=', yMin, 'yMax=', yMax, 'start=', start, 'end=', end,
-        'candleW=', view.candleW, 'cW=', cW, 'cH=', cH, 'K.length=', K.length);
     const chartH = cH - PT - PB;
     const chartW = cW - PL - PR;
 
@@ -566,6 +570,20 @@ let _activeResizeListener = null;
 let _lastSym = null, _lastTf = null;
 
 window.marketChart = {
+    // Is the module's current MC reference still the SAME DOM node that
+    // is actually in the document right now under id="priceChart"?
+    // This is the cheap check OnAfterRenderAsync calls on every non-first
+    // render to detect "Blazor reused this component instance across a
+    // navigation without re-running firstRender logic" — confirmed via
+    // diagnostic logging to actually happen for this component. If MC
+    // no longer matches the live element, the caller knows it needs to
+    // re-run init() right now instead of assuming the original
+    // initialization is still valid.
+    isBoundToLiveCanvas() {
+        const live = document.getElementById('priceChart');
+        return !!live && live === MC && document.contains(MC);
+    },
+
     // Simple synchronous check - does the element exist with real size?
     elementReady(mainId) {
         const el = document.getElementById(mainId);
@@ -584,6 +602,19 @@ window.marketChart = {
     },
 
     init(mainId, rsiId, volId, resizeHandleId, resizeWrapId) {
+        // Bump the generation FIRST, before anything else. Any async
+        // work already in flight from a previous init() call (e.g. a
+        // requestAnimationFrame callback queued below) captured the
+        // OLD generation number and will see this new one when it
+        // finally runs — making it a guaranteed no-op. This single
+        // counter replaces every previous attempt at this problem
+        // (cancellation tokens, detached-element checks, etc) with one
+        // simple, impossible-to-race rule: every deferred callback
+        // checks "is my generation still the current one?" before
+        // touching anything.
+        generationId++;
+        const myGen = generationId;
+
         // Disconnect previous observer/listener if init() called again
         // (happens on Blazor component re-mount without full page reload)
         if (_activeRO) { try { _activeRO.disconnect(); } catch{} _activeRO = null; }
@@ -603,6 +634,8 @@ window.marketChart = {
         MC=document.getElementById(mainId);
         RC=document.getElementById(rsiId);
         VC=document.getElementById(volId);
+        console.log('[chart] init() called, gen=', myGen, 'MC found=', !!MC,
+            'parent size=', MC ? MC.parentElement.clientWidth + 'x' + MC.parentElement.clientHeight : 'n/a');
         if(!MC) return;
 
         // Drag-scroll for ticker bar
@@ -616,13 +649,15 @@ window.marketChart = {
             ticker.addEventListener('mousemove', e=>{if(!isDown)return;e.preventDefault();const x=e.pageX-ticker.offsetLeft;ticker.scrollLeft=scrollLeft-(x-startX);});
         }
 
-        // Debounced resize handler — prevents storm of resize calls
+        // Debounced resize handler — guarded by generation check so a
+        // resize event firing after this chart instance was replaced
+        // can't touch the new instance's state.
         let _roTimer = null;
         const debouncedResize = () => {
             clearTimeout(_roTimer);
             _roTimer = setTimeout(() => {
-                console.log('[chart] debouncedResize fired, K.length=', K.length);
-                if (K.length === 0) return; // nothing to draw yet — don't clear the canvas for no reason
+                if (myGen !== generationId) return;
+                if (K.length === 0) return;
                 resize();
                 drawAll();
             }, 40);
@@ -633,8 +668,11 @@ window.marketChart = {
         _activeResizeListener = debouncedResize;
         window.addEventListener('resize', debouncedResize);
 
-        // Initial layout after 2 frames
+        // Initial layout after 2 frames — generation-guarded so a slow
+        // double-rAF callback from a PREVIOUS init() can never fire
+        // against whatever the CURRENT chart instance is doing.
         requestAnimationFrame(()=>requestAnimationFrame(()=>{
+            if (myGen !== generationId) return;
             resize();
             if(K.length > 0) drawAll();
         }));
@@ -667,6 +705,9 @@ window.marketChart = {
         initResizeY(document.getElementById(resizeHandleId), document.getElementById(resizeWrapId));
     },
     render(sym, tf, klines) {
+        const myGen = generationId;
+        console.log('[chart] render() called, gen=', myGen, 'klines.length=', klines ? klines.length : 'null', 'MC=', !!MC);
+
         // Refresh canvas references up front so resize()/auto-fit below
         // operate on the actual live DOM elements, not stale ones from
         // a previous page visit (drawAll() does this again right before
@@ -684,9 +725,6 @@ window.marketChart = {
 
         const w = W(MC);
         const chartW = (w || 800) - PL - PR;
-
-        console.log('[chart] render', sym, tf, 'K.length=', K.length,
-            'candleW=', view.candleW, 'w=', w, 'MC=', MC ? 'ok' : 'NULL');
 
         // Reset view on symbol/tf change
         if (sym !== _lastSym || tf !== _lastTf) {
@@ -709,7 +747,11 @@ window.marketChart = {
             drawAll();
         } else {
             let a = 0;
-            const retry = () => { resize(); if(W(MC)>=50){drawAll();}else if(++a<10){requestAnimationFrame(retry);} };
+            const retry = () => {
+                if (myGen !== generationId) return; // a newer init() superseded this render
+                resize();
+                if(W(MC)>=50){drawAll();}else if(++a<10){requestAnimationFrame(retry);}
+            };
             requestAnimationFrame(retry);
         }
     }
