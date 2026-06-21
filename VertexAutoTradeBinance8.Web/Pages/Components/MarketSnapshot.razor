@@ -311,9 +311,43 @@
             @if (_chartMaximized)
             {
                 <div class="mk-max-bar">
-                    <div class="mk-max-sym">
-                        @(Selected?.Symbol ?? "")
-                        <span class="mk-max-tf">@TfLabel(Selected?.Timeframe ?? "")</span>
+                    <div class="mk-max-sym-wrap">
+                        <button class="mk-max-sym" @onclick="ToggleMaxSymPicker">
+                            @(Selected?.Symbol ?? "")
+                            <span class="mk-max-tf">@TfLabel(Selected?.Timeframe ?? "")</span>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mk-max-sym-caret"><path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
+                        @if (_maxSymPickerOpen)
+                        {
+                            <div class="mk-max-sym-dropdown">
+                                <input class="mk-max-sym-search" type="text" placeholder="Search symbol…"
+                                       value="@_instrumentSearch" @oninput="OnInstrumentSearchChanged" autofocus />
+                                <div class="mk-max-sym-list">
+                                    @{
+                                        var maxAllInstruments = Series
+                                            .GroupBy(x => x.Symbol)
+                                            .Select(g => g.OrderByDescending(x => x.Klines.Count).First())
+                                            .ToList();
+                                        var maxFiltered = string.IsNullOrWhiteSpace(_instrumentSearch)
+                                            ? maxAllInstruments
+                                            : maxAllInstruments.Where(s => s.Symbol.Contains(_instrumentSearch, StringComparison.OrdinalIgnoreCase)).ToList();
+                                    }
+                                    @foreach (var s in maxFiltered.OrderBy(s => s.Symbol))
+                                    {
+                                        var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
+                                        <div class="mk-max-sym-row @(s.Symbol==_activeSym?"mk-max-sym-row-sel":"")"
+                                             @onclick="() => PickSymInMaximize(s.Symbol)">
+                                            <span>@s.Symbol</span>
+                                            <span class="mono mk-dim">@FmtP(last)</span>
+                                        </div>
+                                    }
+                                    @if (!maxFiltered.Any())
+                                    {
+                                        <div class="mk-side-empty">No match</div>
+                                    }
+                                </div>
+                            </div>
+                        }
                     </div>
                     <div class="mk-max-price @(_chg >= 0 ? "up" : "dn")">@FmtP(_last)</div>
 
@@ -330,8 +364,20 @@
                         Restore
                     </button>
                 </div>
+
+                <div class="mk-max-tf-row">
+                    @foreach (var tf in _allTfs)
+                    {
+                        var hasSeries = Series.Any(s => s.Symbol == _activeSym && s.Timeframe == tf.Key);
+                        var isSelTf   = _activeTf == tf.Key;
+                        <button class="mk-tf-btn @(isSelTf?"mk-tf-on":"") @(hasSeries?"":"mk-tf-dim")"
+                                @onclick="()=>PickTf(tf.Key)">
+                            @tf.Label
+                        </button>
+                    }
+                </div>
             }
-            <div id="chartContainer-@_chartInstanceId" @key="_chartInstanceId" style="width:100%;height:@(_chartMaximized ? "calc(100% - 52px)" : "100%");"></div>
+            <div id="chartContainer-@_chartInstanceId" @key="_chartInstanceId" style="width:100%;height:@(_chartMaximized ? "calc(100% - 88px)" : "100%");"></div>
 
             @if (_selectedPosition != null)
             {
@@ -917,7 +963,20 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-chart-maximized{position:fixed;top:60px;left:20px;right:20px;bottom:20px;z-index:1000;height:auto;background:var(--bg);border:1px solid var(--acc);border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.6);padding:8px;display:flex;flex-direction:column;}
 
 .mk-max-bar{display:flex;align-items:center;gap:14px;padding:8px 12px;height:52px;flex-shrink:0;}
-.mk-max-sym{font-family:var(--mono);font-size:16px;font-weight:700;display:flex;align-items:baseline;gap:8px;}
+.mk-max-sym-wrap{position:relative;}
+.mk-max-sym{font-family:var(--mono);font-size:16px;font-weight:700;display:flex;align-items:baseline;gap:8px;background:none;border:none;color:var(--txt);cursor:pointer;padding:4px 6px;border-radius:6px;transition:background .15s;}
+.mk-max-sym:hover{background:rgba(255,255,255,0.06);}
+.mk-max-sym-caret{width:13px;height:13px;align-self:center;color:var(--dim);}
+.mk-max-sym-dropdown{position:absolute;top:calc(100% + 4px);left:0;width:260px;max-height:340px;background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.5);z-index:20;overflow:hidden;display:flex;flex-direction:column;}
+.mk-max-sym-search{background:var(--bg3);border:none;border-bottom:1px solid var(--bdr);padding:10px 12px;color:var(--txt);font-size:13px;outline:none;}
+.mk-max-sym-search::placeholder{color:var(--dim);}
+.mk-max-sym-list{overflow-y:auto;max-height:290px;scrollbar-width:none;}
+.mk-max-sym-list::-webkit-scrollbar{display:none;}
+.mk-max-sym-row{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;cursor:pointer;font-size:12.5px;transition:background .12s;}
+.mk-max-sym-row:hover{background:rgba(255,255,255,0.05);}
+.mk-max-sym-row-sel{background:rgba(59,130,246,0.12);box-shadow:inset 2px 0 0 var(--acc);}
+.mk-max-tf-row{display:flex;gap:4px;padding:0 12px 8px;flex-shrink:0;overflow-x:auto;scrollbar-width:none;}
+.mk-max-tf-row::-webkit-scrollbar{display:none;}
 .mk-max-tf{font-size:11px;color:var(--dim);background:var(--bg3);padding:2px 8px;border-radius:5px;}
 .mk-max-price{font-family:var(--mono);font-size:16px;font-weight:700;}
 .mk-max-trade{display:flex;align-items:center;gap:6px;margin-left:auto;}
@@ -1342,6 +1401,16 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     string _chartInitError = "";
     string _chartInstanceId = "";
     bool _chartMaximized = false;
+    bool _maxSymPickerOpen = false;
+
+    void ToggleMaxSymPicker() => _maxSymPickerOpen = !_maxSymPickerOpen;
+
+    void PickSymInMaximize(string sym)
+    {
+        PickSym(sym);
+        _maxSymPickerOpen = false;
+        _instrumentSearch = "";
+    }
 
     async Task ToggleChartMaximized()
     {
