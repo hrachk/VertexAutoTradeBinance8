@@ -106,16 +106,31 @@
                     var confProfile = ConfidenceResolver.Resolve(sig.Symbol);
                     bool belowThreshold = (conf / 100m) < confProfile.MinEntry;
 
+                    // Mirrors StrategyEngine.GetDynamicMinRr exactly — same
+                    // regime/slope/volatility-based thresholds (2.0 base,
+                    // 2.5 in a squeeze, 1.7-1.8 in a strong trend), so a
+                    // signal whose RR doesn't actually meet the bar the
+                    // strategy normally requires is flagged just as
+                    // clearly as a below-confidence one.
+                    decimal minRr = GetDynamicMinRrForDisplay(sig);
+                    bool lowRr = rr > 0 && rr < minRr;
+
                     var ttl = GetSignalTtl(sig);
                     bool isRemoving = _expiredSignals.ContainsKey(SignalKey(sig));
 
-                    <div class="sig-card @(sigIsBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @(belowThreshold ? "sc-below-threshold" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "")"
+                    <div class="sig-card @(sigIsBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @((belowThreshold || lowRr) ? "sc-below-threshold" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "")"
                          @key="SignalKey(sig)"
                          @onclick="() => SelectSignal(sig)">
                         @if (belowThreshold)
                         {
                             <div class="sc-threshold-badge" title="@($"Confidence {conf}% is below this symbol's {(confProfile.MinEntry*100).ToString("F0")}% entry threshold — the bot would not have opened this trade")">
                                 ⚠ Below entry threshold
+                            </div>
+                        }
+                        @if (lowRr)
+                        {
+                            <div class="sc-threshold-badge" title="@($"RR {rr:F2} is below this regime's normal minimum of {minRr:F1} — a weaker reward/risk setup than the strategy usually requires")">
+                                ⚠ Low RR ({rr:F1} &lt; {minRr:F1})
                             </div>
                         }
                         <!-- Top row: symbol, side, time -->
@@ -1769,6 +1784,40 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // Relevance / TTL of a signal, derived from its volatility (ATR) rather than a fixed duration.
     // Higher ATR relative to entry price => market moving faster => signal goes stale sooner.
     record SignalTtlInfo(double Pct, string Label, bool IsExpiring, bool IsExpired);
+
+    // Mirrors StrategyEngine.GetDynamicMinRr's threshold logic exactly
+    // (same regime/slope/volatility checks, same numbers) so the
+    // "Low RR" badge reflects the strategy's REAL bar, not a guessed
+    // one. Deliberately omits the AI-trend-prediction adjustment that
+    // method also has (that needs live model state not available on
+    // the Web side) — this is the static, regime-based floor before
+    // any further tightening the live engine might also apply, so the
+    // badge is a conservative "at least this strict" indicator.
+    decimal GetDynamicMinRrForDisplay(MissedTradeRecord sig)
+    {
+        decimal atrPct = sig.Entry > 0 ? sig.ATR / sig.Entry : 0m;
+
+        var regime = sig.Regime;
+        var smartType = sig.SmartType;
+        var vol = sig.Vol;
+        var slope = sig.Slope;
+
+        bool isSqueeze = regime == VertexAutoTradeBinance8.Models.MarketRegime.Range
+            || smartType == "SmartSqueeze";
+
+        bool isStrongTrendLike =
+            regime == VertexAutoTradeBinance8.Models.MarketRegime.StrongUpTrend ||
+            regime == VertexAutoTradeBinance8.Models.MarketRegime.StrongDownTrend ||
+            smartType == "SmartStrongTrend";
+
+        bool strongSlope = Math.Abs(slope) >= 0.02m;
+        bool highVol = vol >= 0.015m || atrPct >= 0.015m;
+        bool lowVol  = vol <= 0.005m || atrPct <= 0.005m;
+
+        if (isSqueeze) return 2.5m;
+        if (isStrongTrendLike && strongSlope) return highVol ? 1.7m : 1.8m;
+        return lowVol ? 2.2m : 2.0m;
+    }
 
     SignalTtlInfo GetSignalTtl(MissedTradeRecord sig)
     {
