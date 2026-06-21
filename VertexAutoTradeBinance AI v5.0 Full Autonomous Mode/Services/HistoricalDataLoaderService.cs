@@ -1,0 +1,199 @@
+using Binance.Net.Enums;
+using VertexAutoTradeBinance8.Services.HistoricalData;
+
+namespace VertexAutoTradeBinance8.Services
+{
+    /// <summary>
+    /// Independent historical-data loader — deliberately has NO
+    /// dependency on SymbolRegistryService, TradingWorker, or anything
+    /// else related to what the strategy is currently trading. Its job is
+    /// singular: keep datadb/ populated with history for whatever symbols
+    /// it's told to track, on whatever timeframes it's told to track,
+    /// regardless of whether the trading strategy ever looks at them.
+    ///
+    /// This is step one of the "full charting history for every symbol"
+    /// goal: a single timeframe, proven working end-to-end (REST fetch ->
+    /// HistoricalDataStore -> file on disk), before expanding to every
+    /// timeframe and the full exchange symbol list. Configured via the
+    /// "HistoricalData" section in appsettings.json — see the Symbols/
+    /// Timeframes/IntervalSeconds keys read below.
+    /// </summary>
+    public sealed class HistoricalDataLoaderService : BackgroundService
+    {
+        private readonly HistoricalDataStore _store;
+        private readonly BinanceClientFactory _factory;
+        private readonly IConfiguration _cfg;
+        private readonly ILogger<HistoricalDataLoaderService> _logger;
+
+        // One REST call at a time — this service has no urgency (it's
+        // backfilling history, not reacting to live signals), so there's
+        // no reason to compete with the trading engine's own REST budget.
+        private static readonly SemaphoreSlim _restGate = new(1, 1);
+
+        public HistoricalDataLoaderService(
+            HistoricalDataStore store,
+            BinanceClientFactory factory,
+            IConfiguration cfg,
+            ILogger<HistoricalDataLoaderService> logger)
+        {
+            _store = store;
+            _factory = factory;
+            _cfg = cfg;
+            _logger = logger;
+        }
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            // Give the rest of the Engine a head start (its own startup
+            // bootstrap, WS subscriptions, etc) before this background
+            // job starts making its own REST calls.
+            try { await Task.Delay(TimeSpan.FromSeconds(20), stoppingToken); }
+            catch (OperationCanceledException) { return; }
+
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await RunOneCycleAsync(stoppingToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[DATADB-LOADER] Unhandled error in loader cycle");
+                }
+
+                var intervalSeconds = _cfg.GetValue("HistoricalData:IntervalSeconds", 300);
+                try { await Task.Delay(TimeSpan.FromSeconds(Math.Max(30, intervalSeconds)), stoppingToken); }
+                catch (OperationCanceledException) { break; }
+            }
+        }
+
+        private async Task RunOneCycleAsync(CancellationToken ct)
+        {
+            var enabled = _cfg.GetValue("HistoricalData:Enabled", false);
+            if (!enabled)
+            {
+                _logger.LogDebug("[DATADB-LOADER] HistoricalData:Enabled is false — skipping cycle");
+                return;
+            }
+
+            var symbols = _cfg.GetSection("HistoricalData:Symbols").Get<string[]>() ?? Array.Empty<string>();
+            var timeframes = _cfg.GetSection("HistoricalData:Timeframes").Get<string[]>() ?? new[] { "15m" };
+            int barsPerFetch = _cfg.GetValue("HistoricalData:BarsPerFetch", 500);
+
+            if (symbols.Length == 0)
+            {
+                _logger.LogInformation("[DATADB-LOADER] No symbols configured under HistoricalData:Symbols — nothing to do this cycle");
+                return;
+            }
+
+            _logger.LogInformation(
+                "[DATADB-LOADER] Cycle starting: {symCount} symbol(s) x {tfCount} timeframe(s)",
+                symbols.Length, timeframes.Length);
+
+            int ok = 0, failed = 0;
+
+            foreach (var symbol in symbols)
+            {
+                if (ct.IsCancellationRequested) break;
+
+                foreach (var tfLabel in timeframes)
+                {
+                    if (ct.IsCancellationRequested) break;
+
+                    if (!TryParseTimeframe(tfLabel, out var tf))
+                    {
+                        _logger.LogWarning("[DATADB-LOADER] Unknown timeframe label '{tf}' — skipped", tfLabel);
+                        continue;
+                    }
+
+                    try
+                    {
+                        await FetchAndStoreAsync(symbol, tfLabel, tf, barsPerFetch, ct);
+                        ok++;
+                    }
+                    catch (Exception ex)
+                    {
+                        failed++;
+                        _logger.LogWarning(ex, "[DATADB-LOADER] Failed {symbol} {tf}", symbol, tfLabel);
+                    }
+
+                    // Gentle pacing between calls — this is a slow background
+                    // job, not a latency-sensitive one.
+                    try { await Task.Delay(250, ct); } catch (OperationCanceledException) { return; }
+                }
+            }
+
+            _logger.LogInformation("[DATADB-LOADER] Cycle done: {ok} ok, {failed} failed", ok, failed);
+        }
+
+        private async Task FetchAndStoreAsync(string symbol, string tfLabel, KlineInterval tf, int barsPerFetch, CancellationToken ct)
+        {
+            await _restGate.WaitAsync(ct);
+            try
+            {
+                using var client = _factory.CreateRestClient();
+
+                // If we already have history, only ask for bars since the
+                // last stored OpenTime — keeps every cycle after the first
+                // cheap (a handful of new bars), instead of re-downloading
+                // hundreds of bars we already have every single time.
+                var existing = await _store.LoadLastAsync(symbol, tfLabel, 1, ct);
+                DateTime? startTime = existing.Count > 0
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(existing[0].OpenTime).UtcDateTime
+                    : null;
+
+                var result = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
+                    symbol, tf,
+                    startTime: startTime,
+                    limit: barsPerFetch,
+                    ct: ct);
+
+                if (!result.Success || result.Data == null)
+                {
+                    _logger.LogWarning("[DATADB-LOADER] REST failed {symbol} {tf}: {err}", symbol, tfLabel, result.Error?.Message);
+                    return;
+                }
+
+                var bars = result.Data
+                    .Select(k => new HistoricalKline(
+                        new DateTimeOffset(k.OpenTime).ToUnixTimeMilliseconds(),
+                        k.OpenPrice, k.HighPrice, k.LowPrice, k.ClosePrice, k.Volume))
+                    .ToList();
+
+                if (bars.Count == 0) return;
+
+                await _store.AppendAsync(symbol, tfLabel, bars, ct);
+            }
+            finally
+            {
+                _restGate.Release();
+            }
+        }
+
+        private static bool TryParseTimeframe(string label, out KlineInterval tf)
+        {
+            switch (label.Trim().ToLowerInvariant())
+            {
+                case "1m": tf = KlineInterval.OneMinute; return true;
+                case "3m": tf = KlineInterval.ThreeMinutes; return true;
+                case "5m": tf = KlineInterval.FiveMinutes; return true;
+                case "15m": tf = KlineInterval.FifteenMinutes; return true;
+                case "30m": tf = KlineInterval.ThirtyMinutes; return true;
+                case "1h": tf = KlineInterval.OneHour; return true;
+                case "2h": tf = KlineInterval.TwoHour; return true;
+                case "4h": tf = KlineInterval.FourHour; return true;
+                case "6h": tf = KlineInterval.SixHour; return true;
+                case "8h": tf = KlineInterval.EightHour; return true;
+                case "12h": tf = KlineInterval.TwelveHour; return true;
+                case "1d": tf = KlineInterval.OneDay; return true;
+                case "3d": tf = KlineInterval.ThreeDay; return true;
+                case "1w": tf = KlineInterval.OneWeek; return true;
+                default: tf = default; return false;
+            }
+        }
+    }
+}
