@@ -102,33 +102,25 @@
         </div>
 
         <div class="st-card">
-            <div class="st-card-head"><div class="st-card-title">Pullback Entry (legacy)</div></div>
-            <div class="st-card-sub">Used by the trend engine's entry timing. Type and EMA period.</div>
-            <div class="st-field">
-                <label>Pullback Type</label>
-                <select title="Pullback Type" class="st-select" value="@GetStr("Strategy:PullbackType","CandleNearEma")"
-                        @onchange="OnPullbackTypeChanged">
-                    <option value="CandleNearEma">CandleNearEma</option>
-                    <option value="RsiReclaim">RsiReclaim</option>
-                </select>
-            </div>
+            <div class="st-card-head"><div class="st-card-title">Pullback Entry</div></div>
+            <div class="st-card-sub">Powers the trend engine's TryPullbackEma21 entry: waits for price to touch the EMA after a clear trend move, then enters on a rejection candle bouncing off it. Live-reloadable — no restart needed.</div>
             <div class="st-field">
                 <label>EMA Period</label>
-                <input title="EMA Period" class="st-input" type="number" value="@GetInt("Strategy:EmaPeriod",21)"
+                <input title="EMA Period" class="st-input" type="number" min="5" max="100" value="@GetInt("Strategy:PullbackEntry:EmaPeriod",21)"
                        @onchange="OnEmaPeriodChanged" />
             </div>
             <div class="st-field">
-                <label>EMA Zone %</label>
-                <input title="EMA Zone %" class="st-input" type="number" step="0.0001" value="@GetDecimal("Strategy:EmaZonePercent",0.002m)"
-                       @onchange="OnEmaZonePercentChanged" />
+                <label>Touch Zone (× ATR)</label>
+                <input title="Touch Zone (ATR multiplier)" class="st-input" type="number" step="0.05" min="0.1" max="2" value="@GetDecimal("Strategy:PullbackEntry:ZoneAtrMultiplier",0.5m)"
+                       @onchange="OnEmaZoneAtrMultiplierChanged" />
+                <div class="st-card-sub" style="margin-top:4px">How close price must come to the EMA to count as a "touch" — expressed as a multiple of ATR (volatility-normalized, not a fixed %), so it scales correctly across symbols.</div>
             </div>
         </div>
 
     </div>;
 
-    private Task OnPullbackTypeChanged(ChangeEventArgs e) => SetAsync("Strategy:PullbackType", e.Value?.ToString() ?? "CandleNearEma");
-    private Task OnEmaPeriodChanged(ChangeEventArgs e) => SetAsync("Strategy:EmaPeriod", ParseIntOr(e.Value, 21));
-    private Task OnEmaZonePercentChanged(ChangeEventArgs e) => SetAsync("Strategy:EmaZonePercent", ParseDecimalOr(e.Value, 0.002m));
+    private Task OnEmaPeriodChanged(ChangeEventArgs e) => SetAsync("Strategy:PullbackEntry:EmaPeriod", ParseIntOr(e.Value, 21));
+    private Task OnEmaZoneAtrMultiplierChanged(ChangeEventArgs e) => SetAsync("Strategy:PullbackEntry:ZoneAtrMultiplier", ParseDecimalOr(e.Value, 0.5m));
 
     private static readonly (string Key, string Label)[] TradingProfiles =
     {

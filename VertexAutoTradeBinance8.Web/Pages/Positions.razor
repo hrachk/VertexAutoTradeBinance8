@@ -2,6 +2,8 @@
 @using Binance.Net.Enums
 @using VertexAutoTradeBinance8.Services
 @inject BinanceClientFactory Factory
+@inject IHttpClientFactory HttpClientFactory
+@inject Microsoft.Extensions.Options.IOptionsMonitor<VertexAutoTradeBinance8.Configuration.BinanceOptions> BinanceOpts
 @implements IDisposable
 
 <PageTitle>Positions — Vertex</PageTitle>
@@ -254,7 +256,7 @@
                                     <div class="t-sym">@o.Symbol.Replace("USDT","")</div>
                                     <div class="t-sub v-dim">@o.Symbol</div>
                                 </td>
-                                <td><span class="t-type">@o.Type</span></td>
+                                <td><span class="t-type">@o.Type</span>@if (o.IsAlgo) { <span class="t-algo-badge" title="Conditional order (Algo Order API)">Conditional</span> }</td>
                                 <td>
                                     <span class="p-side-badge @(buy?"sb-l":"sb-s") sb-sm">@o.Side</span>
                                     @if (o.PosSide != "BOTH") { <div class="t-sub v-dim">@o.PosSide</div> }
@@ -307,7 +309,7 @@
                             string sc = o.Status switch { "FILLED"=>"st-ok","CANCELED" or "EXPIRED"=>"st-can","PARTIALLY_FILLED"=>"st-part",_=>"v-dim" };
                             <tr>
                                 <td><div class="t-sym">@o.Symbol.Replace("USDT","")</div></td>
-                                <td><span class="t-type">@o.Type</span></td>
+                                <td><span class="t-type">@o.Type</span>@if (o.IsAlgo) { <span class="t-algo-badge" title="Conditional order (Algo Order API)">Conditional</span> }</td>
                                 <td><span class="p-side-badge @(buy?"sb-l":"sb-s") sb-sm">@o.Side</span></td>
                                 <td class="mono">@(o.AvgPrice>0?FP(o.AvgPrice):o.Price>0?FP(o.Price):"Market")</td>
                                 <td class="mono">@o.ExecutedQty.ToString("G6") / @o.OrigQty.ToString("G6")</td>
@@ -594,6 +596,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
 .t-sym{font-family:var(--mono);font-size:14px;font-weight:700;}
 .t-sub{font-size:11px;margin-top:2px;}
 .t-type{font-size:10px;background:var(--bg4);border:1px solid var(--bdr2);padding:2px 7px;border-radius:3px;color:var(--dim);}
+.t-algo-badge{font-size:9px;background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.3);color:#3b82f6;padding:2px 6px;border-radius:3px;margin-left:5px;}
 .t-time{font-size:11px;}
 .t-cancel-btn{background:transparent;border:1px solid var(--bdr2);color:var(--dim);padding:5px 12px;border-radius:5px;font-size:11px;cursor:pointer;transition:all .15s;}
 .t-cancel-btn:hover{border-color:var(--red);color:var(--red);}
@@ -656,7 +659,10 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
 
     record OrdRow(long Id, string Symbol, string Type, string Side, string PosSide,
         decimal Price, decimal StopPrice, decimal OrigQty, decimal ExecutedQty,
-        bool ReduceOnly, DateTime Time);
+        bool ReduceOnly, DateTime Time)
+    {
+        public bool IsAlgo { get; init; }
+    }
 
     record HistRow(long Id, string Symbol, string Type, string Side,
         decimal Price, decimal AvgPrice, decimal OrigQty, decimal ExecutedQty,
@@ -744,6 +750,71 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
         catch (Exception ex) { _error = $"Error: {ex.Message}"; }
     }
 
+    async Task<List<OrdRow>> FetchAlgoOrdersRawAsync()
+    {
+        var result = new List<OrdRow>();
+        try
+        {
+            var opt = BinanceOpts.CurrentValue;
+            if (string.IsNullOrWhiteSpace(opt.ApiKey) || string.IsNullOrWhiteSpace(opt.SecretKey))
+                return result;
+
+            var http = HttpClientFactory.CreateClient("AlgoOrdersRaw");
+            http.Timeout = TimeSpan.FromSeconds(8);
+
+            var baseUrl = opt.UseTestnet ? "https://testnet.binancefuture.com" : "https://fapi.binance.com";
+            var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            var q = new List<KeyValuePair<string, string>> { new("timestamp", ts.ToString(System.Globalization.CultureInfo.InvariantCulture)) };
+            var raw = string.Join("&", q.Select(kv => $"{kv.Key}={kv.Value}"));
+            var encoded = string.Join("&", q.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
+
+            using var hmac = new System.Security.Cryptography.HMACSHA256(System.Text.Encoding.UTF8.GetBytes(opt.SecretKey));
+            var hash = hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(raw));
+            var sig = string.Concat(hash.Select(b => b.ToString("x2")));
+
+            var url = $"{baseUrl}/fapi/v1/openAlgoOrders?{encoded}&signature={sig}";
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", opt.ApiKey);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            using var resp = await http.SendAsync(req, cts.Token);
+            var body = await resp.Content.ReadAsStringAsync(cts.Token);
+            if (!resp.IsSuccessStatusCode) return result;
+
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array) return result;
+
+            foreach (var o in doc.RootElement.EnumerateArray())
+            {
+                decimal GetDec(string name) =>
+                    o.TryGetProperty(name, out var v) && decimal.TryParse(v.GetString(), System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0m;
+                string GetStr(string name) => o.TryGetProperty(name, out var v) ? (v.GetString() ?? "") : "";
+                long GetLong(string name) =>
+                    o.TryGetProperty(name, out var v)
+                        ? (v.ValueKind == System.Text.Json.JsonValueKind.Number && v.TryGetInt64(out var l) ? l
+                           : long.TryParse(v.GetString(), out var l2) ? l2 : 0L)
+                        : 0L;
+
+                result.Add(new OrdRow(
+                    Id: GetLong("algoId"),
+                    Symbol: GetStr("symbol"),
+                    Type: GetStr("orderType"),
+                    Side: GetStr("side").ToUpperInvariant(),
+                    PosSide: GetStr("positionSide").ToUpperInvariant(),
+                    Price: GetDec("triggerPrice"),
+                    StopPrice: GetDec("triggerPrice"),
+                    OrigQty: GetDec("quantity"),
+                    ExecutedQty: GetDec("executedQty"),
+                    ReduceOnly: o.TryGetProperty("reduceOnly", out var ro) && ro.GetBoolean(),
+                    Time: DateTime.UtcNow)
+                { IsAlgo = true });
+            }
+        }
+        catch { /* algo orders are an addition; never block the regular orders list on this failing */ }
+        return result;
+    }
+
     async Task FetchOrders()
     {
         _ordLoading = true; StateHasChanged();
@@ -753,15 +824,30 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
             if (client == null) return;
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
             var res = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(ct: cts.Token);
+
+            var regular = new List<OrdRow>();
             if (res.Success && res.Data != null)
-                _openOrders = res.Data
+                regular = res.Data
                     .Select(o => new OrdRow(o.Id, o.Symbol, o.Type.ToString(),
                         o.Side.ToString().ToUpperInvariant(),
                         o.PositionSide.ToString().ToUpperInvariant(),
                         o.Price, o.StopPrice ?? 0m, o.Quantity, o.QuantityFilled,
                         o.ReduceOnly, o.CreateTime))
-                    .OrderBy(o => o.Symbol).ToList();
-            else ShowToast($"Orders: {res.Error?.Message}", false);
+                    .ToList();
+            else if (!res.Success)
+                ShowToast($"Orders: {res.Error?.Message}", false);
+
+            // Conditional/algo orders (STOP_MARKET/TAKE_PROFIT_MARKET) live in
+            // a separate Binance API service since the Dec 2025 migration —
+            // GetOpenOrdersAsync above genuinely cannot see them at all, same
+            // root cause already found and fixed for /market's Open Orders.
+            var algo = await FetchAlgoOrdersRawAsync();
+
+            _openOrders = regular.Concat(algo)
+                .GroupBy(o => o.Id)
+                .Select(g => g.First())
+                .OrderBy(o => o.Symbol)
+                .ToList();
         }
         catch (Exception ex) { ShowToast(ex.Message, false); }
         finally { _ordLoading = false; }
@@ -876,6 +962,14 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
     {
         try
         {
+            if (o.IsAlgo)
+            {
+                var ok = await CancelAlgoOrderRawAsync(o.Id);
+                if (ok) { ShowToast("✓ Order cancelled", true); await FetchOrders(); }
+                else ShowToast("Cancel failed", false);
+                return;
+            }
+
             var client = Factory.TryCreateRestClient();
             if (client == null) return;
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -884,6 +978,41 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
             else ShowToast($"Cancel failed: {res.Error?.Message}", false);
         }
         catch (Exception ex) { ShowToast(ex.Message, false); }
+    }
+
+    async Task<bool> CancelAlgoOrderRawAsync(long algoId)
+    {
+        try
+        {
+            var opt = BinanceOpts.CurrentValue;
+            if (string.IsNullOrWhiteSpace(opt.ApiKey) || string.IsNullOrWhiteSpace(opt.SecretKey)) return false;
+
+            var http = HttpClientFactory.CreateClient("AlgoOrdersRaw");
+            http.Timeout = TimeSpan.FromSeconds(8);
+            var baseUrl = opt.UseTestnet ? "https://testnet.binancefuture.com" : "https://fapi.binance.com";
+            var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            var q = new List<KeyValuePair<string, string>>
+            {
+                new("algoId", algoId.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new("timestamp", ts.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            };
+            var raw = string.Join("&", q.Select(kv => $"{kv.Key}={kv.Value}"));
+            var encoded = string.Join("&", q.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
+
+            using var hmac = new System.Security.Cryptography.HMACSHA256(System.Text.Encoding.UTF8.GetBytes(opt.SecretKey));
+            var hash = hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(raw));
+            var sig = string.Concat(hash.Select(b => b.ToString("x2")));
+
+            var url = $"{baseUrl}/fapi/v1/algoOrder?{encoded}&signature={sig}";
+            using var req = new HttpRequestMessage(HttpMethod.Delete, url);
+            req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", opt.ApiKey);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            using var resp = await http.SendAsync(req, cts.Token);
+            return resp.IsSuccessStatusCode;
+        }
+        catch { return false; }
     }
 
     void ShowToast(string msg, bool ok)

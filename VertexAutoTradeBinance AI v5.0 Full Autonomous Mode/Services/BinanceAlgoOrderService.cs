@@ -69,7 +69,8 @@ namespace VertexAutoTradeBinance8.Services
             decimal triggerPrice,
             string workingType,
             bool? reduceOnly,
-            CancellationToken ct)
+            CancellationToken ct,
+            string? clientAlgoId = null)
         {
             if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret))
             {
@@ -92,6 +93,9 @@ namespace VertexAutoTradeBinance8.Services
                 new("positionSide", positionSide.ToString().ToUpperInvariant()),
                 new("quantity", D(quantity))
             };
+
+            if (!string.IsNullOrWhiteSpace(clientAlgoId))
+                q.Add(new("clientAlgoId", clientAlgoId.Length > 32 ? clientAlgoId[..32] : clientAlgoId));
 
             if (reduceOnly.HasValue && positionSide == PositionSide.Both)
                 q.Add(new("reduceOnly", reduceOnly.Value ? "true" : "false"));
