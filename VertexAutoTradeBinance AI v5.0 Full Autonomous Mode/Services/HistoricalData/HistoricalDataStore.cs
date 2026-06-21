@@ -95,6 +95,29 @@ namespace VertexAutoTradeBinance8.Services.HistoricalData
         }
 
         /// <summary>
+        /// The OpenTime of the OLDEST stored bar, or null if nothing is
+        /// stored yet. Used by deep backfill to know where to continue
+        /// extending the archive backward in time.
+        /// </summary>
+        public async Task<long?> GetOldestOpenTimeAsync(string symbol, string timeframe, CancellationToken ct = default)
+        {
+            var all = await LoadAsync(symbol, timeframe, ct);
+            return all.Count > 0 ? all[0].OpenTime : null;
+        }
+
+        /// <summary>
+        /// Total bar count currently stored for this symbol+timeframe —
+        /// cheap-ish introspection for status reporting (loads the full
+        /// file, but these files are small enough at this project's scale
+        /// that this is fine; revisit if that ever changes).
+        /// </summary>
+        public async Task<int> CountAsync(string symbol, string timeframe, CancellationToken ct = default)
+        {
+            var all = await LoadAsync(symbol, timeframe, ct);
+            return all.Count;
+        }
+
+        /// <summary>
         /// Merges new bars into the stored file: dedup by OpenTime (a bar
         /// with the same OpenTime as an existing one replaces it — handles
         /// the common case of re-fetching the still-forming current bar),
@@ -157,6 +180,25 @@ namespace VertexAutoTradeBinance8.Services.HistoricalData
         /// anything yet" checks before deciding whether to backfill).
         /// </summary>
         public bool Has(string symbol, string timeframe) => File.Exists(FilePath(symbol, timeframe));
+
+        // Small marker file (no content needed, presence is the signal)
+        // recording "deep backfill reached this symbol's actual listing
+        // date on the exchange, stop trying to go further back". Kept as
+        // a separate file rather than a field inside the data JSON itself
+        // — simpler to reason about, and avoids rewriting the (potentially
+        // large) data file just to flip one flag.
+        private string ExhaustedMarkerPath(string symbol, string timeframe) =>
+            FilePath(symbol, timeframe) + ".exhausted";
+
+        public bool IsBackfillExhausted(string symbol, string timeframe) =>
+            File.Exists(ExhaustedMarkerPath(symbol, timeframe));
+
+        public async Task MarkBackfillExhaustedAsync(string symbol, string timeframe, CancellationToken ct = default)
+        {
+            var path = ExhaustedMarkerPath(symbol, timeframe);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllTextAsync(path, DateTime.UtcNow.ToString("O"), ct);
+        }
 
         /// <summary>
         /// Lists every symbol currently stored on disk, regardless of

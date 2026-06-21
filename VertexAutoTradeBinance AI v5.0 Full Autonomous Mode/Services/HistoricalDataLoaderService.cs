@@ -152,6 +152,126 @@ namespace VertexAutoTradeBinance8.Services
             _logger.LogInformation(
                 "[DATADB-LOADER] Cycle done in {elapsed:F1}s: {ok} ok, {failed} failed ({symCount} symbols x {tfCount} timeframes)",
                 sw.Elapsed.TotalSeconds, ok, failed, symbols.Length, timeframes.Length);
+
+            // Deep backfill (extending history BACKWARD in time, toward
+            // each symbol's actual listing date) runs far less often than
+            // the forward-sync pass above — it's a one-time-ish job per
+            // symbol+timeframe (stops permanently once IsBackfillExhausted
+            // is set), not something that needs checking every cycle.
+            // Gated by DeepBackfillEveryNCycles (default 6 — e.g. once per
+            // hour at the default 5-minute IntervalSeconds) so it doesn't
+            // compete with the time-sensitive forward sync for REST budget.
+            _cycleCount++;
+            var everyN = Math.Max(1, _cfg.GetValue("HistoricalData:DeepBackfillEveryNCycles", 6));
+            if (_cycleCount % everyN == 0)
+            {
+                await RunDeepBackfillPassAsync(symbols, timeframes, barsPerFetch, ct);
+            }
+        }
+
+        private int _cycleCount;
+
+        private async Task RunDeepBackfillPassAsync(string[] symbols, string[] timeframes, int barsPerFetch, CancellationToken ct)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            int extended = 0, exhausted = 0;
+
+            foreach (var symbol in symbols)
+            {
+                if (ct.IsCancellationRequested) break;
+                foreach (var tfLabel in timeframes)
+                {
+                    if (ct.IsCancellationRequested) break;
+                    if (!TryParseTimeframe(tfLabel, out var tf)) continue;
+
+                    try
+                    {
+                        var result = await DeepBackfillOneAsync(symbol, tfLabel, tf, barsPerFetch, ct);
+                        if (result == DeepBackfillResult.Extended) extended++;
+                        else if (result == DeepBackfillResult.Exhausted) exhausted++;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "[DATADB-LOADER][DEEP] Failed {symbol} {tf}", symbol, tfLabel);
+                    }
+
+                    try { await Task.Delay(250, ct); } catch (OperationCanceledException) { return; }
+                }
+            }
+
+            sw.Stop();
+            if (extended > 0 || exhausted > 0)
+            {
+                _logger.LogInformation(
+                    "[DATADB-LOADER][DEEP] Pass done in {elapsed:F1}s: {extended} extended further back, {exhausted} newly reached listing date",
+                    sw.Elapsed.TotalSeconds, extended, exhausted);
+            }
+        }
+
+        private enum DeepBackfillResult { Extended, Exhausted, Skipped }
+
+        private async Task<DeepBackfillResult> DeepBackfillOneAsync(string symbol, string tfLabel, KlineInterval tf, int barsPerFetch, CancellationToken ct)
+        {
+            if (_knownInvalidSymbols.Contains(symbol)) return DeepBackfillResult.Skipped;
+            if (_store.IsBackfillExhausted(symbol, tfLabel)) return DeepBackfillResult.Skipped;
+
+            var oldest = await _store.GetOldestOpenTimeAsync(symbol, tfLabel, ct);
+            if (oldest == null) return DeepBackfillResult.Skipped; // nothing fetched forward yet — let the regular pass establish a baseline first
+
+            await _restGate.WaitAsync(ct);
+            try
+            {
+                using var client = _factory.CreateRestClient();
+
+                // endTime just before our oldest known bar — asks Binance
+                // for the bars that come immediately BEFORE what we already
+                // have, extending the archive backward one page at a time.
+                var endTime = DateTimeOffset.FromUnixTimeMilliseconds(oldest.Value).UtcDateTime.AddSeconds(-1);
+
+                var result = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
+                    symbol, tf,
+                    endTime: endTime,
+                    limit: barsPerFetch,
+                    ct: ct);
+
+                if (!result.Success || result.Data == null)
+                {
+                    if (result.Error?.Code == -1121) _knownInvalidSymbols.Add(symbol);
+                    return DeepBackfillResult.Skipped;
+                }
+
+                var bars = result.Data
+                    .Select(k => new HistoricalKline(
+                        new DateTimeOffset(k.OpenTime).ToUnixTimeMilliseconds(),
+                        k.OpenPrice, k.HighPrice, k.LowPrice, k.ClosePrice, k.Volume))
+                    .ToList();
+
+                if (bars.Count == 0)
+                {
+                    // Binance returned nothing further back — we've reached
+                    // this symbol's actual listing date on this timeframe.
+                    await _store.MarkBackfillExhaustedAsync(symbol, tfLabel, ct);
+                    _logger.LogInformation("[DATADB-LOADER][DEEP] {symbol} {tf} reached listing date — backfill complete", symbol, tfLabel);
+                    return DeepBackfillResult.Exhausted;
+                }
+
+                await _store.AppendAsync(symbol, tfLabel, bars, ct);
+
+                // If Binance gave back fewer bars than asked for, that
+                // also means we hit the start of available history.
+                if (bars.Count < barsPerFetch)
+                {
+                    await _store.MarkBackfillExhaustedAsync(symbol, tfLabel, ct);
+                    _logger.LogInformation("[DATADB-LOADER][DEEP] {symbol} {tf} reached listing date — backfill complete", symbol, tfLabel);
+                    return DeepBackfillResult.Exhausted;
+                }
+
+                return DeepBackfillResult.Extended;
+            }
+            finally
+            {
+                _restGate.Release();
+            }
         }
 
         // Symbols confirmed invalid on the exchange (typo, delisted, wrong
