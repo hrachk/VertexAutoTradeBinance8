@@ -1522,8 +1522,15 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             CalcStats();
 
             // Panel is visible by default for whatever symbol is active —
-            // only stays hidden if the user explicitly dismissed it (✕).
-            if (_activeSignal == null && !_orderPanelDismissed && !string.IsNullOrEmpty(_activeSym) && _last > 0)
+            // only stays hidden if the user explicitly dismissed it (✕),
+            // OR if a position is currently selected (that has its own
+            // distinct panel with its own TP/SL chart lines — this check
+            // must not silently reopen Manual Trade on top of it on every
+            // periodic tick, which is exactly what was happening before:
+            // _selectedPosition has _activeSignal == null by design, so
+            // without this it looked indistinguishable from "nothing
+            // selected" to this check).
+            if (_activeSignal == null && _selectedPosition == null && !_orderPanelDismissed && !string.IsNullOrEmpty(_activeSym) && _last > 0)
                 OpenManualPanelFor(_activeSym, _last);
         }
         catch { }
@@ -2299,6 +2306,29 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 })
                 .OrderByDescending(p => Math.Abs(p.Pnl))
                 .ToList();
+
+            // CRITICAL FIX: ActivePositionInfo is a plain class with
+            // reference equality, and the LINQ above creates entirely
+            // NEW instances every single refresh — even for the exact
+            // same still-open position. _selectedPosition held onto
+            // the OLD instance, which after this point matches nothing
+            // in the new _allPositions list via '==' (reference
+            // comparison), even though the position itself is still
+            // genuinely open and was never actually deselected. This
+            // silently broke the "mk-pos-row-sel" highlight and the
+            // ord-panel's "is this still selected" checks on every
+            // single periodic tick — exactly the "after load everything
+            // is lost" symptom from the screenshots. Fix: re-point the
+            // reference at the fresh matching instance (by symbol+side,
+            // since a symbol can have both a LONG and a SHORT position
+            // open simultaneously, as seen in the screenshots) instead
+            // of leaving it dangling.
+            if (_selectedPosition != null)
+            {
+                _selectedPosition = _allPositions.FirstOrDefault(p =>
+                    p.Symbol == _selectedPosition.Symbol && p.Side == _selectedPosition.Side)
+                    ?? _selectedPosition;
+            }
 
             await InvokeAsync(StateHasChanged);
         }
