@@ -16,9 +16,13 @@
             <div class="vertex-subtitle">Quant Engine v8</div>
         </div>
 
-        <span class="client-badge">
-            @Client.Id (@Client.Name)
-        </span>
+        <div class="user-badge">
+            <div class="user-badge-avatar">@(Client.Name?.Length > 0 ? Client.Name[0].ToString().ToUpper() : "?")</div>
+            <div class="user-badge-info">
+                <div class="user-badge-name">@Client.Name</div>
+                <div class="user-badge-id">@Client.Id</div>
+            </div>
+        </div>
     </div>
 
     <div class="vertex-right">
@@ -30,19 +34,53 @@
                 <option value="MeanReversionOnly">Mean-Reversion Only</option>
             </select>
         </div>
-
-        <div class="status-pill">
-            <span class="vertex-status-dot @(EngineStatus == "Running" ? "ok" : "bad")"></span>
-            <span class="vertex-status-text">@EngineStatus</span>
-        </div>
-
-        <div class="meta-pill">
-            <span class="vertex-balance">@Balance USDT</span>
-            <span class="sep">•</span>
-            <span class="vertex-mode">@TradingMode</span>
-        </div>
     </div>
 </header>
+
+<!-- Desktop top menu — replaces the sidebar on wide screens. The
+     sidebar (NavMenu inside <aside>) still exists in the DOM for
+     tablet/mobile, but is hidden via CSS on desktop widths; this nav
+     is the inverse (hidden on tablet/mobile, shown on desktop). -->
+<nav class="vertex-topnav">
+    <NavLink href="/market" class="vt-link vt-link-feature" Match="NavLinkMatch.All" title="Market">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17l5-5 4 4 8-8" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 7h7v7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Market
+    </NavLink>
+    <span class="vt-sep"></span>
+    <NavLink href="/" class="vt-link" Match="NavLinkMatch.All" title="Live Dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3 8 4-16 3 8h4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Live Dashboard
+    </NavLink>
+    <NavLink href="/positions" class="vt-link" Match="NavLinkMatch.All" title="Positions">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        Positions
+    </NavLink>
+    <NavLink href="/overview" class="vt-link" Match="NavLinkMatch.All" title="Overview">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18 14 14 0 010-18z"/></svg>
+        Overview
+    </NavLink>
+    <NavLink href="/trade-permission" class="vt-link" Match="NavLinkMatch.All" title="Trade Permission">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l3 3L22 4" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Trade Permission
+    </NavLink>
+    <span class="vt-sep"></span>
+    <NavLink href="/ai-dashboard" class="vt-link" Match="NavLinkMatch.All" title="AI Dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="4" height="9" rx="1"/><rect x="10" y="6" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="17" rx="1"/></svg>
+        AI Dashboard
+    </NavLink>
+    <NavLink href="/ai-learning" class="vt-link" Match="NavLinkMatch.All" title="AI Learning">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2L2 7l10 5 10-5-10-5z" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        AI Learning
+    </NavLink>
+    <NavLink href="/missed-trades" class="vt-link" Match="NavLinkMatch.All" title="Signals">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Signals
+    </NavLink>
+    <NavLink href="/settings" class="vt-link" Match="NavLinkMatch.All" title="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        Settings
+    </NavLink>
+</nav>
 
 <div class="app-body">
     <div class="page">

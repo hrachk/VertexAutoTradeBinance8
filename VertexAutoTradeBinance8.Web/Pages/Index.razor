@@ -9,12 +9,13 @@
 
 <div class="vx">
 
-    <!-- TOP BAR -->
+    <!-- TOP BAR — real heartbeat status (LIVE/STALLED/DEAD based on
+         actual engine tick freshness), not just "file exists" -->
     <div class="vx-bar">
         <span class="vx-logo">⬡ VERTEX AI</span>
         <div class="vx-bar-mid">
-            <span class="vx-pill @(_s != null ? "pill-on" : "pill-off")">
-                <span class="dot"></span>@(_s != null ? "LIVE" : "OFFLINE")
+            <span class="vx-pill @HeartbeatPillClass">
+                <span class="dot"></span>@HeartbeatText
             </span>
             @if (_s != null)
             {
@@ -69,21 +70,26 @@
             </div>
             <div class="vx-m-val blue">
                 @(_s != null ? $"{_s.ConfidencePercent}%" : "—")
+                @if (_s != null)
+                {
+                    <span class="badge @ConfidenceCss(_s.ConfidenceLevel)">@_s.ConfidenceLevel</span>
+                }
             </div>
         </div>
 
         <div class="vx-m">
             <div class="vx-m-label">LAST DECISION</div>
-            <div class="vx-m-val sm @(_s?.LastEntryDecision?.Contains("BLOCK")==true?"warn":"")">
+            <div class="vx-m-val sm @(_s?.LastEntryDecision?.Contains("BLOCK")==true?"warn":"")"
+                 title="@DecisionDescription(_s?.LastEntryDecision)">
                 @(_s?.LastEntryDecision ?? "—")
             </div>
-            <div class="vx-m-sub">@(_s?.ConfidenceLevel ?? "—")</div>
+            <div class="vx-m-sub">@(_s != null ? $"{DecisionAge}s ago" : "—")</div>
         </div>
 
         <div class="vx-m">
             <div class="vx-m-label">UNIVERSE</div>
             <div class="vx-m-val yellow">@(_s?.UniverseSize ?? 0)</div>
-            <div class="vx-m-sub">Symbols tracked</div>
+            <div class="vx-m-sub">@(_s?.TrackedSymbols ?? 0) tracked</div>
         </div>
 
         <div class="vx-m">
@@ -164,11 +170,17 @@
         }
     </div>
 
-    <!-- ENGINE STATE -->
+    <!-- ENGINE STATE — merged from the old /engine page: full detail
+         grid, confidence sparkline, heartbeat-aware status, supervisor
+         activity, and decision tooltips, all using the SAME heartbeat
+         logic as the top bar so the two can never disagree. -->
     @if (_s != null)
     {
         <div class="vx-section">
-            <div class="vx-sh"><span class="vx-st">ENGINE STATE</span></div>
+            <div class="vx-sh">
+                <span class="vx-st">ENGINE STATE</span>
+                <span class="vx-sb @HeartbeatPillClass">@HeartbeatText</span>
+            </div>
             <div class="vx-cards">
                 <div class="vx-card"><div class="vx-cl">Status</div><div class="vx-cv">@_s.Status</div></div>
                 <div class="vx-card"><div class="vx-cl">Mode</div><div class="vx-cv">@_s.Mode</div></div>
@@ -176,25 +188,69 @@
                 <div class="vx-card"><div class="vx-cl">Timeframe</div><div class="vx-cv">@_s.Timeframe</div></div>
                 <div class="vx-card"><div class="vx-cl">Market Regime</div><div class="vx-cv @RegimeClass">@_s.MarketRegime</div></div>
                 <div class="vx-card"><div class="vx-cl">Smart Regime</div><div class="vx-cv">@_s.SmartRegime</div></div>
-                <div class="vx-card"><div class="vx-cl">Slope</div><div class="vx-cv">@_s.Slope.ToString("F4")</div></div>
-                <div class="vx-card"><div class="vx-cl">Volatility</div><div class="vx-cv">@_s.Volatility.ToString("F4")</div></div>
-                <div class="vx-card"><div class="vx-cl">Confidence</div><div class="vx-cv blue">@_s.ConfidencePercent% (@_s.ConfidenceLevel)</div></div>
-                <div class="vx-card"><div class="vx-cl">Last Decision</div>
-                    <div class="vx-cv @(_s.LastEntryDecision?.Contains("BLOCK")==true?"warn":"")">@(_s.LastEntryDecision ?? "—")</div></div>
-                <div class="vx-card"><div class="vx-cl">Liquidity</div>
-                    <div class="vx-cv @(_s.LiquidityDanger?"danger":"safe")">@(_s.LiquidityDanger ? $"⚠ {_s.LiquidityReason}" : "OK")</div></div>
-                <div class="vx-card"><div class="vx-cl">Open Positions</div><div class="vx-cv yellow">@_s.OpenPositions / 4</div></div>
-                <div class="vx-card"><div class="vx-cl">Universe Size</div><div class="vx-cv">@_s.UniverseSize</div></div>
-                <div class="vx-card"><div class="vx-cl">Supervisor</div><div class="vx-cv sm">@(_s.LastSupervisorMessage ?? "—")</div></div>
-                <div class="vx-card"><div class="vx-cl">Last Update</div><div class="vx-cv sm">@_s.LastUpdate.ToString("HH:mm:ss")</div></div>
-                <div class="vx-card"><div class="vx-cl">Cycles/min</div><div class="vx-cv">@_s.CyclesPerMinute</div></div>
+                <div class="vx-card"><div class="vx-cl">Slope</div><div class="vx-cv mono">@_s.Slope.ToString("F6")</div></div>
+                <div class="vx-card"><div class="vx-cl">Volatility</div><div class="vx-cv mono">@_s.Volatility.ToString("F6")</div></div>
+
+                <div class="vx-card wide">
+                    <div class="vx-cl">Confidence (history)</div>
+                    <svg class="vx-sparkline" viewBox="0 0 100 30" preserveAspectRatio="none">
+                        <polyline fill="none" stroke="@ConfidenceSparklineColor" stroke-width="2"
+                                  points="@ConfidenceSparklinePoints" />
+                    </svg>
+                </div>
+
+                <div class="vx-card @HeartbeatCardClass">
+                    <div class="vx-cl">Engine Heartbeat</div>
+                    <div class="vx-cv">@HeartbeatText</div>
+                </div>
+
+                <div class="vx-card @(SupervisorAlive ? "ok" : "warn")">
+                    <div class="vx-cl">Supervisor</div>
+                    <div class="vx-cv">checks/min: @_s.SupervisorChecksLastMinute</div>
+                </div>
+
+                <div class="vx-card wide">
+                    <div class="vx-cl">Last Supervisor Action</div>
+                    <div class="vx-cv mono">@(_s.LastSupervisorMessage ?? "—")</div>
+                </div>
+
+                <div class="vx-card wide decision-tooltip-wrap">
+                    <div class="vx-cl">Last Strategy Decision</div>
+                    <div class="vx-cv mono decision-tooltip">
+                        @(_s.LastEntryDecision ?? "—")
+                        <span class="vx-cv-sub">(@DecisionAge s ago)</span>
+                        <div class="tooltip">@DecisionDescription(_s.LastEntryDecision)</div>
+                    </div>
+                </div>
+
+                <div class="vx-card"><div class="vx-cl">Tracked Symbols</div><div class="vx-cv">@_s.TrackedSymbols</div></div>
+                <div class="vx-card"><div class="vx-cl">Universe Size</div><div class="vx-cv yellow">@_s.UniverseSize</div></div>
+                <div class="vx-card @(_s.OpenPositions > 0 ? "ok" : "warn")">
+                    <div class="vx-cl">Open Positions</div><div class="vx-cv yellow">@_s.OpenPositions / 4</div>
+                </div>
+
+                <div class="vx-card @(_s.LiquidityDanger ? "danger" : "ok")">
+                    <div class="vx-cl">Liquidity</div>
+                    <div class="vx-cv">
+                        @(_s.LiquidityDanger ? $"⚠ {_s.LiquidityReason}" : "OK")
+                    </div>
+                </div>
+
+                <div class="vx-card wide"><div class="vx-cl">Last Update</div><div class="vx-cv sm">@_s.LastUpdate.ToLocalTime().ToString("HH:mm:ss")</div></div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="vx-section">
+            <div class="vx-empty vx-empty-danger">
+                Engine state file not found — engine may not have started yet, or SharedData:Root is misconfigured.
             </div>
         </div>
     }
 
     <!-- NAV LINKS -->
     <div class="vx-nav">
-        <a href="/engine">⚙ Engine</a>
         <a href="/ai-dashboard">🤖 AI Dashboard</a>
         <a href="/positions">📊 Positions</a>
         <a href="/missed-trades">📡 Signals</a>
@@ -222,8 +278,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .vx-sym{color:var(--acc);font-weight:600;}
 .vx-tag{font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px;background:var(--bg3);}
 .vx-pill{display:flex;align-items:center;gap:6px;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:1px;}
-.pill-on{background:rgba(34,197,94,.15);color:var(--grn);border:1px solid rgba(34,197,94,.3);}
-.pill-off{background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.3);}
+.pill-live{background:rgba(34,197,94,.15);color:var(--grn);border:1px solid rgba(34,197,94,.3);}
+.pill-stalled{background:rgba(234,179,8,.15);color:var(--yel);border:1px solid rgba(234,179,8,.3);}
+.pill-dead{background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.3);}
 .dot{width:7px;height:7px;border-radius:50%;background:currentColor;animation:pulse 1.5s infinite;}
 @@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
 
@@ -231,7 +288,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .vx-metrics{display:grid;grid-template-columns:repeat(8,1fr);gap:1px;background:var(--bdr);border-bottom:1px solid var(--bdr);}
 .vx-m{background:var(--bg2);padding:18px 16px 14px;display:flex;flex-direction:column;gap:4px;}
 .vx-m-label{font-size:10px;letter-spacing:1.5px;color:var(--dim);font-weight:600;}
-.vx-m-val{font-family:var(--mono);font-size:20px;font-weight:700;}
+.vx-m-val{font-family:var(--mono);font-size:20px;font-weight:700;display:flex;align-items:center;gap:6px;}
 .vx-m-val.sm{font-size:12px;word-break:break-all;}
 .vx-m-sub{font-size:11px;color:var(--dim);}
 .vx-cap{font-size:13px;color:var(--dim);}
@@ -243,7 +300,13 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .safe{color:var(--grn)!important;}
 .danger{color:var(--red)!important;font-weight:700!important;}
 
-/* CONFIDENCE */
+/* CONFIDENCE BADGE */
+.badge{font-size:9px;padding:2px 6px;border-radius:8px;font-weight:700;letter-spacing:.5px;}
+.badge-high{background:rgba(34,197,94,.15);color:var(--grn);}
+.badge-mid{background:rgba(234,179,8,.15);color:var(--yel);}
+.badge-low{background:rgba(239,68,68,.15);color:var(--red);}
+
+/* CONFIDENCE BAR */
 .vx-conf-wrap{height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;margin:4px 0;}
 .vx-conf-bar{height:100%;background:var(--acc);border-radius:2px;transition:width .5s;}
 
@@ -258,6 +321,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .vx-st{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
 .vx-sb{font-size:11px;padding:2px 8px;background:var(--bg3);border-radius:10px;color:var(--dim);}
 .vx-empty{text-align:center;padding:32px;color:var(--dim);background:var(--bg2);border-radius:8px;border:1px dashed var(--bdr);}
+.vx-empty-danger{border-color:rgba(239,68,68,.4);color:var(--red);}
 
 /* TABLE */
 .vx-tbl{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13px;}
@@ -272,9 +336,26 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 /* CARDS */
 .vx-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
 .vx-card{background:var(--bg2);border:1px solid var(--bdr);border-radius:6px;padding:12px 14px;}
+.vx-card.wide{grid-column:span 2;}
+.vx-card.ok{border-color:rgba(34,197,94,.3);}
+.vx-card.warn{border-color:rgba(234,179,8,.3);}
+.vx-card.danger{border-color:rgba(239,68,68,.4);}
 .vx-cl{font-size:10px;letter-spacing:1.5px;color:var(--dim);margin-bottom:5px;font-weight:600;}
 .vx-cv{font-family:var(--mono);font-size:13px;word-break:break-all;}
 .vx-cv.sm{font-size:11px;}
+.vx-cv-sub{font-size:10px;color:var(--dim);margin-left:6px;}
+.vx-sparkline{width:100%;height:30px;}
+
+/* DECISION TOOLTIP */
+.decision-tooltip-wrap{position:relative;}
+.decision-tooltip{position:relative;cursor:help;}
+.decision-tooltip .tooltip{
+    position:absolute;bottom:100%;left:0;margin-bottom:6px;
+    background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;
+    padding:8px 12px;font-size:11px;font-family:'Inter',sans-serif;color:var(--txt);
+    white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .15s;z-index:10;
+}
+.decision-tooltip:hover .tooltip{opacity:1;}
 
 /* NAV */
 .vx-nav{display:flex;gap:10px;padding:20px 24px 0;flex-wrap:wrap;}
@@ -282,7 +363,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .vx-nav a:hover{border-color:var(--acc);color:var(--txt);}
 
 @@media(max-width:1400px){.vx-metrics{grid-template-columns:repeat(4,1fr);}}
-@@media(max-width:900px){.vx-metrics{grid-template-columns:repeat(2,1fr);}.vx-cards{grid-template-columns:repeat(2,1fr);}.vx-bar-mid{display:none;}}
+@@media(max-width:900px){.vx-metrics{grid-template-columns:repeat(2,1fr);}.vx-cards{grid-template-columns:repeat(2,1fr);}.vx-bar-mid{display:none;}.vx-card.wide{grid-column:span 1;}}
 </style>
 
 @code {
@@ -291,6 +372,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     private decimal _unrPnl;
     private System.Threading.Timer? _timer;
 
+    private readonly Queue<int> _confidenceHistory = new();
+    private const int ConfidenceHistoryMax = 15;
+
     protected override void OnInitialized()
     {
         PnlService.Start(null, 1000);
@@ -298,9 +382,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
         _timer = new System.Threading.Timer(_ =>
         {
-            _s = EngineState.Load();
+            Load();
             InvokeAsync(StateHasChanged);
         }, null, 0, 2000);
+    }
+
+    private void Load()
+    {
+        _s = EngineState.Load();
+
+        if (_s != null)
+        {
+            _confidenceHistory.Enqueue(_s.ConfidencePercent);
+            while (_confidenceHistory.Count > ConfidenceHistoryMax)
+                _confidenceHistory.Dequeue();
+        }
     }
 
     private void OnUpdated()
@@ -319,6 +415,106 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         "strongdowntrend" or "downtrend" => "bear",
         "range" or "sideways"            => "rng",
         _ => ""
+    };
+
+    // ================= HEARTBEAT — the single source of truth for
+    // LIVE/STALLED/DEAD, used by BOTH the top bar pill and the Engine
+    // State card, so the two can never show conflicting statuses the
+    // way the old separate pages sometimes did (Index.razor only ever
+    // checked "does the state file exist", which stays true even long
+    // after the engine process has actually stopped writing to it;
+    // /engine's tick-freshness check was the more accurate one and is
+    // now the only one, used everywhere). =================
+    private double EngineSilenceSeconds
+    {
+        get
+        {
+            if (_s == null) return double.MaxValue;
+            return (DateTime.UtcNow - _s.LastEngineTick).TotalSeconds;
+        }
+    }
+
+    private string HeartbeatText
+    {
+        get
+        {
+            if (_s == null) return "OFFLINE";
+            if (EngineSilenceSeconds < 5) return $"LIVE · {EngineSilenceSeconds:F1}s";
+            if (EngineSilenceSeconds < 15) return $"STALLED · {EngineSilenceSeconds:F1}s";
+            return $"DEAD · {EngineSilenceSeconds:F1}s";
+        }
+    }
+
+    private string HeartbeatPillClass
+    {
+        get
+        {
+            if (_s == null) return "pill-dead";
+            if (EngineSilenceSeconds < 5) return "pill-live";
+            if (EngineSilenceSeconds < 15) return "pill-stalled";
+            return "pill-dead";
+        }
+    }
+
+    private string HeartbeatCardClass
+    {
+        get
+        {
+            if (_s == null) return "danger";
+            if (EngineSilenceSeconds < 5) return "ok";
+            if (EngineSilenceSeconds < 15) return "warn";
+            return "danger";
+        }
+    }
+
+    private bool SupervisorAlive =>
+        _s != null && (DateTime.UtcNow - _s.LastSupervisorAction) < TimeSpan.FromSeconds(30);
+
+    private int DecisionAge =>
+        _s != null ? (int)(DateTime.UtcNow - _s.LastDecisionTime).TotalSeconds : 0;
+
+    private string ConfidenceCss(string level) => level switch
+    {
+        "HIGH" => "badge-high",
+        "MEDIUM" => "badge-mid",
+        _ => "badge-low"
+    };
+
+    private string ConfidenceSparklinePoints
+    {
+        get
+        {
+            if (_confidenceHistory.Count < 2) return "";
+            var values = _confidenceHistory.ToArray();
+            return string.Join(" ", values.Select((v, i) =>
+            {
+                var x = (i / (double)(values.Length - 1)) * 100;
+                var y = 30 - (v / 100.0) * 28;
+                return $"{x:F1},{y:F1}";
+            }));
+        }
+    }
+
+    private string ConfidenceSparklineColor
+    {
+        get
+        {
+            if (_confidenceHistory.Count == 0) return "#64748b";
+            var avg = _confidenceHistory.Average();
+            if (avg >= 70) return "#22c55e";
+            if (avg >= 45) return "#f59e0b";
+            return "#ef4444";
+        }
+    }
+
+    private string DecisionDescription(string? decision) => decision switch
+    {
+        "LOW_CONFIDENCE" => "AI confidence too low. Market is noisy.",
+        "WAITING_PULLBACK" => "Trend present, waiting for a pullback.",
+        "BLOCKED_LIQUIDITY" => "Dangerous liquidity / stop-hunt risk.",
+        "SOFT_ENTRY" => "Soft probe entry.",
+        "ENTER_ALLOWED" => "Full entry allowed.",
+        _ => "Analyzing market."
     };
 
     public void Dispose()

@@ -270,6 +270,7 @@ public class Program
 
                     // ===== RISK / EXECUTION =====
                     services.AddSingleton<RiskManager>();          // ← теперь SymbolInfoService уже есть
+                    services.AddSingleton<BinanceAlgoOrderService>();
                     services.AddSingleton<OrderExecutor>();
                     services.AddSingleton<OrderCleanerService>();
                     services.AddSingleton<PnLMonitorService>();

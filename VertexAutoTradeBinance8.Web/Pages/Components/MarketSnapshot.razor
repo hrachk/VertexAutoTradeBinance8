@@ -4,6 +4,9 @@
 @using Binance.Net.Enums
 @using VertexAutoTradeBinance8.Services
 @inject MarketSnapshotFileService Service
+@inject VertexAutoTradeBinance8.Configuration.ConfidenceResolver ConfidenceResolver
+@inject IHttpClientFactory HttpClientFactory
+@inject Microsoft.Extensions.Options.IOptionsMonitor<VertexAutoTradeBinance8.Configuration.BinanceOptions> BinanceOpts
 @inject MarketDataLiveState LiveState
 @inject MissedTradeFileService SignalSvc
 @inject BinanceClientFactory Factory
@@ -45,10 +48,139 @@
         </div>
     </div>
 
+    <!-- LIVE SIGNALS — moved above the ticker bar -->
+    <div class="sig-panel">
+            <div class="sig-panel-head">
+                <div class="sig-panel-title">
+                    <span class="sig-dot"></span>
+                    LIVE SIGNALS
+                    <span class="sig-count">@_signals.Count</span>
+                </div>
+                <div class="sig-panel-right">
+                    @if (_signals.Any())
+                    {
+                        <div class="sig-panel-sub">Click a signal to trade manually</div>
+                    }
+                    else
+                    {
+                        <div class="mk-header-scan">
+                            <span class="mk-header-scan-dot"></span>
+                            Detecting
+                            @if (_symbols.Any())
+                            {
+                                <span class="mk-header-scan-sym">@_symbols[_scanSymIdx % _symbols.Count]</span>
+                            }
+                        </div>
+                    }
+                    <div class="sig-pager @(_signals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
+                        @for (int p = 0; p < _sigPageCount; p++)
+                        {
+                            int pageIdx = p;
+                            <span class="sig-pager-dot @(pageIdx == _sigPage ? "active" : "")"
+                                  @onclick="() => GoToSigPage(pageIdx)"></span>
+                        }
+                        <span class="sig-pager-label">@(_sigPage+1)/@_sigPageCount</span>
+                    </div>
+                </div>
+            </div>
+            @if (_signals.Any())
+            {
+            <div class="sig-cards" id="sigCardsScroll" @ref="_sigCardsEl">
+                @foreach (var sig in _signals)
+                {
+                    bool sigIsBuy = sig.Side?.ToUpper() == "BUY" || sig.Side?.ToUpper() == "LONG";
+                    bool isActive = _activeSignal == sig;
+                    decimal sigTp1 = sig.TakeProfits?.FirstOrDefault() ?? 0m;
+                    decimal rr = sig.StopLoss > 0 && sig.Entry > 0 && sigTp1 > 0
+                        ? Math.Abs(sigTp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry)
+                        : 0m;
+                    int conf = sig.Confidence;
+
+                    // SimulatedTradeService (which produces these "Live
+                    // Signals") does NOT apply the real MinEntry
+                    // confidence filter — it shows every signal the
+                    // strategy saw, for visibility, even ones the bot
+                    // would never actually act on. Resolve the real
+                    // per-symbol threshold and flag it clearly so this
+                    // isn't confused with a signal the bot would trade.
+                    var confProfile = ConfidenceResolver.Resolve(sig.Symbol);
+                    bool belowThreshold = (conf / 100m) < confProfile.MinEntry;
+
+                    // Mirrors StrategyEngine.GetDynamicMinRr exactly — same
+                    // regime/slope/volatility-based thresholds (2.0 base,
+                    // 2.5 in a squeeze, 1.7-1.8 in a strong trend), so a
+                    // signal whose RR doesn't actually meet the bar the
+                    // strategy normally requires is flagged just as
+                    // clearly as a below-confidence one.
+                    decimal minRr = GetDynamicMinRrForDisplay(sig);
+                    bool lowRr = rr > 0 && rr < minRr;
+
+                    var ttl = GetSignalTtl(sig);
+                    bool isRemoving = _expiredSignals.ContainsKey(SignalKey(sig));
+
+                    <div class="sig-card @(sigIsBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @((belowThreshold || lowRr) ? "sc-below-threshold" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "")"
+                         @key="SignalKey(sig)"
+                         @onclick="() => SelectSignal(sig)">
+                        @if (belowThreshold)
+                        {
+                            <div class="sc-threshold-badge" title="@($"Confidence {conf}% is below this symbol's {(confProfile.MinEntry*100).ToString("F0")}% entry threshold — the bot would not have opened this trade")">
+                                ⚠ Below entry threshold
+                            </div>
+                        }
+                        @if (lowRr)
+                        {
+                            <div class="sc-threshold-badge" title="@($"RR {rr:F2} is below this regime's normal minimum of {minRr:F1} — a weaker reward/risk setup than the strategy usually requires")">
+                                ⚠ Low RR ({rr:F1} &lt; {minRr:F1})
+                            </div>
+                        }
+                        <!-- Top row: symbol, side, time -->
+                        <div class="sc-top">
+                            <div class="sc-sym-wrap">
+                                <span class="sc-sym">@sig.Symbol.Replace("USDT","")</span>
+                                <span class="sc-usdt">USDT</span>
+                            </div>
+                            <span class="sc-side @(sigIsBuy ? "sc-side-b" : "sc-side-s")">
+                                @(sigIsBuy ? "▲ LONG" : "▼ SHORT")
+                            </span>
+                            <span class="sc-ago">@FmtAgo(sig.Time)</span>
+                        </div>
+
+                        <!-- Confidence bar -->
+                        <div class="sc-conf-wrap">
+                            <div class="sc-conf-bar" style="width:@conf%"
+                                 style2="background:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")"></div>
+                        </div>
+
+                        <!-- Prices, all inline -->
+                        <div class="sc-prices-row">
+                            <div class="sc-p"><span class="sc-pl">Entry</span><span class="sc-pv mono">@FmtP(sig.Entry)</span></div>
+                            <div class="sc-p"><span class="sc-pl">SL</span><span class="sc-pv mono dn">@FmtP(sig.StopLoss)</span></div>
+                            @if (sigTp1 > 0) {
+                                <div class="sc-p"><span class="sc-pl">TP1</span><span class="sc-pv mono up">@FmtP(sigTp1)</span></div>
+                            }
+                        </div>
+
+                        <!-- Footer: confidence/RR/ATR + TTL bar combined in one slim row -->
+                        <div class="sc-foot">
+                            <span class="sc-conf @(conf>=60?"up":conf>=45?"yel":"dn")">@conf%</span>
+                            @if (rr > 0) { <span class="sc-rr">RR @rr.ToString("F1")</span> }
+                            <span class="sc-atr mk-dim">ATR @FmtP(sig.ATR)</span>
+                            <div class="sc-ttl-bar-wrap" title="Estimated relevance window based on volatility (ATR)">
+                                <div class="sc-ttl-bar @(ttl.IsExpiring ? "ttl-low" : ttl.Pct < 50 ? "ttl-mid" : "ttl-high")"
+                                     style="width:@(ttl.Pct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                            </div>
+                            <span class="sc-ttl-label mk-dim">@ttl.Label</span>
+                        </div>
+                    </div>
+                }
+            </div>
+            }
+    </div> <!-- end sig-panel -->
+
     <!-- ROW 1: SYMBOL TICKER -->
     <div class="mk-ticker-bar">
         <div class="mk-ticker-scroll">
-            @foreach (var sym in _symbols)
+            @foreach (var sym in OrderedTickerSymbols)
             {
                 var symSeries = Series.Where(s => s.Symbol == sym).ToList();
                 var best = symSeries.OrderByDescending(s => s.Klines.Count).FirstOrDefault();
@@ -142,152 +274,81 @@
             </div>
         }
 
-        <div class="mk-body-grid @(_activeSignal != null || _selectedPosition != null ? "mk-body-grid-with-panel" : "")">
-        <!-- LEFT: LIVE SIGNALS first, then chart + RSI + Volume, then OPEN POSITIONS, then OPEN ORDERS — all share this one column's width -->
+        <div class="mk-body-grid mk-body-grid-with-panel">
+        <!-- LEFT: chart + RSI + Volume, then OPEN POSITIONS, then OPEN ORDERS — all share this one column's width -->
         <div class="mk-main-col">
-        <div class="sig-panel">
-                <div class="sig-panel-head">
-                    <div class="sig-panel-title">
-                        <span class="sig-dot"></span>
-                        LIVE SIGNALS
-                        <span class="sig-count">@_signals.Count</span>
-                    </div>
-                    <div class="sig-panel-right">
-                        @if (_signals.Any())
-                        {
-                            <div class="sig-panel-sub">Click a signal to trade manually</div>
-                        }
-                        else
-                        {
-                            <div class="mk-header-scan">
-                                <span class="mk-header-scan-dot"></span>
-                                Detecting
-                                @if (_symbols.Any())
-                                {
-                                    <span class="mk-header-scan-sym">@_symbols[_scanSymIdx % _symbols.Count]</span>
-                                }
-                            </div>
-                        }
-                        <div class="sig-pager @(_signals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
-                            @for (int p = 0; p < _sigPageCount; p++)
-                            {
-                                int pageIdx = p;
-                                <span class="sig-pager-dot @(pageIdx == _sigPage ? "active" : "")"
-                                      @onclick="() => GoToSigPage(pageIdx)"></span>
-                            }
-                            <span class="sig-pager-label">@(_sigPage+1)/@_sigPageCount</span>
-                        </div>
-                    </div>
-                </div>
-                @if (_signals.Any())
-                {
-                <div class="sig-cards" id="sigCardsScroll" @ref="_sigCardsEl">
-                    @foreach (var sig in _signals)
-                    {
-                        bool sigIsBuy = sig.Side?.ToUpper() == "BUY" || sig.Side?.ToUpper() == "LONG";
-                        bool isActive = _activeSignal == sig;
-                        decimal sigTp1 = sig.TakeProfits?.FirstOrDefault() ?? 0m;
-                        decimal rr = sig.StopLoss > 0 && sig.Entry > 0 && sigTp1 > 0
-                            ? Math.Abs(sigTp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry)
-                            : 0m;
-                        int conf = sig.Confidence;
-
-                        var ttl = GetSignalTtl(sig);
-                        bool isRemoving = _expiredSignals.ContainsKey(SignalKey(sig));
-
-                        <div class="sig-card @(sigIsBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "")"
-                             @key="SignalKey(sig)"
-                             @onclick="() => SelectSignal(sig)">
-                            <!-- Top row: symbol, side, time -->
-                            <div class="sc-top">
-                                <div class="sc-sym-wrap">
-                                    <span class="sc-sym">@sig.Symbol.Replace("USDT","")</span>
-                                    <span class="sc-usdt">USDT</span>
-                                </div>
-                                <span class="sc-side @(sigIsBuy ? "sc-side-b" : "sc-side-s")">
-                                    @(sigIsBuy ? "▲ LONG" : "▼ SHORT")
-                                </span>
-                                <span class="sc-ago">@FmtAgo(sig.Time)</span>
-                            </div>
-
-                            <!-- Confidence bar -->
-                            <div class="sc-conf-wrap">
-                                <div class="sc-conf-bar" style="width:@conf%"
-                                     style2="background:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")"></div>
-                            </div>
-
-                            <!-- Prices, all inline -->
-                            <div class="sc-prices-row">
-                                <div class="sc-p"><span class="sc-pl">Entry</span><span class="sc-pv mono">@FmtP(sig.Entry)</span></div>
-                                <div class="sc-p"><span class="sc-pl">SL</span><span class="sc-pv mono dn">@FmtP(sig.StopLoss)</span></div>
-                                @if (sigTp1 > 0) {
-                                    <div class="sc-p"><span class="sc-pl">TP1</span><span class="sc-pv mono up">@FmtP(sigTp1)</span></div>
-                                }
-                            </div>
-
-                            <!-- Footer: confidence/RR/ATR + TTL bar combined in one slim row -->
-                            <div class="sc-foot">
-                                <span class="sc-conf @(conf>=60?"up":conf>=45?"yel":"dn")">@conf%</span>
-                                @if (rr > 0) { <span class="sc-rr">RR @rr.ToString("F1")</span> }
-                                <span class="sc-atr mk-dim">ATR @FmtP(sig.ATR)</span>
-                                <div class="sc-ttl-bar-wrap" title="Estimated relevance window based on volatility (ATR)">
-                                    <div class="sc-ttl-bar @(ttl.IsExpiring ? "ttl-low" : ttl.Pct < 50 ? "ttl-mid" : "ttl-high")"
-                                         style="width:@(ttl.Pct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
-                                </div>
-                                <span class="sc-ttl-label mk-dim">@ttl.Label</span>
-                            </div>
-                        </div>
-                    }
-                </div>
-                }
-        </div> <!-- end sig-panel -->
         <div class="mk-charts-col-main">
 
         <!-- Price chart -->
         <div class="mk-chart-head">
-            <div class="mk-chart-title">CANDLESTICK · @(Selected?.Symbol ?? "") · @TfLabel(Selected?.Timeframe ?? "")
-                <span style="color:#22c55e;margin-left:12px">⚡ ticks:@_liveTickCount klines:@_liveKlineCount last:@_lastTickSymbol@@@(_lastTickTime==DateTime.MinValue?"-":_lastTickTime.ToString("HH:mm:ss"))</span>
-            </div>
+            <div class="mk-chart-title">CANDLESTICK · @(Selected?.Symbol ?? "") · @TfLabel(Selected?.Timeframe ?? "")</div>
             <div class="mk-legend">
                 <span style="color:#38bdf8">── EMA21</span>
                 <span style="color:#a855f7">── EMA55</span>
-                <span style="color:#eab308">╌╌ VWAP</span>
-                <span style="color:rgba(59,130,246,0.5)">╌╌ BB(20)</span>
+                <span style="color:#ef4444">RSI · ── OB 70 / OS 30</span>
             </div>
-        </div>
-        <div class="mk-canvas-wrap mk-canvas-price" id="priceWrap">
-            <canvas id="priceChart" style="cursor:crosshair"></canvas>
-            <div class="mk-resize-handle" id="resizeHandle">
-                <div class="mk-resize-dots">⋯</div>
-            </div>
+            <button class="mk-chart-maximize" @onclick="ToggleChartMaximized" title="Maximize chart">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
         </div>
 
-        <!-- RSI -->
-        <div class="mk-chart-head" style="padding-top:4px">
-            <div class="mk-chart-title">RSI(14)</div>
-            <div class="mk-legend">
-                <span style="color:#ef4444">── OB 70</span>
-                <span style="color:#22c55e">── OS 30</span>
-            </div>
-        </div>
-        <div class="mk-canvas-wrap mk-canvas-rsi">
-            <canvas id="rsiChart"></canvas>
-        </div>
+        @if (_chartMaximized)
+        {
+            <div class="mk-chart-maximize-backdrop" @onclick="ToggleChartMaximized"></div>
+        }
 
-        <!-- Volume -->
-        <div class="mk-chart-head" style="padding-top:4px">
-            <div class="mk-chart-title">VOLUME</div>
-        </div>
-        <div class="mk-canvas-wrap mk-canvas-vol">
-            <canvas id="volumeChart"></canvas>
+        <!-- SINGLE persistent chart container — never destroyed or
+             recreated by the maximize toggle. Only the wrapping CSS
+             class changes (adds position:fixed etc), which Lightweight
+             Charts' own autoSize ResizeObserver picks up on its own.
+             Previously this used two separate container elements in
+             an if/else branch, which meant Blazor actually destroyed
+             and recreated the DOM node on every toggle — Lightweight
+             Charts kept its session bound to the now-detached old
+             node, leaving the chart blank until a full page reload
+             forced re-initialization from scratch. -->
+        <div class="mk-chart-container-wrap @(_chartMaximized ? "mk-chart-maximized" : "")">
+            @if (_chartMaximized)
+            {
+                <div class="mk-max-bar">
+                    <div class="mk-max-sym">
+                        @(Selected?.Symbol ?? "")
+                        <span class="mk-max-tf">@TfLabel(Selected?.Timeframe ?? "")</span>
+                    </div>
+                    <div class="mk-max-price @(_chg >= 0 ? "up" : "dn")">@FmtP(_last)</div>
+
+                    <div class="mk-max-trade">
+                        <input class="mk-max-qty mono" type="number" title="Quantity"
+                               value="@(_orderQty > 0 ? _orderQty.ToString("G8") : "")"
+                               @onchange="OnQtyChange" placeholder="Qty" />
+                        <button class="mk-max-buy" disabled="@_orderLoading" @onclick="() => QuickMarketOrder(true)">Buy</button>
+                        <button class="mk-max-sell" disabled="@_orderLoading" @onclick="() => QuickMarketOrder(false)">Sell</button>
+                    </div>
+
+                    <button class="mk-max-restore" @onclick="ToggleChartMaximized" title="Restore">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        Restore
+                    </button>
+                </div>
+            }
+            <div id="chartContainer-@_chartInstanceId" @key="_chartInstanceId" style="width:100%;height:@(_chartMaximized ? "calc(100% - 52px)" : "100%");"></div>
+
+            @if (_selectedPosition != null)
+            {
+                <div class="mk-tpsl-overlay">
+                    <button class="mk-tpsl-btn @(_tpSlEditMode ? "mk-tpsl-btn-on" : "")" @onclick="ToggleTpSlEdit" title="Show/hide existing TP/SL lines">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6M9 8h6M17 16h6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        TP/SL
+                    </button>
+                    <span class="mk-tpsl-hint">Drag near entry line to set TP/SL</span>
+                </div>
+            }
         </div>
 
         <div class="mk-hints">
             <span>🖱 Drag to pan</span>
-            <span>⚲ Scroll to zoom X</span>
-            <span>⇧+Scroll to zoom Y</span>
-            <span>↕ Drag handle to resize</span>
-            <span>2× click to reset</span>
+            <span>⚲ Scroll to zoom</span>
+            <span>🖱 Right-click to pick a price</span>
         </div>
 
         </div> <!-- end mk-charts-col-main -->
@@ -321,19 +382,26 @@
                             <thead>
                                 <tr>
                                     <th>Symbol</th><th>Side</th><th>Lev</th>
-                                    <th>Entry</th><th>Mark</th><th>Size</th><th>PnL</th><th>ROI</th><th></th>
+                                    <th>Entry</th><th>Mark</th><th>Liq</th><th>Size</th><th>PnL</th><th>ROI</th><th></th>
                                 </tr>
                             </thead>
                             <tbody>
                                 @foreach (var pos in _allPositions)
                                 {
-                                    <tr class="mk-pos-row @(_selectedPosition == pos ? "mk-pos-row-sel" : "")"
+                                    <tr class="mk-pos-row @(_selectedPosition == pos ? "mk-pos-row-sel" : "") @(_selectingPosition == pos ? "mk-pos-row-loading" : "")"
                                         @onclick="() => SelectPosition(pos)">
-                                        <td class="mk-oo-sym">@pos.Symbol</td>
+                                        <td class="mk-oo-sym">
+                                            @pos.Symbol
+                                            @if (_selectingPosition == pos)
+                                            {
+                                                <span class="mk-pos-spin">⟳</span>
+                                            }
+                                        </td>
                                         <td class="@(pos.Side == "LONG" ? "up" : "dn")">@pos.Side</td>
                                         <td class="mk-dim">@pos.Leverage×</td>
                                         <td class="mk-mono">@FmtP(pos.EntryPrice)</td>
                                         <td class="mk-mono">@FmtP(pos.MarkPrice)</td>
+                                        <td class="mk-mono mk-liq">@(pos.LiqPrice > 0 ? FmtP(pos.LiqPrice) : "—")</td>
                                         <td class="mk-mono">@pos.Size.ToString("F2")</td>
                                         <td class="mk-mono @(pos.Pnl >= 0 ? "up" : "dn")">@(pos.Pnl >= 0 ? "+" : "")@pos.Pnl.ToString("F2")</td>
                                         <td class="mk-mono @(pos.Roi >= 0 ? "up" : "dn")">@(pos.Roi >= 0 ? "+" : "")@((pos.Roi * 100).ToString("F1"))%</td>
@@ -352,6 +420,10 @@
             }
             else
             {
+                @if (!string.IsNullOrEmpty(_lastAlgoOrdersDebug))
+                {
+                    <div class="mk-algo-debug">⚙ Algo orders fetch: @_lastAlgoOrdersDebug</div>
+                }
                 @if (_openOrders.Count == 0)
                 {
                     <div class="mk-oo-empty">No open orders</div>
@@ -379,7 +451,7 @@
                                         <td>
                                             <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
                                                     @onclick="() => CancelOpenOrderAsync(o)">
-                                                @(_cancellingOrderId == o.OrderId ? "…" : "✕")
+                                                @(_cancellingOrderId == o.OrderId ? "…" : "Cancel")
                                             </button>
                                         </td>
                                     </tr>
@@ -393,14 +465,13 @@
 
         </div> <!-- end mk-main-col -->
 
+        <div class="mk-charts-col-side">
+
         @if (_activeSignal != null)
         {
-        <div class="mk-charts-col-side">
-        <!-- TRADE ORDER PANEL (right sidebar, exchange-style) -->
-        @{
+            // TRADE ORDER PANEL (right sidebar, exchange-style)
             bool isBuy = _activeSignal.Side?.ToUpper() == "BUY" || _activeSignal.Side?.ToUpper() == "LONG";
             decimal tp1 = _activeSignal.TakeProfits?.FirstOrDefault() ?? 0m;
-        }
             <div class="ord-panel">
                 <div class="ord-head">
                     <div class="ord-title">
@@ -603,42 +674,17 @@
                     </div>
                 }
             </div>
-
-        <!-- ALL INSTRUMENTS — compact, scrollable, lives in the sidebar now -->
-        <div class="mk-side-tbl">
-            <div class="mk-side-tbl-title">ALL INSTRUMENTS</div>
-            <div class="mk-side-tbl-scroll">
-                @foreach (var s in Series
-                    .GroupBy(x => x.Symbol)
-                    .Select(g => g.OrderByDescending(x => x.Klines.Count).First())
-                    .OrderBy(x => x.Symbol))
-                {
-                    var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
-                    var open = s.Klines.Count > 0 ? s.Klines[0].Close  : 0m;
-                    var chg  = open > 0 ? (last - open) / open * 100m  : 0m;
-                    <div class="mk-side-row @(s.Symbol==_activeSym?"mk-side-row-sel":"")" @onclick="()=>PickAndTrade(s)">
-                        <span class="mk-side-sym">@s.Symbol</span>
-                        <span class="mk-side-price mono">@FmtP(last)</span>
-                        <span class="mk-side-chg @(chg>=0?"up":"dn")">@(chg>=0?"+":"")@chg.ToString("F1")%</span>
-                    </div>
-                }
-            </div>
-        </div> <!-- end mk-side-tbl -->
-        </div> <!-- end mk-charts-col-side -->
         }
         else if (_selectedPosition != null)
         {
-        <div class="mk-charts-col-side">
-        <!-- POSITION DETAILS (right sidebar) — shown when a row in the
-             OPEN POSITIONS table below the chart is clicked -->
-        @{
+            // POSITION DETAILS (right sidebar): shown when a row in OPEN POSITIONS is clicked
             var pos = _selectedPosition!;
             bool posIsLong = pos.Side == "LONG";
             decimal liqDistPct = pos.LiqPrice > 0 && pos.MarkPrice > 0
                 ? Math.Abs(pos.LiqPrice - pos.MarkPrice) / pos.MarkPrice * 100m
                 : 0m;
-        }
             <div class="ord-panel">
+                <div class="ord-selected-label">Selected Position</div>
                 <div class="ord-head">
                     <div class="ord-title">
                         <span class="sc-side @(posIsLong?"sc-side-b":"sc-side-s") ord-badge">
@@ -646,8 +692,31 @@
                         </span>
                         <span class="ord-sym">@pos.Symbol</span>
                     </div>
-                    <button class="ord-close-x" @onclick="() => _selectedPosition = null">✕</button>
+                    <button class="ord-close-x" @onclick="() => SelectPosition(pos)">✕</button>
                 </div>
+
+                @{
+                    var posOrders = _openOrders.Where(o => o.Symbol == pos.Symbol).ToList();
+                }
+                @if (posOrders.Any())
+                {
+                    <div class="ord-pos-orders">
+                        <div class="ord-pos-orders-title">Open Orders for @pos.Symbol</div>
+                        @foreach (var o in posOrders)
+                        {
+                            <div class="ord-pos-order-row">
+                                <span class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</span>
+                                <span class="mk-dim">@o.Type @(o.ReduceOnly ? "(R)" : "")</span>
+                                <span class="mono">@(o.Price > 0 ? FmtP(o.Price) : "Market")</span>
+                                <span class="mono mk-dim">@o.Qty.ToString("G8")</span>
+                                <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
+                                        @onclick="() => CancelOpenOrderAsync(o)">
+                                    @(_cancellingOrderId == o.OrderId ? "…" : "Cancel")
+                                </button>
+                            </div>
+                        }
+                    </div>
+                }
 
                 <div class="ord-body">
                     <div class="ord-position-box" style="margin:0;border:none;padding:0;">
@@ -707,8 +776,66 @@
                     </div>
                 </div>
             </div>
-        </div> <!-- end mk-charts-col-side (position details) -->
         }
+
+        <!-- ALL INSTRUMENTS — always visible regardless of which panel (or none) is shown above -->
+        <div class="mk-side-tbl">
+            <div class="mk-side-tbl-title">ALL INSTRUMENTS</div>
+            <div class="mk-side-search-wrap">
+                <span class="mk-side-search-icon">🔍</span>
+                <input class="mk-side-search" type="text" placeholder="Search symbol…" title="Search instruments"
+                       value="@_instrumentSearch" @oninput="OnInstrumentSearchChanged" />
+                @if (!string.IsNullOrEmpty(_instrumentSearch))
+                {
+                    <button class="mk-side-search-clear" @onclick="ClearInstrumentSearch" title="Clear search">✕</button>
+                }
+            </div>
+            <div class="mk-side-tbl-scroll">
+                @{
+                    var allInstruments = Series
+                        .GroupBy(x => x.Symbol)
+                        .Select(g => g.OrderByDescending(x => x.Klines.Count).First())
+                        .ToList();
+
+                    var filtered = string.IsNullOrWhiteSpace(_instrumentSearch)
+                        ? allInstruments
+                        : allInstruments.Where(s => s.Symbol.Contains(_instrumentSearch, StringComparison.OrdinalIgnoreCase)).ToList();
+
+                    // Top 12 by total visible volume first, then the rest alphabetically —
+                    // only when not actively searching (search shows plain matches).
+                    var ordered = string.IsNullOrWhiteSpace(_instrumentSearch)
+                        ? filtered.OrderByDescending(s => s.Klines.Sum(k => k.Volume)).Take(12)
+                            .Concat(filtered.OrderByDescending(s => s.Klines.Sum(k => k.Volume)).Skip(12).OrderBy(s => s.Symbol))
+                        : filtered.OrderBy(s => s.Symbol);
+
+                    int rank = 0;
+                }
+                @foreach (var s in ordered)
+                {
+                    rank++;
+                    var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
+                    var open = s.Klines.Count > 0 ? s.Klines[0].Close  : 0m;
+                    var chg  = open > 0 ? (last - open) / open * 100m  : 0m;
+                    bool isTop12 = string.IsNullOrWhiteSpace(_instrumentSearch) && rank <= 12;
+                    <div class="mk-side-row @(s.Symbol==_activeSym?"mk-side-row-sel":"")" id="sideRow-@s.Symbol" @onclick="()=>PickAndTrade(s)">
+                        @if (isTop12)
+                        {
+                            <span class="mk-side-rank">@rank</span>
+                        }
+                        <span class="mk-side-sym">@s.Symbol</span>
+                        <span class="mk-side-price mono">@FmtP(last)</span>
+                        <span class="mk-side-chg @(chg>=0?"up":"dn")">@(chg>=0?"+":"")@chg.ToString("F1")%</span>
+                    </div>
+                }
+                @if (!ordered.Any())
+                {
+                    <div class="mk-side-empty">No instruments match "@_instrumentSearch"</div>
+                }
+            </div>
+        </div> <!-- end mk-side-tbl -->
+
+        </div> <!-- end mk-charts-col-side (shared: manual-trade/position-details + ALL INSTRUMENTS) -->
+
         </div> <!-- end mk-body-grid -->
      </div>
     </div> <!-- end mk-charts-area always-in-DOM -->
@@ -771,9 +898,48 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-body-grid-with-panel{grid-template-columns:1fr 320px;}
 .mk-main-col{min-width:0;display:flex;flex-direction:column;gap:16px;}
 .mk-charts-col-main{min-width:0;}
-.mk-charts-col-side{min-width:0;}
+.mk-charts-col-side{min-width:0;display:flex;flex-direction:column;gap:16px;}
 @@media(max-width:1000px){.mk-body-grid-with-panel{grid-template-columns:1fr;}}
-.mk-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.mk-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px;}
+
+.mk-chart-maximize{flex-shrink:0;width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;color:var(--dim);cursor:pointer;transition:all .15s;}
+.mk-chart-maximize:hover{color:var(--txt);border-color:var(--acc);}
+.mk-chart-maximize svg{width:15px;height:15px;}
+
+.mk-chart-container-wrap{width:100%;height:480px;transition:none;position:relative;}
+
+.mk-tpsl-overlay{position:absolute;top:36px;left:8px;z-index:5;pointer-events:none;display:flex;align-items:center;gap:8px;}
+.mk-tpsl-btn{pointer-events:auto;display:flex;align-items:center;gap:6px;background:rgba(10,13,18,0.92);border:1px solid var(--bdr);color:var(--dim);padding:5px 12px;border-radius:6px;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .15s;backdrop-filter:blur(4px);}
+.mk-tpsl-btn svg{width:13px;height:13px;}
+.mk-tpsl-btn:hover{color:var(--txt);border-color:var(--acc);}
+.mk-tpsl-btn-on{background:rgba(59,130,246,0.15);border-color:var(--acc);color:var(--acc);}
+.mk-tpsl-hint{font-size:11px;color:var(--acc);background:rgba(59,130,246,0.1);padding:4px 10px;border-radius:5px;}
+.mk-chart-maximized{position:fixed;top:60px;left:20px;right:20px;bottom:20px;z-index:1000;height:auto;background:var(--bg);border:1px solid var(--acc);border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.6);padding:8px;display:flex;flex-direction:column;}
+
+.mk-max-bar{display:flex;align-items:center;gap:14px;padding:8px 12px;height:52px;flex-shrink:0;}
+.mk-max-sym{font-family:var(--mono);font-size:16px;font-weight:700;display:flex;align-items:baseline;gap:8px;}
+.mk-max-tf{font-size:11px;color:var(--dim);background:var(--bg3);padding:2px 8px;border-radius:5px;}
+.mk-max-price{font-family:var(--mono);font-size:16px;font-weight:700;}
+.mk-max-trade{display:flex;align-items:center;gap:6px;margin-left:auto;}
+.mk-max-qty{width:100px;background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;padding:7px 10px;color:var(--txt);font-size:12.5px;}
+.mk-max-buy{background:var(--grn);border:none;color:#fff;padding:8px 18px;border-radius:6px;font-size:12.5px;font-weight:700;cursor:pointer;}
+.mk-max-buy:hover:not(:disabled){opacity:.88;}
+.mk-max-sell{background:var(--red);border:none;color:#fff;padding:8px 18px;border-radius:6px;font-size:12.5px;font-weight:700;cursor:pointer;}
+.mk-max-sell:hover:not(:disabled){opacity:.88;}
+.mk-max-buy:disabled,.mk-max-sell:disabled{opacity:.5;cursor:not-allowed;}
+.mk-max-restore{display:flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid var(--bdr);color:var(--dim);padding:8px 14px;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer;transition:all .15s;}
+.mk-max-restore:hover{color:var(--txt);border-color:var(--acc);}
+.mk-max-restore svg{width:14px;height:14px;}
+
+@@media(max-width:900px){
+    .mk-max-bar{flex-wrap:wrap;height:auto;gap:8px;}
+    .mk-max-trade{margin-left:0;width:100%;}
+    .mk-max-qty{flex:1;}
+}
+.mk-chart-maximize-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999;animation:mkFadeIn .15s ease;}
+@@keyframes mkFadeIn{from{opacity:0;}to{opacity:1;}}
+
+@@media(max-width:700px){.mk-chart-maximized{top:8px;left:8px;right:8px;bottom:8px;}}
 .mk-chart-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
 .mk-legend{display:flex;gap:14px;font-size:11px;color:var(--dim);}
 /* TICKER BAR */
@@ -821,6 +987,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .sc-sell::before{background:var(--red);}
 .sig-card:hover{border-color:var(--acc);transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.3);}
 .sc-active{border-color:var(--acc)!important;background:rgba(59,130,246,.08)!important;}
+.sc-below-threshold{opacity:.7;}
+.sc-threshold-badge{font-size:9.5px;font-weight:700;color:#eab308;background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.3);border-radius:5px;padding:2px 7px;margin-bottom:6px;display:inline-block;cursor:help;}
 .sc-top{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
 .sc-sym-wrap{display:flex;align-items:baseline;gap:3px;}
 .sc-sym{font-family:var(--mono);font-size:14px;font-weight:700;}
@@ -865,7 +1033,13 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
 /* ORDER PANEL */
 .ord-panel{margin:0;background:var(--bg3);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;}
+.ord-selected-label{font-size:10px;letter-spacing:1.5px;color:var(--acc);font-weight:700;text-transform:uppercase;padding:10px 18px 0;background:var(--bg2);}
 .ord-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
+
+.ord-pos-orders{padding:12px 18px;border-bottom:1px solid var(--bdr);background:rgba(59,130,246,0.04);}
+.ord-pos-orders-title{font-size:10px;letter-spacing:1px;color:var(--dim);font-weight:700;margin-bottom:8px;text-transform:uppercase;}
+.ord-pos-order-row{display:grid;grid-template-columns:auto 1fr auto auto auto;align-items:center;gap:10px;padding:6px 0;font-size:12px;}
+.ord-pos-order-row+.ord-pos-order-row{border-top:1px solid var(--bdr);}
 .ord-title{display:flex;align-items:center;gap:10px;}
 .ord-price-hint{font-size:10px;color:var(--dim);margin-top:5px;font-style:italic;}
 .ord-manual-badge{font-size:11px;font-weight:700;color:var(--dim);background:var(--bg2);padding:3px 9px;border-radius:5px;letter-spacing:.3px;}
@@ -936,6 +1110,17 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
 .mk-side-tbl{margin-top:4px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;overflow:hidden;}
 .mk-side-tbl-title{font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--dim);font-weight:700;padding:10px 14px 8px;}
+
+.mk-side-search-wrap{display:flex;align-items:center;gap:6px;margin:0 14px 8px;padding:6px 10px;background:var(--bg);border:1px solid var(--bdr);border-radius:8px;}
+.mk-side-search-icon{font-size:11px;opacity:.5;flex-shrink:0;}
+.mk-side-search{flex:1;background:none;border:none;color:var(--txt);font-size:12px;outline:none;min-width:0;}
+.mk-side-search::placeholder{color:var(--dim);}
+.mk-side-search-clear{background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px;padding:0 2px;flex-shrink:0;}
+.mk-side-search-clear:hover{color:var(--txt);}
+
+.mk-side-rank{font-family:var(--mono);font-size:10px;color:var(--acc);font-weight:700;width:16px;flex-shrink:0;text-align:center;}
+.mk-side-empty{padding:16px 14px;text-align:center;color:var(--dim);font-size:12px;}
+
 .mk-side-tbl-scroll{max-height:280px;overflow-y:auto;scrollbar-width:none;}
 .mk-side-tbl-scroll::-webkit-scrollbar{display:none;}
 .mk-side-row{display:flex;align-items:center;gap:8px;padding:7px 14px;cursor:pointer;transition:background .1s;border-top:1px solid var(--bdr);}
@@ -963,29 +1148,33 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
 .mk-hints{display:flex;gap:16px;padding:8px 4px 0;font-size:11px;color:var(--dim);flex-wrap:wrap;}
 
-/* OPEN ORDERS — compact strip under the chart */
-.mk-oo-panel{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:12px 16px;}
-.mk-oo-tabs{display:flex;gap:4px;margin-bottom:10px;border-bottom:1px solid var(--bdr);padding-bottom:0;}
-.mk-oo-tab{display:flex;align-items:center;gap:6px;background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:11px;letter-spacing:1px;font-weight:700;padding:8px 4px 10px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s;}
+/* OPEN ORDERS / POSITIONS — sized like a real exchange panel, not a compact strip */
+.mk-oo-panel{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:18px 20px;}
+.mk-oo-tabs{display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--bdr);padding-bottom:0;}
+.mk-oo-tab{display:flex;align-items:center;gap:8px;background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:13px;letter-spacing:.5px;font-weight:700;padding:10px 6px 12px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s;}
 .mk-oo-tab:hover{color:var(--txt);}
 .mk-oo-tab-on{color:var(--acc);border-bottom-color:var(--acc);}
 .mk-oo-spin{color:var(--acc);animation:mkSpin 1s linear infinite;}
 @@keyframes mkSpin{to{transform:rotate(360deg);}}
-.mk-oo-count{background:var(--bg3);color:var(--txt);font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;}
+.mk-oo-count{background:var(--bg3);color:var(--txt);font-size:12px;font-weight:700;padding:2px 9px;border-radius:10px;}
 .mk-oo-head{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
 .mk-oo-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
-.mk-oo-count{background:var(--bg3);color:var(--txt);font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;}
-.mk-oo-empty{font-size:12px;color:var(--dim);padding:10px 2px;}
-.mk-oo-scroll{max-height:170px;overflow-y:auto;scrollbar-width:none;}
+.mk-oo-empty{font-size:13px;color:var(--dim);padding:24px 2px;text-align:center;}
+.mk-algo-debug{font-size:11px;color:var(--acc);background:rgba(59,130,246,0.08);padding:6px 10px;border-radius:6px;margin-bottom:10px;word-break:break-all;}
+.mk-oo-scroll{max-height:280px;overflow-y:auto;scrollbar-width:none;}
 .mk-oo-scroll::-webkit-scrollbar{display:none;}
 .mk-oo-tbl{width:100%;border-collapse:collapse;}
-.mk-oo-tbl th{position:sticky;top:0;background:var(--bg2);text-align:left;padding:4px 10px;font-size:9px;letter-spacing:.5px;color:var(--dim);border-bottom:1px solid var(--bdr);white-space:nowrap;}
-.mk-oo-tbl td{padding:5px 10px;font-size:12px;border-bottom:1px solid var(--bdr);white-space:nowrap;}
+.mk-oo-tbl th{position:sticky;top:0;background:var(--bg2);text-align:left;padding:8px 14px;font-size:11px;letter-spacing:.5px;color:var(--dim);border-bottom:1px solid var(--bdr);white-space:nowrap;font-weight:600;}
+.mk-oo-tbl td{padding:11px 14px;font-size:13.5px;border-bottom:1px solid var(--bdr);white-space:nowrap;}
 .mk-pos-row{cursor:pointer;transition:background .12s;}
 .mk-pos-row:hover{background:rgba(255,255,255,0.04);}
 .mk-pos-row-sel{background:rgba(59,130,246,0.1);box-shadow:inset 2px 0 0 var(--acc);}
-.mk-oo-sym{font-family:var(--mono);font-weight:700;color:var(--acc);}
-.mk-oo-cancel{background:none;border:1px solid var(--bdr);color:var(--dim);width:22px;height:22px;border-radius:5px;cursor:pointer;font-size:11px;line-height:1;}
+.mk-pos-row-loading{opacity:.7;cursor:wait;}
+.mk-pos-spin{display:inline-block;margin-left:6px;color:var(--acc);animation:mkPosSpin .8s linear infinite;font-size:11px;}
+@@keyframes mkPosSpin{to{transform:rotate(360deg);}}
+.mk-oo-sym{font-family:var(--mono);font-weight:700;color:var(--acc);font-size:13.5px;}
+.mk-liq{color:#f59e0b;}
+.mk-oo-cancel{background:none;border:1px solid var(--bdr);color:var(--dim);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;line-height:1;white-space:nowrap;}
 .mk-oo-cancel:hover:not(:disabled){border-color:var(--red);color:var(--red);}
 .mk-oo-cancel:disabled{opacity:.5;cursor:not-allowed;}
 
@@ -999,8 +1188,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     // Symbol + TF selection
     string _activeSym = "";
+    string _instrumentSearch = "";
+
+    void OnInstrumentSearchChanged(ChangeEventArgs e) => _instrumentSearch = e.Value?.ToString() ?? "";
+    void ClearInstrumentSearch() => _instrumentSearch = "";
     string _activeTf  = "";
     List<string> _symbols = new();
+
+    // Puts the currently-active symbol first in the ticker bar display
+    // order, without touching the underlying _symbols list itself
+    // (which gets periodically rebuilt by the refresh timer and would
+    // otherwise undo any direct reordering within a couple seconds).
+    IEnumerable<string> OrderedTickerSymbols =>
+        string.IsNullOrEmpty(_activeSym) || !_symbols.Contains(_activeSym)
+            ? _symbols
+            : new[] { _activeSym }.Concat(_symbols.Where(s => s != _activeSym));
     int _scanSymIdx = 0;
 
     // All standard TFs in TradingView order
@@ -1030,6 +1232,16 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     protected override async Task OnInitializedAsync()
     {
+        // Unique per-mount suffix for the chart canvas ids. If Blazor's
+        // diffing ever decides this component instance is "the same" as
+        // a previous mount and tries to reuse DOM nodes (which we now
+        // suspect is happening, since the JS-side generationId never
+        // advances past 1 even after navigating away and back), giving
+        // the canvas a genuinely different id each time it's created
+        // makes that reuse structurally impossible — the diffing
+        // algorithm can't match elements with different ids.
+        _chartInstanceId = Guid.NewGuid().ToString("N")[..8];
+
         LiveState.PriceTicked += OnLivePriceTicked;
         LiveState.KlineClosed += OnLiveKlineClosed;
 
@@ -1084,6 +1296,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             ResolveSelected();
             CalcStats();
             try { await RenderCharts(); } catch { }
+
+            // Live PnL caption on the entry line, if a position on this
+            // symbol is currently selected.
+            if (_selectedPosition != null && _selectedPosition.Symbol == symbol)
+            {
+                try { await JS.InvokeVoidAsync("marketChart.updatePnl", $"chartContainer-{_chartInstanceId}", price); } catch { }
+            }
+
             StateHasChanged();
         });
     }
@@ -1120,37 +1340,27 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     string _lastRenderedKey = "";
 
     string _chartInitError = "";
+    string _chartInstanceId = "";
+    bool _chartMaximized = false;
+
+    async Task ToggleChartMaximized()
+    {
+        _chartMaximized = !_chartMaximized;
+        StateHasChanged();
+        // Give the browser a frame to apply the new CSS size before
+        // asking Lightweight Charts to re-measure — autoSize's own
+        // ResizeObserver normally catches this on its own, but a
+        // deliberate nudge here avoids any one-frame flash of the old
+        // size while the transition is mid-flight.
+        await Task.Delay(50);
+        try { await JS.InvokeVoidAsync("marketChart.resize", $"chartContainer-{_chartInstanceId}"); } catch { }
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
             await InitChartAsync();
-        }
-        else if (_chartInitDone)
-        {
-            // CONFIRMED BUG (via diagnostic logs): navigating away from
-            // /market and back through the sidebar does NOT reliably
-            // trigger firstRender=true again for this component — Blazor
-            // can reuse the same component instance across that
-            // navigation, so _chartInitDone stays true from the ORIGINAL
-            // visit and InitChartAsync() never runs again, even though
-            // the <canvas> elements in the DOM may have been recreated.
-            // Fix: on every NON-first render, cheaply ask JS whether the
-            // canvas it's currently bound to is still the one actually in
-            // the document. If not, re-run init() right here — this check
-            // runs every render cycle, so it catches the mismatch on the
-            // very next render after navigating back, not "eventually" or
-            // "never".
-            try
-            {
-                var stillBound = await JS.InvokeAsync<bool>("marketChart.isBoundToLiveCanvas");
-                if (!stillBound)
-                {
-                    await InitChartAsync();
-                }
-            }
-            catch { }
         }
 
         // Render whenever chart is ready and data changed
@@ -1168,33 +1378,36 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         }
     }
 
-    // Initializes the chart exactly once per component instance. No retry
-    // loop, no polling, no cancellation-token bookkeeping needed on this
-    // side — market-chart.js's init() now owns its own generation counter
-    // (bumped on every call) and its own double-requestAnimationFrame wait
-    // for real layout dimensions internally. Calling init() here is fire-
-    // and-forget safe: even if THIS await is somehow still pending when
-    // the component gets disposed and a new one mounts and calls init()
-    // again, the new call's generation bump makes any leftover deferred
-    // work from this one a guaranteed no-op — there is no longer a "zombie
-    // retry loop" possible because there is no retry loop, period.
+    // Initializes the chart. Lightweight Charts' own marketChart.init()
+    // (JS side) disposes any previous chart instance bound to this
+    // container id before creating a new one — so even in the worst
+    // case (Blazor somehow calling this twice, or reusing a component
+    // instance across navigation in a way that re-triggers firstRender),
+    // there is never more than one live chart per container, and no
+    // stale-reference bookkeeping is needed on this side at all.
     async Task InitChartAsync()
     {
         _dotNetRef ??= DotNetObjectReference.Create(this);
         try
         {
-            await JS.InvokeVoidAsync("marketChart.init",
-                "priceChart", "rsiChart", "volumeChart",
-                "resizeHandle", "priceWrap");
-            await RegisterPricePickCallback();
-            _chartInitDone = true;
-            _jsReady = true;
-            _chartInitError = "";
+            var ok = await JS.InvokeAsync<bool>("marketChart.init", $"chartContainer-{_chartInstanceId}");
+            if (ok)
+            {
+                await RegisterPricePickCallback();
+                _chartInitDone = true;
+                _jsReady = true;
+                _chartInitError = "";
+            }
+            else
+            {
+                _chartInitError = "Chart container not found in DOM yet";
+            }
         }
         catch (Exception ex)
         {
             _chartInitError = $"Chart init failed: {ex.Message}";
         }
+        try { await JS.InvokeVoidAsync("tickerDragScroll.bind"); } catch { }
         await InvokeAsync(StateHasChanged);
     }
 
@@ -1305,8 +1518,15 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             CalcStats();
 
             // Panel is visible by default for whatever symbol is active —
-            // only stays hidden if the user explicitly dismissed it (✕).
-            if (_activeSignal == null && !_orderPanelDismissed && !string.IsNullOrEmpty(_activeSym) && _last > 0)
+            // only stays hidden if the user explicitly dismissed it (✕),
+            // OR if a position is currently selected (that has its own
+            // distinct panel with its own TP/SL chart lines — this check
+            // must not silently reopen Manual Trade on top of it on every
+            // periodic tick, which is exactly what was happening before:
+            // _selectedPosition has _activeSignal == null by design, so
+            // without this it looked indistinguishable from "nothing
+            // selected" to this check).
+            if (_activeSignal == null && _selectedPosition == null && !_orderPanelDismissed && !string.IsNullOrEmpty(_activeSym) && _last > 0)
                 OpenManualPanelFor(_activeSym, _last);
         }
         catch { }
@@ -1365,6 +1585,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // "click a Live Signal card" gesture.
     void OpenManualPanelFor(string sym, decimal lastPrice)
     {
+        _selectedPosition = null;
         _activeSignal = new MissedTradeRecord
         {
             Symbol      = sym,
@@ -1468,9 +1689,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 volume   = (double)k.Volume
             }).ToArray();
 
-            DateTime _lastRenderTime = DateTime.UtcNow;
-            await JS.InvokeVoidAsync("marketChart.render",
-                Selected.Symbol, Selected.Timeframe, klines);
+            await JS.InvokeVoidAsync("marketChart.setData", $"chartContainer-{_chartInstanceId}", klines);
         }
         catch { }
     }
@@ -1578,6 +1797,40 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // Higher ATR relative to entry price => market moving faster => signal goes stale sooner.
     record SignalTtlInfo(double Pct, string Label, bool IsExpiring, bool IsExpired);
 
+    // Mirrors StrategyEngine.GetDynamicMinRr's threshold logic exactly
+    // (same regime/slope/volatility checks, same numbers) so the
+    // "Low RR" badge reflects the strategy's REAL bar, not a guessed
+    // one. Deliberately omits the AI-trend-prediction adjustment that
+    // method also has (that needs live model state not available on
+    // the Web side) — this is the static, regime-based floor before
+    // any further tightening the live engine might also apply, so the
+    // badge is a conservative "at least this strict" indicator.
+    decimal GetDynamicMinRrForDisplay(MissedTradeRecord sig)
+    {
+        decimal atrPct = sig.Entry > 0 ? sig.ATR / sig.Entry : 0m;
+
+        var regime = sig.Regime;
+        var smartType = sig.SmartType;
+        var vol = sig.Vol;
+        var slope = sig.Slope;
+
+        bool isSqueeze = regime == VertexAutoTradeBinance8.Models.MarketRegime.Range
+            || smartType == "SmartSqueeze";
+
+        bool isStrongTrendLike =
+            regime == VertexAutoTradeBinance8.Models.MarketRegime.StrongUpTrend ||
+            regime == VertexAutoTradeBinance8.Models.MarketRegime.StrongDownTrend ||
+            smartType == "SmartStrongTrend";
+
+        bool strongSlope = Math.Abs(slope) >= 0.02m;
+        bool highVol = vol >= 0.015m || atrPct >= 0.015m;
+        bool lowVol  = vol <= 0.005m || atrPct <= 0.005m;
+
+        if (isSqueeze) return 2.5m;
+        if (isStrongTrendLike && strongSlope) return highVol ? 1.7m : 1.8m;
+        return lowVol ? 2.2m : 2.0m;
+    }
+
     SignalTtlInfo GetSignalTtl(MissedTradeRecord sig)
     {
         var ageMin = (DateTime.UtcNow - sig.Time.ToUniversalTime()).TotalMinutes;
@@ -1668,7 +1921,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         try
         {
             _dotNetRef ??= DotNetObjectReference.Create(this);
-            await JS.InvokeVoidAsync("marketChartBridge.bindPricePicked", _dotNetRef);
+            await JS.InvokeVoidAsync("marketChart.bindPricePicked", $"chartContainer-{_chartInstanceId}", _dotNetRef);
         }
         catch { }
     }
@@ -1691,6 +1944,162 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
         await SuggestQtyForPrice(_orderPrice);
         await InvokeAsync(StateHasChanged);
+    }
+
+    // Fired from JS once a Bybit-style chart-drag of the SL/TP line is
+    // committed (mouseup). Replaces whatever protective order currently
+    // exists for this position with a new one at the dragged price —
+    // cancel-then-place, same two-call pattern already used everywhere
+    // else in this file for order changes (no new order-placement
+    // primitive was invented for this).
+    bool _slTpDragBusy;
+
+    [JSInvokable]
+    public async Task OnSlDragged(decimal price)
+    {
+        if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
+        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: true, newPrice: price);
+    }
+
+    [JSInvokable]
+    public async Task OnTpDragged(decimal price)
+    {
+        if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
+        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false, newPrice: price);
+    }
+
+    async Task ReplaceProtectiveOrderAsync(ActivePositionInfo pos, bool isStopLoss, decimal newPrice)
+    {
+        _slTpDragBusy = true;
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) { return; }
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+
+            // Round to the symbol's tick size if known, otherwise leave
+            // as-is — better to place a slightly-off-tick order than to
+            // silently snap to a wrong precision.
+            decimal price = _symTickSize > 0 ? Math.Round(newPrice / _symTickSize) * _symTickSize : newPrice;
+
+            bool isLong = pos.Side == "LONG";
+            var closeSide = isLong ? OrderSide.Sell : OrderSide.Buy;
+            var posSide = isLong ? PositionSide.Long : PositionSide.Short;
+
+            // Find and cancel the existing protective order of the same
+            // kind for this symbol, if one exists.
+            var existing = _openOrders.FirstOrDefault(o =>
+                o.Symbol == pos.Symbol &&
+                (isStopLoss ? o.Type.Contains("STOP") : o.Type.Contains("TAKE_PROFIT")));
+
+            if (existing != null)
+            {
+                if (existing.IsAlgo)
+                    await CancelAlgoOrderRawAsync(pos.Symbol, existing.OrderId);
+                else
+                    await client.UsdFuturesApi.Trading.CancelOrderAsync(pos.Symbol, existing.OrderId, ct: cts.Token);
+            }
+
+            // Same conditional-order pattern the Engine itself uses for
+            // placing SL/TP (see PositionSupervisorService.cs) — trigger
+            // price against the Mark price, with price protection
+            // enabled, rather than a plain stop order.
+            var clientOrderId = $"MANUAL_{(isStopLoss ? "SL" : "TP")}_{pos.Symbol}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+
+            var r = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                symbol: pos.Symbol,
+                side: closeSide,
+                type: isStopLoss ? ConditionalOrderType.StopMarket : ConditionalOrderType.TakeProfitMarket,
+                quantity: pos.Qty,
+                positionSide: posSide,
+                triggerPrice: price,
+                workingType: WorkingType.Mark,
+                clientOrderId: clientOrderId,
+                priceProtect: true,
+                ct: cts.Token);
+
+            if (!r.Success)
+            {
+                // Surface the failure where the order-panel error
+                // message already shows up, rather than failing silently.
+                _orderError = $"{(isStopLoss ? "SL" : "TP")} update failed: {r.Error?.Message}";
+            }
+
+            await LoadOpenOrdersAsync();
+            await RefreshPositionLines();
+        }
+        catch (Exception ex)
+        {
+            _orderError = $"{(isStopLoss ? "SL" : "TP")} update failed: {ex.Message}";
+        }
+        finally
+        {
+            _slTpDragBusy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    // Re-draws the entry/SL/TP lines on the chart from the currently
+    // selected position's matching open orders, after any change.
+    async Task RefreshPositionLines()
+    {
+        if (_selectedPosition == null)
+        {
+            try { await JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}"); } catch { }
+            _tpSlEditMode = false;
+            return;
+        }
+
+        var pos = _selectedPosition;
+        try
+        {
+            await JS.InvokeVoidAsync("marketChart.showPositionLines",
+                $"chartContainer-{_chartInstanceId}", pos.EntryPrice, pos.Side, pos.Qty);
+        }
+        catch { }
+
+        // If TP/SL editing was already open (e.g. after a drag just
+        // replaced an order), keep it open and refresh the lines to
+        // reflect the new state rather than closing it.
+        if (_tpSlEditMode)
+        {
+            await ShowTpSlLinesAsync();
+        }
+    }
+
+    // Matches Binance's actual interaction: the entry/PnL line is
+    // always shown once a position is selected, but the SL/TP lines
+    // only appear after the user explicitly clicks the "TP/SL" toggle
+    // — they are not drawn automatically just from selecting a position.
+    bool _tpSlEditMode;
+
+    async Task ToggleTpSlEdit()
+    {
+        _tpSlEditMode = !_tpSlEditMode;
+        if (_tpSlEditMode)
+        {
+            await ShowTpSlLinesAsync();
+        }
+        else
+        {
+            try { await JS.InvokeVoidAsync("marketChart.hideTpSlLines", $"chartContainer-{_chartInstanceId}"); } catch { }
+        }
+    }
+
+    async Task ShowTpSlLinesAsync()
+    {
+        if (_selectedPosition == null) return;
+        var pos = _selectedPosition;
+        var sl = _openOrders.FirstOrDefault(o => o.Symbol == pos.Symbol && o.Type.Contains("STOP"))?.Price ?? 0m;
+        var tp = _openOrders.FirstOrDefault(o => o.Symbol == pos.Symbol && o.Type.Contains("TAKE_PROFIT"))?.Price ?? 0m;
+
+        try
+        {
+            await JS.InvokeVoidAsync("marketChart.showTpSlLines",
+                $"chartContainer-{_chartInstanceId}", pos.EntryPrice, sl, tp, pos.Side);
+        }
+        catch { }
     }
 
     // AI sizing: given an entry price (chart-picked or signal default),
@@ -1753,6 +2162,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     void SelectSignal(MissedTradeRecord sig)
     {
         _activeSignal  = _activeSignal == sig ? null : sig;
+        _selectedPosition = null;
         _orderError    = string.Empty;
         _orderSuccess  = string.Empty;
         _orderType     = "Market";
@@ -1893,6 +2303,29 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 .OrderByDescending(p => Math.Abs(p.Pnl))
                 .ToList();
 
+            // CRITICAL FIX: ActivePositionInfo is a plain class with
+            // reference equality, and the LINQ above creates entirely
+            // NEW instances every single refresh — even for the exact
+            // same still-open position. _selectedPosition held onto
+            // the OLD instance, which after this point matches nothing
+            // in the new _allPositions list via '==' (reference
+            // comparison), even though the position itself is still
+            // genuinely open and was never actually deselected. This
+            // silently broke the "mk-pos-row-sel" highlight and the
+            // ord-panel's "is this still selected" checks on every
+            // single periodic tick — exactly the "after load everything
+            // is lost" symptom from the screenshots. Fix: re-point the
+            // reference at the fresh matching instance (by symbol+side,
+            // since a symbol can have both a LONG and a SHORT position
+            // open simultaneously, as seen in the screenshots) instead
+            // of leaving it dangling.
+            if (_selectedPosition != null)
+            {
+                _selectedPosition = _allPositions.FirstOrDefault(p =>
+                    p.Symbol == _selectedPosition.Symbol && p.Side == _selectedPosition.Side)
+                    ?? _selectedPosition;
+            }
+
             await InvokeAsync(StateHasChanged);
         }
         catch { }
@@ -1903,17 +2336,69 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // right-side panel — same ActivePositionInfo shape the order panel
     // already uses, just driven by a table click instead of a signal.
     ActivePositionInfo? _selectedPosition;
+    ActivePositionInfo? _selectingPosition;
 
-    void SelectPosition(ActivePositionInfo pos)
+    async Task SelectPosition(ActivePositionInfo pos)
     {
         bool wasSelected = _selectedPosition == pos;
-        _selectedPosition = wasSelected ? null : pos;
+        var newSelection = wasSelected ? null : pos;
 
-        // Switch the main chart to this position's symbol so the user
-        // can see the actual price action behind the position they
-        // just clicked, not whatever symbol happened to be on screen.
-        if (!wasSelected)
-            PickSym(pos.Symbol);
+        if (newSelection == null)
+        {
+            // Deselecting: hide chart lines, clear context, one clean
+            // render — no network calls needed for this direction.
+            _selectedPosition = null;
+            _activeSignal = null;
+            try { await JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}"); } catch { }
+            StateHasChanged();
+            return;
+        }
+
+        // Show a small, localized loading spinner on just this row —
+        // doesn't touch the side panel, chart, or ALL INSTRUMENTS list
+        // at all, so there's no layout jump while data loads.
+        _selectingPosition = pos;
+        StateHasChanged();
+
+        // Selecting a new position: do ALL the network/data work FIRST,
+        // while the UI still shows whatever it showed before — nothing
+        // else visible changes yet, so there's no intermediate "empty"
+        // frame for ALL INSTRUMENTS/Manual Trade/the chart to flash
+        // through. Only once everything needed is actually ready do we
+        // flip the rest of the state and render once.
+        await LoadOpenOrdersAsync();
+
+        // Resolve the new symbol's series data ourselves (the same
+        // lookup PickSym does) without calling PickSym itself, since
+        // PickSym fires its own early StateHasChanged()/RenderCharts()
+        // — exactly the extra render pass causing the visible jank.
+        var sym = pos.Symbol;
+        var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == _activeTf)
+            ?? Series.FirstOrDefault(s => s.Symbol == sym);
+
+        // Now flip all the state in one go and render exactly once.
+        _selectedPosition = pos;
+        _selectingPosition = null;
+        _activeSignal = null;
+        _activeSym = sym;
+        if (available != null) _activeTf = available.Timeframe;
+        ResolveSelected();
+        CalcStats();
+
+        _dotNetRef ??= DotNetObjectReference.Create(this);
+        try { await JS.InvokeVoidAsync("marketChart.bindSlTpCallbacks", $"chartContainer-{_chartInstanceId}", _dotNetRef); } catch { }
+
+        // Chart data + position lines together, back-to-back, before
+        // the single StateHasChanged below — so by the time Blazor
+        // actually paints the new panel, the chart underneath it is
+        // already showing the right symbol with its lines drawn, not
+        // catching up a moment later.
+        try { await RenderCharts(); } catch { }
+        await RefreshPositionLines();
+
+        _ = JS.InvokeVoidAsync("tickerDragScroll.scrollSymbolIntoView", pos.Symbol);
+
+        StateHasChanged();
     }
 
     async Task ClosePositionRow(ActivePositionInfo pos)
@@ -2054,15 +2539,126 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         public decimal Qty;
         public decimal Filled;
         public bool ReduceOnly;
+        public bool IsAlgo;
     }
 
     List<OpenOrderRow> _openOrders = new();
+    string _lastAlgoOrdersDebug = "";
     string _ooActiveTab = "positions";
 
     void ShowPositionsTab() => _ooActiveTab = "positions";
     void ShowOrdersTab() => _ooActiveTab = "orders";
     bool _openOrdersLoading;
     long? _cancellingOrderId;
+
+    // Conditional/algo orders (STOP_MARKET, TAKE_PROFIT_MARKET — the
+    // exact types our TP/SL drag feature and Binance's own UI both
+    // create) are NOT returned by GetOpenOrdersAsync at all. Since
+    // Binance's December 2025 mandatory migration, these live in a
+    // completely separate "Algo Order" service with its own dedicated
+    // endpoint (GET /fapi/v1/openAlgoOrders) — the regular open-orders
+    // endpoint genuinely does not know about them. This is the real
+    // root cause of them never showing up, regardless of how Price vs
+    // StopPrice was mapped (that fix was real but insufficient on its
+    // own, since the orders weren't even being fetched in the first
+    // place). Binance.Net 12.13.0 doesn't yet expose a typed method
+    // for this endpoint, so this calls it directly via raw signed HTTP
+    // — the EXACT same signing approach the Engine's own
+    // PositionSupervisorService.BinanceAlgoOrderRaw already uses
+    // successfully for PLACING these orders, just for reading instead.
+    async Task<List<OpenOrderRow>> LoadAlgoOpenOrdersRawAsync(string? symbol = null)
+    {
+        var result = new List<OpenOrderRow>();
+        try
+        {
+            var opt = BinanceOpts.CurrentValue;
+            if (string.IsNullOrWhiteSpace(opt.ApiKey) || string.IsNullOrWhiteSpace(opt.SecretKey))
+            {
+                _lastAlgoOrdersDebug = "No API credentials configured";
+                return result;
+            }
+
+            var http = HttpClientFactory.CreateClient("AlgoOrdersRaw");
+            http.Timeout = TimeSpan.FromSeconds(8);
+
+            var baseUrl = (opt.UseTestnet ? "https://testnet.binancefuture.com" : "https://fapi.binance.com");
+            var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            var q = new List<KeyValuePair<string, string>>
+            {
+                new("timestamp", ts.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            };
+            if (!string.IsNullOrEmpty(symbol)) q.Add(new("symbol", symbol));
+
+            var raw = string.Join("&", q.Select(kv => $"{kv.Key}={kv.Value}"));
+            var encoded = string.Join("&", q.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
+
+            using var hmac = new System.Security.Cryptography.HMACSHA256(System.Text.Encoding.UTF8.GetBytes(opt.SecretKey));
+            var hash = hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(raw));
+            var sig = string.Concat(hash.Select(b => b.ToString("x2")));
+
+            var url = $"{baseUrl}/fapi/v1/openAlgoOrders?{encoded}&signature={sig}";
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", opt.ApiKey);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            using var resp = await http.SendAsync(req, cts.Token);
+            var body = await resp.Content.ReadAsStringAsync(cts.Token);
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                _lastAlgoOrdersDebug = $"HTTP {(int)resp.StatusCode}: {body}";
+                return result;
+            }
+
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            // CONFIRMED via official Binance docs: the response is a
+            // plain top-level JSON array, NOT wrapped in an "orders"
+            // property as initially assumed — that wrong assumption
+            // was the actual bug (JsonException: "requires an element
+            // of type 'Object', but the target element has type
+            // 'Array'" — TryGetProperty on an array root throws
+            // exactly this).
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+            {
+                _lastAlgoOrdersDebug = $"Unexpected response shape (not an array): {body}";
+                return result;
+            }
+
+            foreach (var o in doc.RootElement.EnumerateArray())
+            {
+                decimal GetDec(string name) =>
+                    o.TryGetProperty(name, out var v) && decimal.TryParse(v.GetString(), System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0m;
+                string GetStr(string name) => o.TryGetProperty(name, out var v) ? (v.GetString() ?? "") : "";
+                long GetLong(string name) =>
+                    o.TryGetProperty(name, out var v)
+                        ? (v.ValueKind == System.Text.Json.JsonValueKind.Number && v.TryGetInt64(out var l) ? l
+                           : long.TryParse(v.GetString(), out var l2) ? l2 : 0L)
+                        : 0L;
+
+                result.Add(new OpenOrderRow
+                {
+                    OrderId    = GetLong("algoId"),
+                    Symbol     = GetStr("symbol"),
+                    Side       = GetStr("side").ToUpperInvariant(),
+                    // Real field name confirmed via docs is "orderType"
+                    // (e.g. "TAKE_PROFIT"/"STOP"), not "type".
+                    Type       = GetStr("orderType"),
+                    Price      = GetDec("triggerPrice"),
+                    Qty        = GetDec("quantity"),
+                    Filled     = GetDec("executedQty"),
+                    ReduceOnly = o.TryGetProperty("reduceOnly", out var ro) && ro.GetBoolean(),
+                    IsAlgo     = true,
+                });
+            }
+            _lastAlgoOrdersDebug = $"OK — {result.Count} algo order(s) found";
+        }
+        catch (Exception ex)
+        {
+            _lastAlgoOrdersDebug = $"Exception: {ex.Message}";
+        }
+        return result;
+    }
 
     async Task LoadOpenOrdersAsync()
     {
@@ -2075,18 +2671,35 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             var res = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(ct: cts.Token);
             if (!res.Success || res.Data == null) return;
 
-            _openOrders = res.Data
+            var regularOrders = res.Data
                 .Select(o => new OpenOrderRow
                 {
                     OrderId    = o.Id,
                     Symbol     = o.Symbol,
                     Side       = o.Side.ToString().ToUpperInvariant(),
                     Type       = o.Type.ToString(),
-                    Price      = o.Price,
+                    // Conditional orders (STOP_MARKET / TAKE_PROFIT_MARKET,
+                    // the ones our own TP/SL drag feature creates) store
+                    // their trigger price in StopPrice — Price is 0 for
+                    // these since they execute at market once triggered.
+                    // Same fallback the Engine's own OrderCleanerService.cs
+                    // already uses.
+                    Price      = o.StopPrice.HasValue && o.StopPrice.Value > 0 ? o.StopPrice.Value : o.Price,
                     Qty        = o.Quantity,
                     Filled     = o.QuantityFilled,
                     ReduceOnly = o.ReduceOnly,
                 })
+                .ToList();
+
+            // Algo (conditional) orders live in a completely separate
+            // Binance service since Dec 2025 — fetched via dedicated
+            // raw HTTP call, see LoadAlgoOpenOrdersRawAsync above.
+            var algoOrders = await LoadAlgoOpenOrdersRawAsync();
+
+            _openOrders = regularOrders
+                .Concat(algoOrders)
+                .GroupBy(o => o.OrderId)
+                .Select(g => g.First())
                 .OrderBy(o => o.Symbol)
                 .ToList();
 
@@ -2101,11 +2714,18 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         StateHasChanged();
         try
         {
-            var client = Factory.TryCreateRestClient();
-            if (client == null) return;
+            if (row.IsAlgo)
+            {
+                await CancelAlgoOrderRawAsync(row.Symbol, row.OrderId);
+            }
+            else
+            {
+                var client = Factory.TryCreateRestClient();
+                if (client == null) return;
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-            await client.UsdFuturesApi.Trading.CancelOrderAsync(row.Symbol, row.OrderId, ct: cts.Token);
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                await client.UsdFuturesApi.Trading.CancelOrderAsync(row.Symbol, row.OrderId, ct: cts.Token);
+            }
             await LoadOpenOrdersAsync();
         }
         catch { }
@@ -2114,6 +2734,41 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             _cancellingOrderId = null;
             StateHasChanged();
         }
+    }
+
+    // Algo orders (the ones returned by LoadAlgoOpenOrdersRawAsync) use
+    // a different id space (algoId) and a different cancel endpoint
+    // (DELETE /fapi/v1/algoOrder) than regular orders — same signing
+    // pattern as everywhere else here, reused once more.
+    async Task CancelAlgoOrderRawAsync(string symbol, long algoId)
+    {
+        var opt = BinanceOpts.CurrentValue;
+        if (string.IsNullOrWhiteSpace(opt.ApiKey) || string.IsNullOrWhiteSpace(opt.SecretKey)) return;
+
+        var http = HttpClientFactory.CreateClient("AlgoOrdersRaw");
+        http.Timeout = TimeSpan.FromSeconds(8);
+
+        var baseUrl = opt.UseTestnet ? "https://testnet.binancefuture.com" : "https://fapi.binance.com";
+        var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var q = new List<KeyValuePair<string, string>>
+        {
+            new("algoId", algoId.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            new("timestamp", ts.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+        };
+        var raw = string.Join("&", q.Select(kv => $"{kv.Key}={kv.Value}"));
+        var encoded = string.Join("&", q.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
+
+        using var hmac = new System.Security.Cryptography.HMACSHA256(System.Text.Encoding.UTF8.GetBytes(opt.SecretKey));
+        var hash = hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(raw));
+        var sig = string.Concat(hash.Select(b => b.ToString("x2")));
+
+        var url = $"{baseUrl}/fapi/v1/algoOrder?{encoded}&signature={sig}";
+        using var req = new HttpRequestMessage(HttpMethod.Delete, url);
+        req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", opt.ApiKey);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        try { await http.SendAsync(req, cts.Token); } catch { }
     }
     void OnPriceChange(ChangeEventArgs e)
     {
@@ -2139,7 +2794,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     {
         _orderError   = string.Empty;
         _orderSuccess = string.Empty;
-        _ = JS.InvokeVoidAsync("marketChart.clearPriceLine");
+        _ = JS.InvokeVoidAsync("marketChart.clearPriceLine", $"chartContainer-{_chartInstanceId}");
 
         // Panel stays visible by default — Cancel just resets the form back
         // to a clean manual-trade state for whatever symbol is active.
@@ -2154,7 +2809,22 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _activeSignal        = null;
         _currentPosition     = null;
         _orderPanelDismissed = true;
-        _ = JS.InvokeVoidAsync("marketChart.clearPriceLine");
+        _ = JS.InvokeVoidAsync("marketChart.clearPriceLine", $"chartContainer-{_chartInstanceId}");
+    }
+
+    async Task QuickMarketOrder(bool isBuy)
+    {
+        // Quick-trade from inside the maximized chart. Reuses the exact
+        // same order-placing logic as the regular order panel (qty
+        // rounding, notional checks, leverage, API call) — this is
+        // just a fast path to get there without leaving fullscreen.
+        if (_activeSignal == null || _activeSignal.Symbol != _activeSym)
+        {
+            OpenManualPanelFor(_activeSym, _last);
+        }
+        _orderType = "Market";
+        _activeSignal!.Side = isBuy ? "BUY" : "SELL";
+        await PlaceManualOrder();
     }
 
     async Task PlaceManualOrderBuy()

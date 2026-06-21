@@ -43,6 +43,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly IOptionsMonitor<TradingSettings> _tradingSettings;
         private readonly IOptionsMonitor<TradingOptions> _tradingOptions;
         private readonly IAccountStateService _accountState;
+        private readonly BinanceAlgoOrderService _algoOrders;
 
         // =====================================================
         // Максимум открытых позиций глобально (по всем символам)
@@ -144,7 +145,8 @@ namespace VertexAutoTradeBinance8.Services
             EntryTracker entryTracker,
             CooldownGuard cooldown,
             IOptionsMonitor<TradingOptions> tradingOptions,
-            IAccountStateService accountState)
+            IAccountStateService accountState,
+            BinanceAlgoOrderService algoOrders)
         {
             _logger = logger;
             _factory = factory;
@@ -164,6 +166,7 @@ namespace VertexAutoTradeBinance8.Services
             _cooldown = cooldown;
             _tradingOptions = tradingOptions;
             _accountState = accountState;
+            _algoOrders = algoOrders;
         }
 
         public async Task<bool> ConfirmEntryOn1m(
@@ -2146,8 +2149,45 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             _logger.LogError(
-                "[TP_FAIL_FINAL][{symbol}] code={code} msg={msg} — Supervisor will place emergency TP",
+                "[TP_FAIL_FINAL][{symbol}] code={code} msg={msg} → trying ALGO endpoint",
                 signal.Symbol, res2.Error?.Code, res2.Error?.Message);
+
+            // CRITICAL FIX: both attempts above use the regular
+            // PlaceOrderAsync endpoint, which Binance's mandatory
+            // Dec 9 2025 migration moved ALL conditional orders
+            // (STOP_MARKET/TAKE_PROFIT_MARKET) away from — this
+            // endpoint now rejects them outright (-4120), meaning both
+            // attempts above were failing every single time before
+            // this fix, with no path to actually succeed. This is the
+            // exact reason the at-entry TP was never actually visible
+            // on the exchange ("decided this, but never saw it work").
+            // Falls back to the dedicated Algo Order endpoint, same
+            // mechanism PositionSupervisorService already uses
+            // successfully for its own emergency SL/TP and BE-move
+            // placement.
+            var algoOk = await _algoOrders.PlaceConditionalAsync(
+                symbol: signal.Symbol,
+                side: tpSide,
+                positionSide: posSide,
+                type: "TAKE_PROFIT_MARKET",
+                quantity: tp1Qty,
+                triggerPrice: tp1Price,
+                workingType: "MARK_PRICE",
+                reduceOnly: isHedge ? null : true,
+                ct: ct);
+
+            if (algoOk)
+            {
+                _logger.LogInformation(
+                    "[TP_PLACED_ALGO][{symbol}] price={tp} qty={qty} (via Algo Order endpoint)",
+                    signal.Symbol, tp1Price, tp1Qty);
+            }
+            else
+            {
+                _logger.LogError(
+                    "[TP_FAIL_ALGO][{symbol}] Algo endpoint also failed — Supervisor will place emergency TP",
+                    signal.Symbol);
+            }
         }
 
         private async Task<(bool HasPosition, decimal EntryPrice, decimal Qty, string Reason)> WaitForPositionOrOrderAsync(

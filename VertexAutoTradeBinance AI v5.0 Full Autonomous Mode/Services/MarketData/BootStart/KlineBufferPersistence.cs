@@ -24,9 +24,20 @@ public sealed class KlineBufferPersistence
         _buffer = buffer;
         _logger = logger;
 
-        //var dir = Path.Combine(AppContext.BaseDirectory, "market");
-        //Directory.CreateDirectory(dir);
-        _path = Path.Combine(AppContext.BaseDirectory, "market", "klines_bootstrap.json");
+        // Use SharedData:Root like every other cross-process file in
+        // this project (decision_trace, klines bootstrap was already
+        // supposed to live here per MarketSnapshotFileService's own
+        // comment on the Web side: "SharedData:Root = ...\client_001
+        // (engine writes here)") — AppContext.BaseDirectory points at
+        // THIS process's own bin folder, which is wrong whenever the
+        // Web app runs from a different deployment folder. Without
+        // this fix, the Web dashboard could be reading an entirely
+        // different (stale, or simply absent) file than the one this
+        // class actually saves the live kline buffer to.
+        var root = cfg["SharedData:Root"];
+        _path = !string.IsNullOrWhiteSpace(root)
+            ? Path.Combine(root, "market", "klines_bootstrap.json")
+            : Path.Combine(AppContext.BaseDirectory, "market", "klines_bootstrap.json");
     }
 
     // =====================================================================

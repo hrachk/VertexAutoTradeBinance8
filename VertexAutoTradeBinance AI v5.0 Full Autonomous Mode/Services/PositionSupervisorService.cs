@@ -11,6 +11,7 @@ using System.Drawing;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services.Interface;
@@ -135,30 +136,56 @@ namespace VertexAutoTradeBinance8.Services
     PositionSide side,
     CancellationToken ct)
         {
+            // Regular orders (still checked in case anything was ever
+            // placed through the old non-conditional path).
             var open = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
 
-            if (!open.Success)
-                return;
-
-            foreach (var order in open.Data)
+            if (open.Success)
             {
-                if (order.PositionSide != side)
-                    continue;
-
-                if (order.Type != FuturesOrderType.StopMarket)
-                    continue;
-
-                if (order.ClientOrderId == null)
-                    continue;
-
-                if (order.ClientOrderId.StartsWith(BE_PREFIX) ||
-                    order.ClientOrderId.StartsWith(SL_PREFIX) ||
-                    order.ClientOrderId.StartsWith(TR_PREFIX))
+                foreach (var order in open.Data)
                 {
-                    await client.UsdFuturesApi.Trading.CancelOrderAsync(
-                        symbol,
-                        order.Id,
-                        ct: ct);
+                    if (order.PositionSide != side)
+                        continue;
+
+                    if (order.Type != FuturesOrderType.StopMarket)
+                        continue;
+
+                    if (order.ClientOrderId == null)
+                        continue;
+
+                    if (order.ClientOrderId.StartsWith(BE_PREFIX) ||
+                        order.ClientOrderId.StartsWith(SL_PREFIX) ||
+                        order.ClientOrderId.StartsWith(TR_PREFIX))
+                    {
+                        await client.UsdFuturesApi.Trading.CancelOrderAsync(
+                            symbol,
+                            order.Id,
+                            ct: ct);
+                    }
+                }
+            }
+
+            // CRITICAL FIX: also check algo (conditional) orders — the
+            // EXACT order type PlaceConditionalAsync places, which the
+            // regular endpoint above genuinely cannot see since
+            // Binance's Dec 2025 migration. Every BE-move/SL-update
+            // path in this file places protective orders via the algo
+            // API, so cleanup MUST also look there, or every single
+            // one of these orders survives forever (the original bug
+            // behind both the rapid-SL-duplication and leftover-orders
+            // symptoms).
+            var algoOrders = await _algoRaw.GetOpenAlgoOrdersAsync(symbol, ct);
+            foreach (var algo in algoOrders)
+            {
+                if (algo.PositionSide != side) continue;
+                if (!algo.IsStop) continue;
+
+                if (algo.ClientAlgoId == null) continue;
+                if (algo.ClientAlgoId.StartsWith(BE_PREFIX) ||
+                    algo.ClientAlgoId.StartsWith(SL_PREFIX) ||
+                    algo.ClientAlgoId.StartsWith(TR_PREFIX))
+                {
+                    await _algoRaw.CancelAlgoOrderAsync(algo.AlgoId, ct);
                 }
             }
         }
@@ -503,32 +530,37 @@ namespace VertexAutoTradeBinance8.Services
             entryPrice = await NormalizeTriggerPriceAsync(client, symbol, side, entryPrice, filters.tickSize, true, ct);
             entryPrice = RoundPrice(entryPrice, pricePrecision);
 
-            var open = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
             decimal currentStop = 0m;
 
-            if (open.Success)
+            // CRITICAL FIX: BE-move protective SL orders are placed via
+            // PlaceConditionalAsync (the algo API, see below) — the
+            // regular GetOpenOrdersAsync check that used to live here
+            // never found these (confirmed: algo orders are invisible
+            // to that endpoint since Binance's Dec 2025 migration), so
+            // this "cancel the old one first" step was silently doing
+            // nothing every single cycle, and a new SL got placed on
+            // top of every previous one. This is THE root cause of SL
+            // orders multiplying rapidly that was reported.
+            var algoOrders = await _algoRaw.GetOpenAlgoOrdersAsync(symbol, ct);
+            var currentSlList = algoOrders
+                .Where(o => o.IsStop &&
+                            o.PositionSide == side &&
+                            o.ClientAlgoId != null &&
+                            o.ClientAlgoId.StartsWith(BE_PREFIX))
+                .ToList();
+
+            foreach (var currentSl in currentSlList)
             {
-                // ✅ отменяем все старые BE SL
-                var currentSlList = open.Data
-                    .Where(o => o.Type == FuturesOrderType.StopMarket &&
-                                o.PositionSide == side &&
-                                o.ClientOrderId != null &&
-                                o.ClientOrderId.StartsWith(BE_PREFIX))
-                    .ToList();
+                currentStop = currentSl.TriggerPrice;
 
-                foreach (var currentSl in currentSlList)
+                var cancelled = await _algoRaw.CancelAlgoOrderAsync(currentSl.AlgoId, ct);
+                if (!cancelled)
                 {
-                    currentStop = currentSl.StopPrice ?? 0m;
-
-                    var cancel = await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, currentSl.Id, ct: ct);
-                    if (!cancel.Success)
-                    {
-                        _logger.LogWarning("[BE MOVE][{symbol}][{side}] Failed to cancel old SL {stop}", symbol, side, currentStop);
-                    }
-                    else
-                    {
-                        _logger.LogInformation("[BE MOVE][{symbol}][{side}] canceled old SL {stop}", symbol, side, currentStop);
-                    }
+                    _logger.LogWarning("[BE MOVE][{symbol}][{side}] Failed to cancel old SL {stop}", symbol, side, currentStop);
+                }
+                else
+                {
+                    _logger.LogInformation("[BE MOVE][{symbol}][{side}] canceled old SL {stop}", symbol, side, currentStop);
                 }
             }
 
@@ -662,6 +694,25 @@ namespace VertexAutoTradeBinance8.Services
                     }
                 }
 
+                // CRITICAL FIX: this is exactly the leftover-orders bug
+                // reported via screenshot — algo (conditional) orders
+                // are completely invisible to the regular endpoint
+                // above since Binance's Dec 2025 migration, so any
+                // protective order placed via PlaceConditionalAsync
+                // (which is how every SL/TP in this file gets placed)
+                // was never found here and survived position close
+                // forever, sitting on the exchange as a dangling
+                // STOP/TAKE_PROFIT order with no position behind it.
+                var algoOrdersToClean = await _algoRaw.GetOpenAlgoOrdersAsync(symbol, ct);
+                foreach (var algo in algoOrdersToClean.Where(o => o.PositionSide == side && (o.IsStop || o.IsTakeProfit)))
+                {
+                    var cancelled = await _algoRaw.CancelAlgoOrderAsync(algo.AlgoId, ct);
+                    if (cancelled)
+                        _logger.LogInformation("[SUPERVISOR] {symbol} {side}: canceled leftover algo order {id}", symbol, side, algo.AlgoId);
+                    else
+                        _logger.LogWarning("[SUPERVISOR] {symbol} {side}: failed to cancel leftover algo order {id}", symbol, side, algo.AlgoId);
+                }
+
                 // =====================================================
                 // Очистка lifecycle только для ЭТОЙ позиции
                 // БЫЛО: .Clear() — сбрасывало ВСЕ позиции!
@@ -760,12 +811,24 @@ namespace VertexAutoTradeBinance8.Services
                 var sl = orders.FirstOrDefault(o => o.Type == FuturesOrderType.StopMarket);
                 var tp = orders.FirstOrDefault(o => o.Type == FuturesOrderType.TakeProfitMarket);
 
+                // CRITICAL FIX: allOrders only contains regular orders
+                // (see LoadOrdersAsync) — algo (conditional) orders are
+                // invisible to that endpoint since Binance's Dec 2025
+                // migration. Without this check, an SL/TP placed via
+                // the algo API (which is how every protective order in
+                // this file actually gets placed) would never be found
+                // here, and this code would place ANOTHER emergency
+                // one on top of it every supervisor cycle.
+                var algoOrdersForSide = await _algoRaw.GetOpenAlgoOrdersAsync(symbol, ct);
+                var algoSlExists = algoOrdersForSide.Any(o => o.IsStop && o.PositionSide == side);
+                var algoTpCount = algoOrdersForSide.Count(o => o.IsTakeProfit && o.PositionSide == side);
+
                 // =====================================================
                 // ⚠️ ТОЛЬКО FALLBACK (если вообще нет защиты)
                 // =====================================================
 
                 // ❗ SL отсутствует → ставим аварийный (один раз)
-                if (sl == null)
+                if (sl == null && !algoSlExists)
                 {
                     await CreateEmergencySLAsync(client, symbol, side, qtyAbs, entry, signal, ct);
 
@@ -779,7 +842,7 @@ namespace VertexAutoTradeBinance8.Services
                 // Проверяем количество TP ордеров — если уже есть 2+, не трогаем
                 var existingTps = orders.Count(o =>
                     o.Type == FuturesOrderType.TakeProfitMarket ||
-                    o.Type == FuturesOrderType.TakeProfit);
+                    o.Type == FuturesOrderType.TakeProfit) + algoTpCount;
 
                 if (existingTps == 0)
                 {
@@ -1277,6 +1340,18 @@ namespace VertexAutoTradeBinance8.Services
             bool hasSL = openOrders.Data.Any(o =>
                 o.Type == FuturesOrderType.StopMarket &&
                 o.PositionSide == side);
+
+            // Also check algo orders — an existing SL placed via the
+            // conditional/algo API (which is how this same function's
+            // own fallback below places one, and how every other SL in
+            // this file gets placed) is invisible to the regular check
+            // above, so without this an emergency SL could be placed
+            // on top of an already-existing one.
+            if (!hasSL)
+            {
+                var existingAlgoOrders = await _algoRaw.GetOpenAlgoOrdersAsync(symbol, ct);
+                hasSL = existingAlgoOrders.Any(o => o.IsStop && o.PositionSide == side);
+            }
 
             if (hasSL)
             {
@@ -2868,6 +2943,21 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         // RAW BINANCE ALGO ORDER (POST /fapi/v1/algoOrder)
         // =====================================================================
+        private sealed class BinanceAlgoOrderInfo
+        {
+            public long AlgoId;
+            public string? ClientAlgoId;
+            public string Symbol = "";
+            public OrderSide Side;
+            public PositionSide PositionSide;
+            public string OrderType = ""; // "STOP" / "TAKE_PROFIT" (per Binance's algo-order naming)
+            public decimal TriggerPrice;
+            public decimal Quantity;
+
+            public bool IsStop => OrderType.Contains("STOP", StringComparison.OrdinalIgnoreCase);
+            public bool IsTakeProfit => OrderType.Contains("TAKE_PROFIT", StringComparison.OrdinalIgnoreCase);
+        }
+
         private sealed class BinanceAlgoOrderRaw
         {
             private readonly HttpClient _http;
@@ -2880,7 +2970,14 @@ namespace VertexAutoTradeBinance8.Services
                 _logger = logger;
 
                 _apiKey = cfg["Binance:ApiKey"] ?? string.Empty;
-                _apiSecret = cfg["Binance:ApiSecret"] ?? string.Empty;
+                // CRITICAL FIX: appsettings.json's real field name is
+                // "SecretKey" (confirmed directly), not "ApiSecret" —
+                // this was reading a key that doesn't exist, meaning
+                // _apiSecret was empty the entire time and every
+                // algo-order call (including this session's BE-move/
+                // cleanup fixes) was silently failing the credentials
+                // check before ever reaching the network.
+                _apiSecret = cfg["Binance:SecretKey"] ?? cfg["Binance:ApiSecret"] ?? string.Empty;
                 _baseUrl = (cfg["Binance:FuturesBaseUrl"] ?? "https://fapi.binance.com").TrimEnd('/');
 
                 _http = httpFactory.CreateClient("BinanceAlgoRaw");
@@ -2950,6 +3047,134 @@ namespace VertexAutoTradeBinance8.Services
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "[ALGO-RAW] EX PlaceConditionalAsync {symbol}", symbol);
+                    return false;
+                }
+            }
+
+            // =====================================================
+            // GetOpenAlgoOrdersAsync / CancelAlgoOrderAsync
+            // =====================================================
+            // CRITICAL FIX (found via the Web dashboard's TP/SL
+            // display investigation): every BE-move / SL-update code
+            // path in this file was calling the REGULAR
+            // GetOpenOrdersAsync to check "does a protective order
+            // already exist", and CancelOrderAsync to remove it.
+            // Since Binance's mandatory Dec 9 2025 migration, ALL
+            // conditional orders (STOP_MARKET/TAKE_PROFIT_MARKET —
+            // exactly what this class places via PlaceConditionalAsync
+            // above) live in a completely separate "Algo Order"
+            // service. The regular open-orders endpoint genuinely does
+            // not know these orders exist at all — so every "cancel
+            // the old SL first" check here was finding nothing, every
+            // single time, and immediately placing a brand new SL
+            // without ever removing the previous one. That's the
+            // direct cause of both reported symptoms: SL orders
+            // multiplying rapidly (each BE-move cycle adds another,
+            // since it never sees/cancels the last one) and leftover
+            // orders surviving position close (the close-cleanup path
+            // has the exact same blind spot).
+            public async Task<List<BinanceAlgoOrderInfo>> GetOpenAlgoOrdersAsync(string? symbol, CancellationToken ct)
+            {
+                var result = new List<BinanceAlgoOrderInfo>();
+                if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret))
+                {
+                    _logger.LogError("[ALGO-RAW] Missing Binance:ApiKey / Binance:ApiSecret in config");
+                    return result;
+                }
+
+                var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                var q = new List<KeyValuePair<string, string>>
+                {
+                    new("timestamp", ts.ToString(CultureInfo.InvariantCulture)),
+                };
+                if (!string.IsNullOrEmpty(symbol)) q.Add(new("symbol", symbol));
+
+                var (query, rawQuery) = BuildQuery(q);
+                var sig = Sign(rawQuery, _apiSecret);
+                var url = $"{_baseUrl}/fapi/v1/openAlgoOrders?{query}&signature={sig}";
+
+                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", _apiKey);
+
+                try
+                {
+                    using var resp = await _http.SendAsync(req, ct);
+                    var body = await resp.Content.ReadAsStringAsync(ct);
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
+                        return result;
+                    }
+
+                    // CONFIRMED real response shape via official Binance
+                    // docs: a plain top-level JSON array, not wrapped in
+                    // an "orders" property.
+                    using var doc = JsonDocument.Parse(body);
+                    if (doc.RootElement.ValueKind != JsonValueKind.Array) return result;
+
+                    foreach (var o in doc.RootElement.EnumerateArray())
+                    {
+                        decimal GetDec(string name) =>
+                            o.TryGetProperty(name, out var v) && decimal.TryParse(v.GetString(), CultureInfo.InvariantCulture, out var d) ? d : 0m;
+                        string GetStr(string name) => o.TryGetProperty(name, out var v) ? (v.GetString() ?? "") : "";
+                        long GetLong(string name) =>
+                            o.TryGetProperty(name, out var v)
+                                ? (v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var l) ? l
+                                   : long.TryParse(v.GetString(), out var l2) ? l2 : 0L)
+                                : 0L;
+                        string? GetClientId(string name) => o.TryGetProperty(name, out var v) ? v.GetString() : null;
+
+                        result.Add(new BinanceAlgoOrderInfo
+                        {
+                            AlgoId = GetLong("algoId"),
+                            ClientAlgoId = GetClientId("clientAlgoId"),
+                            Symbol = GetStr("symbol"),
+                            Side = GetStr("side").Equals("BUY", StringComparison.OrdinalIgnoreCase) ? OrderSide.Buy : OrderSide.Sell,
+                            PositionSide = Enum.TryParse<PositionSide>(GetStr("positionSide"), true, out var ps) ? ps : PositionSide.Both,
+                            OrderType = GetStr("orderType"), // "STOP" / "TAKE_PROFIT" / etc
+                            TriggerPrice = GetDec("triggerPrice"),
+                            Quantity = GetDec("quantity"),
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[ALGO-RAW] EX GetOpenAlgoOrdersAsync {symbol}", symbol);
+                }
+                return result;
+            }
+
+            public async Task<bool> CancelAlgoOrderAsync(long algoId, CancellationToken ct)
+            {
+                if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret)) return false;
+
+                var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                var q = new List<KeyValuePair<string, string>>
+                {
+                    new("algoId", algoId.ToString(CultureInfo.InvariantCulture)),
+                    new("timestamp", ts.ToString(CultureInfo.InvariantCulture)),
+                };
+                var (query, rawQuery) = BuildQuery(q);
+                var sig = Sign(rawQuery, _apiSecret);
+                var url = $"{_baseUrl}/fapi/v1/algoOrder?{query}&signature={sig}";
+
+                using var req = new HttpRequestMessage(HttpMethod.Delete, url);
+                req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", _apiKey);
+
+                try
+                {
+                    using var resp = await _http.SendAsync(req, ct);
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        var body = await resp.Content.ReadAsStringAsync(ct);
+                        _logger.LogWarning("[ALGO-RAW] CancelAlgoOrder HTTP {code} body={body}", (int)resp.StatusCode, body);
+                        return false;
+                    }
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[ALGO-RAW] EX CancelAlgoOrderAsync algoId={id}", algoId);
                     return false;
                 }
             }
