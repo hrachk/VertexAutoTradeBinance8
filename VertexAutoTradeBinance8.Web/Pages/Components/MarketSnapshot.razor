@@ -4,6 +4,7 @@
 @using Binance.Net.Enums
 @using VertexAutoTradeBinance8.Services
 @inject MarketSnapshotFileService Service
+@inject VertexAutoTradeBinance8.Configuration.ConfidenceResolver ConfidenceResolver
 @inject IHttpClientFactory HttpClientFactory
 @inject Microsoft.Extensions.Options.IOptionsMonitor<VertexAutoTradeBinance8.Configuration.BinanceOptions> BinanceOpts
 @inject MarketDataLiveState LiveState
@@ -95,12 +96,28 @@
                         : 0m;
                     int conf = sig.Confidence;
 
+                    // SimulatedTradeService (which produces these "Live
+                    // Signals") does NOT apply the real MinEntry
+                    // confidence filter — it shows every signal the
+                    // strategy saw, for visibility, even ones the bot
+                    // would never actually act on. Resolve the real
+                    // per-symbol threshold and flag it clearly so this
+                    // isn't confused with a signal the bot would trade.
+                    var confProfile = ConfidenceResolver.Resolve(sig.Symbol);
+                    bool belowThreshold = (conf / 100m) < confProfile.MinEntry;
+
                     var ttl = GetSignalTtl(sig);
                     bool isRemoving = _expiredSignals.ContainsKey(SignalKey(sig));
 
-                    <div class="sig-card @(sigIsBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "")"
+                    <div class="sig-card @(sigIsBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @(belowThreshold ? "sc-below-threshold" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "")"
                          @key="SignalKey(sig)"
                          @onclick="() => SelectSignal(sig)">
+                        @if (belowThreshold)
+                        {
+                            <div class="sc-threshold-badge" title="@($"Confidence {conf}% is below this symbol's {(confProfile.MinEntry*100).ToString("F0")}% entry threshold — the bot would not have opened this trade")">
+                                ⚠ Below entry threshold
+                            </div>
+                        }
                         <!-- Top row: symbol, side, time -->
                         <div class="sc-top">
                             <div class="sc-sym-wrap">
@@ -953,6 +970,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .sc-sell::before{background:var(--red);}
 .sig-card:hover{border-color:var(--acc);transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.3);}
 .sc-active{border-color:var(--acc)!important;background:rgba(59,130,246,.08)!important;}
+.sc-below-threshold{opacity:.7;}
+.sc-threshold-badge{font-size:9.5px;font-weight:700;color:#eab308;background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.3);border-radius:5px;padding:2px 7px;margin-bottom:6px;display:inline-block;cursor:help;}
 .sc-top{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
 .sc-sym-wrap{display:flex;align-items:baseline;gap:3px;}
 .sc-sym{font-family:var(--mono);font-size:14px;font-weight:700;}

@@ -62,6 +62,17 @@ builder.Services.Configure<EngineConfigRoot>(
 builder.Services.Configure<VertexAutoTradeBinance8.Configuration.BinanceOptions>(
     builder.Configuration.GetSection("Binance"));
 
+// Needed so the Market page can determine, per symbol, whether a
+// displayed signal's confidence is actually above the real entry
+// threshold the Engine uses — SimulatedTradeService (which produces
+// the "Live Signals" shown on /market) does NOT apply MinEntry
+// filtering itself, so without this the UI has no way to distinguish
+// a signal the bot would actually act on from one purely shown for
+// visibility.
+builder.Services.Configure<VertexAutoTradeBinance8.Configuration.SignalConfidenceSettings>(
+    builder.Configuration.GetSection("SignalConfidence"));
+builder.Services.AddSingleton<VertexAutoTradeBinance8.Configuration.ConfidenceResolver>();
+
 
 builder.Services.AddSingleton<AiStopLossOptimizer>();
 builder.Services.AddSingleton<EngineRuntimeSettings>();
