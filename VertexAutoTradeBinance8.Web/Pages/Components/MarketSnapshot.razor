@@ -274,7 +274,7 @@
             </div>
         }
 
-        <div class="mk-body-grid @(_activeSignal != null || _selectedPosition != null ? "mk-body-grid-with-panel" : "")">
+        <div class="mk-body-grid mk-body-grid-with-panel">
         <!-- LEFT: chart + RSI + Volume, then OPEN POSITIONS, then OPEN ORDERS — all share this one column's width -->
         <div class="mk-main-col">
         <div class="mk-charts-col-main">
@@ -465,9 +465,10 @@
 
         </div> <!-- end mk-main-col -->
 
+        <div class="mk-charts-col-side">
+
         @if (_activeSignal != null)
         {
-        <div class="mk-charts-col-side">
         <!-- TRADE ORDER PANEL (right sidebar, exchange-style) -->
         @{
             bool isBuy = _activeSignal.Side?.ToUpper() == "BUY" || _activeSignal.Side?.ToUpper() == "LONG";
@@ -675,67 +676,9 @@
                     </div>
                 }
             </div>
-
-        <!-- ALL INSTRUMENTS — compact, scrollable, lives in the sidebar now -->
-        <div class="mk-side-tbl">
-            <div class="mk-side-tbl-title">ALL INSTRUMENTS</div>
-            <div class="mk-side-search-wrap">
-                <span class="mk-side-search-icon">🔍</span>
-                <input class="mk-side-search" type="text" placeholder="Search symbol…" title="Search instruments"
-                       value="@_instrumentSearch" @oninput="OnInstrumentSearchChanged" />
-                @if (!string.IsNullOrEmpty(_instrumentSearch))
-                {
-                    <button class="mk-side-search-clear" @onclick="ClearInstrumentSearch" title="Clear search">✕</button>
-                }
-            </div>
-            <div class="mk-side-tbl-scroll">
-                @{
-                    var allInstruments = Series
-                        .GroupBy(x => x.Symbol)
-                        .Select(g => g.OrderByDescending(x => x.Klines.Count).First())
-                        .ToList();
-
-                    var filtered = string.IsNullOrWhiteSpace(_instrumentSearch)
-                        ? allInstruments
-                        : allInstruments.Where(s => s.Symbol.Contains(_instrumentSearch, StringComparison.OrdinalIgnoreCase)).ToList();
-
-                    // Top 12 by total visible volume first, then the rest alphabetically —
-                    // only when not actively searching (search shows plain matches).
-                    var ordered = string.IsNullOrWhiteSpace(_instrumentSearch)
-                        ? filtered.OrderByDescending(s => s.Klines.Sum(k => k.Volume)).Take(12)
-                            .Concat(filtered.OrderByDescending(s => s.Klines.Sum(k => k.Volume)).Skip(12).OrderBy(s => s.Symbol))
-                        : filtered.OrderBy(s => s.Symbol);
-
-                    int rank = 0;
-                }
-                @foreach (var s in ordered)
-                {
-                    rank++;
-                    var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
-                    var open = s.Klines.Count > 0 ? s.Klines[0].Close  : 0m;
-                    var chg  = open > 0 ? (last - open) / open * 100m  : 0m;
-                    bool isTop12 = string.IsNullOrWhiteSpace(_instrumentSearch) && rank <= 12;
-                    <div class="mk-side-row @(s.Symbol==_activeSym?"mk-side-row-sel":"")" id="sideRow-@s.Symbol" @onclick="()=>PickAndTrade(s)">
-                        @if (isTop12)
-                        {
-                            <span class="mk-side-rank">@rank</span>
-                        }
-                        <span class="mk-side-sym">@s.Symbol</span>
-                        <span class="mk-side-price mono">@FmtP(last)</span>
-                        <span class="mk-side-chg @(chg>=0?"up":"dn")">@(chg>=0?"+":"")@chg.ToString("F1")%</span>
-                    </div>
-                }
-                @if (!ordered.Any())
-                {
-                    <div class="mk-side-empty">No instruments match "@_instrumentSearch"</div>
-                }
-            </div>
-        </div> <!-- end mk-side-tbl -->
-        </div> <!-- end mk-charts-col-side -->
         }
         else if (_selectedPosition != null)
         {
-        <div class="mk-charts-col-side">
         <!-- POSITION DETAILS (right sidebar) — shown when a row in the
              OPEN POSITIONS table below the chart is clicked -->
         @{
@@ -838,8 +781,70 @@
                     </div>
                 </div>
             </div>
-        </div> <!-- end mk-charts-col-side (position details) -->
         }
+
+        <!-- ALL INSTRUMENTS — always visible regardless of whether
+             Manual Trade or Position Details is showing above (or
+             neither), since this is a separate, permanent navigation
+             tool, not something that should disappear depending on
+             what else is selected. -->
+        <div class="mk-side-tbl">
+            <div class="mk-side-tbl-title">ALL INSTRUMENTS</div>
+            <div class="mk-side-search-wrap">
+                <span class="mk-side-search-icon">🔍</span>
+                <input class="mk-side-search" type="text" placeholder="Search symbol…" title="Search instruments"
+                       value="@_instrumentSearch" @oninput="OnInstrumentSearchChanged" />
+                @if (!string.IsNullOrEmpty(_instrumentSearch))
+                {
+                    <button class="mk-side-search-clear" @onclick="ClearInstrumentSearch" title="Clear search">✕</button>
+                }
+            </div>
+            <div class="mk-side-tbl-scroll">
+                @{
+                    var allInstruments = Series
+                        .GroupBy(x => x.Symbol)
+                        .Select(g => g.OrderByDescending(x => x.Klines.Count).First())
+                        .ToList();
+
+                    var filtered = string.IsNullOrWhiteSpace(_instrumentSearch)
+                        ? allInstruments
+                        : allInstruments.Where(s => s.Symbol.Contains(_instrumentSearch, StringComparison.OrdinalIgnoreCase)).ToList();
+
+                    // Top 12 by total visible volume first, then the rest alphabetically —
+                    // only when not actively searching (search shows plain matches).
+                    var ordered = string.IsNullOrWhiteSpace(_instrumentSearch)
+                        ? filtered.OrderByDescending(s => s.Klines.Sum(k => k.Volume)).Take(12)
+                            .Concat(filtered.OrderByDescending(s => s.Klines.Sum(k => k.Volume)).Skip(12).OrderBy(s => s.Symbol))
+                        : filtered.OrderBy(s => s.Symbol);
+
+                    int rank = 0;
+                }
+                @foreach (var s in ordered)
+                {
+                    rank++;
+                    var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
+                    var open = s.Klines.Count > 0 ? s.Klines[0].Close  : 0m;
+                    var chg  = open > 0 ? (last - open) / open * 100m  : 0m;
+                    bool isTop12 = string.IsNullOrWhiteSpace(_instrumentSearch) && rank <= 12;
+                    <div class="mk-side-row @(s.Symbol==_activeSym?"mk-side-row-sel":"")" id="sideRow-@s.Symbol" @onclick="()=>PickAndTrade(s)">
+                        @if (isTop12)
+                        {
+                            <span class="mk-side-rank">@rank</span>
+                        }
+                        <span class="mk-side-sym">@s.Symbol</span>
+                        <span class="mk-side-price mono">@FmtP(last)</span>
+                        <span class="mk-side-chg @(chg>=0?"up":"dn")">@(chg>=0?"+":"")@chg.ToString("F1")%</span>
+                    </div>
+                }
+                @if (!ordered.Any())
+                {
+                    <div class="mk-side-empty">No instruments match "@_instrumentSearch"</div>
+                }
+            </div>
+        </div> <!-- end mk-side-tbl -->
+
+        </div> <!-- end mk-charts-col-side (shared: manual-trade/position-details + ALL INSTRUMENTS) -->
+
         </div> <!-- end mk-body-grid -->
      </div>
     </div> <!-- end mk-charts-area always-in-DOM -->
@@ -902,7 +907,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-body-grid-with-panel{grid-template-columns:1fr 320px;}
 .mk-main-col{min-width:0;display:flex;flex-direction:column;gap:16px;}
 .mk-charts-col-main{min-width:0;}
-.mk-charts-col-side{min-width:0;}
+.mk-charts-col-side{min-width:0;display:flex;flex-direction:column;gap:16px;}
 @@media(max-width:1000px){.mk-body-grid-with-panel{grid-template-columns:1fr;}}
 .mk-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px;}
 
