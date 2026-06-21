@@ -679,8 +679,7 @@
         }
         else if (_selectedPosition != null)
         {
-        <!-- POSITION DETAILS (right sidebar) — shown when a row in the
-             OPEN POSITIONS table below the chart is clicked -->
+        <!-- POSITION DETAILS (right sidebar): shown when a row in OPEN POSITIONS is clicked -->
         @{
             var pos = _selectedPosition!;
             bool posIsLong = pos.Side == "LONG";
@@ -783,11 +782,7 @@
             </div>
         }
 
-        <!-- ALL INSTRUMENTS — always visible regardless of whether
-             Manual Trade or Position Details is showing above (or
-             neither), since this is a separate, permanent navigation
-             tool, not something that should disappear depending on
-             what else is selected. -->
+        <!-- ALL INSTRUMENTS — always visible regardless of which panel (or none) is shown above -->
         <div class="mk-side-tbl">
             <div class="mk-side-tbl-title">ALL INSTRUMENTS</div>
             <div class="mk-side-search-wrap">
