@@ -2,6 +2,7 @@
 using VertexAutoTradeBinance8.MarketData;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Services.Bootstrap;
+using VertexAutoTradeBinance8.Services.HistoricalData;
 
 public sealed class SupervisorBootstrapHostedService : BackgroundService
 {
@@ -9,6 +10,7 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
     private readonly MarketDataService _market;
     private readonly MarketDataKlineBuffer _buffer;
     private readonly KlineBufferPersistence _persistence;
+    private readonly HistoricalDataStore _historicalStore;
     private readonly ILogger<SupervisorBootstrapHostedService> _logger;
     private readonly IBootGate _bootGate;
 
@@ -17,6 +19,7 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
      MarketDataService market,
      MarketDataKlineBuffer buffer,
      KlineBufferPersistence persistence,
+     HistoricalDataStore historicalStore,
      IBootGate bootGate,
      ILogger<SupervisorBootstrapHostedService> logger)
     {
@@ -24,6 +27,7 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
         _market = market;
         _buffer = buffer;
         _persistence = persistence;
+        _historicalStore = historicalStore;
         _bootGate = bootGate;
         _logger = logger;
     }
@@ -85,6 +89,48 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
                 if (_buffer.Count(symbol, tf) >= 60)
                     continue;
 
+                // CRITICAL FIX (per direct user feedback): check the
+                // datadb/ archive BEFORE falling back to REST. The whole
+                // point of building that archive was wasted if startup
+                // still always waits on the network for data it might
+                // already have sitting on disk. A local file read is
+                // effectively instant compared to a REST round-trip —
+                // if the archive already has enough bars, load them
+                // straight into the live trading buffer and skip the
+                // network call for this symbol+timeframe entirely.
+                var tfLabel = TfToArchiveLabel(tf);
+                if (tfLabel != null && _historicalStore.Has(symbol, tfLabel))
+                {
+                    try
+                    {
+                        var archived = await _historicalStore.LoadLastAsync(symbol, tfLabel, 200, ct);
+                        if (archived.Count >= 60)
+                        {
+                            foreach (var k in archived)
+                            {
+                                _buffer.Upsert(symbol, tf, new Binance.Net.Objects.Models.Futures.BinanceFuturesUsdtKline
+                                {
+                                    OpenTime = DateTimeOffset.FromUnixTimeMilliseconds(k.OpenTime).UtcDateTime,
+                                    OpenPrice = k.Open,
+                                    HighPrice = k.High,
+                                    LowPrice = k.Low,
+                                    ClosePrice = k.Close,
+                                    Volume = k.Volume,
+                                });
+                            }
+
+                            _logger.LogInformation(
+                                "[BOOT] {symbol} {tf} warm-started from datadb/ archive: {count} bars (instant, no REST call)",
+                                symbol, tf, archived.Count);
+                            continue; // skip the REST fallback below entirely
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "[BOOT] {symbol} {tf} archive read failed — falling back to REST", symbol, tf);
+                    }
+                }
+
                 try
                 {
                     var klines = await _market.GetKlines(symbol, tf, 200);
@@ -119,4 +165,17 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
         await _persistence.SaveAsync(ct);
         await base.StopAsync(ct);
     }
+
+    // Maps the strategy's KlineInterval enum to the same lowercase string
+    // labels HistoricalDataLoaderService uses for archive filenames
+    // (datadb/SYMBOL/TF.json) — only the timeframes this bootstrap loop
+    // actually checks (1m/5m/15m) need an entry; returns null for
+    // anything else rather than guessing.
+    private static string? TfToArchiveLabel(KlineInterval tf) => tf switch
+    {
+        KlineInterval.OneMinute => "1m",
+        KlineInterval.FiveMinutes => "5m",
+        KlineInterval.FifteenMinutes => "15m",
+        _ => null
+    };
 }
