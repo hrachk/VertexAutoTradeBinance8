@@ -295,6 +295,8 @@ public class Program
                     services.AddSingleton<MeanReversionEngine>();
                     services.Configure<SymbolSelectionOptions>(
                         ctx.Configuration.GetSection("SymbolSelection"));
+                    services.Configure<PullbackEntryOptions>(
+                        ctx.Configuration.GetSection("Strategy:PullbackEntry"));
                     services.AddSingleton(sp =>
                     {
                         // NOTE: uses "StrategyRouting:Mode", NOT "Strategy:Mode" —

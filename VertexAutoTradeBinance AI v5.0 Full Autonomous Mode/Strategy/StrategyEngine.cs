@@ -8,6 +8,7 @@ using VertexAutoTradeBinance8.Services.MarketData;
 
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
+using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -45,6 +46,7 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly EngineStateSnapshotService _stateSvc;
         private readonly IDecisionTraceService _decisionTrace;
         private readonly TradingOptions _opt;
+        private readonly IOptionsMonitor<Configuration.PullbackEntryOptions> _pullbackEntryOpt;
         private readonly TestModeOptions _test;
         private readonly ConfidenceResolver _confidenceCfg;
         private readonly FundingRateService _fundingRate;
@@ -126,7 +128,8 @@ namespace VertexAutoTradeBinance8.Strategy
             IDecisionTraceService decisionTrace,
             LiquidityGuardService liquidityGuardService,
             FundingRateService fundingRate,
-            ConfidenceResolver confidenceCfg, DecisionMarkerSink decisionMarkers)
+            ConfidenceResolver confidenceCfg, DecisionMarkerSink decisionMarkers,
+            IOptionsMonitor<Configuration.PullbackEntryOptions> pullbackEntryOpt)
         {
             _logger = logger;
             _correlationService = correlationService;
@@ -142,6 +145,7 @@ namespace VertexAutoTradeBinance8.Strategy
             _fundingRate = fundingRate;
             _confidenceCfg = confidenceCfg;
             _decisionMarkers = decisionMarkers;
+            _pullbackEntryOpt = pullbackEntryOpt;
 
             _logger.LogWarning(
                 "[CONFIG][STRATEGY] Trading TF={tf} | TestMode={enabled} Level={level}",
@@ -1129,22 +1133,29 @@ namespace VertexAutoTradeBinance8.Strategy
             decimal atr = Atr(klines, 14, i);
             if (atr <= 0) return null;
 
-            decimal ema21  = EmaClose(klines, 21, i);
+            // Configurable via Settings page -> Strategy Routing tab ->
+            // "Pullback Entry" (Strategy:PullbackEntry:* in appsettings.json),
+            // live-reloadable through IOptionsMonitor — no restart needed.
+            var pbOpt = _pullbackEntryOpt.CurrentValue;
+            int emaPeriod = pbOpt.EmaPeriod > 0 ? pbOpt.EmaPeriod : 21;
+            decimal zoneMult = pbOpt.ZoneAtrMultiplier > 0 ? pbOpt.ZoneAtrMultiplier : 0.5m;
+
+            decimal ema21  = EmaClose(klines, emaPeriod, i);
             decimal ema55  = EmaClose(klines, 55, i);
-            decimal ema21p = EmaClose(klines, 21, i - 5); // slope EMA21
+            decimal ema21p = EmaClose(klines, emaPeriod, i - 5); // slope EMA(period)
 
             // ── 1. TREND DIRECTION via EMA structure ──────────────────────
-            // Prop desk rule: EMA21 должна ИДТИ в нужном направлении
+            // Prop desk rule: EMA(period) должна ИДТИ в нужном направлении
             // Slope нормализован по ATR чтобы не зависеть от цены актива
             decimal ema21Slope = (ema21 - ema21p) / (atr * 5); // per-bar slope in ATR units
-            bool trendUp   = ema21Slope > 0.05m && ema21 > ema55;  // EMA21 выше EMA55 и растёт
-            bool trendDown = ema21Slope < -0.05m && ema21 < ema55; // EMA21 ниже EMA55 и падает
+            bool trendUp   = ema21Slope > 0.05m && ema21 > ema55;  // EMA(period) выше EMA55 и растёт
+            bool trendDown = ema21Slope < -0.05m && ema21 < ema55; // EMA(period) ниже EMA55 и падает
 
             if (!trendUp && !trendDown) return null; // нет чёткого тренда
 
-            // ── 2. PULLBACK: цена должна коснуться зоны EMA21 ──────────────
-            // Зона = EMA21 ± 0.5 ATR (не точечное касание)
-            decimal zone = atr * 0.5m;
+            // ── 2. PULLBACK: цена должна коснуться зоны EMA(period) ────────
+            // Зона = EMA(period) ± zoneMult ATR (не точечное касание)
+            decimal zone = atr * zoneMult;
             bool touchedEma = c0.LowPrice  <= ema21 + zone && c0.HighPrice >= ema21 - zone ||
                               c1.LowPrice  <= ema21 + zone && c1.HighPrice >= ema21 - zone;
             if (!touchedEma) return null;
