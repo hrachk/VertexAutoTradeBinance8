@@ -1558,6 +1558,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // "click a Live Signal card" gesture.
     void OpenManualPanelFor(string sym, decimal lastPrice)
     {
+        _selectedPosition = null;
         _activeSignal = new MissedTradeRecord
         {
             Symbol      = sym,
@@ -2100,6 +2101,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     void SelectSignal(MissedTradeRecord sig)
     {
         _activeSignal  = _activeSignal == sig ? null : sig;
+        _selectedPosition = null;
         _orderError    = string.Empty;
         _orderSuccess  = string.Empty;
         _orderType     = "Market";
@@ -2255,6 +2257,15 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     {
         bool wasSelected = _selectedPosition == pos;
         _selectedPosition = wasSelected ? null : pos;
+
+        // CRITICAL: clear any active signal/manual-trade context first.
+        // The side panel's rendering is if (_activeSignal != null) {...}
+        // else if (_selectedPosition != null) {...} — without clearing
+        // this, selecting a position while a signal/manual-trade panel
+        // was already open left the OLD signal showing instead of the
+        // position details, since _activeSignal took priority in that
+        // check regardless of what was just clicked.
+        _activeSignal = null;
 
         // Switch the main chart to this position's symbol so the user
         // can see the actual price action behind the position they

@@ -33,6 +33,7 @@
         if (!s) return;
         if (s.previewBox && s.previewBox.parentNode) s.previewBox.remove();
         if (s.previewVLine && s.previewVLine.parentNode) s.previewVLine.remove();
+        if (s.tooltipEl && s.tooltipEl.parentNode) s.tooltipEl.remove();
         try { s.chart.remove(); } catch (e) { /* already gone */ }
         sessions.delete(containerId);
     }
@@ -154,10 +155,73 @@
                 if (panes[2]) panes[2].setHeight(90);
             } catch (e) { /* older/edge versions may not support setHeight yet */ }
 
+            // ── Candle tooltip ──────────────────────────────────────
+            // Lightweight Charts has no built-in tooltip — this is the
+            // library's own documented pattern: subscribeCrosshairMove
+            // gives the hovered bar's data, and a plain HTML element
+            // absolutely positioned over the container does the rest.
+            const tooltip = document.createElement('div');
+            tooltip.style.position = 'absolute';
+            tooltip.style.display = 'none';
+            tooltip.style.padding = '8px 12px';
+            tooltip.style.borderRadius = '6px';
+            tooltip.style.background = 'rgba(10,13,18,0.95)';
+            tooltip.style.border = '1px solid rgba(255,255,255,0.1)';
+            tooltip.style.color = '#e2e8f0';
+            tooltip.style.fontSize = '11.5px';
+            tooltip.style.fontFamily = 'monospace';
+            tooltip.style.pointerEvents = 'none';
+            tooltip.style.zIndex = '7';
+            tooltip.style.whiteSpace = 'nowrap';
+            tooltip.style.lineHeight = '1.5';
+            container.style.position = container.style.position || 'relative';
+            container.appendChild(tooltip);
+
+            function fmtVol(v) {
+                if (v >= 1_000_000) return (v / 1_000_000).toFixed(2) + 'M';
+                if (v >= 1_000) return (v / 1_000).toFixed(2) + 'K';
+                return v.toFixed(2);
+            }
+
+            chart.subscribeCrosshairMove((param) => {
+                if (!param.point || !param.time || param.point.y < 0) {
+                    tooltip.style.display = 'none';
+                    return;
+                }
+                const candleData = param.seriesData.get(candleSeries);
+                const volData = param.seriesData.get(volumeSeries);
+                if (!candleData) {
+                    tooltip.style.display = 'none';
+                    return;
+                }
+
+                const { open, high, low, close } = candleData;
+                const chg = open !== 0 ? ((close - open) / open * 100) : 0;
+                const chgColor = chg >= 0 ? colors.up : colors.down;
+                const vol = volData ? volData.value : 0;
+
+                tooltip.innerHTML =
+                    `<div style="display:flex;gap:10px;margin-bottom:4px;">` +
+                    `<span>O <b style="color:${colors.text}">${fmtPrice(open)}</b></span>` +
+                    `<span>H <b style="color:${colors.up}">${fmtPrice(high)}</b></span>` +
+                    `<span>L <b style="color:${colors.down}">${fmtPrice(low)}</b></span>` +
+                    `<span>C <b style="color:${chgColor}">${fmtPrice(close)}</b></span>` +
+                    `<span style="color:${chgColor}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>` +
+                    `</div>` +
+                    `<div style="font-size:13px;font-weight:700;color:#eab308;">VOL ${fmtVol(vol)}</div>`;
+
+                tooltip.style.display = 'block';
+                const rect = container.getBoundingClientRect();
+                let left = param.point.x + 16;
+                if (left + 220 > rect.width) left = param.point.x - 220;
+                tooltip.style.left = left + 'px';
+                tooltip.style.top = '8px';
+            });
+
             const session = {
                 chart, candleSeries, ema21Series, ema55Series,
                 volumeSeries, rsiSeries, rsiObLine, rsiOsLine,
-                priceLine: null, onPricePicked: null,
+                priceLine: null, onPricePicked: null, tooltipEl: tooltip,
                 // Bybit-style draggable position lines (entry/SL/TP).
                 // entryLine is informational only (not draggable —
                 // entry price of an already-open position can't be
