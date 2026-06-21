@@ -388,9 +388,15 @@
                             <tbody>
                                 @foreach (var pos in _allPositions)
                                 {
-                                    <tr class="mk-pos-row @(_selectedPosition == pos ? "mk-pos-row-sel" : "")"
+                                    <tr class="mk-pos-row @(_selectedPosition == pos ? "mk-pos-row-sel" : "") @(_selectingPosition == pos ? "mk-pos-row-loading" : "")"
                                         @onclick="() => SelectPosition(pos)">
-                                        <td class="mk-oo-sym">@pos.Symbol</td>
+                                        <td class="mk-oo-sym">
+                                            @pos.Symbol
+                                            @if (_selectingPosition == pos)
+                                            {
+                                                <span class="mk-pos-spin">⟳</span>
+                                            }
+                                        </td>
                                         <td class="@(pos.Side == "LONG" ? "up" : "dn")">@pos.Side</td>
                                         <td class="mk-dim">@pos.Leverage×</td>
                                         <td class="mk-mono">@FmtP(pos.EntryPrice)</td>
@@ -1167,6 +1173,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-pos-row{cursor:pointer;transition:background .12s;}
 .mk-pos-row:hover{background:rgba(255,255,255,0.04);}
 .mk-pos-row-sel{background:rgba(59,130,246,0.1);box-shadow:inset 2px 0 0 var(--acc);}
+.mk-pos-row-loading{opacity:.7;cursor:wait;}
+.mk-pos-spin{display:inline-block;margin-left:6px;color:var(--acc);animation:mkPosSpin .8s linear infinite;font-size:11px;}
+@@keyframes mkPosSpin{to{transform:rotate(360deg);}}
 .mk-oo-sym{font-family:var(--mono);font-weight:700;color:var(--acc);font-size:13.5px;}
 .mk-liq{color:#f59e0b;}
 .mk-oo-cancel{background:none;border:1px solid var(--bdr);color:var(--dim);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;line-height:1;white-space:nowrap;}
@@ -2301,44 +2310,69 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // right-side panel — same ActivePositionInfo shape the order panel
     // already uses, just driven by a table click instead of a signal.
     ActivePositionInfo? _selectedPosition;
+    ActivePositionInfo? _selectingPosition;
 
     async Task SelectPosition(ActivePositionInfo pos)
     {
         bool wasSelected = _selectedPosition == pos;
-        _selectedPosition = wasSelected ? null : pos;
+        var newSelection = wasSelected ? null : pos;
 
-        // CRITICAL: clear any active signal/manual-trade context first.
-        // The side panel's rendering is if (_activeSignal != null) {...}
-        // else if (_selectedPosition != null) {...} — without clearing
-        // this, selecting a position while a signal/manual-trade panel
-        // was already open left the OLD signal showing instead of the
-        // position details, since _activeSignal took priority in that
-        // check regardless of what was just clicked.
-        _activeSignal = null;
-
-        // Switch the main chart to this position's symbol so the user
-        // can see the actual price action behind the position they
-        // just clicked, not whatever symbol happened to be on screen.
-        // Also: bring it to the front of the ticker bar (via
-        // OrderedTickerSymbols) and scroll the ALL INSTRUMENTS sidebar
-        // list to reveal the matching row.
-        if (!wasSelected)
+        if (newSelection == null)
         {
-            PickSym(pos.Symbol);
-            _ = JS.InvokeVoidAsync("tickerDragScroll.scrollSymbolIntoView", pos.Symbol);
-
-            // Bybit-style draggable Entry/SL/TP lines for the position
-            // just selected — drawn fresh against whatever protective
-            // orders currently exist for this symbol.
-            await LoadOpenOrdersAsync();
-            _dotNetRef ??= DotNetObjectReference.Create(this);
-            try { await JS.InvokeVoidAsync("marketChart.bindSlTpCallbacks", $"chartContainer-{_chartInstanceId}", _dotNetRef); } catch { }
-            await RefreshPositionLines();
-        }
-        else
-        {
+            // Deselecting: hide chart lines, clear context, one clean
+            // render — no network calls needed for this direction.
+            _selectedPosition = null;
+            _activeSignal = null;
             try { await JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}"); } catch { }
+            StateHasChanged();
+            return;
         }
+
+        // Show a small, localized loading spinner on just this row —
+        // doesn't touch the side panel, chart, or ALL INSTRUMENTS list
+        // at all, so there's no layout jump while data loads.
+        _selectingPosition = pos;
+        StateHasChanged();
+
+        // Selecting a new position: do ALL the network/data work FIRST,
+        // while the UI still shows whatever it showed before — nothing
+        // else visible changes yet, so there's no intermediate "empty"
+        // frame for ALL INSTRUMENTS/Manual Trade/the chart to flash
+        // through. Only once everything needed is actually ready do we
+        // flip the rest of the state and render once.
+        await LoadOpenOrdersAsync();
+
+        // Resolve the new symbol's series data ourselves (the same
+        // lookup PickSym does) without calling PickSym itself, since
+        // PickSym fires its own early StateHasChanged()/RenderCharts()
+        // — exactly the extra render pass causing the visible jank.
+        var sym = pos.Symbol;
+        var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == _activeTf)
+            ?? Series.FirstOrDefault(s => s.Symbol == sym);
+
+        // Now flip all the state in one go and render exactly once.
+        _selectedPosition = pos;
+        _selectingPosition = null;
+        _activeSignal = null;
+        _activeSym = sym;
+        if (available != null) _activeTf = available.Timeframe;
+        ResolveSelected();
+        CalcStats();
+
+        _dotNetRef ??= DotNetObjectReference.Create(this);
+        try { await JS.InvokeVoidAsync("marketChart.bindSlTpCallbacks", $"chartContainer-{_chartInstanceId}", _dotNetRef); } catch { }
+
+        // Chart data + position lines together, back-to-back, before
+        // the single StateHasChanged below — so by the time Blazor
+        // actually paints the new panel, the chart underneath it is
+        // already showing the right symbol with its lines drawn, not
+        // catching up a moment later.
+        try { await RenderCharts(); } catch { }
+        await RefreshPositionLines();
+
+        _ = JS.InvokeVoidAsync("tickerDragScroll.scrollSymbolIntoView", pos.Symbol);
+
+        StateHasChanged();
     }
 
     async Task ClosePositionRow(ActivePositionInfo pos)
