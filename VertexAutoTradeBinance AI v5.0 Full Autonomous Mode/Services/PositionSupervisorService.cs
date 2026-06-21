@@ -2970,7 +2970,14 @@ namespace VertexAutoTradeBinance8.Services
                 _logger = logger;
 
                 _apiKey = cfg["Binance:ApiKey"] ?? string.Empty;
-                _apiSecret = cfg["Binance:ApiSecret"] ?? string.Empty;
+                // CRITICAL FIX: appsettings.json's real field name is
+                // "SecretKey" (confirmed directly), not "ApiSecret" —
+                // this was reading a key that doesn't exist, meaning
+                // _apiSecret was empty the entire time and every
+                // algo-order call (including this session's BE-move/
+                // cleanup fixes) was silently failing the credentials
+                // check before ever reaching the network.
+                _apiSecret = cfg["Binance:SecretKey"] ?? cfg["Binance:ApiSecret"] ?? string.Empty;
                 _baseUrl = (cfg["Binance:FuturesBaseUrl"] ?? "https://fapi.binance.com").TrimEnd('/');
 
                 _http = httpFactory.CreateClient("BinanceAlgoRaw");
