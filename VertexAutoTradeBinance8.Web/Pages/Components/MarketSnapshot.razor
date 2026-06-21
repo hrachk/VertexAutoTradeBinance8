@@ -4,6 +4,7 @@
 @using Binance.Net.Enums
 @using VertexAutoTradeBinance8.Services
 @inject MarketSnapshotFileService Service
+@inject HistoricalDataReaderService HistoricalReader
 @inject VertexAutoTradeBinance8.Configuration.ConfidenceResolver ConfidenceResolver
 @inject IHttpClientFactory HttpClientFactory
 @inject Microsoft.Extensions.Options.IOptionsMonitor<VertexAutoTradeBinance8.Configuration.BinanceOptions> BinanceOpts
@@ -1287,6 +1288,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     bool Frozen, _jsReady;
 
     decimal _last, _chg, _ema21, _ema55, _atr;
+    string? _archiveCacheKey;
+    List<KlineDto> _archiveCache = new();
+    DateTime _archiveCacheLoadedAt = DateTime.MinValue;
     double _rsi;
 
     protected override async Task OnInitializedAsync()
@@ -1747,15 +1751,43 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         if (!_jsReady || Selected == null || Selected.Klines.Count < 5) return;
         try
         {
-            var klines = Selected.Klines.Select(k => new
+            // Merge archived history (datadb/ — deeper, but only as fresh
+            // as the Engine's last backfill cycle) with the live in-memory
+            // buffer (Selected.Klines — shallower at only a few hundred
+            // bars, but always current to the last tick). The archive
+            // provides depth for scrolling back; live data provides
+            // accuracy for the most recent bars. Deduped by OpenTime with
+            // live data winning on overlap, since it's always the more
+            // current source for any bar both happen to cover.
+            //
+            // Cached by symbol+timeframe — the archive file only changes
+            // once per Engine backfill cycle (minutes apart), so there's
+            // no reason to re-read it from disk on every single live tick
+            // this function gets called for.
+            var tfLabel = TfLabel(Selected.Timeframe).ToLowerInvariant();
+            var cacheKey = $"{Selected.Symbol}:{tfLabel}";
+            var now = DateTime.UtcNow;
+            if (_archiveCacheKey != cacheKey || (now - _archiveCacheLoadedAt) > TimeSpan.FromSeconds(90))
             {
-                // JS needs unix ms timestamp, not DateTime string
-                openTime = k.OpenTime, // already unix ms
-                open     = (double)k.Open,
-                high     = (double)k.High,
-                low      = (double)k.Low,
-                close    = (double)k.Close,
-                volume   = (double)k.Volume
+                _archiveCache = await HistoricalReader.LoadAsync(Selected.Symbol, tfLabel);
+                _archiveCacheKey = cacheKey;
+                _archiveCacheLoadedAt = now;
+            }
+
+            var merged = new SortedDictionary<long, (decimal Open, decimal High, decimal Low, decimal Close, decimal Volume)>();
+            foreach (var k in _archiveCache)
+                merged[k.OpenTime] = (k.Open, k.High, k.Low, k.Close, k.Volume);
+            foreach (var k in Selected.Klines)
+                merged[k.OpenTime] = (k.Open, k.High, k.Low, k.Close, k.Volume); // live wins on overlap
+
+            var klines = merged.Select(kv => new
+            {
+                openTime = kv.Key,
+                open     = (double)kv.Value.Open,
+                high     = (double)kv.Value.High,
+                low      = (double)kv.Value.Low,
+                close    = (double)kv.Value.Close,
+                volume   = (double)kv.Value.Volume
             }).ToArray();
 
             await JS.InvokeVoidAsync("marketChart.setData", $"chartContainer-{_chartInstanceId}", klines);
