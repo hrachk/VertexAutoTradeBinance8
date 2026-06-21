@@ -37,6 +37,7 @@ builder.Services.AddSingleton<AiRuntimeDataProvider>();
 builder.Services.AddSingleton<SymbolRegistryService>();
 builder.Services.AddSingleton<TradePermissionFileService>();
 builder.Services.AddSingleton<MarketSnapshotFileService>();
+builder.Services.AddSingleton<HistoricalDataReaderService>();
 builder.Services.AddSingleton<MarketDataLiveState>();
 builder.Services.AddSingleton<DecisionMarkersFileService>();
 
