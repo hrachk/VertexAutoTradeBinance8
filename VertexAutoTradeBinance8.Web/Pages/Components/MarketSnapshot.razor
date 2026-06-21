@@ -469,8 +469,8 @@
 
         @if (_activeSignal != null)
         {
-        <!-- TRADE ORDER PANEL (right sidebar, exchange-style) -->
         @{
+            // TRADE ORDER PANEL (right sidebar, exchange-style)
             bool isBuy = _activeSignal.Side?.ToUpper() == "BUY" || _activeSignal.Side?.ToUpper() == "LONG";
             decimal tp1 = _activeSignal.TakeProfits?.FirstOrDefault() ?? 0m;
         }
@@ -679,8 +679,8 @@
         }
         else if (_selectedPosition != null)
         {
-        <!-- POSITION DETAILS (right sidebar): shown when a row in OPEN POSITIONS is clicked -->
         @{
+            // POSITION DETAILS (right sidebar): shown when a row in OPEN POSITIONS is clicked
             var pos = _selectedPosition!;
             bool posIsLong = pos.Side == "LONG";
             decimal liqDistPct = pos.LiqPrice > 0 && pos.MarkPrice > 0
