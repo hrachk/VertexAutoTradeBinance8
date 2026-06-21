@@ -222,8 +222,12 @@ namespace VertexAutoTradeBinance8.Services
                     .Select(s => NormalizeSymbol(s)),
                 StringComparer.OrdinalIgnoreCase);
 
+            HashSet<string> newlyAdded;
             lock (_universeLock)
             {
+                newlyAdded = new HashSet<string>(target, StringComparer.OrdinalIgnoreCase);
+                newlyAdded.ExceptWith(_universe);
+
                 foreach (var sym in target)
                 {
                     // Keep WS subscriptions alive (best-effort)
@@ -241,6 +245,49 @@ namespace VertexAutoTradeBinance8.Services
                 }
 
                 _universe = target;
+            }
+
+            // CRITICAL FIX: this was the remaining gap after the
+            // SupervisorBootstrapHostedService fix (which only covers
+            // PinnedSymbols at Engine startup) — any symbol that enters
+            // the universe via Auto-selection (not pinned), whether at
+            // startup or later when the universe rotates, previously
+            // got NOTHING but a WS subscription here: no historical
+            // backfill at all, meaning it had to accumulate 40-60+ bars
+            // purely from live ticks before the strategy's own
+            // signal-generation checks would pass — the same multi-hour
+            // cold-start problem, just for a different set of symbols
+            // and recurring every time the universe changes, not only
+            // at boot.
+            //
+            // Fix: proactively call the EXISTING GetKlinesAsync (below)
+            // for each genuinely-new symbol on the strategy's two
+            // tracked timeframes (5m/15m) the moment it enters the
+            // universe — this is the exact same method the strategy
+            // itself already lazily calls on first read, which already
+            // has proper rate-limiting (_globalRestLimiter), singleflight
+            // locking (per-symbol+tf SemaphoreSlim), and a cooldown
+            // (CanUseRest) built in. No new fetch mechanism was
+            // invented — this just calls the safe one earlier, instead
+            // of waiting for the strategy to discover the gap on its
+            // own and trigger it reactively bar-by-bar.
+            if (newlyAdded.Count > 0)
+            {
+                _ = Task.Run(async () =>
+                {
+                    foreach (var sym in newlyAdded)
+                    {
+                        try
+                        {
+                            await GetKlinesAsync(sym, KlineInterval.FiveMinutes, 200, CancellationToken.None).ConfigureAwait(false);
+                            await GetKlinesAsync(sym, KlineInterval.FifteenMinutes, 200, CancellationToken.None).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "[MD][UNIVERSE-BACKFILL] Failed for new symbol {symbol}", sym);
+                        }
+                    }
+                });
             }
         }
 
