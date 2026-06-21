@@ -82,6 +82,7 @@ namespace VertexAutoTradeBinance8.Services
         private const string BE_PREFIX = "BE_";
         private const string SL_PREFIX = "SL_";
         private const string TR_PREFIX = "TR_";
+        private const string TP_PREFIX = "TP_";
         // 🔹 Для отслеживания сильных сигналов, чтобы пропускать мягкие фильтры
         private readonly HashSet<string> _beOverrideForStrongTrend = new();
         private readonly ConcurrentDictionary<string, decimal> _lastSl = new();
@@ -1413,7 +1414,8 @@ namespace VertexAutoTradeBinance8.Services
                     triggerPrice: slPrice,
                     workingType: "MARK_PRICE",
                     reduceOnly: null,
-                    ct: ct);
+                    ct: ct,
+                    clientAlgoId: $"{SL_PREFIX}{symbol}_{side}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
 
                 if (ok)
                 {
@@ -2448,7 +2450,8 @@ namespace VertexAutoTradeBinance8.Services
                             triggerPrice: sl,
                             workingType: "CONTRACT_PRICE",
                             reduceOnly: null,
-                            ct: ct);
+                            ct: ct,
+                            clientAlgoId: $"{SL_PREFIX}{symbol}_{side}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
 
                         if (ok)
                         {
@@ -2659,7 +2662,8 @@ namespace VertexAutoTradeBinance8.Services
                                 triggerPrice: trigger,
                                 workingType: "CONTRACT_PRICE",
                                 reduceOnly: null,
-                                ct: CancellationToken.None);
+                                ct: CancellationToken.None,
+                                clientAlgoId: $"{TP_PREFIX}{symbol}_{side}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
 
                             if (ok)
                             {
@@ -2849,6 +2853,30 @@ namespace VertexAutoTradeBinance8.Services
                     }
                     catch { }
 
+                    // CRITICAL FIX: slOrder above comes from the regular
+                    // GetOpenOrdersAsync endpoint, which cannot see algo
+                    // orders at all — the real protective SL almost
+                    // certainly lives there instead, meaning the cancel
+                    // attempt above was silently doing nothing for it.
+                    // This is the exact bug reported: a new BE-move SL
+                    // gets placed while the previous one never actually
+                    // gets removed. Explicitly find and cancel any
+                    // existing BE/SL-tagged algo order for this side
+                    // before placing the new one, independent of whatever
+                    // slOrder did or didn't contain.
+                    try
+                    {
+                        var existingAlgoOrders = await _algoRaw.GetOpenAlgoOrdersAsync(symbol, token);
+                        foreach (var algo in existingAlgoOrders.Where(o =>
+                            o.IsStop && o.PositionSide == side &&
+                            o.ClientAlgoId != null &&
+                            (o.ClientAlgoId.StartsWith(BE_PREFIX) || o.ClientAlgoId.StartsWith(SL_PREFIX))))
+                        {
+                            await _algoRaw.CancelAlgoOrderAsync(algo.AlgoId, token);
+                        }
+                    }
+                    catch { }
+
                     var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
                     var r1 = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
@@ -2873,7 +2901,8 @@ namespace VertexAutoTradeBinance8.Services
                             triggerPrice: s,
                             workingType: "CONTRACT_PRICE",
                             reduceOnly: null,
-                            ct: token);
+                            ct: token,
+                            clientAlgoId: $"{BE_PREFIX}{symbol}_{side}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
                     }
                     else if (!r1.Success)
                     {
@@ -2992,7 +3021,8 @@ namespace VertexAutoTradeBinance8.Services
                 decimal triggerPrice,
                 string workingType,
                 bool? reduceOnly,
-                CancellationToken ct)
+                CancellationToken ct,
+                string? clientAlgoId = null)
             {
                 if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret))
                 {
@@ -3015,6 +3045,20 @@ namespace VertexAutoTradeBinance8.Services
                     new("positionSide", positionSide.ToString().ToUpperInvariant()),
                     new("quantity", D(quantity))
                 };
+
+                // CRITICAL FIX: this parameter previously didn't exist at
+                // all on this method — every caller passing a BE_PREFIX/
+                // SL_PREFIX/TR_PREFIX-tagged id (see the call sites below)
+                // had that value silently dropped, since nothing here ever
+                // added it to the request. Binance's clientAlgoId parameter
+                // (max 32 chars, confirmed via official docs example) is
+                // what actually gets echoed back in clientAlgoId on every
+                // subsequent read — without sending it, Binance generates
+                // its own random one, which is exactly why every cleanup
+                // function's ClientAlgoId.StartsWith(prefix) check never
+                // matched a single order.
+                if (!string.IsNullOrWhiteSpace(clientAlgoId))
+                    q.Add(new("clientAlgoId", clientAlgoId.Length > 32 ? clientAlgoId[..32] : clientAlgoId));
 
                 // reduceOnly — только если positionSide == BOTH (в Hedge не шлём)
                 if (reduceOnly.HasValue && positionSide == PositionSide.Both)
