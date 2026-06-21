@@ -80,13 +80,33 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-            var symbols = _cfg.GetSection("HistoricalData:Symbols").Get<string[]>() ?? Array.Empty<string>();
+            // Explicit symbols (HistoricalData:Symbols) + optionally the
+            // real trading universe's pinned list (SymbolSelection:Pinned)
+            // — IncludePinnedSymbols defaults to true so the archive
+            // naturally tracks whatever's actually being traded without
+            // needing the same list maintained by hand in two places.
+            // Set to false if this archive should only ever cover an
+            // explicit, hand-picked list, independent of trading config.
+            var explicitSymbols = _cfg.GetSection("HistoricalData:Symbols").Get<string[]>() ?? Array.Empty<string>();
+            var includePinned = _cfg.GetValue("HistoricalData:IncludePinnedSymbols", true);
+            var pinnedSymbols = includePinned
+                ? (_cfg.GetSection("SymbolSelection:Pinned").Get<string[]>() ?? Array.Empty<string>())
+                : Array.Empty<string>();
+
+            var symbols = explicitSymbols
+                .Concat(pinnedSymbols)
+                .Select(s => s.Trim().ToUpperInvariant())
+                .Where(s => s.Length > 0)
+                .Distinct()
+                .OrderBy(s => s)
+                .ToArray();
+
             var timeframes = _cfg.GetSection("HistoricalData:Timeframes").Get<string[]>() ?? new[] { "15m" };
             int barsPerFetch = _cfg.GetValue("HistoricalData:BarsPerFetch", 500);
 
             if (symbols.Length == 0)
             {
-                _logger.LogInformation("[DATADB-LOADER] No symbols configured under HistoricalData:Symbols — nothing to do this cycle");
+                _logger.LogInformation("[DATADB-LOADER] No symbols configured (HistoricalData:Symbols empty and SymbolSelection:Pinned empty/disabled) — nothing to do this cycle");
                 return;
             }
 
@@ -94,6 +114,7 @@ namespace VertexAutoTradeBinance8.Services
                 "[DATADB-LOADER] Cycle starting: {symCount} symbol(s) x {tfCount} timeframe(s)",
                 symbols.Length, timeframes.Length);
 
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             int ok = 0, failed = 0;
 
             foreach (var symbol in symbols)
@@ -127,11 +148,24 @@ namespace VertexAutoTradeBinance8.Services
                 }
             }
 
-            _logger.LogInformation("[DATADB-LOADER] Cycle done: {ok} ok, {failed} failed", ok, failed);
+            sw.Stop();
+            _logger.LogInformation(
+                "[DATADB-LOADER] Cycle done in {elapsed:F1}s: {ok} ok, {failed} failed ({symCount} symbols x {tfCount} timeframes)",
+                sw.Elapsed.TotalSeconds, ok, failed, symbols.Length, timeframes.Length);
         }
+
+        // Symbols confirmed invalid on the exchange (typo, delisted, wrong
+        // quote asset, etc) — Binance error code -1121 ("Invalid symbol").
+        // Tracked so a bad entry in config doesn't waste a REST call on
+        // every single cycle forever; cleared only by a process restart
+        // (which re-reads config anyway, so a fixed symbol gets retried).
+        private readonly HashSet<string> _knownInvalidSymbols = new();
 
         private async Task FetchAndStoreAsync(string symbol, string tfLabel, KlineInterval tf, int barsPerFetch, CancellationToken ct)
         {
+            if (_knownInvalidSymbols.Contains(symbol))
+                return;
+
             await _restGate.WaitAsync(ct);
             try
             {
@@ -154,7 +188,15 @@ namespace VertexAutoTradeBinance8.Services
 
                 if (!result.Success || result.Data == null)
                 {
-                    _logger.LogWarning("[DATADB-LOADER] REST failed {symbol} {tf}: {err}", symbol, tfLabel, result.Error?.Message);
+                    if (result.Error?.Code == -1121)
+                    {
+                        _knownInvalidSymbols.Add(symbol);
+                        _logger.LogWarning("[DATADB-LOADER] {symbol} does not exist on the exchange — skipping permanently this run", symbol);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("[DATADB-LOADER] REST failed {symbol} {tf}: {err}", symbol, tfLabel, result.Error?.Message);
+                    }
                     return;
                 }
 
