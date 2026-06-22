@@ -567,8 +567,19 @@ namespace VertexAutoTradeBinance8.Services
 
             // 3) REST policy:
             // - if snapshot is authoritative => REST backfill disabled
+            //   for symbols/timeframes the snapshot already covers
+            // - EXCEPTION: a symbol+timeframe with ZERO buffered candles
+            //   was never part of what made the snapshot "authoritative"
+            //   in the first place — it entered the universe AFTER
+            //   startup (Auto-selection rotation, or a newly opened
+            //   position, exactly the case that motivated this fix).
+            //   Without this carve-out, such a symbol could sit at 0
+            //   candles indefinitely on every timeframe REST would
+            //   otherwise be able to backfill, since the only path back
+            //   to real history was unconditionally blocked by a flag
+            //   meant to protect symbols the snapshot DID restore.
             // - if cold start => REST allowed under cooldown + singleflight + global limiter
-            if (_readyBySnapshot)
+            if (_readyBySnapshot && ws.Count > 0)
                 return ws;
 
             // If restore not attempted yet, allow REST too (cold start safety)

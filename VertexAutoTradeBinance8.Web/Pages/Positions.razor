@@ -309,7 +309,7 @@
                             string sc = o.Status switch { "FILLED"=>"st-ok","CANCELED" or "EXPIRED"=>"st-can","PARTIALLY_FILLED"=>"st-part",_=>"v-dim" };
                             <tr>
                                 <td><div class="t-sym">@o.Symbol.Replace("USDT","")</div></td>
-                                <td><span class="t-type">@o.Type</span>@if (o.IsAlgo) { <span class="t-algo-badge" title="Conditional order (Algo Order API)">Conditional</span> }</td>
+                                <td><span class="t-type">@o.Type</span></td>
                                 <td><span class="p-side-badge @(buy?"sb-l":"sb-s") sb-sm">@o.Side</span></td>
                                 <td class="mono">@(o.AvgPrice>0?FP(o.AvgPrice):o.Price>0?FP(o.Price):"Market")</td>
                                 <td class="mono">@o.ExecutedQty.ToString("G6") / @o.OrigQty.ToString("G6")</td>

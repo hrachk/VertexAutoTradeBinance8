@@ -4,6 +4,7 @@
 @inject RuntimeConfigService Cfg
 @inject StrategyModeFileService StrategyModeSvc
 @inject IJSRuntime JS
+@inject VertexAutoTradeBinance8.Web.Services.HistoricalDataReaderService DataArchive
 
 <PageTitle>Settings — Vertex AI</PageTitle>
 
@@ -66,6 +67,7 @@
                 case "meanrev":  { @MeanRevTab() break; }
                 case "exits":    { @ExitsTab() break; }
                 case "engine":   { @EngineTab() break; }
+                case "datadb":   { @DataArchiveTab() break; }
             }
         }
 
@@ -540,6 +542,61 @@
     private Task OnEnableExecutionToggle(ChangeEventArgs e) => SetAsync("Trading:EnableExecution", (bool)(e.Value ?? true));
     private Task OnDebugToggle(ChangeEventArgs e) => SetAsync("Debug:EnableStrategyDebug", (bool)(e.Value ?? true));
 
+    private RenderFragment DataArchiveTab() => @<div class="st-grid">
+
+        <div class="st-card st-card-wide">
+            <div class="st-card-head"><div class="st-card-title">File-Based Historical Archive</div></div>
+            <div class="st-card-sub">
+                An independent background service (HistoricalDataLoaderService) keeps a permanent,
+                portable archive of OHLCV history under <code>datadb/SYMBOL/TF.json</code> — separate from
+                the live trading buffer, which only holds a few hundred recent bars. Deep backfill
+                gradually extends each symbol+timeframe backward toward its actual exchange listing
+                date, a bit further every hour by default. Configured under
+                <code>HistoricalData</code> in appsettings.json (live-reloadable, no restart needed).
+            </div>
+        </div>
+
+        @{
+            var archivedSymbols = DataArchive.ListArchivedSymbols();
+        }
+
+        @if (archivedSymbols.Count == 0)
+        {
+            <div class="st-card st-card-wide">
+                <div class="st-card-sub">No archived symbols found yet — either <code>HistoricalData:Enabled</code>
+                    is false, or the loader hasn't completed its first cycle. Check the Engine logs for
+                    <code>[DATADB-LOADER]</code> entries.</div>
+            </div>
+        }
+        else
+        {
+            <div class="st-card st-card-wide">
+                <div class="st-card-head"><div class="st-card-title">Archived Symbols (@archivedSymbols.Count)</div></div>
+                <table class="st-archive-table">
+                    <thead>
+                        <tr><th>Symbol</th><th>Timeframes</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var sym in archivedSymbols)
+                        {
+                            var tfs = DataArchive.ListArchivedTimeframes(sym);
+                            <tr>
+                                <td class="st-archive-sym">@sym</td>
+                                <td>
+                                    @foreach (var tf in tfs)
+                                    {
+                                        <span class="st-archive-tf-pill">@tf</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+    </div>;
+
 
     // ── Tab definitions ──────────────────────────────────────
     private sealed record TabDef(string Id, string Label, string Icon, bool LiveBadge);
@@ -552,6 +609,7 @@
         new("symbols",  "Symbol Selection", "🪙", true),
         new("exits",    "Exits & TP/SL",    "🎯", false),
         new("engine",   "Engine Info",      "🖥️", false),
+        new("datadb",   "Data Archive",     "🗄️", false),
     };
 
     private string _activeTab = "strategy";
@@ -764,6 +822,11 @@
 .st-card{background:var(--st-bg2);border:1px solid var(--st-bdr);border-radius:14px;padding:20px;transition:border-color .2s;}
 .st-card:hover{border-color:#2a3347;}
 .st-card-wide{grid-column:1 / -1;}
+.st-archive-table{width:100%;border-collapse:collapse;margin-top:10px;}
+.st-archive-table th{text-align:left;padding:8px 12px;font-size:11px;color:var(--dim);border-bottom:1px solid var(--bdr);text-transform:uppercase;letter-spacing:.5px;}
+.st-archive-table td{padding:8px 12px;border-bottom:1px solid var(--bdr);font-size:13px;}
+.st-archive-sym{font-family:monospace;font-weight:700;color:var(--acc);}
+.st-archive-tf-pill{display:inline-block;font-size:10.5px;background:var(--bg3);border:1px solid var(--bdr);color:var(--txt);padding:2px 8px;border-radius:10px;margin-right:5px;}
 .st-card-muted{opacity:.7;}
 .st-card-warn{background:rgba(234,179,8,0.05);border-color:rgba(234,179,8,0.25);}
 

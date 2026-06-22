@@ -248,6 +248,20 @@ public class Program
                     services.AddSingleton<SymbolUniverseBuilder>();
                     services.AddSingleton<SymbolInfoService>(); // ← 🔴 КРИТИЧНО: ДО RiskManager
 
+                    // =====================================================
+                    // Independent file-based historical data store +
+                    // background loader. Deliberately separate from the
+                    // trading universe / SymbolRegistryService — its job
+                    // is building up a permanent, portable chart-history
+                    // archive (datadb/SYMBOL/TF.json) regardless of what
+                    // the strategy is currently trading. Disabled by
+                    // default (HistoricalData:Enabled=false) — turn on and
+                    // configure Symbols/Timeframes in appsettings.json
+                    // when ready to start backfilling.
+                    // =====================================================
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.HistoricalData.HistoricalDataStore>();
+                    services.AddHostedService<HistoricalDataLoaderService>();
+
                     // ===== SYMBOL REGISTRY =====
                     services.AddSingleton<SymbolRegistryService>();
                     services.AddSingleton<UniverseDryRunFileLogger>();
