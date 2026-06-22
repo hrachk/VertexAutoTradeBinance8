@@ -117,12 +117,54 @@
                        @onchange="OnEmaZoneAtrMultiplierChanged" />
                 <div class="st-card-sub" style="margin-top:4px">How close price must come to the EMA to count as a "touch" — expressed as a multiple of ATR (volatility-normalized, not a fixed %), so it scales correctly across symbols.</div>
             </div>
+
+            <div class="st-toggle-row" style="margin-top:14px">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("Strategy:PullbackEntry:VwapConfirmationEnabled", false)" @onchange="OnVwapConfirmationToggle" />
+                    <span>Require VWAP confirmation</span>
+                </label>
+                <div class="st-card-sub" style="margin-top:4px">Only accept a signal if price is on the expected side of the rolling-window VWAP (above it for longs, below for shorts) — an extra directional check on top of the existing EMA logic. Off by default.</div>
+            </div>
+            @if (GetBool("Strategy:PullbackEntry:VwapConfirmationEnabled", false))
+            {
+                <div class="st-field">
+                    <label>VWAP Period (bars)</label>
+                    <input title="VWAP rolling window (bars)" class="st-input" type="number" min="5" max="200" value="@GetInt("Strategy:PullbackEntry:VwapPeriod",20)"
+                           @onchange="OnVwapPeriodChanged" />
+                </div>
+            }
+
+            <div class="st-toggle-row" style="margin-top:10px">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("Strategy:PullbackEntry:HtfConfirmationEnabled", false)" @onchange="OnHtfConfirmationToggle" />
+                    <span>Require higher-timeframe structure confirmation</span>
+                </label>
+                <div class="st-card-sub" style="margin-top:4px">Only accept a signal if the SAME symbol's EMA21/EMA55 relationship on a higher timeframe agrees with the signal's direction. Off by default.</div>
+            </div>
+            @if (GetBool("Strategy:PullbackEntry:HtfConfirmationEnabled", false))
+            {
+                <div class="st-field">
+                    <label>Confirmation Timeframe</label>
+                    <select title="Higher timeframe to confirm against" class="st-select" value="@GetStr("Strategy:PullbackEntry:HtfConfirmationTimeframe","4h")"
+                            @onchange="OnHtfTimeframeChanged">
+                        <option value="15m">15m</option>
+                        <option value="30m">30m</option>
+                        <option value="1h">1h</option>
+                        <option value="4h">4h</option>
+                        <option value="1d">1d</option>
+                    </select>
+                </div>
+            }
         </div>
 
     </div>;
 
     private Task OnEmaPeriodChanged(ChangeEventArgs e) => SetAsync("Strategy:PullbackEntry:EmaPeriod", ParseIntOr(e.Value, 21));
     private Task OnEmaZoneAtrMultiplierChanged(ChangeEventArgs e) => SetAsync("Strategy:PullbackEntry:ZoneAtrMultiplier", ParseDecimalOr(e.Value, 0.5m));
+    private Task OnVwapConfirmationToggle(ChangeEventArgs e) => SetAsync("Strategy:PullbackEntry:VwapConfirmationEnabled", (bool)(e.Value ?? false));
+    private Task OnVwapPeriodChanged(ChangeEventArgs e) => SetAsync("Strategy:PullbackEntry:VwapPeriod", ParseIntOr(e.Value, 20));
+    private Task OnHtfConfirmationToggle(ChangeEventArgs e) => SetAsync("Strategy:PullbackEntry:HtfConfirmationEnabled", (bool)(e.Value ?? false));
+    private Task OnHtfTimeframeChanged(ChangeEventArgs e) => SetAsync("Strategy:PullbackEntry:HtfConfirmationTimeframe", e.Value?.ToString() ?? "4h");
 
     private static readonly (string Key, string Label)[] TradingProfiles =
     {
