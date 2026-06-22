@@ -115,7 +115,11 @@
                 },
                 rightPriceScale: { borderColor: colors.grid },
                 timeScale: { borderColor: colors.grid, timeVisible: true, secondsVisible: false },
-                crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                    vertLine: { width: 1, color: 'rgba(148,163,184,0.4)', style: LightweightCharts.LineStyle.Dashed },
+                    horzLine: { width: 1, color: 'rgba(148,163,184,0.4)', style: LightweightCharts.LineStyle.Dashed },
+                },
                 autoSize: true,
             });
 
@@ -200,7 +204,30 @@
                 const chgColor = chg >= 0 ? colors.up : colors.down;
                 const vol = volData ? volData.value : 0;
 
+                // Full date/time for the hovered bar — param.time is a
+                // UTCTimestamp (unix seconds) for time-based series.
+                const barDate = new Date(param.time * 1000);
+                const dateStr = barDate.toLocaleString(undefined, {
+                    year: 'numeric', month: 'short', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', hour12: false
+                });
+
+                // Buy/sell volume split — Binance's own kline data already
+                // includes taker-buy volume directly (no extra API call
+                // needed); sell-side is simply the remainder. Only shown
+                // when this specific bar actually has the field (older
+                // archived/snapshot data before this field existed won't).
+                let volSplitHtml = '';
+                const raw = session.rawKlineByTime && session.rawKlineByTime.get(param.time);
+                if (raw && raw.takerBuyVolume != null && raw.takerBuyVolume >= 0) {
+                    const buyVol = raw.takerBuyVolume;
+                    const sellVol = Math.max(0, vol - buyVol);
+                    volSplitHtml = ` <span style="color:${colors.up}">▲${fmtVol(buyVol)}</span>` +
+                                   ` <span style="color:${colors.down}">▼${fmtVol(sellVol)}</span>`;
+                }
+
                 tooltip.innerHTML =
+                    `<div style="color:#94a3b8;font-size:10.5px;margin-bottom:4px;">${dateStr}</div>` +
                     `<div style="display:flex;gap:10px;margin-bottom:4px;">` +
                     `<span>O <b style="color:${colors.text}">${fmtPrice(open)}</b></span>` +
                     `<span>H <b style="color:${colors.up}">${fmtPrice(high)}</b></span>` +
@@ -208,7 +235,7 @@
                     `<span>C <b style="color:${chgColor}">${fmtPrice(close)}</b></span>` +
                     `<span style="color:${chgColor}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>` +
                     `</div>` +
-                    `<div style="font-size:13px;font-weight:700;color:#eab308;">VOL ${fmtVol(vol)}</div>`;
+                    `<div style="font-size:13px;font-weight:700;color:#eab308;">VOL ${fmtVol(vol)}${volSplitHtml}</div>`;
 
                 tooltip.style.display = 'block';
                 const rect = container.getBoundingClientRect();
@@ -426,6 +453,12 @@
             s.rsiSeries.setData(candles.map((c, i) => ({ time: c.time, value: rsiVals[i] })).filter(d => d.value != null));
             s.rsiObLine.setData(candles.map(c => ({ time: c.time, value: 70 })));
             s.rsiOsLine.setData(candles.map(c => ({ time: c.time, value: 30 })));
+
+            // Keep the raw kline data (keyed by time) for the crosshair
+            // tooltip to look up takerBuyVolume for whichever bar is
+            // currently hovered — the chart's own series only carry
+            // OHLCV, not this extra field.
+            s.rawKlineByTime = new Map(candles.map((c, i) => [c.time, klines[i]]));
         },
 
         updateLastBar(containerId, k) {
