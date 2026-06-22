@@ -24,6 +24,9 @@ namespace VertexAutoTradeBinance8.API.Controllers
             return b != null ? Ok(b) : Ok(new AccountBalanceState());
         }
 
+        [HttpGet("realized-pnl-today")]
+        public ActionResult<decimal> GetRealizedPnlToday() => Ok(_state.GetRealizedPnlToday());
+
 
         /// <summary>
         /// GET /api/state/positions?symbols=BTCUSDT,ETHUSDT

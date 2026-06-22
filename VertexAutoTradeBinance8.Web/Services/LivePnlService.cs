@@ -18,6 +18,8 @@ namespace VertexAutoTradeBinance8.Web.Services
         private readonly ILogger<LivePnlService> _logger;
 
         private readonly ConcurrentDictionary<string, LivePositionState> _map = new();
+        private AccountBalanceState _balance = new();
+        private decimal _realizedPnlToday;
 
         private CancellationTokenSource? _cts;
         private Task? _loop;
@@ -44,6 +46,9 @@ namespace VertexAutoTradeBinance8.Web.Services
             _map.TryGetValue(Key(symbol, side), out var v);
             return v;
         }
+
+        public AccountBalanceState Balance => _balance;
+        public decimal RealizedPnlToday => _realizedPnlToday;
 
         // =============================
         // Polling loop (UI-safe)
@@ -79,6 +84,23 @@ namespace VertexAutoTradeBinance8.Web.Services
                             _map[Key(p.Symbol, p.Side)] = p;
                         }
 
+                        // Balance + today's realized PnL — same Central
+                        // Account State source, polled in the same cycle
+                        // rather than a separate timer, to keep this one
+                        // simple loop as the single source of truth for
+                        // everything this service exposes.
+                        try
+                        {
+                            var bal = await _http.GetFromJsonAsync<AccountBalanceState>("/api/state/balance", ct);
+                            if (bal != null) _balance = bal;
+                        }
+                        catch { /* balance is a nice-to-have here; positions matter more, don't let this break the loop */ }
+
+                        try
+                        {
+                            _realizedPnlToday = await _http.GetFromJsonAsync<decimal>("/api/state/realized-pnl-today", ct);
+                        }
+                        catch { }
 
                         Updated?.Invoke();
                     }

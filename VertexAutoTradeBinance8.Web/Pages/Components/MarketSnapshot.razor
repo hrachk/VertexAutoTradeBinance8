@@ -12,6 +12,7 @@
 @inject MissedTradeFileService SignalSvc
 @inject BinanceClientFactory Factory
 @inject IJSRuntime JS
+@inject LivePnlService LivePnl
 @implements IAsyncDisposable
 
 <PageTitle>Market Intelligence — Vertex</PageTitle>
@@ -49,6 +50,7 @@
         </div>
     </div>
 
+    <div class="mk-sticky-top">
     <!-- LIVE SIGNALS — moved above the ticker bar -->
     <div class="sig-panel">
             <div class="sig-panel-head">
@@ -192,6 +194,7 @@
             </div>
             }
     </div> <!-- end sig-panel -->
+    </div> <!-- end mk-sticky-top -->
 
     <!-- ROW 1: SYMBOL TICKER -->
     <div class="mk-ticker-bar">
@@ -414,6 +417,36 @@
         </div>
 
         </div> <!-- end mk-charts-col-main -->
+
+        <!-- ACCOUNT SUMMARY — margin balance, today's realized PnL,
+             wallet balance, unrealized PnL, open positions count+total.
+             Compact, single row, sits right above the positions table. -->
+        <div class="mk-acct-summary">
+            <div class="mk-acct-item">
+                <div class="mk-acct-label">Margin Balance</div>
+                <div class="mk-acct-value mono">$@LivePnl.Balance.UsedMarginUsd.ToString("F2")</div>
+            </div>
+            <div class="mk-acct-item">
+                <div class="mk-acct-label">Realized PnL (today)</div>
+                <div class="mk-acct-value mono @(LivePnl.RealizedPnlToday >= 0 ? "up" : "dn")">
+                    @(LivePnl.RealizedPnlToday >= 0 ? "+" : "")@LivePnl.RealizedPnlToday.ToString("F2")
+                </div>
+            </div>
+            <div class="mk-acct-item">
+                <div class="mk-acct-label">Wallet Balance</div>
+                <div class="mk-acct-value mono">$@LivePnl.Balance.WalletBalanceUsd.ToString("F2")</div>
+            </div>
+            <div class="mk-acct-item">
+                <div class="mk-acct-label">Unrealized PnL</div>
+                <div class="mk-acct-value mono @(LivePnl.Balance.UnrealizedPnlUsd >= 0 ? "up" : "dn")">
+                    @(LivePnl.Balance.UnrealizedPnlUsd >= 0 ? "+" : "")@LivePnl.Balance.UnrealizedPnlUsd.ToString("F2")
+                </div>
+            </div>
+            <div class="mk-acct-item">
+                <div class="mk-acct-label">Open Positions</div>
+                <div class="mk-acct-value mono">@_allPositions.Count <span class="mk-acct-sub">($@_allPositions.Sum(p => p.Size).ToString("F2"))</span></div>
+            </div>
+        </div>
 
         <!-- OPEN POSITIONS / OPEN ORDERS — tabbed, share one panel -->
         <div class="mk-oo-panel">
@@ -968,7 +1001,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-chart-maximize:hover{color:var(--txt);border-color:var(--acc);}
 .mk-chart-maximize svg{width:15px;height:15px;}
 
-.mk-chart-container-wrap{width:100%;height:480px;transition:none;position:relative;}
+.mk-chart-container-wrap{width:100%;height:480px;min-height:280px;max-height:900px;transition:none;position:relative;resize:vertical;overflow:hidden;}
+.mk-chart-container-wrap:not(.mk-chart-maximized)::after{content:'';position:absolute;right:2px;bottom:2px;width:14px;height:14px;background:repeating-linear-gradient(135deg,var(--dim) 0 1.5px,transparent 1.5px 4px);opacity:.5;pointer-events:none;}
 
 .mk-tpsl-overlay{position:absolute;top:36px;left:8px;z-index:5;pointer-events:none;display:flex;align-items:center;gap:8px;}
 .mk-tpsl-btn{pointer-events:auto;display:flex;align-items:center;gap:6px;background:rgba(10,13,18,0.92);border:1px solid var(--bdr);color:var(--dim);padding:5px 12px;border-radius:6px;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .15s;backdrop-filter:blur(4px);}
@@ -1044,6 +1078,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-resize-dots{font-size:12px;color:var(--dim);letter-spacing:2px;line-height:1;}
 
 /* SIGNAL PANEL */
+.mk-sticky-top{position:sticky;top:0;z-index:30;background:var(--bg2);box-shadow:0 4px 12px rgba(0,0,0,.25);}
 .sig-panel{padding:10px 20px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
 .sig-panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
 .sig-panel-title{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:2px;color:var(--txt);}
@@ -1240,6 +1275,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-hints{display:flex;gap:16px;padding:8px 4px 0;font-size:11px;color:var(--dim);flex-wrap:wrap;}
 
 /* OPEN ORDERS / POSITIONS — sized like a real exchange panel, not a compact strip */
+.mk-acct-summary{display:flex;gap:0;background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:12px 20px;margin-bottom:14px;}
+.mk-acct-item{flex:1;padding:0 16px;border-right:1px solid var(--bdr);}
+.mk-acct-item:last-child{border-right:none;}
+.mk-acct-item:first-child{padding-left:0;}
+.mk-acct-label{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;}
+.mk-acct-value{font-size:16px;font-weight:700;}
+.mk-acct-sub{font-size:11px;font-weight:500;color:var(--dim);margin-left:4px;}
+@@media(max-width:900px){.mk-acct-summary{flex-wrap:wrap;gap:10px;}.mk-acct-item{flex:1 1 45%;border-right:none;border-bottom:1px solid var(--bdr);padding-bottom:8px;}}
 .mk-oo-panel{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:18px 20px;}
 .mk-oo-tabs{display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--bdr);padding-bottom:0;}
 .mk-oo-tab{display:flex;align-items:center;gap:8px;background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:13px;letter-spacing:.5px;font-weight:700;padding:10px 6px 12px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s;}
@@ -1322,6 +1365,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     string? _archiveCacheKey;
     List<KlineDto> _archiveCache = new();
     DateTime _archiveCacheLoadedAt = DateTime.MinValue;
+    SortedDictionary<long, (decimal Open, decimal High, decimal Low, decimal Close, decimal Volume, decimal? TakerBuy)>? _mergedKlines;
     double _rsi;
 
     protected override async Task OnInitializedAsync()
@@ -1335,6 +1379,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         // makes that reuse structurally impossible — the diffing
         // algorithm can't match elements with different ids.
         _chartInstanceId = Guid.NewGuid().ToString("N")[..8];
+
+        LivePnl.Start(null);
+        LivePnl.Updated += OnLivePnlUpdated;
 
         LiveState.PriceTicked += OnLivePriceTicked;
         LiveState.KlineClosed += OnLiveKlineClosed;
@@ -1355,6 +1402,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     int _liveKlineCount = 0;
     string _lastTickSymbol = "";
     DateTime _lastTickTime = DateTime.MinValue;
+
+    void OnLivePnlUpdated() => _ = InvokeAsync(StateHasChanged);
 
     void OnLivePriceTicked(string symbol, decimal price)
     {
@@ -1777,6 +1826,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         return v;
     }
 
+    const int DefaultBarsCount = 300;
+
     async Task RenderCharts()
     {
         if (!_jsReady || Selected == null || Selected.Klines.Count < 5) return;
@@ -1805,26 +1856,64 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 _archiveCacheLoadedAt = now;
             }
 
-            var merged = new SortedDictionary<long, (decimal Open, decimal High, decimal Low, decimal Close, decimal Volume, decimal? TakerBuy)>();
+            _mergedKlines = new SortedDictionary<long, (decimal Open, decimal High, decimal Low, decimal Close, decimal Volume, decimal? TakerBuy)>();
             foreach (var k in _archiveCache)
-                merged[k.OpenTime] = (k.Open, k.High, k.Low, k.Close, k.Volume, k.TakerBuyBaseVolume);
+                _mergedKlines[k.OpenTime] = (k.Open, k.High, k.Low, k.Close, k.Volume, k.TakerBuyBaseVolume);
             foreach (var k in Selected.Klines)
-                merged[k.OpenTime] = (k.Open, k.High, k.Low, k.Close, k.Volume, k.TakerBuyBaseVolume); // live wins on overlap
+                _mergedKlines[k.OpenTime] = (k.Open, k.High, k.Low, k.Close, k.Volume, k.TakerBuyBaseVolume); // live wins on overlap
 
-            var klines = merged.Select(kv => new
-            {
-                openTime = kv.Key,
-                open     = (double)kv.Value.Open,
-                high     = (double)kv.Value.High,
-                low      = (double)kv.Value.Low,
-                close    = (double)kv.Value.Close,
-                volume   = (double)kv.Value.Volume,
-                takerBuyVolume = kv.Value.TakerBuy.HasValue ? (double?)kv.Value.TakerBuy.Value : null
-            }).ToArray();
+            // PERFORMANCE FIX: only send the most recent DefaultBarsCount
+            // bars on initial render/symbol switch, not the entire merged
+            // set — that set can grow into the thousands of bars once
+            // deep backfill has run for a while, and re-sending all of it
+            // through JS interop on every single live tick (RenderCharts
+            // gets called that often) is exactly the chart-gets-heavier-
+            // over-time problem reported. The rest stays in _mergedKlines
+            // for LoadMoreHistoryAsync to serve on demand when the user
+            // scrolls back (see JS-side infinite-history handler).
+            var allKeys = _mergedKlines.Keys.ToList();
+            var startIdx = Math.Max(0, allKeys.Count - DefaultBarsCount);
+            var visibleKeys = allKeys.Skip(startIdx).ToList();
 
+            var klines = visibleKeys.Select(k => ToJsKline(k, _mergedKlines[k])).ToArray();
             await JS.InvokeVoidAsync("marketChart.setData", $"chartContainer-{_chartInstanceId}", klines);
+
+            _dotNetRef ??= DotNetObjectReference.Create(this);
+            try { await JS.InvokeVoidAsync("marketChart.bindInfiniteHistory", $"chartContainer-{_chartInstanceId}", _dotNetRef); } catch { }
         }
         catch { }
+    }
+
+    static object ToJsKline(long openTime, (decimal Open, decimal High, decimal Low, decimal Close, decimal Volume, decimal? TakerBuy) v) => new
+    {
+        openTime,
+        open = (double)v.Open,
+        high = (double)v.High,
+        low = (double)v.Low,
+        close = (double)v.Close,
+        volume = (double)v.Volume,
+        takerBuyVolume = v.TakerBuy.HasValue ? (double?)v.TakerBuy.Value : null
+    };
+
+    /// <summary>
+    /// JS-invokable: serves older bars from the in-memory merged dataset
+    /// (already loaded by RenderCharts, no disk/network round-trip needed
+    /// here) when the user scrolls the chart back far enough to approach
+    /// the start of what's currently loaded. This is the Web-side half of
+    /// Lightweight Charts' own documented "infinite history" pattern
+    /// (subscribeVisibleLogicalRangeChange + barsInLogicalRange on the JS
+    /// side, calling back into this method).
+    /// </summary>
+    [JSInvokable]
+    public Task<object[]> LoadMoreHistoryAsync(long beforeOpenTimeMs, int count)
+    {
+        if (_mergedKlines == null || _mergedKlines.Count == 0)
+            return Task.FromResult(Array.Empty<object>());
+
+        var older = _mergedKlines.Where(kv => kv.Key < beforeOpenTimeMs).ToList();
+        var slice = older.Count <= count ? older : older.GetRange(older.Count - count, count);
+
+        return Task.FromResult(slice.Select(kv => ToJsKline(kv.Key, kv.Value)).ToArray());
     }
 
     void Pick(MarketSeries s)
@@ -3084,6 +3173,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     {
         LiveState.PriceTicked -= OnLivePriceTicked;
         LiveState.KlineClosed -= OnLiveKlineClosed;
+        LivePnl.Updated -= OnLivePnlUpdated;
         _cts.Cancel();
         _timer?.Dispose();
         _dotNetRef?.Dispose();

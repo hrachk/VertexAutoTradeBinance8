@@ -34,6 +34,7 @@
         if (s.previewBox && s.previewBox.parentNode) s.previewBox.remove();
         if (s.previewVLine && s.previewVLine.parentNode) s.previewVLine.remove();
         if (s.tooltipEl && s.tooltipEl.parentNode) s.tooltipEl.remove();
+        if (s.resizeObserver) { try { s.resizeObserver.disconnect(); } catch (e) {} }
         try { s.chart.remove(); } catch (e) { /* already gone */ }
         sessions.delete(containerId);
     }
@@ -95,6 +96,21 @@
 
             const container = document.getElementById(containerId);
             if (!container) return false;
+
+            // Watch the resizable parent wrapper (mk-chart-container-wrap)
+            // for size changes — fires when the user drags the CSS resize
+            // handle, or on any other layout change affecting it. Calls
+            // the chart's own resize() so the canvas actually redraws at
+            // the new size; CSS alone only stretches the container, not
+            // the canvas drawing inside it.
+            const resizeTarget = container.parentElement || container;
+            const resizeObserver = new ResizeObserver(() => {
+                try {
+                    const s = sessions.get(containerId);
+                    if (s && s.chart) s.chart.resize(container.clientWidth, container.clientHeight);
+                } catch (e) { /* chart may have just been disposed */ }
+            });
+            resizeObserver.observe(resizeTarget);
 
             const colors = {
                 bg: '#0a0d12', text: '#94a3b8', grid: '#1a1f2e',
@@ -248,7 +264,7 @@
             const session = {
                 chart, candleSeries, ema21Series, ema55Series,
                 volumeSeries, rsiSeries, rsiObLine, rsiOsLine,
-                priceLine: null, onPricePicked: null, tooltipEl: tooltip,
+                priceLine: null, onPricePicked: null, tooltipEl: tooltip, resizeObserver,
                 // Bybit-style draggable position lines (entry/SL/TP).
                 // entryLine is informational only (not draggable —
                 // entry price of an already-open position can't be
@@ -459,6 +475,7 @@
             // currently hovered — the chart's own series only carry
             // OHLCV, not this extra field.
             s.rawKlineByTime = new Map(candles.map((c, i) => [c.time, klines[i]]));
+            s.lastKlinesRaw = klines;
         },
 
         updateLastBar(containerId, k) {
@@ -593,6 +610,79 @@
             if (!s) return;
             s.onSlChanged = (price) => dotNetRef.invokeMethodAsync('OnSlDragged', price);
             s.onTpChanged = (price) => dotNetRef.invokeMethodAsync('OnTpDragged', price);
+        },
+
+        bindInfiniteHistory(containerId, dotNetRef) {
+            const s = sessions.get(containerId);
+            if (!s) return;
+
+            // Avoid double-subscribing if setData/bindInfiniteHistory gets
+            // called again for the same session (e.g. timeframe switch).
+            if (s.infiniteHistoryBound) return;
+            s.infiniteHistoryBound = true;
+            s.loadingMoreHistory = false;
+
+            const THRESHOLD_BARS = 50; // start loading when this close to the left edge
+            const PAGE_SIZE = 300;     // bars requested per load-more call
+
+            s.chart.timeScale().subscribeVisibleLogicalRangeChange(async (range) => {
+                if (!range || s.loadingMoreHistory) return;
+
+                const barsInfo = s.candleSeries.barsInLogicalRange(range);
+                if (!barsInfo || barsInfo.barsBefore == null || barsInfo.barsBefore >= THRESHOLD_BARS) return;
+
+                // Find the earliest bar currently held, to ask Blazor for
+                // anything older than it.
+                const allData = s.candleSeries.data();
+                if (!allData || allData.length === 0) return;
+                const earliestTime = allData[0].time;
+
+                s.loadingMoreHistory = true;
+                try {
+                    const older = await dotNetRef.invokeMethodAsync('LoadMoreHistoryAsync', earliestTime * 1000, PAGE_SIZE);
+                    if (!older || older.length === 0) return; // nothing further back available
+
+                    // Save the current scroll position before rebuilding —
+                    // setData() resets the visible range by default, which
+                    // would otherwise make the chart visually jump every
+                    // time more history loads in.
+                    const savedRange = s.chart.timeScale().getVisibleLogicalRange();
+                    const addedCount = older.length;
+
+                    // Lightweight Charts cannot update() bars older than
+                    // the current earliest one (confirmed via the library's
+                    // own docs/discussions) — the whole series must be
+                    // rebuilt via setData with the combined, sorted set.
+                    const combined = older.concat(s.lastKlinesRaw || []).sort((a, b) => a.openTime - b.openTime);
+                    s.lastKlinesRaw = combined;
+
+                    const candles = combined.map(toCandle);
+                    const closes = combined.map(k => k.close);
+                    const ema21 = ema(closes, 21);
+                    const ema55 = ema(closes, 55);
+                    const rsiVals = rsi(closes, 14);
+
+                    s.candleSeries.setData(candles);
+                    s.ema21Series.setData(candles.map((c, i) => ({ time: c.time, value: ema21[i] })).filter(d => d.value != null));
+                    s.ema55Series.setData(candles.map((c, i) => ({ time: c.time, value: ema55[i] })).filter(d => d.value != null));
+                    s.volumeSeries.setData(combined.map(k => toVolume(k, 'rgba(34,197,94,0.5)', 'rgba(239,68,68,0.5)')));
+                    s.rsiSeries.setData(candles.map((c, i) => ({ time: c.time, value: rsiVals[i] })).filter(d => d.value != null));
+                    s.rsiObLine.setData(candles.map(c => ({ time: c.time, value: 70 })));
+                    s.rsiOsLine.setData(candles.map(c => ({ time: c.time, value: 30 })));
+                    s.rawKlineByTime = new Map(candles.map((c, i) => [c.time, combined[i]]));
+
+                    if (savedRange) {
+                        s.chart.timeScale().setVisibleLogicalRange({
+                            from: savedRange.from + addedCount,
+                            to: savedRange.to + addedCount,
+                        });
+                    }
+                }
+                catch (e) { /* network/server hiccup — user can keep scrolling, next threshold trigger retries */ }
+                finally {
+                    s.loadingMoreHistory = false;
+                }
+            });
         },
 
         bindPricePicked(containerId, dotNetRef) {

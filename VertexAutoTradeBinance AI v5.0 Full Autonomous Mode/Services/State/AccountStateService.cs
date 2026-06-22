@@ -22,7 +22,8 @@ namespace VertexAutoTradeBinance8.Services.State
 
 
         private decimal _realizedPnlSession = 0m;
-
+        private decimal _realizedPnlToday = 0m;
+        private DateTime _realizedPnlTodayDateUtc = DateTime.UtcNow.Date;
 
         public AccountStateService(ILogger<AccountStateService> logger)
         {
@@ -31,6 +32,25 @@ namespace VertexAutoTradeBinance8.Services.State
         }
 
         public decimal GetRealizedPnlSession() => _realizedPnlSession;
+
+        // "Today" per UTC date — auto-resets to 0 the first time this is
+        // read or updated after midnight UTC, rather than accumulating
+        // since Engine startup like the session tracker above does.
+        public decimal GetRealizedPnlToday()
+        {
+            RolloverRealizedPnlTodayIfNeeded();
+            return _realizedPnlToday;
+        }
+
+        private void RolloverRealizedPnlTodayIfNeeded()
+        {
+            var today = DateTime.UtcNow.Date;
+            if (today != _realizedPnlTodayDateUtc)
+            {
+                _realizedPnlTodayDateUtc = today;
+                _realizedPnlToday = 0m;
+            }
+        }
 
         public AccountBalanceState GetBalance() => _bal;
 
@@ -44,10 +64,14 @@ namespace VertexAutoTradeBinance8.Services.State
 
             _realizedPnlSession += pnl;
 
+            RolloverRealizedPnlTodayIfNeeded();
+            _realizedPnlToday += pnl;
+
             _logger.LogInformation(
-                "[STATE] RealizedPnL += {pnl}, session={session}",
+                "[STATE] RealizedPnL += {pnl}, session={session}, today={today}",
                 pnl,
-                _realizedPnlSession);
+                _realizedPnlSession,
+                _realizedPnlToday);
 
             Updated?.Invoke();
         }
