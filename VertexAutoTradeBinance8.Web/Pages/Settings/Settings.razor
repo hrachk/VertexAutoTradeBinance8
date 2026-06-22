@@ -438,19 +438,15 @@
                     <span>Enable BTC dump/squeeze filter</span>
                 </label>
             </div>
+            <div class="st-card-sub" style="margin-bottom:10px">When BTC's own 24h move crosses either threshold below, new Auto-selected entries are paused for that cycle (your Pinned symbols keep trading normally — this only pauses what the scanner picks automatically). Standard practice during acute BTC-driven volatility, when altcoin correlation to BTC spikes and fresh signals become less reliable.</div>
             <div class="st-field-row">
                 <div class="st-field">
                     <label>Dump Threshold (%)</label>
-                    <input title="Enable BTC dump/squeeze filter
-                
-            
-            
-                
-                    Dump Threshold (%)" class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcDumpThreshold", -1.8m)" @onchange="OnBtcDumpThresholdChanged" />
+                    <input title="Pause new auto-entries if BTC's 24h change drops to this value or below (negative number)" class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcDumpThreshold", -5.0m)" @onchange="OnBtcDumpThresholdChanged" />
                 </div>
                 <div class="st-field">
                     <label>Squeeze Threshold (%)</label>
-                    <input title="Squeeze Threshold (%)" class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcSqueezeThreshold", 1.8m)" @onchange="OnBtcSqueezeThresholdChanged" />
+                    <input title="Pause new auto-entries if BTC's 24h change rises to this value or above (positive number)" class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcSqueezeThreshold", 6.0m)" @onchange="OnBtcSqueezeThresholdChanged" />
                 </div>
             </div>
         </div>
@@ -484,8 +480,8 @@
     private Task OnMinPriceChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:MinPrice", ParseDecimalOr(e.Value, 0.045m));
     private Task OnMin24hVolLongChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:Min24hVolumeLong", ParseDecimalOr(e.Value, 1800000m));
     private Task OnBtcFilterToggle(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:EnableBtcFilter", (bool)(e.Value ?? true));
-    private Task OnBtcDumpThresholdChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:BtcDumpThreshold", ParseDecimalOr(e.Value, -1.8m));
-    private Task OnBtcSqueezeThresholdChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:BtcSqueezeThreshold", ParseDecimalOr(e.Value, 1.8m));
+    private Task OnBtcDumpThresholdChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:BtcDumpThreshold", ParseDecimalOr(e.Value, -5.0m));
+    private Task OnBtcSqueezeThresholdChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:BtcSqueezeThreshold", ParseDecimalOr(e.Value, 6.0m));
 
     private RenderFragment ExitsTab() => @<div class="st-grid">
 

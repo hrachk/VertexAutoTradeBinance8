@@ -320,21 +320,57 @@ public class SymbolRegistryService
         // BTC VOLATILITY (SAFE)
         // ============================================================
         decimal btcVol = 0m;
+        decimal btcChangeSigned = 0m;
         var btc = snapshots.FirstOrDefault(s =>
             string.Equals(s.Symbol, "BTCUSDT", StringComparison.OrdinalIgnoreCase));
 
         if (btc != null)
-            btcVol = Math.Abs(btc.PriceChangePercent);
+        {
+            btcChangeSigned = btc.PriceChangePercent;
+            btcVol = Math.Abs(btcChangeSigned);
+        }
+
+        // ============================================================
+        // BTC DUMP/SQUEEZE FILTER — REAL GATE (was previously dead config)
+        // ============================================================
+        // Institutional practice during acute BTC-driven stress: pause
+        // NEW automated entries (not touch existing pinned positions/
+        // watchlist) while BTC's own 24h move is in extreme dump or
+        // squeeze territory — altcoin correlation to BTC spikes sharply
+        // during these windows (>0.85 correlation during high-vol
+        // periods per market research), making freshly-scanned signals
+        // on unrelated symbols statistically less trustworthy right
+        // when the broader market is itself in a violent, BTC-driven
+        // move. Thresholds: BtcDumpThreshold is negative (e.g. -5.0 =
+        // pause if BTC is down 5%+ in 24h), BtcSqueezeThreshold is
+        // positive (e.g. +6.0 = pause if BTC is up 6%+) — squeeze
+        // threshold set wider than dump by default, reflecting crypto's
+        // known asymmetry where sharp upside squeezes tend to run
+        // hotter in magnitude than typical down-moves before reversing.
+        bool enableBtcFilter = auto.GetValue<bool?>("EnableBtcFilter") ?? true;
+        decimal dumpThreshold = auto.GetValue<decimal?>("BtcDumpThreshold") ?? -5.0m;
+        decimal squeezeThreshold = auto.GetValue<decimal?>("BtcSqueezeThreshold") ?? 6.0m;
+        bool btcDumpSqueezeActive = enableBtcFilter && btc != null &&
+            (btcChangeSigned <= dumpThreshold || btcChangeSigned >= squeezeThreshold);
+
+        if (btcDumpSqueezeActive)
+        {
+            _logger.LogWarning(
+                "[SYMBOL-REGISTRY] BTC dump/squeeze filter ACTIVE: BTC 24h change={chg:F2}% (dump<={dump:F1}%, squeeze>={squeeze:F1}%) — pausing new Auto-selected entries this cycle, Pinned symbols unaffected",
+                btcChangeSigned, dumpThreshold, squeezeThreshold);
+        }
 
         // ============================================================
         // TRADABLE FILTER (AI / REGIME)
         // ============================================================
-        var tradable = snapshots
-            .Where(s => !string.IsNullOrWhiteSpace(s.Symbol))
-            .Where(s => _marketRegime.IsTradable(s.Symbol))
-            .ToList();
+        var tradable = btcDumpSqueezeActive
+            ? new List<SymbolMarketSnapshot>() // Auto-scanner paused; Pinned symbols (added below via pinnedCfg/pinnedPos) still flow through untouched
+            : snapshots
+                .Where(s => !string.IsNullOrWhiteSpace(s.Symbol))
+                .Where(s => _marketRegime.IsTradable(s.Symbol))
+                .ToList();
 
-        if (tradable.Count == 0)
+        if (tradable.Count == 0 && !btcDumpSqueezeActive)
         {
             _logger.LogWarning(
                 "[SYMBOL-REGISTRY] Tradable filter empty → fallback to all snapshots");
