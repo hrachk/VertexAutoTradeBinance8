@@ -1275,11 +1275,13 @@ namespace VertexAutoTradeBinance8.Strategy
             // VwapConfirms itself returns true when VWAP data is
             // unavailable, so missing history never blocks a signal —
             // this only rejects on a genuine directional disagreement.
+            string confirmTags = "";
             if (pbOpt.VwapConfirmationEnabled)
             {
                 decimal vwap = Vwap(klines, pbOpt.VwapPeriod > 0 ? pbOpt.VwapPeriod : 20, i);
                 var side = longRejection ? SignalSide.Buy : SignalSide.Sell;
                 if (!VwapConfirms(side, c0.ClosePrice, vwap)) return null;
+                confirmTags += "_VWAP";
             }
 
             // ── 8. HIGHER-TIMEFRAME STRUCTURE CONFIRMATION (optional) ─────
@@ -1293,6 +1295,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 var htfSide = longRejection ? SignalSide.Buy : SignalSide.Sell;
                 var htf = ParseHtfLabel(pbOpt.HtfConfirmationTimeframe) ?? KlineInterval.FourHour;
                 if (!HtfStructureConfirms(symbol, htf, htfSide)) return null;
+                confirmTags += "_HTF";
             }
 
             var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(interval);
@@ -1310,7 +1313,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 var s = new TradeSignal
                 {
                     Symbol = symbol, Side = SignalSide.Buy,
-                    Reason = "PULLBACK_EMA21_LONG_V2", Atr = atr,
+                    Reason = "PULLBACK_EMA21_LONG_V2" + confirmTags, Atr = atr,
                     EntryPrice = entry, StopLoss = slLevel,
                     EntryRangeLow = entry - atr * 0.15m,
                     EntryRangeHigh = entry + atr * 0.15m,
@@ -1337,7 +1340,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 var s = new TradeSignal
                 {
                     Symbol = symbol, Side = SignalSide.Sell,
-                    Reason = "PULLBACK_EMA21_SHORT_V2", Atr = atr,
+                    Reason = "PULLBACK_EMA21_SHORT_V2" + confirmTags, Atr = atr,
                     EntryPrice = entry, StopLoss = slLevel,
                     EntryRangeLow = entry - atr * 0.15m,
                     EntryRangeHigh = entry + atr * 0.15m,

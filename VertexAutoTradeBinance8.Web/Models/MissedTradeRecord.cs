@@ -15,6 +15,12 @@ namespace VertexAutoTradeBinance8.Web.Models
         public List<decimal> TakeProfits { get; set; } = new();
         public decimal? Exit { get; set; }
 
+        /// <summary>Optional entry-zone bounds — null when the signal
+        /// that produced this record didn't populate them (e.g. signals
+        /// from functions other than TryPullbackEma21).</summary>
+        public decimal? EntryRangeLow { get; set; }
+        public decimal? EntryRangeHigh { get; set; }
+
         public string Reason { get; set; } = "";
         public string Tags { get; set; } = "";
 

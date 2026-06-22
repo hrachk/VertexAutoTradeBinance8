@@ -10,6 +10,13 @@
         public decimal StopLoss { get; set; }
         public string Side { get; set; } = string.Empty;
 
+        /// <summary>Optional entry-zone bounds, mirroring TradeSignal's
+        /// own EntryRangeLow/EntryRangeHigh — "anywhere in this range is
+        /// an acceptable entry" rather than one precise price. Null when
+        /// the originating signal didn't populate them.</summary>
+        public decimal? EntryRangeLow { get; set; }
+        public decimal? EntryRangeHigh { get; set; }
+
         public List<decimal> TakeProfits { get; set; } = new();
 
         public string Reason { get; set; } = string.Empty;
