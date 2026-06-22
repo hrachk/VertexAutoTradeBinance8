@@ -22,6 +22,17 @@ public class TradeSignal
     public decimal EntryPrice { get; set; }
     public decimal StopLoss { get; set; }
 
+    /// <summary>
+    /// Optional entry-zone bounds, communicating "anywhere in this range
+    /// is an acceptable entry" rather than one precise price. EntryPrice
+    /// remains the primary execution price everywhere unchanged — these
+    /// are purely additive/informational (e.g. for display, or for a
+    /// future scale-in feature) and default to EntryPrice on both ends
+    /// when unset, so nothing reading only EntryPrice needs to change.
+    /// </summary>
+    public decimal? EntryRangeLow { get; set; }
+    public decimal? EntryRangeHigh { get; set; }
+
     /// <summary>Один базовый TP – для совместимости</summary>
     public decimal? TakeProfit { get; set; }
 
