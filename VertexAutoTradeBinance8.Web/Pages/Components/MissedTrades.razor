@@ -121,9 +121,17 @@
                                 <span class="sl-stage">@r.Stage</span>
                             </div>
                             <div class="sl-row1-right">
+                                @if (r.Reason != null && r.Reason.Contains("_VWAP"))
+                                {
+                                    <span class="sl-confirm-badge" title="This signal's direction was confirmed by VWAP">VWAP✓</span>
+                                }
+                                @if (r.Reason != null && r.Reason.Contains("_HTF"))
+                                {
+                                    <span class="sl-confirm-badge" title="This signal's direction was confirmed by the higher-timeframe structure of the same symbol">HTF✓</span>
+                                }
                                 <!-- Block reason — color coded -->
-                                <span class="sl-reason-badge @RCls(r.Reason)" title="@r.Reason">
-                                    @SR(r.Reason)
+                                <span class="sl-reason-badge @RCls(CleanReason(r.Reason))" title="@r.Reason">
+                                    @SR(CleanReason(r.Reason))
                                 </span>
                                 <!-- Time — readable size -->
                                 <span class="sl-time">@r.Time.ToLocalTime().ToString("dd.MM  HH:mm:ss")</span>
@@ -145,7 +153,13 @@
                         <div class="sl-nums">
                             <div class="sl-num">
                                 <div class="sl-nl">Entry Price</div>
-                                <div class="sl-nv">@FP(r.Entry)</div>
+                                <div class="sl-nv">
+                                    @FP(r.Entry)
+                                    @if (r.EntryRangeLow.HasValue && r.EntryRangeHigh.HasValue)
+                                    {
+                                        <span class="sl-entry-range" title="Acceptable entry zone">(@FP(r.EntryRangeLow.Value)–@FP(r.EntryRangeHigh.Value))</span>
+                                    }
+                                </div>
                             </div>
                             <div class="sl-num">
                                 <div class="sl-nl">Stop Loss</div>
@@ -339,6 +353,8 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
 
 /* Reason badge */
 .sl-reason-badge{font-size:12px;font-weight:600;padding:3px 10px;border-radius:6px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sl-confirm-badge{font-size:10px;font-weight:700;background:rgba(34,197,94,.12);color:#22c55e;padding:2px 7px;border-radius:5px;cursor:help;}
+.sl-entry-range{font-size:10px;color:var(--dim,#64748b);margin-left:5px;font-weight:500;cursor:help;}
 .rc-exec{background:rgba(248,81,73,.12);color:var(--red);border:1px solid rgba(248,81,73,.2);}
 .rc-bal{background:rgba(227,179,65,.1);color:var(--yel);border:1px solid rgba(227,179,65,.2);}
 .rc-min{background:rgba(227,179,65,.08);color:var(--yel);border:1px solid rgba(227,179,65,.15);}
@@ -547,6 +563,18 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
         if (r.Contains("Exec") || r.Contains("EXEC") || r.Contains("Failed")) return "rc-exec";
         if (r.Contains("Balance") || r.Contains("Notional"))                   return "rc-bal";
         return "rc-other";
+    }
+
+    // Strips the _VWAP/_HTF confirmation suffixes (added when those
+    // optional filters pass) before the reason text goes through SR()'s
+    // truncation/pattern matching — without this, a reason like
+    // "PULLBACK_EMA21_LONG_V2_VWAP_HTF" would truncate mid-tag into
+    // something unreadable instead of showing the clean base reason
+    // plus the dedicated VWAP✓/HTF✓ badges shown separately.
+    string CleanReason(string? reason)
+    {
+        if (string.IsNullOrEmpty(reason)) return reason ?? "";
+        return reason.Replace("_VWAP", "").Replace("_HTF", "");
     }
 
     string SR(string r) => r switch
