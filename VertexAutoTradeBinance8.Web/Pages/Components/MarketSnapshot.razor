@@ -452,7 +452,6 @@
                         @onclick="ShowPositionsTab">
                     Open Positions
                     <span class="mk-oo-count">@_allPositions.Count</span>
-                    @if (_positionsLoading) { <span class="mk-oo-spin">⟳</span> }
                 </button>
                 <button class="mk-oo-tab @(_ooActiveTab == "orders" ? "mk-oo-tab-on" : "")"
                         @onclick="ShowOrdersTab">
@@ -1284,7 +1283,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 @@media(max-width:900px){.mk-acct-summary{flex-wrap:wrap;gap:10px;}.mk-acct-item{flex:1 1 45%;border-right:none;border-bottom:1px solid var(--bdr);padding-bottom:8px;}}
 .mk-oo-panel{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:18px 20px;}
 .mk-oo-tabs{display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--bdr);padding-bottom:0;}
-.mk-oo-tab{display:flex;align-items:center;gap:8px;background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:13px;letter-spacing:.5px;font-weight:700;padding:10px 6px 12px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s;}
+.mk-oo-tab{display:flex;align-items:center;gap:8px;background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:13px;letter-spacing:.5px;font-weight:700;padding:10px 6px 12px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s;min-width:140px;}
 .mk-oo-tab:hover{color:var(--txt);}
 .mk-oo-tab-on{color:var(--acc);border-bottom-color:var(--acc);}
 .mk-oo-spin{color:var(--acc);animation:mkSpin 1s linear infinite;}
@@ -1991,6 +1990,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     ActivePositionInfo? _currentPosition;
     List<ActivePositionInfo> _allPositions = new();
     decimal _acctMarginBalance, _acctWalletBalance, _acctUnrealizedPnl, _acctRealizedPnlToday;
+    DateTime _lastRealizedPnlFetchUtc = DateTime.MinValue;
     bool _positionsLoading;
 
     bool PosIsLong => _currentPosition?.Side == "LONG";
@@ -2563,22 +2563,34 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
             // Realized PnL today — via Binance's own Income History
             // endpoint, filtered to REALIZED_PNL entries since UTC
-            // midnight. Kept as a separate try/catch so a failure here
-            // never affects the more important balance numbers above.
-            try
+            // midnight. THROTTLED to once per minute, not every 5-second
+            // tick: confirmed via Binance's own API docs this endpoint
+            // costs 30 weight (6x heavier than Positions/Account at 5
+            // each) — at the previous rate this alone consumed 360
+            // weight/minute (15% of the 2400/minute Futures limit) for
+            // data that only changes when a trade actually closes, not
+            // continuously like live position prices. Kept in its own
+            // try/catch so a failure here never affects the more
+            // important balance numbers above.
+            if ((DateTime.UtcNow - _lastRealizedPnlFetchUtc) >= TimeSpan.FromMinutes(1))
             {
-                using var pnlCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-                var todayStartUtc = DateTime.UtcNow.Date;
-                var incomeRes = await client.UsdFuturesApi.Account.GetIncomeHistoryAsync(
-                    incomeType: "REALIZED_PNL",
-                    startTime: todayStartUtc,
-                    limit: 1000,
-                    ct: pnlCts.Token);
+                try
+                {
+                    using var pnlCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                    var todayStartUtc = DateTime.UtcNow.Date;
+                    var incomeRes = await client.UsdFuturesApi.Account.GetIncomeHistoryAsync(
+                        incomeType: "REALIZED_PNL",
+                        startTime: todayStartUtc,
+                        limit: 1000,
+                        ct: pnlCts.Token);
 
-                if (incomeRes.Success && incomeRes.Data != null)
-                    _acctRealizedPnlToday = incomeRes.Data.Sum(x => x.Income);
+                    if (incomeRes.Success && incomeRes.Data != null)
+                        _acctRealizedPnlToday = incomeRes.Data.Sum(x => x.Income);
+
+                    _lastRealizedPnlFetchUtc = DateTime.UtcNow;
+                }
+                catch { /* same — don't block the page on this */ }
             }
-            catch { /* same — don't block the page on this */ }
 
             _allPositions = res.Data
                 .Where(p => p.Quantity != 0)
