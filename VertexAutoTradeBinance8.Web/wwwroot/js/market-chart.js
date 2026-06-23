@@ -34,7 +34,6 @@
         if (s.previewBox && s.previewBox.parentNode) s.previewBox.remove();
         if (s.previewVLine && s.previewVLine.parentNode) s.previewVLine.remove();
         if (s.tooltipEl && s.tooltipEl.parentNode) s.tooltipEl.remove();
-        if (s.resizeObserver) { try { s.resizeObserver.disconnect(); } catch (e) {} }
         try { s.chart.remove(); } catch (e) { /* already gone */ }
         sessions.delete(containerId);
     }
@@ -96,21 +95,6 @@
 
             const container = document.getElementById(containerId);
             if (!container) return false;
-
-            // Watch the resizable parent wrapper (mk-chart-container-wrap)
-            // for size changes — fires when the user drags the CSS resize
-            // handle, or on any other layout change affecting it. Calls
-            // the chart's own resize() so the canvas actually redraws at
-            // the new size; CSS alone only stretches the container, not
-            // the canvas drawing inside it.
-            const resizeTarget = container.parentElement || container;
-            const resizeObserver = new ResizeObserver(() => {
-                try {
-                    const s = sessions.get(containerId);
-                    if (s && s.chart) s.chart.resize(container.clientWidth, container.clientHeight);
-                } catch (e) { /* chart may have just been disposed */ }
-            });
-            resizeObserver.observe(resizeTarget);
 
             const colors = {
                 bg: '#0a0d12', text: '#94a3b8', grid: '#1a1f2e',
@@ -264,7 +248,7 @@
             const session = {
                 chart, candleSeries, ema21Series, ema55Series,
                 volumeSeries, rsiSeries, rsiObLine, rsiOsLine,
-                priceLine: null, onPricePicked: null, tooltipEl: tooltip, resizeObserver,
+                priceLine: null, onPricePicked: null, tooltipEl: tooltip,
                 // Bybit-style draggable position lines (entry/SL/TP).
                 // entryLine is informational only (not draggable —
                 // entry price of an already-open position can't be
