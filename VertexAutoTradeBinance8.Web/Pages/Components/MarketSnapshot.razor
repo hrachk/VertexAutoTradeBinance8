@@ -1364,6 +1364,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     List<KlineDto> _archiveCache = new();
     DateTime _archiveCacheLoadedAt = DateTime.MinValue;
     SortedDictionary<long, (decimal Open, decimal High, decimal Low, decimal Close, decimal Volume, decimal? TakerBuy)>? _mergedKlines;
+    string? _lastFullRenderCacheKey;
     double _rsi;
 
     protected override async Task OnInitializedAsync()
@@ -1888,11 +1889,36 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             var startIdx = Math.Max(0, allKeys.Count - DefaultBarsCount);
             var visibleKeys = allKeys.Skip(startIdx).ToList();
 
-            var klines = visibleKeys.Select(k => ToJsKline(k, _mergedKlines[k])).ToArray();
-            await JS.InvokeVoidAsync("marketChart.setData", $"chartContainer-{_chartInstanceId}", klines);
+            // CRITICAL FIX: only do a full setData (which resets to the
+            // last DefaultBarsCount bars) when this is genuinely a new
+            // symbol+timeframe, or the very first render. An ordinary
+            // live-tick update for the SAME chart must NOT re-trim back
+            // to 300 bars every single time — doing so was silently
+            // discarding any history the user had lazy-loaded by
+            // scrolling left, which then made the JS-side infinite-
+            // history handler see "few bars left" again immediately and
+            // trigger another lazy-load, discarded again on the very
+            // next tick. That continuous discard/reload cycle IS the
+            // reported jumping/flickering — it happens on every live
+            // tick (every few seconds), well before the literal edge of
+            // available data, not just there.
+            bool isNewSeries = cacheKey != _lastFullRenderCacheKey;
 
-            _dotNetRef ??= DotNetObjectReference.Create(this);
-            try { await JS.InvokeVoidAsync("marketChart.bindInfiniteHistory", $"chartContainer-{_chartInstanceId}", _dotNetRef); } catch { }
+            if (isNewSeries)
+            {
+                var klines = visibleKeys.Select(k => ToJsKline(k, _mergedKlines[k])).ToArray();
+                await JS.InvokeVoidAsync("marketChart.setData", $"chartContainer-{_chartInstanceId}", klines);
+                _lastFullRenderCacheKey = cacheKey;
+
+                _dotNetRef ??= DotNetObjectReference.Create(this);
+                try { await JS.InvokeVoidAsync("marketChart.bindInfiniteHistory", $"chartContainer-{_chartInstanceId}", _dotNetRef); } catch { }
+            }
+            else if (allKeys.Count > 0)
+            {
+                var lastKey = allKeys[^1];
+                var lastKline = ToJsKline(lastKey, _mergedKlines[lastKey]);
+                await JS.InvokeVoidAsync("marketChart.updateLastBar", $"chartContainer-{_chartInstanceId}", lastKline);
+            }
         }
         catch { }
     }

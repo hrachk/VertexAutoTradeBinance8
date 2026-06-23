@@ -516,6 +516,41 @@
             if (!s) return;
             s.candleSeries.update(toCandle(k));
             s.volumeSeries.update(toVolume(k, 'rgba(34,197,94,0.5)', 'rgba(239,68,68,0.5)'));
+
+            // Keep the raw-kline lookups in sync with this incremental
+            // update too — without this, the tooltip/lazy-load logic
+            // would see stale data for the most recent bar after a few
+            // ticks (those structures are only otherwise rebuilt on a
+            // full setData call, which this method exists specifically
+            // to avoid doing on every single tick).
+            if (s.lastKlinesRaw && s.lastKlinesRaw.length > 0) {
+                const candle = toCandle(k);
+                const lastIdx = s.lastKlinesRaw.length - 1;
+                if (s.lastKlinesRaw[lastIdx].openTime === k.openTime) {
+                    s.lastKlinesRaw[lastIdx] = k; // same bar still forming — replace
+                } else {
+                    s.lastKlinesRaw.push(k); // genuinely new bar closed — append
+                }
+                if (s.rawKlineByTime) s.rawKlineByTime.set(candle.time, k);
+
+                // Recompute EMA21/EMA55/RSI for just the tail of the
+                // series — full recalculation is cheap enough at typical
+                // bar counts (hundreds to low thousands) to just redo it
+                // over the whole lastKlinesRaw array each tick, rather
+                // than maintaining incremental EMA/RSI state by hand.
+                const closes = s.lastKlinesRaw.map(x => x.close);
+                const ema21Vals = ema(closes, 21);
+                const ema55Vals = ema(closes, 55);
+                const rsiVals = rsi(closes, 14);
+                const lastTime = candle.time;
+                if (ema21Vals[lastIdx] != null) s.ema21Series.update({ time: lastTime, value: ema21Vals[lastIdx] });
+                if (ema55Vals[lastIdx] != null) s.ema55Series.update({ time: lastTime, value: ema55Vals[lastIdx] });
+                if (rsiVals[lastIdx] != null) {
+                    s.rsiSeries.update({ time: lastTime, value: rsiVals[lastIdx] });
+                    s.rsiObLine.update({ time: lastTime, value: 70 });
+                    s.rsiOsLine.update({ time: lastTime, value: 30 });
+                }
+            }
         },
 
         clearPriceLine(containerId) {
