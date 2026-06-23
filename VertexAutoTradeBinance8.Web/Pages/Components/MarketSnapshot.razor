@@ -12,7 +12,6 @@
 @inject MissedTradeFileService SignalSvc
 @inject BinanceClientFactory Factory
 @inject IJSRuntime JS
-@inject LivePnlService LivePnl
 @implements IAsyncDisposable
 
 <PageTitle>Market Intelligence — Vertex</PageTitle>
@@ -439,22 +438,22 @@
         <div class="mk-acct-summary">
             <div class="mk-acct-item">
                 <div class="mk-acct-label">Margin Balance</div>
-                <div class="mk-acct-value mono">$@LivePnl.Balance.UsedMarginUsd.ToString("F2")</div>
+                <div class="mk-acct-value mono">$@_acctMarginBalance.ToString("F2")</div>
             </div>
             <div class="mk-acct-item">
                 <div class="mk-acct-label">Realized PnL (today)</div>
-                <div class="mk-acct-value mono @(LivePnl.RealizedPnlToday >= 0 ? "up" : "dn")">
-                    @(LivePnl.RealizedPnlToday >= 0 ? "+" : "")@LivePnl.RealizedPnlToday.ToString("F2")
+                <div class="mk-acct-value mono @(_acctRealizedPnlToday >= 0 ? "up" : "dn")">
+                    @(_acctRealizedPnlToday >= 0 ? "+" : "")@_acctRealizedPnlToday.ToString("F2")
                 </div>
             </div>
             <div class="mk-acct-item">
                 <div class="mk-acct-label">Wallet Balance</div>
-                <div class="mk-acct-value mono">$@LivePnl.Balance.WalletBalanceUsd.ToString("F2")</div>
+                <div class="mk-acct-value mono">$@_acctWalletBalance.ToString("F2")</div>
             </div>
             <div class="mk-acct-item">
                 <div class="mk-acct-label">Unrealized PnL</div>
-                <div class="mk-acct-value mono @(LivePnl.Balance.UnrealizedPnlUsd >= 0 ? "up" : "dn")">
-                    @(LivePnl.Balance.UnrealizedPnlUsd >= 0 ? "+" : "")@LivePnl.Balance.UnrealizedPnlUsd.ToString("F2")
+                <div class="mk-acct-value mono @(_acctUnrealizedPnl >= 0 ? "up" : "dn")">
+                    @(_acctUnrealizedPnl >= 0 ? "+" : "")@_acctUnrealizedPnl.ToString("F2")
                 </div>
             </div>
             <div class="mk-acct-item">
@@ -1397,9 +1396,6 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         // algorithm can't match elements with different ids.
         _chartInstanceId = Guid.NewGuid().ToString("N")[..8];
 
-        LivePnl.Start(null);
-        LivePnl.Updated += OnLivePnlUpdated;
-
         LiveState.PriceTicked += OnLivePriceTicked;
         LiveState.KlineClosed += OnLiveKlineClosed;
 
@@ -1419,8 +1415,6 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     int _liveKlineCount = 0;
     string _lastTickSymbol = "";
     DateTime _lastTickTime = DateTime.MinValue;
-
-    void OnLivePnlUpdated() => _ = InvokeAsync(StateHasChanged);
 
     void OnLivePriceTicked(string symbol, decimal price)
     {
@@ -2012,6 +2006,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     bool _orderPanelDismissed;
     ActivePositionInfo? _currentPosition;
     List<ActivePositionInfo> _allPositions = new();
+    decimal _acctMarginBalance, _acctWalletBalance, _acctUnrealizedPnl, _acctRealizedPnlToday;
     bool _positionsLoading;
 
     bool PosIsLong => _currentPosition?.Side == "LONG";
@@ -2527,6 +2522,47 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
             var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: cts.Token);
             if (!res.Success || res.Data == null) { _allPositions = new(); return; }
+
+            // Account summary (margin/wallet balance, unrealized PnL) —
+            // fetched directly via the same Binance client/pattern
+            // already proven working for positions just above, NOT
+            // through the LivePnlService/AccountStateController path,
+            // which was fundamentally broken: that relied on a Web-side
+            // AccountStateService instance that the real Engine process
+            // never updates (Web and Engine are separate .NET processes
+            // with entirely separate DI containers — the Web-side
+            // instance just sits at its default, never-updated values).
+            try
+            {
+                using var acctCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                var acctRes = await client.UsdFuturesApi.Account.GetAccountInfoAsync(ct: acctCts.Token);
+                if (acctRes.Success && acctRes.Data != null)
+                {
+                    _acctMarginBalance = acctRes.Data.TotalMarginBalance;
+                    _acctWalletBalance = acctRes.Data.TotalWalletBalance;
+                    _acctUnrealizedPnl = acctRes.Data.TotalUnrealizedProfit;
+                }
+            }
+            catch { /* account summary is a nice-to-have on this page; don't let it block position loading */ }
+
+            // Realized PnL today — via Binance's own Income History
+            // endpoint, filtered to REALIZED_PNL entries since UTC
+            // midnight. Kept as a separate try/catch so a failure here
+            // never affects the more important balance numbers above.
+            try
+            {
+                using var pnlCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                var todayStartUtc = DateTime.UtcNow.Date;
+                var incomeRes = await client.UsdFuturesApi.Account.GetIncomeHistoryAsync(
+                    incomeType: IncomeType.RealizedPnl,
+                    startTime: todayStartUtc,
+                    limit: 1000,
+                    ct: pnlCts.Token);
+
+                if (incomeRes.Success && incomeRes.Data != null)
+                    _acctRealizedPnlToday = incomeRes.Data.Sum(x => x.Income);
+            }
+            catch { /* same — don't block the page on this */ }
 
             _allPositions = res.Data
                 .Where(p => p.Quantity != 0)
@@ -3190,7 +3226,6 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     {
         LiveState.PriceTicked -= OnLivePriceTicked;
         LiveState.KlineClosed -= OnLiveKlineClosed;
-        LivePnl.Updated -= OnLivePnlUpdated;
         _cts.Cancel();
         _timer?.Dispose();
         _dotNetRef?.Dispose();
