@@ -960,7 +960,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-btn-on{background:rgba(239,68,68,.15);border-color:var(--red);color:var(--red);}
 
 /* TF BAR */
-.mk-tf-bar{display:flex;align-items:center;gap:2px;padding:6px 16px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
+.mk-tf-bar{position:sticky;z-index:24;display:flex;align-items:center;gap:2px;padding:6px 16px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
 .mk-tf-btn{padding:4px 10px;background:transparent;border:none;color:var(--dim);font-family:var(--mono);font-size:12px;font-weight:600;cursor:pointer;border-radius:4px;transition:all .15s;}
 .mk-tf-btn:hover{background:var(--bg3);color:var(--txt);}
 .mk-tf-on{background:var(--acc)!important;color:#fff!important;}
@@ -978,7 +978,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-empty{display:flex;flex-direction:column;align-items:center;gap:14px;padding:80px;color:var(--dim);text-align:center;}
 
 /* STATS */
-.mk-stats{display:grid;grid-template-columns:repeat(12,1fr);gap:1px;background:var(--bdr);border-bottom:1px solid var(--bdr);}
+.mk-stats{position:sticky;z-index:23;display:grid;grid-template-columns:repeat(12,1fr);gap:1px;background:var(--bdr);border-bottom:1px solid var(--bdr);}
 .mk-s{background:var(--bg2);padding:12px 16px;}
 .mk-sl{font-size:10px;letter-spacing:1.5px;color:var(--dim);font-weight:600;}
 .mk-sv{font-family:var(--mono);font-size:14px;font-weight:700;margin-top:4px;}
@@ -1048,7 +1048,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-chart-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
 .mk-legend{display:flex;gap:14px;font-size:11px;color:var(--dim);}
 /* TICKER BAR */
-.mk-ticker-bar{background:var(--bg2);border-bottom:1px solid var(--bdr);overflow-x:auto;scrollbar-width:none;cursor:grab;}
+.mk-ticker-bar{position:sticky;z-index:25;background:var(--bg2);border-bottom:1px solid var(--bdr);overflow-x:auto;scrollbar-width:none;cursor:grab;}
 .mk-ticker-bar::-webkit-scrollbar{display:none;}
 .mk-ticker-scroll{display:flex;align-items:center;padding:0 4px;width:max-content;}
 .mk-tk{display:inline-flex;align-items:center;gap:5px;padding:8px 14px;background:transparent;border:none;border-right:1px solid var(--bdr);cursor:pointer;transition:background .15s;white-space:nowrap;flex-shrink:0;}
@@ -1074,7 +1074,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-resize-dots{font-size:12px;color:var(--dim);letter-spacing:2px;line-height:1;}
 
 /* SIGNAL PANEL */
-.mk-sticky-top{position:sticky;top:0;z-index:30;background:var(--bg2);box-shadow:0 4px 12px rgba(0,0,0,.25);}
+.mk-sticky-top{position:sticky;z-index:26;background:var(--bg2);box-shadow:0 4px 12px rgba(0,0,0,.25);}
 .sig-panel{padding:10px 20px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
 .sig-panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
 .sig-panel-title{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:2px;color:var(--txt);}
@@ -1508,6 +1508,23 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         if (firstRender)
         {
             await InitChartAsync();
+
+            // Stack the sticky header chain (top-to-bottom order):
+            // vertex-header + vertex-topnav live in MainLayout, outside
+            // this component; the rest are this page's own elements.
+            try
+            {
+                await JS.InvokeVoidAsync("stickyStack.init", new[]
+                {
+                    ".vertex-header",
+                    ".vertex-topnav",
+                    ".mk-sticky-top",
+                    ".mk-ticker-bar",
+                    ".mk-tf-bar",
+                    ".mk-stats",
+                });
+            }
+            catch { /* non-critical visual enhancement; page works without it */ }
         }
 
         // Render whenever chart is ready and data changed
@@ -1711,6 +1728,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         CalcStats();
         StateHasChanged();
         _ = RenderCharts();
+        _ = JS.InvokeVoidAsync("stickyStack.recalc");
     }
 
     // Clicking a ticker symbol switches the chart AND opens the order panel,
@@ -1769,6 +1787,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         CalcStats();
         StateHasChanged();
         _ = RenderCharts();
+        _ = JS.InvokeVoidAsync("stickyStack.recalc");
     }
 
     void CalcStats()
@@ -1918,6 +1937,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         CalcStats();
         StateHasChanged();
         _ = RenderCharts();
+        _ = JS.InvokeVoidAsync("stickyStack.recalc");
     }
 
     // Row click in the ALL INSTRUMENTS table: same as ticker click —
@@ -3257,7 +3277,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _cts.Cancel();
         _timer?.Dispose();
         _dotNetRef?.Dispose();
-        await Task.CompletedTask;
+        try { await JS.InvokeVoidAsync("stickyStack.dispose"); } catch { }
     }
 
     sealed class ActivePositionInfo
