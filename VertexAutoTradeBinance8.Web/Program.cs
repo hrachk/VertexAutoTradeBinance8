@@ -116,6 +116,14 @@ builder.Services.AddHttpClient<LivePnlService>(c =>
     c.BaseAddress = new Uri(builder.Configuration["ApiBaseUrl"] ?? "http://localhost:5253");
 });
 
+// Manual SL/TP order placement on /market reuses this exact,
+// production-proven Engine service (raw HTTP, manually-signed Algo
+// Order API calls) rather than Binance.Net's library calls, which
+// don't properly support TP/SL conditional orders post the Dec 2025
+// Algo Order API migration this service was specifically built for.
+builder.Services.AddHttpClient("BinanceAlgoRaw");
+builder.Services.AddSingleton<VertexAutoTradeBinance8.Services.BinanceAlgoOrderService>();
+
  // Режим рынка (AI Smart Regime)
 builder.Services.AddSingleton<AiMarketRegimeService>();
 
