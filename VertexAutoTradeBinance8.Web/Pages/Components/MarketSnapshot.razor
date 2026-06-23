@@ -302,7 +302,17 @@
 
         <!-- Price chart -->
         <div class="mk-chart-head">
-            <div class="mk-chart-title">CANDLESTICK · @(Selected?.Symbol ?? "") · @TfLabel(Selected?.Timeframe ?? "")</div>
+            <div class="mk-chart-title-ticker">
+                @if (Selected != null)
+                {
+                    <span class="mk-tsym">@Selected.Symbol</span>
+                    <span class="mk-ttf">@TfLabel(Selected.Timeframe)</span>
+                }
+                else
+                {
+                    <span class="mk-dim">No symbol selected</span>
+                }
+            </div>
             <div class="mk-legend">
                 <span style="color:#38bdf8">── EMA21</span>
                 <span style="color:#a855f7">── EMA55</span>
@@ -669,59 +679,60 @@
                         </div>
                     </div>
 
-                    @if (_activeSignal.Confidence <= 0)
-                    {
-                        <!-- Manual trade: optional SL + multi-TP, kept
-                             deliberately simple compared to how other
-                             exchanges (Binance's own native multi-TP UI
-                             included) make this needlessly fiddly. One SL
-                             price, a short repeatable list of TP rows
-                             (price + % of the position to close there),
-                             with a running total so it's obvious if the
-                             allocations don't add up to 100%. -->
-                        <div class="ord-row">
-                            <label class="ord-label">Stop Loss <span class="mk-dim">(optional)</span></label>
-                            <div class="ord-input-wrap">
-                                <input class="ord-input mono" type="number" title="Stop Loss price"
-                                       step="@(_symTickSize > 0 ? _symTickSize.ToString("G8") : "any")"
-                                       value="@(_manualSlPrice > 0 ? _manualSlPrice.ToString("G8") : "")"
-                                       @onchange="OnManualSlChange" placeholder="No stop loss" />
-                                <span class="ord-input-sfx">USDT</span>
-                            </div>
-                        </div>
 
-                        <div class="ord-row">
-                            <div style="display:flex;justify-content:space-between;align-items:center;">
-                                <label class="ord-label">Take Profit <span class="mk-dim">(optional, multi)</span></label>
-                                @if (_manualTps.Count > 0)
-                                {
-                                    var totalPct = _manualTps.Sum(t => t.Pct);
-                                    <span class="ord-tp-total @(Math.Abs(totalPct - 100) < 0.01m ? "up" : "yel")">@totalPct.ToString("F0")% allocated</span>
-                                }
-                            </div>
-                            @foreach (var (tpRow, idx) in _manualTps.Select((t, i) => (t, i)))
+                    <!-- SL + multi-TP — auto-filled from the signal's own
+                         levels when this is a strategy signal (one click
+                         sets up the whole trade), or left blank for a
+                         pure manual trade. Either way, editable before
+                         submitting. Kept deliberately simple compared to
+                         how other exchanges (Binance's own native multi-TP
+                         UI included) make this needlessly fiddly. One SL
+                         price, a short repeatable list of TP rows
+                         (price + % of the position to close there), with
+                         a running total so it's obvious if the
+                         allocations don't add up to 100%. -->
+                    <div class="ord-row">
+                        <label class="ord-label">Stop Loss <span class="mk-dim">(optional)</span></label>
+                        <div class="ord-input-wrap">
+                            <input class="ord-input mono" type="number" title="Stop Loss price"
+                                   step="@(_symTickSize > 0 ? _symTickSize.ToString("G8") : "any")"
+                                   value="@(_manualSlPrice > 0 ? _manualSlPrice.ToString("G8") : "")"
+                                   @onchange="OnManualSlChange" placeholder="No stop loss" />
+                            <span class="ord-input-sfx">USDT</span>
+                        </div>
+                    </div>
+
+                    <div class="ord-row">
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <label class="ord-label">Take Profit <span class="mk-dim">(optional, multi)</span></label>
+                            @if (_manualTps.Count > 0)
                             {
-                                <div class="ord-tp-row">
-                                    <input class="ord-input mono ord-tp-price" type="number" title="Take profit price"
-                                           step="@(_symTickSize > 0 ? _symTickSize.ToString("G8") : "any")"
-                                           value="@(tpRow.Price > 0 ? tpRow.Price.ToString("G8") : "")"
-                                           @onchange="@(e => OnManualTpPriceChange(idx, e))" placeholder="Price" />
-                                    <div class="ord-tp-pct-wrap">
-                                        <input class="ord-input mono ord-tp-pct" type="number" title="Percent of position to close at this TP"
-                                               min="1" max="100" step="1"
-                                               value="@tpRow.Pct.ToString("G8")"
-                                               @onchange="@(e => OnManualTpPctChange(idx, e))" />
-                                        <span class="ord-tp-pct-sfx">%</span>
-                                    </div>
-                                    <button class="ord-tp-remove" title="Remove this TP" @onclick="() => RemoveManualTp(idx)">✕</button>
-                                </div>
-                            }
-                            @if (_manualTps.Count < 5)
-                            {
-                                <button class="ord-tp-add" @onclick="AddManualTp">+ Add TP level</button>
+                                var totalPct = _manualTps.Sum(t => t.Pct);
+                                <span class="ord-tp-total @(Math.Abs(totalPct - 100) < 0.01m ? "up" : "yel")">@totalPct.ToString("F0")% allocated</span>
                             }
                         </div>
-                    }
+                        @foreach (var (tpRow, idx) in _manualTps.Select((t, i) => (t, i)))
+                        {
+                            <div class="ord-tp-row">
+                                <input class="ord-input mono ord-tp-price" type="number" title="Take profit price"
+                                       step="@(_symTickSize > 0 ? _symTickSize.ToString("G8") : "any")"
+                                       value="@(tpRow.Price > 0 ? tpRow.Price.ToString("G8") : "")"
+                                       @onchange="@(e => OnManualTpPriceChange(idx, e))" placeholder="Price" />
+                                <div class="ord-tp-pct-wrap">
+                                    <input class="ord-input mono ord-tp-pct" type="number" title="Percent of position to close at this TP"
+                                           min="1" max="100" step="1"
+                                           value="@tpRow.Pct.ToString("G8")"
+                                           @onchange="@(e => OnManualTpPctChange(idx, e))" />
+                                    <span class="ord-tp-pct-sfx">%</span>
+                                </div>
+                                <button class="ord-tp-remove" title="Remove this TP" @onclick="() => RemoveManualTp(idx)">✕</button>
+                            </div>
+                        }
+                        @if (_manualTps.Count < 5)
+                        {
+                            <button class="ord-tp-add" @onclick="AddManualTp">+ Add TP level</button>
+                        }
+                    </div>
 
                     <!-- Reference levels -->
                     <div class="ord-levels">
@@ -1116,7 +1127,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 @@keyframes mkFadeIn{from{opacity:0;}to{opacity:1;}}
 
 @@media(max-width:700px){.mk-chart-maximized{top:8px;left:8px;right:8px;bottom:8px;}}
-.mk-chart-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
+.mk-chart-title-ticker{display:flex;align-items:baseline;gap:8px;}
 .mk-legend{display:flex;gap:14px;font-size:11px;color:var(--dim);}
 /* TICKER BAR */
 .mk-ticker-bar{position:sticky;z-index:25;background:var(--bg2);border-bottom:1px solid var(--bdr);overflow-x:auto;scrollbar-width:none;cursor:grab;}
@@ -1598,6 +1609,36 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             await InitChartAsync();
 
+            // Restore the last symbol/timeframe the user was looking
+            // at, if any was saved for this browser tab — avoids
+            // always resetting to the default symbol on every page
+            // load/navigation. Falls through silently to the existing
+            // default selection if nothing was saved, or the saved
+            // symbol no longer exists in the current universe (e.g.
+            // it dropped out of Auto-selection).
+            try
+            {
+                var savedSym = await JS.InvokeAsync<string?>("sessionStorage.getItem", "vertexMarketSym");
+                var savedTf = await JS.InvokeAsync<string?>("sessionStorage.getItem", "vertexMarketTf");
+                if (!string.IsNullOrEmpty(savedSym))
+                {
+                    var match = !string.IsNullOrEmpty(savedTf)
+                        ? Series.FirstOrDefault(s => s.Symbol == savedSym && s.Timeframe == savedTf)
+                        : null;
+                    match ??= Series.FirstOrDefault(s => s.Symbol == savedSym);
+                    if (match != null && (match.Symbol != _activeSym || match.Timeframe != _activeTf))
+                    {
+                        _activeSym = match.Symbol;
+                        _activeTf = match.Timeframe;
+                        ResolveSelected();
+                        CalcStats();
+                        StateHasChanged();
+                        _ = RenderCharts();
+                    }
+                }
+            }
+            catch { /* sessionStorage unavailable or malformed — just keep the default selection */ }
+
             // Stack the sticky header chain (top-to-bottom order):
             // vertex-header + vertex-topnav live in MainLayout, outside
             // this component; the rest are this page's own elements.
@@ -1818,6 +1859,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         StateHasChanged();
         _ = RenderCharts();
         _ = JS.InvokeVoidAsync("stickyStack.recalc");
+        _ = SaveSelectionState();
+    }
+
+    // Persists the current symbol+timeframe to sessionStorage so it
+    // survives navigating away and back (or refreshing) within the same
+    // browser tab — cleared automatically when the tab closes, so this
+    // is a "remember where I was" convenience, not a permanent setting.
+    async Task SaveSelectionState()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("sessionStorage.setItem", "vertexMarketSym", _activeSym);
+            await JS.InvokeVoidAsync("sessionStorage.setItem", "vertexMarketTf", _activeTf);
+        }
+        catch { }
     }
 
     // Clicking a ticker symbol switches the chart AND opens the order panel,
@@ -1877,6 +1933,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         StateHasChanged();
         _ = RenderCharts();
         _ = JS.InvokeVoidAsync("stickyStack.recalc");
+        _ = SaveSelectionState();
     }
 
     void CalcStats()
@@ -2052,6 +2109,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         StateHasChanged();
         _ = RenderCharts();
         _ = JS.InvokeVoidAsync("stickyStack.recalc");
+        _ = SaveSelectionState();
     }
 
     // Row click in the ALL INSTRUMENTS table: same as ticker click —
@@ -2578,11 +2636,31 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             PickSym(sig.Symbol);
             _ = LoadSymbolInfoAndSuggestQty(sig);
             _ = LoadCurrentPositionAsync(sig.Symbol);
+
+            // Auto-fill SL/TP straight from the signal's own levels —
+            // one click sets up the whole trade (qty, leverage already
+            // computed above; SL/TP here), not just the entry price.
+            // Splits evenly across however many TP levels the signal
+            // actually provided.
+            _manualSlPrice = sig.StopLoss;
+            _manualTps = new List<ManualTpRow>();
+            if (sig.TakeProfits != null && sig.TakeProfits.Count > 0)
+            {
+                decimal evenPct = Math.Round(100m / sig.TakeProfits.Count, 0);
+                for (int i = 0; i < sig.TakeProfits.Count; i++)
+                {
+                    bool isLast = i == sig.TakeProfits.Count - 1;
+                    decimal pct = isLast ? (100m - evenPct * i) : evenPct; // last row absorbs any rounding remainder
+                    _manualTps.Add(new ManualTpRow { Price = sig.TakeProfits[i], Pct = pct });
+                }
+            }
         }
         else
         {
             _orderPanelDismissed = true;
             _currentPosition = null;
+            _manualSlPrice = 0;
+            _manualTps.Clear();
         }
     }
 
@@ -2654,6 +2732,26 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
                     decimal step = _symStep > 0 ? _symStep : 0.001m;
                     _orderQty = Math.Floor(rawQty / step) * step;
+
+                    // 5) Smart leverage — per the standard risk-management
+                    // rule (confirmed via several position-sizing
+                    // references): liquidation distance should be at
+                    // least 2x the stop-loss distance, otherwise the
+                    // exchange force-closes the position before the SL
+                    // ever triggers (paying extra liquidation fees on top).
+                    // Isolated-margin liquidation distance is approximately
+                    // 1/leverage, so the highest safe leverage is roughly
+                    // 1 / (2 × stopDistPct). Capped at a sane ceiling (20x)
+                    // and the symbol's real exchange max — never suggests
+                    // something reckless just because the math allows it.
+                    if (sig.Entry > 0 && stopDist > 0)
+                    {
+                        decimal stopDistPct = stopDist / sig.Entry;
+                        decimal safeLeverage = stopDistPct > 0 ? 1m / (2m * stopDistPct) : 20m;
+                        int suggestedLev = (int)Math.Floor(Math.Clamp(safeLeverage, 1m, 20m));
+                        _orderLeverage = Math.Min(suggestedLev, _symMaxLev > 0 ? _symMaxLev : suggestedLev);
+                        if (_orderLeverage < 1) _orderLeverage = 1;
+                    }
                 }
             }
 
@@ -3425,14 +3523,17 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
             string entrySummary = $"Order #{orderId} placed · {_orderType} · {qty} {_activeSignal.Symbol.Replace("USDT","")}";
 
-            // Manual SL/TP — only for manual trades (Confidence <= 0);
-            // strategy signals already get their own SL/TP handled by
-            // the bot elsewhere. Reuses BinanceAlgoOrderService, the
-            // exact same production-proven, manually-signed Algo Order
-            // API client the bot's own TP/SL placement uses — Binance.Net's
+            // SL/TP — placed via algo orders whenever the panel's SL/TP
+            // fields are populated (auto-filled from the signal's own
+            // levels when this came from a signal, or entered manually
+            // otherwise — either way, this is the user explicitly
+            // confirming these levels via the order panel before
+            // submitting). Reuses BinanceAlgoOrderService, the exact
+            // same production-proven, manually-signed Algo Order API
+            // client the bot's own TP/SL placement uses — Binance.Net's
             // library calls don't properly support conditional orders
             // since the Dec 2025 Algo Order API migration.
-            if (_activeSignal.Confidence <= 0 && (_manualSlPrice > 0 || _manualTps.Any(t => t.Price > 0)))
+            if (_manualSlPrice > 0 || _manualTps.Any(t => t.Price > 0))
             {
                 var protectiveErrors = new List<string>();
                 var closeSide = isBuy ? OrderSide.Sell : OrderSide.Buy; // closing orders go the opposite direction
