@@ -2856,6 +2856,8 @@ compact-card {
 
 /* ===== Desktop top navigation (replaces sidebar on wide screens) ===== */
 .vertex-topnav {
+    position: sticky;
+    z-index: 1900;
     display: flex;
     align-items: center;
     gap: 4px;

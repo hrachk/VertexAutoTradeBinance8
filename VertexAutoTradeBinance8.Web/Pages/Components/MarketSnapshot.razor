@@ -49,6 +49,7 @@
         </div>
     </div>
 
+    <div class="mk-sticky-top">
     <!-- LIVE SIGNALS — moved above the ticker bar -->
     <div class="sig-panel">
             <div class="sig-panel-head">
@@ -97,24 +98,7 @@
                         : 0m;
                     int conf = sig.Confidence;
 
-                    // SimulatedTradeService (which produces these "Live
-                    // Signals") does NOT apply the real MinEntry
-                    // confidence filter — it shows every signal the
-                    // strategy saw, for visibility, even ones the bot
-                    // would never actually act on. Resolve the real
-                    // per-symbol threshold and flag it clearly so this
-                    // isn't confused with a signal the bot would trade.
-                    var confProfile = ConfidenceResolver.Resolve(sig.Symbol);
-                    bool belowThreshold = (conf / 100m) < confProfile.MinEntry;
-
-                    // Mirrors StrategyEngine.GetDynamicMinRr exactly — same
-                    // regime/slope/volatility-based thresholds (2.0 base,
-                    // 2.5 in a squeeze, 1.7-1.8 in a strong trend), so a
-                    // signal whose RR doesn't actually meet the bar the
-                    // strategy normally requires is flagged just as
-                    // clearly as a below-confidence one.
-                    decimal minRr = GetDynamicMinRrForDisplay(sig);
-                    bool lowRr = rr > 0 && rr < minRr;
+                    var (belowThreshold, lowRr, minRr) = IsWeakSignal(sig, conf, rr);
 
                     var ttl = GetSignalTtl(sig);
                     bool isRemoving = _expiredSignals.ContainsKey(SignalKey(sig));
@@ -122,19 +106,13 @@
                     <div class="sig-card @(sigIsBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @((belowThreshold || lowRr) ? "sc-below-threshold" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "")"
                          @key="SignalKey(sig)"
                          @onclick="() => SelectSignal(sig)">
-                        @if (belowThreshold)
+
+                        @if (!_seenSignalKeys.Contains(SignalKey(sig)))
                         {
-                            <div class="sc-threshold-badge" title="@($"Confidence {conf}% is below this symbol's {(confProfile.MinEntry*100).ToString("F0")}% entry threshold — the bot would not have opened this trade")">
-                                ⚠ Below entry threshold
-                            </div>
+                            <span class="sc-new-dot" title="New signal — not yet viewed"></span>
                         }
-                        @if (lowRr)
-                        {
-                            <div class="sc-threshold-badge" title="@($"RR {rr:F2} is below this regime's normal minimum of {minRr:F1} — a weaker reward/risk setup than the strategy usually requires")">
-                                ⚠ Low RR ({rr:F1} &lt; {minRr:F1})
-                            </div>
-                        }
-                        <!-- Top row: symbol, side, time -->
+
+                        <!-- COMPACT (always visible): symbol, side, time, confidence bar -->
                         <div class="sc-top">
                             <div class="sc-sym-wrap">
                                 <span class="sc-sym">@sig.Symbol.Replace("USDT","")</span>
@@ -145,38 +123,75 @@
                             </span>
                             <span class="sc-ago">@FmtAgo(sig.Time)</span>
                         </div>
-
-                        <!-- Confidence bar -->
                         <div class="sc-conf-wrap">
                             <div class="sc-conf-bar" style="width:@conf%"
                                  style2="background:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")"></div>
                         </div>
-
-                        <!-- Prices, all inline -->
-                        <div class="sc-prices-row">
-                            <div class="sc-p"><span class="sc-pl">Entry</span><span class="sc-pv mono">@FmtP(sig.Entry)</span></div>
-                            <div class="sc-p"><span class="sc-pl">SL</span><span class="sc-pv mono dn">@FmtP(sig.StopLoss)</span></div>
-                            @if (sigTp1 > 0) {
-                                <div class="sc-p"><span class="sc-pl">TP1</span><span class="sc-pv mono up">@FmtP(sigTp1)</span></div>
-                            }
-                        </div>
-
-                        <!-- Footer: confidence/RR/ATR + TTL bar combined in one slim row -->
-                        <div class="sc-foot">
-                            <span class="sc-conf @(conf>=60?"up":conf>=45?"yel":"dn")">@conf%</span>
-                            @if (rr > 0) { <span class="sc-rr">RR @rr.ToString("F1")</span> }
-                            <span class="sc-atr mk-dim">ATR @FmtP(sig.ATR)</span>
-                            <div class="sc-ttl-bar-wrap" title="Estimated relevance window based on volatility (ATR)">
-                                <div class="sc-ttl-bar @(ttl.IsExpiring ? "ttl-low" : ttl.Pct < 50 ? "ttl-mid" : "ttl-high")"
-                                     style="width:@(ttl.Pct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                        @if (belowThreshold || lowRr)
+                        {
+                            <div class="sc-warn-strip">
+                                @if (belowThreshold) { <span>⚠ Below threshold</span> }
+                                @if (lowRr) { <span>⚠ Weak R/R</span> }
                             </div>
-                            <span class="sc-ttl-label mk-dim">@ttl.Label</span>
+                        }
+
+                        <!-- EXPANDED (shown on hover only): everything else -->
+                        <div class="sc-expand">
+                            @if (belowThreshold)
+                            {
+                                <div class="sc-threshold-badge" title="@($"Confidence {conf}% is below this symbol's {(ConfidenceResolver.Resolve(sig.Symbol).MinEntry*100).ToString("F0")}% entry threshold — the bot would not have opened this trade")">
+                                    ⚠ Below entry threshold
+                                </div>
+                            }
+                            @if (lowRr)
+                            {
+                                <div class="sc-threshold-badge" title="@($"This trade risks more than it could gain compared to what the strategy normally requires in this market condition (needs at least {minRr:F1}x reward-to-risk here, this signal only offers {rr:F1}x)")">
+                                    ⚠ Weak reward/risk (@(rr.ToString("F1"))x, needs @(minRr.ToString("F1"))x+)
+                                </div>
+                            }
+
+                            <!-- Prices, all inline -->
+                            <div class="sc-prices-row">
+                                <div class="sc-p">
+                                    <span class="sc-pl">Entry</span>
+                                    <span class="sc-pv mono">@FmtP(sig.Entry)</span>
+                                    @if (sig.EntryRangeLow.HasValue && sig.EntryRangeHigh.HasValue)
+                                    {
+                                        <span class="sc-entry-range mono" title="Acceptable entry zone — scale in anywhere within this range">(@FmtP(sig.EntryRangeLow.Value)–@FmtP(sig.EntryRangeHigh.Value))</span>
+                                    }
+                                </div>
+                                <div class="sc-p"><span class="sc-pl">SL</span><span class="sc-pv mono dn">@FmtP(sig.StopLoss)</span></div>
+                                @if (sigTp1 > 0) {
+                                    <div class="sc-p"><span class="sc-pl">TP1</span><span class="sc-pv mono up">@FmtP(sigTp1)</span></div>
+                                }
+                            </div>
+
+                            <!-- Footer: confidence/RR/ATR + TTL bar combined in one slim row -->
+                            <div class="sc-foot">
+                                <span class="sc-conf @(conf>=60?"up":conf>=45?"yel":"dn")">@conf%</span>
+                                @if (rr > 0) { <span class="sc-rr">RR @rr.ToString("F1")</span> }
+                                @if (sig.Reason != null && sig.Reason.Contains("_VWAP"))
+                                {
+                                    <span class="sc-confirm-badge" title="This signal's direction was confirmed by VWAP">VWAP✓</span>
+                                }
+                                @if (sig.Reason != null && sig.Reason.Contains("_HTF"))
+                                {
+                                    <span class="sc-confirm-badge" title="This signal's direction was confirmed by the higher-timeframe structure of the same symbol">HTF✓</span>
+                                }
+                                <span class="sc-atr mk-dim">ATR @FmtP(sig.ATR)</span>
+                                <div class="sc-ttl-bar-wrap" title="Estimated relevance window based on volatility (ATR)">
+                                    <div class="sc-ttl-bar @(ttl.IsExpiring ? "ttl-low" : ttl.Pct < 50 ? "ttl-mid" : "ttl-high")"
+                                         style="width:@(ttl.Pct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                                </div>
+                                <span class="sc-ttl-label mk-dim">@ttl.Label</span>
+                            </div>
                         </div>
                     </div>
                 }
             </div>
             }
     </div> <!-- end sig-panel -->
+    </div> <!-- end mk-sticky-top -->
 
     <!-- ROW 1: SYMBOL TICKER -->
     <div class="mk-ticker-bar">
@@ -400,6 +415,36 @@
 
         </div> <!-- end mk-charts-col-main -->
 
+        <!-- ACCOUNT SUMMARY — margin balance, today's realized PnL,
+             wallet balance, unrealized PnL, open positions count+total.
+             Compact, single row, sits right above the positions table. -->
+        <div class="mk-acct-summary">
+            <div class="mk-acct-item">
+                <div class="mk-acct-label">Margin Balance</div>
+                <div class="mk-acct-value mono">$@_acctMarginBalance.ToString("F2")</div>
+            </div>
+            <div class="mk-acct-item">
+                <div class="mk-acct-label">Realized PnL (today)</div>
+                <div class="mk-acct-value mono @(_acctRealizedPnlToday >= 0 ? "up" : "dn")">
+                    @(_acctRealizedPnlToday >= 0 ? "+" : "")@_acctRealizedPnlToday.ToString("F2")
+                </div>
+            </div>
+            <div class="mk-acct-item">
+                <div class="mk-acct-label">Wallet Balance</div>
+                <div class="mk-acct-value mono">$@_acctWalletBalance.ToString("F2")</div>
+            </div>
+            <div class="mk-acct-item">
+                <div class="mk-acct-label">Unrealized PnL</div>
+                <div class="mk-acct-value mono @(_acctUnrealizedPnl >= 0 ? "up" : "dn")">
+                    @(_acctUnrealizedPnl >= 0 ? "+" : "")@_acctUnrealizedPnl.ToString("F2")
+                </div>
+            </div>
+            <div class="mk-acct-item">
+                <div class="mk-acct-label">Open Positions</div>
+                <div class="mk-acct-value mono">@_allPositions.Count <span class="mk-acct-sub">($@_allPositions.Sum(p => p.Size).ToString("F2"))</span></div>
+            </div>
+        </div>
+
         <!-- OPEN POSITIONS / OPEN ORDERS — tabbed, share one panel -->
         <div class="mk-oo-panel">
             <div class="mk-oo-tabs">
@@ -407,7 +452,6 @@
                         @onclick="ShowPositionsTab">
                     Open Positions
                     <span class="mk-oo-count">@_allPositions.Count</span>
-                    @if (_positionsLoading) { <span class="mk-oo-spin">⟳</span> }
                 </button>
                 <button class="mk-oo-tab @(_ooActiveTab == "orders" ? "mk-oo-tab-on" : "")"
                         @onclick="ShowOrdersTab">
@@ -916,7 +960,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-btn-on{background:rgba(239,68,68,.15);border-color:var(--red);color:var(--red);}
 
 /* TF BAR */
-.mk-tf-bar{display:flex;align-items:center;gap:2px;padding:6px 16px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
+.mk-tf-bar{position:sticky;z-index:24;display:flex;align-items:center;gap:2px;padding:6px 16px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
 .mk-tf-btn{padding:4px 10px;background:transparent;border:none;color:var(--dim);font-family:var(--mono);font-size:12px;font-weight:600;cursor:pointer;border-radius:4px;transition:all .15s;}
 .mk-tf-btn:hover{background:var(--bg3);color:var(--txt);}
 .mk-tf-on{background:var(--acc)!important;color:#fff!important;}
@@ -934,7 +978,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-empty{display:flex;flex-direction:column;align-items:center;gap:14px;padding:80px;color:var(--dim);text-align:center;}
 
 /* STATS */
-.mk-stats{display:grid;grid-template-columns:repeat(12,1fr);gap:1px;background:var(--bdr);border-bottom:1px solid var(--bdr);}
+.mk-stats{position:sticky;z-index:23;display:grid;grid-template-columns:repeat(12,1fr);gap:1px;background:var(--bdr);border-bottom:1px solid var(--bdr);}
 .mk-s{background:var(--bg2);padding:12px 16px;}
 .mk-sl{font-size:10px;letter-spacing:1.5px;color:var(--dim);font-weight:600;}
 .mk-sv{font-family:var(--mono);font-size:14px;font-weight:700;margin-top:4px;}
@@ -953,7 +997,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-chart-maximize:hover{color:var(--txt);border-color:var(--acc);}
 .mk-chart-maximize svg{width:15px;height:15px;}
 
-.mk-chart-container-wrap{width:100%;height:480px;transition:none;position:relative;}
+.mk-chart-container-wrap{width:100%;height:480px;min-height:280px;max-height:900px;transition:none;position:relative;resize:vertical;overflow:hidden;}
+.mk-chart-container-wrap:not(.mk-chart-maximized)::after{content:'';position:absolute;right:2px;bottom:2px;width:14px;height:14px;background:repeating-linear-gradient(135deg,var(--dim) 0 1.5px,transparent 1.5px 4px);opacity:.5;pointer-events:none;}
 
 .mk-tpsl-overlay{position:absolute;top:36px;left:8px;z-index:5;pointer-events:none;display:flex;align-items:center;gap:8px;}
 .mk-tpsl-btn{pointer-events:auto;display:flex;align-items:center;gap:6px;background:rgba(10,13,18,0.92);border:1px solid var(--bdr);color:var(--dim);padding:5px 12px;border-radius:6px;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .15s;backdrop-filter:blur(4px);}
@@ -1003,7 +1048,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-chart-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
 .mk-legend{display:flex;gap:14px;font-size:11px;color:var(--dim);}
 /* TICKER BAR */
-.mk-ticker-bar{background:var(--bg2);border-bottom:1px solid var(--bdr);overflow-x:auto;scrollbar-width:none;cursor:grab;}
+.mk-ticker-bar{position:sticky;z-index:25;background:var(--bg2);border-bottom:1px solid var(--bdr);overflow-x:auto;scrollbar-width:none;cursor:grab;}
 .mk-ticker-bar::-webkit-scrollbar{display:none;}
 .mk-ticker-scroll{display:flex;align-items:center;padding:0 4px;width:max-content;}
 .mk-tk{display:inline-flex;align-items:center;gap:5px;padding:8px 14px;background:transparent;border:none;border-right:1px solid var(--bdr);cursor:pointer;transition:background .15s;white-space:nowrap;flex-shrink:0;}
@@ -1029,6 +1074,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-resize-dots{font-size:12px;color:var(--dim);letter-spacing:2px;line-height:1;}
 
 /* SIGNAL PANEL */
+.mk-sticky-top{position:sticky;z-index:26;background:var(--bg2);box-shadow:0 4px 12px rgba(0,0,0,.25);}
 .sig-panel{padding:10px 20px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
 .sig-panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
 .sig-panel-title{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:2px;color:var(--txt);}
@@ -1041,7 +1087,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .sig-cards::-webkit-scrollbar-thumb{background:var(--bdr);}
 
 /* Signal card */
-.sig-card{flex-shrink:0;width:260px;min-height:100px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.sig-card{flex-shrink:0;width:260px;min-height:0;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
 .sig-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;}
 .sc-buy::before{background:var(--grn);}
 .sc-sell::before{background:var(--red);}
@@ -1057,15 +1103,33 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .sc-side-b{background:rgba(34,197,94,.15);color:var(--grn);}
 .sc-side-s{background:rgba(239,68,68,.15);color:var(--red);}
 .sc-ago{margin-left:auto;color:#94a3b8;font-weight:500;font-size:10px;}
-.sc-conf-wrap{height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;margin-bottom:8px;}
+.sc-conf-wrap{height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;}
 .sc-conf-bar{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--acc),var(--grn));}
+
+/* Compact-state warning strip (shown collapsed; the full badges with
+   tooltips live in sc-expand for hover) */
+.sc-warn-strip{display:flex;gap:6px;margin-top:6px;font-size:9.5px;font-weight:700;color:#eab308;}
+
+/* New-signal blink indicator — small dot, top-right corner, pulses
+   until the card is clicked (SelectSignal marks it seen). */
+.sc-new-dot{position:absolute;top:8px;right:8px;width:7px;height:7px;border-radius:50%;background:var(--acc);box-shadow:0 0 0 0 rgba(59,130,246,.6);animation:scNewPulse 1.6s ease-out infinite;z-index:2;}
+@@keyframes scNewPulse{0%{box-shadow:0 0 0 0 rgba(59,130,246,.6);}70%{box-shadow:0 0 0 7px rgba(59,130,246,0);}100%{box-shadow:0 0 0 0 rgba(59,130,246,0);}}
+
+/* Expanded details — hidden by default (height:0, no padding), grows
+   open on hover via max-height transition. Kept in the DOM always (not
+   display:none) so hover doesn't have to wait on a layout reflow. */
+.sc-expand{max-height:0;opacity:0;overflow:hidden;transition:max-height .25s ease,opacity .2s ease,margin-top .25s ease;margin-top:0;}
+.sig-card:hover .sc-expand{max-height:140px;opacity:1;margin-top:8px;}
+
 .sc-prices-row{display:flex;align-items:center;gap:14px;margin-bottom:6px;}
 .sc-p{display:flex;align-items:center;gap:5px;}
 .sc-pl{font-size:9px;color:var(--dim);}
 .sc-pv{font-size:11.5px;}
+.sc-entry-range{font-size:9.5px;color:var(--dim);margin-left:3px;cursor:help;}
 .sc-foot{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;}
 .sc-conf{font-family:var(--mono);font-size:12px;font-weight:700;flex-shrink:0;}
 .sc-rr{font-size:10px;background:rgba(59,130,246,.12);color:var(--acc);padding:1px 5px;border-radius:3px;flex-shrink:0;}
+.sc-confirm-badge{font-size:9px;font-weight:700;background:rgba(34,197,94,.12);color:var(--grn);padding:1px 5px;border-radius:3px;flex-shrink:0;cursor:help;}
 .sc-atr{font-size:10px;flex-shrink:0;white-space:nowrap;}
 .yel{color:var(--yel)!important;}
 
@@ -1209,9 +1273,17 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-hints{display:flex;gap:16px;padding:8px 4px 0;font-size:11px;color:var(--dim);flex-wrap:wrap;}
 
 /* OPEN ORDERS / POSITIONS — sized like a real exchange panel, not a compact strip */
+.mk-acct-summary{display:flex;gap:0;background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:12px 20px;margin-bottom:14px;}
+.mk-acct-item{flex:1;padding:0 16px;border-right:1px solid var(--bdr);}
+.mk-acct-item:last-child{border-right:none;}
+.mk-acct-item:first-child{padding-left:0;}
+.mk-acct-label{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;}
+.mk-acct-value{font-size:16px;font-weight:700;}
+.mk-acct-sub{font-size:11px;font-weight:500;color:var(--dim);margin-left:4px;}
+@@media(max-width:900px){.mk-acct-summary{flex-wrap:wrap;gap:10px;}.mk-acct-item{flex:1 1 45%;border-right:none;border-bottom:1px solid var(--bdr);padding-bottom:8px;}}
 .mk-oo-panel{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:18px 20px;}
 .mk-oo-tabs{display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--bdr);padding-bottom:0;}
-.mk-oo-tab{display:flex;align-items:center;gap:8px;background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:13px;letter-spacing:.5px;font-weight:700;padding:10px 6px 12px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s;}
+.mk-oo-tab{display:flex;align-items:center;gap:8px;background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:13px;letter-spacing:.5px;font-weight:700;padding:10px 6px 12px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s;min-width:140px;}
 .mk-oo-tab:hover{color:var(--txt);}
 .mk-oo-tab-on{color:var(--acc);border-bottom-color:var(--acc);}
 .mk-oo-spin{color:var(--acc);animation:mkSpin 1s linear infinite;}
@@ -1291,6 +1363,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     string? _archiveCacheKey;
     List<KlineDto> _archiveCache = new();
     DateTime _archiveCacheLoadedAt = DateTime.MinValue;
+    SortedDictionary<long, (decimal Open, decimal High, decimal Low, decimal Close, decimal Volume, decimal? TakerBuy)>? _mergedKlines;
+    string? _lastFullRenderCacheKey;
     double _rsi;
 
     protected override async Task OnInitializedAsync()
@@ -1426,6 +1500,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         // deliberate nudge here avoids any one-frame flash of the old
         // size while the transition is mid-flight.
         await Task.Delay(50);
+        try { await JS.InvokeVoidAsync("marketChart.clearWrapInlineHeight", $"chartContainer-{_chartInstanceId}"); } catch { }
         try { await JS.InvokeVoidAsync("marketChart.resize", $"chartContainer-{_chartInstanceId}"); } catch { }
     }
 
@@ -1434,6 +1509,23 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         if (firstRender)
         {
             await InitChartAsync();
+
+            // Stack the sticky header chain (top-to-bottom order):
+            // vertex-header + vertex-topnav live in MainLayout, outside
+            // this component; the rest are this page's own elements.
+            try
+            {
+                await JS.InvokeVoidAsync("stickyStack.init", new[]
+                {
+                    ".vertex-header",
+                    ".vertex-topnav",
+                    ".mk-sticky-top",
+                    ".mk-ticker-bar",
+                    ".mk-tf-bar",
+                    ".mk-stats",
+                });
+            }
+            catch { /* non-critical visual enhancement; page works without it */ }
         }
 
         // Render whenever chart is ready and data changed
@@ -1637,6 +1729,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         CalcStats();
         StateHasChanged();
         _ = RenderCharts();
+        _ = JS.InvokeVoidAsync("stickyStack.recalc");
     }
 
     // Clicking a ticker symbol switches the chart AND opens the order panel,
@@ -1695,6 +1788,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         CalcStats();
         StateHasChanged();
         _ = RenderCharts();
+        _ = JS.InvokeVoidAsync("stickyStack.recalc");
     }
 
     void CalcStats()
@@ -1746,6 +1840,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         return v;
     }
 
+    const int DefaultBarsCount = 300;
+
     async Task RenderCharts()
     {
         if (!_jsReady || Selected == null || Selected.Klines.Count < 5) return;
@@ -1774,25 +1870,89 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 _archiveCacheLoadedAt = now;
             }
 
-            var merged = new SortedDictionary<long, (decimal Open, decimal High, decimal Low, decimal Close, decimal Volume)>();
+            _mergedKlines = new SortedDictionary<long, (decimal Open, decimal High, decimal Low, decimal Close, decimal Volume, decimal? TakerBuy)>();
             foreach (var k in _archiveCache)
-                merged[k.OpenTime] = (k.Open, k.High, k.Low, k.Close, k.Volume);
+                _mergedKlines[k.OpenTime] = (k.Open, k.High, k.Low, k.Close, k.Volume, k.TakerBuyBaseVolume);
             foreach (var k in Selected.Klines)
-                merged[k.OpenTime] = (k.Open, k.High, k.Low, k.Close, k.Volume); // live wins on overlap
+                _mergedKlines[k.OpenTime] = (k.Open, k.High, k.Low, k.Close, k.Volume, k.TakerBuyBaseVolume); // live wins on overlap
 
-            var klines = merged.Select(kv => new
+            // PERFORMANCE FIX: only send the most recent DefaultBarsCount
+            // bars on initial render/symbol switch, not the entire merged
+            // set — that set can grow into the thousands of bars once
+            // deep backfill has run for a while, and re-sending all of it
+            // through JS interop on every single live tick (RenderCharts
+            // gets called that often) is exactly the chart-gets-heavier-
+            // over-time problem reported. The rest stays in _mergedKlines
+            // for LoadMoreHistoryAsync to serve on demand when the user
+            // scrolls back (see JS-side infinite-history handler).
+            var allKeys = _mergedKlines.Keys.ToList();
+            var startIdx = Math.Max(0, allKeys.Count - DefaultBarsCount);
+            var visibleKeys = allKeys.Skip(startIdx).ToList();
+
+            // CRITICAL FIX: only do a full setData (which resets to the
+            // last DefaultBarsCount bars) when this is genuinely a new
+            // symbol+timeframe, or the very first render. An ordinary
+            // live-tick update for the SAME chart must NOT re-trim back
+            // to 300 bars every single time — doing so was silently
+            // discarding any history the user had lazy-loaded by
+            // scrolling left, which then made the JS-side infinite-
+            // history handler see "few bars left" again immediately and
+            // trigger another lazy-load, discarded again on the very
+            // next tick. That continuous discard/reload cycle IS the
+            // reported jumping/flickering — it happens on every live
+            // tick (every few seconds), well before the literal edge of
+            // available data, not just there.
+            bool isNewSeries = cacheKey != _lastFullRenderCacheKey;
+
+            if (isNewSeries)
             {
-                openTime = kv.Key,
-                open     = (double)kv.Value.Open,
-                high     = (double)kv.Value.High,
-                low      = (double)kv.Value.Low,
-                close    = (double)kv.Value.Close,
-                volume   = (double)kv.Value.Volume
-            }).ToArray();
+                var klines = visibleKeys.Select(k => ToJsKline(k, _mergedKlines[k])).ToArray();
+                await JS.InvokeVoidAsync("marketChart.setData", $"chartContainer-{_chartInstanceId}", klines);
+                _lastFullRenderCacheKey = cacheKey;
 
-            await JS.InvokeVoidAsync("marketChart.setData", $"chartContainer-{_chartInstanceId}", klines);
+                _dotNetRef ??= DotNetObjectReference.Create(this);
+                try { await JS.InvokeVoidAsync("marketChart.bindInfiniteHistory", $"chartContainer-{_chartInstanceId}", _dotNetRef); } catch { }
+            }
+            else if (allKeys.Count > 0)
+            {
+                var lastKey = allKeys[^1];
+                var lastKline = ToJsKline(lastKey, _mergedKlines[lastKey]);
+                await JS.InvokeVoidAsync("marketChart.updateLastBar", $"chartContainer-{_chartInstanceId}", lastKline);
+            }
         }
         catch { }
+    }
+
+    static object ToJsKline(long openTime, (decimal Open, decimal High, decimal Low, decimal Close, decimal Volume, decimal? TakerBuy) v) => new
+    {
+        openTime,
+        open = (double)v.Open,
+        high = (double)v.High,
+        low = (double)v.Low,
+        close = (double)v.Close,
+        volume = (double)v.Volume,
+        takerBuyVolume = v.TakerBuy.HasValue ? (double?)v.TakerBuy.Value : null
+    };
+
+    /// <summary>
+    /// JS-invokable: serves older bars from the in-memory merged dataset
+    /// (already loaded by RenderCharts, no disk/network round-trip needed
+    /// here) when the user scrolls the chart back far enough to approach
+    /// the start of what's currently loaded. This is the Web-side half of
+    /// Lightweight Charts' own documented "infinite history" pattern
+    /// (subscribeVisibleLogicalRangeChange + barsInLogicalRange on the JS
+    /// side, calling back into this method).
+    /// </summary>
+    [JSInvokable]
+    public Task<object[]> LoadMoreHistoryAsync(long beforeOpenTimeMs, int count)
+    {
+        if (_mergedKlines == null || _mergedKlines.Count == 0)
+            return Task.FromResult(Array.Empty<object>());
+
+        var older = _mergedKlines.Where(kv => kv.Key < beforeOpenTimeMs).ToList();
+        var slice = older.Count <= count ? older : older.GetRange(older.Count - count, count);
+
+        return Task.FromResult(slice.Select(kv => ToJsKline(kv.Key, kv.Value)).ToArray());
     }
 
     void Pick(MarketSeries s)
@@ -1803,6 +1963,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         CalcStats();
         StateHasChanged();
         _ = RenderCharts();
+        _ = JS.InvokeVoidAsync("stickyStack.recalc");
     }
 
     // Row click in the ALL INSTRUMENTS table: same as ticker click —
@@ -1832,7 +1993,19 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         if (v <= 0) return "—";
         if (v >= 1000) return v.ToString("F2");
         if (v >= 1)    return v.ToString("F4");
-        return v.ToString("G5");
+        if (v >= 0.01m) return v.ToString("F5");
+        if (v >= 0.0001m) return v.ToString("F6");
+        // Genuinely cheap coins (sub-$0.0001, e.g. SHIB/PEPE-style prices)
+        // need more than a fixed decimal count to show meaningful digits
+        // at all — count leading zeros after the decimal point and show
+        // 5 significant digits past them, in plain notation (never
+        // scientific, which the previous G5 format silently fell back to
+        // and is unreadable on a trading UI).
+        var s = v.ToString("F12").TrimEnd('0');
+        var afterDot = s.Substring(s.IndexOf('.') + 1);
+        int leadingZeros = afterDot.TakeWhile(c => c == '0').Count();
+        int decimals = Math.Min(12, leadingZeros + 5);
+        return v.ToString("F" + decimals);
     }
 
     string FmtV(decimal v)
@@ -1854,6 +2027,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // a permanent filter in LoadData() so the server can never resurrect a
     // signal we've already dismissed within its own lookback window.
     Dictionary<string, DateTime> _expiredSignals = new();
+    HashSet<string> _seenSignalKeys = new();
 
     static string SignalKey(MissedTradeRecord s) => $"{s.Symbol}|{s.Time:O}";
 
@@ -1861,6 +2035,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     bool _orderPanelDismissed;
     ActivePositionInfo? _currentPosition;
     List<ActivePositionInfo> _allPositions = new();
+    decimal _acctMarginBalance, _acctWalletBalance, _acctUnrealizedPnl, _acctRealizedPnlToday;
+    DateTime _lastRealizedPnlFetchUtc = DateTime.MinValue;
     bool _positionsLoading;
 
     bool PosIsLong => _currentPosition?.Side == "LONG";
@@ -1932,6 +2108,25 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         return lowVol ? 2.2m : 2.0m;
     }
 
+    // SimulatedTradeService (which produces these "Live Signals") does
+    // NOT apply the real MinEntry confidence filter — it shows every
+    // signal the strategy saw, for visibility, even ones the bot would
+    // never actually act on. This resolves the real per-symbol
+    // threshold and the regime-based minimum RR, so both the warning
+    // badges AND the TTL (signals flagged here should disappear
+    // faster — they were never going to be traded) use the exact same
+    // definition of "weak".
+    (bool belowThreshold, bool lowRr, decimal minRr) IsWeakSignal(MissedTradeRecord sig, int conf, decimal rr)
+    {
+        var confProfile = ConfidenceResolver.Resolve(sig.Symbol);
+        bool belowThreshold = (conf / 100m) < confProfile.MinEntry;
+
+        decimal minRr = GetDynamicMinRrForDisplay(sig);
+        bool lowRr = rr > 0 && rr < minRr;
+
+        return (belowThreshold, lowRr, minRr);
+    }
+
     SignalTtlInfo GetSignalTtl(MissedTradeRecord sig)
     {
         var ageMin = (DateTime.UtcNow - sig.Time.ToUniversalTime()).TotalMinutes;
@@ -1945,6 +2140,19 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         // Tuned so a "typical" ~0.3% ATR signal lives ~25 min, scaling inversely with volatility.
         double lifeMinutes = (double)(0.075m / relAtr);
         lifeMinutes = Math.Clamp(lifeMinutes, 6, 90);
+
+        // Per direct request: a signal the bot would never actually
+        // trade (below the real confidence threshold, or RR weaker
+        // than the regime requires) shouldn't linger on screen as long
+        // as a genuinely tradeable one — cap its max lifetime much
+        // lower, regardless of how calm the symbol's volatility is.
+        decimal sigTp1 = sig.TakeProfits?.FirstOrDefault() ?? 0m;
+        decimal rr = sig.StopLoss > 0 && sig.Entry > 0 && sigTp1 > 0
+            ? Math.Abs(sigTp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry)
+            : 0m;
+        var (belowThreshold, lowRr, _) = IsWeakSignal(sig, sig.Confidence, rr);
+        if (belowThreshold || lowRr)
+            lifeMinutes = Math.Min(lifeMinutes, 8);
 
         double remaining = lifeMinutes - ageMin;
         double pct = Math.Clamp(remaining / lifeMinutes * 100.0, 0, 100);
@@ -2262,6 +2470,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     void SelectSignal(MissedTradeRecord sig)
     {
+        _seenSignalKeys.Add(SignalKey(sig));
         _activeSignal  = _activeSignal == sig ? null : sig;
         _selectedPosition = null;
         _orderError    = string.Empty;
@@ -2375,6 +2584,59 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
             var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: cts.Token);
             if (!res.Success || res.Data == null) { _allPositions = new(); return; }
+
+            // Account summary (margin/wallet balance, unrealized PnL) —
+            // fetched directly via the same Binance client/pattern
+            // already proven working for positions just above, NOT
+            // through the LivePnlService/AccountStateController path,
+            // which was fundamentally broken: that relied on a Web-side
+            // AccountStateService instance that the real Engine process
+            // never updates (Web and Engine are separate .NET processes
+            // with entirely separate DI containers — the Web-side
+            // instance just sits at its default, never-updated values).
+            try
+            {
+                using var acctCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                var acctRes = await client.UsdFuturesApi.Account.GetAccountInfoV3Async(ct: acctCts.Token);
+                if (acctRes.Success && acctRes.Data != null)
+                {
+                    _acctMarginBalance = acctRes.Data.TotalMarginBalance;
+                    _acctWalletBalance = acctRes.Data.TotalWalletBalance;
+                    _acctUnrealizedPnl = acctRes.Data.TotalUnrealizedProfit;
+                }
+            }
+            catch { /* account summary is a nice-to-have on this page; don't let it block position loading */ }
+
+            // Realized PnL today — via Binance's own Income History
+            // endpoint, filtered to REALIZED_PNL entries since UTC
+            // midnight. THROTTLED to once per minute, not every 5-second
+            // tick: confirmed via Binance's own API docs this endpoint
+            // costs 30 weight (6x heavier than Positions/Account at 5
+            // each) — at the previous rate this alone consumed 360
+            // weight/minute (15% of the 2400/minute Futures limit) for
+            // data that only changes when a trade actually closes, not
+            // continuously like live position prices. Kept in its own
+            // try/catch so a failure here never affects the more
+            // important balance numbers above.
+            if ((DateTime.UtcNow - _lastRealizedPnlFetchUtc) >= TimeSpan.FromMinutes(1))
+            {
+                try
+                {
+                    using var pnlCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                    var todayStartUtc = DateTime.UtcNow.Date;
+                    var incomeRes = await client.UsdFuturesApi.Account.GetIncomeHistoryAsync(
+                        incomeType: "REALIZED_PNL",
+                        startTime: todayStartUtc,
+                        limit: 1000,
+                        ct: pnlCts.Token);
+
+                    if (incomeRes.Success && incomeRes.Data != null)
+                        _acctRealizedPnlToday = incomeRes.Data.Sum(x => x.Income);
+
+                    _lastRealizedPnlFetchUtc = DateTime.UtcNow;
+                }
+                catch { /* same — don't block the page on this */ }
+            }
 
             _allPositions = res.Data
                 .Where(p => p.Quantity != 0)
@@ -3041,7 +3303,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _cts.Cancel();
         _timer?.Dispose();
         _dotNetRef?.Dispose();
-        await Task.CompletedTask;
+        try { await JS.InvokeVoidAsync("stickyStack.dispose"); } catch { }
     }
 
     sealed class ActivePositionInfo

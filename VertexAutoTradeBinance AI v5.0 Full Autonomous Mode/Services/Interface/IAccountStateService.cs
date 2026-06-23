@@ -17,5 +17,6 @@ namespace VertexAutoTradeBinance8.Services.Interface
 
         event Action? Updated;
         void AddRealizedPnl(decimal pnl);
+        decimal GetRealizedPnlToday();
     }
 }

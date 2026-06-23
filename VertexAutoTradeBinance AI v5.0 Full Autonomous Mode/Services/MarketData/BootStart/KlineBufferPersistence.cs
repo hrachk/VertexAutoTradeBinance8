@@ -159,7 +159,8 @@ public sealed class KlineBufferPersistence
                         High = k.HighPrice,
                         Low = k.LowPrice,
                         Close = k.ClosePrice,
-                        Volume = k.Volume
+                        Volume = k.Volume,
+                        TakerBuyBaseVolume = k.TakerBuyBaseVolume
                     });
                 }
 

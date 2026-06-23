@@ -119,10 +119,57 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
                                 });
                             }
 
-                            _logger.LogInformation(
-                                "[BOOT] {symbol} {tf} warm-started from datadb/ archive: {count} bars (instant, no REST call)",
-                                symbol, tf, archived.Count);
-                            continue; // skip the REST fallback below entirely
+                            // CRITICAL: the archive is only as fresh as the
+                            // loader's last cycle (up to ~5 minutes old by
+                            // default) — loading it alone and declaring this
+                            // symbol+timeframe "ready" would mean the
+                            // strategy could start analyzing on a gap of
+                            // stale bars, producing exactly the kind of
+                            // false signal risk flagged directly by the
+                            // user: indicators (EMA/ATR/trend) computed
+                            // against data that doesn't yet reflect the
+                            // real current price. So: ALWAYS close that gap
+                            // explicitly with one more REST call right here,
+                            // asking only for bars from the archive's last
+                            // timestamp forward to now — cheap (a handful of
+                            // bars, not the full 200 again) precisely
+                            // because the archive already did the expensive
+                            // part. Only once this gap-fill completes is the
+                            // symbol+timeframe genuinely caught up to the
+                            // present moment.
+                            var lastArchivedTime = DateTimeOffset.FromUnixTimeMilliseconds(archived[^1].OpenTime).UtcDateTime;
+                            try
+                            {
+                                var freshKlines = await _market.GetKlines(symbol, tf, 50);
+                                int gapFilled = 0;
+                                foreach (var k in freshKlines)
+                                {
+                                    if (k.OpenTime > lastArchivedTime)
+                                    {
+                                        _buffer.Upsert(symbol, tf, k);
+                                        gapFilled++;
+                                    }
+                                }
+
+                                _logger.LogInformation(
+                                    "[BOOT] {symbol} {tf} warm-started from archive ({archCount} bars) + live gap-fill ({gapCount} fresh bars since {lastTime:HH:mm:ss}) — current as of now",
+                                    symbol, tf, archived.Count, gapFilled, lastArchivedTime);
+                            }
+                            catch (Exception gapEx)
+                            {
+                                // Archive data is loaded, but we couldn't
+                                // confirm it's current — do NOT silently
+                                // trust it. Fall through to the normal REST
+                                // bootstrap below instead of skipping it,
+                                // so this symbol+timeframe still ends up
+                                // genuinely fresh rather than possibly stale.
+                                _logger.LogWarning(gapEx,
+                                    "[BOOT] {symbol} {tf} archive loaded but gap-fill failed — falling through to full REST bootstrap to guarantee freshness",
+                                    symbol, tf);
+                                goto archiveFallthrough;
+                            }
+
+                            continue; // genuinely caught up — skip the full REST bootstrap below
                         }
                     }
                     catch (Exception ex)
@@ -131,6 +178,7 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
                     }
                 }
 
+                archiveFallthrough:
                 try
                 {
                     var klines = await _market.GetKlines(symbol, tf, 200);

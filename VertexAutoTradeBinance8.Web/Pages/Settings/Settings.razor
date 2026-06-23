@@ -117,12 +117,54 @@
                        @onchange="OnEmaZoneAtrMultiplierChanged" />
                 <div class="st-card-sub" style="margin-top:4px">How close price must come to the EMA to count as a "touch" — expressed as a multiple of ATR (volatility-normalized, not a fixed %), so it scales correctly across symbols.</div>
             </div>
+
+            <div class="st-toggle-row" style="margin-top:14px">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("Strategy:PullbackEntry:VwapConfirmationEnabled", false)" @onchange="OnVwapConfirmationToggle" />
+                    <span>Require VWAP confirmation</span>
+                </label>
+                <div class="st-card-sub" style="margin-top:4px">Only accept a signal if price is on the expected side of the rolling-window VWAP (above it for longs, below for shorts) — an extra directional check on top of the existing EMA logic. Off by default.</div>
+            </div>
+            @if (GetBool("Strategy:PullbackEntry:VwapConfirmationEnabled", false))
+            {
+                <div class="st-field">
+                    <label>VWAP Period (bars)</label>
+                    <input title="VWAP rolling window (bars)" class="st-input" type="number" min="5" max="200" value="@GetInt("Strategy:PullbackEntry:VwapPeriod",20)"
+                           @onchange="OnVwapPeriodChanged" />
+                </div>
+            }
+
+            <div class="st-toggle-row" style="margin-top:10px">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("Strategy:PullbackEntry:HtfConfirmationEnabled", false)" @onchange="OnHtfConfirmationToggle" />
+                    <span>Require higher-timeframe structure confirmation</span>
+                </label>
+                <div class="st-card-sub" style="margin-top:4px">Only accept a signal if the SAME symbol's EMA21/EMA55 relationship on a higher timeframe agrees with the signal's direction. Off by default.</div>
+            </div>
+            @if (GetBool("Strategy:PullbackEntry:HtfConfirmationEnabled", false))
+            {
+                <div class="st-field">
+                    <label>Confirmation Timeframe</label>
+                    <select title="Higher timeframe to confirm against" class="st-select" value="@GetStr("Strategy:PullbackEntry:HtfConfirmationTimeframe","4h")"
+                            @onchange="OnHtfTimeframeChanged">
+                        <option value="15m">15m</option>
+                        <option value="30m">30m</option>
+                        <option value="1h">1h</option>
+                        <option value="4h">4h</option>
+                        <option value="1d">1d</option>
+                    </select>
+                </div>
+            }
         </div>
 
     </div>;
 
     private Task OnEmaPeriodChanged(ChangeEventArgs e) => SetAsync("Strategy:PullbackEntry:EmaPeriod", ParseIntOr(e.Value, 21));
     private Task OnEmaZoneAtrMultiplierChanged(ChangeEventArgs e) => SetAsync("Strategy:PullbackEntry:ZoneAtrMultiplier", ParseDecimalOr(e.Value, 0.5m));
+    private Task OnVwapConfirmationToggle(ChangeEventArgs e) => SetAsync("Strategy:PullbackEntry:VwapConfirmationEnabled", (bool)(e.Value ?? false));
+    private Task OnVwapPeriodChanged(ChangeEventArgs e) => SetAsync("Strategy:PullbackEntry:VwapPeriod", ParseIntOr(e.Value, 20));
+    private Task OnHtfConfirmationToggle(ChangeEventArgs e) => SetAsync("Strategy:PullbackEntry:HtfConfirmationEnabled", (bool)(e.Value ?? false));
+    private Task OnHtfTimeframeChanged(ChangeEventArgs e) => SetAsync("Strategy:PullbackEntry:HtfConfirmationTimeframe", e.Value?.ToString() ?? "4h");
 
     private static readonly (string Key, string Label)[] TradingProfiles =
     {
@@ -396,19 +438,15 @@
                     <span>Enable BTC dump/squeeze filter</span>
                 </label>
             </div>
+            <div class="st-card-sub" style="margin-bottom:10px">When BTC's own 24h move crosses either threshold below, new Auto-selected entries are paused for that cycle (your Pinned symbols keep trading normally — this only pauses what the scanner picks automatically). Standard practice during acute BTC-driven volatility, when altcoin correlation to BTC spikes and fresh signals become less reliable.</div>
             <div class="st-field-row">
                 <div class="st-field">
                     <label>Dump Threshold (%)</label>
-                    <input title="Enable BTC dump/squeeze filter
-                
-            
-            
-                
-                    Dump Threshold (%)" class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcDumpThreshold", -1.8m)" @onchange="OnBtcDumpThresholdChanged" />
+                    <input title="Pause new auto-entries if BTC's 24h change drops to this value or below (negative number)" class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcDumpThreshold", -5.0m)" @onchange="OnBtcDumpThresholdChanged" />
                 </div>
                 <div class="st-field">
                     <label>Squeeze Threshold (%)</label>
-                    <input title="Squeeze Threshold (%)" class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcSqueezeThreshold", 1.8m)" @onchange="OnBtcSqueezeThresholdChanged" />
+                    <input title="Pause new auto-entries if BTC's 24h change rises to this value or above (positive number)" class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcSqueezeThreshold", 6.0m)" @onchange="OnBtcSqueezeThresholdChanged" />
                 </div>
             </div>
         </div>
@@ -442,8 +480,8 @@
     private Task OnMinPriceChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:MinPrice", ParseDecimalOr(e.Value, 0.045m));
     private Task OnMin24hVolLongChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:Min24hVolumeLong", ParseDecimalOr(e.Value, 1800000m));
     private Task OnBtcFilterToggle(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:EnableBtcFilter", (bool)(e.Value ?? true));
-    private Task OnBtcDumpThresholdChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:BtcDumpThreshold", ParseDecimalOr(e.Value, -1.8m));
-    private Task OnBtcSqueezeThresholdChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:BtcSqueezeThreshold", ParseDecimalOr(e.Value, 1.8m));
+    private Task OnBtcDumpThresholdChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:BtcDumpThreshold", ParseDecimalOr(e.Value, -5.0m));
+    private Task OnBtcSqueezeThresholdChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:BtcSqueezeThreshold", ParseDecimalOr(e.Value, 6.0m));
 
     private RenderFragment ExitsTab() => @<div class="st-grid">
 

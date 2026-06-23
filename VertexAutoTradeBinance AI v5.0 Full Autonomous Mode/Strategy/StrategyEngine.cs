@@ -831,6 +831,85 @@ namespace VertexAutoTradeBinance8.Strategy
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        // VWAP (Volume-Weighted Average Price) — rolling window, not the
+        // classic intraday-reset version, since crypto trades 24/7 with
+        // no session open/close to anchor a daily reset to. Computed over
+        // the last `period` bars using typical price (High+Low+Close)/3,
+        // the standard substitute for true tick-by-trade price when only
+        // OHLCV bars are available (confirmed via VWAP literature — this
+        // is the documented approach when raw trade data isn't accessible).
+        // Used as a CONFIRMATION filter only (see VwapConfirms below),
+        // never as the sole basis for a signal — same caution real VWAP
+        // guides consistently stress: it's one piece of evidence, not a
+        // standalone buy/sell trigger.
+        private static decimal Vwap(IReadOnlyList<BinanceFuturesUsdtKline> klines, int period, int lastIndex)
+        {
+            if (klines == null || klines.Count == 0) return 0m;
+            if (lastIndex < 0 || lastIndex >= klines.Count) return 0m;
+
+            int start = Math.Max(0, lastIndex - period + 1);
+
+            decimal sumPV = 0m, sumV = 0m;
+            for (int i = start; i <= lastIndex; i++)
+            {
+                var k = klines[i];
+                decimal typicalPrice = (k.HighPrice + k.LowPrice + k.ClosePrice) / 3m;
+                sumPV += typicalPrice * k.Volume;
+                sumV += k.Volume;
+            }
+
+            return sumV > 0 ? sumPV / sumV : 0m;
+        }
+
+        // Whether VWAP supports a directional signal — Buy signals want
+        // price trading ABOVE VWAP (buyer-controlled, per the standard
+        // VWAP-as-dynamic-support reading), Sell signals want price BELOW
+        // it. Returns true if VWAP data is unavailable (period too short,
+        // zero volume) rather than blocking the signal — this is a
+        // confirmation bonus, not a hard gate, so missing data should
+        // never itself reject an otherwise-valid signal.
+        private static bool VwapConfirms(SignalSide side, decimal currentPrice, decimal vwap)
+        {
+            if (vwap <= 0) return true;
+            return side == SignalSide.Buy ? currentPrice >= vwap : currentPrice <= vwap;
+        }
+
+        // Higher-timeframe structure confirmation, FOR THE SAME SYMBOL
+        // being traded — distinct from the existing BTC-correlation HTF
+        // checks elsewhere in this file (GetOrUpdateBtcHtfStateAsync),
+        // which only ever look at BTC regardless of what's being traded.
+        // Mirrors the same EMA21>EMA55 trend-direction read already used
+        // for the entry timeframe itself (see TryPullbackEma21 above),
+        // just applied to whatever's already buffered for the higher
+        // timeframe — synchronous, no REST call, via
+        // MarketDataFacade.GetBufferedKlines. Returns true when there
+        // isn't enough HTF data buffered yet, so a thin buffer never
+        // itself blocks an otherwise-valid signal — same "confirmation
+        // bonus, not a hard gate when data is missing" pattern as
+        // VwapConfirms above.
+        private static KlineInterval? ParseHtfLabel(string? label) => label?.Trim().ToLowerInvariant() switch
+        {
+            "15m" => KlineInterval.FifteenMinutes,
+            "30m" => KlineInterval.ThirtyMinutes,
+            "1h" => KlineInterval.OneHour,
+            "4h" => KlineInterval.FourHour,
+            "1d" => KlineInterval.OneDay,
+            _ => null
+        };
+
+        private bool HtfStructureConfirms(string symbol, KlineInterval htf, SignalSide side)
+        {
+            var klines = _marketData?.GetBufferedKlines(symbol, htf);
+            if (klines == null || klines.Count < 60) return true;
+
+            int idx = klines.Count - 1;
+            decimal htfEma21 = EmaClose(klines, 21, idx);
+            decimal htfEma55 = EmaClose(klines, 55, idx);
+            if (htfEma21 == 0 || htfEma55 == 0) return true;
+
+            return side == SignalSide.Buy ? htfEma21 >= htfEma55 : htfEma21 <= htfEma55;
+        }
+
         private static decimal Atr(IReadOnlyList<BinanceFuturesUsdtKline> klines, int period, int lastIndex)
         {
             if (klines == null || klines.Count < period + 1)
@@ -1186,6 +1265,39 @@ namespace VertexAutoTradeBinance8.Strategy
             decimal body = Math.Abs(c0.ClosePrice - c0.OpenPrice);
             if (body < atr * 0.1m || body > atr * 1.8m) return null;
 
+            // ── 7. VWAP CONFIRMATION (optional, additive) ─────────────────
+            // Rolling-window VWAP as a directional confirmation filter —
+            // buyers should be in control (price >= VWAP) for a long,
+            // sellers in control (price <= VWAP) for a short. Toggleable
+            // via Strategy:PullbackEntry:VwapConfirmationEnabled so this
+            // specific addition can be disabled instantly without
+            // touching anything else, if it ever proves too restrictive.
+            // VwapConfirms itself returns true when VWAP data is
+            // unavailable, so missing history never blocks a signal —
+            // this only rejects on a genuine directional disagreement.
+            string confirmTags = "";
+            if (pbOpt.VwapConfirmationEnabled)
+            {
+                decimal vwap = Vwap(klines, pbOpt.VwapPeriod > 0 ? pbOpt.VwapPeriod : 20, i);
+                var side = longRejection ? SignalSide.Buy : SignalSide.Sell;
+                if (!VwapConfirms(side, c0.ClosePrice, vwap)) return null;
+                confirmTags += "_VWAP";
+            }
+
+            // ── 8. HIGHER-TIMEFRAME STRUCTURE CONFIRMATION (optional) ─────
+            // Checks the SAME symbol's structure on a higher timeframe
+            // (default 4h) — does that broader context agree with this
+            // entry-timeframe signal's direction. Distinct from this
+            // file's existing BTC-only HTF checks; this confirms against
+            // whatever's actually being traded.
+            if (pbOpt.HtfConfirmationEnabled)
+            {
+                var htfSide = longRejection ? SignalSide.Buy : SignalSide.Sell;
+                var htf = ParseHtfLabel(pbOpt.HtfConfirmationTimeframe) ?? KlineInterval.FourHour;
+                if (!HtfStructureConfirms(symbol, htf, htfSide)) return null;
+                confirmTags += "_HTF";
+            }
+
             var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(interval);
 
             if (longRejection)
@@ -1201,8 +1313,10 @@ namespace VertexAutoTradeBinance8.Strategy
                 var s = new TradeSignal
                 {
                     Symbol = symbol, Side = SignalSide.Buy,
-                    Reason = "PULLBACK_EMA21_LONG_V2", Atr = atr,
+                    Reason = "PULLBACK_EMA21_LONG_V2" + confirmTags, Atr = atr,
                     EntryPrice = entry, StopLoss = slLevel,
+                    EntryRangeLow = entry - atr * 0.15m,
+                    EntryRangeHigh = entry + atr * 0.15m,
                     IsSuperSignal = ema21Slope > 0.15m,
                     TakeProfits = new List<decimal> {
                         entry + atr * tp1Mult,
@@ -1226,8 +1340,10 @@ namespace VertexAutoTradeBinance8.Strategy
                 var s = new TradeSignal
                 {
                     Symbol = symbol, Side = SignalSide.Sell,
-                    Reason = "PULLBACK_EMA21_SHORT_V2", Atr = atr,
+                    Reason = "PULLBACK_EMA21_SHORT_V2" + confirmTags, Atr = atr,
                     EntryPrice = entry, StopLoss = slLevel,
+                    EntryRangeLow = entry - atr * 0.15m,
+                    EntryRangeHigh = entry + atr * 0.15m,
                     IsSuperSignal = ema21Slope < -0.15m,
                     TakeProfits = new List<decimal> {
                         entry - atr * tp1Mult,

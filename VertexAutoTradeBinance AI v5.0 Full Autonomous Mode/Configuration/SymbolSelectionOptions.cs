@@ -30,8 +30,8 @@ namespace VertexAutoTradeBinance8.Configuration
             public decimal MomentumWeight { get; set; } = 0.35m;
             public decimal MomentumCapPercent { get; set; } = 18m;
             public bool EnableBtcFilter { get; set; } = true;
-            public decimal BtcDumpThreshold { get; set; } = -1.8m;
-            public decimal BtcSqueezeThreshold { get; set; } = 1.8m;
+            public decimal BtcDumpThreshold { get; set; } = -5.0m;
+            public decimal BtcSqueezeThreshold { get; set; } = 6.0m;
             public int DryRunLogLimit { get; set; } = 20;
         }
 

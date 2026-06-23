@@ -212,14 +212,22 @@ public sealed class MarketSnapshotFileService
                     var ot = ReadOpenTime(k.GetProperty("openTime"));
                     if (ot <= 0) continue;
 
-                    klines.Add(new KlineDto(
+                    var dto = new KlineDto(
                         ot,
                         ReadDecimal(k.GetProperty("open")),
                         ReadDecimal(k.GetProperty("high")),
                         ReadDecimal(k.GetProperty("low")),
                         ReadDecimal(k.GetProperty("close")),
                         ReadDecimal(k.GetProperty("volume"))
-                    ));
+                    );
+
+                    // Older snapshot files (written before this field
+                    // existed on the Engine side) simply won't have this
+                    // property — TryGetProperty handles that gracefully.
+                    if (k.TryGetProperty("takerBuyBaseVolume", out var tbv) && tbv.ValueKind != JsonValueKind.Null)
+                        dto = dto with { TakerBuyBaseVolume = ReadDecimal(tbv) };
+
+                    klines.Add(dto);
                 }
             }
 

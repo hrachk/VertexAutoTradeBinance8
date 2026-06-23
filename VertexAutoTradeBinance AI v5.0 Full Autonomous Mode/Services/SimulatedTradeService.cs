@@ -122,6 +122,8 @@ namespace VertexAutoTradeBinance8.Services
                     Entry = entry,
                     StopLoss = sl,
                     Side = signal.Side.ToString(),
+                    EntryRangeLow = signal.EntryRangeLow,
+                    EntryRangeHigh = signal.EntryRangeHigh,
 
                     TakeProfits = signal.TakeProfits != null && signal.TakeProfits.Count > 0
     ? new List<decimal>(signal.TakeProfits)
@@ -377,6 +379,8 @@ namespace VertexAutoTradeBinance8.Services
 
                     Entry = entry,
                     StopLoss = sl,
+                    EntryRangeLow = signal.EntryRangeLow,
+                    EntryRangeHigh = signal.EntryRangeHigh,
 
                     Side = signal.Side.ToString(),
                     TakeProfits = tps,
@@ -524,6 +528,8 @@ namespace VertexAutoTradeBinance8.Services
 
                     Entry = signal.EntryPrice,
                     StopLoss = signal.StopLoss,
+                    EntryRangeLow = signal.EntryRangeLow,
+                    EntryRangeHigh = signal.EntryRangeHigh,
 
                     Side = signal.Side.ToString(),
 

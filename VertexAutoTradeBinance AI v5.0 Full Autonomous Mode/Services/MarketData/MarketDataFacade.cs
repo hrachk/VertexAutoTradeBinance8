@@ -47,6 +47,21 @@ namespace VertexAutoTradeBinance8.Services
         public bool HasSnapshotState => _restoreAttempted;   // semantic: restore attempt completed
         public bool ReadyBySnapshot => _readyBySnapshot;     // semantic: snapshot exists => rest backfill disabled
 
+        /// <summary>
+        /// Synchronous, read-only access to whatever's already in the
+        /// live in-memory buffer for a symbol+timeframe — no REST call,
+        /// no async needed. Used for multi-timeframe confirmation checks
+        /// (e.g. does the 4h structure for THIS symbol agree with a
+        /// signal generated on a lower timeframe), which need to stay
+        /// synchronous to avoid changing the signature of every signal-
+        /// generation function that would need to await otherwise.
+        /// Returns an empty list if nothing is buffered yet for this
+        /// pair — callers should treat that as "no data, don't block the
+        /// signal on it" rather than a hard failure.
+        /// </summary>
+        public IReadOnlyList<BinanceFuturesUsdtKline> GetBufferedKlines(string symbol, KlineInterval tf)
+            => _buf.Snapshot(symbol, tf);
+
         public event Action<string, KlineInterval>? OnWarm;
         public event Action<string, KlineInterval, BinanceFuturesUsdtKline>? WsClosedKline;
 

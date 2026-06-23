@@ -42,6 +42,32 @@
         return p.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
     }
 
+    // Computes the right { precision, minMove } for Lightweight Charts'
+    // priceFormat based on price magnitude — mirrors the same scaling
+    // already used for text price displays elsewhere on this page
+    // (MarketSnapshot.razor's FmtP), so the chart's own price-axis
+    // labels show consistent precision with the rest of the UI for the
+    // same asset, instead of the library's fixed default (2 decimals)
+    // which silently rounds cheap-coin prices into uselessness.
+    function priceFormatFor(price) {
+        const p = Math.abs(price);
+        if (p === 0) return { precision: 2, minMove: 0.01 };
+        if (p >= 1000) return { precision: 2, minMove: 0.01 };
+        if (p >= 1)    return { precision: 4, minMove: 0.0001 };
+        if (p >= 0.01) return { precision: 5, minMove: 0.00001 };
+        if (p >= 0.0001) return { precision: 6, minMove: 0.000001 };
+        // Genuinely cheap coins (sub-$0.0001) — count leading zeros after
+        // the decimal point and show 5 significant digits past them,
+        // capped at 12 total decimals (Lightweight Charts' own practical
+        // ceiling for priceFormat precision).
+        const str = p.toFixed(12);
+        const afterDot = str.slice(str.indexOf('.') + 1);
+        let leadingZeros = 0;
+        for (const ch of afterDot) { if (ch === '0') leadingZeros++; else break; }
+        const precision = Math.min(12, leadingZeros + 5);
+        return { precision, minMove: Math.pow(10, -precision) };
+    }
+
     function toCandle(k) {
         return { time: Math.floor(k.openTime / 1000), open: k.open, high: k.high, low: k.low, close: k.close };
     }
@@ -115,7 +141,11 @@
                 },
                 rightPriceScale: { borderColor: colors.grid },
                 timeScale: { borderColor: colors.grid, timeVisible: true, secondsVisible: false },
-                crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                    vertLine: { width: 1, color: 'rgba(148,163,184,0.4)', style: LightweightCharts.LineStyle.Dashed },
+                    horzLine: { width: 1, color: 'rgba(148,163,184,0.4)', style: LightweightCharts.LineStyle.Dashed },
+                },
                 autoSize: true,
             });
 
@@ -200,7 +230,30 @@
                 const chgColor = chg >= 0 ? colors.up : colors.down;
                 const vol = volData ? volData.value : 0;
 
+                // Full date/time for the hovered bar — param.time is a
+                // UTCTimestamp (unix seconds) for time-based series.
+                const barDate = new Date(param.time * 1000);
+                const dateStr = barDate.toLocaleString(undefined, {
+                    year: 'numeric', month: 'short', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', hour12: false
+                });
+
+                // Buy/sell volume split — Binance's own kline data already
+                // includes taker-buy volume directly (no extra API call
+                // needed); sell-side is simply the remainder. Only shown
+                // when this specific bar actually has the field (older
+                // archived/snapshot data before this field existed won't).
+                let volSplitHtml = '';
+                const raw = session.rawKlineByTime && session.rawKlineByTime.get(param.time);
+                if (raw && raw.takerBuyVolume != null && raw.takerBuyVolume >= 0) {
+                    const buyVol = raw.takerBuyVolume;
+                    const sellVol = Math.max(0, vol - buyVol);
+                    volSplitHtml = ` <span style="color:${colors.up}">▲${fmtVol(buyVol)}</span>` +
+                                   ` <span style="color:${colors.down}">▼${fmtVol(sellVol)}</span>`;
+                }
+
                 tooltip.innerHTML =
+                    `<div style="color:#94a3b8;font-size:10.5px;margin-bottom:4px;">${dateStr}</div>` +
                     `<div style="display:flex;gap:10px;margin-bottom:4px;">` +
                     `<span>O <b style="color:${colors.text}">${fmtPrice(open)}</b></span>` +
                     `<span>H <b style="color:${colors.up}">${fmtPrice(high)}</b></span>` +
@@ -208,7 +261,7 @@
                     `<span>C <b style="color:${chgColor}">${fmtPrice(close)}</b></span>` +
                     `<span style="color:${chgColor}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>` +
                     `</div>` +
-                    `<div style="font-size:13px;font-weight:700;color:#eab308;">VOL ${fmtVol(vol)}</div>`;
+                    `<div style="font-size:13px;font-weight:700;color:#eab308;">VOL ${fmtVol(vol)}${volSplitHtml}</div>`;
 
                 tooltip.style.display = 'block';
                 const rect = container.getBoundingClientRect();
@@ -413,6 +466,17 @@
             const s = sessions.get(containerId);
             if (!s || !klines || !klines.length) return;
 
+            // Dynamic price-scale precision, mirroring how a real exchange
+            // shows enough decimals for the asset's actual price range —
+            // the chart library's own default (precision:2, minMove:0.01)
+            // is wrong for cheap coins, silently rounding e.g. 0.02018
+            // down to 0.02 on the price axis labels. Based on the actual
+            // minimum non-zero close price in the data being shown, not
+            // a fixed assumption.
+            const lastClose = klines[klines.length - 1].close;
+            const { precision, minMove } = priceFormatFor(lastClose);
+            s.candleSeries.applyOptions({ priceFormat: { type: 'price', precision, minMove } });
+
             const candles = klines.map(toCandle);
             const closes = klines.map(k => k.close);
             const ema21 = ema(closes, 21);
@@ -426,6 +490,25 @@
             s.rsiSeries.setData(candles.map((c, i) => ({ time: c.time, value: rsiVals[i] })).filter(d => d.value != null));
             s.rsiObLine.setData(candles.map(c => ({ time: c.time, value: 70 })));
             s.rsiOsLine.setData(candles.map(c => ({ time: c.time, value: 30 })));
+
+            // Keep the raw kline data (keyed by time) for the crosshair
+            // tooltip to look up takerBuyVolume for whichever bar is
+            // currently hovered — the chart's own series only carry
+            // OHLCV, not this extra field.
+            s.rawKlineByTime = new Map(candles.map((c, i) => [c.time, klines[i]]));
+            s.lastKlinesRaw = klines;
+
+            // Only reset the "no more history" flag when this is
+            // genuinely a different series (earliest bar changed) — not
+            // on every single live-tick setData call for the SAME
+            // symbol+timeframe, which would otherwise let an already-
+            // confirmed-exhausted lazy-load retry uselessly on the next
+            // scroll near the edge.
+            const newEarliestTime = candles.length > 0 ? candles[0].time : null;
+            if (newEarliestTime !== s.lastSeriesEarliestTime) {
+                s.historyExhausted = false;
+                s.lastSeriesEarliestTime = newEarliestTime;
+            }
         },
 
         updateLastBar(containerId, k) {
@@ -433,6 +516,41 @@
             if (!s) return;
             s.candleSeries.update(toCandle(k));
             s.volumeSeries.update(toVolume(k, 'rgba(34,197,94,0.5)', 'rgba(239,68,68,0.5)'));
+
+            // Keep the raw-kline lookups in sync with this incremental
+            // update too — without this, the tooltip/lazy-load logic
+            // would see stale data for the most recent bar after a few
+            // ticks (those structures are only otherwise rebuilt on a
+            // full setData call, which this method exists specifically
+            // to avoid doing on every single tick).
+            if (s.lastKlinesRaw && s.lastKlinesRaw.length > 0) {
+                const candle = toCandle(k);
+                const lastIdx = s.lastKlinesRaw.length - 1;
+                if (s.lastKlinesRaw[lastIdx].openTime === k.openTime) {
+                    s.lastKlinesRaw[lastIdx] = k; // same bar still forming — replace
+                } else {
+                    s.lastKlinesRaw.push(k); // genuinely new bar closed — append
+                }
+                if (s.rawKlineByTime) s.rawKlineByTime.set(candle.time, k);
+
+                // Recompute EMA21/EMA55/RSI for just the tail of the
+                // series — full recalculation is cheap enough at typical
+                // bar counts (hundreds to low thousands) to just redo it
+                // over the whole lastKlinesRaw array each tick, rather
+                // than maintaining incremental EMA/RSI state by hand.
+                const closes = s.lastKlinesRaw.map(x => x.close);
+                const ema21Vals = ema(closes, 21);
+                const ema55Vals = ema(closes, 55);
+                const rsiVals = rsi(closes, 14);
+                const lastTime = candle.time;
+                if (ema21Vals[lastIdx] != null) s.ema21Series.update({ time: lastTime, value: ema21Vals[lastIdx] });
+                if (ema55Vals[lastIdx] != null) s.ema55Series.update({ time: lastTime, value: ema55Vals[lastIdx] });
+                if (rsiVals[lastIdx] != null) {
+                    s.rsiSeries.update({ time: lastTime, value: rsiVals[lastIdx] });
+                    s.rsiObLine.update({ time: lastTime, value: 70 });
+                    s.rsiOsLine.update({ time: lastTime, value: 30 });
+                }
+            }
         },
 
         clearPriceLine(containerId) {
@@ -562,6 +680,107 @@
             s.onTpChanged = (price) => dotNetRef.invokeMethodAsync('OnTpDragged', price);
         },
 
+        bindInfiniteHistory(containerId, dotNetRef) {
+            const s = sessions.get(containerId);
+            if (!s) return;
+
+            // Avoid double-subscribing if setData/bindInfiniteHistory gets
+            // called again for the same session (e.g. timeframe switch).
+            if (s.infiniteHistoryBound) return;
+            s.infiniteHistoryBound = true;
+            s.loadingMoreHistory = false;
+
+            const THRESHOLD_BARS = 50; // start loading when this close to the left edge
+            const PAGE_SIZE = 300;     // bars requested per load-more call
+
+            let debounceTimer = null;
+            s.chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+                if (debounceTimer) clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => handleRangeChange(range), 150);
+            });
+
+            const handleRangeChange = async (range) => {
+                if (!range || s.loadingMoreHistory || s.historyExhausted) return;
+
+                const barsInfo = s.candleSeries.barsInLogicalRange(range);
+                if (!barsInfo || barsInfo.barsBefore == null || barsInfo.barsBefore >= THRESHOLD_BARS) return;
+
+                // Find the earliest bar currently held, to ask Blazor for
+                // anything older than it.
+                const allData = s.candleSeries.data();
+                if (!allData || allData.length === 0) return;
+                const earliestTime = allData[0].time;
+
+                s.loadingMoreHistory = true;
+                try {
+                    const older = await dotNetRef.invokeMethodAsync('LoadMoreHistoryAsync', earliestTime * 1000, PAGE_SIZE);
+                    if (!older || older.length === 0) {
+                        // Server has nothing further back at all.
+                        s.historyExhausted = true;
+                        return;
+                    }
+
+                    // CRITICAL: the server serves from an in-memory dataset
+                    // of finite size — once we've scrolled past the actual
+                    // earliest bar it has, every further call would return
+                    // the SAME slice again (computed relative to our
+                    // request, but the underlying data never grows past
+                    // what was loaded). If the oldest bar in this response
+                    // isn't actually older than what we already have
+                    // on-screen, there's nothing genuinely new — stop
+                    // permanently instead of rebuilding the chart forever
+                    // on duplicate data (which is exactly what caused the
+                    // reported constant flickering on the left edge).
+                    const oldestReturned = older[0].openTime / 1000;
+                    if (oldestReturned >= earliestTime) {
+                        s.historyExhausted = true;
+                        return;
+                    }
+
+                    // Save the current scroll position before rebuilding —
+                    // setData() resets the visible range by default, which
+                    // would otherwise make the chart visually jump every
+                    // time more history loads in.
+                    const savedRange = s.chart.timeScale().getVisibleLogicalRange();
+                    const addedCount = older.length;
+
+                    // Lightweight Charts cannot update() bars older than
+                    // the current earliest one (confirmed via the library's
+                    // own docs/discussions) — the whole series must be
+                    // rebuilt via setData with the combined, sorted set.
+                    const combined = older.concat(s.lastKlinesRaw || []).sort((a, b) => a.openTime - b.openTime);
+                    s.lastKlinesRaw = combined;
+
+                    const candles = combined.map(toCandle);
+                    const closes = combined.map(k => k.close);
+                    const ema21 = ema(closes, 21);
+                    const ema55 = ema(closes, 55);
+                    const rsiVals = rsi(closes, 14);
+
+                    s.candleSeries.setData(candles);
+                    s.ema21Series.setData(candles.map((c, i) => ({ time: c.time, value: ema21[i] })).filter(d => d.value != null));
+                    s.ema55Series.setData(candles.map((c, i) => ({ time: c.time, value: ema55[i] })).filter(d => d.value != null));
+                    s.volumeSeries.setData(combined.map(k => toVolume(k, 'rgba(34,197,94,0.5)', 'rgba(239,68,68,0.5)')));
+                    s.rsiSeries.setData(candles.map((c, i) => ({ time: c.time, value: rsiVals[i] })).filter(d => d.value != null));
+                    s.rsiObLine.setData(candles.map(c => ({ time: c.time, value: 70 })));
+                    s.rsiOsLine.setData(candles.map(c => ({ time: c.time, value: 30 })));
+                    s.rawKlineByTime = new Map(candles.map((c, i) => [c.time, combined[i]]));
+                    s.lastSeriesEarliestTime = candles.length > 0 ? candles[0].time : s.lastSeriesEarliestTime;
+
+                    if (savedRange) {
+                        s.chart.timeScale().setVisibleLogicalRange({
+                            from: savedRange.from + addedCount,
+                            to: savedRange.to + addedCount,
+                        });
+                    }
+                }
+                catch (e) { /* network/server hiccup — user can keep scrolling, next threshold trigger retries */ }
+                finally {
+                    s.loadingMoreHistory = false;
+                }
+            };
+        },
+
         bindPricePicked(containerId, dotNetRef) {
             const s = sessions.get(containerId);
             if (!s) return;
@@ -586,6 +805,21 @@
                     s.chart.resize(container.clientWidth, container.clientHeight);
                 }
             } catch (e) { /* autoSize will catch up regardless */ }
+        },
+
+        // Clears the inline height the browser's native resize:vertical
+        // handle writes directly onto the resizable wrap element. Inline
+        // styles win over CSS classes — without clearing it, the wrap
+        // stayed stuck at whatever height the user last manually dragged
+        // it to, both when entering maximize (instead of going full-
+        // height) and when restoring back out of it (instead of
+        // returning to the normal 480px default).
+        clearWrapInlineHeight(containerId) {
+            try {
+                const container = document.getElementById(containerId);
+                const wrap = container && container.parentElement;
+                if (wrap) wrap.style.height = '';
+            } catch (e) { /* non-critical, CSS will mostly still work without this */ }
         },
     };
 
