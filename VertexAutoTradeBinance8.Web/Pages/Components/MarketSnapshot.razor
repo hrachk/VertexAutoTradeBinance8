@@ -98,24 +98,7 @@
                         : 0m;
                     int conf = sig.Confidence;
 
-                    // SimulatedTradeService (which produces these "Live
-                    // Signals") does NOT apply the real MinEntry
-                    // confidence filter — it shows every signal the
-                    // strategy saw, for visibility, even ones the bot
-                    // would never actually act on. Resolve the real
-                    // per-symbol threshold and flag it clearly so this
-                    // isn't confused with a signal the bot would trade.
-                    var confProfile = ConfidenceResolver.Resolve(sig.Symbol);
-                    bool belowThreshold = (conf / 100m) < confProfile.MinEntry;
-
-                    // Mirrors StrategyEngine.GetDynamicMinRr exactly — same
-                    // regime/slope/volatility-based thresholds (2.0 base,
-                    // 2.5 in a squeeze, 1.7-1.8 in a strong trend), so a
-                    // signal whose RR doesn't actually meet the bar the
-                    // strategy normally requires is flagged just as
-                    // clearly as a below-confidence one.
-                    decimal minRr = GetDynamicMinRrForDisplay(sig);
-                    bool lowRr = rr > 0 && rr < minRr;
+                    var (belowThreshold, lowRr, minRr) = IsWeakSignal(sig, conf, rr);
 
                     var ttl = GetSignalTtl(sig);
                     bool isRemoving = _expiredSignals.ContainsKey(SignalKey(sig));
@@ -156,7 +139,7 @@
                         <div class="sc-expand">
                             @if (belowThreshold)
                             {
-                                <div class="sc-threshold-badge" title="@($"Confidence {conf}% is below this symbol's {(confProfile.MinEntry*100).ToString("F0")}% entry threshold — the bot would not have opened this trade")">
+                                <div class="sc-threshold-badge" title="@($"Confidence {conf}% is below this symbol's {(ConfidenceResolver.Resolve(sig.Symbol).MinEntry*100).ToString("F0")}% entry threshold — the bot would not have opened this trade")">
                                     ⚠ Below entry threshold
                                 </div>
                             }
@@ -1517,6 +1500,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         // deliberate nudge here avoids any one-frame flash of the old
         // size while the transition is mid-flight.
         await Task.Delay(50);
+        try { await JS.InvokeVoidAsync("marketChart.clearWrapInlineHeight", $"chartContainer-{_chartInstanceId}"); } catch { }
         try { await JS.InvokeVoidAsync("marketChart.resize", $"chartContainer-{_chartInstanceId}"); } catch { }
     }
 
@@ -2078,6 +2062,25 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         return lowVol ? 2.2m : 2.0m;
     }
 
+    // SimulatedTradeService (which produces these "Live Signals") does
+    // NOT apply the real MinEntry confidence filter — it shows every
+    // signal the strategy saw, for visibility, even ones the bot would
+    // never actually act on. This resolves the real per-symbol
+    // threshold and the regime-based minimum RR, so both the warning
+    // badges AND the TTL (signals flagged here should disappear
+    // faster — they were never going to be traded) use the exact same
+    // definition of "weak".
+    (bool belowThreshold, bool lowRr, decimal minRr) IsWeakSignal(MissedTradeRecord sig, int conf, decimal rr)
+    {
+        var confProfile = ConfidenceResolver.Resolve(sig.Symbol);
+        bool belowThreshold = (conf / 100m) < confProfile.MinEntry;
+
+        decimal minRr = GetDynamicMinRrForDisplay(sig);
+        bool lowRr = rr > 0 && rr < minRr;
+
+        return (belowThreshold, lowRr, minRr);
+    }
+
     SignalTtlInfo GetSignalTtl(MissedTradeRecord sig)
     {
         var ageMin = (DateTime.UtcNow - sig.Time.ToUniversalTime()).TotalMinutes;
@@ -2091,6 +2094,19 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         // Tuned so a "typical" ~0.3% ATR signal lives ~25 min, scaling inversely with volatility.
         double lifeMinutes = (double)(0.075m / relAtr);
         lifeMinutes = Math.Clamp(lifeMinutes, 6, 90);
+
+        // Per direct request: a signal the bot would never actually
+        // trade (below the real confidence threshold, or RR weaker
+        // than the regime requires) shouldn't linger on screen as long
+        // as a genuinely tradeable one — cap its max lifetime much
+        // lower, regardless of how calm the symbol's volatility is.
+        decimal sigTp1 = sig.TakeProfits?.FirstOrDefault() ?? 0m;
+        decimal rr = sig.StopLoss > 0 && sig.Entry > 0 && sigTp1 > 0
+            ? Math.Abs(sigTp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry)
+            : 0m;
+        var (belowThreshold, lowRr, _) = IsWeakSignal(sig, sig.Confidence, rr);
+        if (belowThreshold || lowRr)
+            lifeMinutes = Math.Min(lifeMinutes, 8);
 
         double remaining = lifeMinutes - ageMin;
         double pct = Math.Clamp(remaining / lifeMinutes * 100.0, 0, 100);

@@ -609,7 +609,13 @@
             const THRESHOLD_BARS = 50; // start loading when this close to the left edge
             const PAGE_SIZE = 300;     // bars requested per load-more call
 
-            s.chart.timeScale().subscribeVisibleLogicalRangeChange(async (range) => {
+            let debounceTimer = null;
+            s.chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+                if (debounceTimer) clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => handleRangeChange(range), 150);
+            });
+
+            const handleRangeChange = async (range) => {
                 if (!range || s.loadingMoreHistory) return;
 
                 const barsInfo = s.candleSeries.barsInLogicalRange(range);
@@ -666,7 +672,7 @@
                 finally {
                     s.loadingMoreHistory = false;
                 }
-            });
+            };
         },
 
         bindPricePicked(containerId, dotNetRef) {
@@ -693,6 +699,21 @@
                     s.chart.resize(container.clientWidth, container.clientHeight);
                 }
             } catch (e) { /* autoSize will catch up regardless */ }
+        },
+
+        // Clears the inline height the browser's native resize:vertical
+        // handle writes directly onto the resizable wrap element. Inline
+        // styles win over CSS classes — without clearing it, the wrap
+        // stayed stuck at whatever height the user last manually dragged
+        // it to, both when entering maximize (instead of going full-
+        // height) and when restoring back out of it (instead of
+        // returning to the normal 480px default).
+        clearWrapInlineHeight(containerId) {
+            try {
+                const container = document.getElementById(containerId);
+                const wrap = container && container.parentElement;
+                if (wrap) wrap.style.height = '';
+            } catch (e) { /* non-critical, CSS will mostly still work without this */ }
         },
     };
 
