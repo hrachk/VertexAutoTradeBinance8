@@ -42,6 +42,32 @@
         return p.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
     }
 
+    // Computes the right { precision, minMove } for Lightweight Charts'
+    // priceFormat based on price magnitude — mirrors the same scaling
+    // already used for text price displays elsewhere on this page
+    // (MarketSnapshot.razor's FmtP), so the chart's own price-axis
+    // labels show consistent precision with the rest of the UI for the
+    // same asset, instead of the library's fixed default (2 decimals)
+    // which silently rounds cheap-coin prices into uselessness.
+    function priceFormatFor(price) {
+        const p = Math.abs(price);
+        if (p === 0) return { precision: 2, minMove: 0.01 };
+        if (p >= 1000) return { precision: 2, minMove: 0.01 };
+        if (p >= 1)    return { precision: 4, minMove: 0.0001 };
+        if (p >= 0.01) return { precision: 5, minMove: 0.00001 };
+        if (p >= 0.0001) return { precision: 6, minMove: 0.000001 };
+        // Genuinely cheap coins (sub-$0.0001) — count leading zeros after
+        // the decimal point and show 5 significant digits past them,
+        // capped at 12 total decimals (Lightweight Charts' own practical
+        // ceiling for priceFormat precision).
+        const str = p.toFixed(12);
+        const afterDot = str.slice(str.indexOf('.') + 1);
+        let leadingZeros = 0;
+        for (const ch of afterDot) { if (ch === '0') leadingZeros++; else break; }
+        const precision = Math.min(12, leadingZeros + 5);
+        return { precision, minMove: Math.pow(10, -precision) };
+    }
+
     function toCandle(k) {
         return { time: Math.floor(k.openTime / 1000), open: k.open, high: k.high, low: k.low, close: k.close };
     }
@@ -439,6 +465,17 @@
         setData(containerId, klines) {
             const s = sessions.get(containerId);
             if (!s || !klines || !klines.length) return;
+
+            // Dynamic price-scale precision, mirroring how a real exchange
+            // shows enough decimals for the asset's actual price range —
+            // the chart library's own default (precision:2, minMove:0.01)
+            // is wrong for cheap coins, silently rounding e.g. 0.02018
+            // down to 0.02 on the price axis labels. Based on the actual
+            // minimum non-zero close price in the data being shown, not
+            // a fixed assumption.
+            const lastClose = klines[klines.length - 1].close;
+            const { precision, minMove } = priceFormatFor(lastClose);
+            s.candleSeries.applyOptions({ priceFormat: { type: 'price', precision, minMove } });
 
             const candles = klines.map(toCandle);
             const closes = klines.map(k => k.close);
