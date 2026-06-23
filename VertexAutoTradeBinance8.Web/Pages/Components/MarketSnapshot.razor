@@ -2535,7 +2535,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             try
             {
                 using var acctCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-                var acctRes = await client.UsdFuturesApi.Account.GetAccountInfoAsync(ct: acctCts.Token);
+                var acctRes = await client.UsdFuturesApi.Account.GetAccountInfoV3Async(ct: acctCts.Token);
                 if (acctRes.Success && acctRes.Data != null)
                 {
                     _acctMarginBalance = acctRes.Data.TotalMarginBalance;
@@ -2554,7 +2554,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 using var pnlCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
                 var todayStartUtc = DateTime.UtcNow.Date;
                 var incomeRes = await client.UsdFuturesApi.Account.GetIncomeHistoryAsync(
-                    incomeType: IncomeType.RealizedPnl,
+                    incomeType: "REALIZED_PNL",
                     startTime: todayStartUtc,
                     limit: 1000,
                     ct: pnlCts.Token);
