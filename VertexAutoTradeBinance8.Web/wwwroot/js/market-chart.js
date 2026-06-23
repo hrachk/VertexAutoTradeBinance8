@@ -497,6 +497,18 @@
             // OHLCV, not this extra field.
             s.rawKlineByTime = new Map(candles.map((c, i) => [c.time, klines[i]]));
             s.lastKlinesRaw = klines;
+
+            // Only reset the "no more history" flag when this is
+            // genuinely a different series (earliest bar changed) — not
+            // on every single live-tick setData call for the SAME
+            // symbol+timeframe, which would otherwise let an already-
+            // confirmed-exhausted lazy-load retry uselessly on the next
+            // scroll near the edge.
+            const newEarliestTime = candles.length > 0 ? candles[0].time : null;
+            if (newEarliestTime !== s.lastSeriesEarliestTime) {
+                s.historyExhausted = false;
+                s.lastSeriesEarliestTime = newEarliestTime;
+            }
         },
 
         updateLastBar(containerId, k) {
@@ -653,7 +665,7 @@
             });
 
             const handleRangeChange = async (range) => {
-                if (!range || s.loadingMoreHistory) return;
+                if (!range || s.loadingMoreHistory || s.historyExhausted) return;
 
                 const barsInfo = s.candleSeries.barsInLogicalRange(range);
                 if (!barsInfo || barsInfo.barsBefore == null || barsInfo.barsBefore >= THRESHOLD_BARS) return;
@@ -667,7 +679,28 @@
                 s.loadingMoreHistory = true;
                 try {
                     const older = await dotNetRef.invokeMethodAsync('LoadMoreHistoryAsync', earliestTime * 1000, PAGE_SIZE);
-                    if (!older || older.length === 0) return; // nothing further back available
+                    if (!older || older.length === 0) {
+                        // Server has nothing further back at all.
+                        s.historyExhausted = true;
+                        return;
+                    }
+
+                    // CRITICAL: the server serves from an in-memory dataset
+                    // of finite size — once we've scrolled past the actual
+                    // earliest bar it has, every further call would return
+                    // the SAME slice again (computed relative to our
+                    // request, but the underlying data never grows past
+                    // what was loaded). If the oldest bar in this response
+                    // isn't actually older than what we already have
+                    // on-screen, there's nothing genuinely new — stop
+                    // permanently instead of rebuilding the chart forever
+                    // on duplicate data (which is exactly what caused the
+                    // reported constant flickering on the left edge).
+                    const oldestReturned = older[0].openTime / 1000;
+                    if (oldestReturned >= earliestTime) {
+                        s.historyExhausted = true;
+                        return;
+                    }
 
                     // Save the current scroll position before rebuilding —
                     // setData() resets the visible range by default, which
@@ -697,6 +730,7 @@
                     s.rsiObLine.setData(candles.map(c => ({ time: c.time, value: 70 })));
                     s.rsiOsLine.setData(candles.map(c => ({ time: c.time, value: 30 })));
                     s.rawKlineByTime = new Map(candles.map((c, i) => [c.time, combined[i]]));
+                    s.lastSeriesEarliestTime = candles.length > 0 ? candles[0].time : s.lastSeriesEarliestTime;
 
                     if (savedRange) {
                         s.chart.timeScale().setVisibleLogicalRange({
