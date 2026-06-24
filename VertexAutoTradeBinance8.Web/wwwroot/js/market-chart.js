@@ -286,7 +286,8 @@
                 // there has to be something visible to grab in order
                 // to create a TP/SL that doesn't exist yet, not just
                 // to move one that already does.
-                entryLine: null, slLine: null, tpLine: null,
+                entryLine: null, slLine: null, tpLines: [], liqLine: null, beLine: null,
+                draggingLine: null, draggingLineKind: null, draggingLineIdx: null,
                 entryPrice: 0, side: 'LONG', qty: 0,
                 onSlChanged: null, onTpChanged: null,
                 tpSlArmed: false,   // true after clicking the TP/SL button — "Drag to set TP/SL" mode
@@ -356,10 +357,47 @@
                 return entryY != null && Math.abs(y - entryY) <= NEAR_LINE_PX;
             }
 
+            // Checks proximity to any existing SL/TP line — returns a
+            // descriptor for the closest match within range, or null.
+            // Checked BEFORE the entry-line armed-mode logic so
+            // dragging an EXISTING line moves that specific line
+            // directly, rather than triggering the "drag anywhere
+            // creates a new TP/SL" armed gesture meant for when no
+            // line exists there yet.
+            function findNearbyDraggableLine(y) {
+                if (session.slLine) {
+                    const slY = candleSeries.priceToCoordinate(session.slLine.options().price);
+                    if (slY != null && Math.abs(y - slY) <= NEAR_LINE_PX) {
+                        return { kind: 'sl', line: session.slLine, index: null };
+                    }
+                }
+                for (const tp of (session.tpLines || [])) {
+                    const tpY = candleSeries.priceToCoordinate(tp.price);
+                    if (tpY != null && Math.abs(y - tpY) <= NEAR_LINE_PX) {
+                        return { kind: 'tp', line: tp.line, index: tp.index };
+                    }
+                }
+                return null;
+            }
+
             container.addEventListener('mousedown', (e) => {
                 if (!session.entryPrice) return;
                 const rect = container.getBoundingClientRect();
                 const y = e.clientY - rect.top;
+
+                // Existing SL/TP line under the cursor — drag THAT
+                // specific line directly, taking priority over the
+                // entry-armed "create new TP/SL" gesture below.
+                const nearby = findNearbyDraggableLine(y);
+                if (nearby) {
+                    session.draggingLine = nearby.line;
+                    session.draggingLineKind = nearby.kind;
+                    session.draggingLineIdx = nearby.index;
+                    container.style.cursor = 'grabbing';
+                    e.preventDefault();
+                    return;
+                }
+
                 if (!nearEntryLine(y)) return; // let normal chart pan/zoom/crosshair through elsewhere
                 session.dragging = true;
                 container.style.cursor = 'grabbing';
@@ -369,10 +407,29 @@
             container.addEventListener('mousemove', (e) => {
                 if (!session.entryPrice) return;
 
+                // Actively dragging an existing SL/TP line — just move
+                // that one line's price as the mouse moves, with a live
+                // price preview in its title; the actual order update
+                // (algo order replace) happens on mouseup, not on every
+                // intermediate move (that would hammer the API).
+                if (session.draggingLine) {
+                    const rect = container.getBoundingClientRect();
+                    const y = e.clientY - rect.top;
+                    const price = candleSeries.coordinateToPrice(y);
+                    if (price != null) {
+                        const kind = session.draggingLineKind === 'sl' ? 'SL' :
+                            (session.tpLines.length > 1 ? `TP${session.draggingLineIdx + 1}` : 'TP');
+                        try { session.draggingLine.applyOptions({ price, title: `${kind} ${fmtPrice(price)}` }); } catch (err) {}
+                    }
+                    container.style.cursor = 'grabbing';
+                    return;
+                }
+
                 if (!session.dragging) {
                     const rect = container.getBoundingClientRect();
                     const y = e.clientY - rect.top;
-                    container.style.cursor = nearEntryLine(y) ? 'grab' : 'crosshair';
+                    const nearby = findNearbyDraggableLine(y);
+                    container.style.cursor = nearby ? 'grab' : (nearEntryLine(y) ? 'grab' : 'crosshair');
                     return;
                 }
 
@@ -420,6 +477,31 @@
             });
 
             container.addEventListener('mouseup', (e) => {
+                // Finished dragging an EXISTING SL/TP line to a new
+                // price — commit it via a dedicated callback (distinct
+                // from the entry-armed gesture's onTpChanged, since this
+                // needs to know WHICH TP index moved when there are
+                // multiple).
+                if (session.draggingLine) {
+                    const rect = container.getBoundingClientRect();
+                    const y = e.clientY - rect.top;
+                    const price = candleSeries.coordinateToPrice(y);
+                    const kind = session.draggingLineKind;
+                    const idx = session.draggingLineIdx;
+                    session.draggingLine = null;
+                    session.draggingLineKind = null;
+                    session.draggingLineIdx = null;
+                    container.style.cursor = 'crosshair';
+                    if (price != null) {
+                        if (kind === 'sl') {
+                            if (session.onSlChanged) session.onSlChanged(price);
+                        } else if (kind === 'tp') {
+                            if (session.onTpChangedAt) session.onTpChangedAt(idx, price);
+                        }
+                    }
+                    return;
+                }
+
                 if (!session.entryPrice || !session.dragging) return;
                 session.dragging = false;
                 container.style.cursor = 'crosshair';
@@ -442,6 +524,11 @@
 
             container.addEventListener('mouseleave', () => {
                 if (session.dragging) { session.dragging = false; removePreview(); }
+                if (session.draggingLine) {
+                    session.draggingLine = null;
+                    session.draggingLineKind = null;
+                    session.draggingLineIdx = null;
+                }
             });
 
             container.addEventListener('contextmenu', (e) => {
@@ -560,14 +647,16 @@
             s.priceLine = null;
         },
 
-        // Draws ONLY the entry line for the currently selected position
-        // — this is the persistent reference line with the live-PnL
-        // caption, always visible while a position is selected. SL/TP
-        // lines are a SEPARATE, explicit action (showTpSlLines below),
-        // matching Binance's actual UX: the entry/PnL line is always
-        // there, but TP/SL lines only appear once you click the
-        // "TP/SL" button on it.
-        showPositionLines(containerId, entry, side, qty) {
+        // Draws the entry line, plus liquidation and break-even
+        // reference lines (Bybit-style) for the currently selected
+        // position. The entry line's title is kept SHORT ('Entry
+        // 61.10') — PnL used to be baked into this same title, which
+        // is exactly what made it overrun the chart's right edge and
+        // get visually cut off; live PnL is now shown via a separate
+        // updatePnl() call that only touches the entry line's title
+        // with just the PnL figure appended on each tick, kept short
+        // enough to always fit.
+        showPositionLines(containerId, entry, side, qty, liqPrice, breakEvenPrice) {
             const s = sessions.get(containerId);
             if (!s) return;
             this.hidePositionLines(containerId);
@@ -576,6 +665,12 @@
             s.side = side;
             s.qty = qty;
 
+            // The chart's own built-in last-price line would otherwise
+            // sit right on top of the new PnL-tracking line at the same
+            // price — disable it while a position is selected, since
+            // the PnL line is a strictly more informative replacement.
+            s.candleSeries.applyOptions({ priceLineVisible: false });
+
             if (entry > 0) {
                 s.entryLine = s.candleSeries.createPriceLine({
                     price: entry, color: '#3b82f6', lineWidth: 1,
@@ -583,39 +678,57 @@
                     axisLabelVisible: true, title: `Entry ${fmtPrice(entry)}`,
                 });
             }
+
+            if (liqPrice && liqPrice > 0) {
+                s.liqLine = s.candleSeries.createPriceLine({
+                    price: liqPrice, color: '#f97316', lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    axisLabelVisible: true, title: `Liq ${fmtPrice(liqPrice)}`,
+                });
+            }
+
+            if (breakEvenPrice && breakEvenPrice > 0) {
+                s.beLine = s.candleSeries.createPriceLine({
+                    price: breakEvenPrice, color: '#94a3b8', lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dotted,
+                    axisLabelVisible: true, title: `BE ${fmtPrice(breakEvenPrice)}`,
+                });
+            }
         },
 
-        // Shows the draggable SL/TP lines — called only when the user
-        // clicks the TP/SL button, not automatically on position
-        // selection. sl/tp of 0 means "no real order yet": a dashed
-        // placeholder line is drawn at a sensible default distance so
-        // there's something to grab and drag into a real order, same
-        // idea as before, just now gated behind an explicit click
-        // instead of always-on.
-        // Draws the EXISTING TP/SL as solid lines if real orders are
-        // set, with no placeholder dashed line anymore — Bybit doesn't
-        // show a guess line for a TP/SL that was never set, it just
-        // shows nothing there until the user drags one in via armed
-        // mode (setTpSlArmed below).
-        showTpSlLines(containerId, entry, sl, tp, side) {
+        // Shows the draggable SL + ALL TP lines — called only when the
+        // user clicks the TP/SL button, not automatically on position
+        // selection. tps is an array (multiple TP levels all get their
+        // own draggable line now — previously only the first one was
+        // ever shown). Each line is thin (lineWidth:1, matching the
+        // Entry line's weight) and directly draggable like Entry —
+        // grab the line itself and drag it to a new price, rather than
+        // the old "drag anywhere on the chart" armed-mode gesture.
+        showTpSlLines(containerId, entry, sl, tps, side) {
             const s = sessions.get(containerId);
             if (!s) return;
             this.hideTpSlLines(containerId);
 
             if (sl > 0) {
                 s.slLine = s.candleSeries.createPriceLine({
-                    price: sl, color: '#ef4444', lineWidth: 2,
+                    price: sl, color: '#ef4444', lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Solid,
                     axisLabelVisible: true, title: `SL ${fmtPrice(sl)}`,
                 });
             }
-            if (tp > 0) {
-                s.tpLine = s.candleSeries.createPriceLine({
-                    price: tp, color: '#22c55e', lineWidth: 2,
+
+            const tpList = Array.isArray(tps) ? tps : (tps > 0 ? [tps] : []);
+            s.tpLines = [];
+            tpList.forEach((tpPrice, i) => {
+                if (!tpPrice || tpPrice <= 0) return;
+                const label = tpList.length > 1 ? `TP${i + 1} ${fmtPrice(tpPrice)}` : `TP ${fmtPrice(tpPrice)}`;
+                const line = s.candleSeries.createPriceLine({
+                    price: tpPrice, color: '#22c55e', lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: true, title: `TP ${fmtPrice(tp)}`,
+                    axisLabelVisible: true, title: label,
                 });
-            }
+                s.tpLines.push({ line, index: i, price: tpPrice });
+            });
         },
 
         // Arms/disarms the "Drag to set TP/SL" mode — toggled by the
@@ -633,28 +746,47 @@
         hideTpSlLines(containerId) {
             const s = sessions.get(containerId);
             if (!s) return;
-            for (const key of ['slLine', 'tpLine']) {
-                if (s[key]) { try { s.candleSeries.removePriceLine(s[key]); } catch (e) {} s[key] = null; }
+            if (s.slLine) { try { s.candleSeries.removePriceLine(s.slLine); } catch (e) {} s.slLine = null; }
+            for (const tp of (s.tpLines || [])) {
+                try { s.candleSeries.removePriceLine(tp.line); } catch (e) {}
             }
+            s.tpLines = [];
         },
 
-        // Refreshes just the entry line's title with live PnL, called
-        // on every price tick without needing to redraw SL/TP too.
+        // Refreshes the live market-price line with the current PnL —
+        // moved OFF the Entry line's title (which is what made it
+        // overrun the chart edge and get visually cut off when PnL was
+        // appended there) onto its own short-lived line that tracks
+        // wherever price currently is, exactly like Bybit shows live
+        // PnL right on the current price level.
         updatePnl(containerId, currentPrice) {
             const s = sessions.get(containerId);
-            if (!s || !s.entryLine || !s.entryPrice) return;
+            if (!s || !s.entryPrice) return;
             const dir = s.side === 'LONG' ? 1 : -1;
             const pnl = (currentPrice - s.entryPrice) * dir * s.qty;
             const sign = pnl >= 0 ? '+' : '';
+            const title = `PnL ${sign}${pnl.toFixed(2)}`;
             try {
-                s.entryLine.applyOptions({ title: `Entry ${fmtPrice(s.entryPrice)}  ·  PnL ${sign}${pnl.toFixed(2)}` });
+                if (s.pnlLine) {
+                    s.pnlLine.applyOptions({ price: currentPrice, title });
+                } else {
+                    s.pnlLine = s.candleSeries.createPriceLine({
+                        price: currentPrice, color: pnl >= 0 ? '#22c55e' : '#ef4444', lineWidth: 1,
+                        lineStyle: LightweightCharts.LineStyle.Dashed,
+                        axisLabelVisible: false, title,
+                    });
+                }
             } catch (e) {}
         },
 
         hidePositionLines(containerId) {
             const s = sessions.get(containerId);
             if (!s) return;
+            s.candleSeries.applyOptions({ priceLineVisible: true });
             if (s.entryLine) { try { s.candleSeries.removePriceLine(s.entryLine); } catch (e) {} s.entryLine = null; }
+            if (s.liqLine) { try { s.candleSeries.removePriceLine(s.liqLine); } catch (e) {} s.liqLine = null; }
+            if (s.beLine) { try { s.candleSeries.removePriceLine(s.beLine); } catch (e) {} s.beLine = null; }
+            if (s.pnlLine) { try { s.candleSeries.removePriceLine(s.pnlLine); } catch (e) {} s.pnlLine = null; }
             this.hideTpSlLines(containerId);
             this.setTpSlArmed(containerId, false);
             if (s.previewLine) { try { s.candleSeries.removePriceLine(s.previewLine); } catch (e) {} s.previewLine = null; }
@@ -678,6 +810,7 @@
             if (!s) return;
             s.onSlChanged = (price) => dotNetRef.invokeMethodAsync('OnSlDragged', price);
             s.onTpChanged = (price) => dotNetRef.invokeMethodAsync('OnTpDragged', price);
+            s.onTpChangedAt = (index, price) => dotNetRef.invokeMethodAsync('OnTpDraggedAt', index, price);
         },
 
         bindInfiniteHistory(containerId, dotNetRef) {

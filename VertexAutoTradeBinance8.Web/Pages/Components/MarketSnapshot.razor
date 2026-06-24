@@ -213,22 +213,6 @@
         </div>
     </div>
 
-    <!-- ROW 2: TIMEFRAME SELECTOR (TradingView style) -->
-    @if (!string.IsNullOrEmpty(_activeSym))
-    {
-        <div class="mk-tf-bar">
-            @foreach (var tf in _allTfs)
-            {
-                var hasSeries = Series.Any(s => s.Symbol == _activeSym && s.Timeframe == tf.Key);
-                var isSelTf   = _activeTf == tf.Key;
-                <button class="mk-tf-btn @(isSelTf?"mk-tf-on":"") @(hasSeries?"":"mk-tf-dim")"
-                        @onclick="()=>PickTf(tf.Key)">
-                    @tf.Label
-                </button>
-            }
-        </div>
-    }
-
     @if (Selected != null && Selected.Klines.Count >= 5)
     {
         <!-- STATS BAR -->
@@ -287,6 +271,22 @@
         <!-- LEFT: chart + RSI + Volume, then OPEN POSITIONS, then OPEN ORDERS — all share this one column's width -->
         <div class="mk-main-col">
         <div class="mk-charts-col-main">
+
+        <!-- TIMEFRAME SELECTOR — moved here, directly above the chart -->
+        @if (!string.IsNullOrEmpty(_activeSym))
+        {
+            <div class="mk-tf-bar mk-tf-bar-inline">
+                @foreach (var tf in _allTfs)
+                {
+                    var hasSeries = Series.Any(s => s.Symbol == _activeSym && s.Timeframe == tf.Key);
+                    var isSelTf   = _activeTf == tf.Key;
+                    <button class="mk-tf-btn @(isSelTf?"mk-tf-on":"") @(hasSeries?"":"mk-tf-dim")"
+                            @onclick="()=>PickTf(tf.Key)">
+                        @tf.Label
+                    </button>
+                }
+            </div>
+        }
 
         <!-- Price chart -->
         <div class="mk-chart-head">
@@ -956,6 +956,36 @@
                 </div>
             </div>
         }
+        else if (Selected != null && _openOrders.Any(o => o.Symbol == Selected.Symbol))
+        {
+            // No open position for this symbol, but there ARE open
+            // orders (e.g. a pending limit entry that hasn't filled
+            // yet) — per direct request, surface this regardless of
+            // how the symbol was selected, not only when clicking a
+            // row in the positions table.
+            <div class="ord-panel">
+                <div class="ord-selected-label">Open Orders</div>
+                <div class="ord-head">
+                    <div class="ord-title"><span class="ord-sym">@Selected.Symbol</span></div>
+                    <button class="ord-close-x" @onclick="() => Selected = null">✕</button>
+                </div>
+                <div class="ord-pos-orders">
+                    @foreach (var o in _openOrders.Where(o => o.Symbol == Selected.Symbol))
+                    {
+                        <div class="ord-pos-order-row">
+                            <span class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</span>
+                            <span class="mk-dim">@o.Type @(o.ReduceOnly ? "(R)" : "")</span>
+                            <span class="mono">@(o.Price > 0 ? FmtP(o.Price) : "Market")</span>
+                            <span class="mono mk-dim">@o.Qty.ToString("G8")</span>
+                            <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
+                                    @onclick="() => CancelOpenOrderAsync(o)">
+                                @(_cancellingOrderId == o.OrderId ? "…" : "Cancel")
+                            </button>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
 
         <!-- ALL INSTRUMENTS — always visible regardless of which panel (or none) is shown above -->
         <div class="mk-side-tbl">
@@ -1055,6 +1085,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
 /* TF BAR */
 .mk-tf-bar{position:sticky;z-index:24;display:flex;align-items:center;gap:2px;padding:6px 16px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
+.mk-tf-bar-inline{position:static;border-radius:8px 8px 0 0;margin-bottom:2px;}
 .mk-tf-btn{padding:4px 10px;background:transparent;border:none;color:var(--dim);font-family:var(--mono);font-size:12px;font-weight:600;cursor:pointer;border-radius:4px;transition:all .15s;}
 .mk-tf-btn:hover{background:var(--bg3);color:var(--txt);}
 .mk-tf-on{background:var(--acc)!important;color:#fff!important;}
@@ -1667,7 +1698,6 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                     ".vertex-topnav",
                     ".mk-sticky-top",
                     ".mk-ticker-bar",
-                    ".mk-tf-bar",
                     ".mk-stats",
                 });
             }
@@ -1873,6 +1903,26 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         if (available != null) _activeTf = available.Timeframe;
         ResolveSelected();
         CalcStats();
+
+        // Per direct request: show the position panel for THIS symbol
+        // whenever it has an open position, regardless of whether the
+        // user got here by clicking the positions table row or just
+        // picking the symbol from the ticker/search/anywhere else.
+        var existingPos = _allPositions.FirstOrDefault(p => p.Symbol == sym);
+        if (existingPos != null)
+        {
+            _selectedPosition = existingPos;
+            _activeSignal = null;
+            _ = RefreshPositionLines();
+        }
+        else if (_selectedPosition?.Symbol != sym)
+        {
+            // Switched to a symbol with no position — clear any
+            // stale position panel left over from the previous symbol.
+            _selectedPosition = null;
+            _ = JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}");
+        }
+
         StateHasChanged();
         _ = RenderCharts();
         _ = JS.InvokeVoidAsync("stickyStack.recalc");
@@ -2123,6 +2173,20 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _activeTf  = s.Timeframe;
         Selected = s;
         CalcStats();
+
+        var existingPos = _allPositions.FirstOrDefault(p => p.Symbol == s.Symbol);
+        if (existingPos != null)
+        {
+            _selectedPosition = existingPos;
+            _activeSignal = null;
+            _ = RefreshPositionLines();
+        }
+        else if (_selectedPosition?.Symbol != s.Symbol)
+        {
+            _selectedPosition = null;
+            _ = JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}");
+        }
+
         StateHasChanged();
         _ = RenderCharts();
         _ = JS.InvokeVoidAsync("stickyStack.recalc");
@@ -2444,7 +2508,19 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false, newPrice: price);
     }
 
-    async Task ReplaceProtectiveOrderAsync(ActivePositionInfo pos, bool isStopLoss, decimal newPrice)
+    // Fired when dragging a SPECIFIC TP line (one of possibly several)
+    // — tpIndex matches the same sorted-by-price order the TP lines
+    // were drawn in (see ShowTpSlLinesAsync), so dragging "the 2nd TP
+    // line" replaces the 2nd TP order found in that same order, not
+    // just whichever TP happened to be found first.
+    [JSInvokable]
+    public async Task OnTpDraggedAt(int tpIndex, decimal price)
+    {
+        if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
+        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false, newPrice: price, tpIndex: tpIndex);
+    }
+
+    async Task ReplaceProtectiveOrderAsync(ActivePositionInfo pos, bool isStopLoss, decimal newPrice, int? tpIndex = null)
     {
         _slTpDragBusy = true;
         try
@@ -2464,10 +2540,25 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             var posSide = isLong ? PositionSide.Long : PositionSide.Short;
 
             // Find and cancel the existing protective order of the same
-            // kind for this symbol, if one exists.
-            var existing = _openOrders.FirstOrDefault(o =>
-                o.Symbol == pos.Symbol &&
-                (isStopLoss ? o.Type.Contains("STOP") : o.Type.Contains("TAKE_PROFIT")));
+            // kind for this symbol. For TP with a specific index (one
+            // of possibly several), pick from TP orders sorted the
+            // same way ShowTpSlLinesAsync sorts them for drawing —
+            // otherwise just the first match (SL only ever has one).
+            OpenOrderRow? existing;
+            if (!isStopLoss && tpIndex.HasValue)
+            {
+                var tpOrders = _openOrders
+                    .Where(o => o.Symbol == pos.Symbol && o.Type.Contains("TAKE_PROFIT"))
+                    .OrderBy(o => pos.Side == "LONG" ? o.Price : -o.Price)
+                    .ToList();
+                existing = tpIndex.Value >= 0 && tpIndex.Value < tpOrders.Count ? tpOrders[tpIndex.Value] : null;
+            }
+            else
+            {
+                existing = _openOrders.FirstOrDefault(o =>
+                    o.Symbol == pos.Symbol &&
+                    (isStopLoss ? o.Type.Contains("STOP") : o.Type.Contains("TAKE_PROFIT")));
+            }
 
             if (existing != null)
             {
@@ -2516,6 +2607,20 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         }
     }
 
+    // Break-even price — the level where closing now would net exactly
+    // zero, accounting for the round-trip taker fee (0.05% each way,
+    // Binance's own standard taker rate) on top of just the entry
+    // price. A position needs to move past entry by enough to cover
+    // BOTH the entry and exit fees before it's genuinely break-even,
+    // not merely back at the price it was opened at.
+    const decimal TakerFeeRate = 0.0005m;
+    decimal ComputeBreakEvenPrice(ActivePositionInfo pos)
+    {
+        if (pos.EntryPrice <= 0) return 0m;
+        decimal feeAdjustment = pos.EntryPrice * TakerFeeRate * 2m;
+        return pos.Side == "LONG" ? pos.EntryPrice + feeAdjustment : pos.EntryPrice - feeAdjustment;
+    }
+
     // Re-draws the entry/SL/TP lines on the chart from the currently
     // selected position's matching open orders, after any change.
     async Task RefreshPositionLines()
@@ -2528,10 +2633,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         }
 
         var pos = _selectedPosition;
+        decimal breakEven = ComputeBreakEvenPrice(pos);
         try
         {
             await JS.InvokeVoidAsync("marketChart.showPositionLines",
-                $"chartContainer-{_chartInstanceId}", pos.EntryPrice, pos.Side, pos.Qty);
+                $"chartContainer-{_chartInstanceId}", pos.EntryPrice, pos.Side, pos.Qty, pos.LiqPrice, breakEven);
         }
         catch { }
 
@@ -2568,12 +2674,16 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         if (_selectedPosition == null) return;
         var pos = _selectedPosition;
         var sl = _openOrders.FirstOrDefault(o => o.Symbol == pos.Symbol && o.Type.Contains("STOP"))?.Price ?? 0m;
-        var tp = _openOrders.FirstOrDefault(o => o.Symbol == pos.Symbol && o.Type.Contains("TAKE_PROFIT"))?.Price ?? 0m;
+        var tps = _openOrders
+            .Where(o => o.Symbol == pos.Symbol && o.Type.Contains("TAKE_PROFIT"))
+            .OrderBy(o => pos.Side == "LONG" ? o.Price : -o.Price)
+            .Select(o => o.Price)
+            .ToArray();
 
         try
         {
             await JS.InvokeVoidAsync("marketChart.showTpSlLines",
-                $"chartContainer-{_chartInstanceId}", pos.EntryPrice, sl, tp, pos.Side);
+                $"chartContainer-{_chartInstanceId}", pos.EntryPrice, sl, tps, pos.Side);
         }
         catch { }
     }
