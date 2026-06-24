@@ -30,23 +30,14 @@
         </div>
 
         <div class="mk-hright">
-            @if (Selected != null)
-            {
-                <div class="mk-ticker">
-                    <span class="mk-tsym">@Selected.Symbol</span>
-                    <span class="mk-ttf">@TfLabel(Selected.Timeframe)</span>
-                    @if (_last > 0)
-                    {
-                        <span class="mk-tprice">@FmtP(_last)</span>
-                        <span class="mk-tchg @(_chg >= 0 ? "up" : "dn")">
-                            @(_chg >= 0 ? "▲" : "▼") @Math.Abs(_chg).ToString("F2")%
-                        </span>
-                    }
-                </div>
-            }
-            <button class="mk-btn @(Frozen?"mk-btn-on":"")" @onclick="ToggleFreeze">
-                @(Frozen ? "⏸ Paused" : "▶ Live")
-            </button>
+            <div class="mk-hbal">
+                <span class="mk-hbal-l">Wallet</span>
+                <span class="mk-hbal-v mono">$@_acctWalletBalance.ToString("F2")</span>
+            </div>
+            <div class="mk-hbal mk-hbal-main">
+                <span class="mk-hbal-l">Available</span>
+                <span class="mk-hbal-v-main mono">$@_acctAvailableBalance.ToString("F2")</span>
+            </div>
         </div>
     </div>
 
@@ -58,22 +49,19 @@
                     <span class="sig-dot"></span>
                     LIVE SIGNALS
                     <span class="sig-count">@_signals.Count</span>
+                    <div class="mk-header-scan">
+                        <span class="mk-header-scan-dot"></span>
+                        Detecting
+                        @if (_symbols.Any())
+                        {
+                            <span class="mk-header-scan-sym">@_symbols[_scanSymIdx % _symbols.Count]</span>
+                        }
+                    </div>
                 </div>
                 <div class="sig-panel-right">
                     @if (_signals.Any())
                     {
                         <div class="sig-panel-sub">Click a signal to trade manually</div>
-                    }
-                    else
-                    {
-                        <div class="mk-header-scan">
-                            <span class="mk-header-scan-dot"></span>
-                            Detecting
-                            @if (_symbols.Any())
-                            {
-                                <span class="mk-header-scan-sym">@_symbols[_scanSymIdx % _symbols.Count]</span>
-                            }
-                        </div>
                     }
                     <div class="sig-pager @(_signals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
                         @for (int p = 0; p < _sigPageCount; p++)
@@ -307,11 +295,21 @@
                 {
                     <span class="mk-tsym">@Selected.Symbol</span>
                     <span class="mk-ttf">@TfLabel(Selected.Timeframe)</span>
+                    @if (_last > 0)
+                    {
+                        <span class="mk-tprice">@FmtP(_last)</span>
+                        <span class="mk-tchg @(_chg >= 0 ? "up" : "dn")">
+                            @(_chg >= 0 ? "▲" : "▼") @Math.Abs(_chg).ToString("F2")%
+                        </span>
+                    }
                 }
                 else
                 {
                     <span class="mk-dim">No symbol selected</span>
                 }
+                <button class="mk-btn mk-btn-inline @(Frozen?"mk-btn-on":"")" @onclick="ToggleFreeze">
+                    @(Frozen ? "⏸ Paused" : "▶ Live")
+                </button>
             </div>
             <div class="mk-legend">
                 <span style="color:#38bdf8">── EMA21</span>
@@ -488,7 +486,7 @@
                             <thead>
                                 <tr>
                                     <th>Symbol</th><th>Side</th><th>Lev</th>
-                                    <th>Entry</th><th>Mark</th><th>Liq</th><th>Size</th><th>PnL</th><th>ROI</th><th></th>
+                                    <th>Entry</th><th>Mark</th><th>Liq</th><th>Size</th><th>Margin</th><th>PnL</th><th>ROI</th><th></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -509,11 +507,20 @@
                                         <td class="mk-mono">@FmtP(pos.MarkPrice)</td>
                                         <td class="mk-mono mk-liq">@(pos.LiqPrice > 0 ? FmtP(pos.LiqPrice) : "—")</td>
                                         <td class="mk-mono">@pos.Size.ToString("F2")</td>
+                                        <td class="mk-mono mk-dim">@pos.Margin.ToString("F2")</td>
                                         <td class="mk-mono @(pos.Pnl >= 0 ? "up" : "dn")">@(pos.Pnl >= 0 ? "+" : "")@pos.Pnl.ToString("F2")</td>
                                         <td class="mk-mono @(pos.Roi >= 0 ? "up" : "dn")">@(pos.Roi >= 0 ? "+" : "")@((pos.Roi * 100).ToString("F1"))%</td>
-                                        <td>
+                                        <td class="mk-pos-actions" @onclick:stopPropagation="true">
+                                            <div class="mk-pos-partial-row">
+                                                @foreach (var pct in new[] { 25, 50, 75 })
+                                                {
+                                                    <button class="mk-pos-partial-btn" disabled="@_orderLoading"
+                                                            title="@($"Close {pct}% of this position")"
+                                                            @onclick="() => ClosePositionRowPartial(pos, pct)">@pct%</button>
+                                                }
+                                            </div>
                                             <button class="mk-oo-cancel" disabled="@_orderLoading"
-                                                    @onclick="() => ClosePositionRow(pos)" @onclick:stopPropagation="true">
+                                                    @onclick="() => ClosePositionRow(pos)">
                                                 @(_orderLoading ? "…" : "Close")
                                             </button>
                                         </td>
@@ -1026,8 +1033,12 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-icon{font-size:28px;}
 .mk-title{font-family:var(--mono);font-size:17px;font-weight:700;letter-spacing:2px;color:var(--acc);}
 .mk-sub{font-size:11px;color:var(--dim);margin-top:3px;}
-.mk-hright{display:flex;align-items:center;gap:16px;}
-.mk-header-scan{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim);background:var(--bg3);padding:6px 14px;border-radius:20px;border:1px solid var(--bdr);}
+.mk-hright{display:flex;align-items:center;gap:20px;}
+.mk-hbal{display:flex;flex-direction:column;align-items:flex-end;gap:1px;}
+.mk-hbal-l{font-size:9.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;}
+.mk-hbal-v{font-size:12px;font-weight:600;color:var(--txt);}
+.mk-hbal-v-main{font-size:19px;font-weight:700;color:var(--txt);}
+.mk-header-scan{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);background:var(--bg3);padding:4px 10px;border-radius:20px;border:1px solid var(--bdr);margin-left:8px;}
 .mk-header-scan-dot{width:6px;height:6px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px rgba(56,189,248,0.7);animation:mkHeaderScanPulse 1.6s ease-in-out infinite;flex-shrink:0;}
 @@keyframes mkHeaderScanPulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.4;transform:scale(0.7);}}
 .mk-header-scan-sym{color:#38bdf8;font-family:var(--mono);font-weight:600;}
@@ -1038,6 +1049,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-tprice{font-family:var(--mono);font-size:20px;font-weight:700;}
 .mk-tchg{font-family:var(--mono);font-size:14px;font-weight:600;}
 .mk-btn{padding:6px 16px;border:1px solid var(--bdr);background:var(--bg3);color:var(--dim);border-radius:6px;cursor:pointer;font-size:12px;transition:all .2s;}
+.mk-btn-inline{padding:3px 10px;font-size:11px;margin-left:6px;}
 .mk-btn:hover{border-color:var(--acc);color:var(--txt);}
 .mk-btn-on{background:rgba(239,68,68,.15);border-color:var(--red);color:var(--red);}
 
@@ -1406,6 +1418,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-oo-sym{font-family:var(--mono);font-weight:700;color:var(--acc);font-size:13.5px;}
 .mk-liq{color:#f59e0b;}
 .mk-oo-cancel{background:none;border:1px solid var(--bdr);color:var(--dim);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;line-height:1;white-space:nowrap;}
+.mk-pos-actions{display:flex;flex-direction:column;align-items:flex-end;gap:4px;}
+.mk-pos-partial-row{display:flex;gap:3px;}
+.mk-pos-partial-btn{background:var(--bg3);border:1px solid var(--bdr);color:var(--dim);padding:2px 7px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600;line-height:1.4;}
+.mk-pos-partial-btn:hover:not(:disabled){border-color:var(--acc);color:var(--acc);}
+.mk-pos-partial-btn:disabled{opacity:.5;cursor:not-allowed;}
 .mk-oo-cancel:hover:not(:disabled){border-color:var(--red);color:var(--red);}
 .mk-oo-cancel:disabled{opacity:.5;cursor:not-allowed;}
 
@@ -2181,7 +2198,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     bool _orderPanelDismissed;
     ActivePositionInfo? _currentPosition;
     List<ActivePositionInfo> _allPositions = new();
-    decimal _acctMarginBalance, _acctWalletBalance, _acctUnrealizedPnl, _acctRealizedPnlToday;
+    decimal _acctMarginBalance, _acctWalletBalance, _acctUnrealizedPnl, _acctRealizedPnlToday, _acctAvailableBalance;
     DateTime _lastRealizedPnlFetchUtc = DateTime.MinValue;
     bool _positionsLoading;
 
@@ -2793,6 +2810,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                     _acctMarginBalance = acctRes.Data.TotalMarginBalance;
                     _acctWalletBalance = acctRes.Data.TotalWalletBalance;
                     _acctUnrealizedPnl = acctRes.Data.TotalUnrealizedProfit;
+                    _acctAvailableBalance = acctRes.Data.AvailableBalance;
                 }
             }
             catch { /* account summary is a nice-to-have on this page; don't let it block position loading */ }
@@ -2991,6 +3009,58 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         }
         catch { }
         finally { _orderLoading = false; }
+    }
+
+    async Task ClosePositionRowPartial(ActivePositionInfo pos, int pct)
+    {
+        _orderLoading = true;
+        StateHasChanged();
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return;
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            bool isLong = pos.Side == "LONG";
+            var posSide = isLong ? PositionSide.Long : PositionSide.Short;
+
+            // Round the partial quantity to the symbol's real step size
+            // — an arbitrary percentage of qty almost never lands on a
+            // valid precision on its own, and an invalid quantity gets
+            // rejected by the exchange outright.
+            decimal step = 0.001m;
+            try
+            {
+                var ei = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync(cts.Token);
+                var s = ei.Success ? ei.Data.Symbols.FirstOrDefault(x => x.Name == pos.Symbol) : null;
+                if (s?.LotSizeFilter?.StepSize > 0) step = s.LotSizeFilter.StepSize.Value;
+            }
+            catch { }
+
+            decimal partialQty = Math.Floor(pos.Qty * (pct / 100m) / step) * step;
+            if (partialQty <= 0) return;
+
+            bool isHedge = false;
+            try
+            {
+                var pm = await client.UsdFuturesApi.Account.GetPositionModeAsync(ct: cts.Token);
+                isHedge = pm.Success && pm.Data?.IsHedgeMode == true;
+            }
+            catch { }
+
+            await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: pos.Symbol,
+                side: isLong ? OrderSide.Sell : OrderSide.Buy,
+                type: FuturesOrderType.Market,
+                quantity: partialQty,
+                reduceOnly: isHedge ? null : true,
+                positionSide: isHedge ? posSide : null,
+                ct: cts.Token);
+
+            await LoadAllOpenPositionsAsync();
+        }
+        catch { }
+        finally { _orderLoading = false; StateHasChanged(); }
     }
 
     async Task LoadCurrentPositionAsync(string symbol)
