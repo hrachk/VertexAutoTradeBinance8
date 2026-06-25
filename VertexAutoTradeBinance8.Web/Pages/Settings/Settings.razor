@@ -5,6 +5,7 @@
 @inject StrategyModeFileService StrategyModeSvc
 @inject IJSRuntime JS
 @inject VertexAutoTradeBinance8.Web.Services.HistoricalDataReaderService DataArchive
+@inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoAccount
 
 <PageTitle>Settings — Vertex AI</PageTitle>
 
@@ -68,6 +69,7 @@
                 case "exits":    { @ExitsTab() break; }
                 case "engine":   { @EngineTab() break; }
                 case "datadb":   { @DataArchiveTab() break; }
+                case "demo":     { @DemoTradingTab() break; }
             }
         }
 
@@ -636,6 +638,73 @@
     </div>;
 
 
+    private RenderFragment DemoTradingTab() => @<div class="st-grid">
+
+        <div class="st-card st-card-wide">
+            <div class="st-card-head"><div class="st-card-title">Demo Trading Account</div></div>
+            <div class="st-card-sub">
+                A single shared virtual account (real live prices, virtual money) — toggled on
+                the Market page's header. While active, live Buy/Sell on that page is suspended;
+                everything routes through this demo account instead. Balance changes
+                <strong>permanently</strong> on every close (realistic — it can go negative), not a
+                sandbox that resets your running result automatically.
+            </div>
+        </div>
+
+        @{
+            var demoState = DemoAccount.GetSnapshot();
+        }
+
+        <div class="st-card">
+            <div class="st-card-head"><div class="st-card-title">Current Account State</div></div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>Balance</label>
+                    <div class="st-readonly mono">$@demoState.Balance.ToString("F2")</div>
+                </div>
+                <div class="st-field">
+                    <label>Open Positions</label>
+                    <div class="st-readonly mono">@demoState.Positions.Count</div>
+                </div>
+                <div class="st-field">
+                    <label>Pending Orders</label>
+                    <div class="st-readonly mono">@demoState.PendingOrders.Count</div>
+                </div>
+                <div class="st-field">
+                    <label>Closed Trades</label>
+                    <div class="st-readonly mono">@demoState.History.Count</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head"><div class="st-card-title">Reset Account</div></div>
+            <div class="st-field">
+                <label>Starting Balance (USDT)</label>
+                <input class="st-input" type="number" min="1" step="100" value="@_demoResetBalance"
+                       @onchange="OnDemoResetBalanceChanged" />
+            </div>
+            <div class="st-card-sub" style="margin:8px 0">
+                Resetting wipes ALL current demo positions, pending orders, and trade history, and
+                sets the balance to the amount above. This cannot be undone.
+            </div>
+            @if (!_demoResetConfirm)
+            {
+                <button class="st-btn-danger" @onclick="() => _demoResetConfirm = true">Reset Demo Account</button>
+            }
+            else
+            {
+                <div class="st-confirm-row">
+                    <span>Wipe everything and start over at $@_demoResetBalance.ToString("F2")?</span>
+                    <button class="st-btn-danger" @onclick="ConfirmDemoReset">Yes, reset</button>
+                    <button class="st-btn-secondary" @onclick="() => _demoResetConfirm = false">Cancel</button>
+                </div>
+            }
+        </div>
+
+    </div>;
+
+
     // ── Tab definitions ──────────────────────────────────────
     private sealed record TabDef(string Id, string Label, string Icon, bool LiveBadge);
 
@@ -648,10 +717,31 @@
         new("exits",    "Exits & TP/SL",    "🎯", false),
         new("engine",   "Engine Info",      "🖥️", false),
         new("datadb",   "Data Archive",     "🗄️", false),
+        new("demo",     "Demo Trading",     "🎮", false),
     };
 
     private string _activeTab = "strategy";
     private string _strategyMode = "Auto";
+
+    private decimal _demoResetBalance = 1000m;
+    private bool _demoResetConfirm;
+
+    private Task OnDemoResetBalanceChanged(ChangeEventArgs e)
+    {
+        if (decimal.TryParse(e.Value?.ToString(),
+            System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var v) && v > 0)
+        {
+            _demoResetBalance = v;
+        }
+        return Task.CompletedTask;
+    }
+
+    private void ConfirmDemoReset()
+    {
+        DemoAccount.ResetAccount(_demoResetBalance);
+        _demoResetConfirm = false;
+    }
 
     private static int? ParseIntOr(object? raw, int fallback)
         => int.TryParse(raw?.ToString(), out var v) ? v : fallback;
@@ -681,6 +771,7 @@
 
     protected override async Task OnInitializedAsync()
     {
+        _demoResetBalance = DemoAccount.GetSnapshot().InitialBalance;
         await ReloadAsync();
     }
 
@@ -894,6 +985,11 @@
 
 .st-input,.st-select{width:100%;background:var(--st-bg3);border:1px solid var(--st-bdr);border-radius:8px;padding:9px 12px;color:var(--st-txt);font-size:13.5px;font-family:var(--st-mono);transition:border-color .15s;}
 .st-input:focus,.st-select:focus{outline:none;border-color:var(--st-acc);}
+.st-readonly{background:var(--st-bg3);border:1px solid var(--st-bdr);border-radius:8px;padding:9px 12px;font-size:13.5px;}
+.st-btn-danger{background:rgba(239,68,68,.12);border:1px solid #ef4444;color:#ef4444;padding:9px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;}
+.st-btn-danger:hover{background:rgba(239,68,68,.2);}
+.st-btn-secondary{background:var(--st-bg3);border:1px solid var(--st-bdr);color:var(--st-txt);padding:9px 16px;border-radius:8px;font-size:13px;cursor:pointer;}
+.st-confirm-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;}
 .st-select{cursor:pointer;}
 
 .st-toggle-row{margin-bottom:14px;}
