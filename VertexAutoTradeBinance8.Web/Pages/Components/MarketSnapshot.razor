@@ -896,7 +896,8 @@
                 </div>
 
                 @{
-                    var posOrders = _openOrders.Where(o => o.Symbol == pos.Symbol).ToList();
+                    var posOrders = _openOrders.Where(o => o.Symbol == pos.Symbol &&
+                        (string.IsNullOrEmpty(o.PositionSide) || o.PositionSide == "BOTH" || o.PositionSide == pos.Side)).ToList();
                 }
                 @if (posOrders.Any())
                 {
@@ -2642,15 +2643,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             var posSide = isLong ? PositionSide.Long : PositionSide.Short;
 
             // Find and cancel the existing protective order of the same
-            // kind for this symbol. For TP with a specific index (one
-            // of possibly several), pick from TP orders sorted the
-            // same way ShowTpSlLinesAsync sorts them for drawing —
-            // otherwise just the first match (SL only ever has one).
+            // kind for this symbol AND position side — critical in
+            // hedge mode, where the same symbol can have simultaneous
+            // LONG and SHORT positions each with their own SL/TP.
+            // Without this, dragging a line on one position could
+            // cancel and replace the OTHER position's protective order
+            // instead — a real financial risk, not just a display bug.
+            bool MatchesThisPosition(OpenOrderRow o) =>
+                o.Symbol == pos.Symbol &&
+                (string.IsNullOrEmpty(o.PositionSide) || o.PositionSide == "BOTH" || o.PositionSide == pos.Side);
+
             OpenOrderRow? existing;
             if (!isStopLoss && tpIndex.HasValue)
             {
                 var tpOrders = _openOrders
-                    .Where(o => o.Symbol == pos.Symbol && o.Type.Contains("TAKE_PROFIT"))
+                    .Where(o => MatchesThisPosition(o) && o.Type.Contains("TAKE_PROFIT"))
                     .OrderBy(o => pos.Side == "LONG" ? o.Price : -o.Price)
                     .ToList();
                 existing = tpIndex.Value >= 0 && tpIndex.Value < tpOrders.Count ? tpOrders[tpIndex.Value] : null;
@@ -2658,7 +2665,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             else
             {
                 existing = _openOrders.FirstOrDefault(o =>
-                    o.Symbol == pos.Symbol &&
+                    MatchesThisPosition(o) &&
                     (isStopLoss ? o.Type.Contains("STOP") : o.Type.Contains("TAKE_PROFIT")));
             }
 
@@ -2775,9 +2782,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     {
         if (_selectedPosition == null) return;
         var pos = _selectedPosition;
-        var sl = _openOrders.FirstOrDefault(o => o.Symbol == pos.Symbol && o.Type.Contains("STOP"))?.Price ?? 0m;
+
+        // Filter by PositionSide too, not just Symbol — critical for
+        // hedge-mode accounts where the same symbol can have
+        // simultaneous LONG and SHORT positions, each with their own
+        // SL/TP orders. In one-way mode, PositionSide is always "BOTH"
+        // regardless of actual direction, so that's accepted too
+        // (matches everything, same as before this fix, for accounts
+        // that don't use hedge mode).
+        bool MatchesPosition(OpenOrderRow o) =>
+            o.Symbol == pos.Symbol &&
+            (string.IsNullOrEmpty(o.PositionSide) || o.PositionSide == "BOTH" || o.PositionSide == pos.Side);
+
+        var sl = _openOrders.FirstOrDefault(o => MatchesPosition(o) && o.Type.Contains("STOP"))?.Price ?? 0m;
         var tps = _openOrders
-            .Where(o => o.Symbol == pos.Symbol && o.Type.Contains("TAKE_PROFIT"))
+            .Where(o => MatchesPosition(o) && o.Type.Contains("TAKE_PROFIT"))
             .OrderBy(o => pos.Side == "LONG" ? o.Price : -o.Price)
             .Select(o => o.Price)
             .ToArray();
@@ -3385,6 +3404,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         public long OrderId;
         public string Symbol = "";
         public string Side = "";
+        public string PositionSide = ""; // "LONG"/"SHORT"/"BOTH" — critical for hedge-mode accounts where one symbol can have simultaneous LONG+SHORT positions, each with their own SL/TP orders
         public string Type = "";
         public decimal Price;
         public decimal Qty;
@@ -3492,6 +3512,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                     OrderId    = GetLong("algoId"),
                     Symbol     = GetStr("symbol"),
                     Side       = GetStr("side").ToUpperInvariant(),
+                    PositionSide = GetStr("positionSide").ToUpperInvariant(),
                     // Real field name confirmed via docs is "orderType"
                     // (e.g. "TAKE_PROFIT"/"STOP"), not "type".
                     Type       = GetStr("orderType"),
@@ -3528,6 +3549,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                     OrderId    = o.Id,
                     Symbol     = o.Symbol,
                     Side       = o.Side.ToString().ToUpperInvariant(),
+                    PositionSide = o.PositionSide?.ToString().ToUpperInvariant() ?? "",
                     Type       = o.Type.ToString(),
                     // Conditional orders (STOP_MARKET / TAKE_PROFIT_MARKET,
                     // the ones our own TP/SL drag feature creates) store
