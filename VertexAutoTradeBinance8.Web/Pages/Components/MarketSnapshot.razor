@@ -475,7 +475,7 @@
             </div>
             <div class="mk-acct-item">
                 <div class="mk-acct-label">Open Positions</div>
-                <div class="mk-acct-value mono">@_allPositions.Count <span class="mk-acct-sub">($@_allPositions.Sum(p => p.Size).ToString("F2"))</span></div>
+                <div class="mk-acct-value mono">@DisplayedPositions.Count <span class="mk-acct-sub">($@DisplayedPositions.Sum(p => p.Size).ToString("F2"))</span></div>
             </div>
         </div>
 
@@ -485,7 +485,7 @@
                 <button class="mk-oo-tab @(_ooActiveTab == "positions" ? "mk-oo-tab-on" : "")"
                         @onclick="ShowPositionsTab">
                     Open Positions
-                    <span class="mk-oo-count">@_allPositions.Count</span>
+                    <span class="mk-oo-count">@DisplayedPositions.Count</span>
                 </button>
                 <button class="mk-oo-tab @(_ooActiveTab == "orders" ? "mk-oo-tab-on" : "")"
                         @onclick="ShowOrdersTab">
@@ -496,7 +496,7 @@
 
             @if (_ooActiveTab == "positions")
             {
-                @if (_allPositions.Count == 0)
+                @if (DisplayedPositions.Count == 0)
                 {
                     <div class="mk-oo-empty">No open positions</div>
                 }
@@ -511,13 +511,13 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                @foreach (var pos in _allPositions)
+                                @foreach (var pos in DisplayedPositions)
                                 {
-                                    <tr class="mk-pos-row @(_selectedPosition == pos ? "mk-pos-row-sel" : "") @(_selectingPosition == pos ? "mk-pos-row-loading" : "")"
+                                    <tr class="mk-pos-row @(PosIdentityEquals(_selectedPosition, pos) ? "mk-pos-row-sel" : "") @(PosIdentityEquals(_selectingPosition, pos) ? "mk-pos-row-loading" : "")"
                                         @onclick="() => SelectPosition(pos)">
                                         <td class="mk-oo-sym">
                                             @pos.Symbol
-                                            @if (_selectingPosition == pos)
+                                            @if (PosIdentityEquals(_selectingPosition, pos))
                                             {
                                                 <span class="mk-pos-spin">⟳</span>
                                             }
@@ -606,7 +606,7 @@
             // TRADE ORDER PANEL (right sidebar, exchange-style)
             bool isBuy = _activeSignal.Side?.ToUpper() == "BUY" || _activeSignal.Side?.ToUpper() == "LONG";
             decimal tp1 = _activeSignal.TakeProfits?.FirstOrDefault() ?? 0m;
-            <div class="ord-panel">
+            <div class="ord-panel @(_demoMode ? "ord-panel-demo" : "")">
                 <div class="ord-head">
                     <div class="ord-title">
                         @if (_activeSignal.Confidence > 0)
@@ -805,8 +805,8 @@
                             <button class="ord-submit-btn @(isBuy?"osb-buy":"osb-sell")"
                                     @onclick="PlaceManualOrder" disabled="@_orderLoading">
                                 @if (_orderLoading) { <span class="ord-spin"></span> }
-                                else if (_orderType == "Market") { @(isBuy ? "Buy Market" : "Sell Market") }
-                                else { @(isBuy ? "Buy Limit" : "Sell Limit") }
+                                else if (_orderType == "Market") { @((isBuy ? "Buy Market" : "Sell Market") + (_demoMode ? " (DEMO)" : "")) }
+                                else { @((isBuy ? "Buy Limit" : "Sell Limit") + (_demoMode ? " (DEMO)" : "")) }
                             </button>
                         }
                         else
@@ -815,12 +815,12 @@
                             <button class="ord-submit-btn osb-buy"
                                     @onclick="PlaceManualOrderBuy" disabled="@_orderLoading">
                                 @if (_orderLoading && isBuy) { <span class="ord-spin"></span> }
-                                else { @(_orderType == "Market" ? "Buy Market" : "Buy Limit") }
+                                else { @((_orderType == "Market" ? "Buy Market" : "Buy Limit") + (_demoMode ? " (DEMO)" : "")) }
                             </button>
                             <button class="ord-submit-btn osb-sell"
                                     @onclick="PlaceManualOrderSell" disabled="@_orderLoading">
                                 @if (_orderLoading && !isBuy) { <span class="ord-spin"></span> }
-                                else { @(_orderType == "Market" ? "Sell Market" : "Sell Limit") }
+                                else { @((_orderType == "Market" ? "Sell Market" : "Sell Limit") + (_demoMode ? " (DEMO)" : "")) }
                             </button>
                         }
                     </div>
@@ -1310,6 +1310,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
 /* ORDER PANEL */
 .ord-panel{margin:0;background:var(--bg3);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;}
+.ord-panel-demo{border-color:var(--yel);box-shadow:0 0 0 1px rgba(234,179,8,.25);}
 .ord-selected-label{font-size:10px;letter-spacing:1.5px;color:var(--acc);font-weight:700;text-transform:uppercase;padding:10px 18px 0;background:var(--bg2);}
 .ord-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
 
@@ -2335,6 +2336,26 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     bool _orderPanelDismissed;
     ActivePositionInfo? _currentPosition;
     List<ActivePositionInfo> _allPositions = new();
+
+    // Returns the right positions list for display depending on mode -
+    // converts DemoPosition to ActivePositionInfo (near-identical
+    // shape) so the existing table markup works unchanged for either
+    // source, rather than duplicating the whole table for two data
+    // shapes.
+    List<ActivePositionInfo> DisplayedPositions => _demoMode
+        ? _demoSnapshot.Positions.Select(p =>
+        {
+            decimal mark = DemoAccount.GetLastPrice(p.Symbol);
+            if (mark <= 0) mark = p.EntryPrice;
+            return new ActivePositionInfo
+            {
+                Id = p.Id, Symbol = p.Symbol, Side = p.Side, Leverage = p.Leverage,
+                Qty = p.Qty, Size = p.Notional(mark), EntryPrice = p.EntryPrice,
+                MarkPrice = mark, LiqPrice = p.LiqPrice, Margin = p.Margin,
+                Pnl = p.UnrealizedPnl(mark), Roi = p.Roi(mark),
+            };
+        }).ToList()
+        : _allPositions;
     decimal _acctMarginBalance, _acctWalletBalance, _acctUnrealizedPnl, _acctRealizedPnlToday, _acctAvailableBalance;
 
     // Demo trading state — per direct request, switching to Demo
@@ -3102,7 +3123,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     async Task SelectPosition(ActivePositionInfo pos)
     {
-        bool wasSelected = _selectedPosition == pos;
+        bool wasSelected = PosIdentityEquals(_selectedPosition, pos);
         var newSelection = wasSelected ? null : pos;
 
         if (newSelection == null)
@@ -3167,6 +3188,13 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     async Task ClosePositionRow(ActivePositionInfo pos)
     {
+        if (_demoMode)
+        {
+            DemoAccount.ClosePosition(pos.Id, 100m, "Manual");
+            RefreshDemoSnapshot();
+            return;
+        }
+
         _orderLoading = true;
         StateHasChanged();
         try
@@ -3195,7 +3223,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 positionSide: isHedge ? posSide : null,
                 ct: cts.Token);
 
-            if (_selectedPosition == pos) _selectedPosition = null;
+            if (PosIdentityEquals(_selectedPosition, pos)) _selectedPosition = null;
             await LoadAllOpenPositionsAsync();
         }
         catch { }
@@ -3204,6 +3232,13 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     async Task ClosePositionRowPartial(ActivePositionInfo pos, int pct)
     {
+        if (_demoMode)
+        {
+            DemoAccount.ClosePosition(pos.Id, pct, "Manual");
+            RefreshDemoSnapshot();
+            return;
+        }
+
         _orderLoading = true;
         StateHasChanged();
         try
@@ -3920,8 +3955,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         try { await JS.InvokeVoidAsync("stickyStack.dispose"); } catch { }
     }
 
+    // Stable identity comparison — needed because demo positions get
+    // freshly converted to ActivePositionInfo on every DisplayedPositions
+    // access (reference equality would never match the same logical
+    // position twice). Symbol+Side uniquely identifies a position on
+    // the real exchange too (no two simultaneous positions for the
+    // same symbol+side there), so this works correctly for both modes.
+    static bool PosIdentityEquals(ActivePositionInfo? a, ActivePositionInfo? b)
+    {
+        if (a == null || b == null) return a == b;
+        return a.Symbol == b.Symbol && a.Side == b.Side;
+    }
+
     sealed class ActivePositionInfo
     {
+        public string Id = ""; // empty for real positions (Symbol+Side used as identity there); demo positions carry their real DemoPosition.Id
         public string Symbol = "";
         public string Side = "";
         public int Leverage;
