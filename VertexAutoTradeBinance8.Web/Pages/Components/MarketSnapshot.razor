@@ -1,6 +1,7 @@
 @page "/market"
 @using VertexAutoTradeBinance8.Web.Models
 @using VertexAutoTradeBinance8.Web.Services
+@using VertexAutoTradeBinance8.Web.Demo
 @using Binance.Net.Enums
 @using VertexAutoTradeBinance8.Services
 @inject MarketSnapshotFileService Service
@@ -12,6 +13,7 @@
 @inject MissedTradeFileService SignalSvc
 @inject BinanceClientFactory Factory
 @inject VertexAutoTradeBinance8.Services.BinanceAlgoOrderService AlgoOrders
+@inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoAccount
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
@@ -30,14 +32,33 @@
         </div>
 
         <div class="mk-hright">
-            <div class="mk-hbal">
-                <span class="mk-hbal-l">Wallet</span>
-                <span class="mk-hbal-v mono">$@_acctWalletBalance.ToString("F2")</span>
-            </div>
-            <div class="mk-hbal mk-hbal-main">
-                <span class="mk-hbal-l">Available</span>
-                <span class="mk-hbal-v-main mono">$@_acctAvailableBalance.ToString("F2")</span>
-            </div>
+            <button class="mk-demo-toggle @(_demoMode ? "mk-demo-on" : "")" @onclick="ToggleDemoMode"
+                    title="@(_demoMode ? "Demo trading active — click to return to Live" : "Switch to Demo trading (virtual balance, real live prices)")">
+                <span class="mk-demo-dot"></span>
+                @(_demoMode ? "DEMO" : "LIVE")
+            </button>
+            @if (_demoMode)
+            {
+                <div class="mk-hbal">
+                    <span class="mk-hbal-l">Demo Balance</span>
+                    <span class="mk-hbal-v mono">$@_demoSnapshot.Balance.ToString("F2")</span>
+                </div>
+                <div class="mk-hbal mk-hbal-main">
+                    <span class="mk-hbal-l">Demo Equity</span>
+                    <span class="mk-hbal-v-main mono @(_demoUnrealizedTotal >= 0 ? "up" : "dn")">$@((_demoSnapshot.Balance + _demoUnrealizedTotal).ToString("F2"))</span>
+                </div>
+            }
+            else
+            {
+                <div class="mk-hbal">
+                    <span class="mk-hbal-l">Wallet</span>
+                    <span class="mk-hbal-v mono">$@_acctWalletBalance.ToString("F2")</span>
+                </div>
+                <div class="mk-hbal mk-hbal-main">
+                    <span class="mk-hbal-l">Available</span>
+                    <span class="mk-hbal-v-main mono">$@_acctAvailableBalance.ToString("F2")</span>
+                </div>
+            }
         </div>
     </div>
 
@@ -1064,6 +1085,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-title{font-family:var(--mono);font-size:17px;font-weight:700;letter-spacing:2px;color:var(--acc);}
 .mk-sub{font-size:11px;color:var(--dim);margin-top:3px;}
 .mk-hright{display:flex;align-items:center;gap:20px;}
+.mk-demo-toggle{display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;border:1px solid var(--bdr);background:var(--bg3);color:var(--dim);font-size:11px;font-weight:700;letter-spacing:.5px;cursor:pointer;transition:all .2s;}
+.mk-demo-toggle:hover{border-color:var(--acc);}
+.mk-demo-toggle.mk-demo-on{background:rgba(234,179,8,.12);border-color:var(--yel);color:var(--yel);}
+.mk-demo-dot{width:6px;height:6px;border-radius:50%;background:var(--grn);}
+.mk-demo-toggle.mk-demo-on .mk-demo-dot{background:var(--yel);}
 .mk-hbal{display:flex;flex-direction:column;align-items:flex-end;gap:1px;}
 .mk-hbal-l{font-size:9.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;}
 .mk-hbal-v{font-size:12px;font-weight:600;color:var(--txt);}
@@ -1527,6 +1553,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _chartInstanceId = Guid.NewGuid().ToString("N")[..8];
 
         LiveState.PriceTicked += OnLivePriceTicked;
+        DemoAccount.Updated += OnDemoAccountUpdated;
+        RefreshDemoSnapshot();
         LiveState.KlineClosed += OnLiveKlineClosed;
 
         await LoadData();
@@ -1546,11 +1574,56 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     string _lastTickSymbol = "";
     DateTime _lastTickTime = DateTime.MinValue;
 
+    void ToggleDemoMode()
+    {
+        _demoMode = !_demoMode;
+        // Per direct request: switching modes clears any in-progress
+        // order panel/selection so there's no chance of a half-filled
+        // form carrying over between the two accounts.
+        _activeSignal = null;
+        _selectedPosition = null;
+        _manualSlPrice = 0;
+        _manualTps.Clear();
+        _orderError = "";
+        _orderSuccess = "";
+        RefreshDemoSnapshot();
+        StateHasChanged();
+    }
+
+    void RefreshDemoSnapshot()
+    {
+        _demoSnapshot = DemoAccount.GetSnapshot();
+        decimal total = 0m;
+        foreach (var pos in _demoSnapshot.Positions)
+        {
+            var price = DemoAccount.GetLastPrice(pos.Symbol);
+            if (price > 0) total += pos.UnrealizedPnl(price);
+        }
+        _demoUnrealizedTotal = total;
+    }
+
+    void OnDemoAccountUpdated()
+    {
+        RefreshDemoSnapshot();
+        _ = InvokeAsync(StateHasChanged);
+    }
+
     void OnLivePriceTicked(string symbol, decimal price)
     {
         _liveTickCount++;
         _lastTickSymbol = symbol;
         _lastTickTime = DateTime.UtcNow;
+
+        if (_demoMode && _demoSnapshot.Positions.Any(p => p.Symbol == symbol))
+        {
+            decimal total = 0m;
+            foreach (var pos in _demoSnapshot.Positions)
+            {
+                var p2 = pos.Symbol == symbol ? price : DemoAccount.GetLastPrice(pos.Symbol);
+                if (p2 > 0) total += pos.UnrealizedPnl(p2);
+            }
+            _demoUnrealizedTotal = total;
+        }
 
         _ = InvokeAsync(async () =>
         {
@@ -2263,6 +2336,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     ActivePositionInfo? _currentPosition;
     List<ActivePositionInfo> _allPositions = new();
     decimal _acctMarginBalance, _acctWalletBalance, _acctUnrealizedPnl, _acctRealizedPnlToday, _acctAvailableBalance;
+
+    // Demo trading state — per direct request, switching to Demo
+    // suspends live Buy/Sell on this page entirely (to avoid ever
+    // confusing which account a click would affect), while the chart
+    // and live signals stay completely real underneath.
+    bool _demoMode;
+    DemoAccountState _demoSnapshot = new();
+    decimal _demoUnrealizedTotal;
     DateTime _lastRealizedPnlFetchUtc = DateTime.MinValue;
     bool _positionsLoading;
 
@@ -3614,6 +3695,62 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         await PlaceManualOrder();
     }
 
+    // Demo order execution — mirrors PlaceManualOrder's flow but routes
+    // through DemoAccountService instead of the real Binance client.
+    // Market fills immediately at the real current live price (the
+    // same feed driving the chart, via DemoAccount.GetLastPrice, with
+    // Selected.Klines as a fallback if no tick has arrived yet for this
+    // symbol); Limit/Stop become pending orders DemoAccountService
+    // monitors against the live feed going forward.
+    async Task PlaceDemoOrderAsync()
+    {
+        if (_activeSignal == null) return;
+        _orderLoading = true;
+        StateHasChanged();
+        try
+        {
+            bool isBuy = _activeSignal.Side?.ToUpper() == "BUY" || _activeSignal.Side?.ToUpper() == "LONG";
+            string side = isBuy ? "LONG" : "SHORT";
+
+            decimal? slPrice = _manualSlPrice > 0 ? _manualSlPrice : null;
+            var tpLevels = _manualTps.Where(t => t.Price > 0 && t.Pct > 0)
+                .Select(t => new DemoTpLevel { Price = t.Price, Pct = t.Pct }).ToList();
+
+            if (_orderType == "Market")
+            {
+                decimal price = DemoAccount.GetLastPrice(_activeSignal.Symbol);
+                if (price <= 0) price = Selected?.Klines.LastOrDefault()?.Close ?? 0m;
+                if (price <= 0) { _orderError = "No live price available yet for this symbol"; return; }
+
+                var (ok, error) = DemoAccount.OpenMarketPosition(
+                    _activeSignal.Symbol, side, _orderQty, _orderLeverage, price, slPrice, tpLevels);
+                if (!ok) { _orderError = error; return; }
+
+                _orderSuccess = $"[DEMO] Opened {side} {_orderQty} {_activeSignal.Symbol.Replace("USDT","")} @ {FmtP(price)}" +
+                    (slPrice.HasValue || tpLevels.Count > 0 ? " · SL/TP set" : "");
+            }
+            else
+            {
+                decimal trigger = _orderPrice;
+                if (trigger <= 0) { _orderError = "Enter a trigger price"; return; }
+                var type = _orderType == "Stop" ? DemoOrderType.StopMarket : DemoOrderType.Limit;
+
+                var (ok, error) = DemoAccount.PlacePendingOrder(
+                    _activeSignal.Symbol, side, type, trigger, _orderQty, _orderLeverage, slPrice, tpLevels);
+                if (!ok) { _orderError = error; return; }
+
+                _orderSuccess = $"[DEMO] {_orderType} order placed: {side} {_orderQty} {_activeSignal.Symbol.Replace("USDT","")} @ {FmtP(trigger)}";
+            }
+
+            _manualSlPrice = 0;
+            _manualTps.Clear();
+            _activeSignal = null;
+            RefreshDemoSnapshot();
+        }
+        catch (Exception ex) { _orderError = ex.Message; }
+        finally { _orderLoading = false; StateHasChanged(); }
+    }
+
     async Task PlaceManualOrder()
     {
         if (_activeSignal == null) return;
@@ -3622,6 +3759,17 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
         if (_orderQty <= 0)                                   { _orderError = "Enter quantity"; return; }
         if (_orderType != "Market" && _orderPrice <= 0)       { _orderError = "Enter price"; return; }
+
+        // Demo mode: route entirely through DemoAccountService, the
+        // real Binance client is never touched. Uses the real live
+        // current price (same feed powering the chart) for a Market
+        // order's fill price, so the simulation reflects genuine
+        // market conditions, not a guessed number.
+        if (_demoMode)
+        {
+            await PlaceDemoOrderAsync();
+            return;
+        }
 
         // Notional check: qty × price >= minNotional
         decimal checkPrice = _orderPrice > 0 ? _orderPrice : _activeSignal.Entry;
@@ -3764,6 +3912,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     public async ValueTask DisposeAsync()
     {
         LiveState.PriceTicked -= OnLivePriceTicked;
+        DemoAccount.Updated -= OnDemoAccountUpdated;
         LiveState.KlineClosed -= OnLiveKlineClosed;
         _cts.Cancel();
         _timer?.Dispose();
