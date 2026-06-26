@@ -492,7 +492,52 @@
                     Open Orders
                     <span class="mk-oo-count">@_openOrders.Count</span>
                 </button>
+                @if (_demoMode)
+                {
+                    <button class="mk-oo-tab @(_ooActiveTab == "history" ? "mk-oo-tab-on" : "")"
+                            @onclick="ShowHistoryTab">
+                        History
+                        <span class="mk-oo-count">@_demoSnapshot.History.Count</span>
+                    </button>
+                }
             </div>
+
+            @if (_ooActiveTab == "history" && _demoMode)
+            {
+                @if (_demoSnapshot.History.Count == 0)
+                {
+                    <div class="mk-oo-empty">No closed demo trades yet</div>
+                }
+                else
+                {
+                    <table class="mk-pos-table">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th><th>Side</th><th>Entry</th><th>Exit</th>
+                                <th>PnL</th><th>Reason</th><th>Closed</th><th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var t in _demoSnapshot.History.OrderByDescending(t => t.ClosedAtUtc))
+                            {
+                                <tr>
+                                    <td>@t.Symbol.Replace("USDT","")</td>
+                                    <td class="@(t.Side == "LONG" ? "up" : "dn")">@t.Side</td>
+                                    <td class="mk-mono">@FmtP(t.EntryPrice)</td>
+                                    <td class="mk-mono">@FmtP(t.ExitPrice)</td>
+                                    <td class="mk-mono @(t.RealizedPnl >= 0 ? "up" : "dn")">@(t.RealizedPnl >= 0 ? "+" : "")@t.RealizedPnl.ToString("F2")</td>
+                                    <td class="mk-dim">@t.CloseReason</td>
+                                    <td class="mk-dim">@t.ClosedAtUtc.ToLocalTime().ToString("MM/dd HH:mm")</td>
+                                    <td>
+                                        <button class="mk-oo-cancel"
+                                                @onclick="@(() => OpenShareCardFromHistory(t))">Share</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            }
 
             @if (_ooActiveTab == "positions")
             {
@@ -921,6 +966,19 @@
 
                 <div class="ord-body">
                     <div class="ord-position-box" style="margin:0;border:none;padding:0;">
+
+                        <!-- PnL/ROI as the dominant element up top, per
+                             direct request for a bigger/more comfortable
+                             panel — matches the share-card style. -->
+                        <div class="ord-position-pnl-hero">
+                            <span class="ord-position-pnl-hero-v @(pos.Pnl >= 0 ? "up" : "dn")">
+                                @(pos.Pnl >= 0 ? "+" : "")@pos.Pnl.ToString("F2") USDT
+                            </span>
+                            <span class="ord-position-roi-hero @(pos.Roi >= 0 ? "up" : "dn")">
+                                @(pos.Roi >= 0 ? "+" : "")@((pos.Roi * 100).ToString("F2"))% ROI
+                            </span>
+                        </div>
+
                         <div class="ord-position-grid">
                             <div class="ord-position-cell">
                                 <span class="ord-position-l">Entry Price</span>
@@ -949,15 +1007,6 @@
                                     <span class="ord-position-v mono dn">@FmtP(pos.LiqPrice)</span>
                                 </div>
                             }
-                        </div>
-
-                        <div class="ord-position-pnl-row">
-                            <span class="ord-position-pnl @(pos.Pnl >= 0 ? "up" : "dn")">
-                                @(pos.Pnl >= 0 ? "+" : "")@pos.Pnl.ToString("F4") USDT
-                            </span>
-                            <span class="ord-position-roi @(pos.Roi >= 0 ? "up" : "dn")">
-                                (@(pos.Roi >= 0 ? "+" : "")@((pos.Roi * 100).ToString("F2"))% ROI)
-                            </span>
                         </div>
 
                         @if (pos.LiqPrice > 0)
@@ -1072,6 +1121,19 @@
     </div> <!-- end mk-charts-area always-in-DOM -->
 
     <div id="sigCardFloatOverlay" class="sc-float-overlay"></div>
+
+    @if (_shareCard != null)
+    {
+        <div class="share-modal-backdrop" @onclick="CloseShareCard">
+            <div class="share-modal" @onclick:stopPropagation="true">
+                <canvas @ref="_shareCardCanvasEl" width="900" height="560" class="share-modal-canvas"></canvas>
+                <div class="share-modal-actions">
+                    <button class="share-modal-btn share-modal-btn-secondary" @onclick="CloseShareCard">Close</button>
+                    <button class="share-modal-btn share-modal-btn-primary" @onclick="DownloadShareCard">⬇ Download Image</button>
+                </div>
+            </div>
+        </div>
+    }
 
 <style>
 :root{--bg:#0a0d12;--bg2:#111520;--bg3:#1a1f2e;--bdr:#1e2535;--acc:#3b82f6;--grn:#22c55e;--red:#ef4444;--yel:#eab308;--txt:#e2e8f0;--dim:#64748b;--mono:'JetBrains Mono','Fira Code',monospace;}
@@ -1273,6 +1335,15 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .sig-card{flex-shrink:0;width:260px;min-height:0;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
 .sc-expand{display:none;}
 .sc-float-overlay{position:fixed;display:none;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;box-shadow:0 12px 28px rgba(0,0,0,.45);z-index:200;width:260px;pointer-events:none;}
+
+.share-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:500;padding:20px;}
+.share-modal{background:var(--bg2);border:1px solid var(--bdr);border-radius:16px;padding:20px;max-width:600px;width:100%;box-shadow:0 24px 60px rgba(0,0,0,.5);}
+.share-modal-canvas{width:100%;height:auto;border-radius:12px;display:block;}
+.share-modal-actions{display:flex;gap:10px;margin-top:16px;}
+.share-modal-btn{flex:1;padding:11px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid var(--bdr);}
+.share-modal-btn-secondary{background:var(--bg3);color:var(--dim);}
+.share-modal-btn-primary{background:var(--acc);color:#fff;border-color:var(--acc);}
+.share-modal-btn-primary:hover{opacity:.9;}
 .sc-float-overlay.sc-show{display:block;}
 
 .sc-prices-row{display:flex;align-items:center;gap:14px;margin-bottom:6px;}
@@ -1389,11 +1460,13 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .ord-position-box{margin-top:4px;padding:14px 16px;background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;display:flex;flex-direction:column;gap:10px;}
 .ord-position-head{display:flex;align-items:center;justify-content:space-between;}
 .ord-position-title{font-size:11px;letter-spacing:1px;color:var(--dim);font-weight:700;text-transform:uppercase;}
-.ord-position-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;}
-.ord-position-cell{display:flex;flex-direction:column;gap:2px;}
-.ord-position-l{font-size:10px;color:var(--dim);letter-spacing:.5px;}
-.ord-position-v{font-size:13px;color:var(--txt);}
-.ord-position-pnl-row{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;}
+.ord-position-pnl-hero{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;padding:4px 0 16px;border-bottom:1px solid var(--bdr);margin-bottom:16px;}
+.ord-position-pnl-hero-v{font-size:28px;font-weight:800;letter-spacing:-.5px;line-height:1;}
+.ord-position-roi-hero{font-size:15px;font-weight:700;}
+.ord-position-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 20px;}
+.ord-position-cell{display:flex;flex-direction:column;gap:4px;}
+.ord-position-l{font-size:11px;color:var(--dim);letter-spacing:.5px;}
+.ord-position-v{font-size:15px;color:var(--txt);font-weight:600;}
 .ord-position-pnl.up,.ord-position-roi.up{color:var(--grn);}
 .ord-position-pnl.dn,.ord-position-roi.dn{color:var(--red);}
 .ord-position-roi{font-size:12px;font-weight:600;}
@@ -2363,6 +2436,71 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         : _allPositions;
     decimal _acctMarginBalance, _acctWalletBalance, _acctUnrealizedPnl, _acctRealizedPnlToday, _acctAvailableBalance;
 
+    // Share-card modal state — set whenever a card should be shown
+    // (right after closing a position, or via a Share button on a
+    // closed-trade history row); null hides the modal.
+    sealed class ShareCardData
+    {
+        public string Symbol = "";
+        public string Side = "";
+        public int Leverage;
+        public decimal RoiPct;
+        public decimal Pnl;
+        public decimal EntryPrice;
+        public decimal ExitPrice;
+        public bool IsOpen; // true = still-open position (Mark Price wording), false = closed trade (Close Price wording)
+    }
+    ShareCardData? _shareCard;
+    ElementReference _shareCardCanvasEl;
+
+    void OpenShareCard(string symbol, string side, int leverage, decimal roiPct, decimal pnl,
+        decimal entryPrice, decimal exitPrice, bool isOpen)
+    {
+        _shareCard = new ShareCardData
+        {
+            Symbol = symbol, Side = side, Leverage = leverage, RoiPct = roiPct, Pnl = pnl,
+            EntryPrice = entryPrice, ExitPrice = exitPrice, IsOpen = isOpen,
+        };
+        StateHasChanged();
+        _ = RenderShareCardAsync();
+    }
+
+    void CloseShareCard() => _shareCard = null;
+
+    async Task RenderShareCardAsync()
+    {
+        if (_shareCard == null) return;
+        // Give Blazor a frame to actually mount the canvas element
+        // before JS tries to grab its 2D context.
+        await Task.Delay(30);
+        try
+        {
+            await JS.InvokeVoidAsync("shareCard.render", _shareCardCanvasEl, new
+            {
+                symbol = _shareCard.Symbol.Replace("USDT", ""),
+                side = _shareCard.Side,
+                leverage = _shareCard.Leverage,
+                roiPct = _shareCard.RoiPct,
+                pnl = _shareCard.Pnl,
+                entryPrice = FmtP(_shareCard.EntryPrice),
+                exitPrice = FmtP(_shareCard.ExitPrice),
+                isOpen = _shareCard.IsOpen,
+            });
+        }
+        catch { }
+    }
+
+    async Task DownloadShareCard()
+    {
+        if (_shareCard == null) return;
+        try
+        {
+            await JS.InvokeVoidAsync("shareCard.download", _shareCardCanvasEl,
+                $"{_shareCard.Symbol}_{(_shareCard.RoiPct >= 0 ? "profit" : "loss")}.png");
+        }
+        catch { }
+    }
+
     // Demo trading state — per direct request, switching to Demo
     // suspends live Buy/Sell on this page entirely (to avoid ever
     // confusing which account a click would affect), while the chart
@@ -3215,6 +3353,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             DemoAccount.ClosePosition(pos.Id, 100m, "Manual");
             RefreshDemoSnapshot();
+            OpenShareCard(pos.Symbol, pos.Side, pos.Leverage, pos.Roi * 100m, pos.Pnl, pos.EntryPrice, pos.MarkPrice, isOpen: false);
             return;
         }
 
@@ -3247,6 +3386,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 ct: cts.Token);
 
             if (PosIdentityEquals(_selectedPosition, pos)) _selectedPosition = null;
+            OpenShareCard(pos.Symbol, pos.Side, pos.Leverage, pos.Roi * 100m, pos.Pnl, pos.EntryPrice, pos.MarkPrice, isOpen: false);
             await LoadAllOpenPositionsAsync();
         }
         catch { }
@@ -3259,6 +3399,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             DemoAccount.ClosePosition(pos.Id, pct, "Manual");
             RefreshDemoSnapshot();
+            OpenShareCard(pos.Symbol, pos.Side, pos.Leverage, pos.Roi * 100m, pos.Pnl, pos.EntryPrice, pos.MarkPrice, isOpen: false);
             return;
         }
 
@@ -3306,6 +3447,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 positionSide: isHedge ? posSide : null,
                 ct: cts.Token);
 
+            OpenShareCard(pos.Symbol, pos.Side, pos.Leverage, pos.Roi * 100m, pos.Pnl, pos.EntryPrice, pos.MarkPrice, isOpen: false);
             await LoadAllOpenPositionsAsync();
         }
         catch { }
@@ -3423,6 +3565,15 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     void ShowPositionsTab() => _ooActiveTab = "positions";
     void ShowOrdersTab() => _ooActiveTab = "orders";
+    void ShowHistoryTab() => _ooActiveTab = "history";
+
+    void OpenShareCardFromHistory(DemoClosedTrade t)
+    {
+        decimal roiPct = t.EntryPrice > 0 && t.Qty > 0
+            ? (t.RealizedPnl / (t.EntryPrice * t.Qty)) * 100m
+            : 0m;
+        OpenShareCard(t.Symbol, t.Side, 1, roiPct, t.RealizedPnl, t.EntryPrice, t.ExitPrice, isOpen: false);
+    }
     bool _openOrdersLoading;
     long? _cancellingOrderId;
 
