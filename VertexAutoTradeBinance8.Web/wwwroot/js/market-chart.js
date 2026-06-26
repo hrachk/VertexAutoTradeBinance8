@@ -761,7 +761,18 @@
         // PnL right on the current price level.
         updatePnl(containerId, currentPrice) {
             const s = sessions.get(containerId);
-            if (!s || !s.entryPrice) return;
+            if (!s) { console.warn('[PnL] no session for', containerId); return; }
+            if (!s.entryPrice) { console.warn('[PnL] session has no entryPrice set yet — showPositionLines may not have run'); return; }
+            // Guard against the built-in last-price line and this
+            // custom PnL line both being visible at once - normally
+            // showPositionLines disables the built-in one first, but
+            // if updatePnl ever fires before that fully completes
+            // (e.g. mid-way through the async chain right after
+            // selecting a position), having both on screen for a
+            // moment looks exactly like a flicker/jump between two
+            // nearly-identical lines.
+            s.candleSeries.applyOptions({ priceLineVisible: false });
+
             const dir = s.side === 'LONG' ? 1 : -1;
             const pnl = (currentPrice - s.entryPrice) * dir * s.qty;
             const sign = pnl >= 0 ? '+' : '';

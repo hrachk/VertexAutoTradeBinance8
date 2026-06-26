@@ -1642,6 +1642,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     // ===== LIVE PUSH (from Engine via MarketDataHub) =====
     DateTime _lastLiveRender = DateTime.MinValue;
+    bool _onTickBusy;
     static readonly TimeSpan LiveRenderThrottle = TimeSpan.FromMilliseconds(200);
 
     int _liveTickCount = 0;
@@ -1700,8 +1701,13 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             _demoUnrealizedTotal = total;
         }
 
+        if (_onTickBusy) return; // drop overlapping ticks rather than letting async chains queue up and race
+        _onTickBusy = true;
+
         _ = InvokeAsync(async () =>
         {
+            try
+            {
             await InvokeAsync(StateHasChanged); // always show updated tick counter
 
             var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == _activeTf);
@@ -1741,6 +1747,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             try { await RenderCharts(); } catch { }
 
             StateHasChanged();
+            }
+            finally { _onTickBusy = false; }
         });
     }
 
