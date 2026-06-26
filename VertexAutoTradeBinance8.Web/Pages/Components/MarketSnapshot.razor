@@ -1648,6 +1648,17 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
             if (symbol != _activeSym) return; // only re-render the chart actually on screen
 
+            // Live PnL caption — cheap (just an applyOptions call, not
+            // a full chart redraw), so it updates on every tick rather
+            // than waiting on the same throttle gate as the full
+            // re-render below. This was very likely the actual reason
+            // the PnL line never appeared in practice: between
+            // throttled renders, it simply never got a chance to run.
+            if (_selectedPosition != null && _selectedPosition.Symbol == symbol)
+            {
+                try { await JS.InvokeVoidAsync("marketChart.updatePnl", $"chartContainer-{_chartInstanceId}", price); } catch { }
+            }
+
             var now = DateTime.UtcNow;
             if (now - _lastLiveRender < LiveRenderThrottle) return;
             _lastLiveRender = now;
@@ -1655,13 +1666,6 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             ResolveSelected();
             CalcStats();
             try { await RenderCharts(); } catch { }
-
-            // Live PnL caption on the entry line, if a position on this
-            // symbol is currently selected.
-            if (_selectedPosition != null && _selectedPosition.Symbol == symbol)
-            {
-                try { await JS.InvokeVoidAsync("marketChart.updatePnl", $"chartContainer-{_chartInstanceId}", price); } catch { }
-            }
 
             StateHasChanged();
         });

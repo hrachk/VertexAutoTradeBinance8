@@ -768,12 +768,12 @@
             const title = `PnL ${sign}${pnl.toFixed(2)}`;
             try {
                 if (s.pnlLine) {
-                    s.pnlLine.applyOptions({ price: currentPrice, title });
+                    s.pnlLine.applyOptions({ price: currentPrice, title, color: pnl >= 0 ? '#22c55e' : '#ef4444' });
                 } else {
                     s.pnlLine = s.candleSeries.createPriceLine({
                         price: currentPrice, color: pnl >= 0 ? '#22c55e' : '#ef4444', lineWidth: 1,
                         lineStyle: LightweightCharts.LineStyle.Dashed,
-                        axisLabelVisible: false, title,
+                        axisLabelVisible: true, title,
                     });
                 }
             } catch (e) {}
