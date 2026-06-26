@@ -759,35 +759,68 @@
         // appended there) onto its own short-lived line that tracks
         // wherever price currently is, exactly like Bybit shows live
         // PnL right on the current price level.
+        //
+        // IMPORTANT: the price line's title text and the axisLabelVisible
+        // price-scale label are two SEPARATE rendered elements - having
+        // both enabled is what caused the reported overlapping/garbled
+        // text near the right edge (title text colliding with the axis
+        // label, on top of the built-in last-price label potentially
+        // still showing too). Redesigned: the price line itself carries
+        // NO text at all (just the dashed line marking the price level);
+        // the PnL number is a separate HTML overlay positioned via
+        // priceToCoordinate, placed near the center-left of the chart
+        // per direct request — away from the crowded right edge where
+        // Entry/SL/TP/Liq/BE labels and the price scale all compete.
         updatePnl(containerId, currentPrice) {
             const s = sessions.get(containerId);
             if (!s) { console.warn('[PnL] no session for', containerId); return; }
             if (!s.entryPrice) { console.warn('[PnL] session has no entryPrice set yet — showPositionLines may not have run'); return; }
-            // Guard against the built-in last-price line and this
-            // custom PnL line both being visible at once - normally
-            // showPositionLines disables the built-in one first, but
-            // if updatePnl ever fires before that fully completes
-            // (e.g. mid-way through the async chain right after
-            // selecting a position), having both on screen for a
-            // moment looks exactly like a flicker/jump between two
-            // nearly-identical lines.
             s.candleSeries.applyOptions({ priceLineVisible: false });
 
             const dir = s.side === 'LONG' ? 1 : -1;
             const pnl = (currentPrice - s.entryPrice) * dir * s.qty;
             const sign = pnl >= 0 ? '+' : '';
-            const title = `PnL ${sign}${pnl.toFixed(2)}`;
+            const color = pnl >= 0 ? '#22c55e' : '#ef4444';
+
             try {
                 if (s.pnlLine) {
-                    s.pnlLine.applyOptions({ price: currentPrice, title, color: pnl >= 0 ? '#22c55e' : '#ef4444' });
+                    s.pnlLine.applyOptions({ price: currentPrice, color });
                 } else {
                     s.pnlLine = s.candleSeries.createPriceLine({
-                        price: currentPrice, color: pnl >= 0 ? '#22c55e' : '#ef4444', lineWidth: 1,
+                        price: currentPrice, color, lineWidth: 1,
                         lineStyle: LightweightCharts.LineStyle.Dashed,
-                        axisLabelVisible: true, title,
+                        axisLabelVisible: false, title: '',
                     });
                 }
             } catch (e) {}
+
+            // Position the floating PnL label near the center-left of
+            // the chart's visible width, vertically aligned with the
+            // current price line.
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            const y = s.candleSeries.priceToCoordinate(currentPrice);
+            if (y == null) return;
+
+            if (!s.pnlLabelEl) {
+                s.pnlLabelEl = document.createElement('div');
+                s.pnlLabelEl.style.position = 'absolute';
+                s.pnlLabelEl.style.pointerEvents = 'none';
+                s.pnlLabelEl.style.zIndex = '5';
+                s.pnlLabelEl.style.padding = '2px 8px';
+                s.pnlLabelEl.style.borderRadius = '4px';
+                s.pnlLabelEl.style.fontSize = '12px';
+                s.pnlLabelEl.style.fontWeight = '700';
+                s.pnlLabelEl.style.fontFamily = 'monospace';
+                s.pnlLabelEl.style.transform = 'translateY(-50%)';
+                if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
+                container.appendChild(s.pnlLabelEl);
+            }
+            s.pnlLabelEl.style.left = '18%';
+            s.pnlLabelEl.style.top = y + 'px';
+            s.pnlLabelEl.style.background = color;
+            s.pnlLabelEl.style.color = '#0a0d12';
+            s.pnlLabelEl.textContent = `PnL ${sign}${pnl.toFixed(2)}`;
         },
 
         hidePositionLines(containerId) {
@@ -798,6 +831,7 @@
             if (s.liqLine) { try { s.candleSeries.removePriceLine(s.liqLine); } catch (e) {} s.liqLine = null; }
             if (s.beLine) { try { s.candleSeries.removePriceLine(s.beLine); } catch (e) {} s.beLine = null; }
             if (s.pnlLine) { try { s.candleSeries.removePriceLine(s.pnlLine); } catch (e) {} s.pnlLine = null; }
+            if (s.pnlLabelEl) { try { s.pnlLabelEl.remove(); } catch (e) {} s.pnlLabelEl = null; }
             this.hideTpSlLines(containerId);
             this.setTpSlArmed(containerId, false);
             if (s.previewLine) { try { s.candleSeries.removePriceLine(s.previewLine); } catch (e) {} s.previewLine = null; }
