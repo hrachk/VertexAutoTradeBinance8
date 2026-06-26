@@ -3431,7 +3431,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             {
                 var ei = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync(cts.Token);
                 var s = ei.Success ? ei.Data.Symbols.FirstOrDefault(x => x.Name == pos.Symbol) : null;
-                if (s?.LotSizeFilter?.StepSize > 0) step = s.LotSizeFilter.StepSize.Value;
+                if (s?.LotSizeFilter?.StepSize > 0) step = s.LotSizeFilter.StepSize;
             }
             catch { }
 
@@ -3712,7 +3712,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                     OrderId    = o.Id,
                     Symbol     = o.Symbol,
                     Side       = o.Side.ToString().ToUpperInvariant(),
-                    PositionSide = o.PositionSide?.ToString().ToUpperInvariant() ?? "",
+                    PositionSide = o.PositionSide.ToString().ToUpperInvariant() ?? "",
                     Type       = o.Type.ToString(),
                     // Conditional orders (STOP_MARKET / TAKE_PROFIT_MARKET,
                     // the ones our own TP/SL drag feature creates) store
