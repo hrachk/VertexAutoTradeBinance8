@@ -311,28 +311,60 @@
 
         <!-- Price chart -->
         <div class="mk-chart-head">
-            <div class="mk-chart-title-ticker">
-                @if (Selected != null)
-                {
-                    <span class="mk-tsym">@Selected.Symbol</span>
-                    <span class="mk-ttf">@TfLabel(Selected.Timeframe)</span>
-                    @if (_last > 0)
-                    {
-                        <span class="mk-tprice">@FmtP(_last)</span>
-                        <span class="mk-tchg @(_chg >= 0 ? "up" : "dn")">
-                            @(_chg >= 0 ? "▲" : "▼") @Math.Abs(_chg).ToString("F2")%
-                        </span>
-                    }
-                }
-                else
-                {
-                    <span class="mk-dim">No symbol selected</span>
-                }
-                <button class="mk-btn mk-btn-inline @(Frozen?"mk-btn-on":"")" @onclick="ToggleFreeze">
-                    @(Frozen ? "⏸ Paused" : "▶ Live")
+            <div class="mk-chart-head-left">
+            <div class="mk-max-sym-wrap">
+                <button class="mk-max-sym" @onclick="ToggleMaxSymPicker">
+                    @(Selected?.Symbol ?? "")
+                    <span class="mk-max-tf">@TfLabel(Selected?.Timeframe ?? "")</span>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mk-max-sym-caret"><path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
+                @if (_maxSymPickerOpen)
+                {
+                    <div class="mk-max-sym-dropdown">
+                        <input class="mk-max-sym-search" type="text" placeholder="Search symbol…"
+                               value="@_instrumentSearch" @oninput="OnInstrumentSearchChanged" autofocus />
+                        <div class="mk-max-sym-list">
+                            @{
+                                var stdAllInstruments = Series
+                                    .GroupBy(x => x.Symbol)
+                                    .Select(g => g.OrderByDescending(x => x.Klines.Count).First())
+                                    .ToList();
+                                var stdFiltered = string.IsNullOrWhiteSpace(_instrumentSearch)
+                                    ? stdAllInstruments
+                                    : stdAllInstruments.Where(s => s.Symbol.Contains(_instrumentSearch, StringComparison.OrdinalIgnoreCase)).ToList();
+                            }
+                            @foreach (var s in stdFiltered.OrderBy(s => s.Symbol))
+                            {
+                                var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
+                                <div class="mk-max-sym-row @(s.Symbol==_activeSym?"mk-max-sym-row-sel":"")"
+                                     @onclick="() => PickSymInMaximize(s.Symbol)">
+                                    <span>@s.Symbol</span>
+                                    <span class="mono mk-dim">@FmtP(last)</span>
+                                </div>
+                            }
+                            @if (!stdFiltered.Any())
+                            {
+                                <div class="mk-side-empty">No match</div>
+                            }
+                        </div>
+                    </div>
+                }
             </div>
-            <div class="mk-legend">
+            <div class="mk-max-price @(_chg >= 0 ? "up" : "dn")">@FmtP(_last)</div>
+
+            <div class="mk-max-trade">
+                <input class="mk-max-qty mono" type="number" title="Quantity"
+                       value="@(_orderQty > 0 ? _orderQty.ToString("G8") : "")"
+                       @onchange="OnQtyChange" placeholder="Qty" />
+                <button class="mk-max-buy" disabled="@_orderLoading" @onclick="() => QuickMarketOrder(true)">Buy</button>
+                <button class="mk-max-sell" disabled="@_orderLoading" @onclick="() => QuickMarketOrder(false)">Sell</button>
+            </div>
+
+            <button class="mk-btn mk-btn-inline @(Frozen?"mk-btn-on":"")" @onclick="ToggleFreeze">
+                @(Frozen ? "⏸ Paused" : "▶ Live")
+            </button>
+            </div>
+        <div class="mk-legend">
                 <span style="color:#38bdf8">── EMA21</span>
                 <span style="color:#a855f7">── EMA55</span>
                 <span style="color:#ef4444">RSI · ── OB 70 / OS 30</span>
@@ -361,54 +393,6 @@
             @if (_chartMaximized)
             {
                 <div class="mk-max-bar">
-                    <div class="mk-max-sym-wrap">
-                        <button class="mk-max-sym" @onclick="ToggleMaxSymPicker">
-                            @(Selected?.Symbol ?? "")
-                            <span class="mk-max-tf">@TfLabel(Selected?.Timeframe ?? "")</span>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mk-max-sym-caret"><path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                        </button>
-                        @if (_maxSymPickerOpen)
-                        {
-                            <div class="mk-max-sym-dropdown">
-                                <input class="mk-max-sym-search" type="text" placeholder="Search symbol…"
-                                       value="@_instrumentSearch" @oninput="OnInstrumentSearchChanged" autofocus />
-                                <div class="mk-max-sym-list">
-                                    @{
-                                        var maxAllInstruments = Series
-                                            .GroupBy(x => x.Symbol)
-                                            .Select(g => g.OrderByDescending(x => x.Klines.Count).First())
-                                            .ToList();
-                                        var maxFiltered = string.IsNullOrWhiteSpace(_instrumentSearch)
-                                            ? maxAllInstruments
-                                            : maxAllInstruments.Where(s => s.Symbol.Contains(_instrumentSearch, StringComparison.OrdinalIgnoreCase)).ToList();
-                                    }
-                                    @foreach (var s in maxFiltered.OrderBy(s => s.Symbol))
-                                    {
-                                        var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
-                                        <div class="mk-max-sym-row @(s.Symbol==_activeSym?"mk-max-sym-row-sel":"")"
-                                             @onclick="() => PickSymInMaximize(s.Symbol)">
-                                            <span>@s.Symbol</span>
-                                            <span class="mono mk-dim">@FmtP(last)</span>
-                                        </div>
-                                    }
-                                    @if (!maxFiltered.Any())
-                                    {
-                                        <div class="mk-side-empty">No match</div>
-                                    }
-                                </div>
-                            </div>
-                        }
-                    </div>
-                    <div class="mk-max-price @(_chg >= 0 ? "up" : "dn")">@FmtP(_last)</div>
-
-                    <div class="mk-max-trade">
-                        <input class="mk-max-qty mono" type="number" title="Quantity"
-                               value="@(_orderQty > 0 ? _orderQty.ToString("G8") : "")"
-                               @onchange="OnQtyChange" placeholder="Qty" />
-                        <button class="mk-max-buy" disabled="@_orderLoading" @onclick="() => QuickMarketOrder(true)">Buy</button>
-                        <button class="mk-max-sell" disabled="@_orderLoading" @onclick="() => QuickMarketOrder(false)">Sell</button>
-                    </div>
-
                     <button class="mk-max-restore" @onclick="ToggleChartMaximized" title="Restore">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         Restore
@@ -490,7 +474,7 @@
                 <button class="mk-oo-tab @(_ooActiveTab == "orders" ? "mk-oo-tab-on" : "")"
                         @onclick="ShowOrdersTab">
                     Open Orders
-                    <span class="mk-oo-count">@_openOrders.Count</span>
+                    <span class="mk-oo-count">@(_demoMode ? _demoSnapshot.PendingOrders.Count : _openOrders.Count)</span>
                 </button>
                 @if (_demoMode)
                 {
@@ -599,6 +583,46 @@
             }
             else
             {
+                @if (_demoMode)
+                {
+                    @if (_demoSnapshot.PendingOrders.Count == 0)
+                    {
+                        <div class="mk-oo-empty">No open demo orders</div>
+                    }
+                    else
+                    {
+                        <div class="mk-oo-scroll">
+                            <table class="mk-oo-tbl">
+                                <thead>
+                                    <tr>
+                                        <th>Symbol</th><th>Side</th><th>Type</th>
+                                        <th>Trigger</th><th>Qty</th><th>Lev</th><th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var o in _demoSnapshot.PendingOrders)
+                                    {
+                                        <tr>
+                                            <td class="mk-oo-sym">@o.Symbol</td>
+                                            <td class="@(o.Side == "LONG" ? "up" : "dn")">@o.Side</td>
+                                            <td class="mk-dim">@(o.Type == DemoOrderType.Limit ? "LIMIT" : "STOP_MARKET")</td>
+                                            <td class="mk-mono">@FmtP(o.TriggerPrice)</td>
+                                            <td class="mk-mono">@o.Qty.ToString("G8")</td>
+                                            <td class="mk-dim">@o.Leverage×</td>
+                                            <td>
+                                                <button class="mk-oo-cancel" @onclick="() => CancelDemoPendingOrder(o.Id)">
+                                                    Cancel
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                }
+                else
+                {
                 @if (!string.IsNullOrEmpty(_lastAlgoOrdersDebug))
                 {
                     <div class="mk-algo-debug">⚙ Algo orders fetch: @_lastAlgoOrdersDebug</div>
@@ -638,6 +662,7 @@
                             </tbody>
                         </table>
                     </div>
+                }
                 }
             }
         </div>
@@ -1009,7 +1034,7 @@
                             }
                         </div>
 
-                        @if (pos.LiqPrice > 0)
+                                        @if (pos.LiqPrice > 0)
                         {
                             <div class="ord-position-liq-warn">
                                 ⚠ Liquidation @FmtP(pos.LiqPrice) — @liqDistPct.ToString("F1")% от mark price
@@ -1024,6 +1049,62 @@
                             @if (_orderLoading) { <span class="ord-spin"></span> } else { @("Close Position") }
                         </button>
                     </div>
+
+                    <!-- Add to Position — per direct request: there was
+                         no way to add margin/quantity to an already-
+                         selected position, since opening Manual Trade
+                         used to clobber this panel entirely. Reuses
+                         the exact same fields/submit flow, just scoped
+                         to this position's own side so it can only add,
+                         never accidentally flip direction. -->
+                    @if (!_addToPositionOpen)
+                    {
+                        <button class="ord-add-to-pos-btn" @onclick="() => _addToPositionOpen = true">
+                            + Add to Position
+                        </button>
+                    }
+                    else
+                    {
+                        <div class="ord-add-to-pos-box">
+                            <div class="ord-add-to-pos-head">
+                                <span>Add to @(posIsLong ? "Long" : "Short") @pos.Symbol</span>
+                                <button class="ord-close-x" @onclick="() => _addToPositionOpen = false">✕</button>
+                            </div>
+
+                            <div class="ord-row">
+                                <label class="ord-label">Leverage <span class="mono">@_orderLeverage×</span></label>
+                                <input type="range" min="1" max="@_symMaxLev" step="1"
+                                       class="ord-leverage-slider"
+                                       @bind="_orderLeverage" @bind:event="oninput" />
+                            </div>
+
+                            <div class="ord-row">
+                                <label class="ord-label">Quantity</label>
+                                <div class="ord-input-wrap">
+                                    <input class="ord-input mono" type="number"
+                                           step="@(_symStep > 0 ? _symStep.ToString("G8") : "any")"
+                                           value="@(_orderQty > 0 ? _orderQty.ToString("G8") : "")"
+                                           @onchange="OnQtyChange" />
+                                    <span class="ord-input-sfx">@pos.Symbol.Replace("USDT","")</span>
+                                </div>
+                            </div>
+
+                            @if (!string.IsNullOrEmpty(_orderError))
+                            {
+                                <div class="ord-error">@_orderError</div>
+                            }
+                            @if (!string.IsNullOrEmpty(_orderSuccess))
+                            {
+                                <div class="ord-success">@_orderSuccess</div>
+                            }
+
+                            <button class="ord-submit-btn @(posIsLong ? "osb-buy" : "osb-sell")" disabled="@_orderLoading"
+                                    @onclick="() => AddToPosition(pos)">
+                                @if (_orderLoading) { <span class="ord-spin"></span> }
+                                else { @($"{(posIsLong ? "Buy" : "Sell")} Market{(_demoMode ? " (DEMO)" : "")}") }
+                            </button>
+                        </div>
+                    }
                 </div>
             </div>
         }
@@ -1259,7 +1340,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 @@keyframes mkFadeIn{from{opacity:0;}to{opacity:1;}}
 
 @@media(max-width:700px){.mk-chart-maximized{top:8px;left:8px;right:8px;bottom:8px;}}
-.mk-chart-title-ticker{display:flex;align-items:baseline;gap:8px;}
+.mk-chart-head-left{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
 .mk-legend{display:flex;gap:14px;font-size:11px;color:var(--dim);}
 /* TICKER BAR */
 .mk-ticker-bar{position:sticky;z-index:25;background:var(--bg2);border-bottom:1px solid var(--bdr);overflow-x:auto;scrollbar-width:none;cursor:grab;}
@@ -1471,11 +1552,16 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .ord-position-pnl.dn,.ord-position-roi.dn{color:var(--red);}
 .ord-position-roi{font-size:12px;font-weight:600;}
 .ord-position-liq-warn{padding:7px 10px;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.25);border-radius:6px;font-size:11px;color:#f59e0b;}
+.ord-add-to-pos-btn{width:100%;margin-top:10px;padding:9px;background:rgba(59,130,246,.08);border:1px dashed var(--acc);border-radius:6px;color:var(--acc);font-size:12px;font-weight:600;cursor:pointer;}
+.ord-add-to-pos-btn:hover{background:rgba(59,130,246,.15);}
+.ord-add-to-pos-box{margin-top:10px;padding:12px;background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;display:flex;flex-direction:column;gap:10px;}
+.ord-add-to-pos-head{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:600;color:var(--txt);}
+.ord-leverage-slider{width:100%;}
 .ord-position-close-btn{border:1px solid rgba(239,68,68,.4);background:rgba(239,68,68,.08);color:var(--red);padding:9px;border-radius:7px;font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:8px;}
 .ord-position-close-btn:hover:not(:disabled){background:rgba(239,68,68,.18);box-shadow:0 4px 14px rgba(239,68,68,.25);}
 .ord-position-close-btn:disabled{opacity:.5;cursor:not-allowed;}
 
-.mk-side-tbl{margin-top:4px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;overflow:hidden;}
+.mk-side-tbl{margin-top:4px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;overflow:auto;resize:vertical;height:340px;min-height:160px;max-height:900px;}
 .mk-side-tbl-title{font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--dim);font-weight:700;padding:10px 14px 8px;}
 
 .mk-side-search-wrap{display:flex;align-items:center;gap:6px;margin:0 14px 8px;padding:6px 10px;background:var(--bg);border:1px solid var(--bdr);border-radius:8px;}
@@ -1488,7 +1574,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-side-rank{font-family:var(--mono);font-size:10px;color:var(--acc);font-weight:700;width:16px;flex-shrink:0;text-align:center;}
 .mk-side-empty{padding:16px 14px;text-align:center;color:var(--dim);font-size:12px;}
 
-.mk-side-tbl-scroll{max-height:280px;overflow-y:auto;scrollbar-width:none;}
+.mk-side-tbl-scroll{overflow-y:auto;scrollbar-width:none;}
 .mk-side-tbl-scroll::-webkit-scrollbar{display:none;}
 .mk-side-row{display:flex;align-items:center;gap:8px;padding:7px 14px;cursor:pointer;transition:background .1s;border-top:1px solid var(--bdr);}
 .mk-side-row:first-child{border-top:none;}
@@ -1524,7 +1610,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-acct-value{font-size:16px;font-weight:700;}
 .mk-acct-sub{font-size:11px;font-weight:500;color:var(--dim);margin-left:4px;}
 @@media(max-width:900px){.mk-acct-summary{flex-wrap:wrap;gap:10px;}.mk-acct-item{flex:1 1 45%;border-right:none;border-bottom:1px solid var(--bdr);padding-bottom:8px;}}
-.mk-oo-panel{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:18px 20px;}
+.mk-oo-panel{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:18px 20px;overflow:auto;resize:vertical;min-height:220px;max-height:1200px;}
 .mk-oo-tabs{display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--bdr);padding-bottom:0;}
 .mk-oo-tab{display:flex;align-items:center;gap:8px;background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:13px;letter-spacing:.5px;font-weight:700;padding:10px 6px 12px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s;min-width:140px;}
 .mk-oo-tab:hover{color:var(--txt);}
@@ -2550,6 +2636,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     decimal _orderQty;
     int _orderLeverage = 10;
     bool _orderLoading;
+    bool _addToPositionOpen;
     string _orderError = string.Empty;
 
     decimal _manualSlPrice;
@@ -2794,6 +2881,27 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     async Task ReplaceProtectiveOrderAsync(ActivePositionInfo pos, bool isStopLoss, decimal newPrice, int? tpIndex = null)
     {
+        // CRITICAL SAFETY CHECK: this previously never checked
+        // _demoMode at all, meaning dragging a TP/SL line while in
+        // demo mode was attempting to place a REAL order on the
+        // actual Binance account — exactly why it appeared to "not
+        // work" (the real exchange likely rejected a TP/SL for a
+        // symbol/side with no matching real position), but more
+        // importantly a genuine safety risk if conditions ever aligned
+        // to let it through. Demo mode now mutates the in-memory demo
+        // position's StopLoss/TakeProfits directly instead — no
+        // separate order object needed, since DemoPosition already
+        // embeds these levels and DemoAccountService's own price-tick
+        // monitor watches them directly.
+        if (_demoMode)
+        {
+            decimal price = _symTickSize > 0 ? Math.Round(newPrice / _symTickSize) * _symTickSize : newPrice;
+            DemoAccount.UpdatePositionProtectiveLevel(pos.Id, isStopLoss, price, tpIndex);
+            RefreshDemoSnapshot();
+            await RefreshPositionLines();
+            return;
+        }
+
         _slTpDragBusy = true;
         try
         {
@@ -3314,6 +3422,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _selectedPosition = null;
         _activeSignal = null;
         _orderPanelDismissed = true;
+        _addToPositionOpen = false;
         try { await JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}"); } catch { }
         StateHasChanged();
     }
@@ -3342,6 +3451,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         // at all, so there's no layout jump while data loads.
         _selectingPosition = pos;
         _orderPanelDismissed = false;
+        _addToPositionOpen = false;
         StateHasChanged();
 
         // Selecting a new position: do ALL the network/data work FIRST,
@@ -3606,6 +3716,12 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     void ShowPositionsTab() => _ooActiveTab = "positions";
     void ShowOrdersTab() => _ooActiveTab = "orders";
     void ShowHistoryTab() => _ooActiveTab = "history";
+
+    void CancelDemoPendingOrder(string id)
+    {
+        DemoAccount.CancelPendingOrder(id);
+        RefreshDemoSnapshot();
+    }
 
     void OpenShareCardFromHistory(DemoClosedTrade t)
     {
@@ -3955,6 +4071,76 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // Selected.Klines as a fallback if no tick has arrived yet for this
     // symbol); Limit/Stop become pending orders DemoAccountService
     // monitors against the live feed going forward.
+    // Adds quantity to an already-selected position — per direct
+    // request, there was no way to do this once a position was
+    // selected, since opening Manual Trade used to clobber this panel
+    // entirely. Always uses the position's own side, so this can only
+    // ever add to it, never accidentally open the opposite direction.
+    async Task AddToPosition(ActivePositionInfo pos)
+    {
+        if (_orderQty <= 0) { _orderError = "Enter quantity"; return; }
+        _orderError = "";
+        _orderSuccess = "";
+
+        if (_demoMode)
+        {
+            _orderLoading = true;
+            StateHasChanged();
+            try
+            {
+                decimal price = DemoAccount.GetLastPrice(pos.Symbol);
+                if (price <= 0) price = pos.MarkPrice;
+                if (price <= 0) { _orderError = "No live price available yet"; return; }
+
+                var (ok, error) = DemoAccount.OpenMarketPosition(
+                    pos.Symbol, pos.Side, _orderQty, _orderLeverage, price, null, null);
+                if (!ok) { _orderError = error; return; }
+
+                _orderSuccess = $"[DEMO] Added {_orderQty} {pos.Symbol.Replace("USDT","")} to {pos.Side} @ {FmtP(price)}";
+                _orderQty = 0;
+                _addToPositionOpen = false;
+                RefreshDemoSnapshot();
+            }
+            finally { _orderLoading = false; StateHasChanged(); }
+            return;
+        }
+
+        _orderLoading = true;
+        StateHasChanged();
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) { _orderError = "No API credentials configured"; return; }
+
+            bool isLong = pos.Side == "LONG";
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+            decimal step = _symStep > 0 ? _symStep : 0.001m;
+            decimal qty = Math.Floor(_orderQty / step) * step;
+            if (qty <= 0) { _orderError = "Quantity too small after rounding"; return; }
+
+            try { await client.UsdFuturesApi.Account.ChangeInitialLeverageAsync(pos.Symbol, _orderLeverage, ct: cts.Token); } catch { }
+
+            var pm = await client.UsdFuturesApi.Account.GetPositionModeAsync(ct: cts.Token);
+            bool isHedge = pm.Success && pm.Data?.IsHedgeMode == true;
+
+            await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: pos.Symbol,
+                side: isLong ? OrderSide.Buy : OrderSide.Sell,
+                type: FuturesOrderType.Market,
+                quantity: qty,
+                positionSide: isHedge ? (isLong ? PositionSide.Long : PositionSide.Short) : null,
+                ct: cts.Token);
+
+            _orderSuccess = $"Added {qty} {pos.Symbol.Replace("USDT","")} to {pos.Side}";
+            _orderQty = 0;
+            _addToPositionOpen = false;
+            await LoadAllOpenPositionsAsync();
+        }
+        catch (Exception ex) { _orderError = ex.Message; }
+        finally { _orderLoading = false; StateHasChanged(); }
+    }
+
     async Task PlaceDemoOrderAsync()
     {
         if (_activeSignal == null) return;

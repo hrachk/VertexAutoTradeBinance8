@@ -102,6 +102,35 @@ public sealed class DemoAccountService
             if (margin > _state.Balance)
                 return (false, $"Insufficient demo balance: need ${margin:F2}, have ${_state.Balance:F2}");
 
+            // CRITICAL: both Binance and Bybit always track a single
+            // position per symbol+side — adding to an existing
+            // position averages the entry price (weighted by quantity),
+            // it never creates a second record. Replicating that exact
+            // behavior here, rather than always creating a brand new
+            // DemoPosition, which previously meant buying the same
+            // symbol+side twice incorrectly showed up as two separate
+            // rows instead of one merged position.
+            var existing = _state.Positions.FirstOrDefault(p => p.Symbol == symbol && p.Side == side);
+            if (existing != null)
+            {
+                decimal totalQty = existing.Qty + qty;
+                existing.EntryPrice = ((existing.EntryPrice * existing.Qty) + (currentPrice * qty)) / totalQty;
+                existing.Qty = totalQty;
+                existing.Margin += margin;
+                existing.Leverage = leverage; // last-set leverage wins, matching how the real exchange treats leverage as a symbol-level setting, not per-fill
+                // SL/TP on an add-to-position stay as whatever the
+                // position already had — a fresh add usually doesn't
+                // come with new protective levels, and overwriting
+                // existing ones here would be a surprising side effect.
+                if (stopLoss.HasValue && stopLoss.Value > 0) existing.StopLoss = stopLoss;
+                if (takeProfits != null && takeProfits.Count > 0) existing.TakeProfits = takeProfits;
+                Save();
+                _logger.LogInformation("[DEMO] Added {side} {symbol} qty={qty} @ {price} — merged into existing position, new avg entry {entry}",
+                    side, symbol, qty, currentPrice, existing.EntryPrice);
+                Updated?.Invoke();
+                return (true, "");
+            }
+
             var pos = new DemoPosition
             {
                 Symbol = symbol, Side = side, Qty = qty, Leverage = leverage,
@@ -145,6 +174,38 @@ public sealed class DemoAccountService
             if (removed) Save();
             return removed;
         }
+    }
+
+    // Updates a position's SL or one of its TP levels (or adds a new
+    // TP level when tpIndex is null/out of range) — used by the
+    // chart's drag-to-set-TP/SL flow. The proper, explicit way to
+    // mutate a position's protective levels, rather than relying on
+    // GetSnapshot's returned objects happening to share references
+    // with the internal state.
+    public bool UpdatePositionProtectiveLevel(string positionId, bool isStopLoss, decimal price, int? tpIndex)
+    {
+        lock (_lock)
+        {
+            var pos = _state.Positions.FirstOrDefault(p => p.Id == positionId);
+            if (pos == null) return false;
+
+            if (isStopLoss)
+            {
+                pos.StopLoss = price;
+            }
+            else if (tpIndex.HasValue && tpIndex.Value >= 0 && tpIndex.Value < pos.TakeProfits.Count)
+            {
+                pos.TakeProfits[tpIndex.Value].Price = price;
+            }
+            else
+            {
+                pos.TakeProfits.Add(new DemoTpLevel { Price = price, Pct = 100m });
+            }
+
+            Save();
+        }
+        Updated?.Invoke();
+        return true;
     }
 
     // ===================== Closing positions =====================
