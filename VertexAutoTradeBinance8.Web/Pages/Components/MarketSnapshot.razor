@@ -2102,6 +2102,17 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                     await LoadCurrentPositionAsync(_activeSignal.Symbol);
                 await LoadOpenOrdersAsync();
                 await LoadAllOpenPositionsAsync();
+                await CleanupOrphanedProtectiveOrdersAsync();
+                if (_tpSlEditMode && _selectedPosition != null)
+                {
+                    // Re-render with the now-current order list — this
+                    // is what catches a TP/SL that just filled on the
+                    // real exchange and removes its now-stale line
+                    // from the chart, instead of leaving it drawn
+                    // forever until the user manually toggles the
+                    // TP/SL view off and on again.
+                    await ShowTpSlLinesAsync();
+                }
                 // StateHasChanged triggers OnAfterRenderAsync which calls
                 // RenderCharts only when data actually changed
                 await InvokeAsync(StateHasChanged);
@@ -4050,6 +4061,51 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             await InvokeAsync(StateHasChanged);
         }
         catch { }
+    }
+
+    // Per direct report of "garbage" leftover conditional orders on
+    // the exchange: when a position closes (e.g. via SL), any OTHER
+    // TP levels for that exact symbol+side that never got consumed
+    // become permanently unfillable orphans - Binance Futures doesn't
+    // auto-cancel a position's other reduce-only orders just because
+    // the position itself closed. Left alone, they'd sit there
+    // forever cluttering the open-orders list. Demo mode is skipped
+    // entirely - it has no real exchange orders to clean up, and its
+    // own ClosePositionInternal already clears a closed position's
+    // protective levels in-memory the instant it closes.
+    async Task CleanupOrphanedProtectiveOrdersAsync()
+    {
+        if (_demoMode) return;
+
+        var orphans = _openOrders
+            .Where(o => o.ReduceOnly)
+            .Where(o => !_allPositions.Any(p =>
+                p.Symbol == o.Symbol &&
+                (string.IsNullOrEmpty(o.PositionSide) || o.PositionSide == "BOTH" || o.PositionSide == p.Side)))
+            .ToList();
+
+        if (orphans.Count == 0) return;
+
+        foreach (var o in orphans)
+        {
+            try
+            {
+                if (o.IsAlgo)
+                {
+                    await CancelAlgoOrderRawAsync(o.Symbol, o.OrderId);
+                }
+                else
+                {
+                    var client = Factory.TryCreateRestClient();
+                    if (client == null) continue;
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                    await client.UsdFuturesApi.Trading.CancelOrderAsync(o.Symbol, o.OrderId, ct: cts.Token);
+                }
+            }
+            catch { /* best-effort cleanup — a failure here just means it's retried on the next tick */ }
+        }
+
+        await LoadOpenOrdersAsync();
     }
 
     async Task CancelOpenOrderAsync(OpenOrderRow row)
