@@ -2068,7 +2068,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         // whenever it has an open position, regardless of whether the
         // user got here by clicking the positions table row or just
         // picking the symbol from the ticker/search/anywhere else.
-        var existingPos = _allPositions.FirstOrDefault(p => p.Symbol == sym);
+        var existingPos = DisplayedPositions.FirstOrDefault(p => p.Symbol == sym);
         if (existingPos != null)
         {
             _selectedPosition = existingPos;
@@ -2345,7 +2345,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         Selected = s;
         CalcStats();
 
-        var existingPos = _allPositions.FirstOrDefault(p => p.Symbol == s.Symbol);
+        var existingPos = DisplayedPositions.FirstOrDefault(p => p.Symbol == s.Symbol);
         if (existingPos != null)
         {
             _selectedPosition = existingPos;
