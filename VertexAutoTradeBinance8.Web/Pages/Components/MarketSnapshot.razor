@@ -1108,7 +1108,7 @@
                          never accidentally flip direction. -->
                     @if (!_addToPositionOpen)
                     {
-                        <button class="ord-add-to-pos-btn" @onclick="() => _addToPositionOpen = true">
+                        <button class="ord-add-to-pos-btn" @onclick="() => OpenAddToPosition(pos)">
                             + Add to Position
                         </button>
                     }
@@ -1119,6 +1119,24 @@
                                 <span>Add to @(posIsLong ? "Long" : "Short") @pos.Symbol</span>
                                 <button class="ord-close-x" @onclick="() => _addToPositionOpen = false">✕</button>
                             </div>
+
+                            <div class="ord-row">
+                                <div class="ord-type-tabs">
+                                    <button class="ord-type-tab @(_addToPosType=="Market"?"ord-type-tab-on":"")" @onclick="() => _addToPosType = \"Market\"">Market</button>
+                                    <button class="ord-type-tab @(_addToPosType=="Limit"?"ord-type-tab-on":"")" @onclick="() => _addToPosType = \"Limit\"">Limit</button>
+                                </div>
+                            </div>
+
+                            @if (_addToPosType == "Limit")
+                            {
+                                <div class="ord-row">
+                                    <label class="ord-label">Limit Price</label>
+                                    <input class="ord-input mono" type="number"
+                                           step="@(_symTickSize > 0 ? _symTickSize.ToString("G8") : "any")"
+                                           value="@(_addToPosPrice > 0 ? _addToPosPrice.ToString("G8") : "")"
+                                           @onchange="@(e => _addToPosPrice = ParseDecOr(e.Value, _addToPosPrice))" />
+                                </div>
+                            }
 
                             <div class="ord-row">
                                 <label class="ord-label">Leverage <span class="mono">@_orderLeverage×</span></label>
@@ -1150,7 +1168,7 @@
                             <button class="ord-submit-btn @(posIsLong ? "osb-buy" : "osb-sell")" disabled="@_orderLoading"
                                     @onclick="() => AddToPosition(pos)">
                                 @if (_orderLoading) { <span class="ord-spin"></span> }
-                                else { @($"{(posIsLong ? "Buy" : "Sell")} Market{(_demoMode ? " (DEMO)" : "")}") }
+                                else { @($"{(posIsLong ? "Buy" : "Sell")} {_addToPosType}{(_demoMode ? " (DEMO)" : "")}") }
                             </button>
                         </div>
                     }
@@ -1524,7 +1542,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 /* ORDER PANEL */
 .ord-panel{margin:0;background:var(--bg3);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;}
 .ord-panel-demo{border-color:var(--yel);box-shadow:0 0 0 1px rgba(234,179,8,.25);}
-.ord-selected-label{font-size:10px;letter-spacing:1.5px;color:var(--acc);font-weight:700;text-transform:uppercase;padding:10px 18px 0;background:var(--bg2);}
+.ord-selected-label{font-size:11px;letter-spacing:1.5px;color:var(--acc);font-weight:700;text-transform:uppercase;padding:10px 18px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
 .ord-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
 
 .ord-pos-orders{padding:12px 18px;border-bottom:1px solid var(--bdr);background:rgba(59,130,246,0.04);}
@@ -1615,6 +1633,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .ord-add-to-pos-btn{width:100%;margin-top:10px;padding:9px;background:rgba(59,130,246,.08);border:1px dashed var(--acc);border-radius:6px;color:var(--acc);font-size:12px;font-weight:600;cursor:pointer;}
 .ord-add-to-pos-btn:hover{background:rgba(59,130,246,.15);}
 .ord-add-to-pos-box{margin-top:10px;padding:12px;background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;display:flex;flex-direction:column;gap:10px;}
+.ord-type-tabs{display:flex;gap:4px;background:var(--bg3);border-radius:6px;padding:3px;}
+.ord-type-tab{flex:1;padding:6px;border:none;background:none;border-radius:5px;font-size:12px;font-weight:600;color:var(--dim);cursor:pointer;}
+.ord-type-tab.ord-type-tab-on{background:var(--acc);color:#fff;}
 .ord-add-to-pos-head{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:600;color:var(--txt);}
 .ord-leverage-slider{width:100%;}
 .ord-position-close-btn{border:1px solid rgba(239,68,68,.4);background:rgba(239,68,68,.08);color:var(--red);padding:9px;border-radius:7px;font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:8px;}
@@ -2739,6 +2760,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     int _orderLeverage = 10;
     bool _orderLoading;
     bool _addToPositionOpen;
+    string _addToPosType = "Market";
+    decimal _addToPosPrice;
     string _orderError = string.Empty;
 
     decimal _manualSlPrice;
@@ -2945,7 +2968,31 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     [JSInvokable]
     public async Task OnPricePicked(decimal price)
     {
-        if (_activeSignal == null || price <= 0) return;
+        if (price <= 0) return;
+
+        // Case 1: the Add to Position form is open (a position is
+        // selected) — fill its Limit price and switch it to Limit,
+        // since picking a price only makes sense for a non-Market
+        // order.
+        if (_addToPositionOpen && _selectedPosition != null)
+        {
+            _addToPosType = "Limit";
+            _addToPosPrice = _symTickSize > 0 ? Math.Round(price / _symTickSize) * _symTickSize : price;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        // Case 2: no Manual Trade panel open yet (e.g. a position is
+        // selected but Add to Position isn't expanded) — open one for
+        // the active symbol, matching what right-clicking used to do
+        // before any position was ever selected, rather than silently
+        // doing nothing.
+        if (_activeSignal == null && !string.IsNullOrEmpty(_activeSym) && _selectedPosition == null)
+        {
+            OpenManualPanelFor(_activeSym, _last);
+        }
+
+        if (_activeSignal == null) return; // still nothing to fill into (e.g. a position IS selected but its Add form isn't open)
 
         // Picking a price only makes sense for Limit/Stop orders
         if (_orderType == "Market") _orderType = "Limit";
@@ -4127,6 +4174,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             : v;
     }
 
+    static decimal ParseDecOr(object? raw, decimal fallback)
+        => decimal.TryParse(raw?.ToString(),
+            System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : fallback;
+
     void CancelOrder()
     {
         _orderError   = string.Empty;
@@ -4189,9 +4241,73 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // selected, since opening Manual Trade used to clobber this panel
     // entirely. Always uses the position's own side, so this can only
     // ever add to it, never accidentally open the opposite direction.
+    async Task OpenAddToPosition(ActivePositionInfo pos)
+    {
+        _orderError = "";
+        _orderSuccess = "";
+        _orderQty = 0;
+        _addToPosType = "Market";
+        _addToPosPrice = pos.MarkPrice;
+        _addToPositionOpen = true;
+        StateHasChanged();
+
+        // Bug fix: this previously just flipped a boolean with no
+        // initialization at all - _symMaxLev/_symStep could be stale
+        // from whatever OTHER symbol's form was last opened (or still
+        // zero, if none ever was this session), and _orderQty could
+        // be a leftover non-zero value from somewhere else, making
+        // the form look broken when AddToPosition immediately failed
+        // or used the wrong rounding/leverage cap.
+        if (!_demoMode)
+        {
+            try
+            {
+                var client = Factory.TryCreateRestClient();
+                if (client == null) return;
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+
+                var ei = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync(cts.Token);
+                if (ei.Success)
+                {
+                    var s = ei.Data.Symbols.FirstOrDefault(x => x.Name == pos.Symbol);
+                    if (s != null)
+                    {
+                        _symTickSize = s.PriceFilter?.TickSize ?? 0.0001m;
+                        _symStep = s.LotSizeFilter?.StepSize ?? 0.001m;
+                    }
+                }
+
+                try
+                {
+                    var br = await client.UsdFuturesApi.Account.GetBracketsAsync(pos.Symbol, ct: cts.Token);
+                    if (br.Success && br.Data != null)
+                    {
+                        var sb = br.Data.FirstOrDefault(b => b.Symbol == pos.Symbol);
+                        if (sb?.Brackets?.Length > 0) _symMaxLev = sb.Brackets.Max(b => b.InitialLeverage);
+                    }
+                }
+                catch { }
+            }
+            catch { }
+        }
+        else
+        {
+            // Demo mode has no exchange-info call to make — fall back
+            // to a conservative, always-safe step/leverage cap rather
+            // than leaving whatever was set before (which might not
+            // even apply to this symbol).
+            _symStep = _symStep > 0 ? _symStep : 0.001m;
+            _symMaxLev = _symMaxLev > 0 ? _symMaxLev : 20;
+        }
+
+        _orderLeverage = Math.Min(pos.Leverage > 0 ? pos.Leverage : 10, Math.Max(1, _symMaxLev));
+        StateHasChanged();
+    }
+
     async Task AddToPosition(ActivePositionInfo pos)
     {
         if (_orderQty <= 0) { _orderError = "Enter quantity"; return; }
+        if (_addToPosType == "Limit" && _addToPosPrice <= 0) { _orderError = "Enter a limit price"; return; }
         _orderError = "";
         _orderSuccess = "";
 
@@ -4201,15 +4317,31 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             StateHasChanged();
             try
             {
-                decimal price = DemoAccount.GetLastPrice(pos.Symbol);
-                if (price <= 0) price = pos.MarkPrice;
-                if (price <= 0) { _orderError = "No live price available yet"; return; }
+                if (_addToPosType == "Market")
+                {
+                    decimal price = DemoAccount.GetLastPrice(pos.Symbol);
+                    if (price <= 0) price = pos.MarkPrice;
+                    if (price <= 0) { _orderError = "No live price available yet"; return; }
 
-                var (ok, error) = DemoAccount.OpenMarketPosition(
-                    pos.Symbol, pos.Side, _orderQty, _orderLeverage, price, null, null);
-                if (!ok) { _orderError = error; return; }
+                    var (ok, error) = DemoAccount.OpenMarketPosition(
+                        pos.Symbol, pos.Side, _orderQty, _orderLeverage, price, null, null);
+                    if (!ok) { _orderError = error; return; }
 
-                _orderSuccess = $"[DEMO] Added {_orderQty} {pos.Symbol.Replace("USDT","")} to {pos.Side} @ {FmtP(price)}";
+                    _orderSuccess = $"[DEMO] Added {_orderQty} {pos.Symbol.Replace("USDT","")} to {pos.Side} @ {FmtP(price)}";
+                }
+                else
+                {
+                    // Bug fix #2: Limit support for Add to Position -
+                    // previously Market was the only option. Demo
+                    // routes through the same pending-order mechanism
+                    // regular Manual Trade limit orders already use.
+                    var (ok, error) = DemoAccount.PlacePendingOrder(
+                        pos.Symbol, pos.Side, DemoOrderType.Limit, _addToPosPrice, _orderQty, _orderLeverage, null, null);
+                    if (!ok) { _orderError = error; return; }
+
+                    _orderSuccess = $"[DEMO] Limit order placed: add {_orderQty} {pos.Symbol.Replace("USDT","")} to {pos.Side} @ {FmtP(_addToPosPrice)}";
+                }
+
                 _orderQty = 0;
                 _addToPositionOpen = false;
                 RefreshDemoSnapshot();
@@ -4237,15 +4369,39 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             var pm = await client.UsdFuturesApi.Account.GetPositionModeAsync(ct: cts.Token);
             bool isHedge = pm.Success && pm.Data?.IsHedgeMode == true;
 
-            await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol: pos.Symbol,
-                side: isLong ? OrderSide.Buy : OrderSide.Sell,
-                type: FuturesOrderType.Market,
-                quantity: qty,
-                positionSide: isHedge ? (isLong ? PositionSide.Long : PositionSide.Short) : null,
-                ct: cts.Token);
+            if (_addToPosType == "Market")
+            {
+                await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol: pos.Symbol,
+                    side: isLong ? OrderSide.Buy : OrderSide.Sell,
+                    type: FuturesOrderType.Market,
+                    quantity: qty,
+                    positionSide: isHedge ? (isLong ? PositionSide.Long : PositionSide.Short) : null,
+                    ct: cts.Token);
 
-            _orderSuccess = $"Added {qty} {pos.Symbol.Replace("USDT","")} to {pos.Side}";
+                _orderSuccess = $"Added {qty} {pos.Symbol.Replace("USDT","")} to {pos.Side}";
+            }
+            else
+            {
+                // Bug fix #2: real-mode Limit support for Add to
+                // Position - same rounding/leverage/hedge-mode
+                // handling as Market above, just a GTC Limit order
+                // instead of an immediate Market fill.
+                decimal limitPrice = _symTickSize > 0 ? Math.Round(_addToPosPrice / _symTickSize) * _symTickSize : _addToPosPrice;
+
+                await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol: pos.Symbol,
+                    side: isLong ? OrderSide.Buy : OrderSide.Sell,
+                    type: FuturesOrderType.Limit,
+                    quantity: qty,
+                    price: limitPrice,
+                    timeInForce: TimeInForce.GoodTillCanceled,
+                    positionSide: isHedge ? (isLong ? PositionSide.Long : PositionSide.Short) : null,
+                    ct: cts.Token);
+
+                _orderSuccess = $"Limit order placed: add {qty} {pos.Symbol.Replace("USDT","")} to {pos.Side} @ {FmtP(limitPrice)}";
+            }
+
             _orderQty = 0;
             _addToPositionOpen = false;
             await LoadAllOpenPositionsAsync();
