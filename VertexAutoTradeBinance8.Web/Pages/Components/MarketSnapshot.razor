@@ -1018,7 +1018,7 @@
                     </div>
 
                     <div class="ord-actions" style="margin-top:16px;">
-                        <button class="ord-cancel-btn" @onclick="() => _selectedPosition = null">Close Panel</button>
+                        <button class="ord-cancel-btn" @onclick="ClosePositionPanel">Close Panel</button>
                         <button class="ord-submit-btn osb-sell" disabled="@_orderLoading"
                                 @onclick="() => ClosePositionRow(pos)">
                             @if (_orderLoading) { <span class="ord-spin"></span> } else { @("Close Position") }
@@ -1027,7 +1027,7 @@
                 </div>
             </div>
         }
-        else if (Selected != null && _openOrders.Any(o => o.Symbol == Selected.Symbol))
+        else if (!_orderPanelDismissed && Selected != null && _openOrders.Any(o => o.Symbol == Selected.Symbol))
         {
             // No open position for this symbol, but there ARE open
             // orders (e.g. a pending limit entry that hasn't filled
@@ -2057,6 +2057,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     void PickSym(string sym)
     {
         _activeSym = sym;
+        _orderPanelDismissed = false;
         // Try to keep current TF, fallback to first available
         var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == _activeTf)
             ?? Series.FirstOrDefault(s => s.Symbol == sym);
@@ -2342,6 +2343,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     {
         _activeSym = s.Symbol;
         _activeTf  = s.Timeframe;
+        _orderPanelDismissed = false;
         Selected = s;
         CalcStats();
 
@@ -3307,26 +3309,39 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     ActivePositionInfo? _selectedPosition;
     ActivePositionInfo? _selectingPosition;
 
+    async Task ClosePositionPanel()
+    {
+        _selectedPosition = null;
+        _activeSignal = null;
+        _orderPanelDismissed = true;
+        try { await JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}"); } catch { }
+        StateHasChanged();
+    }
+
     async Task SelectPosition(ActivePositionInfo pos)
     {
-        bool wasSelected = PosIdentityEquals(_selectedPosition, pos);
-        var newSelection = wasSelected ? null : pos;
-
-        if (newSelection == null)
+        // No more toggle-to-deselect on a second click of the same
+        // row — that's what caused the reported "different panel
+        // shows on every other click": deselecting cleared
+        // _selectedPosition but left _activeSym pointing at the same
+        // symbol, so the right panel fell through to the unrelated
+        // "Open Orders for SYMBOL" branch (since that symbol's TP/SL
+        // orders still existed) instead of staying empty - looking
+        // like two competing logics randomly alternating. There's
+        // already a dedicated Close Panel (✕) button for explicitly
+        // dismissing the panel, so clicking the same row again simply
+        // re-shows the same position now, with no surprising side
+        // effect.
+        if (PosIdentityEquals(_selectedPosition, pos))
         {
-            // Deselecting: hide chart lines, clear context, one clean
-            // render — no network calls needed for this direction.
-            _selectedPosition = null;
-            _activeSignal = null;
-            try { await JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}"); } catch { }
-            StateHasChanged();
-            return;
+            return; // already showing this exact position — nothing to do
         }
 
         // Show a small, localized loading spinner on just this row —
         // doesn't touch the side panel, chart, or ALL INSTRUMENTS list
         // at all, so there's no layout jump while data loads.
         _selectingPosition = pos;
+        _orderPanelDismissed = false;
         StateHasChanged();
 
         // Selecting a new position: do ALL the network/data work FIRST,
