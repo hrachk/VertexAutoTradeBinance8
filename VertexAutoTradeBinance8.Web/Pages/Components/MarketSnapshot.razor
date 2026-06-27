@@ -2149,7 +2149,18 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     void PickSymAndTrade(string sym, decimal lastPrice)
     {
         PickSym(sym);
-        OpenManualPanelFor(sym, lastPrice);
+        // Per direct request: don't let the Manual Trade panel
+        // clobber the Selected Position panel PickSym just set up -
+        // if this symbol already has an open position, that panel is
+        // what should show; opening a fresh-entry form on top of an
+        // existing position is what caused the reported "toggle"
+        // behavior (first click via the positions table showed the
+        // position correctly, a second click via the ticker switched
+        // straight to Manual Trade, wiping out _selectedPosition).
+        if (_selectedPosition == null)
+        {
+            OpenManualPanelFor(sym, lastPrice);
+        }
     }
 
     void PickTf(string tf)
@@ -2354,12 +2365,18 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     }
 
     // Row click in the ALL INSTRUMENTS table: same as ticker click —
-    // switch chart AND open the order panel for a manual trade.
+    // switch chart AND open the order panel for a manual trade,
+    // unless this symbol already has an open position (Pick already
+    // selected that position's own panel — see PickSymAndTrade for
+    // the full explanation of why this guard matters).
     void PickAndTrade(MarketSeries s)
     {
         Pick(s);
-        var lastPrice = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
-        OpenManualPanelFor(s.Symbol, lastPrice);
+        if (_selectedPosition == null)
+        {
+            var lastPrice = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
+            OpenManualPanelFor(s.Symbol, lastPrice);
+        }
     }
 
     void ToggleFreeze() => Frozen = !Frozen;
@@ -3894,10 +3911,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         // same order-placing logic as the regular order panel (qty
         // rounding, notional checks, leverage, API call) — this is
         // just a fast path to get there without leaving fullscreen.
-        if (_activeSignal == null || _activeSignal.Symbol != _activeSym)
+        if (_selectedPosition == null && (_activeSignal == null || _activeSignal.Symbol != _activeSym))
         {
             OpenManualPanelFor(_activeSym, _last);
         }
+        if (_activeSignal == null) return; // still no panel (e.g. a position is selected instead) — nothing to submit
         _orderType = "Market";
         _activeSignal!.Side = isBuy ? "BUY" : "SELL";
         await PlaceManualOrder();
