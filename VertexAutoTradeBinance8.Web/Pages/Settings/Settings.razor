@@ -1003,7 +1003,7 @@
 
     private async Task OnDcaSymbolWeightChanged(string symbol, ChangeEventArgs e)
     {
-        decimal newWeight = ParseDecimalOr(e.Value, 1m);
+        decimal newWeight = ParseDecimalOr(e.Value, 1m) ?? 1m;
         var symbols = GetDcaSymbols();
         await SaveDcaSymbolsAsync(symbols.Select(s => s.Symbol == symbol ? (s.Symbol, newWeight) : s).ToList());
     }
@@ -1019,7 +1019,7 @@
         var sym = _dcaNewSymbol.Trim().ToUpperInvariant();
         if (sym == "") { ShowToast("Enter a symbol first", isError: true); return; }
         if (!sym.EndsWith("USDT")) sym += "USDT";
-        decimal weight = ParseDecimalOr(_dcaNewWeight, 1m);
+        decimal weight = ParseDecimalOr(_dcaNewWeight, 1m) ?? 1m;
 
         var symbols = GetDcaSymbols();
         if (symbols.Any(s => s.Symbol == sym)) { ShowToast($"{sym} is already in the list", isError: true); return; }
