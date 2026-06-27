@@ -513,7 +513,7 @@
         </div>
 
         <!-- OPEN POSITIONS / OPEN ORDERS — tabbed, share one panel -->
-        <div class="mk-oo-panel">
+        <div class="mk-oo-panel" id="mkOoPanel">
             <div class="mk-oo-tabs">
                 <button class="mk-oo-tab @(_ooActiveTab == "positions" ? "mk-oo-tab-on" : "")"
                         @onclick="ShowPositionsTab">
@@ -1670,7 +1670,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-acct-value{font-size:16px;font-weight:700;}
 .mk-acct-sub{font-size:11px;font-weight:500;color:var(--dim);margin-left:4px;}
 @@media(max-width:900px){.mk-acct-summary{flex-wrap:wrap;gap:10px;}.mk-acct-item{flex:1 1 45%;border-right:none;border-bottom:1px solid var(--bdr);padding-bottom:8px;}}
-.mk-oo-panel{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:18px 20px;overflow:auto;resize:vertical;min-height:220px;max-height:1200px;}
+.mk-oo-panel{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:18px 20px;overflow:auto;resize:vertical;height:480px;max-height:2000px;}
 .mk-oo-tabs{display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--bdr);padding-bottom:0;}
 .mk-oo-tab{display:flex;align-items:center;gap:8px;background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:13px;letter-spacing:.5px;font-weight:700;padding:10px 6px 12px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s;min-width:140px;}
 .mk-oo-tab:hover{color:var(--txt);}
@@ -1682,7 +1682,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-oo-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
 .mk-oo-empty{font-size:13px;color:var(--dim);padding:24px 2px;text-align:center;}
 .mk-algo-debug{font-size:11px;color:var(--acc);background:rgba(59,130,246,0.08);padding:6px 10px;border-radius:6px;margin-bottom:10px;word-break:break-all;}
-.mk-oo-scroll{max-height:280px;overflow-y:auto;scrollbar-width:none;}
+.mk-oo-scroll{overflow-y:visible;scrollbar-width:none;}
 .mk-oo-scroll::-webkit-scrollbar{display:none;}
 .mk-oo-tbl{width:100%;border-collapse:collapse;}
 .mk-oo-tbl th{position:sticky;top:0;background:var(--bg2);text-align:left;padding:8px 14px;font-size:11px;letter-spacing:.5px;color:var(--dim);border-bottom:1px solid var(--bdr);white-space:nowrap;font-weight:600;}
@@ -1822,6 +1822,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             if (price > 0) total += pos.UnrealizedPnl(price);
         }
         _demoUnrealizedTotal = total;
+        _ooPanelNeedsAutoFit = true;
     }
 
     void OnDemoAccountUpdated()
@@ -2008,6 +2009,12 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 });
             }
             catch { /* non-critical visual enhancement; page works without it */ }
+        }
+
+        if (_ooPanelNeedsAutoFit)
+        {
+            _ooPanelNeedsAutoFit = false;
+            try { await JS.InvokeVoidAsync("autoFitPanel.fit", "mkOoPanel", 2000); } catch { }
         }
 
         // Render whenever chart is ready and data changed
@@ -2714,6 +2721,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     decimal _demoUnrealizedTotal;
     DateTime _lastRealizedPnlFetchUtc = DateTime.MinValue;
     bool _positionsLoading;
+    bool _ooPanelNeedsAutoFit;
 
     bool PosIsLong => _currentPosition?.Side == "LONG";
 
@@ -3510,7 +3518,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             await InvokeAsync(StateHasChanged);
         }
         catch { }
-        finally { _positionsLoading = false; }
+        finally { _positionsLoading = false; _ooPanelNeedsAutoFit = true; }
     }
 
     // Selecting a row in the positions table shows its details in the
