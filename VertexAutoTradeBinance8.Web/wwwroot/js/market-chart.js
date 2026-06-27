@@ -31,9 +31,11 @@
     function disposeSession(containerId) {
         const s = sessions.get(containerId);
         if (!s) return;
+        if (s.abortController) { try { s.abortController.abort(); } catch (e) {} }
         if (s.previewBox && s.previewBox.parentNode) s.previewBox.remove();
         if (s.previewVLine && s.previewVLine.parentNode) s.previewVLine.remove();
         if (s.tooltipEl && s.tooltipEl.parentNode) s.tooltipEl.remove();
+        if (s.pnlLabelEl && s.pnlLabelEl.parentNode) s.pnlLabelEl.remove();
         try { s.chart.remove(); } catch (e) { /* already gone */ }
         sessions.delete(containerId);
     }
@@ -296,6 +298,26 @@
             };
             sessions.set(containerId, session);
 
+            // CRITICAL FIX for a confirmed leak: the event listeners
+            // attached to `container` below persisted across repeated
+            // init() calls on the same containerId — disposeSession
+            // correctly tore down the chart instance and its own DOM
+            // elements, but never removed these, since the container
+            // element itself isn't recreated on re-init. Each re-init
+            // (the comment above already flagged this as a known
+            // possibility - "however many times Blazor calls this")
+            // silently added one more full set of mousedown/mousemove/
+            // mouseup/mouseleave/contextmenu handlers on top of the
+            // previous ones, making every subsequent mouse interaction
+            // on the chart progressively more expensive — likely a
+            // significant contributor to the reported "page gets
+            // heavier over time" issue. One AbortController whose
+            // signal is passed to every addEventListener call below
+            // lets disposeSession remove the entire set in one call.
+            const abortController = new AbortController();
+            session.abortController = abortController;
+            const listenerOpts = { signal: abortController.signal };
+
             // ── Bybit-style drag-to-set TP/SL ───────────────────────
             // Lightweight Charts v5's core API does not expose a
             // built-in draggable price line (open feature request,
@@ -402,7 +424,7 @@
                 session.dragging = true;
                 container.style.cursor = 'grabbing';
                 e.preventDefault();
-            });
+            }, listenerOpts);
 
             container.addEventListener('mousemove', (e) => {
                 if (!session.entryPrice) return;
@@ -474,7 +496,7 @@
                 box.style.border = `1px solid ${isProfitSide ? '#22c55e' : '#ef4444'}`;
                 box.style.color = isProfitSide ? '#22c55e' : '#ef4444';
                 box.textContent = `Expected ${isProfitSide ? 'Profit' : 'Loss'} ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)}`;
-            });
+            }, listenerOpts);
 
             container.addEventListener('mouseup', (e) => {
                 // Finished dragging an EXISTING SL/TP line to a new
@@ -520,7 +542,7 @@
                 } else {
                     if (session.onSlChanged) session.onSlChanged(price);
                 }
-            });
+            }, listenerOpts);
 
             container.addEventListener('mouseleave', () => {
                 if (session.dragging) { session.dragging = false; removePreview(); }
@@ -529,7 +551,7 @@
                     session.draggingLineKind = null;
                     session.draggingLineIdx = null;
                 }
-            });
+            }, listenerOpts);
 
             container.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
@@ -544,7 +566,7 @@
                     axisLabelVisible: true, title: 'pick',
                 });
                 if (session.onPricePicked) session.onPricePicked(price);
-            });
+            }, listenerOpts);
 
             return true;
         },
