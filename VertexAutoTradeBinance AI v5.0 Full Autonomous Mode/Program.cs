@@ -311,6 +311,8 @@ public class Program
                         ctx.Configuration.GetSection("SymbolSelection"));
                     services.Configure<PullbackEntryOptions>(
                         ctx.Configuration.GetSection("Strategy:PullbackEntry"));
+                    services.Configure<DcaOptions>(
+                        ctx.Configuration.GetSection("Dca"));
                     services.AddSingleton(sp =>
                     {
                         // NOTE: uses "StrategyRouting:Mode", NOT "Strategy:Mode" —
@@ -340,6 +342,7 @@ public class Program
                     // ===== HOSTED =====
                     services.AddHostedService<SupervisorBootstrapHostedService>();
                     services.AddHostedService<BackgroundMarketScannerService>();
+                    services.AddHostedService<DcaService>();
                     services.AddHostedService<TradingWorker>();
                     services.AddHostedService<BinanceUserDataHostedService>();
                     services.AddHostedService<KlineSnapshotLiveSaver>();
