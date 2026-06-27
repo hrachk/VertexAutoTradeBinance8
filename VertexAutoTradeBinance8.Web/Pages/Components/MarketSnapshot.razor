@@ -69,7 +69,7 @@
                 <div class="sig-panel-title">
                     <span class="sig-dot"></span>
                     LIVE SIGNALS
-                    <span class="sig-count">@_signals.Count</span>
+                    <span class="sig-count">@DisplayedSignals.Count</span>
                     <div class="mk-header-scan">
                         <span class="mk-header-scan-dot"></span>
                         Detecting
@@ -80,11 +80,19 @@
                     </div>
                 </div>
                 <div class="sig-panel-right">
-                    @if (_signals.Any())
+                    <button class="sig-hidden-toggle @(_showHiddenSignals ? "sig-hidden-toggle-on" : "")"
+                            @onclick="ToggleHiddenSignals" title="Signals that expired in the last hour">
+                        Hidden Signals
+                        @if (_recentExpiredSignals.Count > 0)
+                        {
+                            <span class="sig-hidden-count">@_recentExpiredSignals.Count</span>
+                        }
+                    </button>
+                    @if (_signals.Any() && !_showHiddenSignals)
                     {
                         <div class="sig-panel-sub">Click a signal to trade manually</div>
                     }
-                    <div class="sig-pager @(_signals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
+                    <div class="sig-pager @(DisplayedSignals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
                         @for (int p = 0; p < _sigPageCount; p++)
                         {
                             int pageIdx = p;
@@ -95,10 +103,10 @@
                     </div>
                 </div>
             </div>
-            @if (_signals.Any())
+            @if (DisplayedSignals.Any())
             {
             <div class="sig-cards" id="sigCardsScroll" @ref="_sigCardsEl">
-                @foreach (var sig in _signals)
+                @foreach (var sig in DisplayedSignals)
                 {
                     bool sigIsBuy = sig.Side?.ToUpper() == "BUY" || sig.Side?.ToUpper() == "LONG";
                     bool isActive = _activeSignal == sig;
@@ -113,7 +121,7 @@
                     var ttl = GetSignalTtl(sig);
                     bool isRemoving = _expiredSignals.ContainsKey(SignalKey(sig));
 
-                    <div class="sig-card @(sigIsBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @((belowThreshold || lowRr) ? "sc-below-threshold" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "")"
+                    <div class="sig-card @(sigIsBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @((belowThreshold || lowRr) ? "sc-below-threshold" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "") @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-pinned" : "")"
                          @key="SignalKey(sig)"
                          @onclick="() => SelectSignal(sig)">
 
@@ -131,6 +139,11 @@
                             <span class="sc-side @(sigIsBuy ? "sc-side-b" : "sc-side-s")">
                                 @(sigIsBuy ? "▲ LONG" : "▼ SHORT")
                             </span>
+                            <button class="sc-pin-btn @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-pin-btn-on" : "")"
+                                    title="@(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "Unpin (allow auto-collapse)" : "Pin (keep expanded)")"
+                                    @onclick="() => TogglePinSignal(sig)" @onclick:stopPropagation="true">
+                                📌
+                            </button>
                             <span class="sc-ago">@FmtAgo(sig.Time)</span>
                         </div>
                         <div class="sc-conf-wrap">
@@ -145,12 +158,19 @@
                             </div>
                         }
 
-                        <!-- EXPANDED: kept in DOM (off-screen via display:none on the
-                             card itself when not hovered) purely as a content source
-                             for the JS-driven fixed overlay below — this same markup
-                             never renders inline, so it can never be clipped by the
-                             scroll container's overflow-x:auto. -->
-                        <div class="sc-expand" id="sc-expand-@SignalKey(sig)" style="display:none;">
+                        <!-- EXPANDED: normally kept in DOM (off-screen via
+                             display:none on the card itself) purely as a
+                             content source for the JS-driven fixed overlay
+                             (sig-card-hover.js) — that overlay only ever
+                             supports one active card at a time though, so a
+                             PINNED card instead renders this inline for
+                             real (no display:none), achieved entirely via
+                             Blazor state rather than the JS hover mechanism,
+                             letting multiple cards stay expanded
+                             simultaneously. -->
+                        <div class="sc-expand @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-expand-pinned" : "")"
+                             id="sc-expand-@SignalKey(sig)"
+                             style="@(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "" : "display:none;")">
                             @if (belowThreshold)
                             {
                                 <div class="sc-threshold-badge" title="@($"Confidence {conf}% is below this symbol's {(ConfidenceResolver.Resolve(sig.Symbol).MinEntry*100).ToString("F0")}% entry threshold — the bot would not have opened this trade")">
@@ -175,10 +195,39 @@
                                     }
                                 </div>
                                 <div class="sc-p"><span class="sc-pl">SL</span><span class="sc-pv mono dn">@FmtP(sig.StopLoss)</span></div>
-                                @if (sigTp1 > 0) {
-                                    <div class="sc-p"><span class="sc-pl">TP1</span><span class="sc-pv mono up">@FmtP(sigTp1)</span></div>
-                                }
                             </div>
+                            @if (sig.TakeProfits != null && sig.TakeProfits.Count > 0)
+                            {
+                                <!-- ALL TP levels, not just the first — a
+                                     signal carrying 2-4 TPs (common for
+                                     this strategy) needs all of them
+                                     visible to judge the full trade plan,
+                                     not just where it first takes profit. -->
+                                <div class="sc-prices-row sc-tp-row-all">
+                                    @for (int tpI = 0; tpI < sig.TakeProfits.Count; tpI++)
+                                    {
+                                        var tpVal = sig.TakeProfits[tpI];
+                                        <div class="sc-p">
+                                            <span class="sc-pl">TP@(sig.TakeProfits.Count > 1 ? (tpI + 1).ToString() : "")</span>
+                                            <span class="sc-pv mono up">@FmtP(tpVal)</span>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                            @if (!string.IsNullOrEmpty(sig.SmartType) || sig.Regime != VertexAutoTradeBinance8.Models.MarketRegime.Unknown)
+                            {
+                                <!-- Regime/strategy context — genuinely
+                                     populated on every signal but
+                                     previously never surfaced here, even
+                                     though it's exactly the kind of
+                                     context (trend vs range, which
+                                     sub-strategy fired) a trader needs to
+                                     judge whether to act on a signal. -->
+                                <div class="sc-regime-row mk-dim">
+                                    @if (sig.Regime != VertexAutoTradeBinance8.Models.MarketRegime.Unknown) { <span>@sig.Regime</span> }
+                                    @if (!string.IsNullOrEmpty(sig.SmartType)) { <span>· @sig.SmartType</span> }
+                                </div>
+                            }
 
                             <!-- Footer: confidence/RR/ATR + TTL bar combined in one slim row -->
                             <div class="sc-foot">
@@ -1377,6 +1426,10 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 @@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(34,197,94,.4);}50%{box-shadow:0 0 0 6px rgba(34,197,94,0);}}
 .sig-count{background:var(--acc);color:#fff;font-size:10px;padding:1px 6px;border-radius:8px;font-family:sans-serif;}
 .sig-panel-sub{font-size:11px;color:var(--dim);}
+.sig-hidden-toggle{display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:14px;border:1px solid var(--bdr);background:var(--bg3);color:var(--dim);font-size:11px;font-weight:600;cursor:pointer;}
+.sig-hidden-toggle:hover{border-color:var(--acc);}
+.sig-hidden-toggle.sig-hidden-toggle-on{background:rgba(59,130,246,.12);border-color:var(--acc);color:var(--acc);}
+.sig-hidden-count{background:var(--bg2);border-radius:8px;padding:0 6px;font-size:10px;}
 .sig-cards{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin;}
 .sig-cards::-webkit-scrollbar{height:3px;}
 .sig-cards::-webkit-scrollbar-thumb{background:var(--bdr);}
@@ -1414,7 +1467,12 @@ html,body{background:var(--bg)!important;color:var(--txt);}
    open on hover via max-height transition. Kept in the DOM always (not
    display:none) so hover doesn't have to wait on a layout reflow. */
 .sig-card{flex-shrink:0;width:260px;min-height:0;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.sig-card.sc-pinned{overflow:visible;border-color:var(--acc);box-shadow:0 0 0 1px rgba(59,130,246,.2);}
+.sc-pin-btn{background:none;border:none;font-size:11px;opacity:.35;cursor:pointer;padding:0 2px;line-height:1;flex-shrink:0;}
+.sc-pin-btn:hover{opacity:.8;}
+.sc-pin-btn.sc-pin-btn-on{opacity:1;}
 .sc-expand{display:none;}
+.sc-expand-pinned{display:block!important;position:static!important;margin:8px -14px -10px;padding:10px 14px;border-top:1px solid var(--bdr);}
 .sc-float-overlay{position:fixed;display:none;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;box-shadow:0 12px 28px rgba(0,0,0,.45);z-index:200;width:260px;pointer-events:none;}
 
 .share-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:500;padding:20px;}
@@ -1428,6 +1486,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .sc-float-overlay.sc-show{display:block;}
 
 .sc-prices-row{display:flex;align-items:center;gap:14px;margin-bottom:6px;}
+.sc-tp-row-all{flex-wrap:wrap;gap:10px;}
+.sc-regime-row{font-size:10px;margin-bottom:4px;display:flex;gap:4px;}
 .sc-p{display:flex;align-items:center;gap:5px;}
 .sc-pl{font-size:9px;color:var(--dim);}
 .sc-pv{font-size:11.5px;}
@@ -2512,6 +2572,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     List<MissedTradeRecord> _signals = new();
 
+    void TogglePinSignal(MissedTradeRecord sig)
+    {
+        var key = SignalKey(sig);
+        if (!_pinnedSignalKeys.Remove(key)) _pinnedSignalKeys.Add(key);
+    }
+
+    // Per direct request: a Hidden Signals view surfacing the last
+    // hour's worth of expired signals, instead of having them vanish
+    // from the page entirely. Pagination/TTL logic elsewhere stays
+    // scoped to the real _signals list (that's about live signal
+    // lifecycle, not which list is currently being displayed).
+    List<MissedTradeRecord> DisplayedSignals => _showHiddenSignals ? _recentExpiredSignals : _signals;
+
+    void ToggleHiddenSignals() => _showHiddenSignals = !_showHiddenSignals;
+
     // Keyed by Symbol+Time (not object identity/equality, which we don't
     // control on MissedTradeRecord). Value is the signal's own Time, used
     // only for pruning. An entry here means "already faded out locally" —
@@ -2520,6 +2595,22 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // signal we've already dismissed within its own lookback window.
     Dictionary<string, DateTime> _expiredSignals = new();
     HashSet<string> _seenSignalKeys = new();
+
+    // Archive of recently-expired signals — kept separate from the
+    // _expiredSignals fade-tracking dict above (which only lives a few
+    // seconds, just long enough for the CSS fade-out). Per direct
+    // request: surfaces the last hour's worth of hidden/expired
+    // signals via a new "Hidden Signals" tab, since they'd otherwise
+    // vanish from the page entirely the moment they expire.
+    const int ExpiredSignalArchiveHours = 1;
+    const int ExpiredSignalArchiveMaxCount = 30;
+    List<MissedTradeRecord> _recentExpiredSignals = new();
+    bool _showHiddenSignals;
+
+    // Pinned signal cards stay expanded regardless of hover state —
+    // per direct request, a pin toggle so the user can keep a card's
+    // full details open without needing to keep the mouse over it.
+    HashSet<string> _pinnedSignalKeys = new();
 
     static string SignalKey(MissedTradeRecord s) => $"{s.Symbol}|{s.Time:O}";
 
@@ -2648,7 +2739,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     ElementReference _sigCardsEl;
     int _sigPage = 0;
     const int _sigPageSize = 6;
-    int _sigPageCount => Math.Max(1, (int)Math.Ceiling(_signals.Count / (double)_sigPageSize));
+    int _sigPageCount => Math.Max(1, (int)Math.Ceiling(DisplayedSignals.Count / (double)_sigPageSize));
 
     async void GoToSigPage(int page)
     {
@@ -2793,6 +2884,17 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             _expiredSignals[SignalKey(s)] = s.Time;
         }
+
+        // Archive into the longer-lived hidden-signals list (powers the
+        // "Hidden Signals" tab) before it's dropped from the live list
+        // below — otherwise an expired signal would vanish from the
+        // page entirely with no way to glance back at what was missed.
+        _recentExpiredSignals.InsertRange(0, newlyMarked);
+        var archiveCutoff = DateTime.UtcNow.AddHours(-ExpiredSignalArchiveHours);
+        _recentExpiredSignals = _recentExpiredSignals
+            .Where(s => s.Time >= archiveCutoff)
+            .Take(ExpiredSignalArchiveMaxCount)
+            .ToList();
 
         var keysToRemove = newlyMarked.Select(SignalKey).ToHashSet();
 

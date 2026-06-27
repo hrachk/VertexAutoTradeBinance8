@@ -55,7 +55,13 @@
     }
 
     function isSigCard(el) {
-        return el && el.closest && el.closest('.sig-card');
+        const card = el && el.closest && el.closest('.sig-card');
+        // Pinned cards render their expanded content inline via Blazor
+        // state (no display:none on .sc-expand) — the floating overlay
+        // mechanism is for unpinned cards only, since triggering it on
+        // top of already-visible inline content would be redundant.
+        if (card && card.classList.contains('sc-pinned')) return null;
+        return card;
     }
 
     document.addEventListener('mouseover', (e) => {
