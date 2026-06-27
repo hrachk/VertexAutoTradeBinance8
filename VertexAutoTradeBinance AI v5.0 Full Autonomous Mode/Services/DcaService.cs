@@ -293,7 +293,7 @@ namespace VertexAutoTradeBinance8.Services
         // the last time one fired. Deliberately simple date-matching,
         // not a cron-style engine — DCA schedules here are at most
         // monthly, so this doesn't need to be more sophisticated.
-        internal static bool IsCycleDueNow(DcaOptions.DcaScheduleOptions schedule, DateTime lastCycleUtc, DateTime nowUtc)
+        public static bool IsCycleDueNow(DcaOptions.DcaScheduleOptions schedule, DateTime lastCycleUtc, DateTime nowUtc)
         {
             if (nowUtc.Hour != schedule.HourUtc) return false;
 

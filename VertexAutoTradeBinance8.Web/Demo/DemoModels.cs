@@ -82,6 +82,22 @@ public sealed class DemoClosedTrade
     public DateTime ClosedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
+public sealed class DemoDcaPurchaseRecord
+{
+    public string Symbol { get; set; } = "";
+    public DateTime TimeUtc { get; set; }
+    public decimal Price { get; set; }
+    public decimal Qty { get; set; }
+    public decimal UsdtSpent { get; set; }
+    public bool DipBonusApplied { get; set; }
+}
+
+public sealed class DemoDcaState
+{
+    public DateTime LastCycleUtc { get; set; }
+    public List<DemoDcaPurchaseRecord> History { get; set; } = new();
+}
+
 // The full persisted demo account state — one shared account for now
 // (no per-user separation yet, matching the single-client setup this
 // runs on), serialized to a single JSON file.

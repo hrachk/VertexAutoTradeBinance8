@@ -22,6 +22,20 @@ builder.Configuration
     .AddJsonFile($"appsettings.web.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true) // Dev/Staging/Prod
     .AddEnvironmentVariables();
 
+// Adds the SAME shared runtime-override file the Engine itself loads
+// (and RuntimeConfigService writes to) — needed so settings like Dca
+// (configured once via the Settings page) apply identically whether
+// the symbol is traded for real (Engine) or in demo mode (this Web
+// process), without a separate write path for each.
+{
+    var sharedRoot = builder.Configuration["SharedData:Root"];
+    if (!string.IsNullOrWhiteSpace(sharedRoot))
+    {
+        var runtimePath = Path.Combine(sharedRoot, "appsettings.runtime.json");
+        builder.Configuration.AddJsonFile(runtimePath, optional: true, reloadOnChange: true);
+    }
+}
+
 // Если хочешь, можно добавить User Secrets только в Development
 if (builder.Environment.IsDevelopment())
 {
@@ -38,6 +52,7 @@ builder.Services.AddSingleton<SymbolRegistryService>();
 builder.Services.AddSingleton<TradePermissionFileService>();
 builder.Services.AddSingleton<MarketSnapshotFileService>();
 builder.Services.AddSingleton<HistoricalDataReaderService>();
+builder.Services.Configure<DcaOptions>(builder.Configuration.GetSection("Dca"));
 builder.Services.AddSingleton<MarketDataLiveState>();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.DemoAccountService>();
 builder.Services.AddSingleton<DecisionMarkersFileService>();

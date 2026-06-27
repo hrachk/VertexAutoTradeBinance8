@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Microsoft.Extensions.Options;
+using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Web.Demo;
 
 namespace VertexAutoTradeBinance8.Web.Services;
@@ -18,12 +20,28 @@ public sealed class DemoAccountService
     // demo position's symbol at that exact same moment.
     private readonly Dictionary<string, decimal> _lastPrices = new();
 
+    // ===================== DCA (Dollar-Cost Averaging) =====================
+    // Reuses the exact same DcaOptions config and IsCycleDueNow schedule
+    // logic as the real Engine-side DcaService, so demo and real DCA
+    // can never drift apart in behavior — only the execution side
+    // differs (virtual buys here vs a real Binance order there).
+    private readonly IOptionsMonitor<VertexAutoTradeBinance8.Configuration.DcaOptions> _dcaOptions;
+    private readonly HistoricalDataReaderService _historicalData;
+    private readonly string _dcaStatePath;
+    private DemoDcaState _dcaState = new();
+    private Timer? _dcaTimer;
+
     public event Action? Updated;
 
-    public DemoAccountService(MarketDataLiveState liveState, ILogger<DemoAccountService> logger, IConfiguration cfg)
+    public DemoAccountService(
+        MarketDataLiveState liveState, ILogger<DemoAccountService> logger, IConfiguration cfg,
+        IOptionsMonitor<VertexAutoTradeBinance8.Configuration.DcaOptions> dcaOptions,
+        HistoricalDataReaderService historicalData)
     {
         _liveState = liveState;
         _logger = logger;
+        _dcaOptions = dcaOptions;
+        _historicalData = historicalData;
 
         // Same simple file-based persistence pattern already used
         // elsewhere in this project (klines_bootstrap.json) — a single
@@ -31,10 +49,17 @@ public sealed class DemoAccountService
         // scale and conventions.
         var root = cfg["SharedData:Root"] ?? AppContext.BaseDirectory;
         _filePath = Path.Combine(root, "demo-account.json");
+        _dcaStatePath = Path.Combine(root, "demo-dca-state.json");
 
         Load();
+        LoadDcaState();
 
         _liveState.PriceTicked += OnPriceTicked;
+
+        // Checking once per hour is plenty — DCA schedules are
+        // measured in days/weeks, matching the real DcaService's own
+        // check interval.
+        _dcaTimer = new Timer(_ => _ = CheckDcaCycleAsync(), null, TimeSpan.FromMinutes(1), TimeSpan.FromHours(1));
     }
 
     public DemoAccountState GetSnapshot()
@@ -359,6 +384,144 @@ public sealed class DemoAccountService
     }
 
     // ===================== Persistence =====================
+
+    public DemoDcaState GetDcaSnapshot()
+    {
+        lock (_lock) { return new DemoDcaState { LastCycleUtc = _dcaState.LastCycleUtc, History = _dcaState.History.ToList() }; }
+    }
+
+    private async Task CheckDcaCycleAsync()
+    {
+        try
+        {
+            var opts = _dcaOptions.CurrentValue;
+            if (!opts.Enabled || opts.Symbols.Count == 0) return;
+
+            DateTime lastCycle;
+            lock (_lock) { lastCycle = _dcaState.LastCycleUtc; }
+            if (!VertexAutoTradeBinance8.Services.DcaService.IsCycleDueNow(opts.Schedule, lastCycle, DateTime.UtcNow)) return;
+
+            _logger.LogInformation("[DEMO-DCA] Scheduled cycle starting — {count} symbols, budget {budget} USDT",
+                opts.Symbols.Count, opts.Schedule.BudgetPerCycle);
+
+            bool weighted = string.Equals(opts.AllocationMode, "Weighted", StringComparison.OrdinalIgnoreCase);
+            decimal totalWeight = weighted ? opts.Symbols.Sum(s => Math.Max(0.0001m, s.Weight)) : opts.Symbols.Count;
+
+            foreach (var entry in opts.Symbols)
+            {
+                decimal share = weighted ? Math.Max(0.0001m, entry.Weight) / totalWeight : 1m / opts.Symbols.Count;
+                decimal usdtAmount = opts.Schedule.BudgetPerCycle * share;
+
+                decimal price = GetLastPrice(entry.Symbol);
+                if (price <= 0)
+                {
+                    _logger.LogWarning("[DEMO-DCA] No live price yet for {symbol} — skipping this symbol this cycle", entry.Symbol);
+                    continue;
+                }
+
+                bool dipBonusApplied = false;
+                if (opts.DipBonus.Enabled)
+                {
+                    decimal? oldPrice = await TryGetDemoPriceHoursAgoAsync(entry.Symbol, opts.DipBonus.LookbackHours);
+                    if (oldPrice.HasValue && oldPrice.Value > 0)
+                    {
+                        decimal dropPct = (oldPrice.Value - price) / oldPrice.Value * 100m;
+                        if (dropPct >= opts.DipBonus.DropThresholdPct)
+                        {
+                            usdtAmount *= opts.DipBonus.Multiplier;
+                            dipBonusApplied = true;
+                        }
+                    }
+                }
+
+                decimal qty = price > 0 ? usdtAmount / price : 0m;
+                if (qty <= 0) continue;
+
+                // DCA is spot-style accumulation, not a leveraged
+                // directional bet — leverage 1, matching the real
+                // Engine-side DcaService's own approach.
+                var (ok, error) = OpenMarketPosition(entry.Symbol, "LONG", qty, 1, price, null, null);
+                if (!ok)
+                {
+                    _logger.LogWarning("[DEMO-DCA] Buy failed for {symbol}: {error}", entry.Symbol, error);
+                    continue;
+                }
+
+                lock (_lock)
+                {
+                    _dcaState.History.Insert(0, new DemoDcaPurchaseRecord
+                    {
+                        Symbol = entry.Symbol, TimeUtc = DateTime.UtcNow, Price = price,
+                        Qty = qty, UsdtSpent = usdtAmount, DipBonusApplied = dipBonusApplied,
+                    });
+                    if (_dcaState.History.Count > 500) _dcaState.History = _dcaState.History.Take(500).ToList();
+                }
+
+                _logger.LogInformation("[DEMO-DCA] Bought {qty} {symbol} @ {price} ({amount} USDT){dip}",
+                    qty, entry.Symbol, price, usdtAmount, dipBonusApplied ? " [DIP BONUS]" : "");
+            }
+
+            lock (_lock) { _dcaState.LastCycleUtc = DateTime.UtcNow; }
+            SaveDcaState();
+            Updated?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[DEMO-DCA] Cycle check failed");
+        }
+    }
+
+    private async Task<decimal?> TryGetDemoPriceHoursAgoAsync(string symbol, int hoursAgo)
+    {
+        try
+        {
+            // Reads the same historical archive already powering the
+            // chart (via HistoricalDataReaderService) — demo mode has
+            // no real Binance client of its own for a fresh kline
+            // fetch, but doesn't need one since this data already
+            // exists locally.
+            var klines = await _historicalData.LoadAsync(symbol, "1h");
+            if (klines == null || klines.Count == 0) return null;
+            int idx = Math.Max(0, klines.Count - 1 - hoursAgo);
+            return klines[idx].Close;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void LoadDcaState()
+    {
+        try
+        {
+            if (File.Exists(_dcaStatePath))
+            {
+                var json = File.ReadAllText(_dcaStatePath);
+                var loaded = JsonSerializer.Deserialize<DemoDcaState>(json);
+                if (loaded != null) _dcaState = loaded;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[DEMO-DCA] Failed to load demo-dca-state.json — starting fresh");
+        }
+    }
+
+    private void SaveDcaState()
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(_dcaState, new JsonSerializerOptions { WriteIndented = true });
+            var tmp = _dcaStatePath + ".tmp";
+            File.WriteAllText(tmp, json);
+            File.Move(tmp, _dcaStatePath, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[DEMO-DCA] Failed to save demo-dca-state.json");
+        }
+    }
 
     private void Load()
     {
