@@ -1122,8 +1122,8 @@
 
                             <div class="ord-row">
                                 <div class="ord-type-tabs">
-                                    <button class="ord-type-tab @(_addToPosType=="Market"?"ord-type-tab-on":"")" @onclick="() => _addToPosType = \"Market\"">Market</button>
-                                    <button class="ord-type-tab @(_addToPosType=="Limit"?"ord-type-tab-on":"")" @onclick="() => _addToPosType = \"Limit\"">Limit</button>
+                                    <button class="ord-type-tab @(_addToPosType=="Market"?"ord-type-tab-on":"")" @onclick="SetAddToPosTypeMarket">Market</button>
+                                    <button class="ord-type-tab @(_addToPosType=="Limit"?"ord-type-tab-on":"")" @onclick="SetAddToPosTypeLimit">Limit</button>
                                 </div>
                             </div>
 
@@ -2773,6 +2773,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     bool _addToPositionOpen;
     string _addToPosType = "Market";
     decimal _addToPosPrice;
+
+    void SetAddToPosTypeMarket() => _addToPosType = "Market";
+    void SetAddToPosTypeLimit() => _addToPosType = "Limit";
     string _orderError = string.Empty;
 
     decimal _manualSlPrice;

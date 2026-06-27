@@ -1040,9 +1040,6 @@
         await SetJsonAsync("Dca:Symbols", arr);
     }
 
-    private static decimal ParseDecimalOr(object? raw, decimal fallback)
-        => decimal.TryParse(raw?.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : fallback;
-
     private static int? ParseIntOr(object? raw, int fallback)
         => int.TryParse(raw?.ToString(), out var v) ? v : fallback;
 
