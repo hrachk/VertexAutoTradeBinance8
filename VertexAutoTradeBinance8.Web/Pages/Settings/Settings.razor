@@ -6,6 +6,7 @@
 @inject IJSRuntime JS
 @inject VertexAutoTradeBinance8.Web.Services.HistoricalDataReaderService DataArchive
 @inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoAccount
+@inject VertexAutoTradeBinance8.Web.Services.RealDcaHistoryReader RealDcaHistory
 
 <PageTitle>Settings — Vertex AI</PageTitle>
 
@@ -70,6 +71,7 @@
                 case "engine":   { @EngineTab() break; }
                 case "datadb":   { @DataArchiveTab() break; }
                 case "demo":     { @DemoTradingTab() break; }
+                case "dca":      { @DcaTab() break; }
             }
         }
 
@@ -705,6 +707,240 @@
     </div>;
 
 
+    private RenderFragment DcaTab() => @<div class="st-grid">
+
+        <div class="st-card st-card-wide">
+            <div class="st-card-head"><div class="st-card-title">DCA (Dollar-Cost Averaging) Strategy</div></div>
+            <div class="st-card-sub">
+                A completely separate strategy from everything else on this page — it does NOT use
+                signals, indicators, or market analysis to decide when to buy. It simply spends a
+                fixed budget on the symbols below, on a fixed schedule, every time, regardless of
+                price or market conditions. This is intentional: real-world data consistently shows
+                plain scheduled buying outperforms attempts to "time" entries, and is far less prone
+                to accidentally over-fitting to past price action. It runs <strong>in parallel</strong>
+                with the main signal-based strategy — neither one is "switched off" by the other.
+                It executes the same way on both the real account (a genuine market order is placed)
+                and the Demo account (a virtual buy, same math, same schedule) — useful for watching
+                a few cycles play out risk-free before relying on it for real.
+            </div>
+        </div>
+
+        @{
+            bool dcaEnabled = GetBool("Dca:Enabled", false);
+            var dcaSymbols = GetDcaSymbols();
+            decimal totalWeight = dcaSymbols.Sum(s => Math.Max(0.0001m, s.Weight));
+        }
+
+        <div class="st-card st-card-wide">
+            <div class="st-toggle-row">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@dcaEnabled" @onchange="OnDcaEnabledToggle" />
+                    <span><strong>Enable DCA</strong></span>
+                </label>
+            </div>
+            <div class="st-card-sub" style="margin-top:4px">
+                Leave this OFF until the symbol list and schedule below are set up the way you
+                want — once on, the very next scheduled time slot that matches will place a real
+                order (or a demo one, in demo mode) with whatever is configured at that moment.
+            </div>
+        </div>
+
+        <div class="st-card st-card-wide">
+            <div class="st-card-head"><div class="st-card-title">Which coins, and how much of the budget each gets</div></div>
+            <div class="st-card-sub">
+                Add one row per coin you want to accumulate. The <strong>Weight</strong> number only
+                matters relative to the other rows — it's not a percentage by itself. For example,
+                weights of 60 / 25 / 15 split the budget the same way as 12 / 5 / 3 would: roughly
+                60% / 25% / 15%. A common, professional starting point is weighting the largest,
+                most established coin (e.g. BTC) the heaviest, with smaller/newer coins getting a
+                smaller slice — but there's no requirement to do it that way.
+            </div>
+
+            @if (dcaSymbols.Count > 0)
+            {
+                <table class="st-dca-table">
+                    <thead>
+                        <tr><th>Symbol</th><th>Weight</th><th>≈ Share of budget</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var (sym, weight) in dcaSymbols)
+                        {
+                            decimal pct = totalWeight > 0 ? weight / totalWeight * 100m : 0m;
+                            <tr>
+                                <td class="mono">@sym</td>
+                                <td>
+                                    <input class="st-input st-dca-weight-input" type="number" min="0.01" step="1" value="@weight"
+                                           @onchange="@(e => OnDcaSymbolWeightChanged(sym, e))" />
+                                </td>
+                                <td class="mk-dim">@pct.ToString("F0")%</td>
+                                <td><button class="st-btn-secondary" @onclick="() => RemoveDcaSymbol(sym)">Remove</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            else
+            {
+                <div class="st-card-sub" style="font-style:italic">No symbols configured yet — add one below.</div>
+            }
+
+            <div class="st-add-row" style="margin-top:10px">
+                <input class="st-input" placeholder="e.g. BTCUSDT" value="@_dcaNewSymbol" @oninput="@(e => _dcaNewSymbol = e.Value?.ToString()?.ToUpperInvariant() ?? "")" />
+                <input class="st-input st-dca-weight-input" type="number" min="0.01" step="1" placeholder="Weight" value="@_dcaNewWeight" @oninput="@(e => _dcaNewWeight = e.Value?.ToString() ?? "")" />
+                <button class="st-btn-secondary" @onclick="AddDcaSymbol">+ Add coin</button>
+            </div>
+
+            <div class="st-toggle-row" style="margin-top:14px">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@(GetString("Dca:AllocationMode","Weighted")=="Equal")" @onchange="OnDcaEqualAllocationToggle" />
+                    <span>Split budget equally instead (ignore the Weight numbers above)</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head"><div class="st-card-title">Schedule — when each buy happens</div></div>
+            <div class="st-card-sub">All times are UTC. A real BTC backtest found buying weekly on Mondays accumulated slightly more over 7 years than other weekdays — not a big effect, but it's why Monday is the default.</div>
+
+            <div class="st-field">
+                <label>Frequency</label>
+                <select class="st-select" value="@GetString("Dca:Schedule:Frequency","Weekly")" @onchange="OnDcaFrequencyChanged">
+                    <option value="Daily">Daily</option>
+                    <option value="Weekly">Weekly</option>
+                    <option value="Monthly">Monthly</option>
+                </select>
+            </div>
+
+            @if (GetString("Dca:Schedule:Frequency","Weekly") == "Weekly")
+            {
+                <div class="st-field">
+                    <label>Day of week</label>
+                    <select class="st-select" value="@GetInt("Dca:Schedule:DayOfWeek",1)" @onchange="OnDcaDayOfWeekChanged">
+                        <option value="1">Monday</option>
+                        <option value="2">Tuesday</option>
+                        <option value="3">Wednesday</option>
+                        <option value="4">Thursday</option>
+                        <option value="5">Friday</option>
+                        <option value="6">Saturday</option>
+                        <option value="7">Sunday</option>
+                    </select>
+                </div>
+            }
+            @if (GetString("Dca:Schedule:Frequency","Weekly") == "Monthly")
+            {
+                <div class="st-field">
+                    <label>Day of month</label>
+                    <input class="st-input" type="number" min="1" max="28" value="@GetInt("Dca:Schedule:DayOfMonth",1)" @onchange="OnDcaDayOfMonthChanged" />
+                    <div class="st-card-sub" style="margin-top:4px">Kept to 1-28 so it always exists in every month, including February.</div>
+                </div>
+            }
+
+            <div class="st-field">
+                <label>Hour (UTC, 0-23)</label>
+                <input class="st-input" type="number" min="0" max="23" value="@GetInt("Dca:Schedule:HourUtc",12)" @onchange="OnDcaHourChanged" />
+            </div>
+
+            <div class="st-field">
+                <label>Budget per cycle (USDT)</label>
+                <input class="st-input" type="number" min="1" step="10" value="@GetDecimal("Dca:Schedule:BudgetPerCycle",100m)" @onchange="OnDcaBudgetChanged" />
+                <div class="st-card-sub" style="margin-top:4px">The TOTAL spent across all symbols above, every time the schedule fires — not per-symbol.</div>
+            </div>
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head"><div class="st-card-title">Optional: Dip Bonus</div></div>
+            <div class="st-card-sub">
+                The ONLY market-awareness this strategy has, and it's deliberately simple and
+                fully visible — nothing hidden. If the price has dropped by at least the threshold
+                below over the lookback window <em>at the exact moment a scheduled buy fires</em>,
+                that one buy is multiplied. It does NOT change when buys happen — only how much a
+                scheduled buy spends if the market happened to be down at that moment.
+            </div>
+
+            <div class="st-toggle-row" style="margin-top:8px">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("Dca:DipBonus:Enabled", false)" @onchange="OnDcaDipBonusToggle" />
+                    <span>Enable dip bonus</span>
+                </label>
+            </div>
+
+            @if (GetBool("Dca:DipBonus:Enabled", false))
+            {
+                <div class="st-field-row" style="margin-top:10px">
+                    <div class="st-field">
+                        <label>Lookback (hours)</label>
+                        <input class="st-input" type="number" min="1" max="168" value="@GetInt("Dca:DipBonus:LookbackHours",24)" @onchange="OnDcaDipLookbackChanged" />
+                    </div>
+                    <div class="st-field">
+                        <label>Drop threshold (%)</label>
+                        <input class="st-input" type="number" min="1" max="90" value="@GetDecimal("Dca:DipBonus:DropThresholdPct",10m)" @onchange="OnDcaDipThresholdChanged" />
+                    </div>
+                    <div class="st-field">
+                        <label>Multiplier</label>
+                        <input class="st-input" type="number" min="1" max="10" step="0.5" value="@GetDecimal("Dca:DipBonus:Multiplier",2m)" @onchange="OnDcaDipMultiplierChanged" />
+                    </div>
+                </div>
+                <div class="st-card-sub">
+                    Example with the defaults: if a symbol dropped 10%+ over the last 24 hours right
+                    when its scheduled buy fires, that buy spends 2× its normal share instead of 1×.
+                </div>
+            }
+        </div>
+
+        <div class="st-card st-card-wide">
+            <div class="st-card-head"><div class="st-card-title">Recent Purchases</div></div>
+            <div class="st-card-sub">Real-account and Demo-account DCA run independently with separate histories, even though they share the schedule/symbol settings above.</div>
+
+            @{
+                var realHistory = RealDcaHistory.Read().History.Take(10).ToList();
+                var demoHistory = DemoAccount.GetDcaSnapshot().History.Take(10).ToList();
+            }
+
+            <div class="st-field-row" style="align-items:flex-start">
+                <div class="st-field" style="flex:1">
+                    <label>Real account</label>
+                    @if (realHistory.Count == 0)
+                    {
+                        <div class="st-card-sub" style="font-style:italic">No purchases yet</div>
+                    }
+                    else
+                    {
+                        @foreach (var h in realHistory)
+                        {
+                            <div class="st-dca-history-row">
+                                <span class="mono">@h.Symbol</span>
+                                <span class="mk-dim">@h.TimeUtc.ToLocalTime().ToString("MM/dd HH:mm")</span>
+                                <span class="mono">$@h.UsdtSpent.ToString("F2")</span>
+                                @if (h.DipBonusApplied) { <span class="st-dca-dip-badge">DIP</span> }
+                            </div>
+                        }
+                    }
+                </div>
+                <div class="st-field" style="flex:1">
+                    <label>Demo account</label>
+                    @if (demoHistory.Count == 0)
+                    {
+                        <div class="st-card-sub" style="font-style:italic">No purchases yet</div>
+                    }
+                    else
+                    {
+                        @foreach (var h in demoHistory)
+                        {
+                            <div class="st-dca-history-row">
+                                <span class="mono">@h.Symbol</span>
+                                <span class="mk-dim">@h.TimeUtc.ToLocalTime().ToString("MM/dd HH:mm")</span>
+                                <span class="mono">$@h.UsdtSpent.ToString("F2")</span>
+                                @if (h.DipBonusApplied) { <span class="st-dca-dip-badge">DIP</span> }
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+        </div>
+
+    </div>;
+
+
     // ── Tab definitions ──────────────────────────────────────
     private sealed record TabDef(string Id, string Label, string Icon, bool LiveBadge);
 
@@ -718,6 +954,7 @@
         new("engine",   "Engine Info",      "🖥️", false),
         new("datadb",   "Data Archive",     "🗄️", false),
         new("demo",     "Demo Trading",     "🎮", false),
+        new("dca",       "DCA Strategy",     "📅", true),
     };
 
     private string _activeTab = "strategy";
@@ -742,6 +979,69 @@
         DemoAccount.ResetAccount(_demoResetBalance);
         _demoResetConfirm = false;
     }
+
+    // ── DCA settings ──────────────────────────────────────────
+    string _dcaNewSymbol = "";
+    string _dcaNewWeight = "1";
+
+    private Task OnDcaEnabledToggle(ChangeEventArgs e) => SetAsync("Dca:Enabled", (e.Value as bool?) ?? false);
+    private Task OnDcaFrequencyChanged(ChangeEventArgs e) => SetAsync("Dca:Schedule:Frequency", e.Value?.ToString() ?? "Weekly");
+    private Task OnDcaDayOfWeekChanged(ChangeEventArgs e) => SetAsync("Dca:Schedule:DayOfWeek", ParseIntOr(e.Value, 1));
+    private Task OnDcaDayOfMonthChanged(ChangeEventArgs e) => SetAsync("Dca:Schedule:DayOfMonth", ParseIntOr(e.Value, 1));
+    private Task OnDcaHourChanged(ChangeEventArgs e) => SetAsync("Dca:Schedule:HourUtc", ParseIntOr(e.Value, 12));
+    private Task OnDcaBudgetChanged(ChangeEventArgs e) => SetAsync("Dca:Schedule:BudgetPerCycle", ParseDecimalOr(e.Value, 100m));
+    private Task OnDcaDipBonusToggle(ChangeEventArgs e) => SetAsync("Dca:DipBonus:Enabled", (e.Value as bool?) ?? false);
+    private Task OnDcaDipLookbackChanged(ChangeEventArgs e) => SetAsync("Dca:DipBonus:LookbackHours", ParseIntOr(e.Value, 24));
+    private Task OnDcaDipThresholdChanged(ChangeEventArgs e) => SetAsync("Dca:DipBonus:DropThresholdPct", ParseDecimalOr(e.Value, 10m));
+    private Task OnDcaDipMultiplierChanged(ChangeEventArgs e) => SetAsync("Dca:DipBonus:Multiplier", ParseDecimalOr(e.Value, 2m));
+
+    private Task OnDcaEqualAllocationToggle(ChangeEventArgs e)
+    {
+        bool isEqual = (e.Value as bool?) ?? false;
+        return SetAsync("Dca:AllocationMode", isEqual ? "Equal" : "Weighted");
+    }
+
+    private async Task OnDcaSymbolWeightChanged(string symbol, ChangeEventArgs e)
+    {
+        decimal newWeight = ParseDecimalOr(e.Value, 1m);
+        var symbols = GetDcaSymbols();
+        await SaveDcaSymbolsAsync(symbols.Select(s => s.Symbol == symbol ? (s.Symbol, newWeight) : s).ToList());
+    }
+
+    private async Task RemoveDcaSymbol(string symbol)
+    {
+        var symbols = GetDcaSymbols().Where(s => s.Symbol != symbol).ToList();
+        await SaveDcaSymbolsAsync(symbols);
+    }
+
+    private async Task AddDcaSymbol()
+    {
+        var sym = _dcaNewSymbol.Trim().ToUpperInvariant();
+        if (sym == "") { ShowToast("Enter a symbol first", isError: true); return; }
+        if (!sym.EndsWith("USDT")) sym += "USDT";
+        decimal weight = ParseDecimalOr(_dcaNewWeight, 1m);
+
+        var symbols = GetDcaSymbols();
+        if (symbols.Any(s => s.Symbol == sym)) { ShowToast($"{sym} is already in the list", isError: true); return; }
+
+        symbols.Add((sym, weight));
+        await SaveDcaSymbolsAsync(symbols);
+        _dcaNewSymbol = "";
+        _dcaNewWeight = "1";
+    }
+
+    private async Task SaveDcaSymbolsAsync(List<(string Symbol, decimal Weight)> symbols)
+    {
+        var arr = new JsonArray();
+        foreach (var (sym, weight) in symbols)
+        {
+            arr.Add(new JsonObject { ["Symbol"] = sym, ["Weight"] = weight });
+        }
+        await SetJsonAsync("Dca:Symbols", arr);
+    }
+
+    private static decimal ParseDecimalOr(object? raw, decimal fallback)
+        => decimal.TryParse(raw?.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : fallback;
 
     private static int? ParseIntOr(object? raw, int fallback)
         => int.TryParse(raw?.ToString(), out var v) ? v : fallback;
@@ -841,6 +1141,31 @@
         return arr.Select(n => n?.GetValue<string>() ?? "").Where(s => s != "").ToList();
     }
 
+    private string GetString(string path, string fallback = "")
+    {
+        var node = GetNode(path);
+        if (node == null) return fallback;
+        try { return node.GetValue<string>() ?? fallback; } catch { return fallback; }
+    }
+
+    // DCA's Symbols list is an array of {Symbol, Weight} objects, not
+    // plain strings — GetStrList doesn't fit, needs its own reader.
+    private List<(string Symbol, decimal Weight)> GetDcaSymbols()
+    {
+        var node = GetNode("Dca:Symbols");
+        if (node is not JsonArray arr) return new();
+        var result = new List<(string, decimal)>();
+        foreach (var item in arr)
+        {
+            if (item is not JsonObject obj) continue;
+            var sym = obj["Symbol"]?.GetValue<string>() ?? "";
+            decimal weight = 1m;
+            try { weight = obj["Weight"]?.GetValue<decimal>() ?? 1m; } catch { }
+            if (sym != "") result.Add((sym, weight));
+        }
+        return result;
+    }
+
     private JsonNode? GetNode(string path)
     {
         var segments = path.Split(':', StringSplitOptions.RemoveEmptyEntries);
@@ -860,6 +1185,27 @@
             await Cfg.SetValueAsync(path, value);
             // optimistic local update so the UI reflects the change
             // immediately without waiting for a full reload
+            SetLocalNode(path, value);
+            ShowToast($"Saved — applies within a few seconds");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", isError: true);
+        }
+    }
+
+    // CRITICAL: separate from SetAsync above on purpose — that method's
+    // parameter is statically typed object?, so passing a JsonArray/
+    // JsonObject through it resolves to SetValueAsync's SCALAR overload
+    // at compile time (which stringifies anything it doesn't recognize
+    // via .ToString(), silently corrupting structured data like the DCA
+    // symbols array into a single garbled string). This calls the
+    // JsonNode? overload explicitly instead.
+    private async Task SetJsonAsync(string path, JsonNode? value)
+    {
+        try
+        {
+            await Cfg.SetValueAsync(path, value);
             SetLocalNode(path, value);
             ShowToast($"Saved — applies within a few seconds");
         }
@@ -900,6 +1246,7 @@
         JsonNode? node = value switch
         {
             null => null,
+            JsonNode existing => existing,
             bool b => JsonValue.Create(b),
             int i => JsonValue.Create(i),
             decimal d => JsonValue.Create(d),
@@ -990,6 +1337,12 @@
 .st-btn-danger:hover{background:rgba(239,68,68,.2);}
 .st-btn-secondary{background:var(--st-bg3);border:1px solid var(--st-bdr);color:var(--st-txt);padding:9px 16px;border-radius:8px;font-size:13px;cursor:pointer;}
 .st-confirm-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;}
+.st-dca-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}
+.st-dca-table th{text-align:left;color:var(--st-dim);font-weight:600;font-size:11px;padding:6px 8px;border-bottom:1px solid var(--st-bdr);}
+.st-dca-table td{padding:6px 8px;border-bottom:1px solid var(--st-bdr);}
+.st-dca-weight-input{width:80px;}
+.st-dca-history-row{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:12px;border-bottom:1px solid var(--st-bdr);}
+.st-dca-dip-badge{background:rgba(234,179,8,.15);color:var(--st-yel);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;}
 .st-select{cursor:pointer;}
 
 .st-toggle-row{margin-bottom:14px;}

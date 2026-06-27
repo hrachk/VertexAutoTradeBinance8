@@ -55,18 +55,21 @@ namespace VertexAutoTradeBinance8.Services
             IOptionsMonitor<DcaOptions> options,
             BinanceClientFactory clientFactory,
             MarketDataFacade marketData,
-            IOptions<WebPathsOptions> paths)
+            IConfiguration configuration)
         {
             _logger = logger;
             _options = options;
             _clientFactory = clientFactory;
             _marketData = marketData;
 
-            // Matches EngineStateSnapshotService's own established
-            // path-resolution convention (AppContext.BaseDirectory +
-            // configured relative filename) rather than inventing a
-            // different one for this feature.
-            _statePath = Path.Combine(AppContext.BaseDirectory, "dca_state.json");
+            // SharedData:Root, not AppContext.BaseDirectory — this file
+            // needs to be readable cross-process by the separate Web
+            // app (Settings page's recent-purchases display), matching
+            // DemoAccountService's own established convention for
+            // exactly this kind of cross-process file.
+            var sharedRoot = configuration["SharedData:Root"];
+            var baseDir = !string.IsNullOrWhiteSpace(sharedRoot) ? sharedRoot : AppContext.BaseDirectory;
+            _statePath = Path.Combine(baseDir, "dca_state.json");
             Load();
         }
 

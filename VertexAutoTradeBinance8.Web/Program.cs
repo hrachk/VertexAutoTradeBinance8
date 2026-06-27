@@ -52,6 +52,7 @@ builder.Services.AddSingleton<SymbolRegistryService>();
 builder.Services.AddSingleton<TradePermissionFileService>();
 builder.Services.AddSingleton<MarketSnapshotFileService>();
 builder.Services.AddSingleton<HistoricalDataReaderService>();
+builder.Services.AddSingleton<RealDcaHistoryReader>();
 builder.Services.Configure<DcaOptions>(builder.Configuration.GetSection("Dca"));
 builder.Services.AddSingleton<MarketDataLiveState>();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.DemoAccountService>();
