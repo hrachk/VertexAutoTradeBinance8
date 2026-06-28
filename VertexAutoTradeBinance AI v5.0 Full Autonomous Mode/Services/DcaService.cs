@@ -298,26 +298,52 @@ namespace VertexAutoTradeBinance8.Services
         // monthly, so this doesn't need to be more sophisticated.
         public static bool IsCycleDueNow(DcaOptions.DcaScheduleOptions schedule, DateTime lastCycleUtc, DateTime nowUtc)
         {
+            // Convert to the configured timezone's LOCAL time first -
+            // every comparison below (hour, day of week, day of month)
+            // runs against that local time, not raw UTC. This matters
+            // for more than just the hour: the day of week itself can
+            // shift across the UTC/local boundary (11pm UTC Monday can
+            // already be Tuesday in an eastern zone, or still Sunday
+            // in a western one), so this has to happen before any of
+            // the date-matching logic, not just the hour check.
+            // .NET's TimeZoneInfo handles DST transitions (EDT/EST,
+            // etc) automatically - no custom date math needed.
+            DateTime nowLocal;
+            try
+            {
+                var tz = TimeZoneInfo.FindSystemTimeZoneById(string.IsNullOrWhiteSpace(schedule.TimeZoneId) ? "UTC" : schedule.TimeZoneId);
+                nowLocal = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
+            }
+            catch
+            {
+                // Unknown/invalid timezone id — fall back to UTC
+                // rather than throwing and silently breaking the
+                // entire schedule.
+                nowLocal = nowUtc;
+            }
+
             // Allow firing AT OR AFTER the target hour, not only in
             // the exact hour itself - if the process wasn't running
             // (or this check simply hasn't run yet) right when the
             // target hour started, this still catches up later the
             // same day instead of silently waiting a full extra day.
-            if (nowUtc.Hour < schedule.HourUtc) return false;
+            if (nowLocal.Hour < schedule.HourUtc) return false;
 
             bool dateMatches = schedule.Frequency.ToLowerInvariant() switch
             {
                 "daily" => true,
-                "weekly" => (int)nowUtc.DayOfWeek == (schedule.DayOfWeek % 7), // .NET DayOfWeek is Sunday=0; schedule uses ISO Monday=1..Sunday=7
-                "monthly" => nowUtc.Day == schedule.DayOfMonth,
+                "weekly" => (int)nowLocal.DayOfWeek == (schedule.DayOfWeek % 7), // .NET DayOfWeek is Sunday=0; schedule uses ISO Monday=1..Sunday=7
+                "monthly" => nowLocal.Day == schedule.DayOfMonth,
                 _ => false,
             };
             if (!dateMatches) return false;
 
             // Guard against firing twice on the same day now that the
             // check above is "at or after" rather than an exact hour
-            // match - require at least 20 hours since the last cycle,
-            // same as before.
+            // match - require at least 20 hours since the last cycle.
+            // Compared in UTC (lastCycleUtc/nowUtc are both already
+            // UTC) since elapsed-time math doesn't need the timezone
+            // conversion the date-matching above does.
             return (nowUtc - lastCycleUtc) > TimeSpan.FromHours(20);
         }
 

@@ -792,6 +792,30 @@
             <div class="st-card-sub">@T("dca.schedule.sub")</div>
 
             <div class="st-field">
+                <label>@T("dca.timezone")</label>
+                <select class="st-select" value="@GetString("Dca:Schedule:TimeZoneId","UTC")" @onchange="OnDcaTimeZoneChanged">
+                    <option value="UTC">UTC</option>
+                    <option value="America/New_York">America/New_York (US Eastern — EDT/EST auto)</option>
+                    <option value="America/Chicago">America/Chicago (US Central)</option>
+                    <option value="America/Denver">America/Denver (US Mountain)</option>
+                    <option value="America/Los_Angeles">America/Los_Angeles (US Pacific)</option>
+                    <option value="Europe/London">Europe/London</option>
+                    <option value="Europe/Moscow">Europe/Moscow</option>
+                    <option value="Asia/Dubai">Asia/Dubai (UTC+4)</option>
+                    <option value="Asia/Yerevan">Asia/Yerevan (UTC+4)</option>
+                    <option value="Asia/Shanghai">Asia/Shanghai</option>
+                    <option value="Asia/Tokyo">Asia/Tokyo</option>
+                    <option value="__custom__">@T("dca.timezone.custom")</option>
+                </select>
+                @if (!_dcaKnownTimeZones.Contains(GetString("Dca:Schedule:TimeZoneId","UTC")))
+                {
+                    <input class="st-input" style="margin-top:6px" placeholder="e.g. America/Sao_Paulo"
+                           value="@GetString("Dca:Schedule:TimeZoneId","UTC")" @onchange="OnDcaTimeZoneCustomChanged" />
+                }
+                <div class="st-card-sub" style="margin-top:4px">@T("dca.timezone.sub")</div>
+            </div>
+
+            <div class="st-field">
                 <label>@T("dca.freq")</label>
                 <select class="st-select" value="@GetString("Dca:Schedule:Frequency","Weekly")" @onchange="OnDcaFrequencyChanged">
                     <option value="Daily">@T("dca.freq.daily")</option>
@@ -968,6 +992,21 @@
     string _dcaNewSymbol = "";
     string _dcaLang = "en"; // "en" or "ru" — DCA tab only, per direct request; rest of Settings stays English-only.
 
+    static readonly HashSet<string> _dcaKnownTimeZones = new()
+    {
+        "UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+        "Europe/London", "Europe/Moscow", "Asia/Dubai", "Asia/Yerevan", "Asia/Shanghai", "Asia/Tokyo",
+    };
+
+    private async Task OnDcaTimeZoneChanged(ChangeEventArgs e)
+    {
+        var val = e.Value?.ToString() ?? "UTC";
+        if (val == "__custom__") return; // user picked "Other" — they'll type the real value into the text field that appears
+        await SetAsync("Dca:Schedule:TimeZoneId", val);
+    }
+
+    private Task OnDcaTimeZoneCustomChanged(ChangeEventArgs e) => SetAsync("Dca:Schedule:TimeZoneId", e.Value?.ToString() ?? "UTC");
+
     void SetDcaLangEn() => _dcaLang = "en";
     void SetDcaLangRu() => _dcaLang = "ru";
 
@@ -1002,10 +1041,15 @@
         ["dca.add.button"] = ("+ Add coin", "+ Добавить монету"),
         ["dca.equal"] = ("Split budget equally instead (ignore the Weight numbers above)", "Делить бюджет поровну (игнорировать веса выше)"),
 
+        ["dca.timezone"] = ("Time zone", "Часовой пояс"),
+        ["dca.timezone.custom"] = ("Other (type below)", "Другой (ввести ниже)"),
+        ["dca.timezone.sub"] = (
+            "The Hour field below is interpreted in this time zone. Daylight saving transitions (e.g. US Eastern EDT ↔ EST) are handled automatically — a buy set for 9 AM America/New_York stays at 9 AM New York time year-round, with no manual adjustment needed twice a year.",
+            "Поле Час ниже понимается в этом часовом поясе. Переходы на летнее/зимнее время (например, восточное время США EDT ↔ EST) учитываются автоматически — покупка в 9 утра по America/New_York останется в 9 утра по Нью-Йорку весь год, без ручной правки два раза в год."),
         ["dca.schedule.title"] = ("Schedule — when each buy happens", "Расписание — когда происходит покупка"),
         ["dca.schedule.sub"] = (
-            "All times are UTC. A real BTC backtest found buying weekly on Mondays accumulated slightly more over 7 years than other weekdays — not a big effect, but it's why Monday is the default.",
-            "Всё время указано в UTC. Реальный бэктест на BTC показал, что покупка по понедельникам за 7 лет накопила чуть больше, чем в другие дни недели — эффект небольшой, но поэтому понедельник стоит по умолчанию."),
+            "A real BTC backtest found buying weekly on Mondays accumulated slightly more over 7 years than other weekdays — not a big effect, but it's why Monday is the default.",
+            "Реальный бэктест на BTC показал, что покупка по понедельникам за 7 лет накопила чуть больше, чем в другие дни недели — эффект небольшой, но поэтому понедельник стоит по умолчанию."),
         ["dca.freq"] = ("Frequency", "Частота"),
         ["dca.freq.daily"] = ("Daily", "Ежедневно"),
         ["dca.freq.weekly"] = ("Weekly", "Еженедельно"),
@@ -1020,7 +1064,7 @@
         ["dca.dow.sun"] = ("Sunday", "Воскресенье"),
         ["dca.dom"] = ("Day of month", "День месяца"),
         ["dca.dom.sub"] = ("Kept to 1-28 so it always exists in every month, including February.", "Ограничено 1-28, чтобы дата всегда существовала в любом месяце, включая февраль."),
-        ["dca.hour"] = ("Hour (UTC, 0-23)", "Час (UTC, 0-23)"),
+        ["dca.hour"] = ("Hour (in the time zone above, 0-23)", "Час (в выбранном часовом поясе, 0-23)"),
         ["dca.budget"] = ("Budget per cycle (USDT)", "Бюджет на цикл (USDT)"),
         ["dca.budget.sub"] = ("The TOTAL spent across all symbols above, every time the schedule fires — not per-symbol.", "ОБЩАЯ сумма на все монеты выше за один цикл, не на каждую монету отдельно."),
 

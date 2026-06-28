@@ -48,7 +48,19 @@ namespace VertexAutoTradeBinance8.Configuration
             /// <summary>"Daily", "Weekly", or "Monthly".</summary>
             public string Frequency { get; set; } = "Weekly";
 
-            /// <summary>Hour of day (0-23, UTC) the scheduled buy fires at.</summary>
+            /// <summary>
+            /// IANA time zone identifier (e.g. "UTC", "America/New_York",
+            /// "Europe/Moscow") the schedule below is interpreted in.
+            /// Defaults to "UTC" for backward compatibility with
+            /// existing configs. Using .NET's own TimeZoneInfo means
+            /// DST transitions (e.g. EDT ↔ EST) are handled
+            /// automatically — a configured "9 AM America/New_York"
+            /// buy stays at 9 AM New York time year-round, with no
+            /// manual hour adjustment needed twice a year.
+            /// </summary>
+            public string TimeZoneId { get; set; } = "UTC";
+
+            /// <summary>Hour of day (0-23) the scheduled buy fires at, in the TimeZoneId above.</summary>
             public int HourUtc { get; set; } = 12;
 
             /// <summary>
