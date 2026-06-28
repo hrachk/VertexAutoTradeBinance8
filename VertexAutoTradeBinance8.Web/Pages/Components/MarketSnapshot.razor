@@ -14,6 +14,7 @@
 @inject BinanceClientFactory Factory
 @inject VertexAutoTradeBinance8.Services.BinanceAlgoOrderService AlgoOrders
 @inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoAccount
+@inject VertexAutoTradeBinance8.Web.Services.RealDcaHistoryReader RealDcaHistory
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
@@ -589,12 +590,40 @@
                                 </tr>
                             </thead>
                             <tbody>
+                                @{
+                                    // Computed once before the loop, not per-row - avoids
+                                    // redundant file reads/snapshot copies on every iteration.
+                                    // Per direct request: a small "(DCA)" hint on a position's
+                                    // row when that symbol was recently bought via DCA (the
+                                    // exchange itself has no way to distinguish a DCA buy from
+                                    // a regular one once they're merged into the same position,
+                                    // so this cross-references the separate DCA purchase
+                                    // history instead). Bounded to the last 7 days so the hint
+                                    // doesn't linger forever on a position that received a DCA
+                                    // buy long ago and has since been actively traded normally.
+                                    var dcaCutoff = DateTime.UtcNow.AddDays(-7);
+                                    HashSet<string> recentDcaSymbols;
+                                    if (_demoMode)
+                                    {
+                                        recentDcaSymbols = DemoAccount.GetDcaSnapshot().History
+                                            .Where(h => h.TimeUtc >= dcaCutoff).Select(h => h.Symbol).ToHashSet();
+                                    }
+                                    else
+                                    {
+                                        recentDcaSymbols = RealDcaHistory.Read().History
+                                            .Where(h => h.TimeUtc >= dcaCutoff).Select(h => h.Symbol).ToHashSet();
+                                    }
+                                }
                                 @foreach (var pos in DisplayedPositions)
                                 {
                                     <tr class="mk-pos-row @(PosIdentityEquals(_selectedPosition, pos) ? "mk-pos-row-sel" : "") @(PosIdentityEquals(_selectingPosition, pos) ? "mk-pos-row-loading" : "")"
                                         @onclick="() => SelectPosition(pos)">
                                         <td class="mk-oo-sym">
                                             @pos.Symbol
+                                            @if (recentDcaSymbols.Contains(pos.Symbol))
+                                            {
+                                                <span class="mk-dca-hint" title="This symbol was recently bought via the DCA strategy">(DCA)</span>
+                                            }
                                             @if (PosIdentityEquals(_selectingPosition, pos))
                                             {
                                                 <span class="mk-pos-spin">⟳</span>
@@ -1716,6 +1745,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-pos-row-sel{background:rgba(59,130,246,0.1);box-shadow:inset 2px 0 0 var(--acc);}
 .mk-pos-row-loading{opacity:.7;cursor:wait;}
 .mk-pos-spin{display:inline-block;margin-left:6px;color:var(--acc);animation:mkPosSpin .8s linear infinite;font-size:11px;}
+.mk-dca-hint{margin-left:5px;font-size:9px;color:var(--dim);font-weight:600;letter-spacing:.3px;}
 @@keyframes mkPosSpin{to{transform:rotate(360deg);}}
 .mk-oo-sym{font-family:var(--mono);font-weight:700;color:var(--acc);font-size:13.5px;}
 .mk-liq{color:#f59e0b;}
@@ -1829,6 +1859,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _activeSignal = null;
         _selectedPosition = null;
         _manualSlPrice = 0;
+        _noProtectionConfirmed = false;
         _manualTps.Clear();
         _orderError = "";
         _orderSuccess = "";
@@ -2660,6 +2691,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     bool _orderPanelDismissed;
     ActivePositionInfo? _currentPosition;
     List<ActivePositionInfo> _allPositions = new();
+    bool _lastPositionsFetchOk; // see CleanupOrphanedProtectiveOrdersAsync — never treat an empty _allPositions as ground truth unless this is true
 
     // Returns the right positions list for display depending on mode -
     // converts DemoPosition to ActivePositionInfo (near-identical
@@ -2779,6 +2811,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     string _orderError = string.Empty;
 
     decimal _manualSlPrice;
+    bool _noProtectionConfirmed;
     sealed class ManualTpRow { public decimal Price; public decimal Pct = 100m; }
     List<ManualTpRow> _manualTps = new();
     string _orderSuccess = string.Empty;
@@ -3359,6 +3392,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             _orderPanelDismissed = true;
             _currentPosition = null;
             _manualSlPrice = 0;
+            _noProtectionConfirmed = false;
             _manualTps.Clear();
         }
     }
@@ -3468,11 +3502,12 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         try
         {
             var client = Factory.TryCreateRestClient();
-            if (client == null) return;
+            if (client == null) { _lastPositionsFetchOk = false; return; }
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
             var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: cts.Token);
-            if (!res.Success || res.Data == null) { _allPositions = new(); return; }
+            if (!res.Success || res.Data == null) { _allPositions = new(); _lastPositionsFetchOk = false; return; }
+            _lastPositionsFetchOk = true;
 
             // Account summary (margin/wallet balance, unrealized PnL) —
             // fetched directly via the same Binance client/pattern
@@ -3581,7 +3616,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
             await InvokeAsync(StateHasChanged);
         }
-        catch { }
+        catch { _lastPositionsFetchOk = false; }
         finally { _positionsLoading = false; _ooPanelNeedsAutoFit = true; }
     }
 
@@ -4080,6 +4115,15 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     {
         if (_demoMode) return;
 
+        // CRITICAL: never trust _allPositions for this destructive
+        // operation unless the last fetch genuinely succeeded -
+        // otherwise a transient API failure (network blip, rate
+        // limit, brief Binance outage) leaves _allPositions
+        // temporarily empty, and every real TP/SL order on the
+        // account would look like an "orphan" with no matching
+        // position, getting cancelled outright.
+        if (!_lastPositionsFetchOk) return;
+
         var orphans = _openOrders
             .Where(o => o.ReduceOnly)
             .Where(o => !_allPositions.Any(p =>
@@ -4088,6 +4132,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             .ToList();
 
         if (orphans.Count == 0) return;
+
+        // Defense in depth: even with the fetch-success guard above,
+        // cap how many orders get cancelled in a single pass. A large
+        // batch of "orphans" appearing all at once is itself a signal
+        // something is wrong - genuine orphans should accumulate one
+        // or two at a time as individual positions close, not in bulk.
+        const int maxPerTick = 5;
+        if (orphans.Count > maxPerTick) orphans = orphans.Take(maxPerTick).ToList();
 
         foreach (var o in orphans)
         {
@@ -4510,6 +4562,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             }
 
             _manualSlPrice = 0;
+            _noProtectionConfirmed = false;
             _manualTps.Clear();
             _activeSignal = null;
             RefreshDemoSnapshot();
@@ -4526,6 +4579,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
         if (_orderQty <= 0)                                   { _orderError = "Enter quantity"; return; }
         if (_orderType != "Market" && _orderPrice <= 0)       { _orderError = "Enter price"; return; }
+
+        // Per direct request: warn (don't hard-block, since a
+        // deliberate stop-less entry is sometimes intentional) when
+        // neither protection level is set at all - requires an
+        // explicit second click to confirm before placing an
+        // unprotected position.
+        bool hasSl = _manualSlPrice > 0;
+        bool hasTp = _manualTps.Any(t => t.Price > 0);
+        if (!hasSl && !hasTp && !_noProtectionConfirmed)
+        {
+            _orderError = "No Stop Loss or Take Profit set — click again to confirm opening unprotected";
+            _noProtectionConfirmed = true;
+            return;
+        }
+        _noProtectionConfirmed = false;
 
         // Demo mode: route entirely through DemoAccountService, the
         // real Binance client is never touched. Uses the real live
@@ -4669,6 +4737,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
             _orderSuccess = entrySummary;
             _manualSlPrice = 0;
+            _noProtectionConfirmed = false;
             _manualTps.Clear();
             _activeSignal = null;
         }
