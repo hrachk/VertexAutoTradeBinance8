@@ -26,6 +26,12 @@
     </div>
 
     <div class="vertex-right">
+        <button class="autotrade-toggle @(_autoTradeEnabled ? "autotrade-on" : "autotrade-off")"
+                @onclick="ToggleAutoTrade" title="@(_autoTradeEnabled ? "Bot can open real positions automatically. Click to pause." : "Bot is signal-only — it will NOT open real positions automatically. Click to resume.")">
+            <span class="autotrade-dot"></span>
+            AutoTrade @(_autoTradeEnabled ? "ON" : "OFF")
+        </button>
+
         <div class="strategy-mode-pill">
             <span class="strategy-mode-icon">⚙</span>
             <select class="strategy-mode-select" title="Strategy Mode" value="@_strategyMode" @onchange="OnStrategyModeChanged">
@@ -104,6 +110,7 @@
 @inject Microsoft.Extensions.Options.IOptions<ClientOptions> ClientOptions
 @inject Microsoft.JSInterop.IJSRuntime JS
 @inject VertexAutoTradeBinance8.Web.Services.StrategyModeFileService StrategyModeService
+@inject VertexAutoTradeBinance8.Web.Services.RuntimeConfigService RuntimeCfg
 
 @code {
     ClientOptions Client => ClientOptions.Value;
@@ -115,6 +122,7 @@
     private bool ShowMobileSidebar;
     private bool SidebarCollapsed;
     private string _strategyMode = "Auto";
+    private bool _autoTradeEnabled = true;
 
     void ToggleMobileMenu() => ShowMobileSidebar = !ShowMobileSidebar;
 
@@ -131,11 +139,43 @@
         await StrategyModeService.SetModeAsync(newMode);
     }
 
+    async Task ToggleAutoTrade()
+    {
+        _autoTradeEnabled = !_autoTradeEnabled;
+        try
+        {
+            // SignalOnlyMode:EnableExecution - confirmed this is the
+            // key that actually takes effect (Program.cs registers
+            // Configure<TradingOptions> twice for the same default
+            // options, once for "Trading" and once for
+            // "SignalOnlyMode" - the second registration wins as the
+            // effective value the Engine's _tradingOptions.CurrentValue
+            // resolves to). Written through the same shared runtime-
+            // override file mechanism already used for DCA settings -
+            // the Engine's own IOptionsMonitor picks this up live, no
+            // restart needed.
+            await RuntimeCfg.SetValueAsync("SignalOnlyMode:EnableExecution", _autoTradeEnabled);
+        }
+        catch
+        {
+            // Revert the optimistic UI flip if the write genuinely failed
+            _autoTradeEnabled = !_autoTradeEnabled;
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         try
         {
             _strategyMode = await StrategyModeService.ReadCurrentModeAsync();
+        }
+        catch { }
+
+        try
+        {
+            var cfg = await RuntimeCfg.GetEffectiveConfigAsync();
+            var node = cfg["SignalOnlyMode"]?["EnableExecution"];
+            if (node != null) _autoTradeEnabled = node.GetValue<bool>();
         }
         catch { }
     }

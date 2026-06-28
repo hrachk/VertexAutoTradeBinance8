@@ -2082,7 +2082,6 @@ compact-card {
 
 
 :root {
-   // --header-h: 64px;
     --sidebar-w: 260px;
 }
 
@@ -2091,7 +2090,7 @@ compact-card {
     position: sticky;
     top: 0;
     z-index: 2000;
-    height: var(--header-h);
+    height: var(--vertex-header-h);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -2203,6 +2202,42 @@ compact-card {
 
 .status-pill,
 .meta-pill,
+.autotrade-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .3px;
+    cursor: pointer;
+    border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(255,255,255,0.06);
+    color: #94a3b8;
+    transition: all .15s;
+}
+.autotrade-toggle:hover {
+    border-color: rgba(255,255,255,0.22);
+}
+.autotrade-toggle.autotrade-on {
+    background: rgba(34,197,94,0.12);
+    border-color: rgba(34,197,94,0.35);
+    color: #4ade80;
+}
+.autotrade-toggle.autotrade-off {
+    background: rgba(239,68,68,0.12);
+    border-color: rgba(239,68,68,0.35);
+    color: #f87171;
+}
+.autotrade-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 6px currentColor;
+}
+
 .strategy-mode-pill {
     display: inline-flex;
     align-items: center;
@@ -2272,12 +2307,12 @@ compact-card {
 /* ==== BODY LAYOUT ==== */
 .app-body {
     /* если header sticky — offset НЕ нужен, но оставим защиту */
-    min-height: calc(100vh - var(--header-h));
+    min-height: calc(100vh - var(--vertex-header-h));
 }
 
 .page {
     display: flex;
-    min-height: calc(100vh - var(--header-h));
+    min-height: calc(100vh - var(--vertex-header-h));
 }
 
 /* Sidebar desktop */
@@ -2296,9 +2331,9 @@ compact-card {
 @media (max-width: 980px) {
     .sidebar {
         position: fixed;
-        top: var(--header-h);
+        top: var(--vertex-header-h);
         left: 0;
-        height: calc(100vh - var(--header-h));
+        height: calc(100vh - var(--vertex-header-h));
         transform: translateX(-102%);
         transition: transform 160ms ease;
         z-index: 2500;
@@ -2311,7 +2346,7 @@ compact-card {
 
     .sidebar-backdrop {
         position: fixed;
-        inset: var(--header-h) 0 0 0;
+        inset: var(--vertex-header-h) 0 0 0;
         background: rgba(0,0,0,0.45);
         z-index: 2400;
     }
@@ -2857,6 +2892,7 @@ compact-card {
 /* ===== Desktop top navigation (replaces sidebar on wide screens) ===== */
 .vertex-topnav {
     position: sticky;
+    top: var(--vertex-header-h);
     z-index: 1900;
     display: flex;
     align-items: center;
