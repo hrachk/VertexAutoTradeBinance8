@@ -298,7 +298,12 @@ namespace VertexAutoTradeBinance8.Services
         // monthly, so this doesn't need to be more sophisticated.
         public static bool IsCycleDueNow(DcaOptions.DcaScheduleOptions schedule, DateTime lastCycleUtc, DateTime nowUtc)
         {
-            if (nowUtc.Hour != schedule.HourUtc) return false;
+            // Allow firing AT OR AFTER the target hour, not only in
+            // the exact hour itself - if the process wasn't running
+            // (or this check simply hasn't run yet) right when the
+            // target hour started, this still catches up later the
+            // same day instead of silently waiting a full extra day.
+            if (nowUtc.Hour < schedule.HourUtc) return false;
 
             bool dateMatches = schedule.Frequency.ToLowerInvariant() switch
             {
@@ -309,10 +314,10 @@ namespace VertexAutoTradeBinance8.Services
             };
             if (!dateMatches) return false;
 
-            // Guard against firing twice within the same day if the
-            // hourly check happens to land on the target hour more
-            // than once (DST edge cases, restarts, etc) - require at
-            // least 20 hours since the last cycle.
+            // Guard against firing twice on the same day now that the
+            // check above is "at or after" rather than an exact hour
+            // match - require at least 20 hours since the last cycle,
+            // same as before.
             return (nowUtc - lastCycleUtc) > TimeSpan.FromHours(20);
         }
 
