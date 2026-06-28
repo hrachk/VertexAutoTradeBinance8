@@ -349,7 +349,14 @@
             <div class="mk-tf-bar mk-tf-bar-inline">
                 @foreach (var tf in _allTfs)
                 {
-                    var hasSeries = Series.Any(s => s.Symbol == _activeSym && s.Timeframe == tf.Key);
+                    var hasSeries = Series.Any(s => s.Symbol == _activeSym && s.Timeframe == tf.Key)
+                            // Also check the full datadb archive directly, not just the
+                            // narrow klines_bootstrap.json snapshot Series is loaded from -
+                            // confirmed via the user's real server that pinned symbols have
+                            // archived data in datadb for timeframes (3m/2h/6h/12h/3D/1W)
+                            // that klines_bootstrap.json simply doesn't carry, which is the
+                            // actual reason these showed as permanently inactive.
+                            || HistoricalReader.Has(_activeSym, TfLabel(tf.Key).ToLowerInvariant());
                     var isSelTf   = _activeTf == tf.Key;
                     <button class="mk-tf-btn @(isSelTf?"mk-tf-on":"") @(hasSeries?"":"mk-tf-dim")"
                             @onclick="()=>PickTf(tf.Key)">
@@ -452,7 +459,14 @@
                 <div class="mk-max-tf-row">
                     @foreach (var tf in _allTfs)
                     {
-                        var hasSeries = Series.Any(s => s.Symbol == _activeSym && s.Timeframe == tf.Key);
+                        var hasSeries = Series.Any(s => s.Symbol == _activeSym && s.Timeframe == tf.Key)
+                            // Also check the full datadb archive directly, not just the
+                            // narrow klines_bootstrap.json snapshot Series is loaded from -
+                            // confirmed via the user's real server that pinned symbols have
+                            // archived data in datadb for timeframes (3m/2h/6h/12h/3D/1W)
+                            // that klines_bootstrap.json simply doesn't carry, which is the
+                            // actual reason these showed as permanently inactive.
+                            || HistoricalReader.Has(_activeSym, TfLabel(tf.Key).ToLowerInvariant());
                         var isSelTf   = _activeTf == tf.Key;
                         <button class="mk-tf-btn @(isSelTf?"mk-tf-on":"") @(hasSeries?"":"mk-tf-dim")"
                                 @onclick="()=>PickTf(tf.Key)">
@@ -526,50 +540,97 @@
                     Open Orders
                     <span class="mk-oo-count">@(_demoMode ? _demoSnapshot.PendingOrders.Count : _openOrders.Count)</span>
                 </button>
-                @if (_demoMode)
-                {
-                    <button class="mk-oo-tab @(_ooActiveTab == "history" ? "mk-oo-tab-on" : "")"
-                            @onclick="ShowHistoryTab">
-                        History
-                        <span class="mk-oo-count">@_demoSnapshot.History.Count</span>
-                    </button>
-                }
+                <button class="mk-oo-tab @(_ooActiveTab == "history" ? "mk-oo-tab-on" : "")"
+                        @onclick="ShowHistoryTab">
+                    History
+                    <span class="mk-oo-count">@(_demoMode ? _demoSnapshot.History.Count : _realHistory.Count)</span>
+                </button>
             </div>
 
-            @if (_ooActiveTab == "history" && _demoMode)
+            @if (_ooActiveTab == "history")
             {
-                @if (_demoSnapshot.History.Count == 0)
+                @if (_demoMode)
                 {
-                    <div class="mk-oo-empty">No closed demo trades yet</div>
+                    @if (_demoSnapshot.History.Count == 0)
+                    {
+                        <div class="mk-oo-empty">No closed demo trades yet</div>
+                    }
+                    else
+                    {
+                        <table class="mk-pos-table">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th><th>Side</th><th>Entry</th><th>Exit</th>
+                                    <th>PnL</th><th>Reason</th><th>Closed</th><th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var t in _demoSnapshot.History.OrderByDescending(t => t.ClosedAtUtc))
+                                {
+                                    <tr>
+                                        <td>@t.Symbol.Replace("USDT","")</td>
+                                        <td class="@(t.Side == "LONG" ? "up" : "dn")">@t.Side</td>
+                                        <td class="mk-mono">@FmtP(t.EntryPrice)</td>
+                                        <td class="mk-mono">@FmtP(t.ExitPrice)</td>
+                                        <td class="mk-mono @(t.RealizedPnl >= 0 ? "up" : "dn")">@(t.RealizedPnl >= 0 ? "+" : "")@t.RealizedPnl.ToString("F2")</td>
+                                        <td class="mk-dim">@t.CloseReason</td>
+                                        <td class="mk-dim">@t.ClosedAtUtc.ToLocalTime().ToString("MM/dd HH:mm")</td>
+                                        <td>
+                                            <button class="mk-oo-cancel"
+                                                    @onclick="@(() => OpenShareCardFromHistory(t))">Share</button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
                 }
                 else
                 {
-                    <table class="mk-pos-table">
-                        <thead>
-                            <tr>
-                                <th>Symbol</th><th>Side</th><th>Entry</th><th>Exit</th>
-                                <th>PnL</th><th>Reason</th><th>Closed</th><th></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var t in _demoSnapshot.History.OrderByDescending(t => t.ClosedAtUtc))
-                            {
+                    // Real-mode history is loaded on demand (per-symbol
+                    // API calls, unlike demo's always-in-memory list) -
+                    // reuses the exact same GetUserTradesAsync pattern
+                    // already established in Positions.razor.
+                    @if (_realHistoryLoading)
+                    {
+                        <div class="mk-oo-empty">Loading trade history…</div>
+                    }
+                    else if (_realHistory.Count == 0)
+                    {
+                        <div class="mk-oo-empty">
+                            No closed trade history loaded yet.
+                            <button class="mk-oo-cancel" @onclick="LoadRealHistoryAsync">Load</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <table class="mk-pos-table">
+                            <thead>
                                 <tr>
-                                    <td>@t.Symbol.Replace("USDT","")</td>
-                                    <td class="@(t.Side == "LONG" ? "up" : "dn")">@t.Side</td>
-                                    <td class="mk-mono">@FmtP(t.EntryPrice)</td>
-                                    <td class="mk-mono">@FmtP(t.ExitPrice)</td>
-                                    <td class="mk-mono @(t.RealizedPnl >= 0 ? "up" : "dn")">@(t.RealizedPnl >= 0 ? "+" : "")@t.RealizedPnl.ToString("F2")</td>
-                                    <td class="mk-dim">@t.CloseReason</td>
-                                    <td class="mk-dim">@t.ClosedAtUtc.ToLocalTime().ToString("MM/dd HH:mm")</td>
-                                    <td>
-                                        <button class="mk-oo-cancel"
-                                                @onclick="@(() => OpenShareCardFromHistory(t))">Share</button>
-                                    </td>
+                                    <th>Symbol</th><th>Side</th><th>Price</th><th>Qty</th>
+                                    <th>PnL</th><th>Fee</th><th>Closed</th><th></th>
                                 </tr>
-                            }
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody>
+                                @foreach (var t in _realHistory)
+                                {
+                                    <tr>
+                                        <td>@t.Symbol.Replace("USDT","")</td>
+                                        <td class="@(t.Side == "BUY" ? "up" : "dn")">@t.Side</td>
+                                        <td class="mk-mono">@FmtP(t.Price)</td>
+                                        <td class="mk-mono">@t.Qty.ToString("G8")</td>
+                                        <td class="mk-mono @(t.RealizedPnl >= 0 ? "up" : "dn")">@(t.RealizedPnl >= 0 ? "+" : "")@t.RealizedPnl.ToString("F2")</td>
+                                        <td class="mk-dim">@t.Fee.ToString("F4")</td>
+                                        <td class="mk-dim">@t.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
+                                        <td>
+                                            <button class="mk-oo-cancel" @onclick="@(() => OpenShareCardFromRealHistory(t))">Share</button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        <button class="mk-oo-cancel" style="margin-top:8px" @onclick="LoadRealHistoryAsync">Refresh</button>
+                    }
                 }
             }
 
@@ -639,14 +700,39 @@
                                         <td class="mk-mono @(pos.Pnl >= 0 ? "up" : "dn")">@(pos.Pnl >= 0 ? "+" : "")@pos.Pnl.ToString("F2")</td>
                                         <td class="mk-mono @(pos.Roi >= 0 ? "up" : "dn")">@(pos.Roi >= 0 ? "+" : "")@((pos.Roi * 100).ToString("F1"))%</td>
                                         <td class="mk-pos-actions" @onclick:stopPropagation="true">
-                                            <div class="mk-pos-partial-row">
-                                                @foreach (var pct in new[] { 25, 50, 75 })
-                                                {
-                                                    <button class="mk-pos-partial-btn" disabled="@_orderLoading"
-                                                            title="@($"Close {pct}% of this position")"
-                                                            @onclick="() => ClosePositionRowPartial(pos, pct)">@pct%</button>
-                                                }
-                                            </div>
+                                            @if (_partialCloseOpenKey != $"{pos.Symbol}:{pos.Side}")
+                                            {
+                                                <button class="mk-oo-cancel" disabled="@_orderLoading"
+                                                        @onclick="() => OpenPartialClose(pos)">Partial Close</button>
+                                            }
+                                            else
+                                            {
+                                                <div class="mk-partial-slider-box">
+                                                    <div class="mk-partial-slider-row">
+                                                        <input type="range" min="1" max="100" step="1"
+                                                               value="@_partialClosePct"
+                                                               @oninput="@(e => OnPartialClosePctChanged(e, pos))"
+                                                               class="mk-partial-slider" />
+                                                        <span class="mk-partial-pct mono">@_partialClosePct%</span>
+                                                    </div>
+                                                    <div class="mk-partial-preview">
+                                                        @{
+                                                            decimal previewQty = pos.Qty * (_partialClosePct / 100m);
+                                                            decimal dir = pos.Side == "LONG" ? 1m : -1m;
+                                                            decimal previewPnl = (pos.MarkPrice - pos.EntryPrice) * dir * previewQty;
+                                                        }
+                                                        <span class="mk-dim">Closing @previewQty.ToString("G8") → PnL</span>
+                                                        <span class="mono @(previewPnl >= 0 ? "up" : "dn")">@(previewPnl >= 0 ? "+" : "")@previewPnl.ToString("F2")</span>
+                                                    </div>
+                                                    <div class="mk-partial-actions">
+                                                        <button class="mk-oo-cancel" @onclick="ClosePartialCloseSlider">Cancel</button>
+                                                        <button class="mk-oo-cancel mk-partial-confirm" disabled="@_orderLoading"
+                                                                @onclick="() => ConfirmPartialClose(pos)">
+                                                            @if (_orderLoading) { <span class="ord-spin"></span> } else { @($"Close {_partialClosePct}%") }
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            }
                                             <button class="mk-oo-cancel" disabled="@_orderLoading"
                                                     @onclick="() => ClosePositionRow(pos)">
                                                 @(_orderLoading ? "…" : "Close")
@@ -1750,9 +1836,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-oo-sym{font-family:var(--mono);font-weight:700;color:var(--acc);font-size:13.5px;}
 .mk-liq{color:#f59e0b;}
 .mk-oo-cancel{background:none;border:1px solid var(--bdr);color:var(--dim);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;line-height:1;white-space:nowrap;}
-.mk-pos-actions{display:flex;flex-direction:column;align-items:flex-end;gap:4px;}
-.mk-pos-partial-row{display:flex;gap:3px;}
-.mk-pos-partial-btn{background:var(--bg3);border:1px solid var(--bdr);color:var(--dim);padding:2px 7px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600;line-height:1.4;}
+.mk-pos-actions{display:flex;flex-direction:column;align-items:flex-end;gap:4px;position:relative;}
+.mk-partial-slider-box{display:flex;flex-direction:column;gap:6px;background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;padding:8px 10px;min-width:220px;position:absolute;z-index:30;right:0;top:100%;margin-top:4px;box-shadow:0 8px 20px rgba(0,0,0,.4);}
+.mk-partial-slider-row{display:flex;align-items:center;gap:8px;}
+.mk-partial-slider{flex:1;}
+.mk-partial-pct{font-size:12px;font-weight:700;width:38px;text-align:right;}
+.mk-partial-preview{display:flex;justify-content:space-between;font-size:11px;}
+.mk-partial-actions{display:flex;gap:6px;}
+.mk-partial-confirm{flex:1;background:var(--red);color:#fff;border-color:var(--red);}
 .mk-pos-partial-btn:hover:not(:disabled){border-color:var(--acc);color:var(--acc);}
 .mk-pos-partial-btn:disabled{opacity:.5;cursor:not-allowed;}
 .mk-oo-cancel:hover:not(:disabled){border-color:var(--red);color:var(--red);}
@@ -1865,6 +1956,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _orderSuccess = "";
         RefreshDemoSnapshot();
         StateHasChanged();
+        _ = SaveSelectionState();
     }
 
     void RefreshDemoSnapshot()
@@ -2019,29 +2111,57 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             await InitChartAsync();
 
-            // Restore the last symbol/timeframe the user was looking
-            // at, if any was saved for this browser tab — avoids
-            // always resetting to the default symbol on every page
-            // load/navigation. Falls through silently to the existing
-            // default selection if nothing was saved, or the saved
-            // symbol no longer exists in the current universe (e.g.
-            // it dropped out of Auto-selection).
+            // Restore the full page state the user was last looking
+            // at (symbol/timeframe, demo mode, active tab, selected
+            // position, maximized state), if any was saved for this
+            // browser tab — avoids resetting to defaults on every
+            // page load/navigation, per direct request to remember
+            // everything the user did on the page. Falls through
+            // silently to the existing default selection if nothing
+            // was saved, or anything no longer resolves (e.g. the
+            // saved symbol dropped out of Auto-selection, or the
+            // saved position has since closed).
             try
             {
-                var savedSym = await JS.InvokeAsync<string?>("sessionStorage.getItem", "vertexMarketSym");
-                var savedTf = await JS.InvokeAsync<string?>("sessionStorage.getItem", "vertexMarketTf");
-                if (!string.IsNullOrEmpty(savedSym))
+                var savedJson = await JS.InvokeAsync<string?>("sessionStorage.getItem", "vertexMarketState");
+                if (!string.IsNullOrEmpty(savedJson))
                 {
-                    var match = !string.IsNullOrEmpty(savedTf)
-                        ? Series.FirstOrDefault(s => s.Symbol == savedSym && s.Timeframe == savedTf)
-                        : null;
-                    match ??= Series.FirstOrDefault(s => s.Symbol == savedSym);
-                    if (match != null && (match.Symbol != _activeSym || match.Timeframe != _activeTf))
+                    var saved = System.Text.Json.JsonSerializer.Deserialize<SavedMarketState>(savedJson);
+                    if (saved != null)
                     {
-                        _activeSym = match.Symbol;
-                        _activeTf = match.Timeframe;
-                        ResolveSelected();
-                        CalcStats();
+                        _demoMode = saved.demoMode;
+                        if (!string.IsNullOrEmpty(saved.ooTab)) _ooActiveTab = saved.ooTab;
+                        _chartMaximized = saved.chartMaximized;
+
+                        if (!string.IsNullOrEmpty(saved.sym))
+                        {
+                            var match = !string.IsNullOrEmpty(saved.tf)
+                                ? Series.FirstOrDefault(s => s.Symbol == saved.sym && s.Timeframe == saved.tf)
+                                : null;
+                            match ??= Series.FirstOrDefault(s => s.Symbol == saved.sym);
+                            if (match != null && (match.Symbol != _activeSym || match.Timeframe != _activeTf))
+                            {
+                                _activeSym = match.Symbol;
+                                _activeTf = match.Timeframe;
+                                ResolveSelected();
+                                CalcStats();
+                            }
+                        }
+
+                        if (!string.IsNullOrEmpty(saved.selectedPosKey))
+                        {
+                            var parts = saved.selectedPosKey.Split(':', 2);
+                            if (parts.Length == 2)
+                            {
+                                var restoredPos = DisplayedPositions.FirstOrDefault(p => p.Symbol == parts[0] && p.Side == parts[1]);
+                                if (restoredPos != null)
+                                {
+                                    _selectedPosition = restoredPos;
+                                    _ = RefreshPositionLines();
+                                }
+                            }
+                        }
+
                         StateHasChanged();
                         _ = RenderCharts();
                     }
@@ -2262,6 +2382,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             Selected = match;
         }
+        else if (!string.IsNullOrEmpty(_activeSym) && HistoricalReader.Has(_activeSym, TfLabel(_activeTf).ToLowerInvariant()))
+        {
+            // The requested timeframe has no entry in the narrow
+            // klines_bootstrap.json snapshot Series is loaded from,
+            // but IS archived in datadb (confirmed: pinned symbols
+            // have per-timeframe archive files there that the
+            // bootstrap snapshot simply doesn't carry). Create an
+            // empty placeholder with the real symbol/timeframe -
+            // RenderCharts' own existing archive lazy-load mechanism
+            // (already proven to work for the 6 base timeframes) will
+            // fill this in for real on the next render, rather than
+            // silently snapping back to a different timeframe the
+            // user didn't ask for.
+            Selected = new MarketSeries(_activeSym, _activeTf, Array.Empty<KlineDto>());
+        }
         else if (!string.IsNullOrEmpty(_activeSym))
         {
             // Fallback: best available TF for this symbol
@@ -2313,12 +2448,31 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // survives navigating away and back (or refreshing) within the same
     // browser tab — cleared automatically when the tab closes, so this
     // is a "remember where I was" convenience, not a permanent setting.
+    sealed class SavedMarketState
+    {
+        public string sym { get; set; } = "";
+        public string tf { get; set; } = "";
+        public bool demoMode { get; set; }
+        public string ooTab { get; set; } = "";
+        public string selectedPosKey { get; set; } = "";
+        public bool chartMaximized { get; set; }
+    }
+
     async Task SaveSelectionState()
     {
         try
         {
-            await JS.InvokeVoidAsync("sessionStorage.setItem", "vertexMarketSym", _activeSym);
-            await JS.InvokeVoidAsync("sessionStorage.setItem", "vertexMarketTf", _activeTf);
+            var state = new
+            {
+                sym = _activeSym,
+                tf = _activeTf,
+                demoMode = _demoMode,
+                ooTab = _ooActiveTab,
+                selectedPosKey = _selectedPosition != null ? $"{_selectedPosition.Symbol}:{_selectedPosition.Side}" : "",
+                chartMaximized = _chartMaximized,
+            };
+            var json = System.Text.Json.JsonSerializer.Serialize(state);
+            await JS.InvokeVoidAsync("sessionStorage.setItem", "vertexMarketState", json);
         }
         catch { }
     }
@@ -2383,10 +2537,34 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         }
     }
 
-    void PickTf(string tf)
+    async Task PickTf(string tf)
     {
         _activeTf = tf;
         ResolveSelected();
+
+        // If ResolveSelected created an empty placeholder (this
+        // timeframe has no entry in the narrow klines_bootstrap.json
+        // snapshot but IS archived in datadb), load it directly here
+        // - RenderCharts itself immediately returns when
+        // Klines.Count < 5, so it can never be the thing that performs
+        // this initial fill; this loader bypasses that gate entirely
+        // for exactly this bootstrap case.
+        if (Selected != null && Selected.Klines.Count == 0 && !string.IsNullOrEmpty(_activeSym))
+        {
+            var label = TfLabel(_activeTf).ToLowerInvariant();
+            var archived = await HistoricalReader.LoadAsync(_activeSym, label);
+            if (archived.Count > 0)
+            {
+                Selected = Selected with { Klines = archived };
+                // Also register this in Series so subsequent lookups
+                // (ResolveSelected, the TF-button hasSeries check,
+                // etc) find it normally from now on, same as any
+                // other timeframe that was present from the start.
+                var idx = Series.FindIndex(s => s.Symbol == _activeSym && s.Timeframe == _activeTf);
+                if (idx >= 0) Series[idx] = Selected; else Series.Add(Selected);
+            }
+        }
+
         CalcStats();
         StateHasChanged();
         _ = RenderCharts();
@@ -2605,11 +2783,18 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     string TfLabel(string tf) => tf switch
     {
         "OneMinute"      => "1m",
+        "ThreeMinutes"   => "3m",
         "FiveMinutes"    => "5m",
         "FifteenMinutes" => "15m",
+        "ThirtyMinutes"  => "30m",
         "OneHour"        => "1h",
+        "TwoHour"        => "2h",
         "FourHour"       => "4h",
+        "SixHour"        => "6h",
+        "TwelveHour"     => "12h",
         "OneDay"         => "1D",
+        "ThreeDay"       => "3D",
+        "OneWeek"        => "1W",
         _ => tf
     };
 
@@ -2803,6 +2988,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     int _orderLeverage = 10;
     bool _orderLoading;
     bool _addToPositionOpen;
+
+    // Partial-close slider — keyed by "Symbol:Side" (not object
+    // identity, since DisplayedPositions recreates ActivePositionInfo
+    // objects fresh for demo positions on every access) so only one
+    // position's slider is open at a time, and stays correctly
+    // associated with the right row across re-renders.
+    string _partialCloseOpenKey = "";
+    int _partialClosePct = 50;
     string _addToPosType = "Market";
     decimal _addToPosPrice;
 
@@ -3506,7 +3699,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
             var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: cts.Token);
-            if (!res.Success || res.Data == null) { _allPositions = new(); _lastPositionsFetchOk = false; return; }
+            if (!res.Success || res.Data == null) { _lastPositionsFetchOk = false; return; } // keep showing the last known list rather than flashing to empty
             _lastPositionsFetchOk = true;
 
             // Account summary (margin/wallet balance, unrealized PnL) —
@@ -3634,6 +3827,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _addToPositionOpen = false;
         try { await JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}"); } catch { }
         StateHasChanged();
+        _ = SaveSelectionState();
     }
 
     async Task SelectPosition(ActivePositionInfo pos)
@@ -3704,6 +3898,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _ = JS.InvokeVoidAsync("tickerDragScroll.scrollSymbolIntoView", pos.Symbol);
 
         StateHasChanged();
+        _ = SaveSelectionState();
     }
 
     async Task ClosePositionRow(ActivePositionInfo pos)
@@ -3750,6 +3945,25 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         }
         catch { }
         finally { _orderLoading = false; }
+    }
+
+    void OpenPartialClose(ActivePositionInfo pos)
+    {
+        _partialCloseOpenKey = $"{pos.Symbol}:{pos.Side}";
+        _partialClosePct = 50;
+    }
+
+    void ClosePartialCloseSlider() => _partialCloseOpenKey = "";
+
+    void OnPartialClosePctChanged(ChangeEventArgs e, ActivePositionInfo pos)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var v)) _partialClosePct = Math.Clamp(v, 1, 100);
+    }
+
+    async Task ConfirmPartialClose(ActivePositionInfo pos)
+    {
+        await ClosePositionRowPartial(pos, _partialClosePct);
+        _partialCloseOpenKey = "";
     }
 
     async Task ClosePositionRowPartial(ActivePositionInfo pos, int pct)
@@ -3922,9 +4136,86 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     string _lastAlgoOrdersDebug = "";
     string _ooActiveTab = "positions";
 
-    void ShowPositionsTab() => _ooActiveTab = "positions";
-    void ShowOrdersTab() => _ooActiveTab = "orders";
-    void ShowHistoryTab() => _ooActiveTab = "history";
+    void ShowPositionsTab() { _ooActiveTab = "positions"; _ = SaveSelectionState(); }
+    void ShowOrdersTab() { _ooActiveTab = "orders"; _ = SaveSelectionState(); }
+
+    void ShowHistoryTab()
+    {
+        _ooActiveTab = "history";
+        _ = SaveSelectionState();
+        if (!_demoMode && _realHistory.Count == 0 && !_realHistoryLoading)
+        {
+            _ = LoadRealHistoryAsync();
+        }
+    }
+
+    sealed class RealTradeRow
+    {
+        public string Symbol = "";
+        public string Side = "";
+        public decimal Price;
+        public decimal Qty;
+        public decimal RealizedPnl;
+        public decimal Fee;
+        public DateTime Time;
+    }
+
+    List<RealTradeRow> _realHistory = new();
+    bool _realHistoryLoading;
+
+    // Reuses the exact same GetUserTradesAsync pattern already
+    // established in Positions.razor, rather than inventing a new
+    // approach for this page. Symbol list comes from current open
+    // positions plus the active symbol, since GetUserTradesAsync
+    // requires a specific symbol per call (no account-wide "all
+    // trades" endpoint) - this won't surface history for a symbol
+    // that's been fully closed out and isn't currently open or
+    // selected, which is an inherent limitation of the exchange API
+    // itself, not something this page can work around.
+    async Task LoadRealHistoryAsync()
+    {
+        if (_demoMode) return;
+        _realHistoryLoading = true;
+        StateHasChanged();
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return;
+
+            var symbols = _allPositions.Select(p => p.Symbol)
+                .Concat(string.IsNullOrEmpty(_activeSym) ? Array.Empty<string>() : new[] { _activeSym })
+                .Distinct().Take(10).ToList();
+
+            var results = new List<RealTradeRow>();
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            foreach (var sym in symbols)
+            {
+                try
+                {
+                    var r = await client.UsdFuturesApi.Trading.GetUserTradesAsync(sym, limit: 30, ct: cts.Token);
+                    if (!r.Success || r.Data == null) continue;
+                    foreach (var t in r.Data)
+                    {
+                        results.Add(new RealTradeRow
+                        {
+                            Symbol = t.Symbol, Side = t.Buyer ? "BUY" : "SELL",
+                            Price = t.Price, Qty = t.Quantity, RealizedPnl = t.RealizedPnl,
+                            Fee = t.Fee, Time = t.Timestamp,
+                        });
+                    }
+                }
+                catch { }
+            }
+            _realHistory = results.OrderByDescending(t => t.Time).Take(100).ToList();
+        }
+        finally { _realHistoryLoading = false; StateHasChanged(); }
+    }
+
+    void OpenShareCardFromRealHistory(RealTradeRow t)
+    {
+        decimal roiPct = t.Price > 0 && t.Qty > 0 ? (t.RealizedPnl / (t.Price * t.Qty)) * 100m : 0m;
+        OpenShareCard(t.Symbol, t.Side == "BUY" ? "LONG" : "SHORT", 1, roiPct, t.RealizedPnl, t.Price, t.Price, isOpen: false);
+    }
 
     void CancelDemoPendingOrder(string id)
     {
