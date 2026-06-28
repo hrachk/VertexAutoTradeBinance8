@@ -709,19 +709,15 @@
 
     private RenderFragment DcaTab() => @<div class="st-grid">
 
+        <div class="st-dca-lang-toggle">
+            <button class="st-dca-lang-btn @(_dcaLang=="en"?"st-dca-lang-on":"")" @onclick="SetDcaLangEn">EN</button>
+            <button class="st-dca-lang-btn @(_dcaLang=="ru"?"st-dca-lang-on":"")" @onclick="SetDcaLangRu">RU</button>
+        </div>
+
         <div class="st-card st-card-wide">
-            <div class="st-card-head"><div class="st-card-title">DCA (Dollar-Cost Averaging) Strategy</div></div>
+            <div class="st-card-head"><div class="st-card-title">@T("dca.title")</div></div>
             <div class="st-card-sub">
-                A completely separate strategy from everything else on this page — it does NOT use
-                signals, indicators, or market analysis to decide when to buy. It simply spends a
-                fixed budget on the symbols below, on a fixed schedule, every time, regardless of
-                price or market conditions. This is intentional: real-world data consistently shows
-                plain scheduled buying outperforms attempts to "time" entries, and is far less prone
-                to accidentally over-fitting to past price action. It runs <strong>in parallel</strong>
-                with the main signal-based strategy — neither one is "switched off" by the other.
-                It executes the same way on both the real account (a genuine market order is placed)
-                and the Demo account (a virtual buy, same math, same schedule) — useful for watching
-                a few cycles play out risk-free before relying on it for real.
+                @T("dca.intro") <strong>@T("dca.intro.parallel")</strong> @T("dca.intro.rest")
             </div>
         </div>
 
@@ -735,32 +731,25 @@
             <div class="st-toggle-row">
                 <label class="st-toggle">
                     <input type="checkbox" checked="@dcaEnabled" @onchange="OnDcaEnabledToggle" />
-                    <span><strong>Enable DCA</strong></span>
+                    <span><strong>@T("dca.enable")</strong></span>
                 </label>
             </div>
             <div class="st-card-sub" style="margin-top:4px">
-                Leave this OFF until the symbol list and schedule below are set up the way you
-                want — once on, the very next scheduled time slot that matches will place a real
-                order (or a demo one, in demo mode) with whatever is configured at that moment.
+                @T("dca.enable.sub")
             </div>
         </div>
 
         <div class="st-card st-card-wide">
-            <div class="st-card-head"><div class="st-card-title">Which coins, and how much of the budget each gets</div></div>
+            <div class="st-card-head"><div class="st-card-title">@T("dca.coins.title")</div></div>
             <div class="st-card-sub">
-                Add one row per coin you want to accumulate. The <strong>Weight</strong> number only
-                matters relative to the other rows — it's not a percentage by itself. For example,
-                weights of 60 / 25 / 15 split the budget the same way as 12 / 5 / 3 would: roughly
-                60% / 25% / 15%. A common, professional starting point is weighting the largest,
-                most established coin (e.g. BTC) the heaviest, with smaller/newer coins getting a
-                smaller slice — but there's no requirement to do it that way.
+                @T("dca.coins.sub")
             </div>
 
             @if (dcaSymbols.Count > 0)
             {
                 <table class="st-dca-table">
                     <thead>
-                        <tr><th>Symbol</th><th>Weight</th><th>≈ Share of budget</th><th></th></tr>
+                        <tr><th>@T("dca.col.symbol")</th><th>@T("dca.col.weight")</th><th>@T("dca.col.share")</th><th></th></tr>
                     </thead>
                     <tbody>
                         @foreach (var (sym, weight) in dcaSymbols)
@@ -773,7 +762,7 @@
                                            @onchange="@(e => OnDcaSymbolWeightChanged(sym, e))" />
                                 </td>
                                 <td class="mk-dim">@pct.ToString("F0")%</td>
-                                <td><button class="st-btn-secondary" @onclick="() => RemoveDcaSymbol(sym)">Remove</button></td>
+                                <td><button class="st-btn-secondary" @onclick="() => RemoveDcaSymbol(sym)">@T("dca.col.remove")</button></td>
                             </tr>
                         }
                     </tbody>
@@ -781,86 +770,82 @@
             }
             else
             {
-                <div class="st-card-sub" style="font-style:italic">No symbols configured yet — add one below.</div>
+                <div class="st-card-sub" style="font-style:italic">@T("dca.none")</div>
             }
 
             <div class="st-add-row" style="margin-top:10px">
-                <input class="st-input" placeholder="e.g. BTCUSDT" value="@_dcaNewSymbol" @oninput="@(e => _dcaNewSymbol = e.Value?.ToString()?.ToUpperInvariant() ?? "")" />
-                <input class="st-input st-dca-weight-input" type="number" min="0.01" step="1" placeholder="Weight" value="@_dcaNewWeight" @oninput="@(e => _dcaNewWeight = e.Value?.ToString() ?? "")" />
-                <button class="st-btn-secondary" @onclick="AddDcaSymbol">+ Add coin</button>
+                <input class="st-input" placeholder="@T("dca.add.placeholder")" value="@_dcaNewSymbol" @oninput="@(e => _dcaNewSymbol = e.Value?.ToString()?.ToUpperInvariant() ?? "")" />
+                <input class="st-input st-dca-weight-input" type="number" min="0.01" step="1" placeholder="@T("dca.col.weight")" value="@_dcaNewWeight" @oninput="@(e => _dcaNewWeight = e.Value?.ToString() ?? "")" />
+                <button class="st-btn-secondary" @onclick="AddDcaSymbol">@T("dca.add.button")</button>
             </div>
 
             <div class="st-toggle-row" style="margin-top:14px">
                 <label class="st-toggle">
                     <input type="checkbox" checked="@(GetString("Dca:AllocationMode","Weighted")=="Equal")" @onchange="OnDcaEqualAllocationToggle" />
-                    <span>Split budget equally instead (ignore the Weight numbers above)</span>
+                    <span>@T("dca.equal")</span>
                 </label>
             </div>
         </div>
 
         <div class="st-card">
-            <div class="st-card-head"><div class="st-card-title">Schedule — when each buy happens</div></div>
-            <div class="st-card-sub">All times are UTC. A real BTC backtest found buying weekly on Mondays accumulated slightly more over 7 years than other weekdays — not a big effect, but it's why Monday is the default.</div>
+            <div class="st-card-head"><div class="st-card-title">@T("dca.schedule.title")</div></div>
+            <div class="st-card-sub">@T("dca.schedule.sub")</div>
 
             <div class="st-field">
-                <label>Frequency</label>
+                <label>@T("dca.freq")</label>
                 <select class="st-select" value="@GetString("Dca:Schedule:Frequency","Weekly")" @onchange="OnDcaFrequencyChanged">
-                    <option value="Daily">Daily</option>
-                    <option value="Weekly">Weekly</option>
-                    <option value="Monthly">Monthly</option>
+                    <option value="Daily">@T("dca.freq.daily")</option>
+                    <option value="Weekly">@T("dca.freq.weekly")</option>
+                    <option value="Monthly">@T("dca.freq.monthly")</option>
                 </select>
             </div>
 
             @if (GetString("Dca:Schedule:Frequency","Weekly") == "Weekly")
             {
                 <div class="st-field">
-                    <label>Day of week</label>
+                    <label>@T("dca.dow")</label>
                     <select class="st-select" value="@GetInt("Dca:Schedule:DayOfWeek",1)" @onchange="OnDcaDayOfWeekChanged">
-                        <option value="1">Monday</option>
-                        <option value="2">Tuesday</option>
-                        <option value="3">Wednesday</option>
-                        <option value="4">Thursday</option>
-                        <option value="5">Friday</option>
-                        <option value="6">Saturday</option>
-                        <option value="7">Sunday</option>
+                        <option value="1">@T("dca.dow.mon")</option>
+                        <option value="2">@T("dca.dow.tue")</option>
+                        <option value="3">@T("dca.dow.wed")</option>
+                        <option value="4">@T("dca.dow.thu")</option>
+                        <option value="5">@T("dca.dow.fri")</option>
+                        <option value="6">@T("dca.dow.sat")</option>
+                        <option value="7">@T("dca.dow.sun")</option>
                     </select>
                 </div>
             }
             @if (GetString("Dca:Schedule:Frequency","Weekly") == "Monthly")
             {
                 <div class="st-field">
-                    <label>Day of month</label>
+                    <label>@T("dca.dom")</label>
                     <input class="st-input" type="number" min="1" max="28" value="@GetInt("Dca:Schedule:DayOfMonth",1)" @onchange="OnDcaDayOfMonthChanged" />
-                    <div class="st-card-sub" style="margin-top:4px">Kept to 1-28 so it always exists in every month, including February.</div>
+                    <div class="st-card-sub" style="margin-top:4px">@T("dca.dom.sub")</div>
                 </div>
             }
 
             <div class="st-field">
-                <label>Hour (UTC, 0-23)</label>
+                <label>@T("dca.hour")</label>
                 <input class="st-input" type="number" min="0" max="23" value="@GetInt("Dca:Schedule:HourUtc",12)" @onchange="OnDcaHourChanged" />
             </div>
 
             <div class="st-field">
-                <label>Budget per cycle (USDT)</label>
+                <label>@T("dca.budget")</label>
                 <input class="st-input" type="number" min="1" step="10" value="@GetDecimal("Dca:Schedule:BudgetPerCycle",100m)" @onchange="OnDcaBudgetChanged" />
-                <div class="st-card-sub" style="margin-top:4px">The TOTAL spent across all symbols above, every time the schedule fires — not per-symbol.</div>
+                <div class="st-card-sub" style="margin-top:4px">@T("dca.budget.sub")</div>
             </div>
         </div>
 
         <div class="st-card">
-            <div class="st-card-head"><div class="st-card-title">Optional: Dip Bonus</div></div>
+            <div class="st-card-head"><div class="st-card-title">@T("dca.dip.title")</div></div>
             <div class="st-card-sub">
-                The ONLY market-awareness this strategy has, and it's deliberately simple and
-                fully visible — nothing hidden. If the price has dropped by at least the threshold
-                below over the lookback window <em>at the exact moment a scheduled buy fires</em>,
-                that one buy is multiplied. It does NOT change when buys happen — only how much a
-                scheduled buy spends if the market happened to be down at that moment.
+                @T("dca.dip.sub") <em>@T("dca.dip.sub.em")</em>@T("dca.dip.sub.rest")
             </div>
 
             <div class="st-toggle-row" style="margin-top:8px">
                 <label class="st-toggle">
                     <input type="checkbox" checked="@GetBool("Dca:DipBonus:Enabled", false)" @onchange="OnDcaDipBonusToggle" />
-                    <span>Enable dip bonus</span>
+                    <span>@T("dca.dip.enable")</span>
                 </label>
             </div>
 
@@ -868,28 +853,27 @@
             {
                 <div class="st-field-row" style="margin-top:10px">
                     <div class="st-field">
-                        <label>Lookback (hours)</label>
+                        <label>@T("dca.dip.lookback")</label>
                         <input class="st-input" type="number" min="1" max="168" value="@GetInt("Dca:DipBonus:LookbackHours",24)" @onchange="OnDcaDipLookbackChanged" />
                     </div>
                     <div class="st-field">
-                        <label>Drop threshold (%)</label>
+                        <label>@T("dca.dip.threshold")</label>
                         <input class="st-input" type="number" min="1" max="90" value="@GetDecimal("Dca:DipBonus:DropThresholdPct",10m)" @onchange="OnDcaDipThresholdChanged" />
                     </div>
                     <div class="st-field">
-                        <label>Multiplier</label>
+                        <label>@T("dca.dip.multiplier")</label>
                         <input class="st-input" type="number" min="1" max="10" step="0.5" value="@GetDecimal("Dca:DipBonus:Multiplier",2m)" @onchange="OnDcaDipMultiplierChanged" />
                     </div>
                 </div>
                 <div class="st-card-sub">
-                    Example with the defaults: if a symbol dropped 10%+ over the last 24 hours right
-                    when its scheduled buy fires, that buy spends 2× its normal share instead of 1×.
+                    @T("dca.dip.example")
                 </div>
             }
         </div>
 
         <div class="st-card st-card-wide">
-            <div class="st-card-head"><div class="st-card-title">Recent Purchases</div></div>
-            <div class="st-card-sub">Real-account and Demo-account DCA run independently with separate histories, even though they share the schedule/symbol settings above.</div>
+            <div class="st-card-head"><div class="st-card-title">@T("dca.history.title")</div></div>
+            <div class="st-card-sub">@T("dca.history.sub")</div>
 
             @{
                 var realHistory = RealDcaHistory.Read().History.Take(10).ToList();
@@ -898,10 +882,10 @@
 
             <div class="st-field-row" style="align-items:flex-start">
                 <div class="st-field" style="flex:1">
-                    <label>Real account</label>
+                    <label>@T("dca.history.real")</label>
                     @if (realHistory.Count == 0)
                     {
-                        <div class="st-card-sub" style="font-style:italic">No purchases yet</div>
+                        <div class="st-card-sub" style="font-style:italic">@T("dca.history.none")</div>
                     }
                     else
                     {
@@ -917,10 +901,10 @@
                     }
                 </div>
                 <div class="st-field" style="flex:1">
-                    <label>Demo account</label>
+                    <label>@T("dca.history.demo")</label>
                     @if (demoHistory.Count == 0)
                     {
-                        <div class="st-card-sub" style="font-style:italic">No purchases yet</div>
+                        <div class="st-card-sub" style="font-style:italic">@T("dca.history.none")</div>
                     }
                     else
                     {
@@ -982,6 +966,89 @@
 
     // ── DCA settings ──────────────────────────────────────────
     string _dcaNewSymbol = "";
+    string _dcaLang = "en"; // "en" or "ru" — DCA tab only, per direct request; rest of Settings stays English-only.
+
+    void SetDcaLangEn() => _dcaLang = "en";
+    void SetDcaLangRu() => _dcaLang = "ru";
+
+    string T(string key) => _dcaStrings.TryGetValue(key, out var pair) ? (_dcaLang == "ru" ? pair.Ru : pair.En) : key;
+
+    static readonly Dictionary<string, (string En, string Ru)> _dcaStrings = new()
+    {
+        ["dca.title"] = ("DCA (Dollar-Cost Averaging) Strategy", "DCA (усреднение долларовой стоимости)"),
+        ["dca.intro"] = (
+            "A completely separate strategy from everything else on this page — it does NOT use signals, indicators, or market analysis to decide when to buy. It simply spends a fixed budget on the symbols below, on a fixed schedule, every time, regardless of price or market conditions. This is intentional: real-world data consistently shows plain scheduled buying outperforms attempts to \"time\" entries, and is far less prone to accidentally over-fitting to past price action. It runs",
+            "Это полностью отдельная стратегия, независимая от всего остального на этой странице — она НЕ использует сигналы, индикаторы или анализ рынка для решения, когда покупать. Она просто тратит фиксированный бюджет на монеты ниже, по фиксированному расписанию, каждый раз, независимо от цены или состояния рынка. Это сделано намеренно: данные стабильно показывают, что простая покупка по расписанию превосходит попытки \"угадать момент\" входа, и намного меньше подвержена переподгонке под прошлые данные. Она работает"),
+        ["dca.intro.parallel"] = ("in parallel", "параллельно"),
+        ["dca.intro.rest"] = (
+            "with the main signal-based strategy — neither one is \"switched off\" by the other. It executes the same way on both the real account (a genuine market order is placed) and the Demo account (a virtual buy, same math, same schedule) — useful for watching a few cycles play out risk-free before relying on it for real.",
+            "с основной сигнальной стратегией — ни одна из них не \"выключает\" другую. Работает одинаково и на реальном счёте (размещается настоящий ордер), и на демо-счёте (виртуальная покупка, та же математика, то же расписание) — удобно понаблюдать несколько циклов без риска, прежде чем доверять этому реальные деньги."),
+
+        ["dca.enable"] = ("Enable DCA", "Включить DCA"),
+        ["dca.enable.sub"] = (
+            "Leave this OFF until the symbol list and schedule below are set up the way you want — once on, the very next scheduled time slot that matches will place a real order (or a demo one, in demo mode) with whatever is configured at that moment.",
+            "Оставьте выключенным, пока не настроите список монет и расписание ниже так, как нужно — после включения первое же подходящее по расписанию время сразу разместит реальный ордер (или демо-ордер в демо-режиме) с теми настройками, что есть в этот момент."),
+
+        ["dca.coins.title"] = ("Which coins, and how much of the budget each gets", "Какие монеты, и какая доля бюджета на каждую"),
+        ["dca.coins.sub"] = (
+            "Add one row per coin you want to accumulate. The Weight number only matters relative to the other rows — it's not a percentage by itself. For example, weights of 60 / 25 / 15 split the budget the same way as 12 / 5 / 3 would: roughly 60% / 25% / 15%. A common, professional starting point is weighting the largest, most established coin (e.g. BTC) the heaviest, with smaller/newer coins getting a smaller slice — but there's no requirement to do it that way.",
+            "Добавьте по одной строке на каждую монету, которую хотите накапливать. Число Weight (вес) важно только относительно других строк — это не процент сам по себе. Например, веса 60 / 25 / 15 делят бюджет так же, как 12 / 5 / 3: примерно 60% / 25% / 15%. Распространённый, профессиональный подход — дать наибольший вес самой крупной, устоявшейся монете (например BTC), а более мелким/новым монетам — меньшую долю, но это не обязательное правило."),
+        ["dca.col.symbol"] = ("Symbol", "Монета"),
+        ["dca.col.weight"] = ("Weight", "Вес"),
+        ["dca.col.share"] = ("≈ Share of budget", "≈ Доля бюджета"),
+        ["dca.col.remove"] = ("Remove", "Удалить"),
+        ["dca.none"] = ("No symbols configured yet — add one below.", "Монеты ещё не настроены — добавьте ниже."),
+        ["dca.add.placeholder"] = ("e.g. BTCUSDT", "напр. BTCUSDT"),
+        ["dca.add.button"] = ("+ Add coin", "+ Добавить монету"),
+        ["dca.equal"] = ("Split budget equally instead (ignore the Weight numbers above)", "Делить бюджет поровну (игнорировать веса выше)"),
+
+        ["dca.schedule.title"] = ("Schedule — when each buy happens", "Расписание — когда происходит покупка"),
+        ["dca.schedule.sub"] = (
+            "All times are UTC. A real BTC backtest found buying weekly on Mondays accumulated slightly more over 7 years than other weekdays — not a big effect, but it's why Monday is the default.",
+            "Всё время указано в UTC. Реальный бэктест на BTC показал, что покупка по понедельникам за 7 лет накопила чуть больше, чем в другие дни недели — эффект небольшой, но поэтому понедельник стоит по умолчанию."),
+        ["dca.freq"] = ("Frequency", "Частота"),
+        ["dca.freq.daily"] = ("Daily", "Ежедневно"),
+        ["dca.freq.weekly"] = ("Weekly", "Еженедельно"),
+        ["dca.freq.monthly"] = ("Monthly", "Ежемесячно"),
+        ["dca.dow"] = ("Day of week", "День недели"),
+        ["dca.dow.mon"] = ("Monday", "Понедельник"),
+        ["dca.dow.tue"] = ("Tuesday", "Вторник"),
+        ["dca.dow.wed"] = ("Wednesday", "Среда"),
+        ["dca.dow.thu"] = ("Thursday", "Четверг"),
+        ["dca.dow.fri"] = ("Friday", "Пятница"),
+        ["dca.dow.sat"] = ("Saturday", "Суббота"),
+        ["dca.dow.sun"] = ("Sunday", "Воскресенье"),
+        ["dca.dom"] = ("Day of month", "День месяца"),
+        ["dca.dom.sub"] = ("Kept to 1-28 so it always exists in every month, including February.", "Ограничено 1-28, чтобы дата всегда существовала в любом месяце, включая февраль."),
+        ["dca.hour"] = ("Hour (UTC, 0-23)", "Час (UTC, 0-23)"),
+        ["dca.budget"] = ("Budget per cycle (USDT)", "Бюджет на цикл (USDT)"),
+        ["dca.budget.sub"] = ("The TOTAL spent across all symbols above, every time the schedule fires — not per-symbol.", "ОБЩАЯ сумма на все монеты выше за один цикл, не на каждую монету отдельно."),
+
+        ["dca.dip.title"] = ("Optional: Dip Bonus", "Опционально: бонус на просадке"),
+        ["dca.dip.sub"] = (
+            "The ONLY market-awareness this strategy has, and it's deliberately simple and fully visible — nothing hidden. If the price has dropped by at least the threshold below over the lookback window",
+            "Это ЕДИНСТВЕННАЯ часть стратегии, что учитывает рынок, и она сознательно простая и полностью прозрачная — никакой скрытой логики. Если цена упала минимум на заданный порог за период просмотра"),
+        ["dca.dip.sub.em"] = ("at the exact moment a scheduled buy fires", "именно в момент срабатывания запланированной покупки"),
+        ["dca.dip.sub.rest"] = (
+            ", that one buy is multiplied. It does NOT change when buys happen — only how much a scheduled buy spends if the market happened to be down at that moment.",
+            ", эта конкретная покупка умножается. Это НЕ меняет, когда происходят покупки — только то, сколько потратит уже запланированная покупка, если рынок в этот момент оказался в просадке."),
+        ["dca.dip.enable"] = ("Enable dip bonus", "Включить бонус на просадке"),
+        ["dca.dip.lookback"] = ("Lookback (hours)", "Период просмотра (часы)"),
+        ["dca.dip.threshold"] = ("Drop threshold (%)", "Порог падения (%)"),
+        ["dca.dip.multiplier"] = ("Multiplier", "Множитель"),
+        ["dca.dip.example"] = (
+            "Example with the defaults: if a symbol dropped 10%+ over the last 24 hours right when its scheduled buy fires, that buy spends 2× its normal share instead of 1×.",
+            "Пример со значениями по умолчанию: если монета упала на 10%+ за последние 24 часа именно в момент запланированной покупки, эта покупка потратит 2× от обычной доли вместо 1×."),
+
+        ["dca.history.title"] = ("Recent Purchases", "Последние покупки"),
+        ["dca.history.sub"] = (
+            "Real-account and Demo-account DCA run independently with separate histories, even though they share the schedule/symbol settings above.",
+            "DCA на реальном и демо-счёте работают независимо, с раздельной историей, хотя используют общие настройки расписания и монет выше."),
+        ["dca.history.real"] = ("Real account", "Реальный счёт"),
+        ["dca.history.demo"] = ("Demo account", "Демо-счёт"),
+        ["dca.history.none"] = ("No purchases yet", "Покупок пока нет"),
+    };
+
     string _dcaNewWeight = "1";
 
     private Task OnDcaEnabledToggle(ChangeEventArgs e) => SetAsync("Dca:Enabled", (e.Value as bool?) ?? false);
@@ -1340,6 +1407,9 @@
 .st-dca-weight-input{width:80px;}
 .st-dca-history-row{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:12px;border-bottom:1px solid var(--st-bdr);}
 .st-dca-dip-badge{background:rgba(234,179,8,.15);color:var(--st-yel);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;}
+.st-dca-lang-toggle{display:flex;justify-content:flex-end;gap:4px;margin-bottom:-6px;}
+.st-dca-lang-btn{padding:5px 14px;border-radius:6px;border:1px solid var(--st-bdr);background:var(--st-bg3);color:var(--st-dim);font-size:12px;font-weight:600;cursor:pointer;}
+.st-dca-lang-btn.st-dca-lang-on{background:var(--st-acc);color:#fff;border-color:var(--st-acc);}
 .st-select{cursor:pointer;}
 
 .st-toggle-row{margin-bottom:14px;}
