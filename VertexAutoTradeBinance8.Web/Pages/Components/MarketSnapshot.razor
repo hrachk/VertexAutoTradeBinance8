@@ -1970,6 +1970,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         }
         _demoUnrealizedTotal = total;
         _ooPanelNeedsAutoFit = true;
+        InvalidateDisplayedPositionsCache();
     }
 
     void OnDemoAccountUpdated()
@@ -1993,6 +1994,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 if (p2 > 0) total += pos.UnrealizedPnl(p2);
             }
             _demoUnrealizedTotal = total;
+            InvalidateDisplayedPositionsCache();
         }
 
         if (_onTickBusy) return; // drop overlapping ticks rather than letting async chains queue up and race
@@ -2883,20 +2885,44 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // shape) so the existing table markup works unchanged for either
     // source, rather than duplicating the whole table for two data
     // shapes.
-    List<ActivePositionInfo> DisplayedPositions => _demoMode
-        ? _demoSnapshot.Positions.Select(p =>
+    List<ActivePositionInfo>? _displayedPositionsCache;
+    bool _displayedPositionsCacheValid;
+
+    // CRITICAL PERFORMANCE FIX: this used to be a plain computed
+    // property (=>), meaning EVERY access (and it's read 4+ separate
+    // times in a single markup render pass alone, plus several more
+    // in code) fully reconstructed the entire positions list with
+    // brand new objects in demo mode. Cached now, invalidated
+    // explicitly only when the underlying data actually changes
+    // (InvalidateDisplayedPositionsCache, called from
+    // RefreshDemoSnapshot and the real positions loader) rather than
+    // recomputing on every single read.
+    List<ActivePositionInfo> DisplayedPositions
+    {
+        get
         {
-            decimal mark = DemoAccount.GetLastPrice(p.Symbol);
-            if (mark <= 0) mark = p.EntryPrice;
-            return new ActivePositionInfo
-            {
-                Id = p.Id, Symbol = p.Symbol, Side = p.Side, Leverage = p.Leverage,
-                Qty = p.Qty, Size = p.Notional(mark), EntryPrice = p.EntryPrice,
-                MarkPrice = mark, LiqPrice = p.LiqPrice, Margin = p.Margin,
-                Pnl = p.UnrealizedPnl(mark), Roi = p.Roi(mark),
-            };
-        }).ToList()
-        : _allPositions;
+            if (_displayedPositionsCacheValid && _displayedPositionsCache != null) return _displayedPositionsCache;
+
+            _displayedPositionsCache = _demoMode
+                ? _demoSnapshot.Positions.Select(p =>
+                {
+                    decimal mark = DemoAccount.GetLastPrice(p.Symbol);
+                    if (mark <= 0) mark = p.EntryPrice;
+                    return new ActivePositionInfo
+                    {
+                        Id = p.Id, Symbol = p.Symbol, Side = p.Side, Leverage = p.Leverage,
+                        Qty = p.Qty, Size = p.Notional(mark), EntryPrice = p.EntryPrice,
+                        MarkPrice = mark, LiqPrice = p.LiqPrice, Margin = p.Margin,
+                        Pnl = p.UnrealizedPnl(mark), Roi = p.Roi(mark),
+                    };
+                }).ToList()
+                : _allPositions;
+            _displayedPositionsCacheValid = true;
+            return _displayedPositionsCache;
+        }
+    }
+
+    void InvalidateDisplayedPositionsCache() => _displayedPositionsCacheValid = false;
     decimal _acctMarginBalance, _acctWalletBalance, _acctUnrealizedPnl, _acctRealizedPnlToday, _acctAvailableBalance;
 
     // Share-card modal state — set whenever a card should be shown
@@ -3810,7 +3836,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             await InvokeAsync(StateHasChanged);
         }
         catch { _lastPositionsFetchOk = false; }
-        finally { _positionsLoading = false; _ooPanelNeedsAutoFit = true; }
+        finally { _positionsLoading = false; _ooPanelNeedsAutoFit = true; InvalidateDisplayedPositionsCache(); }
     }
 
     // Selecting a row in the positions table shows its details in the
