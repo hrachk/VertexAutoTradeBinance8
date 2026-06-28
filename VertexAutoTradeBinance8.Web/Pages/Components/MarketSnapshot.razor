@@ -1971,6 +1971,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _demoUnrealizedTotal = total;
         _ooPanelNeedsAutoFit = true;
         InvalidateDisplayedPositionsCache();
+        TryResolvePendingPositionRestore();
     }
 
     void OnDemoAccountUpdated()
@@ -2161,11 +2162,45 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                                     _selectedPosition = restoredPos;
                                     _ = RefreshPositionLines();
                                 }
+                                else
+                                {
+                                    // DisplayedPositions/_allPositions are almost
+                                    // certainly still empty right now - the real
+                                    // Binance fetch this depends on hasn't had a
+                                    // chance to complete yet at firstRender time.
+                                    // Try again once positions actually finish
+                                    // loading for the first time (see
+                                    // LoadAllOpenPositionsAsync/RefreshDemoSnapshot).
+                                    _pendingRestorePosKey = saved.selectedPosKey;
+                                }
                             }
                         }
 
+                        if (saved.tpSlEditMode) { _tpSlEditMode = true; _ = ShowTpSlLinesAsync(); }
+
                         StateHasChanged();
                         _ = RenderCharts();
+
+                        if (!string.IsNullOrEmpty(_activeSym) && !string.IsNullOrEmpty(_activeTf))
+                        {
+                            var symForRestore = _activeSym;
+                            var tfForRestore = _activeTf;
+                            _ = InvokeAsync(async () =>
+                            {
+                                // Give RenderCharts time to actually populate
+                                // the chart via setData before trying to
+                                // restore a visible range against it -
+                                // restoring too early would apply against an
+                                // empty chart with no effect.
+                                await Task.Delay(400);
+                                try
+                                {
+                                    await JS.InvokeVoidAsync("marketChart.restoreScrollPosition",
+                                        $"chartContainer-{_chartInstanceId}", $"{symForRestore}:{tfForRestore}");
+                                }
+                                catch { }
+                            });
+                        }
                     }
                 }
             }
@@ -2458,6 +2493,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         public string ooTab { get; set; } = "";
         public string selectedPosKey { get; set; } = "";
         public bool chartMaximized { get; set; }
+        public bool tpSlEditMode { get; set; }
     }
 
     async Task SaveSelectionState()
@@ -2472,9 +2508,16 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 ooTab = _ooActiveTab,
                 selectedPosKey = _selectedPosition != null ? $"{_selectedPosition.Symbol}:{_selectedPosition.Side}" : "",
                 chartMaximized = _chartMaximized,
+                tpSlEditMode = _tpSlEditMode,
             };
             var json = System.Text.Json.JsonSerializer.Serialize(state);
             await JS.InvokeVoidAsync("sessionStorage.setItem", "vertexMarketState", json);
+
+            if (!string.IsNullOrEmpty(_activeSym) && !string.IsNullOrEmpty(_activeTf))
+            {
+                await JS.InvokeVoidAsync("marketChart.saveScrollPosition",
+                    $"chartContainer-{_chartInstanceId}", $"{_activeSym}:{_activeTf}");
+            }
         }
         catch { }
     }
@@ -2923,6 +2966,29 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     }
 
     void InvalidateDisplayedPositionsCache() => _displayedPositionsCacheValid = false;
+
+    // Completes the position restore firstRender couldn't finish
+    // (DisplayedPositions/_allPositions were still empty at that
+    // point - the real Binance fetch this depends on hadn't had a
+    // chance to complete yet), now that positions actually have data.
+    // Clears the pending key regardless of outcome so this doesn't
+    // keep retrying forever once positions have genuinely finished
+    // loading for the first time.
+    void TryResolvePendingPositionRestore()
+    {
+        if (string.IsNullOrEmpty(_pendingRestorePosKey)) return;
+        var parts = _pendingRestorePosKey.Split(':', 2);
+        _pendingRestorePosKey = null;
+        if (parts.Length != 2 || _selectedPosition != null) return; // don't override something the user has since selected themselves
+
+        var restoredPos = DisplayedPositions.FirstOrDefault(p => p.Symbol == parts[0] && p.Side == parts[1]);
+        if (restoredPos != null)
+        {
+            _selectedPosition = restoredPos;
+            _ = RefreshPositionLines();
+            _ = InvokeAsync(StateHasChanged);
+        }
+    }
     decimal _acctMarginBalance, _acctWalletBalance, _acctUnrealizedPnl, _acctRealizedPnlToday, _acctAvailableBalance;
 
     // Share-card modal state — set whenever a card should be shown
@@ -2999,6 +3065,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     decimal _demoUnrealizedTotal;
     DateTime _lastRealizedPnlFetchUtc = DateTime.MinValue;
     bool _positionsLoading;
+    string? _pendingRestorePosKey; // see the firstRender restore logic and LoadAllOpenPositionsAsync/RefreshDemoSnapshot for why this needs a second attempt after positions actually load
     bool _ooPanelNeedsAutoFit;
 
     bool PosIsLong => _currentPosition?.Side == "LONG";
@@ -3479,6 +3546,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             try { await JS.InvokeVoidAsync("marketChart.hideTpSlLines", $"chartContainer-{_chartInstanceId}"); } catch { }
         }
+        _ = SaveSelectionState();
     }
 
     async Task ShowTpSlLinesAsync()
@@ -3836,7 +3904,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             await InvokeAsync(StateHasChanged);
         }
         catch { _lastPositionsFetchOk = false; }
-        finally { _positionsLoading = false; _ooPanelNeedsAutoFit = true; InvalidateDisplayedPositionsCache(); }
+        finally { _positionsLoading = false; _ooPanelNeedsAutoFit = true; InvalidateDisplayedPositionsCache(); TryResolvePendingPositionRestore(); }
     }
 
     // Selecting a row in the positions table shows its details in the
@@ -3875,49 +3943,37 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             return; // already showing this exact position — nothing to do
         }
 
-        // Show a small, localized loading spinner on just this row —
-        // doesn't touch the side panel, chart, or ALL INSTRUMENTS list
-        // at all, so there's no layout jump while data loads.
-        _selectingPosition = pos;
+        // Show the panel immediately using data already available on
+        // pos itself (Entry/Mark/PnL/Liq/etc - zero network calls
+        // needed for any of that) - this is what actually fixes the
+        // reported slowness, which came from awaiting the open-orders
+        // network call BEFORE showing anything new at all. Network-
+        // dependent extras (open orders list, chart, TP/SL lines)
+        // load right after, in the background, updating their own
+        // small pieces once ready rather than gating the whole panel.
+        _selectingPosition = null;
+        _selectedPosition = pos;
+        _activeSignal = null;
         _orderPanelDismissed = false;
         _addToPositionOpen = false;
-        StateHasChanged();
 
-        // Selecting a new position: do ALL the network/data work FIRST,
-        // while the UI still shows whatever it showed before — nothing
-        // else visible changes yet, so there's no intermediate "empty"
-        // frame for ALL INSTRUMENTS/Manual Trade/the chart to flash
-        // through. Only once everything needed is actually ready do we
-        // flip the rest of the state and render once.
-        await LoadOpenOrdersAsync();
-
-        // Resolve the new symbol's series data ourselves (the same
-        // lookup PickSym does) without calling PickSym itself, since
-        // PickSym fires its own early StateHasChanged()/RenderCharts()
-        // — exactly the extra render pass causing the visible jank.
         var sym = pos.Symbol;
         var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == _activeTf)
             ?? Series.FirstOrDefault(s => s.Symbol == sym);
-
-        // Now flip all the state and render the panel itself
-        // immediately — its own data is ready, so there's no reason
-        // to make the user wait through the chart-related calls below
-        // before seeing it. Those finish and trigger their own
-        // (cheap, chart-only) update afterward.
-        _selectedPosition = pos;
-        _selectingPosition = null;
-        _activeSignal = null;
         _activeSym = sym;
         if (available != null) _activeTf = available.Timeframe;
         ResolveSelected();
         CalcStats();
         StateHasChanged();
 
+        // Everything below is network/chart work that updates its
+        // own piece of the UI once ready - the position panel itself
+        // is already visible and correct at this point.
+        await LoadOpenOrdersAsync();
+
         _dotNetRef ??= DotNetObjectReference.Create(this);
         try { await JS.InvokeVoidAsync("marketChart.bindSlTpCallbacks", $"chartContainer-{_chartInstanceId}", _dotNetRef); } catch { }
 
-        // Chart data + position lines together, back-to-back — the
-        // position panel itself is already visible at this point.
         try { await RenderCharts(); } catch { }
         await RefreshPositionLines();
 
@@ -5064,6 +5120,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     public async ValueTask DisposeAsync()
     {
+        // Capture the final scroll position before anything else -
+        // the user may have just scrolled/zoomed without triggering
+        // any of the other explicit save points (tab switch, symbol
+        // change, etc), so this is the most reliable place to catch
+        // wherever they actually left the chart.
+        if (!string.IsNullOrEmpty(_activeSym) && !string.IsNullOrEmpty(_activeTf))
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("marketChart.saveScrollPosition",
+                    $"chartContainer-{_chartInstanceId}", $"{_activeSym}:{_activeTf}");
+            }
+            catch { }
+        }
+
         LiveState.PriceTicked -= OnLivePriceTicked;
         DemoAccount.Updated -= OnDemoAccountUpdated;
         LiveState.KlineClosed -= OnLiveKlineClosed;

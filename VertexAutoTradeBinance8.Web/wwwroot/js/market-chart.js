@@ -112,6 +112,45 @@
     }
 
     window.marketChart = {
+        // Saves the chart's current visible range (which bars are on
+        // screen, at what zoom level) to sessionStorage, keyed by
+        // symbol+timeframe so switching between different charts
+        // doesn't clobber each other's saved scroll position. Per
+        // direct request to remember exactly where the chart was
+        // scrolled to across page navigations within the same browser
+        // tab - uses the same getVisibleLogicalRange primitive already
+        // proven to work elsewhere in this file (the infinite-history
+        // lazy-load feature).
+        saveScrollPosition(containerId, key) {
+            const s = sessions.get(containerId);
+            if (!s || !s.chart) return;
+            try {
+                const range = s.chart.timeScale().getVisibleLogicalRange();
+                if (!range) return;
+                sessionStorage.setItem('vertexChartScroll:' + key, JSON.stringify({ from: range.from, to: range.to }));
+            } catch (e) {}
+        },
+
+        // Restores a previously-saved visible range, if one exists for
+        // this symbol+timeframe key. Safe to call even if the chart
+        // doesn't have enough bars loaded yet for the saved range to
+        // make sense - setVisibleLogicalRange clamps to whatever data
+        // actually exists rather than erroring out.
+        restoreScrollPosition(containerId, key) {
+            const s = sessions.get(containerId);
+            if (!s || !s.chart) return false;
+            try {
+                const raw = sessionStorage.getItem('vertexChartScroll:' + key);
+                if (!raw) return false;
+                const saved = JSON.parse(raw);
+                if (typeof saved.from !== 'number' || typeof saved.to !== 'number') return false;
+                s.chart.timeScale().setVisibleLogicalRange(saved);
+                return true;
+            } catch (e) {
+                return false;
+            }
+        },
+
         // Creates (or re-creates) a full chart session bound to
         // containerId. Safe to call multiple times against the same id
         // — any previous session for that id is torn down first via
