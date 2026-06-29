@@ -484,8 +484,28 @@
                         </button>
                     }
                 </div>
+
+                @if (DisplayedPositions.Count > 0)
+                {
+                    <!-- Per direct request: quick position switcher in
+                         maximized mode - lets the user flip between
+                         everything currently open without leaving
+                         maximized mode. New, separate block; doesn't
+                         touch the TF row or restore bar above it. -->
+                    <div class="mk-max-pos-row">
+                        @foreach (var p in DisplayedPositions)
+                        {
+                            <button class="mk-max-pos-pill @(p.Side == "LONG" ? "mk-max-pos-long" : "mk-max-pos-short") @(PosIdentityEquals(_selectedPosition, p) ? "mk-max-pos-active" : "")"
+                                    @onclick="() => SelectPosition(p)">
+                                <span class="mk-max-pos-side">@(p.Side == "LONG" ? "▲" : "▼")</span>
+                                @p.Symbol.Replace("USDT","")
+                                <span class="mk-max-pos-pnl @(p.Pnl >= 0 ? "up" : "dn")">@(p.Pnl >= 0 ? "+" : "")@p.Pnl.ToString("F2")</span>
+                            </button>
+                        }
+                    </div>
+                }
             }
-            <div id="chartContainer-@_chartInstanceId" @key="_chartInstanceId" style="width:100%;height:@(_chartMaximized ? "calc(100% - 88px)" : "100%");"></div>
+            <div id="chartContainer-@_chartInstanceId" @key="_chartInstanceId" style="width:100%;height:@(_chartMaximized ? $"calc(100% - {(DisplayedPositions.Count > 0 ? 126 : 88)}px)" : "100%");"></div>
 
             @if (_selectedPosition != null)
             {
@@ -1558,6 +1578,16 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-max-sym-row:hover{background:rgba(255,255,255,0.05);}
 .mk-max-sym-row-sel{background:rgba(59,130,246,0.12);box-shadow:inset 2px 0 0 var(--acc);}
 .mk-max-tf-row{display:flex;gap:4px;padding:0 12px 8px;flex-shrink:0;overflow-x:auto;scrollbar-width:none;}
+.mk-max-pos-row{display:flex;gap:6px;padding:0 12px 8px;flex-shrink:0;overflow-x:auto;scrollbar-width:none;}
+.mk-max-pos-pill{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:8px;font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap;background:var(--bg3);border:1px solid var(--bdr);color:var(--txt);}
+.mk-max-pos-pill.mk-max-pos-long{border-color:rgba(34,197,94,.35);}
+.mk-max-pos-pill.mk-max-pos-short{border-color:rgba(239,68,68,.35);}
+.mk-max-pos-pill.mk-max-pos-active.mk-max-pos-long{background:rgba(34,197,94,.18);}
+.mk-max-pos-pill.mk-max-pos-active.mk-max-pos-short{background:rgba(239,68,68,.18);}
+.mk-max-pos-side{font-size:10px;}
+.mk-max-pos-pill.mk-max-pos-long .mk-max-pos-side{color:var(--grn);}
+.mk-max-pos-pill.mk-max-pos-short .mk-max-pos-side{color:var(--red);}
+.mk-max-pos-pnl{font-family:var(--mono);font-size:10.5px;}
 .mk-max-tf-row::-webkit-scrollbar{display:none;}
 .mk-max-tf{font-size:11px;color:var(--dim);background:var(--bg3);padding:2px 8px;border-radius:5px;}
 .mk-max-price{font-family:var(--mono);font-size:16px;font-weight:700;}
