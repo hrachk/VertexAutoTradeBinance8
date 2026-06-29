@@ -887,7 +887,8 @@
                     </div>
                     @if (_selectedPositionForSameSymbol(_activeSignal.Symbol) != null)
                     {
-                        <button class="ord-collapse-btn" @onclick="ToggleManualTradeCollapsed" title="@(_manualTradeCollapsed ? "Expand" : "Collapse")">
+                        var collapseTitle = _manualTradeCollapsed ? "Expand" : "Collapse";
+                        <button class="ord-collapse-btn" @onclick="ToggleManualTradeCollapsed" title="@collapseTitle">
                             @(_manualTradeCollapsed ? "▾" : "▴")
                         </button>
                     }
@@ -1147,7 +1148,7 @@
                     </div>
                 }
 
-                } <!-- end @if (!_manualTradeCollapsed) -->
+                } <!-- end manualTradeCollapsed check -->
             </div>
         }
         @if (_selectedPosition != null)
