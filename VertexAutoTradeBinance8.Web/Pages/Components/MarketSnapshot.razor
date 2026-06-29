@@ -885,8 +885,17 @@
                         }
                         <span class="ord-sym">@_activeSignal.Symbol</span>
                     </div>
+                    @if (_selectedPositionForSameSymbol(_activeSignal.Symbol) != null)
+                    {
+                        <button class="ord-collapse-btn" @onclick="ToggleManualTradeCollapsed" title="@(_manualTradeCollapsed ? "Expand" : "Collapse")">
+                            @(_manualTradeCollapsed ? "▾" : "▴")
+                        </button>
+                    }
                     <button class="ord-close-x" @onclick="ClosePanel">✕</button>
                 </div>
+
+                @if (!_manualTradeCollapsed)
+                {
 
                 <!-- Available balance — visible always, so the user can size
                      a manual order with the same context other exchanges show. -->
@@ -1137,9 +1146,11 @@
                         </button>
                     </div>
                 }
+
+                } <!-- end @if (!_manualTradeCollapsed) -->
             </div>
         }
-        else if (_selectedPosition != null)
+        @if (_selectedPosition != null)
         {
             // POSITION DETAILS (right sidebar): shown when a row in OPEN POSITIONS is clicked
             var pos = _selectedPosition!;
@@ -1758,6 +1769,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .ord-badge{font-size:12px;}
 .ord-sym{font-family:var(--mono);font-size:16px;font-weight:700;}
 .ord-close-x{background:none;border:none;color:var(--dim);font-size:16px;cursor:pointer;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:all .15s;}
+.ord-collapse-btn{background:none;border:none;color:var(--dim);font-size:14px;cursor:pointer;width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:all .15s;}
+.ord-collapse-btn:hover{background:var(--bg3);color:var(--txt);}
 .ord-close-x:hover{background:var(--bdr);color:var(--txt);}
 .ord-type-tabs{display:flex;background:var(--bg2);border-bottom:1px solid var(--bdr);gap:4px;padding:8px 12px;}
 .ord-tt{flex:1;background:var(--bg3);border:1px solid var(--bdr);color:var(--dim);padding:10px 6px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;border-radius:8px;display:flex;align-items:center;justify-content:center;gap:5px;letter-spacing:.2px;}
@@ -2559,7 +2572,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         }
     }
 
-    void PickSym(string sym)
+    void PickSym(string sym, bool autoSelectExistingPosition = true)
     {
         _activeSym = sym;
         _orderPanelDismissed = false;
@@ -2570,23 +2583,33 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         ResolveSelected();
         CalcStats();
 
-        // Per direct request: show the position panel for THIS symbol
-        // whenever it has an open position, regardless of whether the
-        // user got here by clicking the positions table row or just
-        // picking the symbol from the ticker/search/anywhere else.
-        var existingPos = DisplayedPositions.FirstOrDefault(p => p.Symbol == sym);
-        if (existingPos != null)
+        if (autoSelectExistingPosition)
         {
-            _selectedPosition = existingPos;
-            _activeSignal = null;
-            _ = RefreshPositionLines();
-        }
-        else if (_selectedPosition?.Symbol != sym)
-        {
-            // Switched to a symbol with no position — clear any
-            // stale position panel left over from the previous symbol.
-            _selectedPosition = null;
-            _ = JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}");
+            // Per direct request: show the position panel for THIS symbol
+            // whenever it has an open position, regardless of whether the
+            // user got here by clicking the positions table row or just
+            // picking the symbol from the ticker/search/anywhere else.
+            // Skipped when called from SelectSignal (autoSelectExistingPosition:
+            // false) - that caller is about to set its own _activeSignal/
+            // _selectedPosition state right after this call, and this logic
+            // would otherwise immediately overwrite it, which is exactly
+            // what caused the reported bug (clicking a signal for a symbol
+            // that already has a position only ever showed the position
+            // panel, with no way to act on the signal at all).
+            var existingPos = DisplayedPositions.FirstOrDefault(p => p.Symbol == sym);
+            if (existingPos != null)
+            {
+                _selectedPosition = existingPos;
+                _activeSignal = null;
+                _ = RefreshPositionLines();
+            }
+            else if (_selectedPosition?.Symbol != sym)
+            {
+                // Switched to a symbol with no position — clear any
+                // stale position panel left over from the previous symbol.
+                _selectedPosition = null;
+                _ = JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}");
+            }
         }
 
         StateHasChanged();
@@ -3196,6 +3219,16 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     int _orderLeverage = 10;
     bool _orderLoading;
     bool _addToPositionOpen;
+    bool _manualTradeCollapsed;
+
+    void ToggleManualTradeCollapsed() => _manualTradeCollapsed = !_manualTradeCollapsed;
+
+    // Used to decide whether the Manual Trade panel's collapse button
+    // shows at all - only relevant when a position for the SAME
+    // symbol as the active signal also exists, meaning both panels
+    // would be showing together.
+    ActivePositionInfo? _selectedPositionForSameSymbol(string symbol) =>
+        DisplayedPositions.FirstOrDefault(p => p.Symbol == symbol);
 
     // Partial-close slider — keyed by "Symbol:Side" (not object
     // identity, since DisplayedPositions recreates ActivePositionInfo
@@ -3756,7 +3789,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     {
         _seenSignalKeys.Add(SignalKey(sig));
         _activeSignal  = _activeSignal == sig ? null : sig;
-        _selectedPosition = null;
+        // Per direct confirmation: show BOTH panels together when both
+        // are available, not one clobbering the other - set to the
+        // existing position for this SAME symbol (if any), rather than
+        // unconditionally clearing it, which would have kept the
+        // Position panel hidden even with it now being an independent
+        // @if block above.
+        _selectedPosition = _activeSignal != null ? _selectedPositionForSameSymbol(sig.Symbol) : null;
+        _manualTradeCollapsed = false;
         _orderError    = string.Empty;
         _orderSuccess  = string.Empty;
         _orderType     = "Market";
@@ -3767,9 +3807,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         if (_activeSignal != null)
         {
             _orderPanelDismissed = false;
-            PickSym(sig.Symbol);
+            PickSym(sig.Symbol, autoSelectExistingPosition: false);
             _ = LoadSymbolInfoAndSuggestQty(sig);
             _ = LoadCurrentPositionAsync(sig.Symbol);
+
+            if (_selectedPosition != null)
+            {
+                _ = RefreshPositionLines();
+            }
 
             // Auto-fill SL/TP straight from the signal's own levels —
             // one click sets up the whole trade (qty, leverage already
