@@ -770,11 +770,27 @@
             if (!s) return;
             this.hideTpSlLines(containerId);
 
+            // Per direct request: show the projected PnL for each
+            // TP/SL level right on its line, if price reaches it.
+            // Reuses the exact same PnL formula already used elsewhere
+            // in this file for the drag-preview feature, and the same
+            // qty/entryPrice/side already set on this session by
+            // showPositionLines (which always runs first for a
+            // selected position, before this function is ever called).
+            const dir = s.side === 'LONG' ? 1 : -1;
+            const hasPnlData = s.qty > 0 && s.entryPrice > 0;
+            function pnlSuffix(price) {
+                if (!hasPnlData) return '';
+                const pnl = (price - s.entryPrice) * dir * s.qty;
+                const sign = pnl >= 0 ? '+' : '';
+                return ` (${sign}${pnl.toFixed(2)})`;
+            }
+
             if (sl > 0) {
                 s.slLine = s.candleSeries.createPriceLine({
                     price: sl, color: '#ef4444', lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: true, title: `SL ${fmtPrice(sl)}`,
+                    axisLabelVisible: true, title: `SL ${fmtPrice(sl)}${pnlSuffix(sl)}`,
                 });
             }
 
@@ -786,7 +802,7 @@
                 const line = s.candleSeries.createPriceLine({
                     price: tpPrice, color: '#22c55e', lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: true, title: label,
+                    axisLabelVisible: true, title: `${label}${pnlSuffix(tpPrice)}`,
                 });
                 s.tpLines.push({ line, index: i, price: tpPrice });
             });
