@@ -6,6 +6,8 @@
 @inject MissedTradeFileService MissedSvc
 @inject AiLearningFileService AiSvc
 @inject MarketSnapshotFileService MarketSvc
+@inject Microsoft.JSInterop.IJSRuntime JS
+@inject NavigationManager Nav
 @implements IDisposable
 
 <PageTitle>Vertex AI — Overview</PageTitle>
@@ -224,6 +226,11 @@
                     <span class="ov-card-title">LIVE MARKET</span>
                     <span class="ov-badge">@_markets.Count instruments</span>
                 </div>
+                <div class="ov-market-tabs">
+                    <button class="ov-market-tab @(_ovMarketTab=="hot"?"ov-market-tab-on":"")" @onclick="SetOvMarketTabHot">🔥 Hot</button>
+                    <button class="ov-market-tab @(_ovMarketTab=="gainers"?"ov-market-tab-on":"")" @onclick="SetOvMarketTabGainers">📈 Gainers</button>
+                    <button class="ov-market-tab @(_ovMarketTab=="losers"?"ov-market-tab-on":"")" @onclick="SetOvMarketTabLosers">📉 Losers</button>
+                </div>
                 <table class="ov-tbl">
                     <thead>
                         <tr>
@@ -238,7 +245,7 @@
                     </thead>
                     <tbody>
                         @{ int rank = 0; }
-                        @foreach (var m in _markets)
+                        @foreach (var m in OrderedMarkets())
                         {
                             rank++;
                             var sig = GetSig(m);
@@ -255,8 +262,8 @@
                                     </div>
                                 </td>
                                 <td class="mono bold">@FP(m.LastPrice)</td>
-                                <td class="@(m.Slope > 0 ? "g" : "r") mono">
-                                    @(m.Slope > 0 ? "▲" : "▼") @Math.Abs(m.Slope * 100).ToString("F2")%
+                                <td class="@(m.ChgPct >= 0 ? "g" : "r") mono">
+                                    @(m.ChgPct >= 0 ? "▲" : "▼") @Math.Abs(m.ChgPct).ToString("F2")%
                                 </td>
                                 <td><span class="ov-reg @RegimeN(m.Regime)">@RegStr(m.Regime)</span></td>
                                 <td class="@slopeCls mono small">@m.Slope.ToString("+0.000;-0.000")</td>
@@ -423,6 +430,9 @@ html,body { background:var(--bg)!important; color:var(--txt); font-size:14px; }
 .ov-badge { font-size:11px; padding:2px 8px; background:var(--bg3); border:1px solid var(--bdr); border-radius:20px; color:var(--dim); }
 .ov-badge.badge-ok { color:var(--grn); border-color:rgba(63,185,80,.3); background:rgba(63,185,80,.1); }
 .ov-badge.badge-err { color:var(--red); border-color:rgba(248,81,73,.3); background:rgba(248,81,73,.1); }
+.ov-market-tabs { display:flex; gap:6px; padding:10px 16px; border-bottom:1px solid var(--bdr); }
+.ov-market-tab { flex:1; padding:7px 10px; border-radius:8px; border:1px solid var(--bdr); background:var(--bg3); color:var(--dim); font-size:12px; font-weight:600; cursor:pointer; text-align:center; }
+.ov-market-tab.ov-market-tab-on { background:var(--acc); color:#fff; border-color:var(--acc); }
 .ov-badge.r { color:var(--red); border-color:rgba(248,81,73,.3); background:rgba(248,81,73,.1); }
 
 /* ENGINE GRID */
@@ -524,12 +534,33 @@ html,body { background:var(--bg)!important; color:var(--txt); font-size:14px; }
     int _wins, _losses, _totalTrades, _aiSymbols, _totalBlocked;
     double _winRate, _totalPnl;
     List<MarketRow> _markets = new();
+    string _ovMarketTab = "hot"; // "hot" | "gainers" | "losers" - matches the same 3-tab system on the Market page's ALL INSTRUMENTS panel
+
+    void SetOvMarketTabHot() => _ovMarketTab = "hot";
+    void SetOvMarketTabGainers() => _ovMarketTab = "gainers";
+    void SetOvMarketTabLosers() => _ovMarketTab = "losers";
+
+    // Applies the active tab's ordering - same logic as the Market
+    // page's ALL INSTRUMENTS panel (top 7 by volume for Hot, biggest
+    // %-up/%-down for Gainers/Losers), kept consistent across both
+    // pages rather than diverging into a different ranking here.
+    IEnumerable<MarketRow> OrderedMarkets()
+    {
+        if (_ovMarketTab == "gainers") return _markets.OrderByDescending(m => m.ChgPct);
+        if (_ovMarketTab == "losers") return _markets.OrderBy(m => m.ChgPct);
+
+        var topHot = _markets.OrderByDescending(m => m.Volume).Take(7).Select(m => m.Symbol).ToHashSet();
+        return _markets
+            .OrderByDescending(m => topHot.Contains(m.Symbol))
+            .ThenByDescending(m => topHot.Contains(m.Symbol) ? m.Volume : 0)
+            .ThenByDescending(m => Math.Abs(m.Slope));
+    }
     List<(string, int, int)> _topSymbols = new();
     List<(string, int)> _topReasons = new();
     List<SigRow> _recentSignals = new();
     System.Threading.Timer? _timer;
 
-    record MarketRow(string Symbol, string Timeframe, decimal LastPrice, double Slope, int Regime);
+    record MarketRow(string Symbol, string Timeframe, decimal LastPrice, double Slope, int Regime, decimal ChgPct, decimal Volume);
     record SigRow(string Event, string Symbol, string Side, decimal Entry, int Confidence, string Reason, DateTime Time);
 
     protected override async Task OnInitializedAsync()
@@ -606,11 +637,14 @@ html,body { background:var(--bg)!important; color:var(--txt); font-size:14px; }
                     var s = g.FirstOrDefault(x => x.Timeframe == "FiveMinutes") ?? g.First();
                     var kl = s.Klines;
                     var last = kl.Count > 0 ? kl[^1].Close : 0m;
+                    var open = kl.Count > 0 ? kl[0].Close : 0m;
+                    var chgPct = open > 0 ? (last - open) / open * 100m : 0m;
+                    var volume = kl.Sum(k => k.Volume);
                     var slope = kl.Count >= 5
                         ? (double)(kl[^1].Close - kl[^5].Close) / (double)kl[^5].Close : 0.0;
                     int regime = slope > 0.01 ? 2 : slope > 0.002 ? 1
                                : slope < -0.01 ? 4 : slope < -0.002 ? 3 : 5;
-                    return new MarketRow(s.Symbol, s.Timeframe, last, slope, regime);
+                    return new MarketRow(s.Symbol, s.Timeframe, last, slope, regime, chgPct, volume);
                 })
                 .OrderByDescending(m => Math.Abs(m.Slope))
                 .ToList();
@@ -618,9 +652,34 @@ html,body { background:var(--bg)!important; color:var(--txt); font-size:14px; }
         catch { }
     }
 
-    void NavToMarket(string sym)
+    async Task NavToMarket(string sym)
     {
-        // Navigate to /market with symbol pre-selected
+        try
+        {
+            // Default timeframe to whatever this symbol's row used
+            // (FiveMinutes, confirmed in LoadMarkets above) so the
+            // Market page lands on a timeframe that genuinely has
+            // data for this symbol, not a guess.
+            var tfLabel = "FiveMinutes";
+
+            var existingJson = await JS.InvokeAsync<string?>("sessionStorage.getItem", "vertexMarketState");
+            System.Text.Json.Nodes.JsonObject state;
+            try
+            {
+                state = !string.IsNullOrEmpty(existingJson)
+                    ? (System.Text.Json.Nodes.JsonNode.Parse(existingJson) as System.Text.Json.Nodes.JsonObject) ?? new()
+                    : new();
+            }
+            catch { state = new(); }
+
+            state["sym"] = sym;
+            state["tf"] = tfLabel;
+
+            await JS.InvokeVoidAsync("sessionStorage.setItem", "vertexMarketState", state.ToJsonString());
+        }
+        catch { /* sessionStorage unavailable — navigate anyway, Market page just falls back to its own default symbol */ }
+
+        Nav.NavigateTo("/market");
     }
 
     string FP(decimal v)
