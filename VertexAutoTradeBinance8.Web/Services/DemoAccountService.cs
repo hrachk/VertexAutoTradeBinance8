@@ -330,11 +330,36 @@ public sealed class DemoAccountService
                     continue;
                 }
 
-                _state.Positions.Add(new DemoPosition
+                // CRITICAL: same merge logic as OpenMarketPosition -
+                // a filled pending order for a symbol+side that
+                // already has an open position must merge into it
+                // (weighted-average entry price), not create a
+                // second separate row. This exact gap (this path
+                // never checked for an existing position at all) is
+                // confirmed to be the real cause of a reported case:
+                // a market-opened position, then a pending limit
+                // order on the same symbol+side filling later through
+                // this path, showing up as two separate rows with
+                // different leverage instead of one merged position.
+                var existingPos = _state.Positions.FirstOrDefault(p => p.Symbol == order.Symbol && p.Side == order.Side);
+                if (existingPos != null)
                 {
-                    Symbol = order.Symbol, Side = order.Side, Qty = order.Qty, Leverage = order.Leverage,
-                    EntryPrice = price, Margin = margin, StopLoss = order.StopLoss, TakeProfits = order.TakeProfits,
-                });
+                    decimal totalQty = existingPos.Qty + order.Qty;
+                    existingPos.EntryPrice = ((existingPos.EntryPrice * existingPos.Qty) + (price * order.Qty)) / totalQty;
+                    existingPos.Qty = totalQty;
+                    existingPos.Margin += margin;
+                    existingPos.Leverage = order.Leverage;
+                    if (order.StopLoss.HasValue && order.StopLoss.Value > 0) existingPos.StopLoss = order.StopLoss;
+                    if (order.TakeProfits != null && order.TakeProfits.Count > 0) existingPos.TakeProfits = order.TakeProfits;
+                }
+                else
+                {
+                    _state.Positions.Add(new DemoPosition
+                    {
+                        Symbol = order.Symbol, Side = order.Side, Qty = order.Qty, Leverage = order.Leverage,
+                        EntryPrice = price, Margin = margin, StopLoss = order.StopLoss, TakeProfits = order.TakeProfits,
+                    });
+                }
                 _state.PendingOrders.Remove(order);
                 changed = true;
             }
