@@ -2230,6 +2230,11 @@ compact-card {
     border-color: rgba(239,68,68,0.35);
     color: #f87171;
 }
+.autotrade-toggle.demo-mode-on {
+    background: rgba(234,179,8,0.14);
+    border-color: rgba(234,179,8,0.4);
+    color: #facc15;
+}
 .autotrade-dot {
     width: 7px;
     height: 7px;

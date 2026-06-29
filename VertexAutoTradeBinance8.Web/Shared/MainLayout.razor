@@ -1,5 +1,6 @@
 ﻿@using VertexAutoTradeBinance8.Web.Confs
 @inherits LayoutComponentBase
+@implements IDisposable
 
 <PageTitle> AUTOTRADE AI</PageTitle>
 
@@ -15,7 +16,9 @@
             <div class="vertex-title">VERTEX AUTOTRADE AI</div>
             <div class="vertex-subtitle">Quant Engine v8</div>
         </div>
+    </div>
 
+    <div class="vertex-right">
         <div class="user-badge">
             <div class="user-badge-avatar">@(Client.Name?.Length > 0 ? Client.Name[0].ToString().ToUpper() : "?")</div>
             <div class="user-badge-info">
@@ -23,9 +26,13 @@
                 <div class="user-badge-id">@Client.Id</div>
             </div>
         </div>
-    </div>
 
-    <div class="vertex-right">
+        <button class="autotrade-toggle @(_demoModeEnabled ? "demo-mode-on" : "")"
+                @onclick="ToggleDemoModeHeader" title="@(_demoModeEnabled ? "Demo trading active — virtual balance, real live prices. Click to return to Live." : "Switch to Demo trading (virtual balance, real live prices, risk-free)")">
+            <span class="autotrade-dot"></span>
+            @(_demoModeEnabled ? "DEMO" : "LIVE")
+        </button>
+
         <button class="autotrade-toggle @(_autoTradeEnabled ? "autotrade-on" : "autotrade-off")"
                 @onclick="ToggleAutoTrade" title="@(_autoTradeEnabled ? "Bot can open real positions automatically. Click to pause." : "Bot is signal-only — it will NOT open real positions automatically. Click to resume.")">
             <span class="autotrade-dot"></span>
@@ -111,6 +118,7 @@
 @inject Microsoft.JSInterop.IJSRuntime JS
 @inject VertexAutoTradeBinance8.Web.Services.StrategyModeFileService StrategyModeService
 @inject VertexAutoTradeBinance8.Web.Services.RuntimeConfigService RuntimeCfg
+@inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoAccount
 
 @code {
     ClientOptions Client => ClientOptions.Value;
@@ -123,6 +131,18 @@
     private bool SidebarCollapsed;
     private string _strategyMode = "Auto";
     private bool _autoTradeEnabled = true;
+    private bool _demoModeEnabled;
+
+    void ToggleDemoModeHeader()
+    {
+        DemoAccount.SetDemoMode(!DemoAccount.DemoMode);
+    }
+
+    void OnDemoModeChangedInHeader()
+    {
+        _demoModeEnabled = DemoAccount.DemoMode;
+        _ = InvokeAsync(StateHasChanged);
+    }
 
     void ToggleMobileMenu() => ShowMobileSidebar = !ShowMobileSidebar;
 
@@ -178,6 +198,14 @@
             if (node != null) _autoTradeEnabled = node.GetValue<bool>();
         }
         catch { }
+
+        _demoModeEnabled = DemoAccount.DemoMode;
+        DemoAccount.DemoModeChanged += OnDemoModeChangedInHeader;
+    }
+
+    public void Dispose()
+    {
+        DemoAccount.DemoModeChanged -= OnDemoModeChangedInHeader;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

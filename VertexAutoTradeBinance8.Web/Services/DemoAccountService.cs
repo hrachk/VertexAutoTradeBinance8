@@ -33,6 +33,20 @@ public sealed class DemoAccountService
 
     public event Action? Updated;
 
+    // Demo mode is shared, global state (not local to any one page's
+    // component) so the always-visible sticky header in MainLayout can
+    // show and control the toggle, per direct request to move it
+    // there - this Singleton service is the natural place for it,
+    // reachable from any page.
+    public bool DemoMode { get; private set; }
+    public event Action? DemoModeChanged;
+    public void SetDemoMode(bool enabled)
+    {
+        if (DemoMode == enabled) return;
+        DemoMode = enabled;
+        DemoModeChanged?.Invoke();
+    }
+
     public DemoAccountService(
         MarketDataLiveState liveState, ILogger<DemoAccountService> logger, IConfiguration cfg,
         IOptionsMonitor<VertexAutoTradeBinance8.Configuration.DcaOptions> dcaOptions,

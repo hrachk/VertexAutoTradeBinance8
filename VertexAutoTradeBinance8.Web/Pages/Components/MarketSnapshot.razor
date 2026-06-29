@@ -33,11 +33,6 @@
         </div>
 
         <div class="mk-hright">
-            <button class="mk-demo-toggle @(_demoMode ? "mk-demo-on" : "")" @onclick="ToggleDemoMode"
-                    title="@(_demoMode ? "Demo trading active — click to return to Live" : "Switch to Demo trading (virtual balance, real live prices)")">
-                <span class="mk-demo-dot"></span>
-                @(_demoMode ? "DEMO" : "LIVE")
-            </button>
             @if (_demoMode)
             {
                 <div class="mk-hbal">
@@ -409,13 +404,16 @@
             </div>
             <div class="mk-max-price @(_chg >= 0 ? "up" : "dn")">@FmtP(_last)</div>
 
-            <div class="mk-max-trade">
-                <input class="mk-max-qty mono" type="number" title="Quantity"
-                       value="@(_orderQty > 0 ? _orderQty.ToString("G8") : "")"
-                       @onchange="OnQtyChange" placeholder="Qty" />
-                <button class="mk-max-buy" disabled="@_orderLoading" @onclick="() => QuickMarketOrder(true)">Buy</button>
-                <button class="mk-max-sell" disabled="@_orderLoading" @onclick="() => QuickMarketOrder(false)">Sell</button>
-            </div>
+            @if (_chartMaximized)
+            {
+                <div class="mk-max-trade">
+                    <input class="mk-max-qty mono" type="number" title="Quantity"
+                           value="@(_orderQty > 0 ? _orderQty.ToString("G8") : "")"
+                           @onchange="OnQtyChange" placeholder="Qty" />
+                    <button class="mk-max-buy" disabled="@_orderLoading" @onclick="() => QuickMarketOrder(true)">Buy</button>
+                    <button class="mk-max-sell" disabled="@_orderLoading" @onclick="() => QuickMarketOrder(false)">Sell</button>
+                </div>
+            }
 
             <button class="mk-btn mk-btn-inline @(Frozen?"mk-btn-on":"")" @onclick="ToggleFreeze">
                 @(Frozen ? "⏸ Paused" : "▶ Live")
@@ -1920,6 +1918,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
         LiveState.PriceTicked += OnLivePriceTicked;
         DemoAccount.Updated += OnDemoAccountUpdated;
+        DemoAccount.DemoModeChanged += OnDemoModeChangedExternally;
+        _demoMode = DemoAccount.DemoMode;
         RefreshDemoSnapshot();
         LiveState.KlineClosed += OnLiveKlineClosed;
 
@@ -1944,6 +1944,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     void ToggleDemoMode()
     {
         _demoMode = !_demoMode;
+        DemoAccount.SetDemoMode(_demoMode);
         // Per direct request: switching modes clears any in-progress
         // order panel/selection so there's no chance of a half-filled
         // form carrying over between the two accounts.
@@ -1976,6 +1977,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     void OnDemoAccountUpdated()
     {
+        RefreshDemoSnapshot();
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    void OnDemoModeChangedExternally()
+    {
+        if (_demoMode == DemoAccount.DemoMode) return;
+        _demoMode = DemoAccount.DemoMode;
+        _activeSignal = null;
+        _selectedPosition = null;
+        _manualSlPrice = 0;
+        _noProtectionConfirmed = false;
+        _manualTps.Clear();
+        _orderError = "";
+        _orderSuccess = "";
         RefreshDemoSnapshot();
         _ = InvokeAsync(StateHasChanged);
     }
@@ -5137,6 +5153,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
         LiveState.PriceTicked -= OnLivePriceTicked;
         DemoAccount.Updated -= OnDemoAccountUpdated;
+        DemoAccount.DemoModeChanged -= OnDemoModeChangedExternally;
         LiveState.KlineClosed -= OnLiveKlineClosed;
         _cts.Cancel();
         _timer?.Dispose();
