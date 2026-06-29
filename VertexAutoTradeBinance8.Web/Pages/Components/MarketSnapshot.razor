@@ -2045,6 +2045,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     // ===== LIVE PUSH (from Engine via MarketDataHub) =====
     DateTime _lastLiveRender = DateTime.MinValue;
+    DateTime _lastDemoPnlRender = DateTime.MinValue;
     bool _onTickBusy;
     static readonly TimeSpan LiveRenderThrottle = TimeSpan.FromMilliseconds(200);
 
@@ -2124,6 +2125,13 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             }
             _demoUnrealizedTotal = total;
             InvalidateDisplayedPositionsCache();
+
+            var nowDemo = DateTime.UtcNow;
+            if (nowDemo - _lastDemoPnlRender >= LiveRenderThrottle)
+            {
+                _lastDemoPnlRender = nowDemo;
+                _ = InvokeAsync(StateHasChanged);
+            }
         }
 
         if (_onTickBusy) return; // drop overlapping ticks rather than letting async chains queue up and race
@@ -2133,7 +2141,6 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         {
             try
             {
-            await InvokeAsync(StateHasChanged); // always show updated tick counter
 
             var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == _activeTf);
             if (idx < 0 || Series[idx].Klines.Count == 0) return;
@@ -2412,12 +2419,27 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             while (await _timer!.WaitForNextTickAsync(_cts.Token))
             {
                 if (Frozen) continue;
-                await LoadData();
+
+                // Per performance audit: these three are fully
+                // independent (different data sources: local file vs
+                // two separate Binance endpoints, writing to different
+                // fields) - running them concurrently instead of one
+                // after another cuts this tick's network-bound time
+                // down to whichever single call takes longest, rather
+                // than the sum of all three sequential round-trips.
+                var loadDataTask = LoadData();
+                var loadOrdersTask = LoadOpenOrdersAsync();
+                var loadPositionsTask = LoadAllOpenPositionsAsync();
+                var loadCurrentPosTask = _activeSignal != null
+                    ? LoadCurrentPositionAsync(_activeSignal.Symbol)
+                    : Task.CompletedTask;
+                await Task.WhenAll(loadDataTask, loadOrdersTask, loadPositionsTask, loadCurrentPosTask);
+
                 SweepExpiredSignals();
-                if (_activeSignal != null)
-                    await LoadCurrentPositionAsync(_activeSignal.Symbol);
-                await LoadOpenOrdersAsync();
-                await LoadAllOpenPositionsAsync();
+                // Still strictly sequential after the above - this
+                // depends on both _openOrders and _allPositions
+                // actually being populated by the concurrent calls
+                // that just completed.
                 await CleanupOrphanedProtectiveOrdersAsync();
                 if (_tpSlEditMode && _selectedPosition != null)
                 {
