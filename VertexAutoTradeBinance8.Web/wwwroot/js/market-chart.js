@@ -36,6 +36,8 @@
         if (s.previewVLine && s.previewVLine.parentNode) s.previewVLine.remove();
         if (s.tooltipEl && s.tooltipEl.parentNode) s.tooltipEl.remove();
         if (s.pnlLabelEl && s.pnlLabelEl.parentNode) s.pnlLabelEl.remove();
+        if (s.entryBtnTp && s.entryBtnTp.parentNode) s.entryBtnTp.remove();
+        if (s.entryBtnSl && s.entryBtnSl.parentNode) s.entryBtnSl.remove();
         try { s.chart.remove(); } catch (e) { /* already gone */ }
         sessions.delete(containerId);
     }
@@ -755,6 +757,101 @@
                     axisLabelVisible: true, title: `BE ${fmtPrice(breakEvenPrice)}`,
                 });
             }
+
+            // Per direct confirmation: TP/SL quick-add buttons right on
+            // the Entry line itself (matching the reference Bybit
+            // screenshot), without Reverse. Clicking either prompts for
+            // a price and adds a new protective level via the same
+            // [JSInvokable] handlers the drag gesture already uses, so
+            // no new C#-side plumbing is needed.
+            const container = document.getElementById(containerId);
+            if (container && entry > 0) {
+                if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
+
+                if (!s.entryBtnTp) {
+                    s.entryBtnTp = document.createElement('button');
+                    s.entryBtnTp.textContent = 'TP';
+                    s.entryBtnTp.style.position = 'absolute';
+                    s.entryBtnTp.style.zIndex = '6';
+                    s.entryBtnTp.style.padding = '2px 8px';
+                    s.entryBtnTp.style.borderRadius = '4px';
+                    s.entryBtnTp.style.fontSize = '10.5px';
+                    s.entryBtnTp.style.fontWeight = '700';
+                    s.entryBtnTp.style.border = 'none';
+                    s.entryBtnTp.style.cursor = 'pointer';
+                    s.entryBtnTp.style.background = '#22c55e';
+                    s.entryBtnTp.style.color = '#0a0d12';
+                    s.entryBtnTp.style.transform = 'translateY(-50%)';
+                    s.entryBtnTp.onclick = () => this.promptAddTp(containerId);
+                    container.appendChild(s.entryBtnTp);
+                }
+                if (!s.entryBtnSl) {
+                    s.entryBtnSl = document.createElement('button');
+                    s.entryBtnSl.textContent = 'SL';
+                    s.entryBtnSl.style.position = 'absolute';
+                    s.entryBtnSl.style.zIndex = '6';
+                    s.entryBtnSl.style.padding = '2px 8px';
+                    s.entryBtnSl.style.borderRadius = '4px';
+                    s.entryBtnSl.style.fontSize = '10.5px';
+                    s.entryBtnSl.style.fontWeight = '700';
+                    s.entryBtnSl.style.border = 'none';
+                    s.entryBtnSl.style.cursor = 'pointer';
+                    s.entryBtnSl.style.background = '#ef4444';
+                    s.entryBtnSl.style.color = '#0a0d12';
+                    s.entryBtnSl.style.transform = 'translateY(-50%)';
+                    s.entryBtnSl.onclick = () => this.promptAddSl(containerId);
+                    container.appendChild(s.entryBtnSl);
+                }
+                this.repositionEntryButtons(containerId);
+
+                if (!s.entryBtnRangeSub) {
+                    // Separate subscription from the lazy-load-history
+                    // one elsewhere in init() - just repositions these
+                    // two buttons on every scroll/zoom so they track the
+                    // Entry line's actual Y position rather than
+                    // drifting out of place.
+                    s.entryBtnRangeSub = () => this.repositionEntryButtons(containerId);
+                    s.chart.timeScale().subscribeVisibleLogicalRangeChange(s.entryBtnRangeSub);
+                }
+            }
+        },
+
+        repositionEntryButtons(containerId) {
+            const s = sessions.get(containerId);
+            if (!s || !s.entryBtnTp || !s.entryBtnSl || !s.entryPrice) return;
+            const y = s.candleSeries.priceToCoordinate(s.entryPrice);
+            if (y == null) return;
+            s.entryBtnTp.style.left = '220px';
+            s.entryBtnTp.style.top = y + 'px';
+            s.entryBtnSl.style.left = '260px';
+            s.entryBtnSl.style.top = y + 'px';
+        },
+
+        // Prompts for a price and adds it as a new TP level, reusing
+        // the exact same session-level callback (s.onTpChanged) the
+        // drag-to-set gesture already calls - bound once via
+        // bindSlTpCallbacks, which always runs before this could ever
+        // be clicked (the Entry line / its buttons only exist once a
+        // position is selected, and that selection flow always binds
+        // these callbacks first).
+        promptAddTp(containerId) {
+            const s = sessions.get(containerId);
+            if (!s || !s.onTpChanged) return;
+            const input = window.prompt('Take Profit price:');
+            if (!input) return;
+            const price = parseFloat(input);
+            if (!price || price <= 0) return;
+            s.onTpChanged(price);
+        },
+
+        promptAddSl(containerId) {
+            const s = sessions.get(containerId);
+            if (!s || !s.onSlChanged) return;
+            const input = window.prompt('Stop Loss price:');
+            if (!input) return;
+            const price = parseFloat(input);
+            if (!price || price <= 0) return;
+            s.onSlChanged(price);
         },
 
         // Shows the draggable SL + ALL TP lines — called only when the
@@ -871,9 +968,9 @@
                 }
             } catch (e) {}
 
-            // Position the floating PnL label near the center-left of
-            // the chart's visible width, vertically aligned with the
-            // current price line.
+            // Bybit-style pill positioned right on the PnL line itself
+            // (per direct reference to that screenshot), rather than a
+            // separate floating box off to the side as before.
             const container = document.getElementById(containerId);
             if (!container) return;
             const y = s.candleSeries.priceToCoordinate(currentPrice);
@@ -884,20 +981,21 @@
                 s.pnlLabelEl.style.position = 'absolute';
                 s.pnlLabelEl.style.pointerEvents = 'none';
                 s.pnlLabelEl.style.zIndex = '5';
-                s.pnlLabelEl.style.padding = '2px 8px';
+                s.pnlLabelEl.style.padding = '3px 10px';
                 s.pnlLabelEl.style.borderRadius = '4px';
                 s.pnlLabelEl.style.fontSize = '12px';
                 s.pnlLabelEl.style.fontWeight = '700';
                 s.pnlLabelEl.style.fontFamily = 'monospace';
                 s.pnlLabelEl.style.transform = 'translateY(-50%)';
+                s.pnlLabelEl.style.boxShadow = '0 1px 4px rgba(0,0,0,.35)';
                 if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
                 container.appendChild(s.pnlLabelEl);
             }
-            s.pnlLabelEl.style.left = '18%';
+            s.pnlLabelEl.style.left = '10px';
             s.pnlLabelEl.style.top = y + 'px';
             s.pnlLabelEl.style.background = color;
             s.pnlLabelEl.style.color = '#0a0d12';
-            s.pnlLabelEl.textContent = `PnL ${sign}${pnl.toFixed(2)}`;
+            s.pnlLabelEl.textContent = `${sign}${pnl.toFixed(2)} USDT`;
         },
 
         hidePositionLines(containerId) {
@@ -909,6 +1007,9 @@
             if (s.beLine) { try { s.candleSeries.removePriceLine(s.beLine); } catch (e) {} s.beLine = null; }
             if (s.pnlLine) { try { s.candleSeries.removePriceLine(s.pnlLine); } catch (e) {} s.pnlLine = null; }
             if (s.pnlLabelEl) { try { s.pnlLabelEl.remove(); } catch (e) {} s.pnlLabelEl = null; }
+            if (s.entryBtnTp) { try { s.entryBtnTp.remove(); } catch (e) {} s.entryBtnTp = null; }
+            if (s.entryBtnSl) { try { s.entryBtnSl.remove(); } catch (e) {} s.entryBtnSl = null; }
+            if (s.entryBtnRangeSub) { try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s.entryBtnRangeSub); } catch (e) {} s.entryBtnRangeSub = null; }
             this.hideTpSlLines(containerId);
             this.setTpSlArmed(containerId, false);
             if (s.previewLine) { try { s.candleSeries.removePriceLine(s.previewLine); } catch (e) {} s.previewLine = null; }
