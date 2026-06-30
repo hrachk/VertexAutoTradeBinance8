@@ -38,6 +38,8 @@
         if (s.pnlLabelEl && s.pnlLabelEl.parentNode) s.pnlLabelEl.remove();
         if (s.entryBtnTp && s.entryBtnTp.parentNode) s.entryBtnTp.remove();
         if (s.entryBtnSl && s.entryBtnSl.parentNode) s.entryBtnSl.remove();
+        if (s.slPill && s.slPill.parentNode) s.slPill.remove();
+        for (const pill of (s.tpPills || [])) { if (pill && pill.parentNode) pill.remove(); }
         try { s.chart.remove(); } catch (e) { /* already gone */ }
         sessions.delete(containerId);
     }
@@ -867,42 +869,127 @@
             if (!s) return;
             this.hideTpSlLines(containerId);
 
-            // Per direct request: show the projected PnL for each
-            // TP/SL level right on its line, if price reaches it.
-            // Reuses the exact same PnL formula already used elsewhere
-            // in this file for the drag-preview feature, and the same
-            // qty/entryPrice/side already set on this session by
-            // showPositionLines (which always runs first for a
-            // selected position, before this function is ever called).
             const dir = s.side === 'LONG' ? 1 : -1;
             const hasPnlData = s.qty > 0 && s.entryPrice > 0;
-            function pnlSuffix(price) {
-                if (!hasPnlData) return '';
-                const pnl = (price - s.entryPrice) * dir * s.qty;
-                const sign = pnl >= 0 ? '+' : '';
-                return ` (${sign}${pnl.toFixed(2)})`;
-            }
+            const pnlFor = (price) => hasPnlData ? (price - s.entryPrice) * dir * s.qty : null;
 
             if (sl > 0) {
                 s.slLine = s.candleSeries.createPriceLine({
                     price: sl, color: '#ef4444', lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: true, title: `SL ${fmtPrice(sl)}${pnlSuffix(sl)}`,
+                    axisLabelVisible: false, title: '',
                 });
+                s.slPill = this.makeLevelPill(containerId, '#ef4444', 'SL');
             }
 
             const tpList = Array.isArray(tps) ? tps : (tps > 0 ? [tps] : []);
             s.tpLines = [];
+            s.tpPills = [];
             tpList.forEach((tpPrice, i) => {
                 if (!tpPrice || tpPrice <= 0) return;
-                const label = tpList.length > 1 ? `TP${i + 1} ${fmtPrice(tpPrice)}` : `TP ${fmtPrice(tpPrice)}`;
                 const line = s.candleSeries.createPriceLine({
                     price: tpPrice, color: '#22c55e', lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: true, title: `${label}${pnlSuffix(tpPrice)}`,
+                    axisLabelVisible: false, title: '',
                 });
+                const label = tpList.length > 1 ? `TP${i + 1}` : 'TP';
+                const pill = this.makeLevelPill(containerId, '#22c55e', label);
                 s.tpLines.push({ line, index: i, price: tpPrice });
+                s.tpPills.push(pill);
             });
+
+            this.repositionTpSlPills(containerId, pnlFor);
+
+            if (!s.tpSlPillRangeSub) {
+                // Same dedicated-subscription pattern already proven for
+                // the Entry-line buttons - repositions every pill on
+                // scroll/zoom so they track their actual price level
+                // rather than drifting out of place.
+                s.tpSlPillRangeSub = () => this.repositionTpSlPills(containerId, pnlFor);
+                s.chart.timeScale().subscribeVisibleLogicalRangeChange(s.tpSlPillRangeSub);
+            }
+        },
+
+        // Creates one Bybit-style colored pill: price on top, projected
+        // PnL below, positioned at the right edge of the chart (matching
+        // the reference screenshot). A smooth CSS transition on `top`
+        // makes repositioning during scroll/zoom feel fluid rather than
+        // snapping instantly, per direct request to prioritize visual
+        // polish over minimal overhead for this feature.
+        makeLevelPill(containerId, color, label) {
+            const container = document.getElementById(containerId);
+            if (!container) return null;
+            if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
+
+            const pill = document.createElement('div');
+            pill.style.position = 'absolute';
+            pill.style.zIndex = '6';
+            pill.style.right = '2px';
+            pill.style.padding = '3px 8px';
+            pill.style.borderRadius = '4px';
+            pill.style.fontFamily = 'monospace';
+            pill.style.fontSize = '11px';
+            pill.style.fontWeight = '700';
+            pill.style.lineHeight = '1.3';
+            pill.style.textAlign = 'right';
+            pill.style.color = '#0a0d12';
+            pill.style.background = color;
+            pill.style.boxShadow = '0 1px 4px rgba(0,0,0,.35)';
+            pill.style.transform = 'translateY(-50%)';
+            pill.style.transition = 'top .12s ease-out';
+            pill.style.pointerEvents = 'none';
+            pill.style.whiteSpace = 'nowrap';
+
+            const labelRow = document.createElement('div');
+            labelRow.style.fontSize = '9px';
+            labelRow.style.opacity = '0.85';
+            labelRow.textContent = label;
+            pill.appendChild(labelRow);
+
+            const priceRow = document.createElement('div');
+            pill.appendChild(priceRow);
+            pill._priceRow = priceRow;
+
+            const pnlRow = document.createElement('div');
+            pnlRow.style.fontSize = '9.5px';
+            pill.appendChild(pnlRow);
+            pill._pnlRow = pnlRow;
+
+            container.appendChild(pill);
+            return pill;
+        },
+
+        // Repositions every SL/TP pill to track its actual price level,
+        // and refreshes the price + projected-PnL text shown on each -
+        // called once when lines are first shown and again on every
+        // scroll/zoom via the dedicated subscription above.
+        repositionTpSlPills(containerId, pnlFor) {
+            const s = sessions.get(containerId);
+            if (!s) return;
+
+            const setPillContent = (pill, price) => {
+                if (!pill) return;
+                const y = s.candleSeries.priceToCoordinate(price);
+                if (y == null) { pill.style.display = 'none'; return; }
+                pill.style.display = 'block';
+                pill.style.top = y + 'px';
+                pill._priceRow.textContent = fmtPrice(price);
+                if (pnlFor) {
+                    const pnl = pnlFor(price);
+                    if (pnl != null) {
+                        const sign = pnl >= 0 ? '+' : '';
+                        pill._pnlRow.textContent = `${sign}${pnl.toFixed(2)}`;
+                    } else {
+                        pill._pnlRow.textContent = '';
+                    }
+                }
+            };
+
+            if (s.slLine && s.slPill) setPillContent(s.slPill, s.slLine.options().price);
+            for (const tp of (s.tpLines || [])) {
+                const pill = s.tpPills && s.tpPills[tp.index];
+                setPillContent(pill, tp.price);
+            }
         },
 
         // Arms/disarms the "Drag to set TP/SL" mode — toggled by the
@@ -925,6 +1012,12 @@
                 try { s.candleSeries.removePriceLine(tp.line); } catch (e) {}
             }
             s.tpLines = [];
+            if (s.slPill) { try { s.slPill.remove(); } catch (e) {} s.slPill = null; }
+            for (const pill of (s.tpPills || [])) {
+                try { pill.remove(); } catch (e) {}
+            }
+            s.tpPills = [];
+            if (s.tpSlPillRangeSub) { try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s.tpSlPillRangeSub); } catch (e) {} s.tpSlPillRangeSub = null; }
         },
 
         // Refreshes the live market-price line with the current PnL —
@@ -988,6 +1081,7 @@
                 s.pnlLabelEl.style.fontFamily = 'monospace';
                 s.pnlLabelEl.style.transform = 'translateY(-50%)';
                 s.pnlLabelEl.style.boxShadow = '0 1px 4px rgba(0,0,0,.35)';
+                s.pnlLabelEl.style.transition = 'top .12s ease-out, background .15s ease-out';
                 if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
                 container.appendChild(s.pnlLabelEl);
             }
