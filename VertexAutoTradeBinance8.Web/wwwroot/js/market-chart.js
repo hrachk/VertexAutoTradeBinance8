@@ -784,6 +784,7 @@
                     s.entryBtnTp.style.background = '#22c55e';
                     s.entryBtnTp.style.color = '#0a0d12';
                     s.entryBtnTp.style.transform = 'translateY(-50%)';
+                    s.entryBtnTp.style.transition = 'right .12s ease-out, top .12s ease-out';
                     s.entryBtnTp.onclick = () => this.promptAddTp(containerId);
                     container.appendChild(s.entryBtnTp);
                 }
@@ -801,6 +802,7 @@
                     s.entryBtnSl.style.background = '#ef4444';
                     s.entryBtnSl.style.color = '#0a0d12';
                     s.entryBtnSl.style.transform = 'translateY(-50%)';
+                    s.entryBtnSl.style.transition = 'right .12s ease-out, top .12s ease-out';
                     s.entryBtnSl.onclick = () => this.promptAddSl(containerId);
                     container.appendChild(s.entryBtnSl);
                 }
@@ -823,10 +825,18 @@
             if (!s || !s.entryBtnTp || !s.entryBtnSl || !s.entryPrice) return;
             const y = s.candleSeries.priceToCoordinate(s.entryPrice);
             if (y == null) return;
-            s.entryBtnTp.style.left = '220px';
-            s.entryBtnTp.style.top = y + 'px';
-            s.entryBtnSl.style.left = '260px';
+
+            // Per direct report: positioned relative to the chart's
+            // actual right price-scale width, next to the Entry line's
+            // own native price label, rather than a fixed offset from
+            // the left that drifted disconnected from the line itself.
+            let scaleWidth = 60;
+            try { scaleWidth = s.chart.priceScale('right').width() || 60; } catch (e) {}
+
+            s.entryBtnSl.style.right = (scaleWidth + 4) + 'px';
             s.entryBtnSl.style.top = y + 'px';
+            s.entryBtnTp.style.right = (scaleWidth + 38) + 'px';
+            s.entryBtnTp.style.top = y + 'px';
         },
 
         // Prompts for a price and adds it as a new TP level, reusing
@@ -924,7 +934,6 @@
             const pill = document.createElement('div');
             pill.style.position = 'absolute';
             pill.style.zIndex = '6';
-            pill.style.right = '2px';
             pill.style.padding = '3px 8px';
             pill.style.borderRadius = '4px';
             pill.style.fontFamily = 'monospace';
@@ -936,7 +945,7 @@
             pill.style.background = color;
             pill.style.boxShadow = '0 1px 4px rgba(0,0,0,.35)';
             pill.style.transform = 'translateY(-50%)';
-            pill.style.transition = 'top .12s ease-out';
+            pill.style.transition = 'top .12s ease-out, right .12s ease-out';
             pill.style.pointerEvents = 'none';
             pill.style.whiteSpace = 'nowrap';
 
@@ -967,11 +976,20 @@
             const s = sessions.get(containerId);
             if (!s) return;
 
+            // Read the chart's ACTUAL current right price-scale width
+            // (varies with how many digits the prices need) and keep
+            // pills just inside it, rather than a fixed offset that
+            // could overlap or get clipped by the scale's own labels.
+            let scaleWidth = 60;
+            try { scaleWidth = s.chart.priceScale('right').width() || 60; } catch (e) {}
+            const rightOffset = scaleWidth + 4;
+
             const setPillContent = (pill, price) => {
                 if (!pill) return;
                 const y = s.candleSeries.priceToCoordinate(price);
                 if (y == null) { pill.style.display = 'none'; return; }
                 pill.style.display = 'block';
+                pill.style.right = rightOffset + 'px';
                 pill.style.top = y + 'px';
                 pill._priceRow.textContent = fmtPrice(price);
                 if (pnlFor) {
@@ -1043,6 +1061,7 @@
             if (!s) { console.warn('[PnL] no session for', containerId); return; }
             if (!s.entryPrice) { console.warn('[PnL] session has no entryPrice set yet — showPositionLines may not have run'); return; }
             s.candleSeries.applyOptions({ priceLineVisible: false });
+            s.lastPnlPrice = currentPrice; // for the scroll/zoom subscription below to reposition without waiting for the next tick
 
             const dir = s.side === 'LONG' ? 1 : -1;
             const pnl = (currentPrice - s.entryPrice) * dir * s.qty;
@@ -1090,6 +1109,19 @@
             s.pnlLabelEl.style.background = color;
             s.pnlLabelEl.style.color = '#0a0d12';
             s.pnlLabelEl.textContent = `${sign}${pnl.toFixed(2)} USDT`;
+
+            // Per direct report: keep this label tracking scroll/zoom
+            // synchronously, not only on the next price tick - subscribes
+            // once per session (not per call), repositioning using the
+            // last known price whenever the user scrolls/zooms the chart.
+            if (!s.pnlRangeSub) {
+                s.pnlRangeSub = () => {
+                    if (s.lastPnlPrice == null || !s.entryPrice) return;
+                    const yy = s.candleSeries.priceToCoordinate(s.lastPnlPrice);
+                    if (yy != null && s.pnlLabelEl) s.pnlLabelEl.style.top = yy + 'px';
+                };
+                s.chart.timeScale().subscribeVisibleLogicalRangeChange(s.pnlRangeSub);
+            }
         },
 
         hidePositionLines(containerId) {
@@ -1101,6 +1133,7 @@
             if (s.beLine) { try { s.candleSeries.removePriceLine(s.beLine); } catch (e) {} s.beLine = null; }
             if (s.pnlLine) { try { s.candleSeries.removePriceLine(s.pnlLine); } catch (e) {} s.pnlLine = null; }
             if (s.pnlLabelEl) { try { s.pnlLabelEl.remove(); } catch (e) {} s.pnlLabelEl = null; }
+            if (s.pnlRangeSub) { try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s.pnlRangeSub); } catch (e) {} s.pnlRangeSub = null; }
             if (s.entryBtnTp) { try { s.entryBtnTp.remove(); } catch (e) {} s.entryBtnTp = null; }
             if (s.entryBtnSl) { try { s.entryBtnSl.remove(); } catch (e) {} s.entryBtnSl = null; }
             if (s.entryBtnRangeSub) { try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s.entryBtnRangeSub); } catch (e) {} s.entryBtnRangeSub = null; }

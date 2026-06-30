@@ -945,14 +945,14 @@
                             <tbody>
                                 @foreach (var o in _openOrders)
                                 {
-                                    <tr>
+                                    <tr class="mk-oo-row-clickable" @onclick="() => PickSym(o.Symbol)">
                                         <td class="mk-oo-sym">@o.Symbol</td>
                                         <td class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</td>
                                         <td class="mk-dim">@o.Type @(o.ReduceOnly ? "(R)" : "")</td>
                                         <td class="mk-mono">@(o.Price > 0 ? FmtP(o.Price) : "Market")</td>
                                         <td class="mk-mono">@o.Qty.ToString("G8")</td>
                                         <td class="mk-mono mk-dim">@o.Filled.ToString("G8")</td>
-                                        <td>
+                                        <td @onclick:stopPropagation="true">
                                             <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
                                                     @onclick="() => CancelOpenOrderAsync(o)">
                                                 @(_cancellingOrderId == o.OrderId ? "…" : "Cancel")
@@ -1942,6 +1942,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-oo-tbl th{position:sticky;top:0;background:var(--bg2);text-align:left;padding:8px 14px;font-size:11px;letter-spacing:.5px;color:var(--dim);border-bottom:1px solid var(--bdr);white-space:nowrap;font-weight:600;}
 .mk-oo-tbl td{padding:11px 14px;font-size:13.5px;border-bottom:1px solid var(--bdr);white-space:nowrap;}
 .mk-pos-row{cursor:pointer;transition:background .12s;}
+.mk-oo-row-clickable{cursor:pointer;transition:background .12s;}
+.mk-oo-row-clickable:hover{background:rgba(255,255,255,.03);}
 .mk-pos-row:hover{background:rgba(255,255,255,0.04);}
 .mk-pos-row-sel{background:rgba(59,130,246,0.1);box-shadow:inset 2px 0 0 var(--acc);}
 .mk-pos-row-loading{opacity:.7;cursor:wait;}
