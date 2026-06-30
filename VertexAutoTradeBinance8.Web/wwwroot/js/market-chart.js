@@ -544,9 +544,9 @@
             container.addEventListener('mouseup', (e) => {
                 // Finished dragging an EXISTING SL/TP line to a new
                 // price — commit it via a dedicated callback (distinct
-                // from the entry-armed gesture's onTpChanged, since this
-                // needs to know WHICH TP index moved when there are
-                // multiple).
+                // from the entry-armed gesture's onNewTpRequested,
+                // since this needs to know WHICH TP index moved when
+                // there are multiple).
                 if (session.draggingLine) {
                     const rect = container.getBoundingClientRect();
                     const y = e.clientY - rect.top;
@@ -786,6 +786,7 @@
                     s.entryBtnTp.style.transform = 'translateY(-50%)';
                     s.entryBtnTp.style.transition = 'right .12s ease-out, top .12s ease-out';
                     s.entryBtnTp.onclick = () => this.promptAddTp(containerId);
+                    s.entryBtnTp.addEventListener('mousedown', (ev) => ev.stopPropagation());
                     container.appendChild(s.entryBtnTp);
                 }
                 if (!s.entryBtnSl) {
@@ -804,6 +805,7 @@
                     s.entryBtnSl.style.transform = 'translateY(-50%)';
                     s.entryBtnSl.style.transition = 'right .12s ease-out, top .12s ease-out';
                     s.entryBtnSl.onclick = () => this.promptAddSl(containerId);
+                    s.entryBtnSl.addEventListener('mousedown', (ev) => ev.stopPropagation());
                     container.appendChild(s.entryBtnSl);
                 }
                 this.repositionEntryButtons(containerId);
@@ -833,9 +835,9 @@
             let scaleWidth = 60;
             try { scaleWidth = s.chart.priceScale('right').width() || 60; } catch (e) {}
 
-            s.entryBtnSl.style.right = (scaleWidth + 4) + 'px';
+            s.entryBtnSl.style.right = (scaleWidth + 50) + 'px';
             s.entryBtnSl.style.top = y + 'px';
-            s.entryBtnTp.style.right = (scaleWidth + 38) + 'px';
+            s.entryBtnTp.style.right = (scaleWidth + 84) + 'px';
             s.entryBtnTp.style.top = y + 'px';
         },
 
@@ -993,6 +995,7 @@
                     ev.stopPropagation();
                     this.cancelProtectiveLevel(containerId, cancelKind, cancelIndex);
                 };
+                cancelBtn.addEventListener('mousedown', (ev) => ev.stopPropagation());
                 pill.appendChild(cancelBtn);
             }
 
@@ -1023,7 +1026,7 @@
             // could overlap or get clipped by the scale's own labels.
             let scaleWidth = 60;
             try { scaleWidth = s.chart.priceScale('right').width() || 60; } catch (e) {}
-            const rightOffset = scaleWidth + 4;
+            const rightOffset = scaleWidth + 50;
 
             const setPillContent = (pill, price) => {
                 if (!pill) return;
