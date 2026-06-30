@@ -581,7 +581,7 @@
                 const isProfitSide = isLong ? price > session.entryPrice : price < session.entryPrice;
 
                 if (isProfitSide) {
-                    if (session.onTpChanged) session.onTpChanged(price);
+                    if (session.onNewTpRequested) session.onNewTpRequested(price);
                 } else {
                     if (session.onSlChanged) session.onSlChanged(price);
                 }
@@ -839,21 +839,23 @@
             s.entryBtnTp.style.top = y + 'px';
         },
 
-        // Prompts for a price and adds it as a new TP level, reusing
-        // the exact same session-level callback (s.onTpChanged) the
-        // drag-to-set gesture already calls - bound once via
-        // bindSlTpCallbacks, which always runs before this could ever
-        // be clicked (the Entry line / its buttons only exist once a
-        // position is selected, and that selection flow always binds
-        // these callbacks first).
+        // Per direct confirmation: a single combined prompt asking for
+        // BOTH price and percent at once (format "price, percent"),
+        // since clicking this button (unlike dragging) has no mouse
+        // position to derive a price from - avoids showing two
+        // separate prompts back to back. Calls a dedicated
+        // onNewTpRequestedWithPercent callback so the percent doesn't
+        // need a second round-trip prompt on the C# side.
         promptAddTp(containerId) {
             const s = sessions.get(containerId);
-            if (!s || !s.onTpChanged) return;
-            const input = window.prompt('Take Profit price:');
+            if (!s || !s.onNewTpRequestedWithPercent) return;
+            const input = window.prompt('New TP — enter price, percent (e.g. "65000, 25"):');
             if (!input) return;
-            const price = parseFloat(input);
+            const parts = input.split(',').map(p => p.trim());
+            const price = parseFloat(parts[0]);
+            const pct = parts.length > 1 ? parseFloat(parts[1]) : NaN;
             if (!price || price <= 0) return;
-            s.onTpChanged(price);
+            s.onNewTpRequestedWithPercent(price, isNaN(pct) ? 0 : pct);
         },
 
         promptAddSl(containerId) {
@@ -889,7 +891,7 @@
                     lineStyle: LightweightCharts.LineStyle.Solid,
                     axisLabelVisible: false, title: '',
                 });
-                s.slPill = this.makeLevelPill(containerId, '#ef4444', 'SL');
+                s.slPill = this.makeLevelPill(containerId, '#ef4444', 'SL', 'sl', null);
             }
 
             const tpList = Array.isArray(tps) ? tps : (tps > 0 ? [tps] : []);
@@ -903,7 +905,7 @@
                     axisLabelVisible: false, title: '',
                 });
                 const label = tpList.length > 1 ? `TP${i + 1}` : 'TP';
-                const pill = this.makeLevelPill(containerId, '#22c55e', label);
+                const pill = this.makeLevelPill(containerId, '#22c55e', label, 'tp', i);
                 s.tpLines.push({ line, index: i, price: tpPrice });
                 s.tpPills.push(pill);
             });
@@ -926,7 +928,7 @@
         // makes repositioning during scroll/zoom feel fluid rather than
         // snapping instantly, per direct request to prioritize visual
         // polish over minimal overhead for this feature.
-        makeLevelPill(containerId, color, label) {
+        makeLevelPill(containerId, color, label, cancelKind, cancelIndex) {
             const container = document.getElementById(containerId);
             if (!container) return null;
             if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
@@ -946,26 +948,65 @@
             pill.style.boxShadow = '0 1px 4px rgba(0,0,0,.35)';
             pill.style.transform = 'translateY(-50%)';
             pill.style.transition = 'top .12s ease-out, right .12s ease-out';
-            pill.style.pointerEvents = 'none';
+            pill.style.pointerEvents = 'none'; // doesn't block chart drag gestures underneath - the cancel button below re-enables it on itself specifically
             pill.style.whiteSpace = 'nowrap';
+            pill.style.display = 'flex';
+            pill.style.alignItems = 'center';
+            pill.style.gap = '6px';
+
+            const textWrap = document.createElement('div');
+            pill.appendChild(textWrap);
 
             const labelRow = document.createElement('div');
             labelRow.style.fontSize = '9px';
             labelRow.style.opacity = '0.85';
             labelRow.textContent = label;
-            pill.appendChild(labelRow);
+            textWrap.appendChild(labelRow);
 
             const priceRow = document.createElement('div');
-            pill.appendChild(priceRow);
+            textWrap.appendChild(priceRow);
             pill._priceRow = priceRow;
 
             const pnlRow = document.createElement('div');
             pnlRow.style.fontSize = '9.5px';
-            pill.appendChild(pnlRow);
+            textWrap.appendChild(pnlRow);
             pill._pnlRow = pnlRow;
+
+            if (cancelKind) {
+                const cancelBtn = document.createElement('button');
+                cancelBtn.textContent = '×';
+                cancelBtn.title = `Cancel this ${cancelKind === 'sl' ? 'Stop Loss' : 'Take Profit'}`;
+                cancelBtn.style.pointerEvents = 'auto'; // re-enable specifically on this button, despite the pill itself being pointer-events:none
+                cancelBtn.style.border = 'none';
+                cancelBtn.style.borderRadius = '3px';
+                cancelBtn.style.background = 'rgba(0,0,0,.25)';
+                cancelBtn.style.color = '#0a0d12';
+                cancelBtn.style.cursor = 'pointer';
+                cancelBtn.style.fontSize = '11px';
+                cancelBtn.style.fontWeight = '700';
+                cancelBtn.style.lineHeight = '1';
+                cancelBtn.style.padding = '0';
+                cancelBtn.style.width = '12px';
+                cancelBtn.style.height = '18px';
+                cancelBtn.style.flexShrink = '0';
+                cancelBtn.onclick = (ev) => {
+                    ev.stopPropagation();
+                    this.cancelProtectiveLevel(containerId, cancelKind, cancelIndex);
+                };
+                pill.appendChild(cancelBtn);
+            }
 
             container.appendChild(pill);
             return pill;
+        },
+
+        // Calls the dedicated C# cancel handler for this specific
+        // level - bound once via bindSlTpCallbacks, same established
+        // pattern as the other pill/button callbacks.
+        cancelProtectiveLevel(containerId, kind, index) {
+            const s = sessions.get(containerId);
+            if (!s || !s.onCancelProtectiveLevel) return;
+            s.onCancelProtectiveLevel(kind, index ?? -1);
         },
 
         // Repositions every SL/TP pill to track its actual price level,
@@ -1161,6 +1202,9 @@
             s.onSlChanged = (price) => dotNetRef.invokeMethodAsync('OnSlDragged', price);
             s.onTpChanged = (price) => dotNetRef.invokeMethodAsync('OnTpDragged', price);
             s.onTpChangedAt = (index, price) => dotNetRef.invokeMethodAsync('OnTpDraggedAt', index, price);
+            s.onNewTpRequested = (price) => dotNetRef.invokeMethodAsync('OnNewTpRequested', price);
+            s.onNewTpRequestedWithPercent = (price, pct) => dotNetRef.invokeMethodAsync('OnNewTpRequestedWithPercent', price, pct);
+            s.onCancelProtectiveLevel = (kind, index) => dotNetRef.invokeMethodAsync('OnCancelProtectiveLevel', kind, index);
         },
 
         bindInfiniteHistory(containerId, dotNetRef) {

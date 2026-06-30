@@ -221,7 +221,7 @@ public sealed class DemoAccountService
     // mutate a position's protective levels, rather than relying on
     // GetSnapshot's returned objects happening to share references
     // with the internal state.
-    public bool UpdatePositionProtectiveLevel(string positionId, bool isStopLoss, decimal price, int? tpIndex)
+    public bool UpdatePositionProtectiveLevel(string positionId, bool isStopLoss, decimal price, int? tpIndex, decimal? newTpQty = null)
     {
         lock (_lock)
         {
@@ -238,9 +238,48 @@ public sealed class DemoAccountService
             }
             else
             {
-                pos.TakeProfits.Add(new DemoTpLevel { Price = price, Pct = 100m });
+                // Adding a genuinely NEW level (no specific index given)
+                // - per direct confirmation, dragging from the Entry
+                // line always creates a new TP rather than replacing
+                // one. newTpQty lets the caller specify how much of the
+                // position this new level covers (e.g. from the
+                // requested-percentage prompt) instead of always
+                // defaulting to the full position.
+                decimal pctOfPosition = pos.Qty > 0 && newTpQty.HasValue
+                    ? Math.Clamp(newTpQty.Value / pos.Qty * 100m, 1m, 100m)
+                    : 100m;
+                pos.TakeProfits.Add(new DemoTpLevel { Price = price, Pct = pctOfPosition });
             }
 
+            Save();
+        }
+        Updated?.Invoke();
+        return true;
+    }
+
+    // Per direct request for a per-level cancel button on the chart's
+    // SL/TP pills - removes just one specific level.
+    public bool RemoveStopLoss(string positionId)
+    {
+        lock (_lock)
+        {
+            var pos = _state.Positions.FirstOrDefault(p => p.Id == positionId);
+            if (pos == null) return false;
+            pos.StopLoss = 0m;
+            Save();
+        }
+        Updated?.Invoke();
+        return true;
+    }
+
+    public bool RemoveTakeProfitLevel(string positionId, int tpIndex)
+    {
+        lock (_lock)
+        {
+            var pos = _state.Positions.FirstOrDefault(p => p.Id == positionId);
+            if (pos == null) return false;
+            if (tpIndex < 0 || tpIndex >= pos.TakeProfits.Count) return false;
+            pos.TakeProfits.RemoveAt(tpIndex);
             Save();
         }
         Updated?.Invoke();

@@ -3721,6 +3721,202 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         }
     }
 
+    // Per direct confirmation: dragging from the Entry line always
+    // creates a NEW TP level (never replaces an existing one - that's
+    // what OnTpDragged/OnTpDraggedAt are for, when the user explicitly
+    // grabs a specific existing line). Asks what % of the position to
+    // allocate via a prompt, since the position may already be
+    // partially allocated across existing TP levels and there's no
+    // single "obviously correct" remaining share to assume.
+    [JSInvokable]
+    public async Task OnNewTpRequested(decimal price)
+    {
+        if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
+        var pos = _selectedPosition;
+        decimal remaining = ComputeRemainingUnallocatedTpQty(pos);
+        var pct = await PromptNewTpPercentAsync(remaining, pos.Qty);
+        if (pct == null) { await RefreshPositionLines(); return; } // cancelled — redraw to clear the JS-side preview line
+        await PlaceNewTpLevelAsync(pos, price, pct.Value);
+    }
+
+    // Per direct confirmation: the button-click path (no drag position
+    // to derive a price from) asks for price AND percent in a single
+    // combined prompt on the JS side, so this skips the separate
+    // C#-side percent prompt entirely - pct is already known.
+    [JSInvokable]
+    public async Task OnNewTpRequestedWithPercent(decimal price, decimal pct)
+    {
+        if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
+        if (pct <= 0) pct = 25m; // user left the percent blank in the combined prompt — fall back to a sane default rather than rejecting
+        await PlaceNewTpLevelAsync(_selectedPosition, price, Math.Clamp(pct, 1m, 100m));
+    }
+
+    decimal ComputeRemainingUnallocatedTpQty(ActivePositionInfo pos)
+    {
+        if (_demoMode)
+        {
+            decimal allocatedPctDemo = DemoAccount.GetSnapshot().Positions
+                .FirstOrDefault(p => p.Id == pos.Id)?.TakeProfits?.Sum(t => t.Pct) ?? 0m;
+            return Math.Max(0m, pos.Qty - pos.Qty * (allocatedPctDemo / 100m));
+        }
+
+        bool MatchesThisPosition(OpenOrderRow o) =>
+            o.Symbol == pos.Symbol &&
+            (string.IsNullOrEmpty(o.PositionSide) || o.PositionSide == "BOTH" || o.PositionSide == pos.Side);
+        decimal allocated = _openOrders.Where(o => MatchesThisPosition(o) && o.Type.Contains("TAKE_PROFIT")).Sum(o => o.Qty);
+        return Math.Max(0m, pos.Qty - allocated);
+    }
+
+    async Task PlaceNewTpLevelAsync(ActivePositionInfo pos, decimal price, decimal pct)
+    {
+        if (_demoMode)
+        {
+            decimal tpDemoPrice = _symTickSize > 0 ? Math.Round(price / _symTickSize) * _symTickSize : price;
+            decimal tpDemoQty = pos.Qty * (pct / 100m);
+            DemoAccount.UpdatePositionProtectiveLevel(pos.Id, isStopLoss: false, tpDemoPrice, tpIndex: null, newTpQty: tpDemoQty);
+            RefreshDemoSnapshot();
+            await RefreshPositionLines();
+            return;
+        }
+
+        _slTpDragBusy = true;
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return;
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+
+            decimal tpPrice = _symTickSize > 0 ? Math.Round(price / _symTickSize) * _symTickSize : price;
+            decimal tpQty = pos.Qty * (pct / 100m);
+            if (_symStep > 0) tpQty = Math.Floor(tpQty / _symStep) * _symStep;
+            if (tpQty <= 0) { _orderError = "New TP quantity too small after rounding"; return; }
+
+            bool isLong = pos.Side == "LONG";
+            var closeSide = isLong ? OrderSide.Sell : OrderSide.Buy;
+            var posSide = isLong ? PositionSide.Long : PositionSide.Short;
+            var clientOrderId = $"MANUAL_TPNEW_{pos.Symbol}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+
+            var r = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                symbol: pos.Symbol,
+                side: closeSide,
+                type: ConditionalOrderType.TakeProfitMarket,
+                quantity: tpQty,
+                positionSide: posSide,
+                triggerPrice: tpPrice,
+                workingType: WorkingType.Mark,
+                clientOrderId: clientOrderId,
+                priceProtect: true,
+                ct: cts.Token);
+
+            if (!r.Success)
+            {
+                _orderError = $"New TP failed: {r.Error?.Message}";
+            }
+
+            await LoadOpenOrdersAsync();
+            await RefreshPositionLines();
+        }
+        catch (Exception ex)
+        {
+            _orderError = $"New TP failed: {ex.Message}";
+        }
+        finally
+        {
+            _slTpDragBusy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    // Per direct request: a small "×" cancel button on each SL/TP
+    // pill cancels just that one specific level. For TP with multiple
+    // levels, uses the same sorted-by-price index-matching pattern
+    // already proven in ReplaceProtectiveOrderAsync, so "the 2nd TP
+    // pill" cancels the 2nd TP order found in that same order -
+    // consistent with how dragging "the 2nd TP line" already works.
+    [JSInvokable]
+    public async Task OnCancelProtectiveLevel(string kind, int index)
+    {
+        if (_selectedPosition == null) return;
+        var pos = _selectedPosition;
+        bool isStopLoss = kind == "sl";
+
+        if (_demoMode)
+        {
+            if (isStopLoss)
+            {
+                DemoAccount.RemoveStopLoss(pos.Id);
+            }
+            else
+            {
+                DemoAccount.RemoveTakeProfitLevel(pos.Id, index);
+            }
+            RefreshDemoSnapshot();
+            await RefreshPositionLines();
+            return;
+        }
+
+        bool MatchesThisPosition(OpenOrderRow o) =>
+            o.Symbol == pos.Symbol &&
+            (string.IsNullOrEmpty(o.PositionSide) || o.PositionSide == "BOTH" || o.PositionSide == pos.Side);
+
+        OpenOrderRow? toCancel;
+        if (isStopLoss)
+        {
+            toCancel = _openOrders.FirstOrDefault(o => MatchesThisPosition(o) && o.Type.Contains("STOP"));
+        }
+        else
+        {
+            var tpOrders = _openOrders
+                .Where(o => MatchesThisPosition(o) && o.Type.Contains("TAKE_PROFIT"))
+                .OrderBy(o => pos.Side == "LONG" ? o.Price : -o.Price)
+                .ToList();
+            toCancel = index >= 0 && index < tpOrders.Count ? tpOrders[index] : null;
+        }
+
+        if (toCancel == null) return;
+
+        try
+        {
+            if (toCancel.IsAlgo)
+            {
+                await CancelAlgoOrderRawAsync(pos.Symbol, toCancel.OrderId);
+            }
+            else
+            {
+                var client = Factory.TryCreateRestClient();
+                if (client == null) return;
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                await client.UsdFuturesApi.Trading.CancelOrderAsync(pos.Symbol, toCancel.OrderId, ct: cts.Token);
+            }
+        }
+        catch (Exception ex)
+        {
+            _orderError = $"Cancel {(isStopLoss ? "SL" : "TP")} failed: {ex.Message}";
+        }
+
+        await LoadOpenOrdersAsync();
+        await RefreshPositionLines();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    async Task<decimal?> PromptNewTpPercentAsync(decimal remainingQty, decimal totalQty)
+    {
+        decimal suggestedPct = totalQty > 0 ? Math.Round(remainingQty / totalQty * 100m, 0) : 0m;
+        if (suggestedPct <= 0) suggestedPct = 25m; // fully allocated already — still allow over-allocating slightly if the user really wants to, just don't suggest 0%
+        try
+        {
+            var input = await JS.InvokeAsync<string?>("prompt",
+                $"New TP level — % of position to close here (remaining unallocated: {remainingQty:G8} / {totalQty:G8}):",
+                suggestedPct.ToString("0"));
+            if (string.IsNullOrWhiteSpace(input)) return null;
+            if (!decimal.TryParse(input, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var pct)) return null;
+            return Math.Clamp(pct, 1m, 100m);
+        }
+        catch { return null; }
+    }
+
+
+    // zero, accounting for the round-trip taker fee (0.05% each way,
     // Break-even price — the level where closing now would net exactly
     // zero, accounting for the round-trip taker fee (0.05% each way,
     // Binance's own standard taker rate) on top of just the entry
