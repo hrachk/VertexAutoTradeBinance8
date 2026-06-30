@@ -1289,14 +1289,18 @@
                         @foreach (var o in posOrders)
                         {
                             <div class="ord-pos-order-row">
-                                <span class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</span>
-                                <span class="mk-dim">@o.Type @(o.ReduceOnly ? "(R)" : "")</span>
-                                <span class="mono">@(o.Price > 0 ? FmtP(o.Price) : "Market")</span>
-                                <span class="mono mk-dim">@o.Qty.ToString("G8")</span>
-                                <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
-                                        @onclick="() => CancelOpenOrderAsync(o)">
-                                    @(_cancellingOrderId == o.OrderId ? "…" : "Cancel")
-                                </button>
+                                <div class="ord-pos-order-top">
+                                    <span class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</span>
+                                    <span class="mk-dim ord-pos-order-type">@o.Type @(o.ReduceOnly ? "(R)" : "")</span>
+                                    <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
+                                            @onclick="() => CancelOpenOrderAsync(o)">
+                                        @(_cancellingOrderId == o.OrderId ? "…" : "Cancel")
+                                    </button>
+                                </div>
+                                <div class="ord-pos-order-bottom">
+                                    <span class="mono">@(o.Price > 0 ? FmtP(o.Price) : "Market")</span>
+                                    <span class="mono mk-dim">@o.Qty.ToString("G8")</span>
+                                </div>
                             </div>
                         }
                     </div>
@@ -1557,7 +1561,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 /* CHARTS */
 .mk-charts-area{background:var(--bg2);padding:16px 20px;border-bottom:1px solid var(--bdr);position:relative;}
 .mk-body-grid{display:grid;grid-template-columns:240px 1fr;gap:16px;align-items:start;}
-.mk-body-grid-with-panel{grid-template-columns:240px 1fr 320px;}
+.mk-body-grid-with-panel{grid-template-columns:240px 1fr 360px;}
 @@media(max-width:1300px){.mk-body-grid{grid-template-columns:1fr;}.mk-body-grid-with-panel{grid-template-columns:1fr;}}
 .mk-main-col{min-width:0;display:flex;flex-direction:column;gap:16px;}
 .mk-charts-col-main{min-width:0;}
@@ -1763,10 +1767,13 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .ord-selected-label{font-size:11px;letter-spacing:1.5px;color:var(--acc);font-weight:700;text-transform:uppercase;padding:10px 18px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
 .ord-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
 
-.ord-pos-orders{padding:12px 18px;border-bottom:1px solid var(--bdr);background:rgba(59,130,246,0.04);}
+.ord-pos-orders{padding:12px 18px;border-bottom:1px solid var(--bdr);background:rgba(59,130,246,0.04);overflow:hidden;}
 .ord-pos-orders-title{font-size:10px;letter-spacing:1px;color:var(--dim);font-weight:700;margin-bottom:8px;text-transform:uppercase;}
-.ord-pos-order-row{display:grid;grid-template-columns:auto 1fr auto auto auto;align-items:center;gap:10px;padding:6px 0;font-size:12px;}
+.ord-pos-order-row{display:flex;flex-direction:column;gap:4px;padding:8px 0;font-size:12px;}
 .ord-pos-order-row+.ord-pos-order-row{border-top:1px solid var(--bdr);}
+.ord-pos-order-top{display:flex;align-items:center;gap:8px;min-width:0;}
+.ord-pos-order-type{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ord-pos-order-bottom{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11.5px;}
 .ord-title{display:flex;align-items:center;gap:10px;}
 .ord-price-hint{font-size:10px;color:var(--dim);margin-top:5px;font-style:italic;}
 .ord-manual-badge{font-size:11px;font-weight:700;color:var(--dim);background:var(--bg2);padding:3px 9px;border-radius:5px;letter-spacing:.3px;}
@@ -1943,7 +1950,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 @@keyframes mkPosSpin{to{transform:rotate(360deg);}}
 .mk-oo-sym{font-family:var(--mono);font-weight:700;color:var(--acc);font-size:13.5px;}
 .mk-liq{color:#f59e0b;}
-.mk-oo-cancel{background:none;border:1px solid var(--bdr);color:var(--dim);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;line-height:1;white-space:nowrap;}
+.mk-oo-cancel{background:none;border:1px solid var(--bdr);color:var(--dim);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;line-height:1;white-space:nowrap;flex-shrink:0;}
 .mk-pos-actions{display:flex;flex-direction:column;align-items:flex-end;gap:4px;position:relative;}
 .mk-partial-slider-box{display:flex;flex-direction:column;gap:6px;background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;padding:8px 10px;min-width:220px;position:absolute;z-index:30;right:0;top:100%;margin-top:4px;box-shadow:0 8px 20px rgba(0,0,0,.4);}
 .mk-partial-slider-row{display:flex;align-items:center;gap:8px;}
