@@ -462,11 +462,17 @@ namespace VertexAutoTradeBinance8.Services
                 // =========================
                 // CANCEL CURRENT SL
                 // =========================
+                // Matches the existing SL for this position regardless of
+                // which prefix (if any) it carries - Supervisor's own
+                // previously-placed SL (BE_/SL_/TR_), OR the plain
+                // entry-time SL OrderExecutor places with no special
+                // clientAlgoId at all. Without this, the first
+                // break-even move would place a NEW BE_-prefixed SL on
+                // top of the original entry SL without ever cancelling
+                // it, leaving two simultaneous Stop Loss orders on the
+                // same position instead of one replacing the other.
                 var exitOrders = (await LoadOrdersAsync(client, symbol))
-                    .Where(o =>
-                        o.PositionSide == side &&
-                        o.Type == FuturesOrderType.StopMarket &&
-                        o.ClientOrderId?.StartsWith(BE_PREFIX) == true)
+                    .Where(o => o.PositionSide == side && o.Type == FuturesOrderType.StopMarket)
                     .OrderByDescending(o => o.UpdateTime)
                     .ToList();
 
