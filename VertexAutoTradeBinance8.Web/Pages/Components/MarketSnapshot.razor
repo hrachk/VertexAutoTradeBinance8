@@ -621,7 +621,6 @@
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6M9 8h6M17 16h6" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         TP/SL
                     </button>
-                    <span class="mk-tpsl-hint">Drag near entry line to set TP/SL</span>
                 </div>
             }
         </div>
@@ -1575,15 +1574,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-chart-container-wrap{width:100%;height:480px;min-height:280px;max-height:900px;transition:none;position:relative;resize:vertical;overflow:hidden;}
 .mk-chart-container-wrap:not(.mk-chart-maximized)::after{content:'';position:absolute;right:2px;bottom:2px;width:14px;height:14px;background:repeating-linear-gradient(135deg,var(--dim) 0 1.5px,transparent 1.5px 4px);opacity:.5;pointer-events:none;}
 
-.mk-tpsl-overlay{position:absolute;top:36px;left:8px;z-index:5;pointer-events:none;display:flex;align-items:center;gap:8px;}
+.mk-tpsl-overlay{position:absolute;top:56px;left:8px;z-index:5;pointer-events:none;display:flex;align-items:center;gap:8px;}
 .mk-tpsl-btn{pointer-events:auto;display:flex;align-items:center;gap:6px;background:rgba(10,13,18,0.92);border:1px solid var(--bdr);color:var(--dim);padding:5px 12px;border-radius:6px;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .15s;backdrop-filter:blur(4px);}
 .mk-tpsl-btn svg{width:13px;height:13px;}
 .mk-tpsl-btn:hover{color:var(--txt);border-color:var(--acc);}
 .mk-tpsl-btn-on{background:rgba(59,130,246,0.15);border-color:var(--acc);color:var(--acc);}
-.mk-tpsl-hint{font-size:11px;color:var(--acc);background:rgba(59,130,246,0.1);padding:4px 10px;border-radius:5px;}
-.mk-chart-maximized{position:fixed;inset:0;z-index:2100;height:auto;background:var(--bg);display:flex;flex-direction:column;padding:6px 10px;}
+.mk-chart-maximized{position:fixed;inset:0;z-index:2100;height:auto;max-height:none;resize:none;background:var(--bg);display:flex;flex-direction:column;padding:6px 10px;}
 
-.mk-max-bar{display:flex;align-items:center;gap:14px;padding:8px 12px;height:52px;flex-shrink:0;}
+.mk-max-bar{display:flex;align-items:center;justify-content:flex-end;gap:14px;padding:8px 12px;height:52px;flex-shrink:0;}
 .mk-max-sym-wrap{position:relative;}
 .mk-max-sym{font-family:var(--mono);font-size:16px;font-weight:700;display:flex;align-items:baseline;gap:8px;background:none;border:none;color:var(--txt);cursor:pointer;padding:4px 6px;border-radius:6px;transition:background .15s;}
 .mk-max-sym:hover{background:rgba(255,255,255,0.06);}
@@ -1618,7 +1616,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .mk-max-sell{background:var(--red);border:none;color:#fff;padding:8px 18px;border-radius:6px;font-size:12.5px;font-weight:700;cursor:pointer;}
 .mk-max-sell:hover:not(:disabled){opacity:.88;}
 .mk-max-buy:disabled,.mk-max-sell:disabled{opacity:.5;cursor:not-allowed;}
-.mk-max-restore{display:flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid var(--bdr);color:var(--dim);padding:8px 14px;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer;transition:all .15s;}
+.mk-max-restore{display:flex;align-items:center;gap:6px;background:rgba(59,130,246,.12);border:1px solid var(--acc);color:var(--acc);padding:8px 14px;border-radius:6px;font-size:12.5px;font-weight:700;cursor:pointer;transition:all .15s;}
+.mk-max-restore:hover{background:rgba(59,130,246,.22);}
 .mk-max-restore:hover{color:var(--txt);border-color:var(--acc);}
 .mk-max-restore svg{width:14px;height:14px;}
 
@@ -3938,7 +3937,6 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         if (_selectedPosition == null)
         {
             try { await JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}"); } catch { }
-            _tpSlEditMode = false;
             return;
         }
 
@@ -3960,11 +3958,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         }
     }
 
-    // Matches Binance's actual interaction: the entry/PnL line is
-    // always shown once a position is selected, but the SL/TP lines
-    // only appear after the user explicitly clicks the "TP/SL" toggle
-    // — they are not drawn automatically just from selecting a position.
-    bool _tpSlEditMode;
+    // Per direct request: SL/TP lines now show by DEFAULT as soon as a
+    // position is selected, not only after explicitly clicking the
+    // "TP/SL" toggle - overriding the previous session's deliberate
+    // "matches Binance, not automatic" design choice.
+    bool _tpSlEditMode = true;
 
     async Task ToggleTpSlEdit()
     {

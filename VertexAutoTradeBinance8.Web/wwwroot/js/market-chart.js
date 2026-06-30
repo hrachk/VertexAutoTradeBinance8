@@ -641,7 +641,7 @@
             s.candleSeries.setData(candles);
             s.ema21Series.setData(candles.map((c, i) => ({ time: c.time, value: ema21[i] })).filter(d => d.value != null));
             s.ema55Series.setData(candles.map((c, i) => ({ time: c.time, value: ema55[i] })).filter(d => d.value != null));
-            s.volumeSeries.setData(klines.map(k => toVolume(k, 'rgba(34,197,94,0.5)', 'rgba(239,68,68,0.5)')));
+            s.volumeSeries.setData(klines.map(k => toVolume(k, 'rgba(34,197,94,0.28)', 'rgba(239,68,68,0.28)')));
             s.rsiSeries.setData(candles.map((c, i) => ({ time: c.time, value: rsiVals[i] })).filter(d => d.value != null));
             s.rsiObLine.setData(candles.map(c => ({ time: c.time, value: 70 })));
             s.rsiOsLine.setData(candles.map(c => ({ time: c.time, value: 30 })));
@@ -670,7 +670,7 @@
             const s = sessions.get(containerId);
             if (!s) return;
             s.candleSeries.update(toCandle(k));
-            s.volumeSeries.update(toVolume(k, 'rgba(34,197,94,0.5)', 'rgba(239,68,68,0.5)'));
+            s.volumeSeries.update(toVolume(k, 'rgba(34,197,94,0.28)', 'rgba(239,68,68,0.28)'));
 
             // Keep the raw-kline lookups in sync with this incremental
             // update too — without this, the tooltip/lazy-load logic
@@ -1055,20 +1055,26 @@
             const entries = [];
             const allManagedPills = new Set();
 
-            const addEntry = (pill, price, showPnl) => {
+            const addEntry = (pill, price, showPnl, priority) => {
                 if (!pill) return;
                 allManagedPills.add(pill);
                 const y = s.candleSeries.priceToCoordinate(price);
-                if (y != null) entries.push({ pill, y, price, showPnl });
+                if (y != null) entries.push({ pill, y, price, showPnl, priority });
             };
 
-            if (s.entryLine && s.entryPill) addEntry(s.entryPill, s.entryLine.options().price, false);
-            if (s.liqLine && s.liqPill) addEntry(s.liqPill, s.liqLine.options().price, false);
-            if (s.beLine && s.bePill) addEntry(s.bePill, s.beLine.options().price, false);
-            if (s.slLine && s.slPill) addEntry(s.slPill, s.slLine.options().price, true);
+            // Per direct confirmation: Entry/Liq/BE are priority 0
+            // (always placed first, guaranteed visible at their real
+            // position), SL/TP are priority 1 and get pushed away from
+            // them when there's a collision - not pure top-to-bottom
+            // price order, which could let a TP/SL pill land exactly
+            // on Entry/BE's spot and shove THEM out of place instead.
+            if (s.entryLine && s.entryPill) addEntry(s.entryPill, s.entryLine.options().price, false, 0);
+            if (s.liqLine && s.liqPill) addEntry(s.liqPill, s.liqLine.options().price, false, 0);
+            if (s.beLine && s.bePill) addEntry(s.bePill, s.beLine.options().price, false, 0);
+            if (s.slLine && s.slPill) addEntry(s.slPill, s.slLine.options().price, true, 1);
             for (const tp of (s.tpLines || [])) {
                 const pill = s.tpPills && s.tpPills[tp.index];
-                addEntry(pill, tp.price, true);
+                addEntry(pill, tp.price, true, 1);
             }
 
             // Hide any managed pill whose price is currently off-screen,
@@ -1077,10 +1083,22 @@
                 if (!entries.some(e => e.pill === pill)) pill.style.display = 'none';
             }
 
-            entries.sort((a, b) => a.y - b.y);
-            for (let i = 1; i < entries.length; i++) {
-                const minY = entries[i - 1].y + MIN_GAP;
-                if (entries[i].y < minY) entries[i].y = minY;
+            // Sort by priority FIRST (priority-0 pills are placed and
+            // locked in before any priority-1 pill is considered), then
+            // by Y within each tier - this is what guarantees Entry/
+            // Liq/BE never get bumped out of position by a TP/SL.
+            entries.sort((a, b) => a.priority - b.priority || a.y - b.y);
+
+            const placed = []; // already-finalized pills, in final Y order, used to push new ones away from ANY of them (not just the immediately preceding one)
+            for (const entry of entries) {
+                let y = entry.y;
+                for (const p of placed) {
+                    if (Math.abs(y - p.y) < MIN_GAP) {
+                        y = y >= p.y ? p.y + MIN_GAP : p.y - MIN_GAP;
+                    }
+                }
+                entry.y = y;
+                placed.push(entry);
             }
 
             for (const entry of entries) {
@@ -1197,7 +1215,30 @@
                 if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
                 container.appendChild(s.pnlLabelEl);
             }
-            s.pnlLabelEl.style.left = '10px';
+            // Per direct request: positioned at the last candle's time
+            // + 3 bars further right (using the chart's own
+            // timeToCoordinate for the actual last loaded bar, plus 3x
+            // the current bar spacing) rather than a fixed left-edge
+            // offset - this is what correctly tracks "3 candles past
+            // the last one" across different timeframes/zoom levels.
+            let pnlLabelX = null;
+            try {
+                if (s.lastKlinesRaw && s.lastKlinesRaw.length > 0) {
+                    const lastBar = s.lastKlinesRaw[s.lastKlinesRaw.length - 1];
+                    const lastX = s.chart.timeScale().timeToCoordinate(Math.floor(lastBar.openTime / 1000));
+                    const barSpacing = s.chart.timeScale().options().barSpacing || 6;
+                    if (lastX != null) pnlLabelX = lastX + barSpacing * 3;
+                }
+            } catch (e) {}
+            if (pnlLabelX != null) {
+                s.pnlLabelEl.style.left = pnlLabelX + 'px';
+                s.pnlLabelEl.style.right = 'auto';
+            } else {
+                // Fallback if the last bar's time can't be resolved for
+                // any reason - keep the label somewhere reasonable
+                // rather than disappearing entirely.
+                s.pnlLabelEl.style.left = '10px';
+            }
             s.pnlLabelEl.style.top = y + 'px';
             s.pnlLabelEl.style.background = color;
             s.pnlLabelEl.style.color = '#0a0d12';
@@ -1342,7 +1383,7 @@
                     s.candleSeries.setData(candles);
                     s.ema21Series.setData(candles.map((c, i) => ({ time: c.time, value: ema21[i] })).filter(d => d.value != null));
                     s.ema55Series.setData(candles.map((c, i) => ({ time: c.time, value: ema55[i] })).filter(d => d.value != null));
-                    s.volumeSeries.setData(combined.map(k => toVolume(k, 'rgba(34,197,94,0.5)', 'rgba(239,68,68,0.5)')));
+                    s.volumeSeries.setData(combined.map(k => toVolume(k, 'rgba(34,197,94,0.28)', 'rgba(239,68,68,0.28)')));
                     s.rsiSeries.setData(candles.map((c, i) => ({ time: c.time, value: rsiVals[i] })).filter(d => d.value != null));
                     s.rsiObLine.setData(candles.map(c => ({ time: c.time, value: 70 })));
                     s.rsiOsLine.setData(candles.map(c => ({ time: c.time, value: 30 })));
