@@ -334,6 +334,113 @@
         }
 
         <div class="mk-body-grid mk-body-grid-with-panel">
+
+        <!-- ALL INSTRUMENTS — relocated here per direct request, a
+             dedicated left column, always visible (not collapsible,
+             confirmed), independent of which panel (if any) is shown
+             on the right. -->
+        <div class="mk-side-tbl">
+            <div class="mk-side-tbl-title">ALL INSTRUMENTS</div>
+            <div class="mk-side-search-wrap">
+                <span class="mk-side-search-icon">🔍</span>
+                <input class="mk-side-search" type="text" placeholder="Search symbol…" title="Search instruments"
+                       value="@_instrumentSearch" @oninput="OnInstrumentSearchChanged" />
+                @if (!string.IsNullOrEmpty(_instrumentSearch))
+                {
+                    <button class="mk-side-search-clear" @onclick="ClearInstrumentSearch" title="Clear search">✕</button>
+                }
+            </div>
+            @if (string.IsNullOrWhiteSpace(_instrumentSearch))
+            {
+                <div class="mk-side-tabs">
+                    <button class="mk-side-tab @(_sideTblTab=="hot"?"mk-side-tab-on":"")" @onclick="SetSideTblTabHot">🔥 Hot</button>
+                    <button class="mk-side-tab @(_sideTblTab=="gainers"?"mk-side-tab-on":"")" @onclick="SetSideTblTabGainers">📈 Gainers</button>
+                    <button class="mk-side-tab @(_sideTblTab=="losers"?"mk-side-tab-on":"")" @onclick="SetSideTblTabLosers">📉 Losers</button>
+                </div>
+            }
+            <div class="mk-side-tbl-scroll">
+                @{
+                    var allInstruments = Series
+                        .GroupBy(x => x.Symbol)
+                        .Select(g => g.OrderByDescending(x => x.Klines.Count).First())
+                        .ToList();
+
+                    var filtered = string.IsNullOrWhiteSpace(_instrumentSearch)
+                        ? allInstruments
+                        : allInstruments.Where(s => s.Symbol.Contains(_instrumentSearch, StringComparison.OrdinalIgnoreCase)).ToList();
+
+                    // Per direct request: an exchange-style tab system -
+                    // Hot (top 7 by volume), Gainers (biggest % up),
+                    // Losers (biggest % down) - only applies when not
+                    // actively searching (search shows plain alphabetical
+                    // matches, same as before). Open-position symbols
+                    // always come first regardless of tab, matching the
+                    // same priority treatment given to the maximized-mode
+                    // symbol picker, since those are what the user is
+                    // actively managing.
+                    var sideOpenPosSymbols = DisplayedPositions.Select(p => p.Symbol).ToHashSet();
+
+                    decimal ChgPct(MarketSeries s)
+                    {
+                        var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
+                        var open = s.Klines.Count > 0 ? s.Klines[0].Close : 0m;
+                        return open > 0 ? (last - open) / open * 100m : 0m;
+                    }
+
+                    IEnumerable<MarketSeries> ordered;
+                    int hotCount = 7;
+                    if (!string.IsNullOrWhiteSpace(_instrumentSearch))
+                    {
+                        ordered = filtered.OrderBy(s => s.Symbol);
+                    }
+                    else if (_sideTblTab == "gainers")
+                    {
+                        ordered = filtered.OrderByDescending(s => sideOpenPosSymbols.Contains(s.Symbol)).ThenByDescending(s => ChgPct(s));
+                    }
+                    else if (_sideTblTab == "losers")
+                    {
+                        ordered = filtered.OrderByDescending(s => sideOpenPosSymbols.Contains(s.Symbol)).ThenBy(s => ChgPct(s));
+                    }
+                    else // hot
+                    {
+                        var topHot = filtered.OrderByDescending(s => s.Klines.Sum(k => k.Volume)).Take(hotCount).Select(s => s.Symbol).ToHashSet();
+                        ordered = filtered
+                            .OrderByDescending(s => sideOpenPosSymbols.Contains(s.Symbol))
+                            .ThenByDescending(s => topHot.Contains(s.Symbol))
+                            .ThenByDescending(s => topHot.Contains(s.Symbol) ? s.Klines.Sum(k => k.Volume) : 0)
+                            .ThenBy(s => s.Symbol);
+                    }
+
+                    int rank = 0;
+                }
+                @foreach (var s in ordered)
+                {
+                    rank++;
+                    var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
+                    var chg  = ChgPct(s);
+                    bool showRank = string.IsNullOrWhiteSpace(_instrumentSearch) && _sideTblTab == "hot"
+                        && !sideOpenPosSymbols.Contains(s.Symbol) && rank <= hotCount + sideOpenPosSymbols.Count;
+                    <div class="mk-side-row @(s.Symbol==_activeSym?"mk-side-row-sel":"")" id="sideRow-@s.Symbol" @onclick="()=>PickAndTrade(s)">
+                        @if (sideOpenPosSymbols.Contains(s.Symbol))
+                        {
+                            <span class="mk-max-sym-pos-dot" title="Open position"></span>
+                        }
+                        else if (showRank)
+                        {
+                            <span class="mk-side-rank">@(rank - sideOpenPosSymbols.Count)</span>
+                        }
+                        <span class="mk-side-sym">@s.Symbol</span>
+                        <span class="mk-side-price mono">@FmtP(last)</span>
+                        <span class="mk-side-chg @(chg>=0?"up":"dn")">@(chg>=0?"+":"")@chg.ToString("F1")%</span>
+                    </div>
+                }
+                @if (!ordered.Any())
+                {
+                    <div class="mk-side-empty">No instruments match "@_instrumentSearch"</div>
+                }
+            </div>
+        </div> <!-- end mk-side-tbl -->
+
         <!-- LEFT: chart + RSI + Volume, then OPEN POSITIONS, then OPEN ORDERS — all share this one column's width -->
         <div class="mk-main-col">
         <div class="mk-charts-col-main">
@@ -1363,110 +1470,7 @@
             </div>
         }
 
-        <!-- ALL INSTRUMENTS — always visible regardless of which panel (or none) is shown above -->
-        <div class="mk-side-tbl">
-            <div class="mk-side-tbl-title">ALL INSTRUMENTS</div>
-            <div class="mk-side-search-wrap">
-                <span class="mk-side-search-icon">🔍</span>
-                <input class="mk-side-search" type="text" placeholder="Search symbol…" title="Search instruments"
-                       value="@_instrumentSearch" @oninput="OnInstrumentSearchChanged" />
-                @if (!string.IsNullOrEmpty(_instrumentSearch))
-                {
-                    <button class="mk-side-search-clear" @onclick="ClearInstrumentSearch" title="Clear search">✕</button>
-                }
-            </div>
-            @if (string.IsNullOrWhiteSpace(_instrumentSearch))
-            {
-                <div class="mk-side-tabs">
-                    <button class="mk-side-tab @(_sideTblTab=="hot"?"mk-side-tab-on":"")" @onclick="SetSideTblTabHot">🔥 Hot</button>
-                    <button class="mk-side-tab @(_sideTblTab=="gainers"?"mk-side-tab-on":"")" @onclick="SetSideTblTabGainers">📈 Gainers</button>
-                    <button class="mk-side-tab @(_sideTblTab=="losers"?"mk-side-tab-on":"")" @onclick="SetSideTblTabLosers">📉 Losers</button>
-                </div>
-            }
-            <div class="mk-side-tbl-scroll">
-                @{
-                    var allInstruments = Series
-                        .GroupBy(x => x.Symbol)
-                        .Select(g => g.OrderByDescending(x => x.Klines.Count).First())
-                        .ToList();
-
-                    var filtered = string.IsNullOrWhiteSpace(_instrumentSearch)
-                        ? allInstruments
-                        : allInstruments.Where(s => s.Symbol.Contains(_instrumentSearch, StringComparison.OrdinalIgnoreCase)).ToList();
-
-                    // Per direct request: an exchange-style tab system -
-                    // Hot (top 7 by volume), Gainers (biggest % up),
-                    // Losers (biggest % down) - only applies when not
-                    // actively searching (search shows plain alphabetical
-                    // matches, same as before). Open-position symbols
-                    // always come first regardless of tab, matching the
-                    // same priority treatment given to the maximized-mode
-                    // symbol picker, since those are what the user is
-                    // actively managing.
-                    var sideOpenPosSymbols = DisplayedPositions.Select(p => p.Symbol).ToHashSet();
-
-                    decimal ChgPct(MarketSeries s)
-                    {
-                        var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
-                        var open = s.Klines.Count > 0 ? s.Klines[0].Close : 0m;
-                        return open > 0 ? (last - open) / open * 100m : 0m;
-                    }
-
-                    IEnumerable<MarketSeries> ordered;
-                    int hotCount = 7;
-                    if (!string.IsNullOrWhiteSpace(_instrumentSearch))
-                    {
-                        ordered = filtered.OrderBy(s => s.Symbol);
-                    }
-                    else if (_sideTblTab == "gainers")
-                    {
-                        ordered = filtered.OrderByDescending(s => sideOpenPosSymbols.Contains(s.Symbol)).ThenByDescending(s => ChgPct(s));
-                    }
-                    else if (_sideTblTab == "losers")
-                    {
-                        ordered = filtered.OrderByDescending(s => sideOpenPosSymbols.Contains(s.Symbol)).ThenBy(s => ChgPct(s));
-                    }
-                    else // hot
-                    {
-                        var topHot = filtered.OrderByDescending(s => s.Klines.Sum(k => k.Volume)).Take(hotCount).Select(s => s.Symbol).ToHashSet();
-                        ordered = filtered
-                            .OrderByDescending(s => sideOpenPosSymbols.Contains(s.Symbol))
-                            .ThenByDescending(s => topHot.Contains(s.Symbol))
-                            .ThenByDescending(s => topHot.Contains(s.Symbol) ? s.Klines.Sum(k => k.Volume) : 0)
-                            .ThenBy(s => s.Symbol);
-                    }
-
-                    int rank = 0;
-                }
-                @foreach (var s in ordered)
-                {
-                    rank++;
-                    var last = s.Klines.Count > 0 ? s.Klines[^1].Close : 0m;
-                    var chg  = ChgPct(s);
-                    bool showRank = string.IsNullOrWhiteSpace(_instrumentSearch) && _sideTblTab == "hot"
-                        && !sideOpenPosSymbols.Contains(s.Symbol) && rank <= hotCount + sideOpenPosSymbols.Count;
-                    <div class="mk-side-row @(s.Symbol==_activeSym?"mk-side-row-sel":"")" id="sideRow-@s.Symbol" @onclick="()=>PickAndTrade(s)">
-                        @if (sideOpenPosSymbols.Contains(s.Symbol))
-                        {
-                            <span class="mk-max-sym-pos-dot" title="Open position"></span>
-                        }
-                        else if (showRank)
-                        {
-                            <span class="mk-side-rank">@(rank - sideOpenPosSymbols.Count)</span>
-                        }
-                        <span class="mk-side-sym">@s.Symbol</span>
-                        <span class="mk-side-price mono">@FmtP(last)</span>
-                        <span class="mk-side-chg @(chg>=0?"up":"dn")">@(chg>=0?"+":"")@chg.ToString("F1")%</span>
-                    </div>
-                }
-                @if (!ordered.Any())
-                {
-                    <div class="mk-side-empty">No instruments match "@_instrumentSearch"</div>
-                }
-            </div>
-        </div> <!-- end mk-side-tbl -->
-
-        </div> <!-- end mk-charts-col-side (shared: manual-trade/position-details + ALL INSTRUMENTS) -->
+        </div> <!-- end mk-charts-col-side (manual-trade/position-details) -->
 
         </div> <!-- end mk-body-grid -->
      </div>
@@ -1552,12 +1556,12 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
 /* CHARTS */
 .mk-charts-area{background:var(--bg2);padding:16px 20px;border-bottom:1px solid var(--bdr);position:relative;}
-.mk-body-grid{display:grid;grid-template-columns:1fr;gap:16px;align-items:start;}
-.mk-body-grid-with-panel{grid-template-columns:1fr 320px;}
+.mk-body-grid{display:grid;grid-template-columns:240px 1fr;gap:16px;align-items:start;}
+.mk-body-grid-with-panel{grid-template-columns:240px 1fr 320px;}
+@@media(max-width:1300px){.mk-body-grid{grid-template-columns:1fr;}.mk-body-grid-with-panel{grid-template-columns:1fr;}}
 .mk-main-col{min-width:0;display:flex;flex-direction:column;gap:16px;}
 .mk-charts-col-main{min-width:0;}
 .mk-charts-col-side{min-width:0;display:flex;flex-direction:column;gap:16px;}
-@@media(max-width:1000px){.mk-body-grid-with-panel{grid-template-columns:1fr;}}
 .mk-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px;}
 
 .mk-chart-maximize{flex-shrink:0;width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;color:var(--dim);cursor:pointer;transition:all .15s;}
@@ -1859,7 +1863,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 .ord-position-close-btn:hover:not(:disabled){background:rgba(239,68,68,.18);box-shadow:0 4px 14px rgba(239,68,68,.25);}
 .ord-position-close-btn:disabled{opacity:.5;cursor:not-allowed;}
 
-.mk-side-tbl{margin-top:4px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;overflow:hidden;resize:vertical;height:340px;min-height:160px;max-height:900px;scrollbar-width:none;display:flex;flex-direction:column;}
+.mk-side-tbl{position:sticky;top:calc(var(--vertex-header-h) + 60px);background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;overflow:hidden;resize:vertical;height:calc(100vh - var(--vertex-header-h) - 80px);min-height:300px;max-height:calc(100vh - var(--vertex-header-h) - 40px);scrollbar-width:none;display:flex;flex-direction:column;}
 .mk-side-tbl::-webkit-scrollbar{display:none;}
 .mk-side-tbl-title{font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--dim);font-weight:700;padding:10px 14px 8px;flex-shrink:0;}
 
@@ -2632,6 +2636,51 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 // stale position panel left over from the previous symbol.
                 _selectedPosition = null;
                 _ = JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}");
+            }
+
+            // Per direct request: always show Manual Trade for this
+            // symbol, even with no real signal and no position. Built
+            // as a "manual" MissedTradeRecord with Confidence = 0 -
+            // the existing markup already distinguishes this from a
+            // real signal (Confidence > 0) by showing "Last Price"
+            // instead of "Signal Entry", so this activates logic that
+            // was already half-built rather than introducing a new
+            // branch. ATR-based SL/TP suggestion: 1.5x ATR for the
+            // stop, 2x/3x for TP1/TP2 - a standard, widely-used
+            // starting ratio (not a guarantee, fully editable), kept
+            // simple since the Engine itself has no single canonical
+            // ATR multiplier convention of its own to match here.
+            if (existingPos == null && (_activeSignal == null || _activeSignal.Symbol != sym))
+            {
+                var currentPrice = Selected?.Klines.Count > 0 ? Selected.Klines[^1].Close : 0m;
+                if (currentPrice > 0)
+                {
+                    decimal atrSuggest = _atr > 0 ? _atr : 0m;
+                    _activeSignal = new MissedTradeRecord
+                    {
+                        Symbol = sym,
+                        Side = "LONG",
+                        Entry = currentPrice,
+                        StopLoss = atrSuggest > 0 ? currentPrice - atrSuggest * 1.5m : 0m,
+                        TakeProfits = atrSuggest > 0
+                            ? new List<decimal> { currentPrice + atrSuggest * 2m, currentPrice + atrSuggest * 3m }
+                            : new List<decimal>(),
+                    };
+                    _orderPrice = currentPrice;
+                    _manualSlPrice = _activeSignal.StopLoss;
+                    _manualTps = new List<ManualTpRow>();
+                    if (_activeSignal.TakeProfits.Count > 0)
+                    {
+                        decimal evenPct = Math.Round(100m / _activeSignal.TakeProfits.Count, 0);
+                        for (int i = 0; i < _activeSignal.TakeProfits.Count; i++)
+                        {
+                            bool isLast = i == _activeSignal.TakeProfits.Count - 1;
+                            decimal pct = isLast ? (100m - evenPct * i) : evenPct;
+                            _manualTps.Add(new ManualTpRow { Price = _activeSignal.TakeProfits[i], Pct = pct });
+                        }
+                    }
+                    _ = LoadSymbolInfoAndSuggestQty(_activeSignal);
+                }
             }
         }
 
