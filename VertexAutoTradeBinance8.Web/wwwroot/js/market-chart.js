@@ -827,15 +827,13 @@
                 }
             }
 
-            // Position the Entry/Liq/BE pills (and re-check collisions
-            // against any already-visible SL/TP pills) right away,
-            // matching the same pnlFor formula the SL/TP path uses -
-            // per direct request, this is now ONE unified system, not
-            // two separately-positioned sets of pills.
-            const dirForPnl = s.side === 'LONG' ? 1 : -1;
-            const hasPnlData = s.qty > 0 && s.entryPrice > 0;
-            const pnlForEntry = (price) => hasPnlData ? (price - s.entryPrice) * dirForPnl * s.qty : null;
-            this.repositionAllPills(containerId, pnlForEntry);
+            // Per direct performance audit: the Entry/Liq/BE pills'
+            // positions get finalized by the repositionAllPills call
+            // inside showTpSlLines, which always runs right after this
+            // (via RefreshPositionLines, now that TP/SL shows by
+            // default) - calling it here too was pure redundant work,
+            // immediately made stale by that second call on every
+            // single position switch.
         },
 
         repositionEntryButtons(containerId) {
@@ -1253,6 +1251,20 @@
                     if (s.lastPnlPrice == null || !s.entryPrice) return;
                     const yy = s.candleSeries.priceToCoordinate(s.lastPnlPrice);
                     if (yy != null && s.pnlLabelEl) s.pnlLabelEl.style.top = yy + 'px';
+
+                    // Also recalculate X - barSpacing changes on zoom,
+                    // so "last bar + 3 bar widths" would otherwise
+                    // visibly drift from the correct spot as soon as
+                    // the user zooms, since only Y was kept in sync
+                    // here before this fix.
+                    try {
+                        if (s.lastKlinesRaw && s.lastKlinesRaw.length > 0 && s.pnlLabelEl) {
+                            const lastBar = s.lastKlinesRaw[s.lastKlinesRaw.length - 1];
+                            const lastX = s.chart.timeScale().timeToCoordinate(Math.floor(lastBar.openTime / 1000));
+                            const barSpacing = s.chart.timeScale().options().barSpacing || 6;
+                            if (lastX != null) s.pnlLabelEl.style.left = (lastX + barSpacing * 3) + 'px';
+                        }
+                    } catch (e) {}
                 };
                 s.chart.timeScale().subscribeVisibleLogicalRangeChange(s.pnlRangeSub);
             }

@@ -2454,13 +2454,36 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 await CleanupOrphanedProtectiveOrdersAsync();
                 if (_tpSlEditMode && _selectedPosition != null)
                 {
-                    // Re-render with the now-current order list — this
-                    // is what catches a TP/SL that just filled on the
-                    // real exchange and removes its now-stale line
-                    // from the chart, instead of leaving it drawn
-                    // forever until the user manually toggles the
-                    // TP/SL view off and on again.
-                    await ShowTpSlLinesAsync();
+                    // Per performance audit: only redraw if the actual
+                    // set of TP/SL orders for this position genuinely
+                    // changed since the last tick - without this,
+                    // ShowTpSlLinesAsync (a full DOM teardown+rebuild
+                    // of every pill) ran every single 5-second tick
+                    // unconditionally, even when nothing had changed,
+                    // since TP/SL now shows by default. Still catches
+                    // a TP/SL that just filled on the real exchange
+                    // (which DOES change this set), just without the
+                    // wasted work on every tick where nothing changed.
+                    var pos = _selectedPosition;
+                    bool MatchesThisPos(OpenOrderRow o) =>
+                        o.Symbol == pos.Symbol &&
+                        (string.IsNullOrEmpty(o.PositionSide) || o.PositionSide == "BOTH" || o.PositionSide == pos.Side) &&
+                        (o.Type.Contains("STOP") || o.Type.Contains("TAKE_PROFIT"));
+                    var currentTpSlSnapshot = string.Join("|", _openOrders
+                        .Where(MatchesThisPos)
+                        .OrderBy(o => o.OrderId)
+                        .Select(o => $"{o.OrderId}:{o.Price}"));
+                    if (currentTpSlSnapshot != _lastTpSlSnapshot)
+                    {
+                        _lastTpSlSnapshot = currentTpSlSnapshot;
+                        // Re-render with the now-current order list — this
+                        // is what catches a TP/SL that just filled on the
+                        // real exchange and removes its now-stale line
+                        // from the chart, instead of leaving it drawn
+                        // forever until the user manually toggles the
+                        // TP/SL view off and on again.
+                        await ShowTpSlLinesAsync();
+                    }
                 }
                 // StateHasChanged triggers OnAfterRenderAsync which calls
                 // RenderCharts only when data actually changed
@@ -3283,6 +3306,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     DateTime _lastRealizedPnlFetchUtc = DateTime.MinValue;
     bool _positionsLoading;
     string? _pendingRestorePosKey; // see the firstRender restore logic and LoadAllOpenPositionsAsync/RefreshDemoSnapshot for why this needs a second attempt after positions actually load
+    string _lastTpSlSnapshot = ""; // see the periodic TP/SL refresh check — skips redundant pill redraws when nothing has actually changed
     bool _ooPanelNeedsAutoFit;
 
     bool PosIsLong => _currentPosition?.Side == "LONG";
@@ -3993,6 +4017,15 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         bool MatchesPosition(OpenOrderRow o) =>
             o.Symbol == pos.Symbol &&
             (string.IsNullOrEmpty(o.PositionSide) || o.PositionSide == "BOTH" || o.PositionSide == pos.Side);
+
+        // Sync the snapshot regardless of caller (SelectPosition, a
+        // drag commit, the periodic check, etc) so the periodic
+        // check's comparison always reflects what's actually shown,
+        // not stale state from before a position switch.
+        _lastTpSlSnapshot = string.Join("|", _openOrders
+            .Where(o => MatchesPosition(o) && (o.Type.Contains("STOP") || o.Type.Contains("TAKE_PROFIT")))
+            .OrderBy(o => o.OrderId)
+            .Select(o => $"{o.OrderId}:{o.Price}"));
 
         var sl = _openOrders.FirstOrDefault(o => MatchesPosition(o) && o.Type.Contains("STOP"))?.Price ?? 0m;
         var tps = _openOrders
