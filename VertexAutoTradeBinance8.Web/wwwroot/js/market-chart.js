@@ -39,6 +39,9 @@
         if (s.entryBtnTp && s.entryBtnTp.parentNode) s.entryBtnTp.remove();
         if (s.entryBtnSl && s.entryBtnSl.parentNode) s.entryBtnSl.remove();
         if (s.slPill && s.slPill.parentNode) s.slPill.remove();
+        if (s.entryPill && s.entryPill.parentNode) s.entryPill.remove();
+        if (s.liqPill && s.liqPill.parentNode) s.liqPill.remove();
+        if (s.bePill && s.bePill.parentNode) s.bePill.remove();
         for (const pill of (s.tpPills || [])) { if (pill && pill.parentNode) pill.remove(); }
         try { s.chart.remove(); } catch (e) { /* already gone */ }
         sessions.delete(containerId);
@@ -740,24 +743,27 @@
                 s.entryLine = s.candleSeries.createPriceLine({
                     price: entry, color: '#3b82f6', lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Dotted,
-                    axisLabelVisible: true, title: `Entry ${fmtPrice(entry)}`,
+                    axisLabelVisible: false, title: '',
                 });
+                s.entryPill = this.makeLevelPill(containerId, '#3b82f6', 'Entry', null, null);
             }
 
             if (liqPrice && liqPrice > 0) {
                 s.liqLine = s.candleSeries.createPriceLine({
                     price: liqPrice, color: '#f97316', lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Dashed,
-                    axisLabelVisible: true, title: `Liq ${fmtPrice(liqPrice)}`,
+                    axisLabelVisible: false, title: '',
                 });
+                s.liqPill = this.makeLevelPill(containerId, '#f97316', 'Liq', null, null);
             }
 
             if (breakEvenPrice && breakEvenPrice > 0) {
                 s.beLine = s.candleSeries.createPriceLine({
                     price: breakEvenPrice, color: '#94a3b8', lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Dotted,
-                    axisLabelVisible: true, title: `BE ${fmtPrice(breakEvenPrice)}`,
+                    axisLabelVisible: false, title: '',
                 });
+                s.bePill = this.makeLevelPill(containerId, '#94a3b8', 'BE', null, null);
             }
 
             // Per direct confirmation: TP/SL quick-add buttons right on
@@ -820,6 +826,16 @@
                     s.chart.timeScale().subscribeVisibleLogicalRangeChange(s.entryBtnRangeSub);
                 }
             }
+
+            // Position the Entry/Liq/BE pills (and re-check collisions
+            // against any already-visible SL/TP pills) right away,
+            // matching the same pnlFor formula the SL/TP path uses -
+            // per direct request, this is now ONE unified system, not
+            // two separately-positioned sets of pills.
+            const dirForPnl = s.side === 'LONG' ? 1 : -1;
+            const hasPnlData = s.qty > 0 && s.entryPrice > 0;
+            const pnlForEntry = (price) => hasPnlData ? (price - s.entryPrice) * dirForPnl * s.qty : null;
+            this.repositionAllPills(containerId, pnlForEntry);
         },
 
         repositionEntryButtons(containerId) {
@@ -912,14 +928,14 @@
                 s.tpPills.push(pill);
             });
 
-            this.repositionTpSlPills(containerId, pnlFor);
+            this.repositionAllPills(containerId, pnlFor);
 
             if (!s.tpSlPillRangeSub) {
                 // Same dedicated-subscription pattern already proven for
                 // the Entry-line buttons - repositions every pill on
                 // scroll/zoom so they track their actual price level
                 // rather than drifting out of place.
-                s.tpSlPillRangeSub = () => this.repositionTpSlPills(containerId, pnlFor);
+                s.tpSlPillRangeSub = () => this.repositionAllPills(containerId, pnlFor);
                 s.chart.timeScale().subscribeVisibleLogicalRangeChange(s.tpSlPillRangeSub);
             }
         },
@@ -935,44 +951,44 @@
             if (!container) return null;
             if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
 
+            // Single thin horizontal row (label · price · PnL all on
+            // one line), matching the Bybit reference style - not a
+            // tall stacked block.
             const pill = document.createElement('div');
             pill.style.position = 'absolute';
             pill.style.zIndex = '6';
-            pill.style.padding = '3px 8px';
-            pill.style.borderRadius = '4px';
+            pill.style.display = 'flex';
+            pill.style.alignItems = 'center';
+            pill.style.gap = '5px';
+            pill.style.padding = '2px 6px';
+            pill.style.height = '18px';
+            pill.style.borderRadius = '3px';
             pill.style.fontFamily = 'monospace';
-            pill.style.fontSize = '11px';
+            pill.style.fontSize = '10.5px';
             pill.style.fontWeight = '700';
-            pill.style.lineHeight = '1.3';
-            pill.style.textAlign = 'right';
             pill.style.color = '#0a0d12';
             pill.style.background = color;
-            pill.style.boxShadow = '0 1px 4px rgba(0,0,0,.35)';
+            pill.style.boxShadow = '0 1px 3px rgba(0,0,0,.35)';
             pill.style.transform = 'translateY(-50%)';
             pill.style.transition = 'top .12s ease-out, right .12s ease-out';
             pill.style.pointerEvents = 'none'; // doesn't block chart drag gestures underneath - the cancel button below re-enables it on itself specifically
             pill.style.whiteSpace = 'nowrap';
-            pill.style.display = 'flex';
-            pill.style.alignItems = 'center';
-            pill.style.gap = '6px';
 
-            const textWrap = document.createElement('div');
-            pill.appendChild(textWrap);
+            const labelEl = document.createElement('span');
+            labelEl.style.opacity = '0.75';
+            labelEl.style.fontSize = '9px';
+            labelEl.textContent = label;
+            pill.appendChild(labelEl);
 
-            const labelRow = document.createElement('div');
-            labelRow.style.fontSize = '9px';
-            labelRow.style.opacity = '0.85';
-            labelRow.textContent = label;
-            textWrap.appendChild(labelRow);
+            const priceEl = document.createElement('span');
+            pill.appendChild(priceEl);
+            pill._priceRow = priceEl;
 
-            const priceRow = document.createElement('div');
-            textWrap.appendChild(priceRow);
-            pill._priceRow = priceRow;
-
-            const pnlRow = document.createElement('div');
-            pnlRow.style.fontSize = '9.5px';
-            textWrap.appendChild(pnlRow);
-            pill._pnlRow = pnlRow;
+            const pnlEl = document.createElement('span');
+            pnlEl.style.opacity = '0.85';
+            pnlEl.style.fontSize = '9.5px';
+            pill.appendChild(pnlEl);
+            pill._pnlRow = pnlEl;
 
             if (cancelKind) {
                 const cancelBtn = document.createElement('button');
@@ -980,16 +996,16 @@
                 cancelBtn.title = `Cancel this ${cancelKind === 'sl' ? 'Stop Loss' : 'Take Profit'}`;
                 cancelBtn.style.pointerEvents = 'auto'; // re-enable specifically on this button, despite the pill itself being pointer-events:none
                 cancelBtn.style.border = 'none';
-                cancelBtn.style.borderRadius = '3px';
-                cancelBtn.style.background = 'rgba(0,0,0,.25)';
+                cancelBtn.style.borderRadius = '2px';
+                cancelBtn.style.background = 'rgba(0,0,0,.22)';
                 cancelBtn.style.color = '#0a0d12';
                 cancelBtn.style.cursor = 'pointer';
-                cancelBtn.style.fontSize = '11px';
+                cancelBtn.style.fontSize = '10px';
                 cancelBtn.style.fontWeight = '700';
                 cancelBtn.style.lineHeight = '1';
                 cancelBtn.style.padding = '0';
-                cancelBtn.style.width = '12px';
-                cancelBtn.style.height = '18px';
+                cancelBtn.style.width = '11px';
+                cancelBtn.style.height = '14px';
                 cancelBtn.style.flexShrink = '0';
                 cancelBtn.onclick = (ev) => {
                     ev.stopPropagation();
@@ -1016,7 +1032,7 @@
         // and refreshes the price + projected-PnL text shown on each -
         // called once when lines are first shown and again on every
         // scroll/zoom via the dedicated subscription above.
-        repositionTpSlPills(containerId, pnlFor) {
+        repositionAllPills(containerId, pnlFor) {
             const s = sessions.get(containerId);
             if (!s) return;
 
@@ -1028,15 +1044,52 @@
             try { scaleWidth = s.chart.priceScale('right').width() || 60; } catch (e) {}
             const rightOffset = scaleWidth + 50;
 
-            const setPillContent = (pill, price) => {
+            // Per direct request for a professional, unified solution:
+            // EVERY position-related pill (Entry, Liq, BE, SL, every
+            // TP) goes through ONE collision-avoidance pass together,
+            // not separate, uncoordinated systems - this is what
+            // actually prevents the pile-up shown in the reported
+            // screenshot, where Entry/BE/SL/TP1 all landed on top of
+            // each other because nothing knew about its neighbors.
+            const MIN_GAP = 19; // a bit more than one pill's own height (18px), so consecutive pills never visually touch
+            const entries = [];
+            const allManagedPills = new Set();
+
+            const addEntry = (pill, price, showPnl) => {
                 if (!pill) return;
+                allManagedPills.add(pill);
                 const y = s.candleSeries.priceToCoordinate(price);
-                if (y == null) { pill.style.display = 'none'; return; }
-                pill.style.display = 'block';
+                if (y != null) entries.push({ pill, y, price, showPnl });
+            };
+
+            if (s.entryLine && s.entryPill) addEntry(s.entryPill, s.entryLine.options().price, false);
+            if (s.liqLine && s.liqPill) addEntry(s.liqPill, s.liqLine.options().price, false);
+            if (s.beLine && s.bePill) addEntry(s.bePill, s.beLine.options().price, false);
+            if (s.slLine && s.slPill) addEntry(s.slPill, s.slLine.options().price, true);
+            for (const tp of (s.tpLines || [])) {
+                const pill = s.tpPills && s.tpPills[tp.index];
+                addEntry(pill, tp.price, true);
+            }
+
+            // Hide any managed pill whose price is currently off-screen,
+            // before running collision math on only the ones visible.
+            for (const pill of allManagedPills) {
+                if (!entries.some(e => e.pill === pill)) pill.style.display = 'none';
+            }
+
+            entries.sort((a, b) => a.y - b.y);
+            for (let i = 1; i < entries.length; i++) {
+                const minY = entries[i - 1].y + MIN_GAP;
+                if (entries[i].y < minY) entries[i].y = minY;
+            }
+
+            for (const entry of entries) {
+                const { pill, y, price, showPnl } = entry;
+                pill.style.display = 'flex';
                 pill.style.right = rightOffset + 'px';
                 pill.style.top = y + 'px';
                 pill._priceRow.textContent = fmtPrice(price);
-                if (pnlFor) {
+                if (showPnl && pnlFor) {
                     const pnl = pnlFor(price);
                     if (pnl != null) {
                         const sign = pnl >= 0 ? '+' : '';
@@ -1044,13 +1097,9 @@
                     } else {
                         pill._pnlRow.textContent = '';
                     }
+                } else {
+                    pill._pnlRow.textContent = '';
                 }
-            };
-
-            if (s.slLine && s.slPill) setPillContent(s.slPill, s.slLine.options().price);
-            for (const tp of (s.tpLines || [])) {
-                const pill = s.tpPills && s.tpPills[tp.index];
-                setPillContent(pill, tp.price);
             }
         },
 
@@ -1175,6 +1224,9 @@
             if (s.entryLine) { try { s.candleSeries.removePriceLine(s.entryLine); } catch (e) {} s.entryLine = null; }
             if (s.liqLine) { try { s.candleSeries.removePriceLine(s.liqLine); } catch (e) {} s.liqLine = null; }
             if (s.beLine) { try { s.candleSeries.removePriceLine(s.beLine); } catch (e) {} s.beLine = null; }
+            if (s.entryPill) { try { s.entryPill.remove(); } catch (e) {} s.entryPill = null; }
+            if (s.liqPill) { try { s.liqPill.remove(); } catch (e) {} s.liqPill = null; }
+            if (s.bePill) { try { s.bePill.remove(); } catch (e) {} s.bePill = null; }
             if (s.pnlLine) { try { s.candleSeries.removePriceLine(s.pnlLine); } catch (e) {} s.pnlLine = null; }
             if (s.pnlLabelEl) { try { s.pnlLabelEl.remove(); } catch (e) {} s.pnlLabelEl = null; }
             if (s.pnlRangeSub) { try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s.pnlRangeSub); } catch (e) {} s.pnlRangeSub = null; }
