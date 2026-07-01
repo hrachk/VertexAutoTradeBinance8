@@ -790,7 +790,6 @@
                     s.entryBtnTp.style.background = '#22c55e';
                     s.entryBtnTp.style.color = '#0a0d12';
                     s.entryBtnTp.style.transform = 'translateY(-50%)';
-                    
                     s.entryBtnTp.onclick = () => this.promptAddTp(containerId);
                     s.entryBtnTp.addEventListener('mousedown', (ev) => ev.stopPropagation());
                     container.appendChild(s.entryBtnTp);
@@ -809,7 +808,6 @@
                     s.entryBtnSl.style.background = '#ef4444';
                     s.entryBtnSl.style.color = '#0a0d12';
                     s.entryBtnSl.style.transform = 'translateY(-50%)';
-                    
                     s.entryBtnSl.onclick = () => this.promptAddSl(containerId);
                     s.entryBtnSl.addEventListener('mousedown', (ev) => ev.stopPropagation());
                     container.appendChild(s.entryBtnSl);
@@ -928,18 +926,23 @@
 
             this.repositionAllPills(containerId, pnlFor);
 
-            // RAF loop — pills track their price line pixel-perfectly on
-            // every animation frame, not only on scroll/zoom events.
-            // This is what makes them feel "merged" with the line:
-            // priceToCoordinate() is always in sync with whatever
-            // LightweightCharts rendered last frame, so there's zero lag.
-            if (!s.tpSlPillRafId) {
-                const loop = () => {
-                    if (!sessions.has(containerId)) return; // session disposed
-                    this.repositionAllPills(containerId, pnlFor);
-                    s.tpSlPillRafId = requestAnimationFrame(loop);
-                };
-                s.tpSlPillRafId = requestAnimationFrame(loop);
+            if (!s.tpSlPillRangeSub) {
+                // Subscribe to BOTH time-axis scroll/zoom (X) and
+                // price-scale zoom (Y) so pills track their lines on
+                // every visual change, not only horizontal scroll.
+                const self = this;
+                s.tpSlPillRangeSub = () => self.repositionAllPills(containerId, pnlFor);
+                s.chart.timeScale().subscribeVisibleLogicalRangeChange(s.tpSlPillRangeSub);
+                // Price-scale (Y axis) zoom also changes pixel coordinates
+                // of every price level — subscribe separately so pills
+                // stay locked to their line when the user pinches/scrolls
+                // the price axis vertically.
+                s.tpSlPriceScaleSub = s.tpSlPillRangeSub;
+                try { s.chart.priceScale('right').applyOptions({}); } catch (e) {}
+                // Use crosshair move as a reliable per-frame update trigger —
+                // it fires on every render tick when the mouse is over the chart.
+                s.tpSlCrosshairSub = s.tpSlPillRangeSub;
+                s.chart.subscribeCrosshairMove(s.tpSlCrosshairSub);
             }
         },
 
@@ -1030,8 +1033,9 @@
             s.onCancelProtectiveLevel(kind, index ?? -1);
         },
 
-        // Repositions every SL/TP/Entry/Liq/BE pill to track its price line.
-        // Called every RAF frame so pills move in lock-step with the chart.
+        // Repositions every pill (Entry/Liq/BE/SL/TP) to track its
+        // price line. Called on scroll/zoom (X and Y) so pills move
+        // in lock-step with the chart without any lag.
         repositionAllPills(containerId, pnlFor) {
             const s = sessions.get(containerId);
             if (!s) return;
@@ -1041,10 +1045,13 @@
             const rightOffset = scaleWidth + 50;
             const MIN_GAP = 20; // px between pill centres (pill height = 18px)
 
-            // 1. Collect all pills that have a valid on-screen Y coordinate.
+            // 1. Collect all pills with a valid on-screen Y coordinate.
             const entries = [];
+            const allPills = [];
+
             const collect = (pill, price, showPnl) => {
                 if (!pill) return;
+                allPills.push(pill);
                 const y = s.candleSeries.priceToCoordinate(price);
                 if (y == null) { pill.style.display = 'none'; return; }
                 entries.push({ pill, price, showPnl, trueY: y, y });
@@ -1055,17 +1062,15 @@
             collect(s.bePill,    s.beLine?.options().price,     false);
             collect(s.slPill,    s.slLine?.options().price,     true);
             for (const tp of (s.tpLines || [])) {
-                const pill = s.tpPills?.[tp.index];
-                collect(pill, tp.price, true);
+                collect(s.tpPills?.[tp.index], tp.price, true);
             }
 
             if (entries.length === 0) return;
 
-            // 2. Sort by true Y ascending (top of screen first = highest price first).
+            // 2. Sort by true Y ascending (top of screen = highest price first).
             entries.sort((a, b) => a.trueY - b.trueY);
 
-            // 3. Single forward pass: if a pill would overlap the previous one,
-            //    push it down just enough to clear MIN_GAP. Simple and stable.
+            // 3. Single forward pass: push overlapping pills down just enough.
             for (let i = 1; i < entries.length; i++) {
                 const needed = entries[i - 1].y + MIN_GAP;
                 if (entries[i].y < needed) entries[i].y = needed;
@@ -1113,8 +1118,8 @@
                 try { pill.remove(); } catch (e) {}
             }
             s.tpPills = [];
-            if (s.tpSlPillRafId) { cancelAnimationFrame(s.tpSlPillRafId); s.tpSlPillRafId = null; }
             if (s.tpSlPillRangeSub) { try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s.tpSlPillRangeSub); } catch (e) {} s.tpSlPillRangeSub = null; }
+            if (s.tpSlCrosshairSub) { try { s.chart.unsubscribeCrosshairMove(s.tpSlCrosshairSub); } catch (e) {} s.tpSlCrosshairSub = null; }
         },
 
         // Refreshes the live market-price line with the current PnL —
