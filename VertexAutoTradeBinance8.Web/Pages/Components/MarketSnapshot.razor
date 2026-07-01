@@ -3128,7 +3128,15 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // lifecycle, not which list is currently being displayed).
     List<MissedTradeRecord> DisplayedSignals => _showHiddenSignals ? _recentExpiredSignals : _signals;
 
-    void ToggleHiddenSignals() => _showHiddenSignals = !_showHiddenSignals;
+    async Task ToggleHiddenSignals()
+    {
+        _showHiddenSignals = !_showHiddenSignals;
+        // Reset pager/scroll — the two lists (_signals vs _recentExpiredSignals)
+        // have independent page counts, so staying on the old _sigPage index
+        // after switching can point past the end of the new list (e.g. a
+        // stale "3/1" pager label) and leave sigCardsScroll at the wrong offset.
+        await GoToSigPage(0);
+    }
 
     // Keyed by Symbol+Time (not object identity/equality, which we don't
     // control on MissedTradeRecord). Value is the signal's own Time, used
@@ -3359,7 +3367,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     const int _sigPageSize = 6;
     int _sigPageCount => Math.Max(1, (int)Math.Ceiling(DisplayedSignals.Count / (double)_sigPageSize));
 
-    async void GoToSigPage(int page)
+    async Task GoToSigPage(int page)
     {
         _sigPage = Math.Clamp(page, 0, _sigPageCount - 1);
         try

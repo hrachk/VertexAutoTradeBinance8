@@ -33,9 +33,16 @@ namespace VertexAutoTradeBinance8.Services
             _learningService = learningService;
             _logger = logger;
 
-            var root = Path.Combine(AppContext.BaseDirectory);
-            //cfg["SharedData:Root"]
-             //   ?? throw new InvalidOperationException("SharedData:Root not configured");
+            // Use SharedData:Root like every other cross-process file in this
+            // project (decision_trace_*.jsonl, klines_bootstrap.json, etc) —
+            // AppContext.BaseDirectory points at THIS process's own bin folder,
+            // which is wrong when the Web app (running from a different bin
+            // folder) needs to read missed_trades.json back. Falls back to the
+            // local bin folder only if SharedData:Root isn't configured.
+            var sharedRoot = cfg["SharedData:Root"];
+            var root = !string.IsNullOrWhiteSpace(sharedRoot)
+                ? sharedRoot
+                : AppContext.BaseDirectory;
 
             Directory.CreateDirectory(root);
           _filePath = Path.Combine(root, "missed_trades.json");
