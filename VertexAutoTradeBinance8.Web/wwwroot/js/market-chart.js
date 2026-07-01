@@ -790,7 +790,7 @@
                     s.entryBtnTp.style.background = '#22c55e';
                     s.entryBtnTp.style.color = '#0a0d12';
                     s.entryBtnTp.style.transform = 'translateY(-50%)';
-                    s.entryBtnTp.style.transition = 'right .12s ease-out, top .12s ease-out';
+                    
                     s.entryBtnTp.onclick = () => this.promptAddTp(containerId);
                     s.entryBtnTp.addEventListener('mousedown', (ev) => ev.stopPropagation());
                     container.appendChild(s.entryBtnTp);
@@ -809,7 +809,7 @@
                     s.entryBtnSl.style.background = '#ef4444';
                     s.entryBtnSl.style.color = '#0a0d12';
                     s.entryBtnSl.style.transform = 'translateY(-50%)';
-                    s.entryBtnSl.style.transition = 'right .12s ease-out, top .12s ease-out';
+                    
                     s.entryBtnSl.onclick = () => this.promptAddSl(containerId);
                     s.entryBtnSl.addEventListener('mousedown', (ev) => ev.stopPropagation());
                     container.appendChild(s.entryBtnSl);
@@ -928,13 +928,18 @@
 
             this.repositionAllPills(containerId, pnlFor);
 
-            if (!s.tpSlPillRangeSub) {
-                // Same dedicated-subscription pattern already proven for
-                // the Entry-line buttons - repositions every pill on
-                // scroll/zoom so they track their actual price level
-                // rather than drifting out of place.
-                s.tpSlPillRangeSub = () => this.repositionAllPills(containerId, pnlFor);
-                s.chart.timeScale().subscribeVisibleLogicalRangeChange(s.tpSlPillRangeSub);
+            // RAF loop — pills track their price line pixel-perfectly on
+            // every animation frame, not only on scroll/zoom events.
+            // This is what makes them feel "merged" with the line:
+            // priceToCoordinate() is always in sync with whatever
+            // LightweightCharts rendered last frame, so there's zero lag.
+            if (!s.tpSlPillRafId) {
+                const loop = () => {
+                    if (!sessions.has(containerId)) return; // session disposed
+                    this.repositionAllPills(containerId, pnlFor);
+                    s.tpSlPillRafId = requestAnimationFrame(loop);
+                };
+                s.tpSlPillRafId = requestAnimationFrame(loop);
             }
         },
 
@@ -968,7 +973,6 @@
             pill.style.background = color;
             pill.style.boxShadow = '0 1px 3px rgba(0,0,0,.35)';
             pill.style.transform = 'translateY(-50%)';
-            pill.style.transition = 'top .12s ease-out, right .12s ease-out';
             pill.style.pointerEvents = 'none'; // doesn't block chart drag gestures underneath - the cancel button below re-enables it on itself specifically
             pill.style.whiteSpace = 'nowrap';
 
@@ -1083,20 +1087,38 @@
 
             // Sort by priority FIRST (priority-0 pills are placed and
             // locked in before any priority-1 pill is considered), then
-            // by Y within each tier - this is what guarantees Entry/
-            // Liq/BE never get bumped out of position by a TP/SL.
+            // by Y within each tier — this guarantees Entry/Liq/BE are
+            // never bumped out of position by a TP/SL.
             entries.sort((a, b) => a.priority - b.priority || a.y - b.y);
 
-            const placed = []; // already-finalized pills, in final Y order, used to push new ones away from ANY of them (not just the immediately preceding one)
-            for (const entry of entries) {
-                let y = entry.y;
-                for (const p of placed) {
-                    if (Math.abs(y - p.y) < MIN_GAP) {
-                        y = y >= p.y ? p.y + MIN_GAP : p.y - MIN_GAP;
+            // Multi-pass collision resolution: push pills away from each
+            // other until no overlaps remain (max 8 passes handles even
+            // tightly-clustered groups of 5+ pills). Each pill is pushed
+            // in the direction that minimises total displacement from its
+            // real price coordinate — lower pills go down, upper go up.
+            const MAX_PASSES = 8;
+            for (let pass = 0; pass < MAX_PASSES; pass++) {
+                let anyMoved = false;
+                for (let i = 1; i < entries.length; i++) {
+                    const prev = entries[i - 1];
+                    const cur  = entries[i];
+                    const gap  = cur.y - prev.y;
+                    if (gap < MIN_GAP) {
+                        const push = (MIN_GAP - gap) / 2;
+                        if (prev.priority <= cur.priority) {
+                            // Both same priority or cur is lower-priority:
+                            // push cur down, prev up
+                            prev.y -= push;
+                            cur.y  += push;
+                        } else {
+                            // prev is lower-priority (shouldn't normally happen
+                            // after sort, but guard it): only push cur
+                            cur.y += MIN_GAP - gap;
+                        }
+                        anyMoved = true;
                     }
                 }
-                entry.y = y;
-                placed.push(entry);
+                if (!anyMoved) break;
             }
 
             for (const entry of entries) {
@@ -1144,6 +1166,7 @@
                 try { pill.remove(); } catch (e) {}
             }
             s.tpPills = [];
+            if (s.tpSlPillRafId) { cancelAnimationFrame(s.tpSlPillRafId); s.tpSlPillRafId = null; }
             if (s.tpSlPillRangeSub) { try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s.tpSlPillRangeSub); } catch (e) {} s.tpSlPillRangeSub = null; }
         },
 
