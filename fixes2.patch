@@ -1,0 +1,134 @@
+--- a/VertexAutoTradeBinance8.Web/Pages/Components/MarketSnapshot.razor
++++ b/VertexAutoTradeBinance8.Web/Pages/Components/MarketSnapshot.razor
+@@ -1274,7 +1274,7 @@
+                         </span>
+                         <span class="ord-sym">@pos.Symbol</span>
+                     </div>
+-                    <button class="ord-close-x" @onclick="() => SelectPosition(pos)">✕</button>
++                    <button class="ord-close-x" @onclick="ClosePositionPanel">✕</button>
+                 </div>
+ 
+                 @{
+@@ -2025,6 +2025,12 @@
+     DateTime _archiveCacheLoadedAt = DateTime.MinValue;
+     SortedDictionary<long, (decimal Open, decimal High, decimal Low, decimal Close, decimal Volume, decimal? TakerBuy)>? _mergedKlines;
+     string? _lastFullRenderCacheKey;
++    // Cache key for _mergedKlines rebuild — avoids re-allocating the entire
++    // SortedDictionary (+ ToList of all keys) on every live tick when neither
++    // the archive nor the symbol/TF has actually changed. Only the last bar
++    // gets updated in-place on ordinary live ticks (see RenderCharts).
++    string? _mergedKlinesCacheKey;
++    DateTime _lastMergeTime = DateTime.MinValue;
+     double _rsi;
+ 
+     protected override async Task OnInitializedAsync()
+@@ -2936,11 +2942,38 @@
+                 _archiveCacheLoadedAt = now;
+             }
+ 
+-            _mergedKlines = new SortedDictionary<long, (decimal Open, decimal High, decimal Low, decimal Close, decimal Volume, decimal? TakerBuy)>();
+-            foreach (var k in _archiveCache)
+-                _mergedKlines[k.OpenTime] = (k.Open, k.High, k.Low, k.Close, k.Volume, k.TakerBuyBaseVolume);
+-            foreach (var k in Selected.Klines)
+-                _mergedKlines[k.OpenTime] = (k.Open, k.High, k.Low, k.Close, k.Volume, k.TakerBuyBaseVolume); // live wins on overlap
++            // PERFORMANCE FIX: only rebuild the merged SortedDictionary when
++            // the archive or symbol/TF actually changed. Previously this
++            // created a brand-new SortedDictionary with 500-1000+ inserts +
++            // ToList() of all keys + a full kline array on every single live
++            // tick (every few seconds), generating thousands of heap objects
++            // per tick and triggering GC pauses that made the chart feel
++            // progressively heavier the longer the session ran.
++            bool mergeNeeded = _mergedKlinesCacheKey != cacheKey
++                            || _lastMergeTime != _archiveCacheLoadedAt
++                            || _mergedKlines == null;
++
++            if (mergeNeeded)
++            {
++                _mergedKlines = new SortedDictionary<long, (decimal Open, decimal High, decimal Low, decimal Close, decimal Volume, decimal? TakerBuy)>();
++                foreach (var k in _archiveCache)
++                    _mergedKlines[k.OpenTime] = (k.Open, k.High, k.Low, k.Close, k.Volume, k.TakerBuyBaseVolume);
++                foreach (var k in Selected.Klines)
++                    _mergedKlines[k.OpenTime] = (k.Open, k.High, k.Low, k.Close, k.Volume, k.TakerBuyBaseVolume); // live wins on overlap
++                _mergedKlinesCacheKey = cacheKey;
++                _lastMergeTime = _archiveCacheLoadedAt;
++            }
++            else if (Selected.Klines.Count > 0)
++            {
++                // Archive unchanged, same symbol/TF — just patch the last bar
++                // (and the one before it, in case the previous bar just closed)
++                // in the existing dictionary instead of rebuilding everything.
++                var tail = Selected.Klines.Count >= 2
++                    ? Selected.Klines.Skip(Selected.Klines.Count - 2).ToList()
++                    : Selected.Klines.TakeLast(1).ToList();
++                foreach (var k in tail)
++                    _mergedKlines![k.OpenTime] = (k.Open, k.High, k.Low, k.Close, k.Volume, k.TakerBuyBaseVolume);
++            }
+ 
+             // PERFORMANCE FIX: only send the most recent DefaultBarsCount
+             // bars on initial render/symbol switch, not the entire merged
+@@ -2951,27 +2984,20 @@
+             // over-time problem reported. The rest stays in _mergedKlines
+             // for LoadMoreHistoryAsync to serve on demand when the user
+             // scrolls back (see JS-side infinite-history handler).
+-            var allKeys = _mergedKlines.Keys.ToList();
+-            var startIdx = Math.Max(0, allKeys.Count - DefaultBarsCount);
+-            var visibleKeys = allKeys.Skip(startIdx).ToList();
+-
+-            // CRITICAL FIX: only do a full setData (which resets to the
+-            // last DefaultBarsCount bars) when this is genuinely a new
+-            // symbol+timeframe, or the very first render. An ordinary
+-            // live-tick update for the SAME chart must NOT re-trim back
+-            // to 300 bars every single time — doing so was silently
+-            // discarding any history the user had lazy-loaded by
+-            // scrolling left, which then made the JS-side infinite-
+-            // history handler see "few bars left" again immediately and
+-            // trigger another lazy-load, discarded again on the very
+-            // next tick. That continuous discard/reload cycle IS the
+-            // reported jumping/flickering — it happens on every live
+-            // tick (every few seconds), well before the literal edge of
+-            // available data, not just there.
++            // Keys needed for rendering — only materialise the full list when
++            // we're about to do a full setData (isNewSeries). On ordinary live
++            // ticks we only ever need the last key for updateLastBar, so avoid
++            // allocating a List<long> of 500+ entries every few seconds.
++            int allKeysCount = _mergedKlines.Count;
+             bool isNewSeries = cacheKey != _lastFullRenderCacheKey;
+ 
+             if (isNewSeries)
+             {
++                // Only materialise the key list here, where we actually need
++                // to slice the last DefaultBarsCount bars for setData.
++                var allKeysList = _mergedKlines.Keys.ToList();
++                var startIdx = Math.Max(0, allKeysList.Count - DefaultBarsCount);
++                var visibleKeys = allKeysList.Skip(startIdx).ToList();
+                 var klines = visibleKeys.Select(k => ToJsKline(k, _mergedKlines[k])).ToArray();
+                 await JS.InvokeVoidAsync("marketChart.setData", $"chartContainer-{_chartInstanceId}", klines);
+                 _lastFullRenderCacheKey = cacheKey;
+@@ -2979,9 +3005,12 @@
+                 _dotNetRef ??= DotNetObjectReference.Create(this);
+                 try { await JS.InvokeVoidAsync("marketChart.bindInfiniteHistory", $"chartContainer-{_chartInstanceId}", _dotNetRef); } catch { }
+             }
+-            else if (allKeys.Count > 0)
++            else if (allKeysCount > 0)
+             {
+-                var lastKey = allKeys[^1];
++                // Ordinary live tick — just update the last bar in-place.
++                // _mergedKlines is a SortedDictionary so .Last() is O(log n),
++                // far cheaper than ToList()[^1] which was O(n) every tick.
++                var lastKey = _mergedKlines.Keys.Max();
+                 var lastKline = ToJsKline(lastKey, _mergedKlines[lastKey]);
+                 await JS.InvokeVoidAsync("marketChart.updateLastBar", $"chartContainer-{_chartInstanceId}", lastKline);
+             }
+@@ -4437,7 +4466,11 @@
+         _selectedPosition = pos;
+         _activeSignal = null;
+         _orderPanelDismissed = false;
+-        _addToPositionOpen = false;
++        // Auto-expand the Add to Position form immediately — previously the
++        // user had to click "+" separately after the panel opened, which felt
++        // like the panel was missing trade controls. The form is already
++        // context-scoped to this position's side so it can only add, never flip.
++        _addToPositionOpen = true;
+ 
+         var sym = pos.Symbol;
+         var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == _activeTf)
