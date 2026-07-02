@@ -134,7 +134,7 @@
             try {
                 const range = s.chart.timeScale().getVisibleLogicalRange();
                 if (!range) return;
-                sessionStorage.setItem('vertexChartScroll:' + key, JSON.stringify({ from: range.from, to: range.to }));
+                localStorage.setItem('vertexChartScroll:' + key, JSON.stringify({ from: range.from, to: range.to }));
             } catch (e) {}
         },
 
@@ -147,7 +147,7 @@
             const s = sessions.get(containerId);
             if (!s || !s.chart) return false;
             try {
-                const raw = sessionStorage.getItem('vertexChartScroll:' + key);
+                const raw = localStorage.getItem('vertexChartScroll:' + key);
                 if (!raw) return false;
                 const saved = JSON.parse(raw);
                 if (typeof saved.from !== 'number' || typeof saved.to !== 'number') return false;
