@@ -2,6 +2,7 @@
 @using VertexAutoTradeBinance8.Web.Services
 @using VertexAutoTradeBinance8.Web.Models
 @using VertexAutoTradeBinance8.Web.Demo
+@using VertexAutoTradeBinance8.Services
 @inject MissedTradeFileService MissedSvc
 @inject DemoAccountService DemoAccount
 @inject BinanceClientFactory Factory
@@ -621,8 +622,11 @@ else
 
     string BuildFillPath(string pts, int w, int h)
     {
-        if (string.IsNullOrEmpty(pts)) return "";
-        return $"M0,{h} L{pts.Replace(" ", " L")} L{w},{h} Z";
+        if (string.IsNullOrEmpty(pts)) return string.Empty;
+        // No quotes inside the interpolated string — Razor's parser
+        // misreads embedded quotes as string terminators.
+        var inner = pts.Replace(" ", " L");
+        return "M0," + h + " L" + inner + " L" + w + "," + h + " Z";
     }
 
     double PnlToY(decimal price, List<decimal> vals, int h)
