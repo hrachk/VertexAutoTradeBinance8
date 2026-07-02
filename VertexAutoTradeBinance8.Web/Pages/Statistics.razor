@@ -158,8 +158,13 @@ else
                         var pnlSign  = pnl >= 0 ? "+" : "";
                         var pnlFmt   = pnl.ToString("F2");
                         var tooltip  = dayLabel + ": " + pnlSign + pnlFmt + " USDT";
+                        var pnlShort = pnl == 0 ? "" : (pnlSign + (Math.Abs(pnl) >= 10 ? ((int)Math.Abs(pnl)).ToString() : Math.Abs(pnl).ToString("F1")));
                         <div class="st-cal-day @cls" style="background:@bg" title="@tooltip">
                             <span class="st-cal-num">@day.Day</span>
+                            @if (pnl != 0)
+                            {
+                                <span class="st-cal-pnl">@pnlShort</span>
+                            }
                         </div>
                     }
                 </div>
@@ -335,9 +340,10 @@ else
 /* Calendar */
 .st-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
 .st-cal-dow { font-size: 9px; font-weight: 700; color: var(--st-dim); text-align: center; padding-bottom: 2px; }
-.st-cal-day { aspect-ratio: 1; border-radius: 3px; display: flex; align-items: center; justify-content: center; cursor: default; transition: transform .1s; }
+.st-cal-day { aspect-ratio: 1; border-radius: 3px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: default; transition: transform .1s; gap: 1px; padding: 1px 0; }
 .st-cal-day:hover { transform: scale(1.15); z-index: 1; position: relative; }
-.st-cal-num { font-size: 9px; color: rgba(255,255,255,.5); font-weight: 600; }
+.st-cal-num { font-size: 9px; color: rgba(255,255,255,.55); font-weight: 600; line-height: 1; }
+.st-cal-pnl { font-size: 8px; color: rgba(255,255,255,.9); font-weight: 700; line-height: 1; letter-spacing: -.2px; }
 
 /* Long/Short split */
 .st-split-row { display: flex; gap: 0; }
