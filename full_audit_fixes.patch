@@ -1,0 +1,88 @@
+--- a/VertexAutoTradeBinance AI v5.0 Full Autonomous Mode/TradingWorker.cs
++++ b/VertexAutoTradeBinance AI v5.0 Full Autonomous Mode/TradingWorker.cs
+@@ -1230,13 +1230,23 @@
+         }
+ 
+ 
++        // Cooldown check using per-symbol resolved options.
++        // Previously used _options.CooldownMinutes which reads from the
++        // shared TradingOptions default; the Trading section in appsettings
++        // has no CooldownMinutes key so the field was always 0, making
++        // InCooldown permanently return false — effectively disabling the
++        // cooldown gate entirely for every symbol.
++        // Now uses _resolver.Resolve(symbol).CooldownSeconds so BTC/ETH
++        // get their per-symbol 120s and everything else gets the 90s default.
+         private bool InCooldown(string symbol)
+         {
+-            if (_options.CooldownMinutes <= 0)
+-                return false;
++            var trading = _resolver.Resolve(symbol);
++            int cooldownSec = trading.CooldownSeconds > 0
++                ? trading.CooldownSeconds
++                : (_options.CooldownSeconds > 0 ? _options.CooldownSeconds : 90);
+ 
+             return _lastTrade.TryGetValue(symbol, out var last)
+-                   && DateTime.UtcNow - last < TimeSpan.FromMinutes(_options.CooldownMinutes);
++                   && DateTime.UtcNow - last < TimeSpan.FromSeconds(cooldownSec);
+         }
+ 
+         private void MarkTrade(string symbol) =>
+--- a/VertexAutoTradeBinance AI v5.0 Full Autonomous Mode/Services/RiskManager.cs
++++ b/VertexAutoTradeBinance AI v5.0 Full Autonomous Mode/Services/RiskManager.cs
+@@ -226,11 +226,12 @@
+             // -----------------------------
+             decimal riskNotional = riskBudget / slPercent;
+             decimal leverageCapNotional = balance * leverage * 0.98m;
+-            
+-            decimal marginCapNotional =
+-    balance < 50
+-        ? balance * leverage   // 🔥 отключаем ограничение
+-        : balance * MaxMarginPercent * leverage;
++
++            // balance < 50 path already returned early above via the
++            // MICRO-ACCOUNT block — this code is only reachable when
++            // balance >= 50, so the ternary was dead code. Use
++            // MaxMarginPercent unconditionally here.
++            decimal marginCapNotional = balance * MaxMarginPercent * leverage;
+ 
+             decimal finalNotional = Math.Min(riskNotional, Math.Min(leverageCapNotional, marginCapNotional));
+             
+--- a/VertexAutoTradeBinance AI v5.0 Full Autonomous Mode/Program.cs
++++ b/VertexAutoTradeBinance AI v5.0 Full Autonomous Mode/Program.cs
+@@ -140,9 +140,11 @@
+                     services.Configure<TradingOptions>(
+                       ctx.Configuration.GetSection("Trading")); // TRUE default
+ 
+-
+-                    services.Configure<TradingOptions>(
+-                  ctx.Configuration.GetSection("SignalOnlyMode"));
++                    // NOTE: SignalOnlyMode section previously also bound to TradingOptions
++                    // here, silently overriding any Trading-section value of EnableExecution.
++                    // Removed: EnableExecution defaults to true in TradingOptions and is
++                    // set explicitly in the Trading section if needed — a second silent
++                    // binding only made config harder to reason about.
+ 
+                     services.Configure<TradingOptions>("BTC",
+                         ctx.Configuration.GetSection("Trading:BTC"));
+--- a/VertexAutoTradeBinance8.Web/wwwroot/js/market-chart.js
++++ b/VertexAutoTradeBinance8.Web/wwwroot/js/market-chart.js
+@@ -895,9 +895,16 @@
+             if (!s) return;
+             this.hideTpSlLines(containerId);
+ 
+-            const dir = s.side === 'LONG' ? 1 : -1;
+-            const hasPnlData = s.qty > 0 && s.entryPrice > 0;
+-            const pnlFor = (price) => hasPnlData ? (price - s.entryPrice) * dir * s.qty : null;
++            // pnlFor reads s.side/s.qty/s.entryPrice dynamically on every
++            // call — not captured at closure creation. Fixes a bug where
++            // hasPnlData/dir were stale after a partial-close updated s.qty,
++            // causing PnL shown on pills to remain wrong until showTpSlLines
++            // was fully re-called.
++            const pnlFor = (price) => {
++                if (!s.qty || !s.entryPrice) return null;
++                const d = s.side === 'LONG' ? 1 : -1;
++                return (price - s.entryPrice) * d * s.qty;
++            };
+ 
+             if (sl > 0) {
+                 s.slLine = s.candleSeries.createPriceLine({

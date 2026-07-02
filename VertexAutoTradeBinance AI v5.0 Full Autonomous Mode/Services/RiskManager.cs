@@ -226,11 +226,12 @@ namespace VertexAutoTradeBinance8.Services
             // -----------------------------
             decimal riskNotional = riskBudget / slPercent;
             decimal leverageCapNotional = balance * leverage * 0.98m;
-            
-            decimal marginCapNotional =
-    balance < 50
-        ? balance * leverage   // 🔥 отключаем ограничение
-        : balance * MaxMarginPercent * leverage;
+
+            // balance < 50 path already returned early above via the
+            // MICRO-ACCOUNT block — this code is only reachable when
+            // balance >= 50, so the ternary was dead code. Use
+            // MaxMarginPercent unconditionally here.
+            decimal marginCapNotional = balance * MaxMarginPercent * leverage;
 
             decimal finalNotional = Math.Min(riskNotional, Math.Min(leverageCapNotional, marginCapNotional));
             

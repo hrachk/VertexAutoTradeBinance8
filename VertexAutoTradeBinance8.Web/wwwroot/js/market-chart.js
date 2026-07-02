@@ -895,9 +895,16 @@
             if (!s) return;
             this.hideTpSlLines(containerId);
 
-            const dir = s.side === 'LONG' ? 1 : -1;
-            const hasPnlData = s.qty > 0 && s.entryPrice > 0;
-            const pnlFor = (price) => hasPnlData ? (price - s.entryPrice) * dir * s.qty : null;
+            // pnlFor reads s.side/s.qty/s.entryPrice dynamically on every
+            // call — not captured at closure creation. Fixes a bug where
+            // hasPnlData/dir were stale after a partial-close updated s.qty,
+            // causing PnL shown on pills to remain wrong until showTpSlLines
+            // was fully re-called.
+            const pnlFor = (price) => {
+                if (!s.qty || !s.entryPrice) return null;
+                const d = s.side === 'LONG' ? 1 : -1;
+                return (price - s.entryPrice) * d * s.qty;
+            };
 
             if (sl > 0) {
                 s.slLine = s.candleSeries.createPriceLine({

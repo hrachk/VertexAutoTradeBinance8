@@ -1230,13 +1230,23 @@ namespace VertexAutoTradeBinance8
         }
 
 
+        // Cooldown check using per-symbol resolved options.
+        // Previously used _options.CooldownMinutes which reads from the
+        // shared TradingOptions default; the Trading section in appsettings
+        // has no CooldownMinutes key so the field was always 0, making
+        // InCooldown permanently return false — effectively disabling the
+        // cooldown gate entirely for every symbol.
+        // Now uses _resolver.Resolve(symbol).CooldownSeconds so BTC/ETH
+        // get their per-symbol 120s and everything else gets the 90s default.
         private bool InCooldown(string symbol)
         {
-            if (_options.CooldownMinutes <= 0)
-                return false;
+            var trading = _resolver.Resolve(symbol);
+            int cooldownSec = trading.CooldownSeconds > 0
+                ? trading.CooldownSeconds
+                : (_options.CooldownSeconds > 0 ? _options.CooldownSeconds : 90);
 
             return _lastTrade.TryGetValue(symbol, out var last)
-                   && DateTime.UtcNow - last < TimeSpan.FromMinutes(_options.CooldownMinutes);
+                   && DateTime.UtcNow - last < TimeSpan.FromSeconds(cooldownSec);
         }
 
         private void MarkTrade(string symbol) =>

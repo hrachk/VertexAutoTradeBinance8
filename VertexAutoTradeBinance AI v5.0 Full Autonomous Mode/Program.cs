@@ -140,9 +140,11 @@ public class Program
                     services.Configure<TradingOptions>(
                       ctx.Configuration.GetSection("Trading")); // TRUE default
 
-
-                    services.Configure<TradingOptions>(
-                  ctx.Configuration.GetSection("SignalOnlyMode"));
+                    // NOTE: SignalOnlyMode section previously also bound to TradingOptions
+                    // here, silently overriding any Trading-section value of EnableExecution.
+                    // Removed: EnableExecution defaults to true in TradingOptions and is
+                    // set explicitly in the Trading section if needed — a second silent
+                    // binding only made config harder to reason about.
 
                     services.Configure<TradingOptions>("BTC",
                         ctx.Configuration.GetSection("Trading:BTC"));
