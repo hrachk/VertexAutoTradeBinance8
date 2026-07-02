@@ -83,8 +83,12 @@ namespace VertexAutoTradeBinance8.Services
         private const string SL_PREFIX = "SL_";
         private const string TR_PREFIX = "TR_";
         private const string TP_PREFIX = "TP_";
-        // 🔹 Для отслеживания сильных сигналов, чтобы пропускать мягкие фильтры
-        private readonly HashSet<string> _beOverrideForStrongTrend = new();
+        // ConcurrentDictionary used as a thread-safe set — value is always
+        // true, key presence is the signal. HashSet<string> is NOT safe for
+        // concurrent read+write from the parallel Task.WhenAll(ProbeSide Long,
+        // ProbeSide Short) calls in SuperviseAsync, which could corrupt the
+        // collection or throw InvalidOperationException.
+        private readonly ConcurrentDictionary<string, bool> _beOverrideForStrongTrend = new();
         private readonly ConcurrentDictionary<string, decimal> _lastSl = new();
         private readonly IOptionsMonitor<TradingOptions> _tradingOptions;
         public PositionSupervisorService(
@@ -338,10 +342,10 @@ namespace VertexAutoTradeBinance8.Services
                 if (strongTrend)
                 {
                     if (longPos != null && Math.Abs(longPos.Quantity) > POSITION_EPS)
-                        _beOverrideForStrongTrend.Add(BuildExitKey(symbol, PositionSide.Long, longPos.EntryPrice));
+                        _beOverrideForStrongTrend.TryAdd(BuildExitKey(symbol, PositionSide.Long, longPos.EntryPrice), true);
 
                     if (shortPos != null && Math.Abs(shortPos.Quantity) > POSITION_EPS)
-                        _beOverrideForStrongTrend.Add(BuildExitKey(symbol, PositionSide.Short, shortPos.EntryPrice));
+                        _beOverrideForStrongTrend.TryAdd(BuildExitKey(symbol, PositionSide.Short, shortPos.EntryPrice), true);
                 }
             }
 
@@ -357,7 +361,7 @@ namespace VertexAutoTradeBinance8.Services
                     _beLevel.TryRemove(key, out _);
                     _beMoved.TryRemove(key, out _);
                     _lastSl.TryRemove(key, out _);
-                    _beOverrideForStrongTrend.Remove(key);
+                    _beOverrideForStrongTrend.TryRemove(key, out _);
                     return;
                 }
 
@@ -389,7 +393,7 @@ namespace VertexAutoTradeBinance8.Services
                 decimal PARTIAL_SIZE = isToxic ? 0.42m : 0.34m;
                 decimal MIN_BUFFER = ATR * (isToxic ? 0.5m : 0.3m);
 
-                bool skipSoftFilters = _beOverrideForStrongTrend.Contains(keyProbe);
+                bool skipSoftFilters = _beOverrideForStrongTrend.ContainsKey(keyProbe);
 
                 // =========================
                 // SAFE ZONE → не дергать SL
@@ -509,10 +513,17 @@ namespace VertexAutoTradeBinance8.Services
                 );
 
             // 5) HANDLE OPEN POSITIONS
+            // Load orders once and share between both sides — previously
+            // LoadOrdersAsync was called separately for Long and Short,
+            // meaning the two calls could see different exchange state
+            // (if an order filled between the two calls) and wasted 2x
+            // the API weight unnecessarily.
+            var sharedOrders = await LoadOrdersAsync(client, symbol);
+
             if (hasLong)
-                await HandleSideAsync(client, symbol, PositionSide.Long, longPos!, await LoadOrdersAsync(client, symbol), lastSignal, klines1m, ct);
+                await HandleSideAsync(client, symbol, PositionSide.Long, longPos!, sharedOrders, lastSignal, klines1m, ct);
             if (hasShort)
-                await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, await LoadOrdersAsync(client, symbol), lastSignal, klines1m, ct);
+                await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, sharedOrders, lastSignal, klines1m, ct);
         }
 
         // ===== PLACE BE SL =====
@@ -734,7 +745,7 @@ namespace VertexAutoTradeBinance8.Services
                 _lastSl.TryRemove(exitKey, out _);
                 _pendingReset.TryRemove(exitKey, out _);
                 _earlyTpDone.TryRemove(posGuardKey, out _);
-                _beOverrideForStrongTrend.Remove(exitKey);
+                _beOverrideForStrongTrend.TryRemove(exitKey, out _);
                 _lifecycle.Clear(exitKey);
 
                 return;
