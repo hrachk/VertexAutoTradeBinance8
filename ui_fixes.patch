@@ -1,0 +1,131 @@
+--- a/VertexAutoTradeBinance8.Web/Pages/Components/MarketSnapshot.razor
++++ b/VertexAutoTradeBinance8.Web/Pages/Components/MarketSnapshot.razor
+@@ -668,12 +668,12 @@
+             <div class="mk-oo-tabs">
+                 <button class="mk-oo-tab @(_ooActiveTab == "positions" ? "mk-oo-tab-on" : "")"
+                         @onclick="ShowPositionsTab">
+-                    Open Positions
++                    Positions
+                     <span class="mk-oo-count">@DisplayedPositions.Count</span>
+                 </button>
+                 <button class="mk-oo-tab @(_ooActiveTab == "orders" ? "mk-oo-tab-on" : "")"
+                         @onclick="ShowOrdersTab">
+-                    Open Orders
++                    Orders
+                     <span class="mk-oo-count">@(_demoMode ? _demoSnapshot.PendingOrders.Count : _openOrders.Count)</span>
+                 </button>
+                 <button class="mk-oo-tab @(_ooActiveTab == "history" ? "mk-oo-tab-on" : "")"
+@@ -681,6 +681,9 @@
+                     History
+                     <span class="mk-oo-count">@(_demoMode ? _demoSnapshot.History.Count : _realHistory.Count)</span>
+                 </button>
++                <span class="mk-oo-mode-badge @(_demoMode ? "mk-oo-mode-demo" : "mk-oo-mode-live")">
++                    @(_demoMode ? "DEMO" : "LIVE")
++                </span>
+             </div>
+ 
+             @if (_ooActiveTab == "history")
+@@ -838,8 +841,12 @@
+                                         <td class="mk-pos-actions" @onclick:stopPropagation="true">
+                                             @if (_partialCloseOpenKey != $"{pos.Symbol}:{pos.Side}")
+                                             {
+-                                                <button class="mk-oo-cancel" disabled="@_orderLoading"
+-                                                        @onclick="() => OpenPartialClose(pos)">Partial Close</button>
++                                                <button class="mk-pos-partial-btn2" disabled="@_orderLoading"
++                                                        @onclick="() => OpenPartialClose(pos)">⅟₂ Partial</button>
++                                                <button class="mk-pos-close-btn" disabled="@_orderLoading"
++                                                        @onclick="() => ClosePositionRow(pos)">
++                                                    @(_orderLoading ? "…" : "Close")
++                                                </button>
+                                             }
+                                             else
+                                             {
+@@ -869,10 +876,6 @@
+                                                     </div>
+                                                 </div>
+                                             }
+-                                            <button class="mk-oo-cancel" disabled="@_orderLoading"
+-                                                    @onclick="() => ClosePositionRow(pos)">
+-                                                @(_orderLoading ? "…" : "Close")
+-                                            </button>
+                                         </td>
+                                     </tr>
+                                 }
+@@ -1571,7 +1574,7 @@
+ .mk-chart-maximize:hover{color:var(--txt);border-color:var(--acc);}
+ .mk-chart-maximize svg{width:15px;height:15px;}
+ 
+-.mk-chart-container-wrap{width:100%;height:480px;min-height:280px;max-height:900px;transition:none;position:relative;resize:vertical;overflow:hidden;}
++.mk-chart-container-wrap{width:100%;height:560px;min-height:280px;max-height:900px;transition:none;position:relative;resize:vertical;overflow:hidden;}
+ .mk-chart-container-wrap:not(.mk-chart-maximized)::after{content:'';position:absolute;right:2px;bottom:2px;width:14px;height:14px;background:repeating-linear-gradient(135deg,var(--dim) 0 1.5px,transparent 1.5px 4px);opacity:.5;pointer-events:none;}
+ 
+ .mk-tpsl-overlay{position:absolute;top:56px;left:8px;z-index:5;pointer-events:none;display:flex;align-items:center;gap:8px;}
+@@ -1924,13 +1927,18 @@
+ @@media(max-width:900px){.mk-acct-summary{flex-wrap:wrap;gap:10px;}.mk-acct-item{flex:1 1 45%;border-right:none;border-bottom:1px solid var(--bdr);padding-bottom:8px;}}
+ .mk-oo-panel{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:18px 20px;overflow:auto;resize:vertical;height:480px;max-height:2000px;scrollbar-width:none;}
+ .mk-oo-panel::-webkit-scrollbar{display:none;}
+-.mk-oo-tabs{display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--bdr);padding-bottom:0;}
+-.mk-oo-tab{display:flex;align-items:center;gap:8px;background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:13px;letter-spacing:.5px;font-weight:700;padding:10px 6px 12px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s;min-width:140px;}
+-.mk-oo-tab:hover{color:var(--txt);}
+-.mk-oo-tab-on{color:var(--acc);border-bottom-color:var(--acc);}
++.mk-oo-tabs{display:flex;gap:4px;margin-bottom:14px;padding:4px;background:var(--bg3);border-radius:10px;border:1px solid var(--bdr);}
++.mk-oo-tab{display:flex;align-items:center;gap:7px;background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:12px;letter-spacing:.4px;font-weight:700;padding:7px 14px 7px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s;min-width:140px;}
++.mk-oo-tab:hover{color:var(--txt);background:rgba(255,255,255,.04);border-radius:7px;}
++.mk-oo-tab-on{color:#fff!important;background:var(--acc);border-radius:7px;box-shadow:0 2px 8px rgba(59,130,246,.35);}
++.mk-oo-tab-on:hover{background:var(--acc)!important;}
+ .mk-oo-spin{color:var(--acc);animation:mkSpin 1s linear infinite;}
+ @@keyframes mkSpin{to{transform:rotate(360deg);}}
+-.mk-oo-count{background:var(--bg3);color:var(--txt);font-size:12px;font-weight:700;padding:2px 9px;border-radius:10px;}
++.mk-oo-count{background:var(--bg2);color:var(--txt);font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;border:1px solid var(--bdr);}
++.mk-oo-tab-on .mk-oo-count{background:rgba(255,255,255,.2);border-color:transparent;color:#fff;}
++.mk-oo-mode-badge{margin-left:auto;padding:3px 10px;border-radius:6px;font-size:10px;font-weight:800;letter-spacing:1.5px;align-self:center;}
++.mk-oo-mode-live{background:rgba(34,197,94,.15);color:var(--grn);border:1px solid rgba(34,197,94,.3);}
++.mk-oo-mode-demo{background:rgba(234,179,8,.12);color:var(--yel);border:1px solid rgba(234,179,8,.3);}
+ .mk-oo-head{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+ .mk-oo-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;}
+ .mk-oo-empty{font-size:13px;color:var(--dim);padding:24px 2px;text-align:center;}
+@@ -1952,7 +1960,13 @@
+ .mk-oo-sym{font-family:var(--mono);font-weight:700;color:var(--acc);font-size:13.5px;}
+ .mk-liq{color:#f59e0b;}
+ .mk-oo-cancel{background:none;border:1px solid var(--bdr);color:var(--dim);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;line-height:1;white-space:nowrap;flex-shrink:0;}
+-.mk-pos-actions{display:flex;flex-direction:column;align-items:flex-end;gap:4px;position:relative;}
++.mk-pos-actions{display:flex;flex-direction:row;align-items:center;gap:6px;position:relative;justify-content:flex-end;flex-wrap:wrap;}
++.mk-pos-close-btn{padding:5px 14px;border-radius:7px;border:1px solid var(--red);background:rgba(239,68,68,.1);color:var(--red);cursor:pointer;font-size:12px;font-weight:700;white-space:nowrap;transition:all .15s;}
++.mk-pos-close-btn:hover:not(:disabled){background:var(--red);color:#fff;}
++.mk-pos-close-btn:disabled{opacity:.5;cursor:not-allowed;}
++.mk-pos-partial-btn2{padding:5px 14px;border-radius:7px;border:1px solid var(--bdr);background:transparent;color:var(--dim);cursor:pointer;font-size:12px;font-weight:700;white-space:nowrap;transition:all .15s;}
++.mk-pos-partial-btn2:hover:not(:disabled){border-color:var(--acc);color:var(--acc);background:rgba(59,130,246,.08);}
++.mk-pos-partial-btn2:disabled{opacity:.5;cursor:not-allowed;}
+ .mk-partial-slider-box{display:flex;flex-direction:column;gap:6px;background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;padding:8px 10px;min-width:220px;position:absolute;z-index:30;right:0;top:100%;margin-top:4px;box-shadow:0 8px 20px rgba(0,0,0,.4);}
+ .mk-partial-slider-row{display:flex;align-items:center;gap:8px;}
+ .mk-partial-slider{flex:1;}
+@@ -4779,20 +4793,26 @@
+             var client = Factory.TryCreateRestClient();
+             if (client == null) return;
+ 
++            // Combine: open positions + active symbol + recently visible symbols
++            // Previously only queried symbols with open positions — if no positions
++            // were open, history was always empty. Now also includes the active
++            // symbol and up to 10 symbols from the visible ticker list.
+             var symbols = _allPositions.Select(p => p.Symbol)
+                 .Concat(string.IsNullOrEmpty(_activeSym) ? Array.Empty<string>() : new[] { _activeSym })
+-                .Distinct().Take(10).ToList();
++                .Concat(Series.Take(15).Select(m => m.Symbol))
++                .Distinct().Take(20).ToList();
+ 
+             var results = new List<RealTradeRow>();
+-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
++            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+             foreach (var sym in symbols)
+             {
+                 try
+                 {
+-                    var r = await client.UsdFuturesApi.Trading.GetUserTradesAsync(sym, limit: 30, ct: cts.Token);
++                    var r = await client.UsdFuturesApi.Trading.GetUserTradesAsync(sym, limit: 20, ct: cts.Token);
+                     if (!r.Success || r.Data == null) continue;
+                     foreach (var t in r.Data)
+                     {
++                        if (t.RealizedPnl == 0) continue; // skip entry fills, only closing trades
+                         results.Add(new RealTradeRow
+                         {
+                             Symbol = t.Symbol, Side = t.Buyer ? "BUY" : "SELL",
