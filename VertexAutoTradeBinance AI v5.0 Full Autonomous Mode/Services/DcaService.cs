@@ -183,6 +183,38 @@ namespace VertexAutoTradeBinance8.Services
             }
             decimal currentPrice = tickerRes.Data.Price;
 
+            // Clamp leverage to a safe range and sync it with the exchange
+            // before calculating position size. Without this, the account's
+            // current leverage for the symbol (which could be anything — left
+            // over from a manual trade, or the Binance default) silently
+            // determined the actual margin used, making the math below wrong.
+            int leverage = Math.Clamp(opts.Leverage > 0 ? opts.Leverage : 3, 1, 20);
+            try
+            {
+                // Clamp to the exchange's own max for this symbol (e.g. some
+                // low-liquidity alts cap out at 10x even if 20x is configured).
+                var brackets = await client.UsdFuturesApi.Account.GetBracketsAsync(symbol, ct: ct).ConfigureAwait(false);
+                if (brackets.Success && brackets.Data != null)
+                {
+                    var sb = brackets.Data.FirstOrDefault(b => b.Symbol == symbol);
+                    int exchangeMax = sb?.Brackets?.Length > 0 ? sb.Brackets.Max(b => b.InitialLeverage) : 20;
+                    if (leverage > exchangeMax)
+                    {
+                        _logger.LogWarning("[DCA][{symbol}] Configured leverage {cfg}x exceeds exchange max {max}x — clamping", symbol, leverage, exchangeMax);
+                        leverage = exchangeMax;
+                    }
+                }
+                var levRes = await client.UsdFuturesApi.Account.ChangeInitialLeverageAsync(symbol, leverage, ct: ct).ConfigureAwait(false);
+                if (!levRes.Success)
+                    _logger.LogWarning("[DCA][{symbol}] ChangeInitialLeverageAsync failed: {err} — proceeding with account's current setting", symbol, levRes.Error?.Message);
+                else
+                    _logger.LogInformation("[DCA][{symbol}] Leverage set to {lev}x", symbol, leverage);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[DCA][{symbol}] Leverage sync failed — proceeding", symbol);
+            }
+
             bool dipBonusApplied = false;
             decimal finalUsdtAmount = usdtAmount;
 

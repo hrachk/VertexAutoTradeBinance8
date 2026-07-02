@@ -1,0 +1,94 @@
+--- a/VertexAutoTradeBinance AI v5.0 Full Autonomous Mode/Configuration/DcaOptions.cs
++++ b/VertexAutoTradeBinance AI v5.0 Full Autonomous Mode/Configuration/DcaOptions.cs
+@@ -16,6 +16,21 @@
+         public bool Enabled { get; set; } = false;
+ 
+         /// <summary>
++        /// Leverage applied to every DCA entry order on Binance Futures.
++        /// Range: 1–20. Default: 3.
++        ///
++        /// DCA is an accumulation strategy, not a directional bet —
++        /// moderate leverage (3–5x) amplifies the compounding effect
++        /// of cost-averaging without approaching the liquidation risk
++        /// of the main signal-reactive engine (which runs 19–25x).
++        /// Setting this to 1 replicates pure spot-equivalent exposure
++        /// on a Futures account (full notional backed by margin, no
++        /// amplification). Setting it above 5 is not recommended for
++        /// a schedule-driven strategy that does not use stop-losses.
++        /// </summary>
++        public int Leverage { get; set; } = 3;
++
++        /// <summary>
+         /// How the total per-cycle budget is split across symbols when
+         /// more than one is configured. "Weighted" uses each entry's
+         /// own Weight (e.g. BTC gets the largest share, alts smaller -
+--- a/VertexAutoTradeBinance AI v5.0 Full Autonomous Mode/Services/DcaService.cs
++++ b/VertexAutoTradeBinance AI v5.0 Full Autonomous Mode/Services/DcaService.cs
+@@ -183,6 +183,38 @@
+             }
+             decimal currentPrice = tickerRes.Data.Price;
+ 
++            // Clamp leverage to a safe range and sync it with the exchange
++            // before calculating position size. Without this, the account's
++            // current leverage for the symbol (which could be anything — left
++            // over from a manual trade, or the Binance default) silently
++            // determined the actual margin used, making the math below wrong.
++            int leverage = Math.Clamp(opts.Leverage > 0 ? opts.Leverage : 3, 1, 20);
++            try
++            {
++                // Clamp to the exchange's own max for this symbol (e.g. some
++                // low-liquidity alts cap out at 10x even if 20x is configured).
++                var brackets = await client.UsdFuturesApi.Account.GetBracketsAsync(symbol, ct: ct).ConfigureAwait(false);
++                if (brackets.Success && brackets.Data != null)
++                {
++                    var sb = brackets.Data.FirstOrDefault(b => b.Symbol == symbol);
++                    int exchangeMax = sb?.Brackets?.Length > 0 ? sb.Brackets.Max(b => b.InitialLeverage) : 20;
++                    if (leverage > exchangeMax)
++                    {
++                        _logger.LogWarning("[DCA][{symbol}] Configured leverage {cfg}x exceeds exchange max {max}x — clamping", symbol, leverage, exchangeMax);
++                        leverage = exchangeMax;
++                    }
++                }
++                var levRes = await client.UsdFuturesApi.Account.ChangeInitialLeverageAsync(symbol, leverage, ct: ct).ConfigureAwait(false);
++                if (!levRes.Success)
++                    _logger.LogWarning("[DCA][{symbol}] ChangeInitialLeverageAsync failed: {err} — proceeding with account's current setting", symbol, levRes.Error?.Message);
++                else
++                    _logger.LogInformation("[DCA][{symbol}] Leverage set to {lev}x", symbol, leverage);
++            }
++            catch (Exception ex)
++            {
++                _logger.LogWarning(ex, "[DCA][{symbol}] Leverage sync failed — proceeding", symbol);
++            }
++
+             bool dipBonusApplied = false;
+             decimal finalUsdtAmount = usdtAmount;
+ 
+--- a/VertexAutoTradeBinance AI v5.0 Full Autonomous Mode/appsettings.json
++++ b/VertexAutoTradeBinance AI v5.0 Full Autonomous Mode/appsettings.json
+@@ -100,6 +100,7 @@
+   },
+   "Dca": {
+     "Enabled": false,
++    "Leverage": 3,
+     "AllocationMode": "Weighted",
+     "Symbols": [
+       { "Symbol": "BTCUSDT", "Weight": 60 },
+--- a/VertexAutoTradeBinance8.Web/Services/DemoAccountService.cs
++++ b/VertexAutoTradeBinance8.Web/Services/DemoAccountService.cs
+@@ -515,10 +515,12 @@
+                 decimal qty = price > 0 ? usdtAmount / price : 0m;
+                 if (qty <= 0) continue;
+ 
+-                // DCA is spot-style accumulation, not a leveraged
+-                // directional bet — leverage 1, matching the real
+-                // Engine-side DcaService's own approach.
+-                var (ok, error) = OpenMarketPosition(entry.Symbol, "LONG", qty, 1, price, null, null);
++                // Use the configured DCA leverage (default 3x), same
++                // as the real Engine-side DcaService — previously this
++                // was hardcoded to 1, meaning demo always ran at 1x
++                // while live would run at the configured leverage.
++                int dcaLeverage = Math.Clamp(opts.Leverage > 0 ? opts.Leverage : 3, 1, 20);
++                var (ok, error) = OpenMarketPosition(entry.Symbol, "LONG", qty, dcaLeverage, price, null, null);
+                 if (!ok)
+                 {
+                     _logger.LogWarning("[DEMO-DCA] Buy failed for {symbol}: {error}", entry.Symbol, error);

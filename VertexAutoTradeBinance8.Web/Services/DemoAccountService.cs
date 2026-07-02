@@ -515,10 +515,12 @@ public sealed class DemoAccountService
                 decimal qty = price > 0 ? usdtAmount / price : 0m;
                 if (qty <= 0) continue;
 
-                // DCA is spot-style accumulation, not a leveraged
-                // directional bet — leverage 1, matching the real
-                // Engine-side DcaService's own approach.
-                var (ok, error) = OpenMarketPosition(entry.Symbol, "LONG", qty, 1, price, null, null);
+                // Use the configured DCA leverage (default 3x), same
+                // as the real Engine-side DcaService — previously this
+                // was hardcoded to 1, meaning demo always ran at 1x
+                // while live would run at the configured leverage.
+                int dcaLeverage = Math.Clamp(opts.Leverage > 0 ? opts.Leverage : 3, 1, 20);
+                var (ok, error) = OpenMarketPosition(entry.Symbol, "LONG", qty, dcaLeverage, price, null, null);
                 if (!ok)
                 {
                     _logger.LogWarning("[DEMO-DCA] Buy failed for {symbol}: {error}", entry.Symbol, error);

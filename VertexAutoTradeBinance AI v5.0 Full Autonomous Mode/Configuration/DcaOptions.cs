@@ -16,6 +16,21 @@ namespace VertexAutoTradeBinance8.Configuration
         public bool Enabled { get; set; } = false;
 
         /// <summary>
+        /// Leverage applied to every DCA entry order on Binance Futures.
+        /// Range: 1–20. Default: 3.
+        ///
+        /// DCA is an accumulation strategy, not a directional bet —
+        /// moderate leverage (3–5x) amplifies the compounding effect
+        /// of cost-averaging without approaching the liquidation risk
+        /// of the main signal-reactive engine (which runs 19–25x).
+        /// Setting this to 1 replicates pure spot-equivalent exposure
+        /// on a Futures account (full notional backed by margin, no
+        /// amplification). Setting it above 5 is not recommended for
+        /// a schedule-driven strategy that does not use stop-losses.
+        /// </summary>
+        public int Leverage { get; set; } = 3;
+
+        /// <summary>
         /// How the total per-cycle budget is split across symbols when
         /// more than one is configured. "Weighted" uses each entry's
         /// own Weight (e.g. BTC gets the largest share, alts smaller -
