@@ -154,8 +154,13 @@ else
                         var intensity = pnl != 0 ? Math.Min(Math.Abs(pnl) / Math.Max(_maxDayAbsPnl, 1m), 1m) : 0m;
                         var alpha = 0.15m + intensity * 0.75m;
                         var bg = pnl > 0 ? $"rgba(34,197,94,{alpha:F2})" : pnl < 0 ? $"rgba(239,68,68,{alpha:F2})" : "rgba(255,255,255,.04)";
-                        <div class="st-cal-day @cls" style="background:@bg"
-                             title="@day.ToString("MMM d"): @(pnl >= 0 ? "+" : "")@pnl.ToString("F2") USDT">
+                        @{
+                            var dayLabel = day.ToString("MMM d");
+                            var pnlSign  = pnl >= 0 ? "+" : "";
+                            var pnlFmt   = pnl.ToString("F2");
+                            var tooltip  = dayLabel + ": " + pnlSign + pnlFmt + " USDT";
+                        }
+                        <div class="st-cal-day @cls" style="background:@bg" title="@tooltip">
                             <span class="st-cal-num">@day.Day</span>
                         </div>
                     }
