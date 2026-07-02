@@ -1,0 +1,693 @@
+@page "/statistics"
+@using VertexAutoTradeBinance8.Web.Services
+@using VertexAutoTradeBinance8.Web.Models
+@using VertexAutoTradeBinance8.Web.Demo
+@using Binance.Net.Interfaces.Clients
+@inject MissedTradeFileService MissedSvc
+@inject DemoAccountService DemoAccount
+@inject IBinanceRestClient Binance
+@inject IJSRuntime JS
+@implements IDisposable
+
+<PageTitle>Vertex AI — Statistics</PageTitle>
+
+<div class="st-root">
+
+<!-- ═══════════════════ HEADER ═══════════════════ -->
+<div class="st-header">
+    <div class="st-header-left">
+        <h1 class="st-title">Performance</h1>
+        <div class="st-mode-badge @(_demoMode ? "st-mode-demo" : "st-mode-live")">
+            @(_demoMode ? "DEMO" : "LIVE")
+        </div>
+    </div>
+    <div class="st-header-right">
+        <!-- Mode toggle -->
+        <button class="st-mode-btn @(!_demoMode ? "st-mode-btn-on" : "")" @onclick="() => SetMode(false)">Live</button>
+        <button class="st-mode-btn @(_demoMode ? "st-mode-btn-on" : "")" @onclick="() => SetMode(true)">Demo</button>
+        <div class="st-sep"></div>
+        <!-- Range selector -->
+        @foreach (var r in new[] { ("7D","7D"), ("30D","30D"), ("90D","90D"), ("ALL","All") })
+        {
+            <button class="st-range-btn @(_range == r.Item1 ? "st-range-btn-on" : "")"
+                    @onclick="() => SetRange(r.Item1)">@r.Item2</button>
+        }
+        <div class="st-sep"></div>
+        <input class="st-date-input" type="date" @bind="_dateFrom" @bind:after="LoadData" title="From" />
+        <span class="st-dim">—</span>
+        <input class="st-date-input" type="date" @bind="_dateTo" @bind:after="LoadData" title="To" />
+    </div>
+</div>
+
+@if (_loading)
+{
+    <div class="st-loading"><div class="st-spinner"></div> Loading...</div>
+}
+else
+{
+
+<!-- ═══════════════════ KPI ROW ═══════════════════ -->
+<div class="st-kpi-row">
+    <div class="st-kpi">
+        <div class="st-kpi-label">Net PnL</div>
+        <div class="st-kpi-value @(_stats.NetPnl >= 0 ? "st-up" : "st-dn")">
+            @(_stats.NetPnl >= 0 ? "+" : "")@_stats.NetPnl.ToString("F2") <span class="st-kpi-unit">USDT</span>
+        </div>
+    </div>
+    <div class="st-kpi">
+        <div class="st-kpi-label">Win Rate</div>
+        <div class="st-kpi-value @(_stats.WinRate >= 50 ? "st-up" : "st-dn")">
+            @_stats.WinRate.ToString("F1")<span class="st-kpi-unit">%</span>
+        </div>
+    </div>
+    <div class="st-kpi">
+        <div class="st-kpi-label">Total Trades</div>
+        <div class="st-kpi-value">@_stats.TotalTrades</div>
+    </div>
+    <div class="st-kpi">
+        <div class="st-kpi-label">Avg Win</div>
+        <div class="st-kpi-value st-up">+@_stats.AvgWin.ToString("F2")</div>
+    </div>
+    <div class="st-kpi">
+        <div class="st-kpi-label">Avg Loss</div>
+        <div class="st-kpi-value st-dn">@_stats.AvgLoss.ToString("F2")</div>
+    </div>
+    <div class="st-kpi">
+        <div class="st-kpi-label">Profit Factor</div>
+        <div class="st-kpi-value @(_stats.ProfitFactor >= 1 ? "st-up" : "st-dn")">
+            @_stats.ProfitFactor.ToString("F2")
+        </div>
+    </div>
+    <div class="st-kpi">
+        <div class="st-kpi-label">Max Drawdown</div>
+        <div class="st-kpi-value st-dn">@_stats.MaxDrawdown.ToString("F2")</div>
+    </div>
+    <div class="st-kpi">
+        <div class="st-kpi-label">Best Trade</div>
+        <div class="st-kpi-value st-up">+@_stats.BestTrade.ToString("F2")</div>
+    </div>
+    <div class="st-kpi">
+        <div class="st-kpi-label">Worst Trade</div>
+        <div class="st-kpi-value st-dn">@_stats.WorstTrade.ToString("F2")</div>
+    </div>
+    <div class="st-kpi">
+        <div class="st-kpi-label">Avg Duration</div>
+        <div class="st-kpi-value">@_stats.AvgDuration</div>
+    </div>
+</div>
+
+<!-- ═══════════════════ MAIN BODY ═══════════════════ -->
+<div class="st-body">
+
+    <!-- LEFT: Cumulative PnL chart + Calendar -->
+    <div class="st-left">
+
+        <!-- Cumulative PnL curve -->
+        <div class="st-card">
+            <div class="st-card-title">Cumulative PnL</div>
+            <div class="st-chart-wrap" id="st-pnl-chart">
+                @if (_dailyPnl.Count > 0)
+                {
+                    <svg class="st-svg" viewBox="0 0 @_svgW @_svgH" preserveAspectRatio="none">
+                        @{
+                            var pts = BuildCurvePts(_cumulativePnl, _svgW, _svgH);
+                            var isPos = _stats.NetPnl >= 0;
+                            var lineColor = isPos ? "#22c55e" : "#ef4444";
+                            var fillColor = isPos ? "rgba(34,197,94,.12)" : "rgba(239,68,68,.12)";
+                        }
+                        <!-- Fill -->
+                        <path d="@BuildFillPath(pts, _svgW, _svgH)" fill="@fillColor" />
+                        <!-- Zero line -->
+                        @{ var zeroY = PnlToY(0, _cumulativePnl, _svgH); }
+                        <line x1="0" y1="@zeroY" x2="@_svgW" y2="@zeroY"
+                              stroke="#334155" stroke-width="1" stroke-dasharray="4 4"/>
+                        <!-- Curve -->
+                        <polyline points="@pts" fill="none" stroke="@lineColor" stroke-width="2" stroke-linejoin="round"/>
+                    </svg>
+                }
+                else
+                {
+                    <div class="st-empty">No trade history in selected range</div>
+                }
+            </div>
+        </div>
+
+        <!-- Calendar heatmap -->
+        <div class="st-card">
+            <div class="st-card-title">Daily PnL Calendar</div>
+            <div class="st-calendar">
+                @{
+                    var calStart = new DateTime(_dateTo.Year, _dateTo.Month, 1).AddMonths(-2);
+                    var calDays = Enumerable.Range(0, 90).Select(i => calStart.AddDays(i)).ToList();
+                    var firstDow = (int)calStart.DayOfWeek;
+                }
+                <div class="st-cal-grid">
+                    @foreach (var dow in new[] { "S","M","T","W","T","F","S" })
+                    {
+                        <div class="st-cal-dow">@dow</div>
+                    }
+                    @for (int i = 0; i < firstDow; i++) { <div></div> }
+                    @foreach (var day in calDays.Where(d => d <= _dateTo))
+                    {
+                        var pnl = _dailyPnl.TryGetValue(day.Date, out var v) ? v : 0m;
+                        var cls = pnl > 0 ? "st-cal-pos" : pnl < 0 ? "st-cal-neg" : "st-cal-zero";
+                        var intensity = pnl != 0 ? Math.Min(Math.Abs(pnl) / Math.Max(_maxDayAbsPnl, 1m), 1m) : 0m;
+                        var alpha = 0.15m + intensity * 0.75m;
+                        var bg = pnl > 0 ? $"rgba(34,197,94,{alpha:F2})" : pnl < 0 ? $"rgba(239,68,68,{alpha:F2})" : "rgba(255,255,255,.04)";
+                        <div class="st-cal-day @cls" style="background:@bg"
+                             title="@day.ToString("MMM d"): @(pnl >= 0 ? "+" : "")@pnl.ToString("F2") USDT">
+                            <span class="st-cal-num">@day.Day</span>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- Long vs Short breakdown -->
+        <div class="st-card">
+            <div class="st-card-title">Long vs Short</div>
+            <div class="st-split-row">
+                <div class="st-split-side">
+                    <div class="st-split-label">LONG</div>
+                    <div class="st-split-val @(_stats.LongPnl >= 0 ? "st-up" : "st-dn")">
+                        @(_stats.LongPnl >= 0 ? "+" : "")@_stats.LongPnl.ToString("F2")
+                    </div>
+                    <div class="st-split-sub">@_stats.LongWins W / @_stats.LongLosses L</div>
+                    <div class="st-split-wr">Win rate: @(_stats.LongTrades > 0 ? (100m * _stats.LongWins / _stats.LongTrades).ToString("F1") : "—")%</div>
+                </div>
+                <div class="st-split-divider"></div>
+                <div class="st-split-side">
+                    <div class="st-split-label">SHORT</div>
+                    <div class="st-split-val @(_stats.ShortPnl >= 0 ? "st-up" : "st-dn")">
+                        @(_stats.ShortPnl >= 0 ? "+" : "")@_stats.ShortPnl.ToString("F2")
+                    </div>
+                    <div class="st-split-sub">@_stats.ShortWins W / @_stats.ShortLosses L</div>
+                    <div class="st-split-wr">Win rate: @(_stats.ShortTrades > 0 ? (100m * _stats.ShortWins / _stats.ShortTrades).ToString("F1") : "—")%</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- RIGHT: Symbol breakdown + Trade log -->
+    <div class="st-right">
+
+        <!-- Top symbols by PnL -->
+        <div class="st-card">
+            <div class="st-card-title">By Symbol</div>
+            <div class="st-sym-list">
+                @foreach (var row in _bySymbol.Take(10))
+                {
+                    var barW = _bySymbol.Count > 0 && _bySymbol[0].AbsPnl > 0
+                        ? (int)(100 * row.AbsPnl / _bySymbol[0].AbsPnl) : 0;
+                    <div class="st-sym-row">
+                        <span class="st-sym-name">@row.Symbol</span>
+                        <div class="st-sym-bar-wrap">
+                            <div class="st-sym-bar @(row.Pnl >= 0 ? "st-sym-bar-pos" : "st-sym-bar-neg")"
+                                 style="width:@barW%"></div>
+                        </div>
+                        <span class="st-sym-pnl @(row.Pnl >= 0 ? "st-up" : "st-dn")">
+                            @(row.Pnl >= 0 ? "+" : "")@row.Pnl.ToString("F2")
+                        </span>
+                        <span class="st-sym-cnt">@row.Count tr.</span>
+                    </div>
+                }
+                @if (_bySymbol.Count == 0)
+                {
+                    <div class="st-empty">No data</div>
+                }
+            </div>
+        </div>
+
+        <!-- Close reason breakdown -->
+        <div class="st-card">
+            <div class="st-card-title">Close Reasons</div>
+            <div class="st-reason-grid">
+                @foreach (var r in _byReason)
+                {
+                    <div class="st-reason-row">
+                        <span class="st-reason-label">@r.Key</span>
+                        <div class="st-reason-bar-wrap">
+                            <div class="st-reason-bar"
+                                 style="width:@(Math.Min(100, (int)(100m * r.Value / Math.Max(_stats.TotalTrades, 1)))  )%"></div>
+                        </div>
+                        <span class="st-reason-cnt">@r.Value</span>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Trade log -->
+        <div class="st-card st-card-trades">
+            <div class="st-card-title">
+                Trade Log
+                <span class="st-card-sub">(@_trades.Count trades in range)</span>
+            </div>
+            <div class="st-trade-scroll">
+                <table class="st-trade-tbl">
+                    <thead>
+                        <tr>
+                            <th @onclick='() => SetTradeSort("time")'>Time @SortArrow("time")</th>
+                            <th @onclick='() => SetTradeSort("sym")'>Symbol @SortArrow("sym")</th>
+                            <th>Side</th>
+                            <th @onclick='() => SetTradeSort("pnl")'>PnL @SortArrow("pnl")</th>
+                            <th>Entry</th><th>Exit</th>
+                            <th>Duration</th><th>Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var t in SortedTrades.Take(200))
+                        {
+                            <tr class="@(t.Pnl >= 0 ? "st-tr-win" : "st-tr-loss")">
+                                <td class="st-mono st-dim">@t.ClosedAt.ToLocalTime().ToString("MM/dd HH:mm")</td>
+                                <td class="st-sym-cell">@t.Symbol</td>
+                                <td class="@(t.Side == "LONG" ? "st-up" : "st-dn")">@t.Side</td>
+                                <td class="st-mono @(t.Pnl >= 0 ? "st-up" : "st-dn")">
+                                    @(t.Pnl >= 0 ? "+" : "")@t.Pnl.ToString("F2")
+                                </td>
+                                <td class="st-mono">@t.EntryPrice.ToString("G6")</td>
+                                <td class="st-mono">@t.ExitPrice.ToString("G6")</td>
+                                <td class="st-dim">@FormatDuration(t.OpenedAt, t.ClosedAt)</td>
+                                <td class="st-reason-pill @ReasonClass(t.CloseReason)">@t.CloseReason</td>
+                            </tr>
+                        }
+                        @if (!_trades.Any())
+                        {
+                            <tr><td colspan="8" class="st-empty">No closed trades in selected range</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+</div>
+} <!-- end !loading -->
+</div>
+
+<style>
+:root { --st-bg: #0a0d12; --st-bg2: #0f1623; --st-bg3: #111827; --st-bdr: #1e2d47; --st-acc: #3b82f6; --st-dim: #475569; --st-txt: #e2e8f0; --st-up: #22c55e; --st-dn: #ef4444; }
+
+.st-root { background: var(--st-bg); min-height: 100vh; color: var(--st-txt); font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px 28px; display: flex; flex-direction: column; gap: 20px; }
+
+/* Header */
+.st-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.st-header-left { display: flex; align-items: center; gap: 12px; }
+.st-title { font-size: 22px; font-weight: 800; color: var(--st-txt); margin: 0; letter-spacing: -.4px; }
+.st-mode-badge { font-size: 10px; font-weight: 800; letter-spacing: 1.5px; padding: 3px 10px; border-radius: 6px; }
+.st-mode-live { background: rgba(34,197,94,.15); color: #22c55e; border: 1px solid rgba(34,197,94,.3); }
+.st-mode-demo { background: rgba(234,179,8,.12); color: #eab308; border: 1px solid rgba(234,179,8,.3); }
+.st-header-right { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.st-mode-btn, .st-range-btn { padding: 5px 13px; border-radius: 6px; border: 1px solid var(--st-bdr); background: transparent; color: var(--st-dim); cursor: pointer; font-size: 12px; font-weight: 700; transition: all .12s; }
+.st-mode-btn:hover, .st-range-btn:hover { color: var(--st-txt); border-color: #334155; }
+.st-mode-btn-on, .st-range-btn-on { background: var(--st-acc)!important; border-color: var(--st-acc)!important; color: #fff!important; box-shadow: 0 2px 8px rgba(59,130,246,.3); }
+.st-sep { width: 1px; height: 22px; background: var(--st-bdr); margin: 0 4px; }
+.st-date-input { background: var(--st-bg3); border: 1px solid var(--st-bdr); color: var(--st-txt); border-radius: 6px; padding: 5px 8px; font-size: 12px; cursor: pointer; }
+.st-date-input:focus { outline: none; border-color: var(--st-acc); }
+.st-dim { color: var(--st-dim); font-size: 12px; }
+
+/* KPI row */
+.st-kpi-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.st-kpi { background: var(--st-bg2); border: 1px solid var(--st-bdr); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
+.st-kpi-label { font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--st-dim); }
+.st-kpi-value { font-size: 20px; font-weight: 800; font-family: 'Cascadia Code', 'Fira Code', monospace; }
+.st-kpi-unit { font-size: 11px; font-weight: 600; opacity: .6; }
+.st-up { color: var(--st-up)!important; }
+.st-dn { color: var(--st-dn)!important; }
+
+/* Body layout */
+.st-body { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .st-body { grid-template-columns: 1fr; } }
+.st-left, .st-right { display: flex; flex-direction: column; gap: 16px; }
+
+/* Card */
+.st-card { background: var(--st-bg2); border: 1px solid var(--st-bdr); border-radius: 12px; padding: 18px 20px; }
+.st-card-title { font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--st-dim); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+.st-card-sub { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.st-empty { text-align: center; color: var(--st-dim); font-size: 13px; padding: 24px 0; }
+
+/* Chart */
+.st-chart-wrap { height: 160px; width: 100%; position: relative; }
+.st-svg { width: 100%; height: 100%; display: block; }
+
+/* Calendar */
+.st-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.st-cal-dow { font-size: 9px; font-weight: 700; color: var(--st-dim); text-align: center; padding-bottom: 2px; }
+.st-cal-day { aspect-ratio: 1; border-radius: 3px; display: flex; align-items: center; justify-content: center; cursor: default; transition: transform .1s; }
+.st-cal-day:hover { transform: scale(1.15); z-index: 1; position: relative; }
+.st-cal-num { font-size: 9px; color: rgba(255,255,255,.5); font-weight: 600; }
+
+/* Long/Short split */
+.st-split-row { display: flex; gap: 0; }
+.st-split-side { flex: 1; text-align: center; padding: 8px; }
+.st-split-label { font-size: 10px; font-weight: 800; letter-spacing: 1.5px; color: var(--st-dim); margin-bottom: 6px; }
+.st-split-val { font-size: 22px; font-weight: 800; font-family: monospace; }
+.st-split-sub { font-size: 11px; color: var(--st-dim); margin-top: 4px; }
+.st-split-wr { font-size: 11px; color: var(--st-dim); margin-top: 2px; }
+.st-split-divider { width: 1px; background: var(--st-bdr); margin: 8px 0; }
+
+/* Symbol breakdown */
+.st-sym-list { display: flex; flex-direction: column; gap: 7px; }
+.st-sym-row { display: flex; align-items: center; gap: 10px; }
+.st-sym-name { font-size: 12px; font-weight: 700; font-family: monospace; width: 100px; flex-shrink: 0; color: var(--st-txt); }
+.st-sym-bar-wrap { flex: 1; height: 6px; background: rgba(255,255,255,.05); border-radius: 3px; overflow: hidden; }
+.st-sym-bar { height: 100%; border-radius: 3px; transition: width .3s; }
+.st-sym-bar-pos { background: var(--st-up); }
+.st-sym-bar-neg { background: var(--st-dn); }
+.st-sym-pnl { font-size: 12px; font-weight: 700; font-family: monospace; width: 72px; text-align: right; flex-shrink: 0; }
+.st-sym-cnt { font-size: 10px; color: var(--st-dim); width: 40px; text-align: right; flex-shrink: 0; }
+
+/* Reasons */
+.st-reason-grid { display: flex; flex-direction: column; gap: 6px; }
+.st-reason-row { display: flex; align-items: center; gap: 10px; }
+.st-reason-label { width: 80px; font-size: 11px; font-weight: 700; color: var(--st-txt); flex-shrink: 0; }
+.st-reason-bar-wrap { flex: 1; height: 5px; background: rgba(255,255,255,.05); border-radius: 3px; overflow: hidden; }
+.st-reason-bar { height: 100%; background: var(--st-acc); border-radius: 3px; transition: width .3s; }
+.st-reason-cnt { font-size: 11px; color: var(--st-dim); width: 28px; text-align: right; flex-shrink: 0; }
+
+/* Trade table */
+.st-card-trades { padding-bottom: 0; }
+.st-trade-scroll { overflow-x: auto; overflow-y: auto; max-height: 420px; border-radius: 0 0 12px 12px; }
+.st-trade-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.st-trade-tbl th { text-align: left; padding: 8px 10px; background: var(--st-bg3); color: var(--st-dim); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; border-bottom: 1px solid var(--st-bdr); cursor: pointer; user-select: none; white-space: nowrap; position: sticky; top: 0; z-index: 1; }
+.st-trade-tbl th:hover { color: var(--st-txt); }
+.st-trade-tbl td { padding: 7px 10px; border-bottom: 1px solid rgba(30,45,71,.5); white-space: nowrap; }
+.st-trade-tbl tr:last-child td { border-bottom: none; }
+.st-tr-win { background: transparent; }
+.st-tr-loss { background: rgba(239,68,68,.02); }
+.st-trade-tbl tr:hover td { background: rgba(255,255,255,.02); }
+.st-mono { font-family: monospace; }
+.st-sym-cell { font-weight: 700; }
+.st-reason-pill { border-radius: 4px; padding: 2px 7px; font-size: 10px; font-weight: 800; letter-spacing: .5px; }
+.st-reason-sl { background: rgba(239,68,68,.15); color: #ef4444; }
+.st-reason-tp { background: rgba(34,197,94,.15); color: #22c55e; }
+.st-reason-manual { background: rgba(59,130,246,.15); color: #60a5fa; }
+.st-reason-other { background: rgba(148,163,184,.1); color: #94a3b8; }
+
+/* Loading */
+.st-loading { display: flex; align-items: center; justify-content: center; gap: 12px; height: 200px; color: var(--st-dim); font-size: 14px; }
+.st-spinner { width: 20px; height: 20px; border: 2px solid var(--st-bdr); border-top-color: var(--st-acc); border-radius: 50%; animation: st-spin .7s linear infinite; }
+@@keyframes st-spin { to { transform: rotate(360deg); } }
+</style>
+
+@code {
+    bool _loading = true;
+    bool _demoMode = false;
+    string _range = "30D";
+    DateTime _dateFrom = DateTime.Today.AddDays(-30);
+    DateTime _dateTo = DateTime.Today;
+
+    // Computed stats
+    PerfStats _stats = new();
+    Dictionary<DateTime, decimal> _dailyPnl = new();
+    List<decimal> _cumulativePnl = new();
+    decimal _maxDayAbsPnl = 1m;
+    List<SymRow> _bySymbol = new();
+    Dictionary<string, int> _byReason = new();
+    List<TradeRow> _trades = new();
+
+    // Trade log sort
+    string _tradeSort = "time";
+    bool _tradeSortAsc = false;
+
+    // SVG dimensions
+    const int _svgW = 600, _svgH = 140;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Restore Demo/Live mode from localStorage
+        try
+        {
+            var saved = await JS.InvokeAsync<string?>("localStorage.getItem", "vertexMarketState");
+            if (!string.IsNullOrEmpty(saved))
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(saved);
+                if (doc.RootElement.TryGetProperty("demoMode", out var dm))
+                    _demoMode = dm.GetBoolean();
+            }
+        }
+        catch { }
+        await LoadData();
+    }
+
+    async Task SetMode(bool demo)
+    {
+        _demoMode = demo;
+        await LoadData();
+    }
+
+    async Task SetRange(string r)
+    {
+        _range = r;
+        (_dateFrom, _dateTo) = r switch
+        {
+            "7D"  => (DateTime.Today.AddDays(-7),  DateTime.Today),
+            "30D" => (DateTime.Today.AddDays(-30), DateTime.Today),
+            "90D" => (DateTime.Today.AddDays(-90), DateTime.Today),
+            _     => (DateTime.Today.AddYears(-5), DateTime.Today), // ALL
+        };
+        await LoadData();
+    }
+
+    async Task LoadData()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            _trades = _demoMode ? await LoadDemoTrades() : await LoadLiveTrades();
+            Compute();
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    // ─── Demo data source ───────────────────────────────────────────
+    Task<List<TradeRow>> LoadDemoTrades()
+    {
+        var demo = DemoAccount.GetSnapshot().History;
+        var rows = demo
+            .Where(t => t.ClosedAtUtc.Date >= _dateFrom && t.ClosedAtUtc.Date <= _dateTo)
+            .Select(t => new TradeRow
+            {
+                Symbol = t.Symbol, Side = t.Side,
+                EntryPrice = t.EntryPrice, ExitPrice = t.ExitPrice,
+                Qty = t.Qty, Pnl = t.RealizedPnl,
+                CloseReason = t.CloseReason,
+                OpenedAt = t.OpenedAtUtc, ClosedAt = t.ClosedAtUtc,
+            }).ToList();
+        return Task.FromResult(rows);
+    }
+
+    // ─── Live data source (Binance API) ─────────────────────────────
+    async Task<List<TradeRow>> LoadLiveTrades()
+    {
+        var rows = new List<TradeRow>();
+        try
+        {
+            // GetUserTrades per symbol is weight-heavy; use income history
+            // (REALIZED_PNL type) as the primary source — it covers ALL
+            // symbols in one call and only includes closing fills.
+            var from = new DateTime(_dateFrom.Year, _dateFrom.Month, _dateFrom.Day, 0, 0, 0, DateTimeKind.Utc);
+            var to   = new DateTime(_dateTo.Year,   _dateTo.Month,   _dateTo.Day,   23, 59, 59, DateTimeKind.Utc);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var incomeRes = await Binance.UsdFuturesApi.Account.GetIncomeHistoryAsync(
+                incomeType: Binance.Net.Enums.IncomeType.RealizedPnl,
+                startTime: from, endTime: to, limit: 1000, ct: cts.Token);
+
+            if (incomeRes.Success && incomeRes.Data != null)
+            {
+                // Group by symbol+time proximity to reconstruct trade rows
+                foreach (var inc in incomeRes.Data)
+                {
+                    rows.Add(new TradeRow
+                    {
+                        Symbol = inc.Symbol ?? "—",
+                        Side = inc.Income >= 0 ? "LONG" : "SHORT", // approximate
+                        Pnl = inc.Income,
+                        CloseReason = "Close",
+                        ClosedAt = inc.Timestamp,
+                        OpenedAt = inc.Timestamp,
+                        EntryPrice = 0, ExitPrice = 0, Qty = 0,
+                    });
+                }
+            }
+        }
+        catch { }
+        return rows;
+    }
+
+    // ─── Stats computation ───────────────────────────────────────────
+    void Compute()
+    {
+        if (_trades.Count == 0)
+        {
+            _stats = new(); _dailyPnl = new(); _cumulativePnl = new();
+            _bySymbol = new(); _byReason = new(); _maxDayAbsPnl = 1m;
+            return;
+        }
+
+        var wins   = _trades.Where(t => t.Pnl > 0).ToList();
+        var losses = _trades.Where(t => t.Pnl < 0).ToList();
+
+        decimal grossWin  = wins.Sum(t => t.Pnl);
+        decimal grossLoss = Math.Abs(losses.Sum(t => t.Pnl));
+
+        // Cumulative PnL by day
+        _dailyPnl = _trades
+            .GroupBy(t => t.ClosedAt.Date)
+            .OrderBy(g => g.Key)
+            .ToDictionary(g => g.Key, g => g.Sum(t => t.Pnl));
+
+        // Cumulative curve (running sum)
+        decimal run = 0;
+        _cumulativePnl = _dailyPnl.OrderBy(kv => kv.Key)
+            .Select(kv => { run += kv.Value; return run; }).ToList();
+
+        _maxDayAbsPnl = _dailyPnl.Values.Select(Math.Abs).DefaultIfEmpty(1m).Max();
+
+        // Max drawdown
+        decimal peak = 0, dd = 0;
+        run = 0;
+        foreach (var v in _cumulativePnl)
+        {
+            if (v > peak) peak = v;
+            var cur = peak - v;
+            if (cur > dd) dd = cur;
+        }
+
+        // By symbol
+        _bySymbol = _trades
+            .GroupBy(t => t.Symbol)
+            .Select(g => new SymRow { Symbol = g.Key, Pnl = g.Sum(t => t.Pnl), Count = g.Count() })
+            .OrderByDescending(r => Math.Abs(r.Pnl))
+            .ToList();
+
+        // By reason
+        _byReason = _trades
+            .GroupBy(t => string.IsNullOrEmpty(t.CloseReason) ? "Close" : t.CloseReason)
+            .OrderByDescending(g => g.Count())
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var longs  = _trades.Where(t => t.Side == "LONG").ToList();
+        var shorts = _trades.Where(t => t.Side == "SHORT").ToList();
+
+        _stats = new PerfStats
+        {
+            NetPnl = _trades.Sum(t => t.Pnl),
+            TotalTrades = _trades.Count,
+            WinRate = _trades.Count > 0 ? 100m * wins.Count / _trades.Count : 0,
+            AvgWin = wins.Count > 0 ? wins.Average(t => t.Pnl) : 0,
+            AvgLoss = losses.Count > 0 ? losses.Average(t => t.Pnl) : 0,
+            ProfitFactor = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? 99.9m : 0,
+            MaxDrawdown = -dd,
+            BestTrade = _trades.Max(t => t.Pnl),
+            WorstTrade = _trades.Min(t => t.Pnl),
+            AvgDuration = ComputeAvgDuration(),
+            LongPnl = longs.Sum(t => t.Pnl),
+            ShortPnl = shorts.Sum(t => t.Pnl),
+            LongTrades = longs.Count, LongWins = longs.Count(t => t.Pnl > 0), LongLosses = longs.Count(t => t.Pnl < 0),
+            ShortTrades = shorts.Count, ShortWins = shorts.Count(t => t.Pnl > 0), ShortLosses = shorts.Count(t => t.Pnl < 0),
+        };
+    }
+
+    string ComputeAvgDuration()
+    {
+        var durs = _trades.Where(t => t.OpenedAt != t.ClosedAt)
+                          .Select(t => (t.ClosedAt - t.OpenedAt).TotalMinutes).ToList();
+        if (!durs.Any()) return "—";
+        var avg = durs.Average();
+        return avg < 60 ? $"{(int)avg}m" : avg < 1440 ? $"{avg / 60:F1}h" : $"{avg / 1440:F1}d";
+    }
+
+    // ─── SVG helpers ────────────────────────────────────────────────
+    string BuildCurvePts(List<decimal> vals, int w, int h)
+    {
+        if (vals.Count == 0) return "";
+        var min = vals.Min(); var max = vals.Max();
+        var range = max - min; if (range == 0) range = 1;
+        var pts = vals.Select((v, i) =>
+        {
+            double x = w * i / Math.Max(vals.Count - 1, 1);
+            double y = h - (double)((v - min) / range) * (h - 16) - 8;
+            return $"{x:F1},{y:F1}";
+        });
+        return string.Join(" ", pts);
+    }
+
+    string BuildFillPath(string pts, int w, int h)
+    {
+        if (string.IsNullOrEmpty(pts)) return "";
+        return $"M0,{h} L{pts.Replace(" ", " L")} L{w},{h} Z";
+    }
+
+    double PnlToY(decimal price, List<decimal> vals, int h)
+    {
+        if (vals.Count == 0) return h / 2.0;
+        var min = vals.Min(); var max = vals.Max();
+        var range = max - min; if (range == 0) range = 1;
+        return h - (double)((price - min) / range) * (h - 16) - 8;
+    }
+
+    // ─── Sorting ────────────────────────────────────────────────────
+    void SetTradeSort(string field)
+    {
+        if (_tradeSort == field) _tradeSortAsc = !_tradeSortAsc;
+        else { _tradeSort = field; _tradeSortAsc = false; }
+    }
+
+    IEnumerable<TradeRow> SortedTrades => _tradeSort switch
+    {
+        "sym" => _tradeSortAsc ? _trades.OrderBy(t => t.Symbol) : _trades.OrderByDescending(t => t.Symbol),
+        "pnl" => _tradeSortAsc ? _trades.OrderBy(t => t.Pnl) : _trades.OrderByDescending(t => t.Pnl),
+        _     => _tradeSortAsc ? _trades.OrderBy(t => t.ClosedAt) : _trades.OrderByDescending(t => t.ClosedAt),
+    };
+
+    string SortArrow(string f) => _tradeSort == f ? (_tradeSortAsc ? "↑" : "↓") : "";
+
+    string ReasonClass(string r) => r?.ToUpper() switch
+    {
+        var s when s?.StartsWith("SL") == true  => "st-reason-sl",
+        var s when s?.StartsWith("TP") == true  => "st-reason-tp",
+        "MANUAL" => "st-reason-manual",
+        _ => "st-reason-other"
+    };
+
+    string FormatDuration(DateTime from, DateTime to)
+    {
+        if (from == to) return "—";
+        var d = to - from;
+        return d.TotalMinutes < 60 ? $"{(int)d.TotalMinutes}m"
+             : d.TotalHours < 24  ? $"{d.TotalHours:F1}h"
+             : $"{d.TotalDays:F1}d";
+    }
+
+    // ─── Models ──────────────────────────────────────────────────────
+    record TradeRow
+    {
+        public string Symbol { get; init; } = "";
+        public string Side { get; init; } = "";
+        public decimal EntryPrice { get; init; }
+        public decimal ExitPrice { get; init; }
+        public decimal Qty { get; init; }
+        public decimal Pnl { get; init; }
+        public string CloseReason { get; init; } = "";
+        public DateTime OpenedAt { get; init; }
+        public DateTime ClosedAt { get; init; }
+    }
+
+    record SymRow { public string Symbol { get; init; } = ""; public decimal Pnl { get; init; } public decimal AbsPnl => Math.Abs(Pnl); public int Count { get; init; } }
+
+    class PerfStats
+    {
+        public decimal NetPnl, AvgWin, AvgLoss, BestTrade, WorstTrade, ProfitFactor, MaxDrawdown, WinRate;
+        public decimal LongPnl, ShortPnl;
+        public int TotalTrades, LongTrades, LongWins, LongLosses, ShortTrades, ShortWins, ShortLosses;
+        public string AvgDuration = "—";
+    }
+
+    public void Dispose() { }
+}
