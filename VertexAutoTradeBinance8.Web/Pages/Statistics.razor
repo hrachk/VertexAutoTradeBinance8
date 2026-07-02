@@ -2,10 +2,9 @@
 @using VertexAutoTradeBinance8.Web.Services
 @using VertexAutoTradeBinance8.Web.Models
 @using VertexAutoTradeBinance8.Web.Demo
-@using Binance.Net.Interfaces.Clients
 @inject MissedTradeFileService MissedSvc
 @inject DemoAccountService DemoAccount
-@inject IBinanceRestClient Binance
+@inject BinanceClientFactory Factory
 @inject IJSRuntime JS
 @implements IDisposable
 
@@ -316,7 +315,7 @@ else
 
 /* Body layout */
 .st-body { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
-@media (max-width: 1100px) { .st-body { grid-template-columns: 1fr; } }
+@@media (max-width: 1100px) { .st-body { grid-template-columns: 1fr; } }
 .st-left, .st-right { display: flex; flex-direction: column; gap: 16px; }
 
 /* Card */
@@ -494,23 +493,25 @@ else
             var to   = new DateTime(_dateTo.Year,   _dateTo.Month,   _dateTo.Day,   23, 59, 59, DateTimeKind.Utc);
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            var incomeRes = await Binance.UsdFuturesApi.Account.GetIncomeHistoryAsync(
-                incomeType: Binance.Net.Enums.IncomeType.RealizedPnl,
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return rows;
+
+            var incomeRes = await client.UsdFuturesApi.Account.GetIncomeHistoryAsync(
+                incomeType: "REALIZED_PNL",
                 startTime: from, endTime: to, limit: 1000, ct: cts.Token);
 
             if (incomeRes.Success && incomeRes.Data != null)
             {
-                // Group by symbol+time proximity to reconstruct trade rows
                 foreach (var inc in incomeRes.Data)
                 {
                     rows.Add(new TradeRow
                     {
-                        Symbol = inc.Symbol ?? "—",
-                        Side = inc.Income >= 0 ? "LONG" : "SHORT", // approximate
-                        Pnl = inc.Income,
+                        Symbol     = inc.Symbol ?? "—",
+                        Side       = inc.Income >= 0 ? "LONG" : "SHORT",
+                        Pnl        = inc.Income,
                         CloseReason = "Close",
-                        ClosedAt = inc.Timestamp,
-                        OpenedAt = inc.Timestamp,
+                        ClosedAt   = inc.Timestamp,
+                        OpenedAt   = inc.Timestamp,
                         EntryPrice = 0, ExitPrice = 0, Qty = 0,
                     });
                 }
@@ -639,12 +640,17 @@ else
         else { _tradeSort = field; _tradeSortAsc = false; }
     }
 
-    IEnumerable<TradeRow> SortedTrades => _tradeSort switch
+    IEnumerable<TradeRow> SortedTrades
     {
-        "sym" => _tradeSortAsc ? _trades.OrderBy(t => t.Symbol) : _trades.OrderByDescending(t => t.Symbol),
-        "pnl" => _tradeSortAsc ? _trades.OrderBy(t => t.Pnl) : _trades.OrderByDescending(t => t.Pnl),
-        _     => _tradeSortAsc ? _trades.OrderBy(t => t.ClosedAt) : _trades.OrderByDescending(t => t.ClosedAt),
-    };
+        get
+        {
+            if (_tradeSort == "sym")
+                return _tradeSortAsc ? _trades.OrderBy(t => t.Symbol) : (IEnumerable<TradeRow>)_trades.OrderByDescending(t => t.Symbol);
+            if (_tradeSort == "pnl")
+                return _tradeSortAsc ? _trades.OrderBy(t => t.Pnl) : (IEnumerable<TradeRow>)_trades.OrderByDescending(t => t.Pnl);
+            return _tradeSortAsc ? _trades.OrderBy(t => t.ClosedAt) : (IEnumerable<TradeRow>)_trades.OrderByDescending(t => t.ClosedAt);
+        }
+    }
 
     string SortArrow(string f) => _tradeSort == f ? (_tradeSortAsc ? "↑" : "↓") : "";
 
@@ -679,7 +685,13 @@ else
         public DateTime ClosedAt { get; init; }
     }
 
-    record SymRow { public string Symbol { get; init; } = ""; public decimal Pnl { get; init; } public decimal AbsPnl => Math.Abs(Pnl); public int Count { get; init; } }
+    sealed class SymRow
+    {
+        public string Symbol { get; init; } = "";
+        public decimal Pnl { get; init; }
+        public decimal AbsPnl => Math.Abs(Pnl);
+        public int Count { get; init; }
+    }
 
     class PerfStats
     {
