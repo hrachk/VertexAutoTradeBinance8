@@ -85,16 +85,36 @@
     string _pendingApiKey    = "";
     string _pendingSecretKey = "";
     bool _connSaved;
+    string _connError = "";
 
     private RenderFragment ConnectionTab() => @<div class="st-grid">
 
         <div class="st-card st-card-wide">
             <div class="st-card-head">
                 <div class="st-card-title">🔑 Binance API Connection</div>
+                <!-- Status badge — shows at a glance whether keys are configured -->
+                @{
+                    var apiKey    = GetStr("Binance:ApiKey");
+                    var secretKey = GetStr("Binance:SecretKey");
+                    bool keysOk   = !string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(secretKey);
+                    var keyMasked = keysOk ? apiKey[..Math.Min(8, apiKey.Length)] + "••••••••" : "";
+                }
+                <div class="st-conn-status @(keysOk ? "st-conn-ok" : "st-conn-missing")">
+                    @if (keysOk)
+                    {
+                        <span>✓ Keys configured — <code>@keyMasked</code></span>
+                        <span class="st-conn-reload">Both Engine and Web reload automatically on save — no restart needed</span>
+                    }
+                    else
+                    {
+                        <span>⚠ No API keys — enter them below to connect to Binance</span>
+                    }
+                </div>
             </div>
             <div class="st-card-sub">
-                Credentials are stored in <code>appsettings.runtime.json</code> on disk — plain text, not encrypted.
-                Use a Binance API key with <strong>Futures trading</strong> permission only. Never enable withdrawals.
+                Saved to <code>appsettings.runtime.json</code> — loaded by <strong>both</strong> Engine and Web
+                via <code>reloadOnChange</code>, so one save updates both processes instantly.
+                Use a key with <strong>Futures trading</strong> permission only. Never enable withdrawals.
             </div>
 
             <div class="st-field-group" style="margin-top:18px">
@@ -105,8 +125,8 @@
                     <div class="st-input-row">
                         <input class="st-input st-input-wide st-input-mono"
                                type="text"
-                               placeholder="Paste your Binance API key…"
-                               value="@(string.IsNullOrEmpty(_pendingApiKey) ? GetStr("Binance:ApiKey") : _pendingApiKey)"
+                               placeholder="@(keysOk ? "Currently set — paste new key to replace" : "Paste your Binance API key…")"
+                               value="@_pendingApiKey"
                                @oninput="OnApiKeyInput"
                                autocomplete="off" spellcheck="false" />
                     </div>
@@ -118,8 +138,8 @@
                     <div class="st-input-row">
                         <input class="st-input st-input-wide st-input-mono"
                                type="@(_showSecret ? "text" : "password")"
-                               placeholder="Paste your Binance Secret key…"
-                               value="@(string.IsNullOrEmpty(_pendingSecretKey) ? GetStr("Binance:SecretKey") : _pendingSecretKey)"
+                               placeholder="@(keysOk ? "Currently set — paste new secret to replace" : "Paste your Binance Secret key…")"
+                               value="@_pendingSecretKey"
                                @oninput="OnSecretKeyInput"
                                autocomplete="new-password" spellcheck="false" />
                         <button class="st-icon-btn" title="@(_showSecret ? "Hide" : "Show")"
@@ -131,12 +151,20 @@
 
                 <!-- Save button -->
                 <div style="margin-top:16px; display:flex; align-items:center; gap:12px;">
-                    <button class="st-btn-primary" @onclick="SaveConnectionAsync">
-                        💾 Save credentials
+                    <button class="st-btn-primary"
+                            disabled="@(string.IsNullOrWhiteSpace(_pendingApiKey) && string.IsNullOrWhiteSpace(_pendingSecretKey))"
+                            @onclick="SaveConnectionAsync">
+                        💾 Save &amp; apply
                     </button>
                     @if (_connSaved)
                     {
-                        <span style="color:#22c55e; font-size:12px; font-weight:700;">✓ Saved — Engine will reload within seconds</span>
+                        <span style="color:#22c55e; font-size:12px; font-weight:700;">
+                            ✓ Saved to appsettings.runtime.json — Engine and Web reloading…
+                        </span>
+                    }
+                    @if (_connError != "")
+                    {
+                        <span style="color:#ef4444; font-size:12px; font-weight:700;">✗ @_connError</span>
                     }
                 </div>
             </div>
@@ -196,24 +224,52 @@
     private async Task SaveConnectionAsync()
     {
         _connSaved = false;
-        // Only write what's actually been typed — don't overwrite if field
-        // was left empty (user may have just wanted to change one key).
-        if (!string.IsNullOrWhiteSpace(_pendingApiKey))
+        _connError = "";
+
+        var apiKey    = _pendingApiKey.Trim();
+        var secretKey = _pendingSecretKey.Trim();
+
+        // Basic sanity checks — Binance API keys are always 64 chars,
+        // secrets 64 chars. Warn the user rather than silently writing
+        // a truncated/pasted value that will just fail auth later.
+        if (!string.IsNullOrEmpty(apiKey) && apiKey.Length < 20)
         {
-            await SetAsync("Binance:ApiKey", _pendingApiKey.Trim());
-            _pendingApiKey = "";
+            _connError = "API key looks too short — check you copied it fully";
+            StateHasChanged(); return;
         }
-        if (!string.IsNullOrWhiteSpace(_pendingSecretKey))
+        if (!string.IsNullOrEmpty(secretKey) && secretKey.Length < 20)
         {
-            await SetAsync("Binance:SecretKey", _pendingSecretKey.Trim());
-            _pendingSecretKey = "";
+            _connError = "Secret key looks too short — check you copied it fully";
+            StateHasChanged(); return;
         }
-        _connSaved = true;
-        StateHasChanged();
-        // Auto-hide confirmation after 4 seconds
-        await Task.Delay(4000);
-        _connSaved = false;
-        StateHasChanged();
+
+        try
+        {
+            // Write to appsettings.runtime.json via RuntimeConfigService.
+            // Both Engine and Web load this file with reloadOnChange:true —
+            // IOptionsMonitor<BinanceOptions> consumers in BOTH processes
+            // pick up the new values within ~1 second, no restart needed.
+            if (!string.IsNullOrEmpty(apiKey))
+            {
+                await SetAsync("Binance:ApiKey", apiKey);
+                _pendingApiKey = "";
+            }
+            if (!string.IsNullOrEmpty(secretKey))
+            {
+                await SetAsync("Binance:SecretKey", secretKey);
+                _pendingSecretKey = "";
+            }
+            _connSaved = true;
+            StateHasChanged();
+            await Task.Delay(5000);
+            _connSaved = false;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            _connError = $"Save failed: {ex.Message}";
+            StateHasChanged();
+        }
     }
 
     private RenderFragment StrategyTab() => @<div class="st-grid">
@@ -1561,6 +1617,11 @@
 .st-field-group{display:flex;flex-direction:column;}
 .st-field{display:flex;flex-direction:column;gap:6px;}
 .st-checkbox{width:16px;height:16px;accent-color:var(--acc);cursor:pointer;flex-shrink:0;}
+.st-conn-status{margin-top:10px;padding:10px 14px;border-radius:8px;font-size:12px;display:flex;flex-direction:column;gap:4px;}
+.st-conn-ok{background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);color:#22c55e;}
+.st-conn-missing{background:rgba(234,179,8,.08);border:1px solid rgba(234,179,8,.25);color:#eab308;}
+.st-conn-reload{font-size:10px;color:var(--dim);margin-top:2px;}
+.st-btn-primary:disabled{opacity:.4;cursor:not-allowed;}
 
 .st-card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;}
 .st-card-title{font-size:14.5px;font-weight:700;}
