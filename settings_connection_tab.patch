@@ -1,0 +1,196 @@
+--- a/VertexAutoTradeBinance8.Web/Pages/Settings/Settings.razor
++++ b/VertexAutoTradeBinance8.Web/Pages/Settings/Settings.razor
+@@ -63,6 +63,7 @@
+         {
+             @switch (_activeTab)
+             {
++                case "connection": { @ConnectionTab() break; }
+                 case "strategy": { @StrategyTab() break; }
+                 case "risk":     { @RiskTab() break; }
+                 case "symbols":  { @SymbolsTab() break; }
+@@ -79,6 +80,142 @@
+ </div>
+ 
+ @code {
++    // ── Connection / Binance API tab ──────────────────────────
++    bool _showSecret;
++    string _pendingApiKey    = "";
++    string _pendingSecretKey = "";
++    bool _connSaved;
++
++    private RenderFragment ConnectionTab() => @<div class="st-grid">
++
++        <div class="st-card st-card-wide">
++            <div class="st-card-head">
++                <div class="st-card-title">🔑 Binance API Connection</div>
++            </div>
++            <div class="st-card-sub">
++                Credentials are stored in <code>appsettings.runtime.json</code> on disk — plain text, not encrypted.
++                Use a Binance API key with <strong>Futures trading</strong> permission only. Never enable withdrawals.
++            </div>
++
++            <div class="st-field-group" style="margin-top:18px">
++
++                <!-- API Key -->
++                <div class="st-field">
++                    <label class="st-label">API Key</label>
++                    <div class="st-input-row">
++                        <input class="st-input st-input-wide st-input-mono"
++                               type="text"
++                               placeholder="Paste your Binance API key…"
++                               value="@(string.IsNullOrEmpty(_pendingApiKey) ? GetStr("Binance:ApiKey") : _pendingApiKey)"
++                               @oninput="OnApiKeyInput"
++                               autocomplete="off" spellcheck="false" />
++                    </div>
++                </div>
++
++                <!-- Secret Key -->
++                <div class="st-field" style="margin-top:12px">
++                    <label class="st-label">Secret Key</label>
++                    <div class="st-input-row">
++                        <input class="st-input st-input-wide st-input-mono"
++                               type="@(_showSecret ? "text" : "password")"
++                               placeholder="Paste your Binance Secret key…"
++                               value="@(string.IsNullOrEmpty(_pendingSecretKey) ? GetStr("Binance:SecretKey") : _pendingSecretKey)"
++                               @oninput="OnSecretKeyInput"
++                               autocomplete="new-password" spellcheck="false" />
++                        <button class="st-icon-btn" title="@(_showSecret ? "Hide" : "Show")"
++                                @onclick="() => _showSecret = !_showSecret">
++                            @(_showSecret ? "🙈" : "👁")
++                        </button>
++                    </div>
++                </div>
++
++                <!-- Save button -->
++                <div style="margin-top:16px; display:flex; align-items:center; gap:12px;">
++                    <button class="st-btn-primary" @onclick="SaveConnectionAsync">
++                        💾 Save credentials
++                    </button>
++                    @if (_connSaved)
++                    {
++                        <span style="color:#22c55e; font-size:12px; font-weight:700;">✓ Saved — Engine will reload within seconds</span>
++                    }
++                </div>
++            </div>
++        </div>
++
++        <!-- Advanced connection params -->
++        <div class="st-card">
++            <div class="st-card-head"><div class="st-card-title">Advanced</div></div>
++            <div class="st-card-sub">Order book depth and update rate. Defaults are fine for most setups.</div>
++
++            <div class="st-fields" style="margin-top:14px">
++                <div class="st-field-row">
++                    <label class="st-label">Use Testnet</label>
++                    <input type="checkbox" class="st-checkbox"
++                           checked="@GetBool("Binance:UseTestnet", false)"
++                           @onchange="OnTestnetChanged" />
++                    <span class="st-field-hint">Routes all orders to Binance Testnet — no real money used</span>
++                </div>
++
++                <div class="st-field-row" style="margin-top:10px">
++                    <label class="st-label">Order Book Depth</label>
++                    <input class="st-input" type="number" min="5" max="1000" step="5"
++                           value="@GetInt("Binance:Depth", 50)"
++                           @onchange="OnDepthChanged" />
++                    <span class="st-field-hint">Levels of order book to subscribe to (5–1000)</span>
++                </div>
++
++                <div class="st-field-row" style="margin-top:10px">
++                    <label class="st-label">Depth Update ms</label>
++                    <input class="st-input" type="number" min="100" max="1000" step="100"
++                           value="@GetInt("Binance:DepthUpdateMs", 300)"
++                           @onchange="OnDepthUpdateMsChanged" />
++                    <span class="st-field-hint">WebSocket push interval in milliseconds (100 / 300)</span>
++                </div>
++            </div>
++        </div>
++
++        <!-- Security notice -->
++        <div class="st-card st-card-wide st-card-warn">
++            <div class="st-card-head"><div class="st-card-title">⚠️ Security reminder</div></div>
++            <ul style="margin:8px 0 0 16px; font-size:12px; line-height:2; color:var(--st-dim)">
++                <li>Never share your Secret Key with anyone — not even Binance support.</li>
++                <li>Restrict the API key to <strong>Futures trading only</strong> — disable Spot, withdrawals, and transfers.</li>
++                <li>Whitelist your server IP on the Binance API key settings page.</li>
++                <li>Rotate keys periodically. If leaked — delete immediately on Binance and generate new ones.</li>
++            </ul>
++        </div>
++
++    </div>;
++
++    private void OnApiKeyInput(ChangeEventArgs e)    => _pendingApiKey    = e.Value?.ToString() ?? string.Empty;
++    private void OnSecretKeyInput(ChangeEventArgs e) => _pendingSecretKey = e.Value?.ToString() ?? string.Empty;
++    private Task OnTestnetChanged(ChangeEventArgs e)      => SetAsync("Binance:UseTestnet",    (bool)(e.Value ?? false));
++    private Task OnDepthChanged(ChangeEventArgs e)         => SetAsync("Binance:Depth",          ParseIntOr(e.Value, 50));
++    private Task OnDepthUpdateMsChanged(ChangeEventArgs e) => SetAsync("Binance:DepthUpdateMs",  ParseIntOr(e.Value, 300));
++
++    private async Task SaveConnectionAsync()
++    {
++        _connSaved = false;
++        // Only write what's actually been typed — don't overwrite if field
++        // was left empty (user may have just wanted to change one key).
++        if (!string.IsNullOrWhiteSpace(_pendingApiKey))
++        {
++            await SetAsync("Binance:ApiKey", _pendingApiKey.Trim());
++            _pendingApiKey = "";
++        }
++        if (!string.IsNullOrWhiteSpace(_pendingSecretKey))
++        {
++            await SetAsync("Binance:SecretKey", _pendingSecretKey.Trim());
++            _pendingSecretKey = "";
++        }
++        _connSaved = true;
++        StateHasChanged();
++        // Auto-hide confirmation after 4 seconds
++        await Task.Delay(4000);
++        _connSaved = false;
++        StateHasChanged();
++    }
++
+     private RenderFragment StrategyTab() => @<div class="st-grid">
+ 
+         <div class="st-card st-card-wide">
+@@ -954,15 +1091,16 @@
+ 
+     private readonly List<TabDef> _tabs = new()
+     {
+-        new("strategy", "Strategy Routing", "🧭", true),
+-        new("meanrev",  "Mean-Reversion",   "📉", true),
+-        new("risk",     "Risk & Leverage",  "⚖️", true),
+-        new("symbols",  "Symbol Selection", "🪙", true),
+-        new("exits",    "Exits & TP/SL",    "🎯", false),
+-        new("engine",   "Engine Info",      "🖥️", false),
+-        new("datadb",   "Data Archive",     "🗄️", false),
+-        new("demo",     "Demo Trading",     "🎮", false),
+-        new("dca",       "DCA Strategy",     "📅", true),
++        new("connection", "Connection",        "🔑", false),
++        new("strategy",  "Strategy Routing",  "🧭", true),
++        new("meanrev",   "Mean-Reversion",    "📉", true),
++        new("risk",      "Risk & Leverage",   "⚖️", true),
++        new("symbols",   "Symbol Selection",  "🪙", true),
++        new("exits",     "Exits & TP/SL",     "🎯", false),
++        new("engine",    "Engine Info",       "🖥️", false),
++        new("datadb",    "Data Archive",      "🗄️", false),
++        new("demo",      "Demo Trading",      "🎮", false),
++        new("dca",       "DCA Strategy",      "📅", true),
+     };
+ 
+     private string _activeTab = "strategy";
+@@ -1413,6 +1551,16 @@
+ .st-archive-tf-pill{display:inline-block;font-size:10.5px;background:var(--bg3);border:1px solid var(--bdr);color:var(--txt);padding:2px 8px;border-radius:10px;margin-right:5px;}
+ .st-card-muted{opacity:.7;}
+ .st-card-warn{background:rgba(234,179,8,0.05);border-color:rgba(234,179,8,0.25);}
++.st-input-wide{width:100%;max-width:520px;}
++.st-input-mono{font-family:'Cascadia Code','Fira Code',monospace;font-size:12px;letter-spacing:.3px;}
++.st-input-row{display:flex;align-items:center;gap:8px;}
++.st-icon-btn{background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;padding:6px 10px;cursor:pointer;font-size:14px;color:var(--dim);flex-shrink:0;}
++.st-icon-btn:hover{border-color:var(--acc);color:var(--txt);}
++.st-btn-primary{background:var(--acc);border:none;border-radius:7px;padding:8px 18px;color:#fff;font-size:12px;font-weight:700;cursor:pointer;transition:opacity .12s;}
++.st-btn-primary:hover{opacity:.85;}
++.st-field-group{display:flex;flex-direction:column;}
++.st-field{display:flex;flex-direction:column;gap:6px;}
++.st-checkbox{width:16px;height:16px;accent-color:var(--acc);cursor:pointer;flex-shrink:0;}
+ 
+ .st-card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;}
+ .st-card-title{font-size:14.5px;font-weight:700;}
