@@ -1,0 +1,313 @@
+--- a/VertexAutoTradeBinance8.Web/Pages/Positions.razor
++++ b/VertexAutoTradeBinance8.Web/Pages/Positions.razor
+@@ -2,6 +2,8 @@
+ @using Binance.Net.Enums
+ @using VertexAutoTradeBinance8.Services
+ @inject BinanceClientFactory Factory
++@inject VertexAutoTradeBinance8.Web.Services.MarketDataLiveState LiveState
++@inject VertexAutoTradeBinance8.Web.Services.MarketSnapshotFileService SnapSvc
+ @inject IHttpClientFactory HttpClientFactory
+ @inject Microsoft.Extensions.Options.IOptionsMonitor<VertexAutoTradeBinance8.Configuration.BinanceOptions> BinanceOpts
+ @implements IDisposable
+@@ -134,7 +136,8 @@
+                     bool warn   = liqDist >= 5m && liqDist < 12m;
+                     decimal move = p.Entry > 0 ? (p.Mark - p.Entry) / p.Entry * 100m * (isL ? 1 : -1) : 0m;
+ 
+-                    <div class="p-card @(isL ? "card-long" : "card-short") @(danger ? "card-danger" : "")">
++                    <div class="p-card @(isL ? "card-long" : "card-short") @(danger ? "card-danger" : "")"
++                         @onclick="() => OpenMiniStats(p)">
+ 
+                         <!-- Card Header -->
+                         <div class="p-card-head">
+@@ -169,6 +172,30 @@
+                             </div>
+                         </div>
+ 
++                        <!-- Live sparkline -->
++                        @{ var spark = GetSparkline(p.Symbol); }
++                        @if (spark.Count > 1)
++                        {
++                            <div class="p-spark-wrap">
++                                <svg class="p-spark-svg" viewBox="0 0 200 36" preserveAspectRatio="none">
++                                    @{
++                                        var sMin = spark.Min(); var sMax = spark.Max();
++                                        var sRange = sMax - sMin; if (sRange == 0) sRange = 1m;
++                                        var sW = 200.0 / Math.Max(spark.Count - 1, 1);
++                                        var sPts = string.Join(" ", spark.Select((v, i) =>
++                                            FormattableString.Invariant($"{i*sW:F1},{(double)(36m-(v-sMin)/sRange*32m):F1}")));
++                                        var sparkColor = spark.Last() >= spark.First() ? "#22c55e" : "#ef4444";
++                                        var sparkFill  = spark.Last() >= spark.First() ? "rgba(34,197,94,.08)" : "rgba(239,68,68,.08)";
++                                        var lastX = (spark.Count - 1) * sW;
++                                        var lastY = (double)(36m - (spark.Last() - sMin) / sRange * 32m);
++                                    }
++                                    <path d="M0,36 L@(sPts.Replace(" "," L")) L200,36 Z" fill="@sparkFill"/>
++                                    <polyline points="@sPts" fill="none" stroke="@sparkColor" stroke-width="1.5" stroke-linejoin="round"/>
++                                    <circle cx="@lastX.ToString("F1")" cy="@lastY.ToString("F1")" r="2.5" fill="@sparkColor"/>
++                                </svg>
++                            </div>
++                        }
++
+                         <!-- Progress bar - price move -->
+                         <div class="p-move-bar-wrap">
+                             <div class="p-move-bar @(move >= 0 ? "mb-pos" : "mb-neg")"
+@@ -182,8 +209,12 @@
+                                 <div class="p-cg-val mono">@FP(p.Entry)</div>
+                             </div>
+                             <div class="p-cg">
+-                                <div class="p-cg-lab">Mark Price</div>
+-                                <div class="p-cg-val mono @(isL?(p.Mark>p.Entry?"v-pos":""):(p.Mark<p.Entry?"v-pos":""))">@FP(p.Mark)</div>
++                                <div class="p-cg-lab">Mark Price
++                                    @if (GetLivePrice(p.Symbol) > 0) { <span class="p-live-dot">●</span> }
++                                </div>
++                                <div class="p-cg-val mono @(isL?(p.Mark>p.Entry?"v-pos":""):(p.Mark<p.Entry?"v-pos":""))">
++                                    @(GetLivePrice(p.Symbol) > 0 ? FP(GetLivePrice(p.Symbol)) : FP(p.Mark))
++                                </div>
+                             </div>
+                             <div class="p-cg">
+                                 <div class="p-cg-lab">Size</div>
+@@ -225,9 +256,12 @@
+                             <div class="p-card-foot-info">
+                                 <span class="v-dim" style="font-size:11px">Position value: @p.SizeUsdt.ToString("F2") USDT</span>
+                             </div>
+-                            <button class="p-close-btn" @onclick="() => _confirmPos = p">
+-                                Close Position
+-                            </button>
++                            <div class="p-card-foot-btns">
++                                <button class="p-partial-btn" @onclick:stopPropagation="true"
++                                        @onclick="() => OpenPartialClose(p)">½ Partial</button>
++                                <button class="p-close-btn" @onclick:stopPropagation="true"
++                                        @onclick="() => _confirmPos = p">Close</button>
++                            </div>
+                         </div>
+ 
+                     </div>
+@@ -479,6 +513,113 @@
+         </div>
+     }
+ 
++    <!-- ══════════ MINI STATS POPUP ════════════════════════════════ -->
++    @if (_miniPos != null)
++    {
++        <div class="p-overlay" @onclick="() => _miniPos = null">
++            <div class="p-mini-modal" @onclick:stopPropagation="true">
++                <div class="p-modal-top">
++                    <div style="display:flex;align-items:center;gap:10px;">
++                        <div class="p-card-icon @(_miniPos.Side=="LONG"?"icon-l":"icon-s") icon-lg">@_miniPos.Symbol[0]</div>
++                        <div>
++                            <div class="p-modal-sym-name">@_miniPos.Symbol</div>
++                            <div style="display:flex;gap:6px;margin-top:4px;">
++                                <span class="p-side-badge @(_miniPos.Side=="LONG"?"sb-l":"sb-s")">
++                                    @(_miniPos.Side=="LONG"?"▲ LONG":"▼ SHORT")
++                                </span>
++                                <span class="p-lev">@_miniPos.Leverage×</span>
++                            </div>
++                        </div>
++                    </div>
++                    <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;">
++                        @foreach (var tf in new[]{("OneMinute","1m"),("FiveMinutes","5m"),("FifteenMinutes","15m"),("OneHour","1h"),("FourHour","4h"),("OneDay","1D")})
++                        {
++                            <button class="p-tf-btn @(_miniTf==tf.Item1?"p-tf-on":"")"
++                                    @onclick="() => _miniTf = tf.Item1">@tf.Item2</button>
++                        }
++                        <button class="p-modal-x" @onclick="() => _miniPos = null">✕</button>
++                    </div>
++                </div>
++
++                <div class="p-mini-chart-wrap">
++                    <MarketMiniChart Symbol="@_miniPos.Symbol" Timeframe="@_miniTf" MaxBars="80" />
++                </div>
++
++                @{
++                    var mp = _miniPos; bool mpUp = mp.Pnl >= 0;
++                    decimal mpRoe = mp.Roi*100m;
++                    decimal mpMove = mp.Entry>0?(mp.Mark-mp.Entry)/mp.Entry*100m*(mp.Side=="LONG"?1:-1):0m;
++                    var mpLive = GetLivePrice(mp.Symbol);
++                }
++                <div class="p-mini-stats">
++                    <div class="p-ms"><div class="p-ms-lab">Unrealized PnL</div><div class="p-ms-val @(mpUp?"v-pos":"v-neg")">@(mpUp?"+":"")@mp.Pnl.ToString("F4")</div></div>
++                    <div class="p-ms"><div class="p-ms-lab">ROE</div><div class="p-ms-val @(mpUp?"v-pos":"v-neg")">@(mpUp?"+":"")@mpRoe.ToString("F2")%</div></div>
++                    <div class="p-ms"><div class="p-ms-lab">Entry</div><div class="p-ms-val mono">@FP(mp.Entry)</div></div>
++                    <div class="p-ms"><div class="p-ms-lab">Mark <span class="p-live-dot">●</span></div><div class="p-ms-val mono">@(mpLive>0?FP(mpLive):FP(mp.Mark))</div></div>
++                    <div class="p-ms"><div class="p-ms-lab">Liq Price</div><div class="p-ms-val v-danger mono">@FP(mp.LiqPrice)</div></div>
++                    <div class="p-ms"><div class="p-ms-lab">Move</div><div class="p-ms-val @(mpMove>=0?"v-pos":"v-neg")">@(mpMove>=0?"+":"")@mpMove.ToString("F2")%</div></div>
++                    <div class="p-ms"><div class="p-ms-lab">Size</div><div class="p-ms-val mono">@mp.SizeUsdt.ToString("F2") USDT</div></div>
++                    <div class="p-ms"><div class="p-ms-lab">Margin</div><div class="p-ms-val mono">@mp.Margin.ToString("F2") USDT</div></div>
++                </div>
++
++                <div class="p-modal-foot">
++                    <a href="/market?sym=@_miniPos.Symbol" class="p-modal-cancel"
++                       style="text-align:center;text-decoration:none;display:flex;align-items:center;justify-content:center;">
++                        📈 Market
++                    </a>
++                    <button class="p-modal-cancel"
++                            @onclick="() => { _partialPos = _miniPos; _miniPos = null; }">
++                        ½ Partial
++                    </button>
++                    <button class="p-modal-confirm"
++                            @onclick="() => { _confirmPos = _miniPos; _miniPos = null; }">
++                        Close Position
++                    </button>
++                </div>
++            </div>
++        </div>
++    }
++
++    <!-- ══════════ PARTIAL CLOSE ═════════════════════════════════════ -->
++    @if (_partialPos != null)
++    {
++        <div class="p-overlay" @onclick="() => _partialPos = null">
++            <div class="p-modal" @onclick:stopPropagation="true">
++                <div class="p-modal-top">
++                    <div class="p-modal-title">½ Partial Close — @_partialPos.Symbol</div>
++                    <button class="p-modal-x" @onclick="() => _partialPos = null">✕</button>
++                </div>
++                <div class="p-modal-body">
++                    <div style="margin-bottom:16px;">
++                        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--dim);margin-bottom:8px;">
++                            <span>Close percentage</span>
++                            <span class="mono" style="color:var(--txt);font-size:16px;font-weight:700;">@_partialPct%</span>
++                        </div>
++                        <input type="range" min="5" max="95" step="5"
++                               style="width:100%;accent-color:var(--acc);"
++                               value="@_partialPct"
++                               @oninput="OnPartialPctInput" />
++                        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--dim);margin-top:4px;">
++                            <span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>95%</span>
++                        </div>
++                    </div>
++                    @{ decimal closeQty = _partialPos.SizeUsdt * _partialPct / 100m; }
++                    <div class="p-modal-rows">
++                        <div class="p-modal-row"><span class="v-dim">Closing</span><span class="mono">@_partialPct% — @closeQty.ToString("F2") USDT</span></div>
++                        <div class="p-modal-row"><span class="v-dim">Remaining</span><span class="mono">@(100-_partialPct)% — @(_partialPos.SizeUsdt - closeQty).ToString("F2") USDT</span></div>
++                    </div>
++                    <div class="p-modal-warn">Market order — closes @_partialPct% at current price immediately</div>
++                </div>
++                <div class="p-modal-foot">
++                    <button class="p-modal-cancel" @onclick="() => _partialPos = null">Cancel</button>
++                    <button class="p-modal-confirm" @onclick="PartialCloseConfirmed" disabled="@_actionLoading">
++                        @if (_actionLoading) { <span class="p-spin-sm"></span> } else { <span>Close @_partialPct%</span> }
++                    </button>
++                </div>
++            </div>
++        </div>
++    }
++
+     <!-- Toast -->
+     @if (!string.IsNullOrEmpty(_toast))
+     {
+@@ -615,6 +756,27 @@
+ 
+ /* Card footer */
+ .p-card-foot{display:flex;align-items:center;justify-content:space-between;padding:8px 18px 14px;}
++.p-card-foot-btns{display:flex;gap:6px;}
++.p-partial-btn{background:transparent;border:1px solid var(--bdr2);color:var(--dim);padding:5px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;}
++.p-partial-btn:hover{border-color:var(--acc);color:var(--acc);}
++.p-spark-wrap{height:40px;overflow:hidden;position:relative;background:linear-gradient(to bottom,rgba(255,255,255,.01),transparent);}
++.p-spark-svg{width:100%;height:40px;display:block;}
++.p-live-dot{color:#22c55e;font-size:8px;animation:live-pulse 1.5s ease-in-out infinite;margin-left:3px;}
++@@keyframes live-pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
++.p-card{cursor:pointer;transition:border-color .15s;}
++.p-mini-modal{background:var(--bg3);border:1px solid var(--bdr2);border-radius:16px;width:700px;max-width:95vw;box-shadow:0 24px 80px rgba(0,0,0,.7);animation:slideUp .25s ease;}
++.p-mini-chart-wrap{height:260px;overflow:hidden;border-top:1px solid var(--bdr);border-bottom:1px solid var(--bdr);}
++.p-mini-stats{display:grid;grid-template-columns:repeat(4,1fr);}
++.p-ms{padding:12px 16px;border-right:1px solid var(--bdr);}
++.p-ms:nth-child(4n){border-right:none;}
++.p-ms:nth-child(n+5){border-top:1px solid var(--bdr);}
++.p-ms-lab{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;}
++.p-ms-val{font-family:var(--mono);font-size:14px;font-weight:700;}
++.p-tf-btn{background:var(--bg4);border:1px solid var(--bdr2);color:var(--dim);padding:4px 9px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;transition:all .12s;}
++.p-tf-btn:hover{border-color:var(--acc);color:var(--acc);}
++.p-tf-on{background:rgba(77,159,255,.12)!important;border-color:var(--acc)!important;color:var(--acc)!important;}
++.p-card-sym-link{text-decoration:none;color:inherit;}
++.p-card-sym-link:hover .p-card-sym{color:var(--acc);}
+ .p-card-foot-info{font-size:11px;}
+ .p-close-btn{background:transparent;border:1px solid var(--red);color:var(--red);padding:6px 18px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;letter-spacing:.3px;}
+ .p-close-btn:hover{background:var(--red);color:#fff;box-shadow:0 0 16px rgba(255,77,106,.3);}
+@@ -722,6 +884,68 @@
+         decimal Qty, decimal Pnl, decimal Roe, decimal Commission, DateTime Time);
+ 
+     // ── State ─────────────────────────────────────────────────
++    // ── Live prices ──────────────────────────────────────────
++    readonly Dictionary<string, decimal> _livePrices = new();
++    readonly Dictionary<string, List<decimal>> _sparklines = new();
++    const int SparkMax = 60;
++
++    decimal GetLivePrice(string sym) => _livePrices.TryGetValue(sym, out var p) ? p : 0m;
++    List<decimal> GetSparkline(string sym) => _sparklines.TryGetValue(sym, out var s) ? s : new();
++
++    void OnLivePriceTick(string sym, decimal price)
++    {
++        _livePrices[sym] = price;
++        if (!_sparklines.ContainsKey(sym)) _sparklines[sym] = new List<decimal>();
++        var sp = _sparklines[sym];
++        sp.Add(price);
++        if (sp.Count > SparkMax) sp.RemoveAt(0);
++        if (_positions.Any(p => p.Symbol == sym))
++            _ = InvokeAsync(StateHasChanged);
++    }
++
++    // ── Mini popup ───────────────────────────────────────────
++    PosRow? _miniPos;
++    string  _miniTf = "FifteenMinutes";
++    void OpenMiniStats(PosRow p) => _miniPos = p;
++
++    // ── Partial close ────────────────────────────────────────
++    PosRow? _partialPos;
++    int _partialPct = 50;
++    void OpenPartialClose(PosRow p) { _partialPos = p; _partialPct = 50; }
++    void OnPartialPctInput(ChangeEventArgs e)
++        => _partialPct = int.TryParse(e.Value?.ToString(), out var v) ? v : 50;
++
++    async Task PartialCloseConfirmed()
++    {
++        if (_partialPos == null) return;
++        _actionLoading = true; StateHasChanged();
++        try
++        {
++            var client = Factory.TryCreateRestClient();
++            if (client == null) { ShowToast("No API credentials", false); return; }
++            var p = _partialPos;
++            bool isL = p.Side == "LONG";
++            decimal totalQty = p.Entry > 0 ? p.SizeUsdt / p.Entry : 0m;
++            decimal closeQty = Math.Round(totalQty * _partialPct / 100m, 3);
++            if (closeQty <= 0) { ShowToast("Qty too small", false); return; }
++            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
++            var side    = isL ? Binance.Net.Enums.OrderSide.Sell : Binance.Net.Enums.OrderSide.Buy;
++            var posSide = isL ? Binance.Net.Enums.PositionSide.Long : Binance.Net.Enums.PositionSide.Short;
++            var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
++                p.Symbol, side, Binance.Net.Enums.FuturesOrderType.Market,
++                quantity: closeQty, positionSide: posSide, reduceOnly: true, ct: cts.Token);
++            if (res.Success)
++            {
++                ShowToast($"✓ Closed {_partialPct}% of {p.Symbol}", true);
++                _partialPos = null;
++                await FetchPositions();
++            }
++            else ShowToast($"Error: {res.Error?.Message}", false);
++        }
++        catch (Exception ex) { ShowToast(ex.Message, false); }
++        finally { _actionLoading = false; StateHasChanged(); }
++    }
++
+     int _tab;
+     int _ordSubTab; // 0=Basic 1=Conditional
+     bool _loading, _ordLoading, _histLoading, _actionLoading, _pnlLoading;
+@@ -742,6 +966,7 @@
+ 
+     protected override async Task OnInitializedAsync()
+     {
++        LiveState.PriceTicked += OnLivePriceTick;
+         await RefreshAll();
+         _timer = new System.Threading.Timer(async _ =>
+             await InvokeAsync(async () => { await FetchPositions(); StateHasChanged(); }),
+@@ -1094,5 +1319,9 @@
+         return v.ToString("G5");
+     }
+ 
+-    public void Dispose() => _timer?.Dispose();
++    public void Dispose()
++    {
++        LiveState.PriceTicked -= OnLivePriceTick;
++        _timer?.Dispose();
++    }
+ }
