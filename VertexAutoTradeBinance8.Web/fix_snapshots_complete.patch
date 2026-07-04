@@ -1,0 +1,95 @@
+--- a/VertexAutoTradeBinance8.Web/Pages/Positions.razor
++++ b/VertexAutoTradeBinance8.Web/Pages/Positions.razor
+@@ -11,6 +11,21 @@
+ <PageTitle>Positions — Vertex</PageTitle>
+ 
+ <div class="p-root">
++    @{
++        // ONE snapshot per render cycle — all template code reads only
++        // these local variables, never the mutable backing fields directly.
++        // This eliminates "Collection was modified" crashes caused by the
++        // background timer replacing list references mid-render.
++        var snapPositions  = _positions;
++        var snapOrders     = _openOrders;
++        var snapHistOrders = _histOrders;
++        var snapPnlRows    = _pnlRows;
++        var snapPosCount   = snapPositions.Count;
++        var snapOrderCount = snapOrders.Count;
++        // Pre-compute order splits so they're available across all tabs
++        var basicOrders  = snapOrders.Where(o => !o.IsAlgo).ToList();
++        var algoOrders   = snapOrders.Where(o =>  o.IsAlgo).ToList();
++    }
+ 
+     <!-- ══════════ HERO HEADER ══════════════════════════════════════ -->
+     <div class="p-hero">
+@@ -136,8 +151,7 @@
+                     bool warn   = liqDist >= 5m && liqDist < 12m;
+                     decimal move = p.Entry > 0 ? (p.Mark - p.Entry) / p.Entry * 100m * (isL ? 1 : -1) : 0m;
+ 
+-                    @{ var cardCls = "p-card " + (isL ? "card-long" : "card-short") + (danger ? " card-danger" : ""); }
+-                    <div class="@cardCls"
++                    <div class="p-card @(isL ? "card-long" : "card-short")@(danger ? " card-danger" : "")"
+                          @onclick="() => OpenMiniStats(p)">
+ 
+                         <!-- Card Header -->
+@@ -260,20 +274,14 @@
+             </div>
+         }
+     }
+-    @{
+-        var basicOrders = snapOrders.Where(o => !o.IsAlgo).ToList();
+-        var algoOrders = snapOrders.Where(o => o.IsAlgo).ToList();
+-    }
+-    @{
+-        var ordersToShow = _ordSubTab == 0 ? basicOrders : algoOrders;
+-    }
++
+     <!-- ══════════ TAB 1: OPEN ORDERS ══════════════════════════════ -->
+     @if (_tab == 1)
+     {
+         @if (_ordLoading) { <div class="p-loader"><div class="p-spin-ring"></div><span>Loading orders…</span></div> }
+         else
+         {
+-           
++            var ordersToShow = _ordSubTab == 0 ? basicOrders : algoOrders;
+             <!-- Sub-tabs: Basic / Conditional -->
+             <div class="p-subtabs">
+                 <button class="p-subtab @(_ordSubTab==0?"p-subtab-on":"")" @onclick="()=>_ordSubTab=0">
+@@ -333,8 +341,7 @@
+                                         <div class="mono @(fp>0?"v-pos":"v-dim")">@o.ExecutedQty.ToString("G6")</div>
+                                         @if (fp > 0) { <div class="t-fill-track"><div class="t-fill-bar" style="width:@fp%"></div></div> }
+                                     </td>
+-                                    @{ var rdCls = o.ReduceOnly ? "v-pos" : "v-dim"; var rdTxt = o.ReduceOnly ? "✓" : "—"; }
+-                                                        <td class="@rdCls">@rdTxt</td>
++                                    <td class="@(o.ReduceOnly ? "v-pos" : "v-dim")">@(o.ReduceOnly ? "✓" : "—")</td>
+                                     <td class="mono v-dim t-time">@o.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
+                                     <td><button class="t-cancel-btn" @onclick="()=>CancelOrder(o)">Cancel</button></td>
+                                 </tr>
+@@ -441,8 +448,7 @@
+                                 <td class="mono @(win?"v-pos":"v-neg")" style="font-weight:700">
+                                     @(win?"+":"")@t.Pnl.ToString("F4")
+                                 </td>
+-                                @{ var roeCls = win ? "v-pos" : "v-neg"; var roeSign = win ? "+" : ""; }
+-                                            <td class="@roeCls">@roeSign@t.Roe.ToString("F2")%</td>
++                                <td class="@(win ? "v-pos" : "v-neg")">@(win ? "+" : "")@t.Roe.ToString("F2")%</td>
+                                 <td class="mono v-dim">@t.Commission.ToString("F5")</td>
+                                 <td class="mono v-dim t-time">@t.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
+                             </tr>
+@@ -547,11 +553,15 @@
+                     decimal mpRoe = mp.Roi*100m;
+                     decimal mpMove = mp.Entry>0?(mp.Mark-mp.Entry)/mp.Entry*100m*(mp.Side=="LONG"?1:-1):0m;
+                     var mpLive = GetLivePrice(mp.Symbol);
++                    var mpCls  = mpUp ? "v-pos" : "v-neg";
++                    var mpSign = mpUp ? "+" : "";
++                    var mpMoveCls  = mpMove >= 0 ? "v-pos" : "v-neg";
++                    var mpMoveSign = mpMove >= 0 ? "+" : "";
+                 }
+                 <div class="p-mini-stats">
+-                    <div class="p-ms"><div class="p-ms-lab">Unrealized PnL</div>@{ var mpCls = mpUp ? "v-pos" : "v-neg"; var mpSign = mpUp ? "+" : ""; }
++                    <div class="p-ms"><div class="p-ms-lab">Unrealized PnL</div>
+                                     <div class="p-ms-val @mpCls">@mpSign@mp.Pnl.ToString("F4")</div></div>
+-                    <div class="p-ms"><div class="p-ms-lab">ROE</div><div class="p-ms-val @(mpUp?"v-pos":"v-neg")">@(mpUp?"+":"")@mpRoe.ToString("F2")%</div></div>
++                    <div class="p-ms"><div class="p-ms-lab">ROE</div><div class="p-ms-val @mpCls">@mpSign@mpRoe.ToString("F2")%</div></div>
+                     <div class="p-ms"><div class="p-ms-lab">Entry</div><div class="p-ms-val mono">@FP(mp.Entry)</div></div>
+                     <div class="p-ms"><div class="p-ms-lab">Mark <span class="p-live-dot">●</span></div><div class="p-ms-val mono">@(mpLive>0?FP(mpLive):FP(mp.Mark))</div></div>
+                     <div class="p-ms"><div class="p-ms-lab">Liq Price</div><div class="p-ms-val v-danger mono">@FP(mp.LiqPrice)</div></div>
