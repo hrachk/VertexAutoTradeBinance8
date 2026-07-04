@@ -1,0 +1,24 @@
+--- a/VertexAutoTradeBinance AI v5.0 Full Autonomous Mode/appsettings.json
++++ b/VertexAutoTradeBinance AI v5.0 Full Autonomous Mode/appsettings.json
+@@ -130,7 +130,7 @@
+     "Auto": {
+       "RefreshInterval": 1,
+       "ScannerCacheSeconds": 45,
+-      "TopVolumeCount": 12,
++      "TopVolumeCount": 15,
+       "FinalUniverseCap": 10,
+       "TotalUniverseCap": 10,
+       "StabilityMaxAdds": 1,
+@@ -149,9 +149,9 @@
+       "Enabled": true,
+       "LowVolPct": 1.2,
+       "MidVolPct": 2.5,
+-      "CapLowVol": 18,
+-      "CapMidVol": 20,
+-      "CapHighVol": 22
++      "CapLowVol": 15,
++      "CapMidVol": 18,
++      "CapHighVol": 20
+     }
+   },
+ 
