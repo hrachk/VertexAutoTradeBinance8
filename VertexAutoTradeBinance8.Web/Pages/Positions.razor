@@ -42,14 +42,14 @@
             </div>
             <div class="p-hdiv"></div>
             <div class="p-hstat">
-                <div class="p-hstat-val @(_positions.Count > 0 ? "h-active" : "")">
-                    @_positions.Count
+                <div class="p-hstat-val @(snapPosCount > 0 ? "h-active" : "")">
+                    @snapPosCount
                 </div>
                 <div class="p-hstat-lab">Open Positions</div>
             </div>
             <div class="p-hdiv"></div>
             <div class="p-hstat">
-                <div class="p-hstat-val @(_openOrders.Count > 0 ? "h-active" : "")">@_openOrders.Count</div>
+                <div class="p-hstat-val @(snapOrderCount > 0 ? "h-active" : "")">@snapOrderCount</div>
                 <div class="p-hstat-lab">Open Orders</div>
             </div>
         </div>
@@ -76,11 +76,11 @@
     <div class="p-tabs">
         <button class="p-tab @(_tab==0?"p-tab-on":"")" @onclick="()=>SetTab(0)">
             <span class="p-tab-label">Positions</span>
-            @if (_positions.Any()) { <span class="p-tab-chip">@_positions.Count</span> }
+            @if (snapPosCount > 0) { <span class="p-tab-chip">@snapPosCount</span> }
         </button>
         <button class="p-tab @(_tab==1?"p-tab-on":"")" @onclick="()=>SetTab(1)">
             <span class="p-tab-label">Open Orders</span>
-            @if (_openOrders.Any()) { <span class="p-tab-chip">@_openOrders.Count</span> }
+            @if (snapOrderCount > 0) { <span class="p-tab-chip">@snapOrderCount</span> }
         </button>
         <button class="p-tab @(_tab==2?"p-tab-on":"")" @onclick="()=>SetTab(2)">
             <span class="p-tab-label">Order History</span>
@@ -94,11 +94,11 @@
     <!-- ══════════ TAB 0: POSITIONS ═════════════════════════════════ -->
     @if (_tab == 0)
     {
-        @if (_loading && !_positions.Any())
+        @if (_loading && snapPosCount == 0)
         {
             <div class="p-loader"><div class="p-spin-ring"></div><span>Loading positions…</span></div>
         }
-        else if (!_positions.Any())
+        else if (!snapPositions.Any())
         {
             <div class="p-empty">
                 <div class="p-empty-icon">
@@ -119,14 +119,13 @@
                     </span>
                 </div>
                 <div class="p-pnl-banner-right">
-                    <span class="p-pnl-count">@_positions.Count position@(_positions.Count != 1 ? "s" : "")</span>
+                    <span class="p-pnl-count">@snapPosCount position@(snapPosCount != 1 ? "s" : "")</span>
                 </div>
             </div>
 
             <!-- Position cards -->
             <div class="p-cards">
-                @{ var posSnap = _positions; }
-                @foreach (var p in posSnap)
+                @foreach (var p in snapPositions)
                 {
                     bool isL = p.Side == "LONG";
                     bool pUp = p.Pnl >= 0;
@@ -137,7 +136,8 @@
                     bool warn   = liqDist >= 5m && liqDist < 12m;
                     decimal move = p.Entry > 0 ? (p.Mark - p.Entry) / p.Entry * 100m * (isL ? 1 : -1) : 0m;
 
-                    <div class="p-card @(isL ? "card-long" : "card-short") @(danger ? "card-danger" : "")"
+                    @{ var cardCls = "p-card " + (isL ? "card-long" : "card-short") + (danger ? " card-danger" : ""); }
+                    <div class="@cardCls"
                          @onclick="() => OpenMiniStats(p)">
 
                         <!-- Card Header -->
@@ -261,8 +261,8 @@
         }
     }
     @{
-        var basicOrders = _openOrders.Where(o => !o.IsAlgo).ToList();
-        var algoOrders = _openOrders.Where(o => o.IsAlgo).ToList();
+        var basicOrders = snapOrders.Where(o => !o.IsAlgo).ToList();
+        var algoOrders = snapOrders.Where(o => o.IsAlgo).ToList();
     }
     @{
         var ordersToShow = _ordSubTab == 0 ? basicOrders : algoOrders;
@@ -333,7 +333,8 @@
                                         <div class="mono @(fp>0?"v-pos":"v-dim")">@o.ExecutedQty.ToString("G6")</div>
                                         @if (fp > 0) { <div class="t-fill-track"><div class="t-fill-bar" style="width:@fp%"></div></div> }
                                     </td>
-                                    <td class="@(o.ReduceOnly?"v-pos":"v-dim")">@(o.ReduceOnly?"✓":"—")</td>
+                                    @{ var rdCls = o.ReduceOnly ? "v-pos" : "v-dim"; var rdTxt = o.ReduceOnly ? "✓" : "—"; }
+                                                        <td class="@rdCls">@rdTxt</td>
                                     <td class="mono v-dim t-time">@o.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
                                     <td><button class="t-cancel-btn" @onclick="()=>CancelOrder(o)">Cancel</button></td>
                                 </tr>
@@ -349,7 +350,7 @@
     @if (_tab == 2)
     {
         @if (_histLoading) { <div class="p-loader"><div class="p-spin-ring"></div><span>Loading history…</span></div> }
-        else if (!_histOrders.Any())
+        else if (!snapHistOrders.Any())
         {
             <div class="p-empty">
                 <div class="p-empty-icon"><svg viewBox="0 0 64 64" fill="none"><path d="M32 12v8M32 44v8M12 32h8M44 32h8" stroke="#1e2535" stroke-width="2" stroke-linecap="round"/><circle cx="32" cy="32" r="12" stroke="#30363d" stroke-width="2"/></svg></div>
@@ -365,7 +366,7 @@
                         <tr><th>Symbol</th><th>Type</th><th>Side</th><th>Price</th><th>Qty / Filled</th><th>Status</th><th>Time</th></tr>
                     </thead>
                     <tbody>
-                        @foreach (var o in _histOrders)
+                        @foreach (var o in snapHistOrders)
                         {
                             bool buy = o.Side == "BUY";
                             string sc = o.Status switch { "FILLED"=>"st-ok","CANCELED" or "EXPIRED"=>"st-can","PARTIALLY_FILLED"=>"st-part",_=>"v-dim" };
@@ -389,7 +390,7 @@
     @if (_tab == 3)
     {
         @if (_pnlLoading) { <div class="p-loader"><div class="p-spin-ring"></div><span>Loading P&L…</span></div> }
-        else if (!_pnlRows.Any())
+        else if (!snapPnlRows.Any())
         {
             <div class="p-empty">
                 <div class="p-empty-icon"><svg viewBox="0 0 64 64" fill="none"><path d="M12 48L24 36l8 8 20-24" stroke="#30363d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
@@ -412,12 +413,12 @@
                     <div class="p-pnl-sc-lab">Wins</div>
                 </div>
                 <div class="p-pnl-sc">
-                    <div class="p-pnl-sc-val v-neg">@(_pnlRows.Count - _pnlWins)</div>
+                    <div class="p-pnl-sc-val v-neg">@(snapPnlRows.Count - _pnlWins)</div>
                     <div class="p-pnl-sc-lab">Losses</div>
                 </div>
                 <div class="p-pnl-sc">
-                    <div class="p-pnl-sc-val @(_pnlRows.Count>0&&_pnlWins*100/_pnlRows.Count>=50?"v-pos":"v-neg")">
-                        @(_pnlRows.Count > 0 ? (_pnlWins * 100.0 / _pnlRows.Count).ToString("F0") : "0")%
+                    <div class="p-pnl-sc-val @(snapPnlRows.Count>0&&_pnlWins*100/snapPnlRows.Count>=50?"v-pos":"v-neg")">
+                        @(snapPnlRows.Count > 0 ? (_pnlWins * 100.0 / snapPnlRows.Count).ToString("F0") : "0")%
                     </div>
                     <div class="p-pnl-sc-lab">Win Rate</div>
                 </div>
@@ -429,7 +430,7 @@
                         <tr><th>Symbol</th><th>Side</th><th>Fill Price</th><th>Qty</th><th>Realized P&L</th><th>ROE%</th><th>Commission</th><th>Time</th></tr>
                     </thead>
                     <tbody>
-                        @foreach (var t in _pnlRows)
+                        @foreach (var t in snapPnlRows)
                         {
                             bool win = t.Pnl >= 0;
                             <tr>
@@ -440,7 +441,8 @@
                                 <td class="mono @(win?"v-pos":"v-neg")" style="font-weight:700">
                                     @(win?"+":"")@t.Pnl.ToString("F4")
                                 </td>
-                                <td class="@(win?"v-pos":"v-neg")">@(win?"+":"")@t.Roe.ToString("F2")%</td>
+                                @{ var roeCls = win ? "v-pos" : "v-neg"; var roeSign = win ? "+" : ""; }
+                                            <td class="@roeCls">@roeSign@t.Roe.ToString("F2")%</td>
                                 <td class="mono v-dim">@t.Commission.ToString("F5")</td>
                                 <td class="mono v-dim t-time">@t.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
                             </tr>
@@ -547,7 +549,8 @@
                     var mpLive = GetLivePrice(mp.Symbol);
                 }
                 <div class="p-mini-stats">
-                    <div class="p-ms"><div class="p-ms-lab">Unrealized PnL</div><div class="p-ms-val @(mpUp?"v-pos":"v-neg")">@(mpUp?"+":"")@mp.Pnl.ToString("F4")</div></div>
+                    <div class="p-ms"><div class="p-ms-lab">Unrealized PnL</div>@{ var mpCls = mpUp ? "v-pos" : "v-neg"; var mpSign = mpUp ? "+" : ""; }
+                                    <div class="p-ms-val @mpCls">@mpSign@mp.Pnl.ToString("F4")</div></div>
                     <div class="p-ms"><div class="p-ms-lab">ROE</div><div class="p-ms-val @(mpUp?"v-pos":"v-neg")">@(mpUp?"+":"")@mpRoe.ToString("F2")%</div></div>
                     <div class="p-ms"><div class="p-ms-lab">Entry</div><div class="p-ms-val mono">@FP(mp.Entry)</div></div>
                     <div class="p-ms"><div class="p-ms-lab">Mark <span class="p-live-dot">●</span></div><div class="p-ms-val mono">@(mpLive>0?FP(mpLive):FP(mp.Mark))</div></div>
