@@ -1,0 +1,119 @@
+--- a/VertexAutoTradeBinance8.Web/Pages/Positions.razor
++++ b/VertexAutoTradeBinance8.Web/Pages/Positions.razor
+@@ -173,25 +173,15 @@
+                         </div>
+ 
+                         <!-- Live sparkline -->
+-                        @{ var spark = GetSparkline(p.Symbol); }
+-                        @if (spark.Count > 1)
++                        @if (HasSparkline(p.Symbol))
+                         {
+                             <div class="p-spark-wrap">
+                                 <svg class="p-spark-svg" viewBox="0 0 200 36" preserveAspectRatio="none">
+-                                    @{
+-                                        var sMin = spark.Min(); var sMax = spark.Max();
+-                                        var sRange = sMax - sMin; if (sRange == 0) sRange = 1m;
+-                                        var sW = 200.0 / Math.Max(spark.Count - 1, 1);
+-                                        var sPts = string.Join(" ", spark.Select((v, i) =>
+-                                            FormattableString.Invariant($"{i*sW:F1},{(double)(36m-(v-sMin)/sRange*32m):F1}")));
+-                                        var sparkColor = spark.Last() >= spark.First() ? "#22c55e" : "#ef4444";
+-                                        var sparkFill  = spark.Last() >= spark.First() ? "rgba(34,197,94,.08)" : "rgba(239,68,68,.08)";
+-                                        var lastX = (spark.Count - 1) * sW;
+-                                        var lastY = (double)(36m - (spark.Last() - sMin) / sRange * 32m);
+-                                    }
+-                                    <path d="M0,36 L@(sPts.Replace(" "," L")) L200,36 Z" fill="@sparkFill"/>
+-                                    <polyline points="@sPts" fill="none" stroke="@sparkColor" stroke-width="1.5" stroke-linejoin="round"/>
+-                                    <circle cx="@lastX.ToString("F1")" cy="@lastY.ToString("F1")" r="2.5" fill="@sparkColor"/>
++                                    <path d="@BuildSparkFill(p.Symbol)" fill="@SparkFill(p.Symbol)"/>
++                                    <polyline points="@BuildSparkPoints(p.Symbol)" fill="none"
++                                              stroke="@SparkColor(p.Symbol)" stroke-width="1.5" stroke-linejoin="round"/>
++                                    <circle cx="@SparkLastX(p.Symbol)" cy="@SparkLastY(p.Symbol)"
++                                            r="2.5" fill="@SparkColor(p.Symbol)"/>
+                                 </svg>
+                             </div>
+                         }
+@@ -919,6 +909,84 @@
+             _ = InvokeAsync(StateHasChanged);
+     }
+ 
++    // ── Spark helper methods ─────────────────────────────────
++    // All string work done in C# — never inline inside HTML attributes
++    // Each method takes a snapshot via GetSparkline so render thread
++    // iterates a stable copy even if SignalR fires concurrently.
++
++    static (decimal mn, decimal rng, double sw) SparkScale(List<decimal> s)
++    {
++        var mn = s.Min(); var mx = s.Max();
++        var rng = mx - mn; if (rng == 0) rng = 1m;
++        return (mn, rng, 200.0 / Math.Max(s.Count - 1, 1));
++    }
++
++    bool HasSparkline(string sym)
++    {
++        var s = GetSparkline(sym);
++        return s.Count > 1;
++    }
++
++    string BuildSparkPoints(string sym)
++    {
++        var s = GetSparkline(sym);
++        if (s.Count < 2) return "";
++        var (mn, rng, sw) = SparkScale(s);
++        var sb = new System.Text.StringBuilder();
++        for (int i = 0; i < s.Count; i++)
++        {
++            if (i > 0) sb.Append(' ');
++            sb.Append((i * sw).ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
++            sb.Append(',');
++            sb.Append(((double)(36m - (s[i] - mn) / rng * 32m))
++                .ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
++        }
++        return sb.ToString();
++    }
++
++    string BuildSparkFill(string sym)
++    {
++        var s = GetSparkline(sym);
++        if (s.Count < 2) return "";
++        var (_, _, sw) = SparkScale(s);
++        double lastX = (s.Count - 1) * sw;
++        var pts = BuildSparkPoints(sym);
++        if (string.IsNullOrEmpty(pts)) return "";
++        return "M0,36 L" + pts.Replace(" ", " L") + " L"
++             + lastX.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) + ",36 Z";
++    }
++
++    string SparkColor(string sym)
++    {
++        var s = GetSparkline(sym);
++        return s.Count >= 2 && s.Last() >= s.First() ? "#22c55e" : "#ef4444";
++    }
++
++    string SparkFill(string sym)
++    {
++        var s = GetSparkline(sym);
++        return s.Count >= 2 && s.Last() >= s.First()
++            ? "rgba(34,197,94,.08)" : "rgba(239,68,68,.08)";
++    }
++
++    string SparkLastX(string sym)
++    {
++        var s = GetSparkline(sym);
++        if (s.Count < 2) return "0";
++        var (_, _, sw) = SparkScale(s);
++        return ((s.Count - 1) * sw)
++            .ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
++    }
++
++    string SparkLastY(string sym)
++    {
++        var s = GetSparkline(sym);
++        if (s.Count < 2) return "18";
++        var (mn, rng, _) = SparkScale(s);
++        return ((double)(36m - (s.Last() - mn) / rng * 32m))
++            .ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
++    }
++
+     // ── Mini popup ───────────────────────────────────────────
+     PosRow? _miniPos;
+     string  _miniTf = "FifteenMinutes";
