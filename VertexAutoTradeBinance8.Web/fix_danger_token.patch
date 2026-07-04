@@ -1,0 +1,12 @@
+--- a/VertexAutoTradeBinance8.Web/Pages/Positions.razor
++++ b/VertexAutoTradeBinance8.Web/Pages/Positions.razor
+@@ -151,7 +151,8 @@
+                     bool warn   = liqDist >= 5m && liqDist < 12m;
+                     decimal move = p.Entry > 0 ? (p.Mark - p.Entry) / p.Entry * 100m * (isL ? 1 : -1) : 0m;
+ 
+-                    <div class="p-card @(isL ? "card-long" : "card-short")@(danger ? " card-danger" : "")"
++                    @{ var cardCls = "p-card " + (isL ? "card-long" : "card-short") + (danger ? " card-danger" : ""); }
++                    <div class="@cardCls"
+                          @onclick="() => OpenMiniStats(p)">
+ 
+                         <!-- Card Header -->
