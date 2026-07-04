@@ -1,0 +1,132 @@
+--- a/VertexAutoTradeBinance AI v5.0 Full Autonomous Mode/Services/PositionSupervisorService.cs
++++ b/VertexAutoTradeBinance AI v5.0 Full Autonomous Mode/Services/PositionSupervisorService.cs
+@@ -3011,6 +3011,15 @@
+             private readonly string _apiKey;
+             private readonly string _apiSecret;
+             private readonly string _baseUrl;
++
++            // Cache: fetch ALL algo orders once per TTL, serve from cache per symbol.
++            // Without this, GetOpenAlgoOrdersAsync was called for EVERY symbol on
++            // every supervisor tick (50+ symbols × every 80ms loop = 1000s of
++            // requests/min → HTTP 429 IP ban from Binance).
++            private readonly SemaphoreSlim _cacheLock = new(1, 1);
++            private List<BinanceAlgoOrderInfo> _cachedAll = new();
++            private DateTime _cacheExpiry = DateTime.MinValue;
++            private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(20);
+             public BinanceAlgoOrderRaw(IConfiguration cfg, IHttpClientFactory httpFactory, ILogger logger)
+             {
+                 _logger = logger;
+@@ -3136,37 +3145,64 @@
+             // has the exact same blind spot).
+             public async Task<List<BinanceAlgoOrderInfo>> GetOpenAlgoOrdersAsync(string? symbol, CancellationToken ct)
+             {
+-                var result = new List<BinanceAlgoOrderInfo>();
+                 if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret))
+                 {
+                     _logger.LogError("[ALGO-RAW] Missing Binance:ApiKey / Binance:ApiSecret in config");
+-                    return result;
++                    return new();
+                 }
+ 
+-                var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+-                var q = new List<KeyValuePair<string, string>>
++                // Serve from cache if still fresh — avoids hammering Binance
++                // with hundreds of requests/min (one per symbol per supervisor tick).
++                if (DateTime.UtcNow < _cacheExpiry)
+                 {
+-                    new("timestamp", ts.ToString(CultureInfo.InvariantCulture)),
+-                };
+-                if (!string.IsNullOrEmpty(symbol)) q.Add(new("symbol", symbol));
+-
+-                var (query, rawQuery) = BuildQuery(q);
+-                var sig = Sign(rawQuery, _apiSecret);
+-                var url = $"{_baseUrl}/fapi/v1/openAlgoOrders?{query}&signature={sig}";
+-
+-                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+-                req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", _apiKey);
++                    return string.IsNullOrEmpty(symbol)
++                        ? new List<BinanceAlgoOrderInfo>(_cachedAll)
++                        : _cachedAll.Where(o => o.Symbol == symbol).ToList();
++                }
+ 
++                // Fetch ALL algo orders in one request (no symbol filter) and
++                // cache the result. Individual callers then filter by symbol locally.
++                await _cacheLock.WaitAsync(ct);
+                 try
+                 {
+-                    using var resp = await _http.SendAsync(req, ct);
+-                    var body = await resp.Content.ReadAsStringAsync(ct);
+-                    if (!resp.IsSuccessStatusCode)
++                    // Double-check after acquiring lock — another thread may have
++                    // refreshed the cache while we were waiting.
++                    if (DateTime.UtcNow < _cacheExpiry)
+                     {
+-                        _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
+-                        return result;
++                        return string.IsNullOrEmpty(symbol)
++                            ? new List<BinanceAlgoOrderInfo>(_cachedAll)
++                            : _cachedAll.Where(o => o.Symbol == symbol).ToList();
+                     }
+ 
++                    var result = new List<BinanceAlgoOrderInfo>();
++                    var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
++                    // No symbol filter — fetch all at once
++                    var q = new List<KeyValuePair<string, string>>
++                    {
++                        new("timestamp", ts.ToString(CultureInfo.InvariantCulture)),
++                    };
++
++                    var (query, rawQuery) = BuildQuery(q);
++                    var sig = Sign(rawQuery, _apiSecret);
++                    var url = $"{_baseUrl}/fapi/v1/openAlgoOrders?{query}&signature={sig}";
++
++                    using var req = new HttpRequestMessage(HttpMethod.Get, url);
++                    req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", _apiKey);
++
++                    try
++                    {
++                        using var resp = await _http.SendAsync(req, ct);
++                        var body = await resp.Content.ReadAsStringAsync(ct);
++                        if (!resp.IsSuccessStatusCode)
++                        {
++                            _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
++                            // Return stale cache on error rather than empty — better
++                            // to act on slightly old data than to lose SL/TP visibility.
++                            return string.IsNullOrEmpty(symbol)
++                                ? new List<BinanceAlgoOrderInfo>(_cachedAll)
++                                : _cachedAll.Where(o => o.Symbol == symbol).ToList();
++                        }
++
+                     // CONFIRMED real response shape via official Binance
+                     // docs: a plain top-level JSON array, not wrapped in
+                     // an "orders" property.
+@@ -3198,11 +3234,26 @@
+                         });
+                     }
+                 }
+-                catch (Exception ex)
++                        catch (Exception ex)
++                        {
++                            _logger.LogError(ex, "[ALGO-RAW] EX GetOpenAlgoOrdersAsync {symbol}", symbol);
++                            return string.IsNullOrEmpty(symbol)
++                                ? new List<BinanceAlgoOrderInfo>(_cachedAll)
++                                : _cachedAll.Where(o => o.Symbol == symbol).ToList();
++                        }
++
++                        // Update cache on success
++                        _cachedAll = result;
++                        _cacheExpiry = DateTime.UtcNow.Add(CacheTtl);
++                        _logger.LogDebug("[ALGO-RAW] Cache refreshed: {count} algo orders", result.Count);
++                        return string.IsNullOrEmpty(symbol)
++                            ? new List<BinanceAlgoOrderInfo>(result)
++                            : result.Where(o => o.Symbol == symbol).ToList();
++                }
++                finally
+                 {
+-                    _logger.LogError(ex, "[ALGO-RAW] EX GetOpenAlgoOrdersAsync {symbol}", symbol);
++                    _cacheLock.Release();
+                 }
+-                return result;
+             }
+ 
+             public async Task<bool> CancelAlgoOrderAsync(long algoId, CancellationToken ct)
