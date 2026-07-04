@@ -885,20 +885,36 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
 
     // ── State ─────────────────────────────────────────────────
     // ── Live prices ──────────────────────────────────────────
-    readonly Dictionary<string, decimal> _livePrices = new();
-    readonly Dictionary<string, List<decimal>> _sparklines = new();
+    // ConcurrentDictionary for live prices (written from SignalR thread,
+    // read from Blazor render thread) — prevents InvalidOperationException
+    // "Collection was modified" that crashed the circuit.
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, decimal> _livePrices = new();
+    // Sparklines: lock protects the List while it is being modified.
+    // GetSparkline() returns a SNAPSHOT (new list copy) so the render
+    // thread iterates a stable collection even if OnLivePriceTick fires
+    // concurrently and mutates the original list.
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, List<decimal>> _sparklines = new();
+    readonly object _sparkLock = new();
     const int SparkMax = 60;
 
     decimal GetLivePrice(string sym) => _livePrices.TryGetValue(sym, out var p) ? p : 0m;
-    List<decimal> GetSparkline(string sym) => _sparklines.TryGetValue(sym, out var s) ? s : new();
+
+    // Returns a snapshot — safe to enumerate while the source list is mutated
+    List<decimal> GetSparkline(string sym)
+    {
+        if (!_sparklines.TryGetValue(sym, out var s)) return new();
+        lock (_sparkLock) { return new List<decimal>(s); }  // snapshot
+    }
 
     void OnLivePriceTick(string sym, decimal price)
     {
         _livePrices[sym] = price;
-        if (!_sparklines.ContainsKey(sym)) _sparklines[sym] = new List<decimal>();
-        var sp = _sparklines[sym];
-        sp.Add(price);
-        if (sp.Count > SparkMax) sp.RemoveAt(0);
+        lock (_sparkLock)
+        {
+            var sp = _sparklines.GetOrAdd(sym, _ => new List<decimal>());
+            sp.Add(price);
+            if (sp.Count > SparkMax) sp.RemoveAt(0);
+        }
         if (_positions.Any(p => p.Symbol == sym))
             _ = InvokeAsync(StateHasChanged);
     }
