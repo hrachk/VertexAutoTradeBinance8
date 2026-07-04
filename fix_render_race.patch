@@ -1,0 +1,148 @@
+--- a/VertexAutoTradeBinance8.Web/Pages/Positions.razor
++++ b/VertexAutoTradeBinance8.Web/Pages/Positions.razor
+@@ -11,6 +11,20 @@
+ <PageTitle>Positions — Vertex</PageTitle>
+ 
+ <div class="p-root">
++    @{
++        // Capture immutable snapshots of all mutable fields at the START
++        // of each render cycle. The timer and async fetches replace these
++        // fields between renders — snapshotting here ensures the entire
++        // render tree sees a consistent, stable view of each collection
++        // even if a background fetch replaces the field mid-render.
++        var snapPositions  = _positions;
++        var snapOrders     = _openOrders;
++        var snapHistOrders = _histOrders;
++        var snapPnlRows    = _pnlRows;
++        var snapTotalPnl   = _totalPnl;
++        var snapOrderCount = snapOrders.Count;
++        var snapPosCount   = snapPositions.Count;
++    }
+ 
+     <!-- ══════════ HERO HEADER ══════════════════════════════════════ -->
+     <div class="p-hero">
+@@ -43,13 +57,13 @@
+             <div class="p-hdiv"></div>
+             <div class="p-hstat">
+                 <div class="p-hstat-val @(_positions.Count > 0 ? "h-active" : "")">
+-                    @_positions.Count
++                    @snapPosCount
+                 </div>
+                 <div class="p-hstat-lab">Open Positions</div>
+             </div>
+             <div class="p-hdiv"></div>
+             <div class="p-hstat">
+-                <div class="p-hstat-val @(_openOrders.Count > 0 ? "h-active" : "")">@_openOrders.Count</div>
++                <div class="p-hstat-val @(_openOrders.Count > 0 ? "h-active" : "")">@snapOrderCount</div>
+                 <div class="p-hstat-lab">Open Orders</div>
+             </div>
+         </div>
+@@ -76,11 +90,11 @@
+     <div class="p-tabs">
+         <button class="p-tab @(_tab==0?"p-tab-on":"")" @onclick="()=>SetTab(0)">
+             <span class="p-tab-label">Positions</span>
+-            @if (_positions.Any()) { <span class="p-tab-chip">@_positions.Count</span> }
++            @if (snapPosCount > 0) { <span class="p-tab-chip">@snapPosCount</span> }
+         </button>
+         <button class="p-tab @(_tab==1?"p-tab-on":"")" @onclick="()=>SetTab(1)">
+             <span class="p-tab-label">Open Orders</span>
+-            @if (_openOrders.Any()) { <span class="p-tab-chip">@_openOrders.Count</span> }
++            @if (snapOrderCount > 0) { <span class="p-tab-chip">@snapOrderCount</span> }
+         </button>
+         <button class="p-tab @(_tab==2?"p-tab-on":"")" @onclick="()=>SetTab(2)">
+             <span class="p-tab-label">Order History</span>
+@@ -98,7 +112,7 @@
+         {
+             <div class="p-loader"><div class="p-spin-ring"></div><span>Loading positions…</span></div>
+         }
+-        else if (!_positions.Any())
++        else if (!snapPositions.Any())
+         {
+             <div class="p-empty">
+                 <div class="p-empty-icon">
+@@ -119,14 +133,13 @@
+                     </span>
+                 </div>
+                 <div class="p-pnl-banner-right">
+-                    <span class="p-pnl-count">@_positions.Count position@(_positions.Count != 1 ? "s" : "")</span>
++                    <span class="p-pnl-count">@snapPosCount position@(snapPosCount != 1 ? "s" : "")</span>
+                 </div>
+             </div>
+ 
+             <!-- Position cards -->
+             <div class="p-cards">
+-                @{ var posSnap = _positions; }
+-                @foreach (var p in posSnap)
++                @foreach (var p in snapPositions)
+                 {
+                     bool isL = p.Side == "LONG";
+                     bool pUp = p.Pnl >= 0;
+@@ -268,8 +281,8 @@
+         else
+         {
+             @{
+-                var basicOrders = _openOrders.Where(o => !o.IsAlgo).ToList();
+-                var algoOrders  = _openOrders.Where(o =>  o.IsAlgo).ToList();
++                var basicOrders = snapOrders.Where(o => !o.IsAlgo).ToList();
++                var algoOrders  = snapOrders.Where(o =>  o.IsAlgo).ToList();
+             }
+             <!-- Sub-tabs: Basic / Conditional -->
+             <div class="p-subtabs">
+@@ -364,7 +377,7 @@
+                         <tr><th>Symbol</th><th>Type</th><th>Side</th><th>Price</th><th>Qty / Filled</th><th>Status</th><th>Time</th></tr>
+                     </thead>
+                     <tbody>
+-                        @foreach (var o in _histOrders)
++                        @foreach (var o in snapHistOrders)
+                         {
+                             bool buy = o.Side == "BUY";
+                             string sc = o.Status switch { "FILLED"=>"st-ok","CANCELED" or "EXPIRED"=>"st-can","PARTIALLY_FILLED"=>"st-part",_=>"v-dim" };
+@@ -411,12 +424,12 @@
+                     <div class="p-pnl-sc-lab">Wins</div>
+                 </div>
+                 <div class="p-pnl-sc">
+-                    <div class="p-pnl-sc-val v-neg">@(_pnlRows.Count - _pnlWins)</div>
++                    <div class="p-pnl-sc-val v-neg">@(snapPnlRows.Count - _pnlWins)</div>
+                     <div class="p-pnl-sc-lab">Losses</div>
+                 </div>
+                 <div class="p-pnl-sc">
+                     <div class="p-pnl-sc-val @(_pnlRows.Count>0&&_pnlWins*100/_pnlRows.Count>=50?"v-pos":"v-neg")">
+-                        @(_pnlRows.Count > 0 ? (_pnlWins * 100.0 / _pnlRows.Count).ToString("F0") : "0")%
++                        @(snapPnlRows.Count > 0 ? (_pnlWins * 100.0 / _pnlRows.Count).ToString("F0") : "0")%
+                     </div>
+                     <div class="p-pnl-sc-lab">Win Rate</div>
+                 </div>
+@@ -428,7 +441,7 @@
+                         <tr><th>Symbol</th><th>Side</th><th>Fill Price</th><th>Qty</th><th>Realized P&L</th><th>ROE%</th><th>Commission</th><th>Time</th></tr>
+                     </thead>
+                     <tbody>
+-                        @foreach (var t in _pnlRows)
++                        @foreach (var t in snapPnlRows)
+                         {
+                             bool win = t.Pnl >= 0;
+                             <tr>
+@@ -1062,8 +1075,13 @@
+         LiveState.PriceTicked += OnLivePriceTick;
+         await RefreshAll();
+         _timer = new System.Threading.Timer(async _ =>
+-            await InvokeAsync(async () => { await FetchPositions(); StateHasChanged(); }),
+-            null, 3000, 3000);
++            await InvokeAsync(async () =>
++            {
++                await FetchPositions();
++                await FetchOrders();
++                StateHasChanged();
++            }),
++            null, 5000, 5000);
+     }
+ 
+     async Task SetTab(int t)
+@@ -1080,7 +1098,7 @@
+         _error = string.Empty;
+         StateHasChanged();
+         await FetchPositions();
+-        if (_tab == 1) await FetchOrders();
++        await FetchOrders();   // always fetch so hero count is correct
+         if (_tab == 2) await FetchHistory();
+         _lastRefresh = DateTime.UtcNow;
+         _loading = false;

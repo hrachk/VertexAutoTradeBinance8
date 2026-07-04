@@ -260,17 +260,20 @@
             </div>
         }
     }
-
+    @{
+        var basicOrders = _openOrders.Where(o => !o.IsAlgo).ToList();
+        var algoOrders = _openOrders.Where(o => o.IsAlgo).ToList();
+    }
+    @{
+        var ordersToShow = _ordSubTab == 0 ? basicOrders : algoOrders;
+    }
     <!-- ══════════ TAB 1: OPEN ORDERS ══════════════════════════════ -->
     @if (_tab == 1)
     {
         @if (_ordLoading) { <div class="p-loader"><div class="p-spin-ring"></div><span>Loading orders…</span></div> }
         else
         {
-            @{
-                var basicOrders = _openOrders.Where(o => !o.IsAlgo).ToList();
-                var algoOrders  = _openOrders.Where(o =>  o.IsAlgo).ToList();
-            }
+           
             <!-- Sub-tabs: Basic / Conditional -->
             <div class="p-subtabs">
                 <button class="p-subtab @(_ordSubTab==0?"p-subtab-on":"")" @onclick="()=>_ordSubTab=0">
@@ -283,9 +286,7 @@
                 </button>
             </div>
 
-            @{
-                var ordersToShow = _ordSubTab == 0 ? basicOrders : algoOrders;
-            }
+         
             @if (!ordersToShow.Any())
             {
                 <div class="p-empty">
