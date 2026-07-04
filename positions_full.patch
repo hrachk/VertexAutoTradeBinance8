@@ -1,0 +1,489 @@
+--- a/VertexAutoTradeBinance8.Web/Pages/Positions.razor
++++ b/VertexAutoTradeBinance8.Web/Pages/Positions.razor
+@@ -1,6 +1,7 @@
+ @page "/positions"
+ @using Binance.Net.Enums
+ @using VertexAutoTradeBinance8.Services
++@using VertexAutoTradeBinance8.Web.Pages.Components
+ @inject BinanceClientFactory Factory
+ @inject IHttpClientFactory HttpClientFactory
+ @inject Microsoft.Extensions.Options.IOptionsMonitor<VertexAutoTradeBinance8.Configuration.BinanceOptions> BinanceOpts
+@@ -28,6 +29,17 @@
+                 <div class="p-hstat-lab">Unrealized PnL</div>
+             </div>
+             <div class="p-hdiv"></div>
++            <div class="p-hstat @(_realizedPnlToday >= 0 ? "h-pos" : "h-neg")">
++                <div class="p-hstat-val">
++                    @(_realizedPnlToday >= 0 ? "+" : "")@_realizedPnlToday.ToString("F2")
++                    <span class="p-hstat-cur">USDT</span>
++                </div>
++                <div class="p-hstat-lab">
++                    Realized Today
++                    <a href="/statistics" class="p-stat-link" title="Open Statistics">↗</a>
++                </div>
++            </div>
++            <div class="p-hdiv"></div>
+             <div class="p-hstat">
+                 <div class="p-hstat-val @(_positions.Count > 0 ? "h-active" : "")">
+                     @_positions.Count
+@@ -36,7 +48,7 @@
+             </div>
+             <div class="p-hdiv"></div>
+             <div class="p-hstat">
+-                <div class="p-hstat-val">@_openOrders.Count</div>
++                <div class="p-hstat-val @(_openOrders.Count > 0 ? "h-active" : "")">@_openOrders.Count</div>
+                 <div class="p-hstat-lab">Open Orders</div>
+             </div>
+         </div>
+@@ -123,7 +135,8 @@
+                     bool warn   = liqDist >= 5m && liqDist < 12m;
+                     decimal move = p.Entry > 0 ? (p.Mark - p.Entry) / p.Entry * 100m * (isL ? 1 : -1) : 0m;
+ 
+-                    <div class="p-card @(isL ? "card-long" : "card-short") @(danger ? "card-danger" : "")">
++                    <div class="p-card @(isL ? "card-long" : "card-short") @(danger ? "card-danger" : "")"
++                         @onclick="() => OpenMiniStats(p)">
+ 
+                         <!-- Card Header -->
+                         <div class="p-card-head">
+@@ -132,10 +145,13 @@
+                                     @p.Symbol[0]
+                                 </div>
+                                 <div>
+-                                    <div class="p-card-sym">
+-                                        @p.Symbol.Replace("USDT", "")
+-                                        <span class="p-card-usdt">USDT</span>
+-                                    </div>
++                                    <a href="/market?sym=@p.Symbol" class="p-card-sym-link"
++                                       @onclick:stopPropagation="true">
++                                        <div class="p-card-sym">
++                                            @p.Symbol.Replace("USDT", "")
++                                            <span class="p-card-usdt">USDT</span>
++                                        </div>
++                                    </a>
+                                     <div class="p-card-meta">
+                                         <span class="p-side-badge @(isL ? "sb-l" : "sb-s")">
+                                             @(isL ? "▲ LONG" : "▼ SHORT")
+@@ -212,9 +228,12 @@
+                             <div class="p-card-foot-info">
+                                 <span class="v-dim" style="font-size:11px">Position value: @p.SizeUsdt.ToString("F2") USDT</span>
+                             </div>
+-                            <button class="p-close-btn" @onclick="() => _confirmPos = p">
+-                                Close Position
+-                            </button>
++                            <div class="p-card-foot-btns">
++                                <button class="p-partial-btn" @onclick:stopPropagation="true"
++                                        @onclick="() => OpenPartialClose(p)">½ Partial</button>
++                                <button class="p-close-btn" @onclick:stopPropagation="true"
++                                        @onclick="() => _confirmPos = p">Close</button>
++                            </div>
+                         </div>
+ 
+                     </div>
+@@ -227,59 +246,79 @@
+     @if (_tab == 1)
+     {
+         @if (_ordLoading) { <div class="p-loader"><div class="p-spin-ring"></div><span>Loading orders…</span></div> }
+-        else if (!_openOrders.Any())
+-        {
+-            <div class="p-empty">
+-                <div class="p-empty-icon"><svg viewBox="0 0 64 64" fill="none"><rect x="12" y="16" width="40" height="32" rx="4" stroke="#1e2535" stroke-width="2"/><line x1="20" y1="26" x2="44" y2="26" stroke="#30363d" stroke-width="2" stroke-linecap="round"/><line x1="20" y1="32" x2="36" y2="32" stroke="#30363d" stroke-width="2" stroke-linecap="round"/></svg></div>
+-                <div class="p-empty-title">No open orders</div>
+-                <div class="p-empty-sub">TP, SL and pending orders appear here</div>
+-            </div>
+-        }
+         else
+         {
+-            <div class="p-table-wrap">
+-                <table class="p-table">
+-                    <thead>
+-                        <tr>
+-                            <th>Symbol</th><th>Type</th><th>Side</th>
+-                            <th>Price</th><th>Amount</th><th>Filled</th>
+-                            <th>Reduce</th><th>Time</th><th></th>
+-                        </tr>
+-                    </thead>
+-                    <tbody>
+-                        @foreach (var o in _openOrders)
+-                        {
+-                            bool buy = o.Side == "BUY";
+-                            decimal fp = o.OrigQty > 0 ? o.ExecutedQty / o.OrigQty * 100m : 0m;
++            var basicOrders = _openOrders.Where(o => !o.IsAlgo).ToList();
++            var algoOrders  = _openOrders.Where(o =>  o.IsAlgo).ToList();
++            <!-- Sub-tabs: Basic / Conditional -->
++            <div class="p-subtabs">
++                <button class="p-subtab @(_ordSubTab==0?"p-subtab-on":"")" @onclick="()=>_ordSubTab=0">
++                    Basic
++                    @if (basicOrders.Any()) { <span class="p-tab-chip p-tab-chip-sm">@basicOrders.Count</span> }
++                </button>
++                <button class="p-subtab @(_ordSubTab==1?"p-subtab-on":"")" @onclick="()=>_ordSubTab=1">
++                    Conditional
++                    @if (algoOrders.Any()) { <span class="p-tab-chip p-tab-chip-sm">@algoOrders.Count</span> }
++                </button>
++            </div>
++
++            var ordersToShow = _ordSubTab == 0 ? basicOrders : algoOrders;
++
++            @if (!ordersToShow.Any())
++            {
++                <div class="p-empty">
++                    <div class="p-empty-icon"><svg viewBox="0 0 64 64" fill="none"><rect x="12" y="16" width="40" height="32" rx="4" stroke="#1e2535" stroke-width="2"/><line x1="20" y1="26" x2="44" y2="26" stroke="#30363d" stroke-width="2" stroke-linecap="round"/><line x1="20" y1="32" x2="36" y2="32" stroke="#30363d" stroke-width="2" stroke-linecap="round"/></svg></div>
++                    <div class="p-empty-title">No @(_ordSubTab==0?"basic":"conditional") orders</div>
++                    <div class="p-empty-sub">@(_ordSubTab==0?"Limit and market orders appear here":"TP/SL and algo orders appear here")</div>
++                </div>
++            }
++            else
++            {
++                <div class="p-table-wrap">
++                    <table class="p-table">
++                        <thead>
+                             <tr>
+-                                <td>
+-                                    <div class="t-sym">@o.Symbol.Replace("USDT","")</div>
+-                                    <div class="t-sub v-dim">@o.Symbol</div>
+-                                </td>
+-                                <td><span class="t-type">@o.Type</span>@if (o.IsAlgo) { <span class="t-algo-badge" title="Conditional order (Algo Order API)">Conditional</span> }</td>
+-                                <td>
+-                                    <span class="p-side-badge @(buy?"sb-l":"sb-s") sb-sm">@o.Side</span>
+-                                    @if (o.PosSide != "BOTH") { <div class="t-sub v-dim">@o.PosSide</div> }
+-                                </td>
+-                                <td class="mono">
+-                                    @if (o.Price > 0) { <div>@FP(o.Price)</div> }
+-                                    @if (o.StopPrice > 0) { <div class="t-sub v-dim">Stop @FP(o.StopPrice)</div> }
+-                                </td>
+-                                <td class="mono">@o.OrigQty.ToString("G6")</td>
+-                                <td>
+-                                    <div class="mono @(fp>0?"v-pos":"v-dim")">@o.ExecutedQty.ToString("G6")</div>
+-                                    @if (fp > 0) {
+-                                        <div class="t-fill-track"><div class="t-fill-bar" style="width:@fp%"></div></div>
+-                                    }
+-                                </td>
+-                                <td class="@(o.ReduceOnly?"v-pos":"v-dim")">@(o.ReduceOnly?"✓":"—")</td>
+-                                <td class="mono v-dim t-time">@o.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
+-                                <td><button class="t-cancel-btn" @onclick="()=>CancelOrder(o)">Cancel</button></td>
++                                <th>Symbol</th><th>Type</th><th>Side</th>
++                                <th>Price</th><th>Qty</th><th>Filled</th>
++                                <th>Reduce</th><th>Time</th><th></th>
+                             </tr>
+-                        }
+-                    </tbody>
+-                </table>
+-            </div>
++                        </thead>
++                        <tbody>
++                            @foreach (var o in ordersToShow)
++                            {
++                                bool buy = o.Side == "BUY";
++                                decimal fp = o.OrigQty > 0 ? o.ExecutedQty / o.OrigQty * 100m : 0m;
++                                <tr>
++                                    <td>
++                                        <div class="t-sym">@o.Symbol.Replace("USDT","")</div>
++                                        <div class="t-sub v-dim">@o.Symbol</div>
++                                    </td>
++                                    <td>
++                                        <span class="t-type">@o.Type</span>
++                                        @if (o.IsAlgo) { <span class="t-algo-badge">(R)</span> }
++                                    </td>
++                                    <td>
++                                        <span class="p-side-badge @(buy?"sb-l":"sb-s") sb-sm">@o.Side</span>
++                                        @if (o.PosSide != "BOTH") { <div class="t-sub v-dim">@o.PosSide</div> }
++                                    </td>
++                                    <td class="mono">
++                                        @if (o.Price > 0) { <div>@FP(o.Price)</div> }
++                                        @if (o.StopPrice > 0 && o.StopPrice != o.Price) { <div class="t-sub v-dim">Stop @FP(o.StopPrice)</div> }
++                                    </td>
++                                    <td class="mono">@o.OrigQty.ToString("G6")</td>
++                                    <td>
++                                        <div class="mono @(fp>0?"v-pos":"v-dim")">@o.ExecutedQty.ToString("G6")</div>
++                                        @if (fp > 0) { <div class="t-fill-track"><div class="t-fill-bar" style="width:@fp%"></div></div> }
++                                    </td>
++                                    <td class="@(o.ReduceOnly?"v-pos":"v-dim")">@(o.ReduceOnly?"✓":"—")</td>
++                                    <td class="mono v-dim t-time">@o.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
++                                    <td><button class="t-cancel-btn" @onclick="()=>CancelOrder(o)">Cancel</button></td>
++                                </tr>
++                            }
++                        </tbody>
++                    </table>
++                </div>
++            }
+         }
+     }
+ 
+@@ -446,7 +485,103 @@
+         </div>
+     }
+ 
+-    <!-- Toast -->
++    <!-- ══════════ MINI STATS POPUP ════════════════════════════════ -->
++    @if (_miniPos != null)
++    {
++        <div class="p-overlay" @onclick="() => _miniPos = null">
++            <div class="p-mini-modal" @onclick:stopPropagation="true">
++                <div class="p-modal-top">
++                    <div style="display:flex;align-items:center;gap:10px;">
++                        <div class="p-card-icon @(_miniPos.Side=="LONG"?"icon-l":"icon-s") icon-lg">@_miniPos.Symbol[0]</div>
++                        <div>
++                            <div class="p-modal-sym-name">@_miniPos.Symbol</div>
++                            <div style="display:flex;gap:6px;margin-top:4px;">
++                                <span class="p-side-badge @(_miniPos.Side=="LONG"?"sb-l":"sb-s")">
++                                    @(_miniPos.Side=="LONG"?"▲ LONG":"▼ SHORT")
++                                </span>
++                                <span class="p-lev">@_miniPos.Leverage×</span>
++                            </div>
++                        </div>
++                    </div>
++                    <!-- TF selector -->
++                    <div style="display:flex;align-items:center;gap:6px;">
++                        @foreach (var tf in new[]{("FiveMinutes","5m"),("FifteenMinutes","15m"),("OneHour","1h"),("FourHour","4h")})
++                        {
++                            <button class="p-tf-btn @(_miniTf==tf.Item1?"p-tf-on":"")"
++                                    @onclick="() => _miniTf = tf.Item1">@tf.Item2</button>
++                        }
++                        <button class="p-modal-x" @onclick="() => _miniPos = null">✕</button>
++                    </div>
++                </div>
++
++                <!-- Mini chart -->
++                <div class="p-mini-chart-wrap">
++                    <MarketMiniChart Symbol="@_miniPos.Symbol" Timeframe="@_miniTf" MaxBars="80" />
++                </div>
++
++                <!-- Stats grid -->
++                <div class="p-mini-stats">
++                    @{ var mp = _miniPos; bool mp_up = mp.Pnl >= 0; decimal mp_roe = mp.Roi*100m; decimal mp_move = mp.Entry>0?(mp.Mark-mp.Entry)/mp.Entry*100m*(mp.Side=="LONG"?1:-1):0m; }
++                    <div class="p-ms"><div class="p-ms-lab">Unrealized PnL</div><div class="p-ms-val @(mp_up?"v-pos":"v-neg")">@(mp_up?"+":"")@mp.Pnl.ToString("F4")</div></div>
++                    <div class="p-ms"><div class="p-ms-lab">ROE</div><div class="p-ms-val @(mp_up?"v-pos":"v-neg")">@(mp_up?"+":"")@mp_roe.ToString("F2")%</div></div>
++                    <div class="p-ms"><div class="p-ms-lab">Entry</div><div class="p-ms-val mono">@FP(mp.Entry)</div></div>
++                    <div class="p-ms"><div class="p-ms-lab">Mark</div><div class="p-ms-val mono">@FP(mp.Mark)</div></div>
++                    <div class="p-ms"><div class="p-ms-lab">Liq Price</div><div class="p-ms-val mono v-danger">@FP(mp.LiqPrice)</div></div>
++                    <div class="p-ms"><div class="p-ms-lab">Move</div><div class="p-ms-val @(mp_move>=0?"v-pos":"v-neg")">@(mp_move>=0?"+":"")@mp_move.ToString("F2")%</div></div>
++                    <div class="p-ms"><div class="p-ms-lab">Size</div><div class="p-ms-val mono">@mp.SizeUsdt.ToString("F2") USDT</div></div>
++                    <div class="p-ms"><div class="p-ms-lab">Margin</div><div class="p-ms-val mono">@mp.Margin.ToString("F2") USDT</div></div>
++                </div>
++
++                <div class="p-modal-foot">
++                    <a href="/market?sym=@_miniPos.Symbol" class="p-modal-cancel" style="text-align:center;text-decoration:none;">
++                        📈 Open on Market
++                    </a>
++                    <button class="p-modal-cancel" @onclick="() => { _partialPos = _miniPos; _miniPos = null; }">½ Partial Close</button>
++                    <button class="p-modal-confirm" @onclick="() => { _confirmPos = _miniPos; _miniPos = null; }">Close Position</button>
++                </div>
++            </div>
++        </div>
++    }
++
++    <!-- ══════════ PARTIAL CLOSE MODAL ═════════════════════════════ -->
++    @if (_partialPos != null)
++    {
++        <div class="p-overlay" @onclick="() => _partialPos = null">
++            <div class="p-modal" @onclick:stopPropagation="true">
++                <div class="p-modal-top">
++                    <div class="p-modal-title">½ Partial Close — @_partialPos.Symbol</div>
++                    <button class="p-modal-x" @onclick="() => _partialPos = null">✕</button>
++                </div>
++                <div class="p-modal-body">
++                    <div style="margin-bottom:16px;">
++                        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--dim);margin-bottom:6px;">
++                            <span>Close percentage</span>
++                            <span class="mono" style="color:var(--txt)">@_partialPct%</span>
++                        </div>
++                        <input type="range" min="5" max="95" step="5"
++                               style="width:100%;accent-color:var(--acc);"
++                               value="@_partialPct"
++                               @oninput="e => _partialPct = int.Parse(e.Value?.ToString() ?? "50")" />
++                        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--dim);margin-top:2px;">
++                            <span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>95%</span>
++                        </div>
++                    </div>
++                    @{ decimal closeQty = _partialPos.SizeUsdt * _partialPct / 100m; }
++                    <div class="p-modal-rows">
++                        <div class="p-modal-row"><span class="v-dim">Closing</span><span class="mono">@_partialPct% = @closeQty.ToString("F2") USDT</span></div>
++                        <div class="p-modal-row"><span class="v-dim">Remaining</span><span class="mono">@((100-_partialPct))% = @(_partialPos.SizeUsdt - closeQty).ToString("F2") USDT</span></div>
++                    </div>
++                    <div class="p-modal-warn">Market order — closes @_partialPct% of position at current price</div>
++                </div>
++                <div class="p-modal-foot">
++                    <button class="p-modal-cancel" @onclick="() => _partialPos = null">Cancel</button>
++                    <button class="p-modal-confirm" @onclick="PartialCloseConfirmed" disabled="@_actionLoading">
++                        @if (_actionLoading) { <span class="p-spin-sm"></span> } else { <span>Close @_partialPct%</span> }
++                    </button>
++                </div>
++            </div>
++        </div>
++    }
+     @if (!string.IsNullOrEmpty(_toast))
+     {
+         <div class="p-toast @(_toastOk?"t-ok":"t-err")">
+@@ -586,6 +721,59 @@
+ .p-close-btn{background:transparent;border:1px solid var(--red);color:var(--red);padding:6px 18px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;letter-spacing:.3px;}
+ .p-close-btn:hover{background:var(--red);color:#fff;box-shadow:0 0 16px rgba(255,77,106,.3);}
+ 
++/* ── HERO REALIZED LINK ──────────────────────────────────── */
++.p-stat-link{margin-left:5px;color:var(--acc);text-decoration:none;font-size:11px;opacity:.7;transition:opacity .15s;}
++.p-stat-link:hover{opacity:1;}
++
++/* ── SUBTABS (Basic / Conditional) ──────────────────────── */
++.p-subtabs{display:flex;gap:2px;padding:12px 28px 0;border-bottom:1px solid var(--bdr);background:var(--bg2);}
++.p-subtab{background:none;border:none;color:var(--dim);font-size:12px;font-weight:600;padding:8px 16px 10px;cursor:pointer;display:flex;align-items:center;gap:7px;position:relative;transition:color .15s;border-radius:6px 6px 0 0;}
++.p-subtab:hover{color:var(--txt);background:rgba(255,255,255,.03);}
++.p-subtab-on{color:var(--acc)!important;background:rgba(77,159,255,.06)!important;}
++.p-subtab-on::after{content:'';position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--acc);border-radius:2px 2px 0 0;}
++.p-tab-chip-sm{font-size:10px;padding:1px 6px;}
++
++/* ── SYMBOL LINK ON CARD ─────────────────────────────────── */
++.p-card-sym-link{text-decoration:none;color:inherit;}
++.p-card-sym-link:hover .p-card-sym{color:var(--acc);}
++.p-card-sym-link:hover .p-card-usdt{color:var(--acc);}
++
++/* ── CARD CLICKABLE ──────────────────────────────────────── */
++.p-card{cursor:pointer;}
++.p-card:active{transform:scale(.995);}
++.p-card-foot-btns{display:flex;gap:6px;}
++.p-partial-btn{background:transparent;border:1px solid var(--bdr2);color:var(--dim);padding:5px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;}
++.p-partial-btn:hover{border-color:var(--acc);color:var(--acc);}
++
++/* ── SYMBOL LINK ON CARD ─────────────────────────────────── */
++.p-card-sym-link{text-decoration:none;color:inherit;}
++.p-card-sym-link:hover .p-card-sym{color:var(--acc);}
++
++/* ── HERO LINK ───────────────────────────────────────────── */
++.p-stat-link{margin-left:5px;color:var(--acc);text-decoration:none;font-size:11px;opacity:.7;}
++.p-stat-link:hover{opacity:1;}
++
++/* ── SUBTABS ─────────────────────────────────────────────── */
++.p-subtabs{display:flex;gap:2px;padding:12px 28px 0;border-bottom:1px solid var(--bdr);background:var(--bg2);}
++.p-subtab{background:none;border:none;color:var(--dim);font-size:12px;font-weight:600;padding:8px 16px 10px;cursor:pointer;display:flex;align-items:center;gap:7px;position:relative;transition:color .15s;}
++.p-subtab:hover{color:var(--txt);}
++.p-subtab-on{color:var(--acc)!important;}
++.p-subtab-on::after{content:'';position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--acc);}
++.p-tab-chip-sm{font-size:10px;padding:1px 6px;}
++
++/* ── MINI MODAL ──────────────────────────────────────────── */
++.p-mini-modal{background:var(--bg3);border:1px solid var(--bdr2);border-radius:16px;width:680px;max-width:95vw;box-shadow:0 24px 80px rgba(0,0,0,.7);animation:slideUp .25s ease;}
++.p-mini-chart-wrap{height:240px;overflow:hidden;border-top:1px solid var(--bdr);border-bottom:1px solid var(--bdr);}
++.p-mini-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border-bottom:1px solid var(--bdr);}
++.p-ms{padding:12px 16px;border-right:1px solid var(--bdr);}
++.p-ms:nth-child(4n){border-right:none;}
++.p-ms:nth-child(n+5){border-top:1px solid var(--bdr);}
++.p-ms-lab{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;}
++.p-ms-val{font-family:var(--mono);font-size:14px;font-weight:700;}
++.p-tf-btn{background:var(--bg4);border:1px solid var(--bdr2);color:var(--dim);padding:4px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;transition:all .12s;}
++.p-tf-btn:hover{border-color:var(--acc);color:var(--acc);}
++.p-tf-on{background:rgba(77,159,255,.12)!important;border-color:var(--acc)!important;color:var(--acc)!important;}
++
+ /* ── TABLE (Orders / History / PnL) ─────────────────────── */
+ .p-table-wrap{overflow-x:auto;padding:8px 0;}
+ .p-table{width:100%;border-collapse:collapse;min-width:700px;}
+@@ -672,7 +860,57 @@
+         decimal Qty, decimal Pnl, decimal Roe, decimal Commission, DateTime Time);
+ 
+     // ── State ─────────────────────────────────────────────────
++    // ── Mini popup state ──────────────────────────────────────
++    PosRow? _miniPos;
++    string  _miniTf = "FifteenMinutes";
++
++    void OpenMiniStats(PosRow p) => _miniPos = p;
++
++    // ── Partial close state ───────────────────────────────────
++    PosRow? _partialPos;
++    int _partialPct = 50;
++
++    void OpenPartialClose(PosRow p) { _partialPos = p; _partialPct = 50; }
++
++    async Task PartialCloseConfirmed()
++    {
++        if (_partialPos == null) return;
++        _actionLoading = true; StateHasChanged();
++        try
++        {
++            var client = Factory.TryCreateRestClient();
++            if (client == null) { ShowToast("No API credentials", false); return; }
++            var p   = _partialPos;
++            bool isL = p.Side == "LONG";
++            // Qty to close = position qty * pct/100
++            // We derive qty from SizeUsdt / EntryPrice (approximate)
++            decimal totalQty = p.Entry > 0 ? p.SizeUsdt / p.Entry : 0m;
++            decimal closeQty = Math.Round(totalQty * _partialPct / 100m, 3);
++            if (closeQty <= 0) { ShowToast("Qty too small", false); return; }
++
++            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
++            var side = isL ? Binance.Net.Enums.OrderSide.Sell : Binance.Net.Enums.OrderSide.Buy;
++            var posSide = isL ? Binance.Net.Enums.PositionSide.Long : Binance.Net.Enums.PositionSide.Short;
++            var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
++                p.Symbol, side, Binance.Net.Enums.FuturesOrderType.Market,
++                quantity: closeQty, positionSide: posSide,
++                reduceOnly: true, ct: cts.Token);
++
++            if (res.Success)
++            {
++                ShowToast($"✓ Closed {_partialPct}% of {p.Symbol}", true);
++                _partialPos = null;
++                await FetchPositions();
++            }
++            else
++                ShowToast($"Error: {res.Error?.Message}", false);
++        }
++        catch (Exception ex) { ShowToast(ex.Message, false); }
++        finally { _actionLoading = false; StateHasChanged(); }
++    }
++
+     int _tab;
++    int _ordSubTab; // 0=Basic 1=Conditional
+     bool _loading, _ordLoading, _histLoading, _actionLoading, _pnlLoading;
+     DateTime _lastRefresh;
+     string _error = string.Empty;
+@@ -686,14 +924,21 @@
+     List<HistRow> _histOrders = new();
+     List<PnlRow>  _pnlRows    = new();
+ 
+-    decimal _totalPnl, _pnlTotal;
++    decimal _totalPnl, _pnlTotal, _realizedPnlToday;
+     int _pnlWins;
+ 
+     protected override async Task OnInitializedAsync()
+     {
+         await RefreshAll();
+         _timer = new System.Threading.Timer(async _ =>
+-            await InvokeAsync(async () => { await FetchPositions(); StateHasChanged(); }),
++            await InvokeAsync(async () =>
++            {
++                await FetchPositions();
++                // Refresh orders silently so the count in the hero stays correct
++                // even when the user is on the Positions tab
++                await FetchOrders();
++                StateHasChanged();
++            }),
+             null, 3000, 3000);
+     }
+ 
+@@ -710,8 +955,9 @@
+         _loading = true;
+         _error = string.Empty;
+         StateHasChanged();
+-        await FetchPositions();
+-        if (_tab == 1) await FetchOrders();
++        // Run positions + orders concurrently so Open Orders count
++        // is visible immediately even when on the Positions tab
++        await Task.WhenAll(FetchPositions(), FetchOrders());
+         if (_tab == 2) await FetchHistory();
+         _lastRefresh = DateTime.UtcNow;
+         _loading = false;
+@@ -745,6 +991,19 @@
+                 .OrderByDescending(p => Math.Abs(p.Pnl)).ToList();
+ 
+             _totalPnl = _positions.Sum(p => p.Pnl);
++
++            // Also fetch today's realized PnL while we have the client open
++            try
++            {
++                using var ctsPnl = new CancellationTokenSource(TimeSpan.FromSeconds(5));
++                var pnlRes = await client.UsdFuturesApi.Account.GetIncomeHistoryAsync(
++                    incomeType: "REALIZED_PNL",
++                    startTime: DateTime.UtcNow.Date,
++                    limit: 1000, ct: ctsPnl.Token);
++                if (pnlRes.Success && pnlRes.Data != null)
++                    _realizedPnlToday = pnlRes.Data.Sum(x => x.Income);
++            }
++            catch { /* non-blocking — don't fail positions if this one fails */ }
+         }
+         catch (OperationCanceledException) { _error = "Request timed out."; }
+         catch (Exception ex) { _error = $"Error: {ex.Message}"; }
