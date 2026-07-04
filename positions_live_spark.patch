@@ -1,0 +1,154 @@
+--- a/VertexAutoTradeBinance8.Web/Pages/Positions.razor
++++ b/VertexAutoTradeBinance8.Web/Pages/Positions.razor
+@@ -5,6 +5,8 @@
+ @inject BinanceClientFactory Factory
+ @inject IHttpClientFactory HttpClientFactory
+ @inject Microsoft.Extensions.Options.IOptionsMonitor<VertexAutoTradeBinance8.Configuration.BinanceOptions> BinanceOpts
++@inject VertexAutoTradeBinance8.Web.Services.MarketDataLiveState LiveState
++@inject VertexAutoTradeBinance8.Web.Services.MarketSnapshotFileService SnapSvc
+ @implements IDisposable
+ 
+ <PageTitle>Positions — Vertex</PageTitle>
+@@ -172,6 +174,35 @@
+                             </div>
+                         </div>
+ 
++                        <!-- Sparkline (live mini price chart) -->
++                        @{ var spark = GetSparkline(p.Symbol); }
++                        @if (spark.Count > 1)
++                        {
++                            <div class="p-spark-wrap">
++                                <svg class="p-spark-svg" viewBox="0 0 200 36" preserveAspectRatio="none">
++                                    @{
++                                        var sMin = spark.Min(); var sMax = spark.Max();
++                                        var sRange = sMax - sMin; if (sRange == 0) sRange = 1m;
++                                        double sW = 200.0 / Math.Max(spark.Count - 1, 1);
++                                        var sPts = string.Join(" ", spark.Select((v, i) =>
++                                            $"{i*sW:F1},{(double)(36m - (v - sMin) / sRange * 32m):F1}"));
++                                        var sparkColor = spark.Last() >= spark.First() ? "#22c55e" : "#ef4444";
++                                        var sparkFill = spark.Last() >= spark.First()
++                                            ? "rgba(34,197,94,.08)" : "rgba(239,68,68,.08)";
++                                        var fillPath = $"M0,36 L{sPts.Replace(" ","_").Replace("_"," L")} L200,36 Z";
++                                    }
++                                    <path d="@fillPath" fill="@sparkFill"/>
++                                    <polyline points="@sPts" fill="none" stroke="@sparkColor" stroke-width="1.5" stroke-linejoin="round"/>
++                                    <!-- Live price dot -->
++                                    @{
++                                        var lastX = (spark.Count - 1) * sW;
++                                        var lastY = (double)(36m - (spark.Last() - sMin) / sRange * 32m);
++                                    }
++                                    <circle cx="@lastX.ToString("F1")" cy="@lastY.ToString("F1")" r="2.5" fill="@sparkColor"/>
++                                </svg>
++                            </div>
++                        }
++
+                         <!-- Progress bar - price move -->
+                         <div class="p-move-bar-wrap">
+                             <div class="p-move-bar @(move >= 0 ? "mb-pos" : "mb-neg")"
+@@ -185,8 +216,17 @@
+                                 <div class="p-cg-val mono">@FP(p.Entry)</div>
+                             </div>
+                             <div class="p-cg">
+-                                <div class="p-cg-lab">Mark Price</div>
+-                                <div class="p-cg-val mono @(isL?(p.Mark>p.Entry?"v-pos":""):(p.Mark<p.Entry?"v-pos":""))">@FP(p.Mark)</div>
++                                <div class="p-cg-lab">
++                                    Mark Price
++                                    @{ var liveP = GetLivePrice(p.Symbol); }
++                                    @if (liveP > 0 && liveP != p.Mark)
++                                    {
++                                        <span class="p-live-dot" title="Live">●</span>
++                                    }
++                                </div>
++                                <div class="p-cg-val mono @(isL?(p.Mark>p.Entry?"v-pos":""):(p.Mark<p.Entry?"v-pos":""))">
++                                    @(liveP > 0 ? FP(liveP) : FP(p.Mark))
++                                </div>
+                             </div>
+                             <div class="p-cg">
+                                 <div class="p-cg-lab">Size</div>
+@@ -505,7 +545,7 @@
+                     </div>
+                     <!-- TF selector -->
+                     <div style="display:flex;align-items:center;gap:6px;">
+-                        @foreach (var tf in new[]{("FiveMinutes","5m"),("FifteenMinutes","15m"),("OneHour","1h"),("FourHour","4h")})
++                        @foreach (var tf in new[]{("OneMinute","1m"),("FiveMinutes","5m"),("FifteenMinutes","15m"),("OneHour","1h"),("FourHour","4h"),("OneDay","1D")})
+                         {
+                             <button class="p-tf-btn @(_miniTf==tf.Item1?"p-tf-on":"")"
+                                     @onclick="() => _miniTf = tf.Item1">@tf.Item2</button>
+@@ -525,7 +565,10 @@
+                     <div class="p-ms"><div class="p-ms-lab">Unrealized PnL</div><div class="p-ms-val @(mp_up?"v-pos":"v-neg")">@(mp_up?"+":"")@mp.Pnl.ToString("F4")</div></div>
+                     <div class="p-ms"><div class="p-ms-lab">ROE</div><div class="p-ms-val @(mp_up?"v-pos":"v-neg")">@(mp_up?"+":"")@mp_roe.ToString("F2")%</div></div>
+                     <div class="p-ms"><div class="p-ms-lab">Entry</div><div class="p-ms-val mono">@FP(mp.Entry)</div></div>
+-                    <div class="p-ms"><div class="p-ms-lab">Mark</div><div class="p-ms-val mono">@FP(mp.Mark)</div></div>
++                    <div class="p-ms">
++                        <div class="p-ms-lab">Mark <span class="p-live-dot">●</span></div>
++                        <div class="p-ms-val mono">@(GetLivePrice(mp.Symbol) > 0 ? FP(GetLivePrice(mp.Symbol)) : FP(mp.Mark))</div>
++                    </div>
+                     <div class="p-ms"><div class="p-ms-lab">Liq Price</div><div class="p-ms-val mono v-danger">@FP(mp.LiqPrice)</div></div>
+                     <div class="p-ms"><div class="p-ms-lab">Move</div><div class="p-ms-val @(mp_move>=0?"v-pos":"v-neg")">@(mp_move>=0?"+":"")@mp_move.ToString("F2")%</div></div>
+                     <div class="p-ms"><div class="p-ms-lab">Size</div><div class="p-ms-val mono">@mp.SizeUsdt.ToString("F2") USDT</div></div>
+@@ -738,6 +781,14 @@
+ .p-card-sym-link:hover .p-card-sym{color:var(--acc);}
+ .p-card-sym-link:hover .p-card-usdt{color:var(--acc);}
+ 
++/* ── SPARKLINE ───────────────────────────────────────────── */
++.p-spark-wrap{height:40px;overflow:hidden;margin:0;position:relative;background:linear-gradient(to bottom,rgba(255,255,255,.01),transparent);}
++.p-spark-svg{width:100%;height:40px;display:block;}
++
++/* ── LIVE DOT ────────────────────────────────────────────── */
++.p-live-dot{color:#22c55e;font-size:8px;animation:live-pulse 1.5s ease-in-out infinite;margin-left:3px;}
++@@keyframes live-pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
++
+ /* ── CARD CLICKABLE ──────────────────────────────────────── */
+ .p-card{cursor:pointer;}
+ .p-card:active{transform:scale(.995);}
+@@ -860,6 +911,30 @@
+         decimal Qty, decimal Pnl, decimal Roe, decimal Commission, DateTime Time);
+ 
+     // ── State ─────────────────────────────────────────────────
++    // ── Live prices (from SignalR) ───────────────────────────
++    readonly Dictionary<string, decimal> _livePrices = new();
++    readonly Dictionary<string, List<decimal>> _sparklines = new();
++    const int SparkMax = 60; // last 60 live ticks per symbol
++
++    decimal GetLivePrice(string sym)
++        => _livePrices.TryGetValue(sym, out var p) ? p : 0m;
++
++    List<decimal> GetSparkline(string sym)
++        => _sparklines.TryGetValue(sym, out var s) ? s : new();
++
++    void OnLivePriceTick(string sym, decimal price)
++    {
++        _livePrices[sym] = price;
++        if (!_sparklines.ContainsKey(sym))
++            _sparklines[sym] = new List<decimal>();
++        var s = _sparklines[sym];
++        s.Add(price);
++        if (s.Count > SparkMax) s.RemoveAt(0);
++        // Only re-render if this symbol is in open positions
++        if (_positions.Any(p => p.Symbol == sym))
++            _ = InvokeAsync(StateHasChanged);
++    }
++
+     // ── Mini popup state ──────────────────────────────────────
+     PosRow? _miniPos;
+     string  _miniTf = "FifteenMinutes";
+@@ -929,6 +1004,8 @@
+ 
+     protected override async Task OnInitializedAsync()
+     {
++        // Subscribe to live prices from Engine via SignalR
++        LiveState.PriceTicked += OnLivePriceTick;
+         await RefreshAll();
+         _timer = new System.Threading.Timer(async _ =>
+             await InvokeAsync(async () =>
+@@ -1289,5 +1366,9 @@
+         return v.ToString("G5");
+     }
+ 
+-    public void Dispose() => _timer?.Dispose();
++    public void Dispose()
++    {
++        LiveState.PriceTicked -= OnLivePriceTick;
++        _timer?.Dispose();
++    }
+ }
