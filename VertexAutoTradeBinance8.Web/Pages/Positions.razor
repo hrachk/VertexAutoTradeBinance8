@@ -546,7 +546,7 @@
                 </div>
 
                 <div class="p-mini-chart-wrap">
-                    <MarketMiniChart Symbol="@_miniPos.Symbol" Timeframe="@_miniTf" MaxBars="80" />
+                    <MarketMiniChart Symbol="@_miniPos.Symbol" Timeframe="@_miniTf" MaxBars="120" />
                 </div>
 
                 @{
@@ -1076,9 +1076,41 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
     {
         LiveState.PriceTicked += OnLivePriceTick;
         await RefreshAll();
+        // Pre-seed sparklines from klines snapshot so cards show a real
+        // price history immediately — without this the buffer starts empty
+        // and sparkline shows a flat line with a sudden spike on first tick.
+        _ = Task.Run(SeedSparklinesFromSnapshotAsync);
         _timer = new System.Threading.Timer(async _ =>
             await InvokeAsync(async () => { await FetchPositions(); StateHasChanged(); }),
             null, 3000, 3000);
+    }
+
+    async Task SeedSparklinesFromSnapshotAsync()
+    {
+        try
+        {
+            var allSeries = await SnapSvc.LoadAsync();
+            lock (_sparkLock)
+            {
+                foreach (var series in allSeries)
+                {
+                    if (series.Klines.Count < 2) continue;
+                    // Use 1m or 5m klines as sparkline seed
+                    if (series.Timeframe != "OneMinute" && series.Timeframe != "FiveMinutes") continue;
+                    // Only seed symbols that have open positions
+                    var prices = series.Klines
+                        .TakeLast(SparkMax)
+                        .Select(k => k.Close)
+                        .ToList();
+                    if (prices.Count < 2) continue;
+                    // Only keep the most granular TF per symbol
+                    if (!_sparklines.ContainsKey(series.Symbol) || series.Timeframe == "OneMinute")
+                        _sparklines[series.Symbol] = prices;
+                }
+            }
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { /* non-blocking */ }
     }
 
     async Task SetTab(int t)
