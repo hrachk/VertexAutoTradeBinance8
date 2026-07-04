@@ -125,7 +125,8 @@
 
             <!-- Position cards -->
             <div class="p-cards">
-                @foreach (var p in _positions)
+                @{ var posSnap = _positions; }
+                @foreach (var p in posSnap)
                 {
                     bool isL = p.Side == "LONG";
                     bool pUp = p.Pnl >= 0;
@@ -266,8 +267,10 @@
         @if (_ordLoading) { <div class="p-loader"><div class="p-spin-ring"></div><span>Loading orders…</span></div> }
         else
         {
-            var basicOrders = _openOrders.Where(o => !o.IsAlgo).ToList();
-            var algoOrders  = _openOrders.Where(o =>  o.IsAlgo).ToList();
+            @{
+                var basicOrders = _openOrders.Where(o => !o.IsAlgo).ToList();
+                var algoOrders  = _openOrders.Where(o =>  o.IsAlgo).ToList();
+            }
             <!-- Sub-tabs: Basic / Conditional -->
             <div class="p-subtabs">
                 <button class="p-subtab @(_ordSubTab==0?"p-subtab-on":"")" @onclick="()=>_ordSubTab=0">
@@ -280,8 +283,9 @@
                 </button>
             </div>
 
-            var ordersToShow = _ordSubTab == 0 ? basicOrders : algoOrders;
-
+            @{
+                var ordersToShow = _ordSubTab == 0 ? basicOrders : algoOrders;
+            }
             @if (!ordersToShow.Any())
             {
                 <div class="p-empty">
@@ -1040,10 +1044,15 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
     PosRow? _confirmPos;
     System.Threading.Timer? _timer;
 
-    List<PosRow>  _positions  = new();
-    List<OrdRow>  _openOrders = new();
-    List<HistRow> _histOrders = new();
-    List<PnlRow>  _pnlRows    = new();
+    // These lists are replaced atomically (full reassignment, never mutated
+    // in-place) so foreach in render always gets a consistent snapshot.
+    // Timer thread does: _positions = newList (atomic reference swap)
+    // Render thread does: foreach(var p in _positions) — sees old OR new,
+    // never a partially-mutated state.
+    volatile List<PosRow>  _positions  = new();
+    volatile List<OrdRow>  _openOrders = new();
+    volatile List<HistRow> _histOrders = new();
+    volatile List<PnlRow>  _pnlRows    = new();
 
     decimal _totalPnl, _pnlTotal, _realizedPnlToday;
     int _pnlWins;
