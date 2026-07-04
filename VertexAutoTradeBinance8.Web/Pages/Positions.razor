@@ -28,6 +28,17 @@
                 <div class="p-hstat-lab">Unrealized PnL</div>
             </div>
             <div class="p-hdiv"></div>
+            <div class="p-hstat @(_realizedPnlToday >= 0 ? "h-pos" : "h-neg")">
+                <div class="p-hstat-val">
+                    @(_realizedPnlToday >= 0 ? "+" : "")@_realizedPnlToday.ToString("F2")
+                    <span class="p-hstat-cur">USDT</span>
+                </div>
+                <div class="p-hstat-lab">
+                    Realized Today
+                    <a href="/statistics" class="p-stat-link" title="Open Statistics">↗</a>
+                </div>
+            </div>
+            <div class="p-hdiv"></div>
             <div class="p-hstat">
                 <div class="p-hstat-val @(_positions.Count > 0 ? "h-active" : "")">
                     @_positions.Count
@@ -36,7 +47,7 @@
             </div>
             <div class="p-hdiv"></div>
             <div class="p-hstat">
-                <div class="p-hstat-val">@_openOrders.Count</div>
+                <div class="p-hstat-val @(_openOrders.Count > 0 ? "h-active" : "")">@_openOrders.Count</div>
                 <div class="p-hstat-lab">Open Orders</div>
             </div>
         </div>
@@ -132,10 +143,12 @@
                                     @p.Symbol[0]
                                 </div>
                                 <div>
-                                    <div class="p-card-sym">
-                                        @p.Symbol.Replace("USDT", "")
-                                        <span class="p-card-usdt">USDT</span>
-                                    </div>
+                                    <a href="/market?sym=@p.Symbol" class="p-card-sym-link">
+                                        <div class="p-card-sym">
+                                            @p.Symbol.Replace("USDT", "")
+                                            <span class="p-card-usdt">USDT</span>
+                                        </div>
+                                    </a>
                                     <div class="p-card-meta">
                                         <span class="p-side-badge @(isL ? "sb-l" : "sb-s")">
                                             @(isL ? "▲ LONG" : "▼ SHORT")
@@ -227,59 +240,79 @@
     @if (_tab == 1)
     {
         @if (_ordLoading) { <div class="p-loader"><div class="p-spin-ring"></div><span>Loading orders…</span></div> }
-        else if (!_openOrders.Any())
-        {
-            <div class="p-empty">
-                <div class="p-empty-icon"><svg viewBox="0 0 64 64" fill="none"><rect x="12" y="16" width="40" height="32" rx="4" stroke="#1e2535" stroke-width="2"/><line x1="20" y1="26" x2="44" y2="26" stroke="#30363d" stroke-width="2" stroke-linecap="round"/><line x1="20" y1="32" x2="36" y2="32" stroke="#30363d" stroke-width="2" stroke-linecap="round"/></svg></div>
-                <div class="p-empty-title">No open orders</div>
-                <div class="p-empty-sub">TP, SL and pending orders appear here</div>
-            </div>
-        }
         else
         {
-            <div class="p-table-wrap">
-                <table class="p-table">
-                    <thead>
-                        <tr>
-                            <th>Symbol</th><th>Type</th><th>Side</th>
-                            <th>Price</th><th>Amount</th><th>Filled</th>
-                            <th>Reduce</th><th>Time</th><th></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var o in _openOrders)
-                        {
-                            bool buy = o.Side == "BUY";
-                            decimal fp = o.OrigQty > 0 ? o.ExecutedQty / o.OrigQty * 100m : 0m;
-                            <tr>
-                                <td>
-                                    <div class="t-sym">@o.Symbol.Replace("USDT","")</div>
-                                    <div class="t-sub v-dim">@o.Symbol</div>
-                                </td>
-                                <td><span class="t-type">@o.Type</span>@if (o.IsAlgo) { <span class="t-algo-badge" title="Conditional order (Algo Order API)">Conditional</span> }</td>
-                                <td>
-                                    <span class="p-side-badge @(buy?"sb-l":"sb-s") sb-sm">@o.Side</span>
-                                    @if (o.PosSide != "BOTH") { <div class="t-sub v-dim">@o.PosSide</div> }
-                                </td>
-                                <td class="mono">
-                                    @if (o.Price > 0) { <div>@FP(o.Price)</div> }
-                                    @if (o.StopPrice > 0) { <div class="t-sub v-dim">Stop @FP(o.StopPrice)</div> }
-                                </td>
-                                <td class="mono">@o.OrigQty.ToString("G6")</td>
-                                <td>
-                                    <div class="mono @(fp>0?"v-pos":"v-dim")">@o.ExecutedQty.ToString("G6")</div>
-                                    @if (fp > 0) {
-                                        <div class="t-fill-track"><div class="t-fill-bar" style="width:@fp%"></div></div>
-                                    }
-                                </td>
-                                <td class="@(o.ReduceOnly?"v-pos":"v-dim")">@(o.ReduceOnly?"✓":"—")</td>
-                                <td class="mono v-dim t-time">@o.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
-                                <td><button class="t-cancel-btn" @onclick="()=>CancelOrder(o)">Cancel</button></td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
+            var basicOrders = _openOrders.Where(o => !o.IsAlgo).ToList();
+            var algoOrders  = _openOrders.Where(o =>  o.IsAlgo).ToList();
+            <!-- Sub-tabs: Basic / Conditional -->
+            <div class="p-subtabs">
+                <button class="p-subtab @(_ordSubTab==0?"p-subtab-on":"")" @onclick="()=>_ordSubTab=0">
+                    Basic
+                    @if (basicOrders.Any()) { <span class="p-tab-chip p-tab-chip-sm">@basicOrders.Count</span> }
+                </button>
+                <button class="p-subtab @(_ordSubTab==1?"p-subtab-on":"")" @onclick="()=>_ordSubTab=1">
+                    Conditional
+                    @if (algoOrders.Any()) { <span class="p-tab-chip p-tab-chip-sm">@algoOrders.Count</span> }
+                </button>
             </div>
+
+            var ordersToShow = _ordSubTab == 0 ? basicOrders : algoOrders;
+
+            @if (!ordersToShow.Any())
+            {
+                <div class="p-empty">
+                    <div class="p-empty-icon"><svg viewBox="0 0 64 64" fill="none"><rect x="12" y="16" width="40" height="32" rx="4" stroke="#1e2535" stroke-width="2"/><line x1="20" y1="26" x2="44" y2="26" stroke="#30363d" stroke-width="2" stroke-linecap="round"/><line x1="20" y1="32" x2="36" y2="32" stroke="#30363d" stroke-width="2" stroke-linecap="round"/></svg></div>
+                    <div class="p-empty-title">No @(_ordSubTab==0?"basic":"conditional") orders</div>
+                    <div class="p-empty-sub">@(_ordSubTab==0?"Limit and market orders appear here":"TP/SL and algo orders appear here")</div>
+                </div>
+            }
+            else
+            {
+                <div class="p-table-wrap">
+                    <table class="p-table">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th><th>Type</th><th>Side</th>
+                                <th>Price</th><th>Qty</th><th>Filled</th>
+                                <th>Reduce</th><th>Time</th><th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var o in ordersToShow)
+                            {
+                                bool buy = o.Side == "BUY";
+                                decimal fp = o.OrigQty > 0 ? o.ExecutedQty / o.OrigQty * 100m : 0m;
+                                <tr>
+                                    <td>
+                                        <div class="t-sym">@o.Symbol.Replace("USDT","")</div>
+                                        <div class="t-sub v-dim">@o.Symbol</div>
+                                    </td>
+                                    <td>
+                                        <span class="t-type">@o.Type</span>
+                                        @if (o.IsAlgo) { <span class="t-algo-badge">(R)</span> }
+                                    </td>
+                                    <td>
+                                        <span class="p-side-badge @(buy?"sb-l":"sb-s") sb-sm">@o.Side</span>
+                                        @if (o.PosSide != "BOTH") { <div class="t-sub v-dim">@o.PosSide</div> }
+                                    </td>
+                                    <td class="mono">
+                                        @if (o.Price > 0) { <div>@FP(o.Price)</div> }
+                                        @if (o.StopPrice > 0 && o.StopPrice != o.Price) { <div class="t-sub v-dim">Stop @FP(o.StopPrice)</div> }
+                                    </td>
+                                    <td class="mono">@o.OrigQty.ToString("G6")</td>
+                                    <td>
+                                        <div class="mono @(fp>0?"v-pos":"v-dim")">@o.ExecutedQty.ToString("G6")</div>
+                                        @if (fp > 0) { <div class="t-fill-track"><div class="t-fill-bar" style="width:@fp%"></div></div> }
+                                    </td>
+                                    <td class="@(o.ReduceOnly?"v-pos":"v-dim")">@(o.ReduceOnly?"✓":"—")</td>
+                                    <td class="mono v-dim t-time">@o.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
+                                    <td><button class="t-cancel-btn" @onclick="()=>CancelOrder(o)">Cancel</button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
         }
     }
 
@@ -586,6 +619,23 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
 .p-close-btn{background:transparent;border:1px solid var(--red);color:var(--red);padding:6px 18px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;letter-spacing:.3px;}
 .p-close-btn:hover{background:var(--red);color:#fff;box-shadow:0 0 16px rgba(255,77,106,.3);}
 
+/* ── HERO REALIZED LINK ──────────────────────────────────── */
+.p-stat-link{margin-left:5px;color:var(--acc);text-decoration:none;font-size:11px;opacity:.7;transition:opacity .15s;}
+.p-stat-link:hover{opacity:1;}
+
+/* ── SUBTABS (Basic / Conditional) ──────────────────────── */
+.p-subtabs{display:flex;gap:2px;padding:12px 28px 0;border-bottom:1px solid var(--bdr);background:var(--bg2);}
+.p-subtab{background:none;border:none;color:var(--dim);font-size:12px;font-weight:600;padding:8px 16px 10px;cursor:pointer;display:flex;align-items:center;gap:7px;position:relative;transition:color .15s;border-radius:6px 6px 0 0;}
+.p-subtab:hover{color:var(--txt);background:rgba(255,255,255,.03);}
+.p-subtab-on{color:var(--acc)!important;background:rgba(77,159,255,.06)!important;}
+.p-subtab-on::after{content:'';position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--acc);border-radius:2px 2px 0 0;}
+.p-tab-chip-sm{font-size:10px;padding:1px 6px;}
+
+/* ── SYMBOL LINK ON CARD ─────────────────────────────────── */
+.p-card-sym-link{text-decoration:none;color:inherit;}
+.p-card-sym-link:hover .p-card-sym{color:var(--acc);}
+.p-card-sym-link:hover .p-card-usdt{color:var(--acc);}
+
 /* ── TABLE (Orders / History / PnL) ─────────────────────── */
 .p-table-wrap{overflow-x:auto;padding:8px 0;}
 .p-table{width:100%;border-collapse:collapse;min-width:700px;}
@@ -673,6 +723,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
 
     // ── State ─────────────────────────────────────────────────
     int _tab;
+    int _ordSubTab; // 0=Basic 1=Conditional
     bool _loading, _ordLoading, _histLoading, _actionLoading, _pnlLoading;
     DateTime _lastRefresh;
     string _error = string.Empty;
@@ -686,7 +737,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
     List<HistRow> _histOrders = new();
     List<PnlRow>  _pnlRows    = new();
 
-    decimal _totalPnl, _pnlTotal;
+    decimal _totalPnl, _pnlTotal, _realizedPnlToday;
     int _pnlWins;
 
     protected override async Task OnInitializedAsync()
@@ -745,6 +796,19 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
                 .OrderByDescending(p => Math.Abs(p.Pnl)).ToList();
 
             _totalPnl = _positions.Sum(p => p.Pnl);
+
+            // Also fetch today's realized PnL while we have the client open
+            try
+            {
+                using var ctsPnl = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var pnlRes = await client.UsdFuturesApi.Account.GetIncomeHistoryAsync(
+                    incomeType: "REALIZED_PNL",
+                    startTime: DateTime.UtcNow.Date,
+                    limit: 1000, ct: ctsPnl.Token);
+                if (pnlRes.Success && pnlRes.Data != null)
+                    _realizedPnlToday = pnlRes.Data.Sum(x => x.Income);
+            }
+            catch { /* non-blocking — don't fail positions if this one fails */ }
         }
         catch (OperationCanceledException) { _error = "Request timed out."; }
         catch (Exception ex) { _error = $"Error: {ex.Message}"; }
