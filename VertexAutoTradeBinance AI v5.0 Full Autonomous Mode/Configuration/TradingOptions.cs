@@ -32,4 +32,10 @@ public class TradingOptions
     /// </summary>
     public int StartupSubscriptionCap { get; set; } = 8;
     public bool EnableExecution { get; set; } = true;
+
+    /// <summary>
+    /// Maximum margin as a fraction of balance that a single position may consume.
+    /// Default 0.12 = 12%. Previously hardcoded as const decimal in RiskManager.
+    /// </summary>
+    public decimal MaxMarginPercent { get; set; } = 0.12m;
 } 
