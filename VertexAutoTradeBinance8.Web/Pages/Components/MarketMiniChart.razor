@@ -108,6 +108,128 @@
 
 
 
+
+<style>
+/* ── MarketMiniChart — self-contained styles ──────────────────────────────
+   The component renders a pure-SVG candlestick chart. Without these rules
+   the chart-wrap has no height and the SVG collapses to 0px (invisible).
+   These styles are scoped only by living inside this component's markup;
+   they intentionally do NOT use Blazor CSS isolation (.razor.css) so they
+   can be kept co-located and reviewed alongside the SVG markup they style.
+─────────────────────────────────────────────────────────────────────────── */
+
+/* Container: must have an explicit height so the SVG fills it.
+   The parent (p-mini-chart-wrap in Positions.razor) sets its own height;
+   chart-wrap fills it completely. */
+.chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 220px;          /* fallback when parent has no height set   */
+    background: #080d14;
+    border-radius: 0;
+    overflow: hidden;
+    user-select: none;
+}
+
+/* SVG fills the entire container */
+.chart-svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+/* Empty state */
+.chart-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    font-size: 13px;
+    color: #3a4a60;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+/* ── Candle bodies ────────────────────────────────────────────── */
+.body {
+    rx: 1px;
+    ry: 1px;
+}
+.body.up   { fill: #00d68f; }          /* green — bullish close             */
+.body.down { fill: #ff4d6a; }          /* red   — bearish close             */
+
+/* ── Wicks ────────────────────────────────────────────────────── */
+.wick {
+    stroke-width: 1;
+    stroke: #4a6080;
+}
+
+/* Evaluated candle highlight */
+.body-evaluated { opacity: 0.6; rx: 2px; }
+.wick-evaluated { stroke: #ffd166 !important; stroke-width: 1.5; }
+
+/* ── Price line (close-to-close) ──────────────────────────────── */
+.price-line {
+    fill: none;
+    stroke: rgba(77, 159, 255, 0.35);
+    stroke-width: 1;
+    stroke-linejoin: round;
+}
+
+/* ── Axis labels ──────────────────────────────────────────────── */
+.price-tick {
+    font-size: 9px;
+    fill: #3a4a60;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+.time-tick {
+    font-size: 9px;
+    fill: #3a4a60;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* ── Decision markers ─────────────────────────────────────────── */
+.mk {
+    stroke: none;
+    cursor: pointer;
+    transition: r 0.15s;
+}
+.mk:hover { r: 6px; }
+
+.mk.evaluated       { fill: #ffd166; }
+.mk.late            { fill: #ff4d6a; }
+.mk.lowvol          { fill: #4a6080; }
+.mk.conf            { fill: #a855f7; }
+.mk.entry           { fill: #00d68f; }
+.mk.reject          { fill: #ff4d6a; }
+.mk.other           { fill: #4d9fff; }
+
+/* ── Tooltip ──────────────────────────────────────────────────── */
+.chart-tooltip {
+    position: absolute;
+    background: #0f1623;
+    border: 1px solid #1e2d47;
+    border-radius: 8px;
+    padding: 8px 12px;
+    pointer-events: none;
+    z-index: 100;
+    min-width: 160px;
+    max-width: 260px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+.tt-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #dce8f5;
+    margin-bottom: 4px;
+}
+.tt-body {
+    font-size: 11px;
+    color: #4a6080;
+    line-height: 1.5;
+}
+</style>
+
 @code {
     [Parameter] public string Symbol { get; set; } = "";
     [Parameter] public string Timeframe { get; set; } = "FiveMinutes";
@@ -562,5 +684,6 @@
 
 
 }
+
 
 
