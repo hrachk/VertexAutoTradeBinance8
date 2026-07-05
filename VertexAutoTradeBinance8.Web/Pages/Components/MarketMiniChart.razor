@@ -171,11 +171,13 @@
         // === 1) NORMALIZE TF (UI → SNAPSHOT) ===
         static string NormalizeTf(string tf) => tf switch
         {
-            "1m" or "OneMinute" => "OneMinute",
-            "5m" or "FiveMinutes" => "FiveMinutes",
-            "15m" or "FifteenMinutes" => "FifteenMinutes",
-            "1h" or "OneHour" => "OneHour",
-            "4h" or "FourHour" => "FourHour",
+            "1m" or "OneMinute"      => "OneMinute",
+            "5m" or "FiveMinutes"    => "FiveMinutes",
+            "15m" or "FifteenMinutes"=> "FifteenMinutes",
+            "30m" or "ThirtyMinutes" => "ThirtyMinutes",
+            "1h" or "OneHour"        => "OneHour",
+            "4h" or "FourHour"       => "FourHour",
+            "1D" or "1d" or "OneDay" => "OneDay",
             _ => tf
         };
 
@@ -230,6 +232,9 @@
                 _klines = kf;
                 BuildBars(kf);
                 BuildPriceLine(kf);
+                // Force re-render — OnParametersSetAsync return alone may not
+                // trigger full re-render when called from parameter change
+                await InvokeAsync(StateHasChanged);
             }
             else
             {
@@ -284,10 +289,7 @@
             var client = Factory.TryCreateRestClient();
             if (client == null) return null;
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-            var res = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
-                symbol, Binance.Net.Enums.KlineInterval.FifteenMinutes,
-                limit: Math.Min(MaxBars, 200), ct: cts.Token);
-            // Re-parse with correct interval
+            // Map interval string to enum
             var ki = interval switch
             {
                 "1m"  => Binance.Net.Enums.KlineInterval.OneMinute,
