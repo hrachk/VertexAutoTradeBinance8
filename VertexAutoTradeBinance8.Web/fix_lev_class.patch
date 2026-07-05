@@ -1,0 +1,16 @@
+--- a/VertexAutoTradeBinance8.Web/Pages/Components/MarketSnapshot.razor
++++ b/VertexAutoTradeBinance8.Web/Pages/Components/MarketSnapshot.razor
+@@ -4242,10 +4242,9 @@
+             var r = await c.UsdFuturesApi.Account.ChangeInitialLeverageAsync(_levPos.Symbol, _levVal, ct: cts.Token);
+             if (r.Success)
+             {
+-                var sym = _levPos.Symbol; var side = _levPos.Side; var lev = _levVal;
+-                _allPositions = _allPositions
+-                    .Select(p => p.Symbol == sym && p.Side == side ? p with { Leverage = lev } : p)
+-                    .ToList();
++                // ActivePositionInfo is a class, not a record — mutate directly
++                var target = _allPositions.FirstOrDefault(p => p.Symbol == _levPos.Symbol && p.Side == _levPos.Side);
++                if (target != null) target.Leverage = _levVal;
+                 _levPos = null;
+             }
+             else _levErr = r.Error?.Message ?? "Failed";
