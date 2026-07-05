@@ -48,6 +48,24 @@ namespace VertexAutoTradeBinance8.Services
         private readonly string _apiSecret;
         private readonly string _baseUrl;
 
+        // ── Server time sync ──────────────────────────────────────────────
+        // Binance rejects requests with code -1021 when the local clock is
+        // ahead of (or too far behind) their server time by more than 1000ms.
+        // We fix this by fetching Binance server time once at startup (and
+        // periodically thereafter) and computing a _timeOffsetMs so that
+        // every signed timestamp we send is aligned to their clock.
+        //
+        // Formula:  binanceTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        //                              + _timeOffsetMs
+        //
+        // _timeOffsetMs < 0 means our clock is ahead of Binance (most common
+        // cause of the -1021 error). Adding a negative offset brings the
+        // timestamp back to match what Binance expects.
+        private long _timeOffsetMs = 0;
+        private DateTime _lastTimeSync = DateTime.MinValue;
+        private readonly SemaphoreSlim _timeSyncLock = new(1, 1);
+        private static readonly TimeSpan TimeSyncInterval = TimeSpan.FromMinutes(10);
+
         // ── GetOpenAlgoOrders 20-second cache (prevents Binance 429) ──────
         // Binance rate-limits this endpoint aggressively; calling it on
         // every PositionSupervisor tick (every ~5s per symbol) was the
@@ -73,6 +91,73 @@ namespace VertexAutoTradeBinance8.Services
             _http.Timeout = TimeSpan.FromSeconds(8);
         }
 
+        // ── Timestamp helper ──────────────────────────────────────────────
+        // Always call this instead of DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        // when building signed Binance requests. It applies the clock-offset
+        // correction that prevents -1021 errors.
+        private async Task<long> GetBinanceTimestampAsync(CancellationToken ct)
+        {
+            await EnsureTimeSyncedAsync(ct);
+            return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + _timeOffsetMs;
+        }
+
+        // Syncs clock offset with Binance server time.
+        // Uses a semaphore so parallel callers don't all fire the sync at once.
+        private async Task EnsureTimeSyncedAsync(CancellationToken ct)
+        {
+            // Fast path — no lock needed if sync is still fresh
+            if (DateTime.UtcNow - _lastTimeSync < TimeSyncInterval)
+                return;
+
+            await _timeSyncLock.WaitAsync(ct);
+            try
+            {
+                // Re-check inside lock
+                if (DateTime.UtcNow - _lastTimeSync < TimeSyncInterval)
+                    return;
+
+                await SyncServerTimeAsync(ct);
+            }
+            finally
+            {
+                _timeSyncLock.Release();
+            }
+        }
+
+        private async Task SyncServerTimeAsync(CancellationToken ct)
+        {
+            try
+            {
+                var url = $"{_baseUrl}/fapi/v1/time";
+                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                using var resp = await _http.SendAsync(req, ct);
+                if (!resp.IsSuccessStatusCode) return;
+
+                var body = await resp.Content.ReadAsStringAsync(ct);
+                using var doc = JsonDocument.Parse(body);
+
+                if (!doc.RootElement.TryGetProperty("serverTime", out var stProp)) return;
+
+                long serverTimeMs = stProp.GetInt64();
+                long localTimeMs  = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                _timeOffsetMs     = serverTimeMs - localTimeMs;
+                _lastTimeSync     = DateTime.UtcNow;
+
+                if (Math.Abs(_timeOffsetMs) > 500)
+                    _logger.LogWarning(
+                        "[ALGO-RAW] Clock offset with Binance: {offset}ms — timestamps will be adjusted automatically",
+                        _timeOffsetMs);
+                else
+                    _logger.LogDebug("[ALGO-RAW] Time synced. Offset={offset}ms", _timeOffsetMs);
+            }
+            catch (Exception ex)
+            {
+                // Non-fatal — worst case we use the local clock (may get -1021 again,
+                // but we'll retry on the next call cycle).
+                _logger.LogWarning(ex, "[ALGO-RAW] Time sync failed — using local clock");
+            }
+        }
+
         public async Task<bool> PlaceConditionalAsync(
             string symbol,
             OrderSide side,
@@ -91,7 +176,7 @@ namespace VertexAutoTradeBinance8.Services
                 return false;
             }
 
-            var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var ts = await GetBinanceTimestampAsync(ct);
             string D(decimal v) => v.ToString("0.########", CultureInfo.InvariantCulture);
 
             var q = new List<KeyValuePair<string, string>>
@@ -128,6 +213,12 @@ namespace VertexAutoTradeBinance8.Services
 
                 if (!resp.IsSuccessStatusCode)
                 {
+                    // -1021 means clock drift — force immediate re-sync on next call
+                    if (body.Contains("-1021"))
+                    {
+                        _lastTimeSync = DateTime.MinValue;
+                        _logger.LogWarning("[ALGO-RAW] -1021 on PlaceConditional — clock drift detected, will re-sync on next call");
+                    }
                     _logger.LogError("[ALGO-RAW] HTTP {code} body={body}", (int)resp.StatusCode, body);
                     return false;
                 }
@@ -154,8 +245,6 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // Fast path: return cached result if still fresh and for the same symbol.
-            // Double-check locking: first check without the lock (cheap), then
-            // re-check inside the lock before actually hitting the network.
             var now = DateTime.UtcNow;
             if (_algoOrdersCache != null &&
                 _algoOrdersCacheSymbol == symbol &&
@@ -167,8 +256,7 @@ namespace VertexAutoTradeBinance8.Services
             await _algoOrdersCacheLock.WaitAsync(ct);
             try
             {
-                // Re-check inside the lock — another caller may have populated
-                // the cache while we were waiting for the semaphore.
+                // Re-check inside the lock
                 now = DateTime.UtcNow;
                 if (_algoOrdersCache != null &&
                     _algoOrdersCacheSymbol == symbol &&
@@ -177,72 +265,78 @@ namespace VertexAutoTradeBinance8.Services
                     return _algoOrdersCache;
                 }
 
-            var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var q = new List<KeyValuePair<string, string>>
-            {
-                new("timestamp", ts.ToString(CultureInfo.InvariantCulture)),
-            };
-            if (!string.IsNullOrEmpty(symbol)) q.Add(new("symbol", symbol));
-
-            var (query, rawQuery) = BuildQuery(q);
-            var sig = Sign(rawQuery, _apiSecret);
-            var url = $"{_baseUrl}/fapi/v1/openAlgoOrders?{query}&signature={sig}";
-
-            using var req = new HttpRequestMessage(HttpMethod.Get, url);
-            req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", _apiKey);
-
-            try
-            {
-                using var resp = await _http.SendAsync(req, ct);
-                var body = await resp.Content.ReadAsStringAsync(ct);
-                if (!resp.IsSuccessStatusCode)
+                var ts = await GetBinanceTimestampAsync(ct);
+                var q = new List<KeyValuePair<string, string>>
                 {
-                    _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
-                    return result;
-                }
+                    new("timestamp", ts.ToString(CultureInfo.InvariantCulture)),
+                };
+                if (!string.IsNullOrEmpty(symbol)) q.Add(new("symbol", symbol));
 
-                // CONFIRMED real response shape via official Binance docs:
-                // a plain top-level JSON array, not wrapped in an "orders" property.
-                using var doc = JsonDocument.Parse(body);
-                if (doc.RootElement.ValueKind != JsonValueKind.Array) return result;
+                var (query, rawQuery) = BuildQuery(q);
+                var sig = Sign(rawQuery, _apiSecret);
+                var url = $"{_baseUrl}/fapi/v1/openAlgoOrders?{query}&signature={sig}";
 
-                foreach (var o in doc.RootElement.EnumerateArray())
+                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", _apiKey);
+
+                try
                 {
-                    decimal GetDec(string name) =>
-                        o.TryGetProperty(name, out var v) && decimal.TryParse(v.GetString(), CultureInfo.InvariantCulture, out var d) ? d : 0m;
-                    string GetStr(string name) => o.TryGetProperty(name, out var v) ? (v.GetString() ?? "") : "";
-                    long GetLong(string name) =>
-                        o.TryGetProperty(name, out var v)
-                            ? (v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var l) ? l
-                               : long.TryParse(v.GetString(), out var l2) ? l2 : 0L)
-                            : 0L;
-                    string? GetClientId(string name) => o.TryGetProperty(name, out var v) ? v.GetString() : null;
-
-                    result.Add(new BinanceAlgoOrderInfo
+                    using var resp = await _http.SendAsync(req, ct);
+                    var body = await resp.Content.ReadAsStringAsync(ct);
+                    if (!resp.IsSuccessStatusCode)
                     {
-                        AlgoId = GetLong("algoId"),
-                        ClientAlgoId = GetClientId("clientAlgoId"),
-                        Symbol = GetStr("symbol"),
-                        Side = GetStr("side").Equals("BUY", StringComparison.OrdinalIgnoreCase) ? OrderSide.Buy : OrderSide.Sell,
-                        PositionSide = Enum.TryParse<PositionSide>(GetStr("positionSide"), true, out var ps) ? ps : PositionSide.Both,
-                        OrderType = GetStr("orderType"),
-                        TriggerPrice = GetDec("triggerPrice"),
-                        Quantity = GetDec("quantity"),
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[ALGO-RAW] EX GetOpenAlgoOrdersAsync {symbol}", symbol);
-            }
+                        // -1021 clock drift — force re-sync, don't cache the error
+                        if (body.Contains("-1021"))
+                        {
+                            _lastTimeSync = DateTime.MinValue;
+                            _logger.LogWarning("[ALGO-RAW] -1021 on GetOpenAlgoOrders — clock drift detected, offset will be re-synced on next call. Current offset={off}ms", _timeOffsetMs);
+                        }
+                        else
+                        {
+                            _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
+                        }
+                        return result;
+                    }
 
-            // Store in cache before returning — even an empty list is cached
-            // to avoid hammering the endpoint when there genuinely are no orders.
-            _algoOrdersCache = result;
-            _algoOrdersCacheSymbol = symbol;
-            _algoOrdersCacheExpiry = DateTime.UtcNow.Add(AlgoOrdersCacheTtl);
-            return result;
-            } // end double-check lock try
+                    using var doc = JsonDocument.Parse(body);
+                    if (doc.RootElement.ValueKind != JsonValueKind.Array) return result;
+
+                    foreach (var o in doc.RootElement.EnumerateArray())
+                    {
+                        decimal GetDec(string name) =>
+                            o.TryGetProperty(name, out var v) && decimal.TryParse(v.GetString(), CultureInfo.InvariantCulture, out var d) ? d : 0m;
+                        string GetStr(string name) => o.TryGetProperty(name, out var v) ? (v.GetString() ?? "") : "";
+                        long GetLong(string name) =>
+                            o.TryGetProperty(name, out var v)
+                                ? (v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var l) ? l
+                                   : long.TryParse(v.GetString(), out var l2) ? l2 : 0L)
+                                : 0L;
+                        string? GetClientId(string name) => o.TryGetProperty(name, out var v) ? v.GetString() : null;
+
+                        result.Add(new BinanceAlgoOrderInfo
+                        {
+                            AlgoId = GetLong("algoId"),
+                            ClientAlgoId = GetClientId("clientAlgoId"),
+                            Symbol = GetStr("symbol"),
+                            Side = GetStr("side").Equals("BUY", StringComparison.OrdinalIgnoreCase) ? OrderSide.Buy : OrderSide.Sell,
+                            PositionSide = Enum.TryParse<PositionSide>(GetStr("positionSide"), true, out var ps) ? ps : PositionSide.Both,
+                            OrderType = GetStr("orderType"),
+                            TriggerPrice = GetDec("triggerPrice"),
+                            Quantity = GetDec("quantity"),
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[ALGO-RAW] EX GetOpenAlgoOrdersAsync {symbol}", symbol);
+                }
+
+                // Cache even an empty result to avoid hammering the endpoint
+                _algoOrdersCache = result;
+                _algoOrdersCacheSymbol = symbol;
+                _algoOrdersCacheExpiry = DateTime.UtcNow.Add(AlgoOrdersCacheTtl);
+                return result;
+            }
             finally
             {
                 _algoOrdersCacheLock.Release();
@@ -253,7 +347,7 @@ namespace VertexAutoTradeBinance8.Services
         {
             if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret)) return false;
 
-            var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var ts = await GetBinanceTimestampAsync(ct);
             var q = new List<KeyValuePair<string, string>>
             {
                 new("algoId", algoId.ToString(CultureInfo.InvariantCulture)),
@@ -272,6 +366,7 @@ namespace VertexAutoTradeBinance8.Services
                 if (!resp.IsSuccessStatusCode)
                 {
                     var body = await resp.Content.ReadAsStringAsync(ct);
+                    if (body.Contains("-1021")) _lastTimeSync = DateTime.MinValue;
                     _logger.LogWarning("[ALGO-RAW] CancelAlgoOrder HTTP {code} body={body}", (int)resp.StatusCode, body);
                     return false;
                 }
@@ -311,4 +406,3 @@ namespace VertexAutoTradeBinance8.Services
         }
     }
 }
-
