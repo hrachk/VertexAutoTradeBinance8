@@ -139,9 +139,14 @@ namespace VertexAutoTradeBinance8.Services
                 if (!doc.RootElement.TryGetProperty("serverTime", out var stProp)) return;
 
                 long serverTimeMs = stProp.GetInt64();
+                // Use RTT midpoint: measure local time BEFORE and AFTER the
+                // HTTP round-trip, average them to compensate for network latency.
                 long localTimeMs  = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 _timeOffsetMs     = serverTimeMs - localTimeMs;
                 _lastTimeSync     = DateTime.UtcNow;
+                _logger.LogInformation(
+                    "[ALGO-RAW] Time sync OK: serverTime={srv} localTime={loc} offset={off}ms",
+                    serverTimeMs, localTimeMs, _timeOffsetMs);
 
                 if (Math.Abs(_timeOffsetMs) > 500)
                     _logger.LogWarning(
@@ -181,15 +186,16 @@ namespace VertexAutoTradeBinance8.Services
 
             var q = new List<KeyValuePair<string, string>>
             {
-                new("algoType", "CONDITIONAL"),
-                new("symbol", symbol),
-                new("side", side == OrderSide.Buy ? "BUY" : "SELL"),
-                new("type", type),
-                new("timestamp", ts.ToString(CultureInfo.InvariantCulture)),
+                new("algoType",    "CONDITIONAL"),
+                new("symbol",      symbol),
+                new("side",        side == OrderSide.Buy ? "BUY" : "SELL"),
+                new("type",        type),
+                new("timestamp",   ts.ToString(CultureInfo.InvariantCulture)),
+                new("recvWindow",  "5000"),
                 new("workingType", workingType),
                 new("triggerPrice", D(triggerPrice)),
                 new("positionSide", positionSide.ToString().ToUpperInvariant()),
-                new("quantity", D(quantity))
+                new("quantity",    D(quantity))
             };
 
             if (!string.IsNullOrWhiteSpace(clientAlgoId))
@@ -268,7 +274,8 @@ namespace VertexAutoTradeBinance8.Services
                 var ts = await GetBinanceTimestampAsync(ct);
                 var q = new List<KeyValuePair<string, string>>
                 {
-                    new("timestamp", ts.ToString(CultureInfo.InvariantCulture)),
+                    new("timestamp",  ts.ToString(CultureInfo.InvariantCulture)),
+                    new("recvWindow", "5000"),
                 };
                 if (!string.IsNullOrEmpty(symbol)) q.Add(new("symbol", symbol));
 
@@ -350,8 +357,9 @@ namespace VertexAutoTradeBinance8.Services
             var ts = await GetBinanceTimestampAsync(ct);
             var q = new List<KeyValuePair<string, string>>
             {
-                new("algoId", algoId.ToString(CultureInfo.InvariantCulture)),
-                new("timestamp", ts.ToString(CultureInfo.InvariantCulture)),
+                new("algoId",     algoId.ToString(CultureInfo.InvariantCulture)),
+                new("timestamp",  ts.ToString(CultureInfo.InvariantCulture)),
+                new("recvWindow", "5000"),
             };
             var (query, rawQuery) = BuildQuery(q);
             var sig = Sign(rawQuery, _apiSecret);
@@ -406,3 +414,4 @@ namespace VertexAutoTradeBinance8.Services
         }
     }
 }
+
