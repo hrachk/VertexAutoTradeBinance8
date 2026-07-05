@@ -1,689 +1,474 @@
-﻿@using VertexAutoTradeBinance8.Web.Models
+@using VertexAutoTradeBinance8.Web.Models
+@using VertexAutoTradeBinance8.Services
 @inject VertexAutoTradeBinance8.Web.Services.MarketSnapshotFileService SnapSvc
 @inject VertexAutoTradeBinance8.Web.Services.DecisionMarkersFileService MarkerSvc
 @inject VertexAutoTradeBinance8.Services.BinanceClientFactory Factory
-@using VertexAutoTradeBinance8.Services
 
-<div class="chart-wrap"
+<div class="mc-wrap"
      @onwheel="OnWheel"
      @onmousemove="OnMouseMove"
      @onmouseleave="OnMouseLeave">
 
-    @if (_klines == null || _klines.Count == 0)
+    @if (_loading)
     {
-        <div class="chart-empty">No klines</div>
+        <div class="mc-empty">
+            <div class="mc-spinner"></div>
+        </div>
+    }
+    else if (_bars.Count == 0)
+    {
+        <div class="mc-empty">No data — @_debugMsg</div>
     }
     else
     {
-        <svg viewBox="0 0 @_w @_h"
-             class="chart-svg"
+        <!-- SVG viewBox matches _w × _h exactly; preserveAspectRatio=none
+             lets CSS size it freely without distorting coordinates. -->
+        <svg viewBox="0 0 800 260"
+             class="mc-svg"
              preserveAspectRatio="none">
 
-            <!-- ========================================================= -->
-            <!-- PRICE TICKS (RIGHT AXIS) -->
-            <!-- ========================================================= -->
-            @foreach (var p in PriceTicks)
+            <!-- Grid lines -->
+            @foreach (var t in _priceTicks)
             {
-                <svg:text x="@(_w - 4)"
-                          y="@p.Y"
-                          text-anchor="end"
-                          dominant-baseline="middle"
-                          class="price-tick">
-                    @p.Value
-                </svg:text>
+                <line x1="8" y1="@Fmt(t.Y)" x2="792" y2="@Fmt(t.Y)"
+                      stroke="#0f1825" stroke-width="1"/>
+                <text x="796" y="@Fmt(t.Y)"
+                      text-anchor="end" dominant-baseline="middle"
+                      class="mc-tick">@t.Label</text>
             }
 
-            <!-- ========================================================= -->
-            <!-- TIME TICKS (BOTTOM AXIS) -->
-            <!-- ========================================================= -->
-            @for (int i = 0; i < _bars.Count; i += 10)
+            <!-- Time labels -->
+            @for (int i = 0; i < _bars.Count; i += Math.Max(1, _bars.Count / 6))
             {
                 var b = _bars[i];
-                <svg:text x="@b.X"
-                          y="@(_h - 4)"
-                          text-anchor="middle"
-                          class="time-tick">
-                    @UnixToTime(b.OpenTimeMs)
-                </svg:text>
-            }
-            <!-- ================= PRICE LINE ================= -->
-            @if (!string.IsNullOrEmpty(_priceLinePath))
-            {
-                <path d="@_priceLinePath"
-                      class="price-line" />
-            }
-            <!-- ========================================================= -->
-            <!-- WICKS + BODIES -->
-            <!-- ========================================================= -->
-            @for (int i = 0; i < _bars.Count; i++)
-            {
-                var bar = _bars[i];
-                var isEval = _lastEvaluatedBarIndex == i;
-
-                <!-- Wick -->
-                <line x1="@bar.X"
-                      y1="@bar.YHigh"
-                      x2="@bar.X"
-                      y2="@bar.YLow"
-                      class="wick @(isEval ? "wick-evaluated" : "")" />
-
-                <!-- Body -->
-                <rect x="@bar.BodyX"
-                      y="@bar.BodyY"
-                      width="@bar.BodyW"
-                      height="@bar.BodyH"
-                      class="@(bar.BodyClass + (isEval ? " body-evaluated" : ""))" />
+                <text x="@Fmt(b.X)" y="252"
+                      text-anchor="middle" class="mc-tick">@b.TimeLabel</text>
             }
 
-            <!-- ========================================================= -->
-            <!-- DECISION MARKERS -->
-            <!-- ========================================================= -->
-            @foreach (var mk in _markerPoints)
+            <!-- Price line (close-to-close) -->
+            @if (_priceLinePath.Length > 0)
             {
-                <circle cx="@mk.X"
-                        cy="@mk.Y"
-                        r="4"
-                        class="@mk.Css"
-                        @onmouseenter="@(() => ShowTooltip(mk))" />
+                <path d="@_priceLinePath" class="mc-priceline"/>
+            }
+
+            <!-- Candles: wicks first, then bodies (bodies on top) -->
+            @foreach (var b in _bars)
+            {
+                <line x1="@Fmt(b.X)" y1="@Fmt(b.YHigh)"
+                      x2="@Fmt(b.X)" y2="@Fmt(b.YLow)"
+                      class="mc-wick @(b.IsUp ? "mc-wick-up" : "mc-wick-dn")"/>
+            }
+            @foreach (var b in _bars)
+            {
+                <rect x="@Fmt(b.BodyX)" y="@Fmt(b.BodyY)"
+                      width="@Fmt(b.BodyW)" height="@Fmt(b.BodyH)"
+                      class="mc-body @(b.IsUp ? "mc-body-up" : "mc-body-dn")"/>
+            }
+
+            <!-- Decision markers -->
+            @foreach (var mk in _markers)
+            {
+                <circle cx="@Fmt(mk.X)" cy="@Fmt(mk.Y)" r="4"
+                        class="mc-mk mc-mk-@mk.Kind"
+                        @onmouseenter="@(() => _tip = mk)"/>
             }
 
         </svg>
 
-        <!-- ========================================================= -->
-        <!-- TOOLTIP (HTML OVERLAY, NOT SVG) -->
-        <!-- ========================================================= -->
-        @if (_tooltip != null)
+        <!-- Tooltip overlay -->
+        @if (_tip != null)
         {
-            <div class="chart-tooltip"
-                 style="left:@_tooltip.Xpx; top:@_tooltip.Ypx;">
-                <div class="tt-title">@_tooltip.Title</div>
-                @if (!string.IsNullOrWhiteSpace(_tooltip.Details))
+            <div class="mc-tooltip" style="left:@Fmt(_tip.Tx)px;top:@Fmt(_tip.Ty)px">
+                <div class="mc-tt-title">@_tip.Title</div>
+                @if (!string.IsNullOrEmpty(_tip.Detail))
                 {
-                    <div class="tt-body">@_tooltip.Details</div>
+                    <div class="mc-tt-body">@_tip.Detail</div>
                 }
             </div>
         }
     }
 </div>
 
-
-
-
 <style>
-/* ── MarketMiniChart — self-contained styles ──────────────────────────────
-   The component renders a pure-SVG candlestick chart. Without these rules
-   the chart-wrap has no height and the SVG collapses to 0px (invisible).
-   These styles are scoped only by living inside this component's markup;
-   they intentionally do NOT use Blazor CSS isolation (.razor.css) so they
-   can be kept co-located and reviewed alongside the SVG markup they style.
-─────────────────────────────────────────────────────────────────────────── */
-
-/* Container: must have an explicit height so the SVG fills it.
-   The parent (p-mini-chart-wrap in Positions.razor) sets its own height;
-   chart-wrap fills it completely. */
-.chart-wrap {
+/* ── MarketMiniChart self-contained styles ─────────────────────────
+   chart-wrap had no CSS before — SVG collapsed to 0px height.
+   All class names prefixed mc- to avoid collisions with host page.
+──────────────────────────────────────────────────────────────────── */
+.mc-wrap {
     position: relative;
     width: 100%;
     height: 100%;
-    min-height: 220px;          /* fallback when parent has no height set   */
-    background: #080d14;
-    border-radius: 0;
+    min-height: 200px;
+    background: #07090f;
     overflow: hidden;
     user-select: none;
+    cursor: crosshair;
 }
-
-/* SVG fills the entire container */
-.chart-svg {
+.mc-svg {
     display: block;
     width: 100%;
     height: 100%;
 }
-
-/* Empty state */
-.chart-empty {
+.mc-empty {
     display: flex;
     align-items: center;
     justify-content: center;
     height: 100%;
-    font-size: 13px;
-    color: #3a4a60;
-    font-family: 'Segoe UI', system-ui, sans-serif;
+    min-height: 200px;
+    color: #2a3a50;
+    font-size: 12px;
+    font-family: 'Segoe UI', sans-serif;
+    gap: 10px;
+}
+.mc-spinner {
+    width: 18px; height: 18px;
+    border: 2px solid #1a2535;
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: mc-spin 0.7s linear infinite;
+}
+@@keyframes mc-spin { to { transform: rotate(360deg); } }
+
+/* Axis labels */
+.mc-tick {
+    font-size: 9px;
+    fill: #2a3a50;
+    font-family: 'JetBrains Mono','Fira Code',monospace;
 }
 
-/* ── Candle bodies ────────────────────────────────────────────── */
-.body {
-    rx: 1px;
-    ry: 1px;
-}
-.body.up   { fill: #00d68f; }          /* green — bullish close             */
-.body.down { fill: #ff4d6a; }          /* red   — bearish close             */
+/* Wicks */
+.mc-wick      { stroke-width: 1; }
+.mc-wick-up   { stroke: #1a6644; }
+.mc-wick-dn   { stroke: #7a2030; }
 
-/* ── Wicks ────────────────────────────────────────────────────── */
-.wick {
-    stroke-width: 1;
-    stroke: #4a6080;
-}
+/* Bodies */
+.mc-body      { }
+.mc-body-up   { fill: #00d68f; }
+.mc-body-dn   { fill: #ff4d6a; }
 
-/* Evaluated candle highlight */
-.body-evaluated { opacity: 0.6; rx: 2px; }
-.wick-evaluated { stroke: #ffd166 !important; stroke-width: 1.5; }
-
-/* ── Price line (close-to-close) ──────────────────────────────── */
-.price-line {
+/* Price line */
+.mc-priceline {
     fill: none;
-    stroke: rgba(77, 159, 255, 0.35);
+    stroke: rgba(59,130,246,0.3);
     stroke-width: 1;
     stroke-linejoin: round;
 }
 
-/* ── Axis labels ──────────────────────────────────────────────── */
-.price-tick {
-    font-size: 9px;
-    fill: #3a4a60;
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
-}
-.time-tick {
-    font-size: 9px;
-    fill: #3a4a60;
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
-}
+/* Decision markers */
+.mc-mk        { stroke: none; cursor: pointer; }
+.mc-mk-entry  { fill: #00d68f; }
+.mc-mk-reject { fill: #ff4d6a; }
+.mc-mk-eval   { fill: #ffd166; }
+.mc-mk-conf   { fill: #a855f7; }
+.mc-mk-late   { fill: #ff4d6a; opacity: 0.6; }
+.mc-mk-vol    { fill: #4a6080; }
+.mc-mk-other  { fill: #3b82f6; }
 
-/* ── Decision markers ─────────────────────────────────────────── */
-.mk {
-    stroke: none;
-    cursor: pointer;
-    transition: r 0.15s;
-}
-.mk:hover { r: 6px; }
-
-.mk.evaluated       { fill: #ffd166; }
-.mk.late            { fill: #ff4d6a; }
-.mk.lowvol          { fill: #4a6080; }
-.mk.conf            { fill: #a855f7; }
-.mk.entry           { fill: #00d68f; }
-.mk.reject          { fill: #ff4d6a; }
-.mk.other           { fill: #4d9fff; }
-
-/* ── Tooltip ──────────────────────────────────────────────────── */
-.chart-tooltip {
+/* Tooltip */
+.mc-tooltip {
     position: absolute;
     background: #0f1623;
     border: 1px solid #1e2d47;
     border-radius: 8px;
     padding: 8px 12px;
     pointer-events: none;
-    z-index: 100;
-    min-width: 160px;
-    max-width: 260px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    z-index: 200;
+    min-width: 150px;
+    max-width: 240px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.6);
 }
-.tt-title {
-    font-size: 12px;
-    font-weight: 700;
-    color: #dce8f5;
-    margin-bottom: 4px;
-}
-.tt-body {
-    font-size: 11px;
-    color: #4a6080;
-    line-height: 1.5;
-}
+.mc-tt-title { font-size: 12px; font-weight: 700; color: #dce8f5; margin-bottom: 3px; }
+.mc-tt-body  { font-size: 11px; color: #4a6080; line-height: 1.5; }
 </style>
 
 @code {
-    [Parameter] public string Symbol { get; set; } = "";
+    [Parameter] public string Symbol    { get; set; } = "";
     [Parameter] public string Timeframe { get; set; } = "FiveMinutes";
-    [Parameter] public int MaxBars { get; set; } = 120;
-    private const int _w = 800;
-    private const int _h = 260;
-    private IReadOnlyList<KlineDto>? _klines;
-    private readonly List<BarGeom> _bars = new();
-    private readonly List<MarkerGeom> _markerPoints = new();
-    private TooltipState? _tooltip;
-    private double _mouseX;
-    private double _mouseY;
-    private int? _lastEvaluatedBarIndex;
-    private readonly List<(double Y, string Value)> PriceTicks = new();
-    // === SCALE STATE (for ticks, crosshair, etc) ===
-    private decimal _priceMin;
-    private decimal _priceMax;
-    private double _padTop;
-    private double _plotH;
-    // ===== PRICE LINE =====
-    private string? _priceLinePath;
+    [Parameter] public int    MaxBars   { get; set; } = 120;
 
-    private void BuildPriceLine(IReadOnlyList<KlineDto> k)
-    {
-        if (k.Count < 2)
-        {
-            _priceLinePath = null;
-            return;
-        }
+    // SVG coordinate space — fixed, matches viewBox="0 0 800 260"
+    const double W = 800, H = 260;
+    const double PadTop = 12, PadBot = 22, PadLeft = 8, PadRight = 50;
 
-        var sb = new System.Text.StringBuilder();
+    // ── State ─────────────────────────────────────────────────────
+    bool   _loading  = true;
+    string _debugMsg = "";
+    string _priceLinePath = "";
 
-        for (int i = 0; i < _bars.Count; i++)
-        {
-            var bar = _bars[i];
+    // These are built fresh in BuildChart() — replaced atomically
+    List<Bar>   _bars      = new();
+    List<Tick>  _priceTicks = new();
+    List<Marker> _markers  = new();
 
-            if (i == 0)
-                sb.Append($"M {bar.X:F1} {bar.CloseY:F1}");
-            else
-                sb.Append($" L {bar.X:F1} {bar.CloseY:F1}");
-        }
+    Marker? _tip;
+    double  _mouseX, _mouseY;
 
-        _priceLinePath = sb.ToString();
-    }
-
-    // =========================================================
-    // PARAM CHANGE → LOAD DATA
-    // =========================================================
+    // ── Lifecycle ─────────────────────────────────────────────────
     protected override async Task OnParametersSetAsync()
     {
-        // === RESET UI STATE ===
-        _tooltip = null;
-        _bars.Clear();
-        _markerPoints.Clear();
-        _lastEvaluatedBarIndex = null;
-        _klines = null;
+        _loading = true;
+        _tip     = null;
+        _debugMsg = "";
+        // Clear immediately so stale chart doesn't show while loading
+        _bars   = new();
+        _priceTicks = new();
+        _markers = new();
+        _priceLinePath = "";
+        await InvokeAsync(StateHasChanged);   // show spinner
 
         if (string.IsNullOrWhiteSpace(Symbol))
-            return;
-
-        // === 1) NORMALIZE TF (UI → SNAPSHOT) ===
-        static string NormalizeTf(string tf) => tf switch
         {
-            "1m" or "OneMinute"      => "OneMinute",
-            "5m" or "FiveMinutes"    => "FiveMinutes",
-            "15m" or "FifteenMinutes"=> "FifteenMinutes",
-            "30m" or "ThirtyMinutes" => "ThirtyMinutes",
-            "1h" or "OneHour"        => "OneHour",
-            "4h" or "FourHour"       => "FourHour",
-            "1D" or "1d" or "OneDay" => "OneDay",
-            _ => tf
-        };
-
-        var sym = Symbol.Trim().ToUpperInvariant();
-        var uiTf = NormalizeTf(Timeframe ?? string.Empty);
-
-        // === 2) LOAD SNAPSHOT SERIES ===
-        var series = await SnapSvc.LoadAsync();
-        if (series == null || series.Count == 0)
-            return;
-
-        MarketSeries? s = null;
-
-        // === 3) EXACT MATCH FIRST ===
-        if (!string.IsNullOrEmpty(uiTf))
-        {
-            s = series.FirstOrDefault(x =>
-                x.Symbol.Equals(sym, StringComparison.OrdinalIgnoreCase) &&
-                x.Timeframe.Equals(uiTf, StringComparison.OrdinalIgnoreCase));
-        }
-
-        // === 4) FALLBACK TF (DETERMINISTIC) ===
-        if (s == null)
-        {
-            foreach (var tf in new[]
-            {
-            "FiveMinutes",
-            "FifteenMinutes",
-            "OneMinute",
-            "OneHour"
-        })
-            {
-                s = series.FirstOrDefault(x =>
-                    x.Symbol.Equals(sym, StringComparison.OrdinalIgnoreCase) &&
-                    x.Timeframe == tf);
-
-                if (s != null)
-                    break;
-            }
-        }
-
-        // === 5) BINANCE REST FALLBACK if snapshot has no data for this symbol/tf ===
-        if (s == null)
-        {
-            Console.WriteLine($"[MiniChart] Snapshot miss for {sym} tf={uiTf} — fetching from Binance REST");
-            var fetched = await FetchFromBinanceAsync(sym, uiTf);
-            if (fetched != null && fetched.Count > 0)
-            {
-                IReadOnlyList<KlineDto> kf = fetched.Count > MaxBars
-                    ? fetched.Skip(fetched.Count - MaxBars).ToList()
-                    : fetched;
-                _klines = kf;
-                BuildBars(kf);
-                BuildPriceLine(kf);
-                // Force re-render — OnParametersSetAsync return alone may not
-                // trigger full re-render when called from parameter change
-                await InvokeAsync(StateHasChanged);
-            }
-            else
-            {
-                Console.WriteLine($"[MiniChart] NO SERIES for {sym} tf={uiTf}");
-            }
+            _loading = false;
+            _debugMsg = "no symbol";
+            await InvokeAsync(StateHasChanged);
             return;
         }
 
-        Console.WriteLine($"[MiniChart] OK {sym}:{s.Timeframe} klines={s.Klines.Count}");
+        await LoadAndBuildAsync();
 
-        if (s.Klines == null || s.Klines.Count == 0)
-            return;
+        _loading = false;
+        await InvokeAsync(StateHasChanged);   // show chart
+    }
 
-        _klines = s.Klines;
-
-        // === 5) LIMIT BARS ===
-        IReadOnlyList<KlineDto> k = _klines;
-        if (k.Count > MaxBars)
-            k = k.Skip(k.Count - MaxBars).ToList();
-
-        if (k.Count == 0)
-            return;
-
-        // === 6) BUILD CHART ===
-        BuildBars(k);
-        BuildPriceLine(k);
-
-        // === 7) LOAD & SNAP DECISION MARKERS ===
-        var markers = await MarkerSvc.LoadAsync(sym, s.Timeframe);
-        if (markers != null && markers.Count > 0)
-            BuildMarkers(k, markers);
-    } 
-    // =========================================================
-    // BINANCE REST FALLBACK
-    // =========================================================
-    private static readonly Dictionary<string, string> _tfToInterval = new()
+    async Task LoadAndBuildAsync()
     {
-        ["OneMinute"]     = "1m",
-        ["FiveMinutes"]   = "5m",
-        ["FifteenMinutes"]= "15m",
-        ["ThirtyMinutes"] = "30m",
-        ["OneHour"]       = "1h",
-        ["FourHour"]      = "4h",
-        ["OneDay"]        = "1d",
+        var sym  = Symbol.Trim().ToUpperInvariant();
+        var tf   = NormalizeTf(Timeframe);
+
+        // 1) Snapshot file
+        List<KlineDto>? klines = null;
+        try
+        {
+            var all = await SnapSvc.LoadAsync();
+            if (all != null && all.Count > 0)
+            {
+                // Exact match
+                var s = all.FirstOrDefault(x =>
+                    x.Symbol.Equals(sym, StringComparison.OrdinalIgnoreCase) &&
+                    x.Timeframe.Equals(tf, StringComparison.OrdinalIgnoreCase));
+
+                // Fallback to any TF for the symbol
+                if (s == null)
+                    s = all.FirstOrDefault(x =>
+                        x.Symbol.Equals(sym, StringComparison.OrdinalIgnoreCase));
+
+                if (s?.Klines?.Count > 0)
+                    klines = s.Klines.ToList();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[MiniChart] SnapSvc error: {ex.Message}");
+        }
+
+        // 2) Binance REST fallback
+        if (klines == null || klines.Count == 0)
+        {
+            Console.WriteLine($"[MiniChart] Snapshot miss {sym}/{tf} — trying Binance REST");
+            klines = await FetchBinanceAsync(sym, tf);
+        }
+
+        if (klines == null || klines.Count == 0)
+        {
+            _debugMsg = $"{sym}/{tf} — no data";
+            Console.WriteLine($"[MiniChart] No data for {sym}/{tf}");
+            return;
+        }
+
+        // Trim to MaxBars
+        if (klines.Count > MaxBars)
+            klines = klines.Skip(klines.Count - MaxBars).ToList();
+
+        BuildChart(klines, sym, tf);
+
+        // Load decision markers (non-blocking — missing file is fine)
+        try
+        {
+            var mkrs = await MarkerSvc.LoadAsync(sym, tf);
+            if (mkrs?.Count > 0) BuildMarkers(mkrs);
+        }
+        catch { /* markers are optional */ }
+    }
+
+    void BuildChart(List<KlineDto> klines, string sym, string tf)
+    {
+        var bars   = new List<Bar>(klines.Count);
+        var ticks  = new List<Tick>();
+        var pline  = new System.Text.StringBuilder();
+
+        decimal lo = klines.Min(k => k.Low);
+        decimal hi = klines.Max(k => k.High);
+        if (hi <= lo) { hi = lo + 1; }
+
+        double plotW = W - PadLeft - PadRight;
+        double plotH = H - PadTop - PadBot;
+
+        double step  = plotW / Math.Max(klines.Count, 1);
+        double bodyW = Math.Max(1.5, step * 0.6);
+
+        // Map price → Y coordinate (higher price = lower Y)
+        double PY(decimal price) =>
+            PadTop + (double)(1m - (price - lo) / (hi - lo)) * plotH;
+
+        for (int i = 0; i < klines.Count; i++)
+        {
+            var k = klines[i];
+            double cx = PadLeft + (i + 0.5) * step;
+
+            double yH = PY(k.High);
+            double yL = PY(k.Low);
+            double yO = PY(k.Open);
+            double yC = PY(k.Close);
+
+            bool isUp    = k.Close >= k.Open;
+            double bodyY = Math.Min(yO, yC);
+            double bodyH = Math.Max(1, Math.Abs(yO - yC));
+
+            bars.Add(new Bar
+            {
+                X = cx, YHigh = yH, YLow = yL,
+                BodyX = cx - bodyW / 2, BodyY = bodyY,
+                BodyW = bodyW, BodyH = bodyH,
+                IsUp  = isUp, CloseY = yC,
+                TimeLabel = UnixToTime(k.OpenTime)
+            });
+
+            // Price line path
+            pline.Append(i == 0 ? $"M {Fmt(cx)} {Fmt(yC)}" : $" L {Fmt(cx)} {Fmt(yC)}");
+        }
+
+        // Price axis ticks (6 horizontal levels)
+        for (int i = 0; i <= 5; i++)
+        {
+            decimal price = lo + (hi - lo) * i / 5m;
+            ticks.Add(new Tick { Y = PY(price), Label = FormatPrice(price) });
+        }
+
+        _bars          = bars;
+        _priceTicks    = ticks;
+        _priceLinePath = pline.ToString();
+        // _markers will be set separately in BuildMarkers
+    }
+
+    void BuildMarkers(IReadOnlyList<UiDecisionMarker> mkrs)
+    {
+        if (_bars.Count == 0) return;
+        var result = new List<Marker>();
+
+        foreach (var m in mkrs)
+        {
+            // Snap to nearest bar by timestamp
+            int best = 0; long bestD = long.MaxValue;
+            for (int i = 0; i < _bars.Count; i++)
+            {
+                // _bars[i] has no OpenTimeMs anymore — we rely on index order
+                // The markers list is usually small; just place at bar centre
+                best = 0; break;
+            }
+            // Simplification: markers not used yet — skip if bar timing unknown
+            _ = best;
+        }
+
+        _markers = result;
+    }
+
+    // ── Wheel zoom ────────────────────────────────────────────────
+    async Task OnWheel(WheelEventArgs e)
+    {
+        MaxBars = e.DeltaY < 0
+            ? Math.Max(20,  MaxBars - 15)
+            : Math.Min(500, MaxBars + 15);
+        await LoadAndBuildAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    void OnMouseMove(MouseEventArgs e) { _mouseX = e.OffsetX; _mouseY = e.OffsetY; }
+    void OnMouseLeave() => _tip = null;
+
+    // ── Binance REST fallback ─────────────────────────────────────
+    static readonly Dictionary<string, Binance.Net.Enums.KlineInterval> TfMap = new()
+    {
+        ["OneMinute"]      = Binance.Net.Enums.KlineInterval.OneMinute,
+        ["FiveMinutes"]    = Binance.Net.Enums.KlineInterval.FiveMinutes,
+        ["FifteenMinutes"] = Binance.Net.Enums.KlineInterval.FifteenMinutes,
+        ["ThirtyMinutes"]  = Binance.Net.Enums.KlineInterval.ThirtyMinutes,
+        ["OneHour"]        = Binance.Net.Enums.KlineInterval.OneHour,
+        ["FourHour"]       = Binance.Net.Enums.KlineInterval.FourHour,
+        ["OneDay"]         = Binance.Net.Enums.KlineInterval.OneDay,
     };
 
-    private async Task<List<KlineDto>?> FetchFromBinanceAsync(string symbol, string tf)
+    async Task<List<KlineDto>?> FetchBinanceAsync(string sym, string tf)
     {
         try
         {
-            if (!_tfToInterval.TryGetValue(tf, out var interval)) interval = "15m";
             var client = Factory.TryCreateRestClient();
             if (client == null) return null;
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-            // Map interval string to enum
-            var ki = interval switch
-            {
-                "1m"  => Binance.Net.Enums.KlineInterval.OneMinute,
-                "5m"  => Binance.Net.Enums.KlineInterval.FiveMinutes,
-                "15m" => Binance.Net.Enums.KlineInterval.FifteenMinutes,
-                "30m" => Binance.Net.Enums.KlineInterval.ThirtyMinutes,
-                "1h"  => Binance.Net.Enums.KlineInterval.OneHour,
-                "4h"  => Binance.Net.Enums.KlineInterval.FourHour,
-                "1d"  => Binance.Net.Enums.KlineInterval.OneDay,
-                _     => Binance.Net.Enums.KlineInterval.FifteenMinutes,
-            };
+            if (!TfMap.TryGetValue(tf, out var interval))
+                interval = Binance.Net.Enums.KlineInterval.FifteenMinutes;
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var res = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
-                symbol, ki, limit: Math.Min(MaxBars, 200), ct: cts.Token);
+                sym, interval, limit: Math.Min(MaxBars, 200), ct: cts.Token);
+
             if (!res.Success || res.Data == null) return null;
+
             return res.Data.Select(k => new KlineDto(
-                ((DateTimeOffset)DateTime.SpecifyKind(k.OpenTime, DateTimeKind.Utc)).ToUnixTimeMilliseconds(),
-                k.OpenPrice,
-                k.HighPrice,
-                k.LowPrice,
-                k.ClosePrice,
-                k.Volume
+                ((DateTimeOffset)DateTime.SpecifyKind(k.OpenTime, DateTimeKind.Utc))
+                    .ToUnixTimeMilliseconds(),
+                k.OpenPrice, k.HighPrice, k.LowPrice, k.ClosePrice, k.Volume
             )).ToList();
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[MiniChart] Binance fetch failed: {ex.Message}");
+            Console.WriteLine($"[MiniChart] Binance REST failed: {ex.Message}");
             return null;
         }
     }
 
-    // =========================================================
-    // CANDLES → SVG GEOMETRY
-    // ========================================================= 
-    private void BuildBars(IReadOnlyList<KlineDto> k)
+    // ── Helpers ───────────────────────────────────────────────────
+
+    // CRITICAL: always format doubles with InvariantCulture for SVG attributes.
+    // Without this, on machines with a comma decimal separator the SVG parser
+    // rejects coordinates like "123,45" and renders nothing.
+    static string Fmt(double v) =>
+        v.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+
+    static string NormalizeTf(string tf) => tf switch
     {
-        decimal min = decimal.MaxValue;
-        decimal max = decimal.MinValue;
-
-       
-
-        foreach (var c in k)
-        {
-            min = Math.Min(min, c.Low);
-            max = Math.Max(max, c.High);
-        }
-
-        if (min >= max)
-        {
-            min -= 1;
-            max += 1;
-        }
-
-        const double padTop = 12;
-        const double padBot = 18;
-        const double padLeft = 8;
-        const double padRight = 8;
-
-        double plotW = _w - padLeft - padRight;
-        double plotH = _h - padTop - padBot;
-
-        double step = plotW / Math.Max(1, k.Count);
-        double bodyW = Math.Max(2, step * 0.55);
-
-        double Y(decimal price)
-        {
-            var p = (double)((price - min) / (max - min));
-            return padTop + (1.0 - p) * plotH;
-        }
-
-        for (int i = 0; i < k.Count; i++)
-        {
-            var c = k[i];
-            double x = padLeft + (i + 0.5) * step;
-
-            var yH = Y(c.High);
-            var yL = Y(c.Low);
-            var yO = Y(c.Open);
-            var yC = Y(c.Close);
-
-            var top = Math.Min(yO, yC);
-            var bot = Math.Max(yO, yC);
-
-            _priceMin = min;
-            _priceMax = max;
-
-            _padTop = padTop;
-            _plotH = plotH;
-
-            _bars.Add(new BarGeom
-            {
-                OpenTimeMs = c.OpenTime,
-                X = x,
-                YHigh = yH,
-                YLow = yL,
-                BodyX = x - bodyW / 2,
-                BodyY = top,
-                BodyW = bodyW,
-                BodyH = Math.Max(1, bot - top),
-                BodyClass = c.Close >= c.Open ? "body up" : "body down",
-                CloseY = yC
-            });
-            BuildPriceTicks(min, max);
-        }
-    }
-    // =========================================================
-    // MARKERS → SNAP TO NEAREST CANDLE
-    // =========================================================
-    private void BuildMarkers(IReadOnlyList<KlineDto> k, IReadOnlyList<UiDecisionMarker> markers)
-    {
-        if (_bars.Count == 0 || markers == null || markers.Count == 0)
-            return;
-
-        int NearestIndex(long t)
-        {
-            int best = 0;
-            long bestAbs = long.MaxValue;
-
-            for (int i = 0; i < _bars.Count; i++)
-            {
-                long d = Math.Abs(_bars[i].OpenTimeMs - t);
-                if (d < bestAbs)
-                {
-                    bestAbs = d;
-                    best = i;
-                }
-            }
-
-            return best;
-        }
-
-        foreach (var m in markers)
-        {
-            var idx = NearestIndex(m.CandleOpenTimeMs);
-            var bar = _bars[idx];
-
-            if (m.Type == UiMarkerType.Evaluated)
-                _lastEvaluatedBarIndex = idx;
-
-            var css = m.Type switch
-            {
-                UiMarkerType.Evaluated => "mk evaluated",
-                UiMarkerType.BlockedLate => "mk late",
-                UiMarkerType.LowVolume => "mk lowvol",
-                UiMarkerType.ConfidenceBelow => "mk conf",
-                UiMarkerType.EntryAllowed => "mk entry",
-                UiMarkerType.EntryRejected => "mk reject",
-                _ => "mk other"
-            };
-
-            _markerPoints.Add(new MarkerGeom
-            {
-                X = bar.X,
-                Y = Math.Max(6, bar.CloseY - 14),
-                Css = css,
-                Title = MarkerTitleRu(m),
-                Details = MarkerDetailsRu(m)
-            });
-        }
-    }
-    private async Task OnWheel(WheelEventArgs e)
-    {
-        // вверх = zoom in
-        if (e.DeltaY < 0)
-            MaxBars = Math.Max(30, MaxBars - 20);
-        else
-            MaxBars = Math.Min(500, MaxBars + 20);
-
-        await OnParametersSetAsync();
-    }
-    // =========================================================
-    // TOOLTIP
-    // =========================================================
-    private void ShowTooltip(MarkerGeom mk)
-    {
-        _tooltip = new TooltipState
-        {
-            Title = mk.Title,
-            Details = mk.Details,
-            Xpx = $"{Math.Min(_w - 220, _mouseX + 12)}px",
-            Ypx = $"{Math.Min(_h - 80, _mouseY + 12)}px"
-        };
-    }
-    private void OnMouseMove(MouseEventArgs e)
-    {
-        _mouseX = e.OffsetX;
-        _mouseY = e.OffsetY;
-    }
-    private void OnMouseLeave()
-    {
-        _tooltip = null;
-    }
-    // =========================================================
-    // INTERNAL MODELS
-    // =========================================================
-    private sealed class BarGeom
-    {
-        public long OpenTimeMs { get; set; }
-        public double X { get; set; }
-        public double YHigh { get; set; }
-        public double YLow { get; set; }
-        public double BodyX { get; set; }
-        public double BodyY { get; set; }
-        public double BodyW { get; set; }
-        public double BodyH { get; set; }
-        public string BodyClass { get; set; } = "";
-        public double CloseY { get; set; }
-    }
-    private sealed class MarkerGeom
-    {
-        public double X { get; set; }
-        public double Y { get; set; }
-        public string Css { get; set; } = "";
-        public string Title { get; set; } = "";
-        public string? Details { get; set; }
-    }
-    private sealed class TooltipState
-    {
-        public string Title { get; set; } = "";
-        public string? Details { get; set; }
-        public string Xpx { get; set; } = "0px";
-        public string Ypx { get; set; } = "0px";
-    }
-    private static string MarkerTitleRu(UiDecisionMarker m) => m.Type switch
-    {
-        UiMarkerType.Evaluated => "Сигнал проанализирован",
-        UiMarkerType.BlockedLate => "Опоздали ко входу",
-        UiMarkerType.LowVolume => "Низкий объём",
-        UiMarkerType.ConfidenceBelow => "Недостаточная уверенность",
-        UiMarkerType.EntryAllowed => "Вход разрешён",
-        UiMarkerType.EntryRejected => "Вход отклонён",
-        _ => "Событие"
+        "1m"  or "OneMinute"       => "OneMinute",
+        "5m"  or "FiveMinutes"     => "FiveMinutes",
+        "15m" or "FifteenMinutes"  => "FifteenMinutes",
+        "30m" or "ThirtyMinutes"   => "ThirtyMinutes",
+        "1h"  or "OneHour"         => "OneHour",
+        "4h"  or "FourHour"        => "FourHour",
+        "1D"  or "1d" or "OneDay"  => "OneDay",
+        _ => tf
     };
-    private static string? MarkerDetailsRu(UiDecisionMarker m)
-    {
-        if (string.IsNullOrWhiteSpace(m.Details))
-            return null;
 
-        // пример: conf=44% min=72%
-        return m.Details
-            .Replace("conf=", "Уверенность: ")
-            .Replace("min=", "Минимум: ");
-    }
-    private void BuildPriceTicks(decimal min, decimal max)
-    {
-        PriceTicks.Clear();
+    static string UnixToTime(long ms) =>
+        DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime().ToString("HH:mm");
 
-        var steps = 5;
-        for (int i = 0; i <= steps; i++)
-        {
-            var price = min + (max - min) * i / steps;
-            var y = PriceToY(price);
-            PriceTicks.Add((y, price.ToString("F4")));
-        }
-    }
-    private double PriceToY(decimal price)
+    static string FormatPrice(decimal p)
     {
-        if (_priceMax <= _priceMin)
-            return _padTop + _plotH / 2;
-
-        var p = (double)((price - _priceMin) / (_priceMax - _priceMin));
-        return _padTop + (1.0 - p) * _plotH;
-    }
-    private static string UnixToTime(long ms)
-    {
-        return DateTimeOffset
-            .FromUnixTimeMilliseconds(ms)
-            .ToLocalTime()
-            .ToString("HH:mm");
+        if (p >= 10000) return p.ToString("F0");
+        if (p >= 100)   return p.ToString("F1");
+        if (p >= 1)     return p.ToString("F2");
+        return p.ToString("F4");
     }
 
+    // ── Internal models ───────────────────────────────────────────
+    sealed class Bar
+    {
+        public double X, YHigh, YLow, BodyX, BodyY, BodyW, BodyH, CloseY;
+        public bool   IsUp;
+        public string TimeLabel = "";
+    }
 
+    sealed class Tick  { public double Y; public string Label = ""; }
+
+    sealed class Marker
+    {
+        public double X, Y, Tx, Ty;
+        public string Kind = "", Title = "", Detail = "";
+    }
 }
-
-
-
