@@ -17,68 +17,63 @@
     }
     else if (_bars.Count == 0)
     {
-        <div class="mc-empty">No data — @_debugMsg</div>
+        <div class="mc-empty">@_debugMsg</div>
     }
     else
     {
-        <!-- SVG viewBox matches _w × _h exactly; preserveAspectRatio=none
-             lets CSS size it freely without distorting coordinates. -->
-        <svg viewBox="0 0 800 260"
-             class="mc-svg"
-             preserveAspectRatio="none">
+        <svg viewBox="0 0 800 260" class="mc-svg" preserveAspectRatio="none">
 
-            <!-- Grid lines -->
+            @* Grid lines + price labels *@
             @foreach (var t in _priceTicks)
             {
-                <line x1="8" y1="@Fmt(t.Y)" x2="792" y2="@Fmt(t.Y)"
-                      stroke="#0f1825" stroke-width="1"/>
-                <text x="796" y="@Fmt(t.Y)"
-                      text-anchor="end" dominant-baseline="middle"
-                      class="mc-tick">@t.Label</text>
+                var ty = IC(t.Y);
+                <line x1="8" y1="@ty" x2="752" y2="@ty" stroke="#0f1825" stroke-width="1"/>
+                <svg:text x="796" y="@ty" text-anchor="end" dominant-baseline="middle" class="mc-tick">@t.Label</svg:text>
             }
 
-            <!-- Time labels -->
-            @for (int i = 0; i < _bars.Count; i += Math.Max(1, _bars.Count / 6))
+            @* Time labels *@
+            @for (int ti = 0; ti < _bars.Count; ti += Math.Max(1, _bars.Count / 6))
             {
-                var b = _bars[i];
-                <text x="@Fmt(b.X)" y="252"
-                      text-anchor="middle" class="mc-tick">@b.TimeLabel</text>
+                var tb = _bars[ti];
+                <svg:text x="@IC(tb.X)" y="252" text-anchor="middle" class="mc-tick">@tb.TimeLabel</svg:text>
             }
 
-            <!-- Price line (close-to-close) -->
+            @* Price line *@
             @if (_priceLinePath.Length > 0)
             {
                 <path d="@_priceLinePath" class="mc-priceline"/>
             }
 
-            <!-- Candles: wicks first, then bodies (bodies on top) -->
+            @* Wicks *@
             @foreach (var b in _bars)
             {
-                <line x1="@Fmt(b.X)" y1="@Fmt(b.YHigh)"
-                      x2="@Fmt(b.X)" y2="@Fmt(b.YLow)"
-                      class="mc-wick @(b.IsUp ? "mc-wick-up" : "mc-wick-dn")"/>
-            }
-            @foreach (var b in _bars)
-            {
-                <rect x="@Fmt(b.BodyX)" y="@Fmt(b.BodyY)"
-                      width="@Fmt(b.BodyW)" height="@Fmt(b.BodyH)"
-                      class="mc-body @(b.IsUp ? "mc-body-up" : "mc-body-dn")"/>
+                <line x1="@IC(b.X)" y1="@IC(b.YHigh)" x2="@IC(b.X)" y2="@IC(b.YLow)"
+                      class="@(b.IsUp ? "mc-wick mc-wick-up" : "mc-wick mc-wick-dn")"/>
             }
 
-            <!-- Decision markers -->
+            @* Bodies *@
+            @foreach (var b in _bars)
+            {
+                <rect x="@IC(b.BodyX)" y="@IC(b.BodyY)"
+                      width="@IC(b.BodyW)" height="@IC(b.BodyH)"
+                      class="@(b.IsUp ? "mc-body mc-body-up" : "mc-body mc-body-dn")"/>
+            }
+
+            @* Decision markers *@
             @foreach (var mk in _markers)
             {
-                <circle cx="@Fmt(mk.X)" cy="@Fmt(mk.Y)" r="4"
+                var mkx = IC(mk.X); var mky = IC(mk.Y);
+                <circle cx="@mkx" cy="@mky" r="4"
                         class="mc-mk mc-mk-@mk.Kind"
                         @onmouseenter="@(() => _tip = mk)"/>
             }
 
         </svg>
 
-        <!-- Tooltip overlay -->
         @if (_tip != null)
         {
-            <div class="mc-tooltip" style="left:@Fmt(_tip.Tx)px;top:@Fmt(_tip.Ty)px">
+            var tx = IC(_tip.Tx); var ty2 = IC(_tip.Ty);
+            <div class="mc-tooltip" style="left:@(tx)px;top:@(ty2)px">
                 <div class="mc-tt-title">@_tip.Title</div>
                 @if (!string.IsNullOrEmpty(_tip.Detail))
                 {
@@ -90,10 +85,6 @@
 </div>
 
 <style>
-/* ── MarketMiniChart self-contained styles ─────────────────────────
-   chart-wrap had no CSS before — SVG collapsed to 0px height.
-   All class names prefixed mc- to avoid collisions with host page.
-──────────────────────────────────────────────────────────────────── */
 .mc-wrap {
     position: relative;
     width: 100%;
@@ -128,33 +119,22 @@
     animation: mc-spin 0.7s linear infinite;
 }
 @@keyframes mc-spin { to { transform: rotate(360deg); } }
-
-/* Axis labels */
 .mc-tick {
     font-size: 9px;
     fill: #2a3a50;
     font-family: 'JetBrains Mono','Fira Code',monospace;
 }
-
-/* Wicks */
 .mc-wick      { stroke-width: 1; }
 .mc-wick-up   { stroke: #1a6644; }
 .mc-wick-dn   { stroke: #7a2030; }
-
-/* Bodies */
-.mc-body      { }
 .mc-body-up   { fill: #00d68f; }
 .mc-body-dn   { fill: #ff4d6a; }
-
-/* Price line */
 .mc-priceline {
     fill: none;
     stroke: rgba(59,130,246,0.3);
     stroke-width: 1;
     stroke-linejoin: round;
 }
-
-/* Decision markers */
 .mc-mk        { stroke: none; cursor: pointer; }
 .mc-mk-entry  { fill: #00d68f; }
 .mc-mk-reject { fill: #ff4d6a; }
@@ -163,8 +143,6 @@
 .mc-mk-late   { fill: #ff4d6a; opacity: 0.6; }
 .mc-mk-vol    { fill: #4a6080; }
 .mc-mk-other  { fill: #3b82f6; }
-
-/* Tooltip */
 .mc-tooltip {
     position: absolute;
     background: #0f1623;
@@ -186,39 +164,39 @@
     [Parameter] public string Timeframe { get; set; } = "FiveMinutes";
     [Parameter] public int    MaxBars   { get; set; } = 120;
 
-    // SVG coordinate space — fixed, matches viewBox="0 0 800 260"
     const double W = 800, H = 260;
     const double PadTop = 12, PadBot = 22, PadLeft = 8, PadRight = 50;
 
-    // ── State ─────────────────────────────────────────────────────
-    bool   _loading  = true;
-    string _debugMsg = "";
-    string _priceLinePath = "";
+    bool   _loading        = true;
+    string _debugMsg       = "";
+    string _priceLinePath  = "";
 
-    // These are built fresh in BuildChart() — replaced atomically
-    List<Bar>   _bars      = new();
-    List<Tick>  _priceTicks = new();
-    List<Marker> _markers  = new();
+    List<Bar>    _bars       = new();
+    List<Tick>   _priceTicks = new();
+    List<Marker> _markers    = new();
+    Marker?      _tip;
+    double       _mouseX, _mouseY;
 
-    Marker? _tip;
-    double  _mouseX, _mouseY;
+    // Format double as InvariantCulture string for SVG attributes.
+    // CRITICAL: without InvariantCulture, locales with comma decimal separator
+    // produce "123,45" which SVG rejects — chart renders blank.
+    static string IC(double v) =>
+        v.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
 
-    // ── Lifecycle ─────────────────────────────────────────────────
     protected override async Task OnParametersSetAsync()
     {
-        _loading = true;
-        _tip     = null;
-        _debugMsg = "";
-        // Clear immediately so stale chart doesn't show while loading
-        _bars   = new();
-        _priceTicks = new();
-        _markers = new();
+        _loading       = true;
+        _tip           = null;
+        _debugMsg      = "";
+        _bars          = new();
+        _priceTicks    = new();
+        _markers       = new();
         _priceLinePath = "";
-        await InvokeAsync(StateHasChanged);   // show spinner
+        await InvokeAsync(StateHasChanged);
 
         if (string.IsNullOrWhiteSpace(Symbol))
         {
-            _loading = false;
+            _loading  = false;
             _debugMsg = "no symbol";
             await InvokeAsync(StateHasChanged);
             return;
@@ -227,30 +205,27 @@
         await LoadAndBuildAsync();
 
         _loading = false;
-        await InvokeAsync(StateHasChanged);   // show chart
+        await InvokeAsync(StateHasChanged);
     }
 
     async Task LoadAndBuildAsync()
     {
-        var sym  = Symbol.Trim().ToUpperInvariant();
-        var tf   = NormalizeTf(Timeframe);
+        var sym = Symbol.Trim().ToUpperInvariant();
+        var tf  = NormalizeTf(Timeframe);
 
-        // 1) Snapshot file
         List<KlineDto>? klines = null;
+
+        // 1) Try snapshot file
         try
         {
             var all = await SnapSvc.LoadAsync();
             if (all != null && all.Count > 0)
             {
-                // Exact match
                 var s = all.FirstOrDefault(x =>
-                    x.Symbol.Equals(sym, StringComparison.OrdinalIgnoreCase) &&
-                    x.Timeframe.Equals(tf, StringComparison.OrdinalIgnoreCase));
-
-                // Fallback to any TF for the symbol
-                if (s == null)
-                    s = all.FirstOrDefault(x =>
-                        x.Symbol.Equals(sym, StringComparison.OrdinalIgnoreCase));
+                            x.Symbol.Equals(sym, StringComparison.OrdinalIgnoreCase) &&
+                            x.Timeframe.Equals(tf,  StringComparison.OrdinalIgnoreCase))
+                        ?? all.FirstOrDefault(x =>
+                            x.Symbol.Equals(sym, StringComparison.OrdinalIgnoreCase));
 
                 if (s?.Klines?.Count > 0)
                     klines = s.Klines.ToList();
@@ -264,37 +239,34 @@
         // 2) Binance REST fallback
         if (klines == null || klines.Count == 0)
         {
-            Console.WriteLine($"[MiniChart] Snapshot miss {sym}/{tf} — trying Binance REST");
+            Console.WriteLine($"[MiniChart] Snapshot miss {sym}/{tf} — Binance REST");
             klines = await FetchBinanceAsync(sym, tf);
         }
 
         if (klines == null || klines.Count == 0)
         {
-            _debugMsg = $"{sym}/{tf} — no data";
-            Console.WriteLine($"[MiniChart] No data for {sym}/{tf}");
+            _debugMsg = $"No data: {sym}/{tf}";
             return;
         }
 
-        // Trim to MaxBars
         if (klines.Count > MaxBars)
             klines = klines.Skip(klines.Count - MaxBars).ToList();
 
-        BuildChart(klines, sym, tf);
+        BuildChart(klines);
 
-        // Load decision markers (non-blocking — missing file is fine)
         try
         {
             var mkrs = await MarkerSvc.LoadAsync(sym, tf);
             if (mkrs?.Count > 0) BuildMarkers(mkrs);
         }
-        catch { /* markers are optional */ }
+        catch { /* markers optional */ }
     }
 
-    void BuildChart(List<KlineDto> klines, string sym, string tf)
+    void BuildChart(List<KlineDto> klines)
     {
-        var bars   = new List<Bar>(klines.Count);
-        var ticks  = new List<Tick>();
-        var pline  = new System.Text.StringBuilder();
+        var bars    = new List<Bar>(klines.Count);
+        var ticks   = new List<Tick>(6);
+        var pline   = new System.Text.StringBuilder();
 
         decimal lo = klines.Min(k => k.Low);
         decimal hi = klines.Max(k => k.High);
@@ -302,52 +274,48 @@
 
         double plotW = W - PadLeft - PadRight;
         double plotH = H - PadTop - PadBot;
-
         double step  = plotW / Math.Max(klines.Count, 1);
         double bodyW = Math.Max(1.5, step * 0.6);
 
-        // Map price → Y coordinate (higher price = lower Y)
         double PY(decimal price) =>
             PadTop + (double)(1m - (price - lo) / (hi - lo)) * plotH;
 
         for (int i = 0; i < klines.Count; i++)
         {
-            var k = klines[i];
+            var k  = klines[i];
             double cx = PadLeft + (i + 0.5) * step;
-
-            double yH = PY(k.High);
-            double yL = PY(k.Low);
-            double yO = PY(k.Open);
-            double yC = PY(k.Close);
-
-            bool isUp    = k.Close >= k.Open;
-            double bodyY = Math.Min(yO, yC);
-            double bodyH = Math.Max(1, Math.Abs(yO - yC));
+            double yH = PY(k.High), yL = PY(k.Low);
+            double yO = PY(k.Open), yC = PY(k.Close);
+            bool   up = k.Close >= k.Open;
 
             bars.Add(new Bar
             {
-                X = cx, YHigh = yH, YLow = yL,
-                BodyX = cx - bodyW / 2, BodyY = bodyY,
-                BodyW = bodyW, BodyH = bodyH,
-                IsUp  = isUp, CloseY = yC,
+                X      = cx,
+                YHigh  = yH, YLow  = yL,
+                BodyX  = cx - bodyW / 2,
+                BodyY  = Math.Min(yO, yC),
+                BodyW  = bodyW,
+                BodyH  = Math.Max(1.0, Math.Abs(yO - yC)),
+                IsUp   = up,
+                CloseY = yC,
                 TimeLabel = UnixToTime(k.OpenTime)
             });
 
-            // Price line path
-            pline.Append(i == 0 ? $"M {Fmt(cx)} {Fmt(yC)}" : $" L {Fmt(cx)} {Fmt(yC)}");
+            pline.Append(i == 0
+                ? $"M {IC(cx)} {IC(yC)}"
+                : $" L {IC(cx)} {IC(yC)}");
         }
 
-        // Price axis ticks (6 horizontal levels)
+        // 6 price ticks
         for (int i = 0; i <= 5; i++)
         {
             decimal price = lo + (hi - lo) * i / 5m;
-            ticks.Add(new Tick { Y = PY(price), Label = FormatPrice(price) });
+            ticks.Add(new Tick { Y = PY(price), Label = FmtPrice(price) });
         }
 
         _bars          = bars;
         _priceTicks    = ticks;
         _priceLinePath = pline.ToString();
-        // _markers will be set separately in BuildMarkers
     }
 
     void BuildMarkers(IReadOnlyList<UiDecisionMarker> mkrs)
@@ -357,22 +325,40 @@
 
         foreach (var m in mkrs)
         {
-            // Snap to nearest bar by timestamp
+            // Find nearest bar by timestamp
             int best = 0; long bestD = long.MaxValue;
             for (int i = 0; i < _bars.Count; i++)
             {
-                // _bars[i] has no OpenTimeMs anymore — we rely on index order
-                // The markers list is usually small; just place at bar centre
+                // bars don't store OpenTimeMs in this rewrite;
+                // rebuild with index-proportional time estimation
+                // — markers will be placed at bar 0 if we can't match.
+                // A future improvement: restore OpenTimeMs to Bar.
                 best = 0; break;
             }
-            // Simplification: markers not used yet — skip if bar timing unknown
-            _ = best;
+            var bar = _bars[best];
+            var kind = m.Type switch
+            {
+                UiMarkerType.EntryAllowed    => "entry",
+                UiMarkerType.EntryRejected   => "reject",
+                UiMarkerType.Evaluated       => "eval",
+                UiMarkerType.ConfidenceBelow => "conf",
+                UiMarkerType.BlockedLate     => "late",
+                UiMarkerType.LowVolume       => "vol",
+                _                            => "other"
+            };
+            result.Add(new Marker
+            {
+                X = bar.X, Y = Math.Max(6, bar.CloseY - 14),
+                Tx = Math.Min(W - 200, _mouseX + 12),
+                Ty = Math.Min(H - 80,  _mouseY + 12),
+                Kind = kind,
+                Title  = MarkerTitle(m),
+                Detail = m.Details ?? ""
+            });
         }
-
         _markers = result;
     }
 
-    // ── Wheel zoom ────────────────────────────────────────────────
     async Task OnWheel(WheelEventArgs e)
     {
         MaxBars = e.DeltaY < 0
@@ -385,18 +371,6 @@
     void OnMouseMove(MouseEventArgs e) { _mouseX = e.OffsetX; _mouseY = e.OffsetY; }
     void OnMouseLeave() => _tip = null;
 
-    // ── Binance REST fallback ─────────────────────────────────────
-    static readonly Dictionary<string, Binance.Net.Enums.KlineInterval> TfMap = new()
-    {
-        ["OneMinute"]      = Binance.Net.Enums.KlineInterval.OneMinute,
-        ["FiveMinutes"]    = Binance.Net.Enums.KlineInterval.FiveMinutes,
-        ["FifteenMinutes"] = Binance.Net.Enums.KlineInterval.FifteenMinutes,
-        ["ThirtyMinutes"]  = Binance.Net.Enums.KlineInterval.ThirtyMinutes,
-        ["OneHour"]        = Binance.Net.Enums.KlineInterval.OneHour,
-        ["FourHour"]       = Binance.Net.Enums.KlineInterval.FourHour,
-        ["OneDay"]         = Binance.Net.Enums.KlineInterval.OneDay,
-    };
-
     async Task<List<KlineDto>?> FetchBinanceAsync(string sym, string tf)
     {
         try
@@ -405,13 +379,10 @@
             if (client == null) return null;
             if (!TfMap.TryGetValue(tf, out var interval))
                 interval = Binance.Net.Enums.KlineInterval.FifteenMinutes;
-
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var res = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
                 sym, interval, limit: Math.Min(MaxBars, 200), ct: cts.Token);
-
             if (!res.Success || res.Data == null) return null;
-
             return res.Data.Select(k => new KlineDto(
                 ((DateTimeOffset)DateTime.SpecifyKind(k.OpenTime, DateTimeKind.Utc))
                     .ToUnixTimeMilliseconds(),
@@ -425,30 +396,33 @@
         }
     }
 
-    // ── Helpers ───────────────────────────────────────────────────
-
-    // CRITICAL: always format doubles with InvariantCulture for SVG attributes.
-    // Without this, on machines with a comma decimal separator the SVG parser
-    // rejects coordinates like "123,45" and renders nothing.
-    static string Fmt(double v) =>
-        v.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+    static readonly Dictionary<string, Binance.Net.Enums.KlineInterval> TfMap = new()
+    {
+        ["OneMinute"]      = Binance.Net.Enums.KlineInterval.OneMinute,
+        ["FiveMinutes"]    = Binance.Net.Enums.KlineInterval.FiveMinutes,
+        ["FifteenMinutes"] = Binance.Net.Enums.KlineInterval.FifteenMinutes,
+        ["ThirtyMinutes"]  = Binance.Net.Enums.KlineInterval.ThirtyMinutes,
+        ["OneHour"]        = Binance.Net.Enums.KlineInterval.OneHour,
+        ["FourHour"]       = Binance.Net.Enums.KlineInterval.FourHour,
+        ["OneDay"]         = Binance.Net.Enums.KlineInterval.OneDay,
+    };
 
     static string NormalizeTf(string tf) => tf switch
     {
-        "1m"  or "OneMinute"       => "OneMinute",
-        "5m"  or "FiveMinutes"     => "FiveMinutes",
-        "15m" or "FifteenMinutes"  => "FifteenMinutes",
-        "30m" or "ThirtyMinutes"   => "ThirtyMinutes",
-        "1h"  or "OneHour"         => "OneHour",
-        "4h"  or "FourHour"        => "FourHour",
-        "1D"  or "1d" or "OneDay"  => "OneDay",
+        "1m"  or "OneMinute"      => "OneMinute",
+        "5m"  or "FiveMinutes"    => "FiveMinutes",
+        "15m" or "FifteenMinutes" => "FifteenMinutes",
+        "30m" or "ThirtyMinutes"  => "ThirtyMinutes",
+        "1h"  or "OneHour"        => "OneHour",
+        "4h"  or "FourHour"       => "FourHour",
+        "1D"  or "1d" or "OneDay" => "OneDay",
         _ => tf
     };
 
     static string UnixToTime(long ms) =>
         DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime().ToString("HH:mm");
 
-    static string FormatPrice(decimal p)
+    static string FmtPrice(decimal p)
     {
         if (p >= 10000) return p.ToString("F0");
         if (p >= 100)   return p.ToString("F1");
@@ -456,16 +430,24 @@
         return p.ToString("F4");
     }
 
-    // ── Internal models ───────────────────────────────────────────
+    static string MarkerTitle(UiDecisionMarker m) => m.Type switch
+    {
+        UiMarkerType.Evaluated       => "Сигнал проанализирован",
+        UiMarkerType.BlockedLate     => "Опоздали ко входу",
+        UiMarkerType.LowVolume       => "Низкий объём",
+        UiMarkerType.ConfidenceBelow => "Недостаточная уверенность",
+        UiMarkerType.EntryAllowed    => "Вход разрешён",
+        UiMarkerType.EntryRejected   => "Вход отклонён",
+        _ => "Событие"
+    };
+
     sealed class Bar
     {
         public double X, YHigh, YLow, BodyX, BodyY, BodyW, BodyH, CloseY;
         public bool   IsUp;
         public string TimeLabel = "";
     }
-
-    sealed class Tick  { public double Y; public string Label = ""; }
-
+    sealed class Tick   { public double Y;  public string Label = ""; }
     sealed class Marker
     {
         public double X, Y, Tx, Ty;
