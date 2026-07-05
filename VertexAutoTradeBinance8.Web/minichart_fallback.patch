@@ -1,0 +1,101 @@
+--- a/VertexAutoTradeBinance8.Web/Pages/Components/MarketMiniChart.razor
++++ b/VertexAutoTradeBinance8.Web/Pages/Components/MarketMiniChart.razor
+@@ -1,6 +1,8 @@
+ ﻿@using VertexAutoTradeBinance8.Web.Models
+ @inject VertexAutoTradeBinance8.Web.Services.MarketSnapshotFileService SnapSvc
+ @inject VertexAutoTradeBinance8.Web.Services.DecisionMarkersFileService MarkerSvc
++@inject VertexAutoTradeBinance8.Services.BinanceClientFactory Factory
++@using VertexAutoTradeBinance8.Services
+ 
+ <div class="chart-wrap"
+      @onwheel="OnWheel"
+@@ -215,10 +217,24 @@
+             }
+         }
+ 
+-        // === LOG ===
++        // === 5) BINANCE REST FALLBACK if snapshot has no data for this symbol/tf ===
+         if (s == null)
+         {
+-            Console.WriteLine($"[MiniChart] NO SERIES for {sym} tf={uiTf}");
++            Console.WriteLine($"[MiniChart] Snapshot miss for {sym} tf={uiTf} — fetching from Binance REST");
++            var fetched = await FetchFromBinanceAsync(sym, uiTf);
++            if (fetched != null && fetched.Count > 0)
++            {
++                IReadOnlyList<KlineDto> kf = fetched.Count > MaxBars
++                    ? fetched.Skip(fetched.Count - MaxBars).ToList()
++                    : fetched;
++                _klines = kf;
++                BuildBars(kf);
++                BuildPriceLine(kf);
++            }
++            else
++            {
++                Console.WriteLine($"[MiniChart] NO SERIES for {sym} tf={uiTf}");
++            }
+             return;
+         }
+ 
+@@ -247,6 +263,62 @@
+             BuildMarkers(k, markers);
+     } 
+     // =========================================================
++    // BINANCE REST FALLBACK
++    // =========================================================
++    private static readonly Dictionary<string, string> _tfToInterval = new()
++    {
++        ["OneMinute"]     = "1m",
++        ["FiveMinutes"]   = "5m",
++        ["FifteenMinutes"]= "15m",
++        ["ThirtyMinutes"] = "30m",
++        ["OneHour"]       = "1h",
++        ["FourHour"]      = "4h",
++        ["OneDay"]        = "1d",
++    };
++
++    private async Task<List<KlineDto>?> FetchFromBinanceAsync(string symbol, string tf)
++    {
++        try
++        {
++            if (!_tfToInterval.TryGetValue(tf, out var interval)) interval = "15m";
++            var client = Factory.TryCreateRestClient();
++            if (client == null) return null;
++            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
++            var res = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
++                symbol, Binance.Net.Enums.KlineInterval.FifteenMinutes,
++                limit: Math.Min(MaxBars, 200), ct: cts.Token);
++            // Re-parse with correct interval
++            var ki = interval switch
++            {
++                "1m"  => Binance.Net.Enums.KlineInterval.OneMinute,
++                "5m"  => Binance.Net.Enums.KlineInterval.FiveMinutes,
++                "15m" => Binance.Net.Enums.KlineInterval.FifteenMinutes,
++                "30m" => Binance.Net.Enums.KlineInterval.ThirtyMinutes,
++                "1h"  => Binance.Net.Enums.KlineInterval.OneHour,
++                "4h"  => Binance.Net.Enums.KlineInterval.FourHour,
++                "1d"  => Binance.Net.Enums.KlineInterval.OneDay,
++                _     => Binance.Net.Enums.KlineInterval.FifteenMinutes,
++            };
++            res = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
++                symbol, ki, limit: Math.Min(MaxBars, 200), ct: cts.Token);
++            if (!res.Success || res.Data == null) return null;
++            return res.Data.Select(k => new KlineDto(
++                k.OpenTime.ToUnixTimeMilliseconds(),
++                k.OpenPrice,
++                k.HighPrice,
++                k.LowPrice,
++                k.ClosePrice,
++                k.Volume
++            )).ToList();
++        }
++        catch (Exception ex)
++        {
++            Console.WriteLine($"[MiniChart] Binance fetch failed: {ex.Message}");
++            return null;
++        }
++    }
++
++    // =========================================================
+     // CANDLES → SVG GEOMETRY
+     // ========================================================= 
+     private void BuildBars(IReadOnlyList<KlineDto> k)
