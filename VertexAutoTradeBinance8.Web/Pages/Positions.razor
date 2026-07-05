@@ -6,6 +6,7 @@
 @inject VertexAutoTradeBinance8.Web.Services.MarketSnapshotFileService SnapSvc
 @inject IHttpClientFactory HttpClientFactory
 @inject Microsoft.Extensions.Options.IOptionsMonitor<VertexAutoTradeBinance8.Configuration.BinanceOptions> BinanceOpts
+@inject VertexAutoTradeBinance8.Web.Services.BinanceTimeService BinanceTime
 @implements IDisposable
 
 <PageTitle>Positions — Vertex</PageTitle>
@@ -1327,7 +1328,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
             http.Timeout = TimeSpan.FromSeconds(8);
 
             var baseUrl = opt.UseTestnet ? "https://testnet.binancefuture.com" : "https://fapi.binance.com";
-            var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var ts = await BinanceTime.NowMsAsync();
 
             var q = new List<KeyValuePair<string, string>> { new("timestamp", ts.ToString(System.Globalization.CultureInfo.InvariantCulture)) };
             var raw = string.Join("&", q.Select(kv => $"{kv.Key}={kv.Value}"));
@@ -1554,7 +1555,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
             var http = HttpClientFactory.CreateClient("AlgoOrdersRaw");
             http.Timeout = TimeSpan.FromSeconds(8);
             var baseUrl = opt.UseTestnet ? "https://testnet.binancefuture.com" : "https://fapi.binance.com";
-            var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var ts = await BinanceTime.NowMsAsync();
 
             var q = new List<KeyValuePair<string, string>>
             {
@@ -1600,3 +1601,4 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
         _timer?.Dispose();
     }
 }
+
