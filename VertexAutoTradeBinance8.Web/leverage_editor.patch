@@ -1,0 +1,338 @@
+--- a/VertexAutoTradeBinance8.Web/Pages/Positions.razor
++++ b/VertexAutoTradeBinance8.Web/Pages/Positions.razor
+@@ -172,7 +172,9 @@
+                                         <span class="p-side-badge @(isL ? "sb-l" : "sb-s")">
+                                             @(isL ? "▲ LONG" : "▼ SHORT")
+                                         </span>
+-                                        <span class="p-lev">@p.Leverage×</span>
++                                        <button class="p-lev p-lev-btn"
++                                                @onclick:stopPropagation="true"
++                                                @onclick="() => OpenLevEditorPos(p)">@p.Leverage× ✎</button>
+                                         <span class="p-perp">Perpetual</span>
+                                     </div>
+                                 </div>
+@@ -629,6 +631,69 @@
+         </div>
+     }
+ 
++    <!-- Leverage Editor -->
++    @if (_posLevPos != null)
++    {
++        <div class="p-overlay" @onclick="() => { _posLevPos = null; _posLevErr = string.Empty; }">
++            <div class="p-lev-modal" @onclick:stopPropagation="true">
++                <div class="p-lev-mhead">
++                    <div>
++                        <div class="p-lev-msym">@_posLevPos.Symbol</div>
++                        <div class="p-lev-msub">Current @_posLevPos.Leverage× · Change leverage</div>
++                    </div>
++                    <button class="p-modal-x" @onclick="() => { _posLevPos = null; _posLevErr = string.Empty; }">✕</button>
++                </div>
++                <div class="p-lev-mbody">
++                    <div class="p-lev-valrow">
++                        <span class="p-lev-big">@_posLevVal×</span>
++                        <span class="p-lev-maxhint">Max @_posLevMax×</span>
++                    </div>
++                    <input type="range" min="1" max="@_posLevMax" step="1"
++                           value="@_posLevVal" @oninput="OnPosLevInput" class="p-lev-range" />
++                    <div class="p-lev-presets">
++                        @foreach (var pv in new[]{1,2,3,5,10,15,20,25,50})
++                        {
++                            if (pv <= _posLevMax)
++                            {
++                                var lv = pv;
++                                <button class="p-lev-pre @(_posLevVal==lv?"p-lev-pre-on":"")"
++                                        @onclick="() => _posLevVal = lv">@lv×</button>
++                            }
++                        }
++                    </div>
++                    @{
++                        var lpos = _posLevPos;
++                        var om = lpos.Leverage > 0 ? lpos.SizeUsdt / lpos.Leverage : 0m;
++                        var nm = _posLevVal > 0 ? lpos.SizeUsdt / _posLevVal : 0m;
++                        var dm = nm - om;
++                    }
++                    <div class="p-lev-preview">
++                        <div class="p-lev-prev-row">
++                            <span>Est. Margin</span>
++                            <span class="mono @(dm > 0 ? "v-neg" : "v-pos")">
++                                @nm.ToString("F2") USDT
++                                <span class="v-dim">(@(dm >= 0 ? "+" : "")@dm.ToString("F2"))</span>
++                            </span>
++                        </div>
++                        <div style="font-size:10px;color:#eab308;margin-top:2px;">
++                            ⚠ Higher leverage = lower margin but higher liquidation risk
++                        </div>
++                    </div>
++                    @if (!string.IsNullOrEmpty(_posLevErr))
++                    {
++                        <div class="p-lev-err">@_posLevErr</div>
++                    }
++                </div>
++                <div class="p-modal-foot">
++                    <button class="p-modal-cancel" @onclick="() => { _posLevPos = null; _posLevErr = string.Empty; }">Cancel</button>
++                    <button class="p-modal-confirm" @onclick="SaveLevPos" disabled="@_posLevSaving">
++                        @if (_posLevSaving) { <span class="p-spin-ring"></span> } else { <span>Confirm @_posLevVal×</span> }
++                    </button>
++                </div>
++            </div>
++        </div>
++    }
++
+     <!-- Toast -->
+     @if (!string.IsNullOrEmpty(_toast))
+     {
+@@ -807,6 +872,24 @@
+ .p-card-sym-link:hover .p-card-sym{color:var(--acc);}
+ .p-card-sym-link:hover .p-card-usdt{color:var(--acc);}
+ 
++.p-lev-btn{font-size:11px;font-weight:700;padding:2px 7px;border-radius:5px;border:1px solid rgba(255,255,255,.12);background:none;color:var(--txt);cursor:pointer;transition:all .15s;}
++.p-lev-btn:hover{border-color:var(--acc);color:var(--acc);}
++.p-lev-modal{background:#0f1623;border:1px solid #1e2d47;border-radius:14px;width:420px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,.7);}
++.p-lev-mhead{display:flex;justify-content:space-between;align-items:flex-start;padding:18px 20px 14px;border-bottom:1px solid #1e2d47;}
++.p-lev-msym{font-size:16px;font-weight:800;}
++.p-lev-msub{font-size:11px;color:#64748b;margin-top:2px;}
++.p-lev-mbody{padding:18px 20px;display:flex;flex-direction:column;gap:14px;}
++.p-lev-valrow{display:flex;align-items:baseline;justify-content:space-between;}
++.p-lev-big{font-size:36px;font-weight:800;font-family:monospace;color:#3b82f6;}
++.p-lev-maxhint{font-size:11px;color:#64748b;}
++.p-lev-range{width:100%;accent-color:#3b82f6;}
++.p-lev-presets{display:flex;gap:5px;flex-wrap:wrap;}
++.p-lev-pre{background:#080b10;border:1px solid #1a2232;color:#64748b;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;transition:all .12s;}
++.p-lev-pre:hover{border-color:#3b82f6;color:#3b82f6;}
++.p-lev-pre-on{background:rgba(59,130,246,.15)!important;border-color:#3b82f6!important;color:#3b82f6!important;}
++.p-lev-preview{background:#080b10;border:1px solid #1a2232;border-radius:8px;padding:10px 14px;}
++.p-lev-prev-row{display:flex;justify-content:space-between;font-size:12px;}
++.p-lev-err{color:#ef4444;font-size:12px;padding:8px 12px;background:rgba(239,68,68,.08);border-radius:6px;}
+ /* ── TABLE (Orders / History / PnL) ─────────────────────── */
+ .p-table-wrap{overflow-x:auto;padding:8px 0;}
+ .p-table{width:100%;border-collapse:collapse;min-width:700px;}
+@@ -1049,6 +1132,58 @@
+         finally { _actionLoading = false; StateHasChanged(); }
+     }
+ 
++    // ── Leverage editor ─────────────────────────────────────────
++    PosRow? _posLevPos;
++    int _posLevVal, _posLevMax = 125;
++    bool _posLevSaving;
++    string _posLevErr = "";
++
++    async Task OpenLevEditorPos(PosRow p)
++    {
++        _posLevPos = p; _posLevVal = p.Leverage; _posLevErr = ""; _posLevMax = 125;
++        try
++        {
++            var c = Factory.TryCreateRestClient();
++            if (c != null)
++            {
++                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
++                var br = await c.UsdFuturesApi.Account.GetBracketsAsync(p.Symbol, ct: cts.Token);
++                if (br.Success && br.Data != null)
++                {
++                    var s = br.Data.FirstOrDefault(b => b.Symbol == p.Symbol);
++                    if (s?.Brackets?.Length > 0) _posLevMax = s.Brackets.Max(b => b.InitialLeverage);
++                }
++            }
++        }
++        catch { }
++        StateHasChanged();
++    }
++
++    void OnPosLevInput(ChangeEventArgs e)
++        => _posLevVal = int.TryParse(e.Value?.ToString(), out var v) ? Math.Clamp(v, 1, _posLevMax) : _posLevVal;
++
++    async Task SaveLevPos()
++    {
++        if (_posLevPos == null) return;
++        _posLevSaving = true; _posLevErr = ""; StateHasChanged();
++        try
++        {
++            var c = Factory.TryCreateRestClient();
++            if (c == null) { _posLevErr = "No API credentials"; return; }
++            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
++            var r = await c.UsdFuturesApi.Account.ChangeInitialLeverageAsync(_posLevPos.Symbol, _posLevVal, ct: cts.Token);
++            if (r.Success)
++            {
++                var sym = _posLevPos.Symbol; var side = _posLevPos.Side; var lev = _posLevVal;
++                _positions = _positions.Select(p => p.Symbol == sym && p.Side == side ? p with { Leverage = lev } : p).ToList();
++                _posLevPos = null;
++            }
++            else _posLevErr = r.Error?.Message ?? "Failed";
++        }
++        catch (Exception ex) { _posLevErr = ex.Message; }
++        finally { _posLevSaving = false; StateHasChanged(); }
++    }
++
+     int _tab;
+     int _ordSubTab; // 0=Basic 1=Conditional
+     bool _loading, _ordLoading, _histLoading, _actionLoading, _pnlLoading;
+--- a/VertexAutoTradeBinance8.Web/Pages/Components/MarketSnapshot.razor
++++ b/VertexAutoTradeBinance8.Web/Pages/Components/MarketSnapshot.razor
+@@ -867,7 +867,10 @@
+                                             }
+                                         </td>
+                                         <td class="@(pos.Side == "LONG" ? "up" : "dn")">@pos.Side</td>
+-                                        <td class="mk-dim">@pos.Leverage×</td>
++                                        <td @onclick:stopPropagation="true" style="padding:4px 8px;">
++                                            <button class="mk-lev-chip" title="Change leverage"
++                                                    @onclick="() => OpenLevEditor(pos)">@pos.Leverage× ✎</button>
++                                        </td>
+                                         <td class="mk-mono">@FmtP(pos.EntryPrice)</td>
+                                         <td class="mk-mono">@FmtP(pos.MarkPrice)</td>
+                                         <td class="mk-mono mk-liq">@(pos.LiqPrice > 0 ? FmtP(pos.LiqPrice) : "—")</td>
+@@ -2023,10 +2026,95 @@
+ .mk-oo-cancel:hover:not(:disabled){border-color:var(--red);color:var(--red);}
+ .mk-oo-cancel:disabled{opacity:.5;cursor:not-allowed;}
+ 
++.mk-lev-chip{background:none;border:1px solid var(--bdr2);border-radius:5px;color:var(--dim);padding:3px 7px;cursor:pointer;font-size:12px;font-weight:700;transition:all .15s;white-space:nowrap;}
++.mk-lev-chip:hover{border-color:var(--acc);color:var(--acc);}
++.mk-lev-modal{background:var(--bg3);border:1px solid var(--bdr2);border-radius:14px;width:420px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,.7);}
++.mk-lev-mhead{display:flex;justify-content:space-between;align-items:flex-start;padding:18px 20px 14px;border-bottom:1px solid var(--bdr);}
++.mk-lev-msym{font-size:16px;font-weight:800;}
++.mk-lev-msub{font-size:11px;color:var(--dim);margin-top:2px;}
++.mk-lev-mbody{padding:18px 20px;display:flex;flex-direction:column;gap:14px;}
++.mk-lev-valrow{display:flex;align-items:baseline;justify-content:space-between;}
++.mk-lev-big{font-size:36px;font-weight:800;font-family:var(--mono);color:var(--acc);}
++.mk-lev-maxhint{font-size:11px;color:var(--dim);}
++.mk-lev-range{width:100%;accent-color:var(--acc);}
++.mk-lev-presets{display:flex;gap:5px;flex-wrap:wrap;}
++.mk-lev-pre{background:var(--bg2);border:1px solid var(--bdr);color:var(--dim);padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;transition:all .12s;}
++.mk-lev-pre:hover{border-color:var(--acc);color:var(--acc);}
++.mk-lev-pre-on{background:rgba(59,130,246,.15)!important;border-color:var(--acc)!important;color:var(--acc)!important;}
++.mk-lev-preview{background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;padding:10px 14px;}
++.mk-lev-prev-row{display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;}
++.mk-lev-err{color:var(--red);font-size:12px;padding:8px 12px;background:rgba(239,68,68,.08);border-radius:6px;}
++.mk-lev-mfoot{display:flex;gap:8px;padding:14px 20px;border-top:1px solid var(--bdr);}
++.mk-lev-cancel{flex:1;background:transparent;border:1px solid var(--bdr2);color:var(--dim);padding:9px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600;}
++.mk-lev-cancel:hover{border-color:var(--txt);color:var(--txt);}
++.mk-lev-confirm{flex:2;background:var(--acc);border:none;color:#fff;padding:9px;border-radius:7px;cursor:pointer;font-size:13px;font-weight:700;}
++.mk-lev-confirm:disabled{opacity:.5;cursor:not-allowed;}
+ @@media(max-width:1400px){.mk-stats{grid-template-columns:repeat(6,1fr);}}
+ @@media(max-width:900px){.mk-stats{grid-template-columns:repeat(3,1fr);}.mk-header{flex-direction:column;gap:12px;}}
+ </style>
+ 
++@if (_levPos != null)
++{
++    <div class="mk-overlay" @onclick="() => { _levPos = null; _levErr = string.Empty; }">
++        <div class="mk-lev-modal" @onclick:stopPropagation="true">
++            <div class="mk-lev-mhead">
++                <div>
++                    <div class="mk-lev-msym">@_levPos.Symbol</div>
++                    <div class="mk-lev-msub">Current @_levPos.Leverage× · Change leverage</div>
++                </div>
++                <button class="mk-close-x" @onclick="() => { _levPos = null; _levErr = string.Empty; }">✕</button>
++            </div>
++            <div class="mk-lev-mbody">
++                <div class="mk-lev-valrow">
++                    <span class="mk-lev-big">@_levVal×</span>
++                    <span class="mk-lev-maxhint">Max @_levMax×</span>
++                </div>
++                <input type="range" min="1" max="@_levMax" step="1"
++                       value="@_levVal" @oninput="OnLevInput" class="mk-lev-range" />
++                <div class="mk-lev-presets">
++                    @foreach (var pv in new[]{1,2,3,5,10,15,20,25,50})
++                    {
++                        if (pv <= _levMax)
++                        {
++                            var lv = pv;
++                            <button class="mk-lev-pre @(_levVal==lv?"mk-lev-pre-on":"")"
++                                    @onclick="() => _levVal = lv">@lv×</button>
++                        }
++                    }
++                </div>
++                @{
++                    var lp = _levPos;
++                    var om = lp.Leverage > 0 ? lp.Size / lp.Leverage : 0m;
++                    var nm = _levVal > 0 ? lp.Size / _levVal : 0m;
++                    var dm = nm - om;
++                }
++                <div class="mk-lev-preview">
++                    <div class="mk-lev-prev-row">
++                        <span>Est. Margin</span>
++                        <span class="mk-mono @(dm > 0 ? "dn" : "up")">
++                            @nm.ToString("F2") USDT
++                            <span class="mk-dim">(@(dm >= 0 ? "+" : "")@dm.ToString("F2"))</span>
++                        </span>
++                    </div>
++                    <div style="font-size:10px;color:#fbbf24;margin-top:4px;">
++                        ⚠ Higher leverage = lower margin but higher liquidation risk
++                    </div>
++                </div>
++                @if (!string.IsNullOrEmpty(_levErr))
++                {
++                    <div class="mk-lev-err">@_levErr</div>
++                }
++            </div>
++            <div class="mk-lev-mfoot">
++                <button class="mk-lev-cancel" @onclick="() => { _levPos = null; _levErr = string.Empty; }">Cancel</button>
++                <button class="mk-lev-confirm" @onclick="SaveLev" disabled="@_levSaving">
++                    @if (_levSaving) { <span class="mk-spin-sm"></span> } else { <span>Confirm @_levVal×</span> }
++                </button>
++            </div>
++        </div>
++    </div>
++}
++
+ @code {
+     List<MarketSeries> Series = new();
+     MarketSeries? Selected;
+@@ -4112,6 +4200,60 @@
+     // "matches Binance, not automatic" design choice.
+     bool _tpSlEditMode = true;
+ 
++    // ── Leverage editor ──────────────────────────────────────────────
++    ActivePositionInfo? _levPos;
++    int _levVal, _levMax = 125;
++    bool _levSaving;
++    string _levErr = "";
++
++    async Task OpenLevEditor(ActivePositionInfo pos)
++    {
++        _levPos = pos; _levVal = pos.Leverage; _levErr = ""; _levMax = 125;
++        try
++        {
++            var c = Factory.TryCreateRestClient();
++            if (c != null)
++            {
++                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
++                var br = await c.UsdFuturesApi.Account.GetBracketsAsync(pos.Symbol, ct: cts.Token);
++                if (br.Success && br.Data != null)
++                {
++                    var s = br.Data.FirstOrDefault(b => b.Symbol == pos.Symbol);
++                    if (s?.Brackets?.Length > 0) _levMax = s.Brackets.Max(b => b.InitialLeverage);
++                }
++            }
++        }
++        catch { }
++        StateHasChanged();
++    }
++
++    void OnLevInput(ChangeEventArgs e)
++        => _levVal = int.TryParse(e.Value?.ToString(), out var v) ? Math.Clamp(v, 1, _levMax) : _levVal;
++
++    async Task SaveLev()
++    {
++        if (_levPos == null) return;
++        _levSaving = true; _levErr = ""; StateHasChanged();
++        try
++        {
++            var c = Factory.TryCreateRestClient();
++            if (c == null) { _levErr = "No API credentials"; return; }
++            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
++            var r = await c.UsdFuturesApi.Account.ChangeInitialLeverageAsync(_levPos.Symbol, _levVal, ct: cts.Token);
++            if (r.Success)
++            {
++                var sym = _levPos.Symbol; var side = _levPos.Side; var lev = _levVal;
++                _allPositions = _allPositions
++                    .Select(p => p.Symbol == sym && p.Side == side ? p with { Leverage = lev } : p)
++                    .ToList();
++                _levPos = null;
++            }
++            else _levErr = r.Error?.Message ?? "Failed";
++        }
++        catch (Exception ex) { _levErr = ex.Message; }
++        finally { _levSaving = false; StateHasChanged(); }
++    }
++
+     async Task ToggleTpSlEdit()
+     {
+         _tpSlEditMode = !_tpSlEditMode;
