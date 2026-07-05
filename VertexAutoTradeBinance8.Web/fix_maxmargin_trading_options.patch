@@ -1,0 +1,13 @@
+--- /tmp/TradingOptions_orig.cs	2026-07-05 12:07:33.085300051 +0000
++++ /tmp/TradingOptions_new.cs	2026-07-05 12:07:41.827917897 +0000
+@@ -32,4 +32,10 @@
+     /// </summary>
+     public int StartupSubscriptionCap { get; set; } = 8;
+     public bool EnableExecution { get; set; } = true;
++
++    /// <summary>
++    /// Maximum margin as a fraction of balance that a single position may consume.
++    /// Default 0.12 = 12%. Previously hardcoded as const decimal in RiskManager.
++    /// </summary>
++    public decimal MaxMarginPercent { get; set; } = 0.12m;
+ } 

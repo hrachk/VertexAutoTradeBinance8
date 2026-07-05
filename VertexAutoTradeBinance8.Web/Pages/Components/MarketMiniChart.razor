@@ -301,7 +301,7 @@
                 "1d"  => Binance.Net.Enums.KlineInterval.OneDay,
                 _     => Binance.Net.Enums.KlineInterval.FifteenMinutes,
             };
-            res = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
+            var res = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
                 symbol, ki, limit: Math.Min(MaxBars, 200), ct: cts.Token);
             if (!res.Success || res.Data == null) return null;
             return res.Data.Select(k => new KlineDto(

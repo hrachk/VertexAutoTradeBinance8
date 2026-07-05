@@ -1,0 +1,72 @@
+--- /tmp/BinanceAlgoOrderService_orig.cs	2026-07-05 12:07:32.849300042 +0000
++++ /tmp/BinanceAlgoOrderService_new.cs	2026-07-05 12:08:17.330534919 +0000
+@@ -48,6 +48,19 @@
+         private readonly string _apiSecret;
+         private readonly string _baseUrl;
+ 
++        // ── GetOpenAlgoOrders 20-second cache (prevents Binance 429) ──────
++        // Binance rate-limits this endpoint aggressively; calling it on
++        // every PositionSupervisor tick (every ~5s per symbol) was the
++        // direct cause of the 429 bursts seen in production. A 20s TTL
++        // is short enough to catch newly-placed conditional orders within
++        // a reasonable window, but long enough to stay well inside the
++        // per-minute request budget even with 20 tracked symbols.
++        private readonly SemaphoreSlim _algoOrdersCacheLock = new(1, 1);
++        private List<BinanceAlgoOrderInfo>? _algoOrdersCache;
++        private string? _algoOrdersCacheSymbol;
++        private DateTime _algoOrdersCacheExpiry = DateTime.MinValue;
++        private static readonly TimeSpan AlgoOrdersCacheTtl = TimeSpan.FromSeconds(20);
++
+         public BinanceAlgoOrderService(IConfiguration cfg, IHttpClientFactory httpFactory, ILogger<BinanceAlgoOrderService> logger)
+         {
+             _logger = logger;
+@@ -140,6 +153,30 @@
+                 return result;
+             }
+ 
++            // Fast path: return cached result if still fresh and for the same symbol.
++            // Double-check locking: first check without the lock (cheap), then
++            // re-check inside the lock before actually hitting the network.
++            var now = DateTime.UtcNow;
++            if (_algoOrdersCache != null &&
++                _algoOrdersCacheSymbol == symbol &&
++                now < _algoOrdersCacheExpiry)
++            {
++                return _algoOrdersCache;
++            }
++
++            await _algoOrdersCacheLock.WaitAsync(ct);
++            try
++            {
++                // Re-check inside the lock — another caller may have populated
++                // the cache while we were waiting for the semaphore.
++                now = DateTime.UtcNow;
++                if (_algoOrdersCache != null &&
++                    _algoOrdersCacheSymbol == symbol &&
++                    now < _algoOrdersCacheExpiry)
++                {
++                    return _algoOrdersCache;
++                }
++
+             var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+             var q = new List<KeyValuePair<string, string>>
+             {
+@@ -198,7 +235,18 @@
+             {
+                 _logger.LogError(ex, "[ALGO-RAW] EX GetOpenAlgoOrdersAsync {symbol}", symbol);
+             }
++
++            // Store in cache before returning — even an empty list is cached
++            // to avoid hammering the endpoint when there genuinely are no orders.
++            _algoOrdersCache = result;
++            _algoOrdersCacheSymbol = symbol;
++            _algoOrdersCacheExpiry = DateTime.UtcNow.Add(AlgoOrdersCacheTtl);
+             return result;
++            } // end double-check lock try
++            finally
++            {
++                _algoOrdersCacheLock.Release();
++            }
+         }
+ 
+         public async Task<bool> CancelAlgoOrderAsync(long algoId, CancellationToken ct)
