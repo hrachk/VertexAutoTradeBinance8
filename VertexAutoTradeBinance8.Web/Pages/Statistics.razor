@@ -4,6 +4,7 @@
 @using VertexAutoTradeBinance8.Web.Demo
 @using VertexAutoTradeBinance8.Services
 @using VertexAutoTradeBinance8.Configuration
+@using Microsoft.Extensions.Options
 @inject MissedTradeFileService MissedSvc
 @inject DemoAccountService DemoAccount
 @inject BinanceClientFactory Factory
@@ -16,7 +17,7 @@
 
 <div class="st-root">
 
-<!-- ═══════════════════ HEADER ═══════════════════ -->
+<!-- HEADER -->
 <div class="st-header">
     <div class="st-header-left">
         <h1 class="st-title">@(_activeTab == "dca" ? "DCA Report" : "Performance")</h1>
@@ -25,25 +26,16 @@
         </div>
     </div>
     <div class="st-header-right">
-        <!-- Tab switcher -->
-        <button class="st-tab-btn @(_activeTab == "trading" ? "st-tab-btn-on" : "")" @onclick='() => SetTab("trading")'>
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="14" height="14"><path d="M2 12l3-4 3 3 3-6 3 3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Trading
-        </button>
-        <button class="st-tab-btn @(_activeTab == "dca" ? "st-tab-btn-on" : "")" @onclick='() => SetTab("dca")'>
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="14" height="14"><circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2" stroke-linecap="round"/></svg>
-            DCA Report
-        </button>
+        <button class="st-tab-btn @(_activeTab == "trading" ? "st-tab-btn-on" : "")" @onclick='() => SetTab("trading")'>Trading</button>
+        <button class="st-tab-btn @(_activeTab == "dca" ? "st-tab-btn-on" : "")" @onclick='() => SetTab("dca")'>DCA Report</button>
         <div class="st-sep"></div>
-        <!-- Mode toggle -->
         <button class="st-mode-btn @(!_demoMode ? "st-mode-btn-on" : "")" @onclick="() => SetMode(false)">Live</button>
         <button class="st-mode-btn @(_demoMode ? "st-mode-btn-on" : "")" @onclick="() => SetMode(true)">Demo</button>
         <div class="st-sep"></div>
-        <!-- Range selector -->
-        @foreach (var r in new[] { ("7D","7D"), ("30D","30D"), ("90D","90D"), ("ALL","All") })
+        @foreach (var r in _ranges)
         {
-            <button class="st-range-btn @(_range == r.Item1 ? "st-range-btn-on" : "")"
-                    @onclick="() => SetRange(r.Item1)">@r.Item2</button>
+            <button class="st-range-btn @(_range == r.Key ? "st-range-btn-on" : "")"
+                    @onclick="() => SetRange(r.Key)">@r.Value</button>
         }
         <div class="st-sep"></div>
         <input class="st-date-input" type="date" @bind="_dateFrom" @bind:after="LoadData" title="From" />
@@ -58,82 +50,57 @@
 }
 else if (_activeTab == "trading")
 {
-    <!-- ═══════════════════ KPI ROW ═══════════════════ -->
+    <!-- KPI ROW -->
     <div class="st-kpi-row">
-        <div class="st-kpi">
-            <div class="st-kpi-label">Net PnL</div>
-            <div class="st-kpi-value @(_stats.NetPnl >= 0 ? "st-up" : "st-dn")">
-                @(_stats.NetPnl >= 0 ? "+" : "")@_stats.NetPnl.ToString("F2") <span class="st-kpi-unit">USDT</span>
-            </div>
-        </div>
-        <div class="st-kpi">
-            <div class="st-kpi-label">Win Rate</div>
-            <div class="st-kpi-value @(_stats.WinRate >= 50 ? "st-up" : "st-dn")">
-                @_stats.WinRate.ToString("F1")<span class="st-kpi-unit">%</span>
-            </div>
-        </div>
-        <div class="st-kpi">
-            <div class="st-kpi-label">Total Trades</div>
-            <div class="st-kpi-value">@_stats.TotalTrades</div>
-        </div>
-        <div class="st-kpi">
-            <div class="st-kpi-label">Avg Win</div>
-            <div class="st-kpi-value st-up">+@_stats.AvgWin.ToString("F2")</div>
-        </div>
-        <div class="st-kpi">
-            <div class="st-kpi-label">Avg Loss</div>
-            <div class="st-kpi-value st-dn">@_stats.AvgLoss.ToString("F2")</div>
-        </div>
-        <div class="st-kpi">
-            <div class="st-kpi-label">Profit Factor</div>
-            <div class="st-kpi-value @(_stats.ProfitFactor >= 1 ? "st-up" : "st-dn")">
-                @_stats.ProfitFactor.ToString("F2")
-            </div>
-        </div>
-        <div class="st-kpi">
-            <div class="st-kpi-label">Max Drawdown</div>
-            <div class="st-kpi-value st-dn">@_stats.MaxDrawdown.ToString("F2")</div>
-        </div>
-        <div class="st-kpi">
-            <div class="st-kpi-label">Best Trade</div>
-            <div class="st-kpi-value st-up">+@_stats.BestTrade.ToString("F2")</div>
-        </div>
-        <div class="st-kpi">
-            <div class="st-kpi-label">Worst Trade</div>
-            <div class="st-kpi-value st-dn">@_stats.WorstTrade.ToString("F2")</div>
-        </div>
-        <div class="st-kpi">
-            <div class="st-kpi-label">Avg Duration</div>
-            <div class="st-kpi-value">@_stats.AvgDuration</div>
-        </div>
+        <div class="st-kpi"><div class="st-kpi-label">Net PnL</div>
+            <div class="st-kpi-value @(_stats.NetPnl >= 0 ? "st-up" : "st-dn")">@(_stats.NetPnl >= 0 ? "+" : "")@_stats.NetPnl.ToString("F2") <span class="st-kpi-unit">USDT</span></div></div>
+        <div class="st-kpi"><div class="st-kpi-label">Win Rate</div>
+            <div class="st-kpi-value @(_stats.WinRate >= 50 ? "st-up" : "st-dn")">@_stats.WinRate.ToString("F1")<span class="st-kpi-unit">%</span></div></div>
+        <div class="st-kpi"><div class="st-kpi-label">Total Trades</div>
+            <div class="st-kpi-value">@_stats.TotalTrades</div></div>
+        <div class="st-kpi"><div class="st-kpi-label">Avg Win</div>
+            <div class="st-kpi-value st-up">+@_stats.AvgWin.ToString("F2")</div></div>
+        <div class="st-kpi"><div class="st-kpi-label">Avg Loss</div>
+            <div class="st-kpi-value st-dn">@_stats.AvgLoss.ToString("F2")</div></div>
+        <div class="st-kpi"><div class="st-kpi-label">Profit Factor</div>
+            <div class="st-kpi-value @(_stats.ProfitFactor >= 1 ? "st-up" : "st-dn")">@_stats.ProfitFactor.ToString("F2")</div></div>
+        <div class="st-kpi"><div class="st-kpi-label">Max Drawdown</div>
+            <div class="st-kpi-value st-dn">@_stats.MaxDrawdown.ToString("F2")</div></div>
+        <div class="st-kpi"><div class="st-kpi-label">Best Trade</div>
+            <div class="st-kpi-value st-up">+@_stats.BestTrade.ToString("F2")</div></div>
+        <div class="st-kpi"><div class="st-kpi-label">Worst Trade</div>
+            <div class="st-kpi-value st-dn">@_stats.WorstTrade.ToString("F2")</div></div>
+        <div class="st-kpi"><div class="st-kpi-label">Avg Duration</div>
+            <div class="st-kpi-value">@_stats.AvgDuration</div></div>
     </div>
 
-    <!-- ═══════════════════ MAIN BODY ═══════════════════ -->
     <div class="st-body">
-        <!-- LEFT -->
         <div class="st-left">
+            <!-- Cumulative PnL chart -->
             <div class="st-card">
                 <div class="st-card-title">Cumulative PnL</div>
-                <div class="st-chart-wrap" id="st-pnl-chart">
-                    @if (_dailyPnl.Count > 0)
+                <div class="st-chart-wrap">
+                    @if (_cumulativePnl.Count > 0)
                     {
+                        var isPos = _stats.NetPnl >= 0;
+                        var lineColor = isPos ? "#22c55e" : "#ef4444";
+                        var fillColor = isPos ? "rgba(34,197,94,.12)" : "rgba(239,68,68,.12)";
+                        var pts = BuildCurvePts(_cumulativePnl, _svgW, _svgH);
+                        var zeroY = PnlToY(0, _cumulativePnl, _svgH);
                         <svg class="st-svg" viewBox="0 0 @_svgW @_svgH" preserveAspectRatio="none">
-                            @{
-                                var pts = BuildCurvePts(_cumulativePnl, _svgW, _svgH);
-                                var isPos = _stats.NetPnl >= 0;
-                                var lineColor = isPos ? "#22c55e" : "#ef4444";
-                                var fillColor = isPos ? "rgba(34,197,94,.12)" : "rgba(239,68,68,.12)";
-                            }
                             <path d="@BuildFillPath(pts, _svgW, _svgH)" fill="@fillColor" />
-                            @{ var zeroY = PnlToY(0, _cumulativePnl, _svgH); }
-                            <line x1="0" y1="@zeroY" x2="@_svgW" y2="@zeroY"
-                                  stroke="#334155" stroke-width="1" stroke-dasharray="4 4"/>
+                            <line x1="0" y1="@zeroY" x2="@_svgW" y2="@zeroY" stroke="#334155" stroke-width="1" stroke-dasharray="4 4"/>
                             <polyline points="@pts" fill="none" stroke="@lineColor" stroke-width="2" stroke-linejoin="round"/>
                         </svg>
                     }
-                    else { <div class="st-empty">No trade history in selected range</div> }
+                    else
+                    {
+                        <div class="st-empty">No trade history in selected range</div>
+                    }
                 </div>
             </div>
+
+            <!-- Calendar heatmap -->
             <div class="st-card">
                 <div class="st-card-title">Daily PnL Calendar</div>
                 <div class="st-calendar">
@@ -153,7 +120,7 @@ else if (_activeTab == "trading")
                             var alpha = 0.15m + intensity * 0.75m;
                             var bg = pnl > 0 ? $"rgba(34,197,94,{alpha:F2})" : pnl < 0 ? $"rgba(239,68,68,{alpha:F2})" : "rgba(255,255,255,.04)";
                             var tooltip = day.ToString("MMM d") + ": " + (pnl >= 0 ? "+" : "") + pnl.ToString("F2") + " USDT";
-                            var pnlShort = pnl == 0 ? "" : ((pnl >= 0 ? "+" : "") + (Math.Abs(pnl) >= 10 ? ((int)Math.Abs(pnl)).ToString() : Math.Abs(pnl).ToString("F1")));
+                            var pnlShort = pnl == 0 ? "" : (pnl >= 0 ? "+" : "") + (Math.Abs(pnl) >= 10 ? ((int)Math.Abs(pnl)).ToString() : Math.Abs(pnl).ToString("F1"));
                             <div class="st-cal-day" style="background:@bg" title="@tooltip">
                                 <span class="st-cal-num">@day.Day</span>
                                 @if (pnl != 0) { <span class="st-cal-pnl">@pnlShort</span> }
@@ -162,31 +129,30 @@ else if (_activeTab == "trading")
                     </div>
                 </div>
             </div>
+
+            <!-- Long vs Short -->
             <div class="st-card">
                 <div class="st-card-title">Long vs Short</div>
                 <div class="st-split-row">
                     <div class="st-split-side">
                         <div class="st-split-label">LONG</div>
-                        <div class="st-split-val @(_stats.LongPnl >= 0 ? "st-up" : "st-dn")">
-                            @(_stats.LongPnl >= 0 ? "+" : "")@_stats.LongPnl.ToString("F2")
-                        </div>
+                        <div class="st-split-val @(_stats.LongPnl >= 0 ? "st-up" : "st-dn")">@(_stats.LongPnl >= 0 ? "+" : "")@_stats.LongPnl.ToString("F2")</div>
                         <div class="st-split-sub">@_stats.LongWins W / @_stats.LongLosses L</div>
                         <div class="st-split-wr">Win rate: @(_stats.LongTrades > 0 ? (100m * _stats.LongWins / _stats.LongTrades).ToString("F1") : "—")%</div>
                     </div>
                     <div class="st-split-divider"></div>
                     <div class="st-split-side">
                         <div class="st-split-label">SHORT</div>
-                        <div class="st-split-val @(_stats.ShortPnl >= 0 ? "st-up" : "st-dn")">
-                            @(_stats.ShortPnl >= 0 ? "+" : "")@_stats.ShortPnl.ToString("F2")
-                        </div>
+                        <div class="st-split-val @(_stats.ShortPnl >= 0 ? "st-up" : "st-dn")">@(_stats.ShortPnl >= 0 ? "+" : "")@_stats.ShortPnl.ToString("F2")</div>
                         <div class="st-split-sub">@_stats.ShortWins W / @_stats.ShortLosses L</div>
                         <div class="st-split-wr">Win rate: @(_stats.ShortTrades > 0 ? (100m * _stats.ShortWins / _stats.ShortTrades).ToString("F1") : "—")%</div>
                     </div>
                 </div>
             </div>
         </div>
-        <!-- RIGHT -->
+
         <div class="st-right">
+            <!-- By Symbol -->
             <div class="st-card">
                 <div class="st-card-title">By Symbol</div>
                 <div class="st-sym-list">
@@ -203,6 +169,8 @@ else if (_activeTab == "trading")
                     @if (_bySymbol.Count == 0) { <div class="st-empty">No data</div> }
                 </div>
             </div>
+
+            <!-- Close Reasons -->
             <div class="st-card">
                 <div class="st-card-title">Close Reasons</div>
                 <div class="st-reason-grid">
@@ -216,8 +184,10 @@ else if (_activeTab == "trading")
                     }
                 </div>
             </div>
+
+            <!-- Trade log -->
             <div class="st-card st-card-trades">
-                <div class="st-card-title">Trade Log <span class="st-card-sub">(@_trades.Count trades in range)</span></div>
+                <div class="st-card-title">Trade Log <span class="st-card-sub">(@_trades.Count in range)</span></div>
                 <div class="st-trade-scroll">
                     <table class="st-trade-tbl">
                         <thead><tr>
@@ -241,7 +211,7 @@ else if (_activeTab == "trading")
                                     <td class="st-reason-pill @ReasonClass(t.CloseReason)">@t.CloseReason</td>
                                 </tr>
                             }
-                            @if (!_trades.Any()) { <tr><td colspan="8" class="st-empty">No closed trades in selected range</td></tr> }
+                            @if (!_trades.Any()) { <tr><td colspan="8" class="st-empty">No closed trades</td></tr> }
                         </tbody>
                     </table>
                 </div>
@@ -251,113 +221,97 @@ else if (_activeTab == "trading")
 }
 else if (_activeTab == "dca")
 {
-    <!-- ═══════════════════ DCA REPORT ═══════════════════ -->
-
-    <!-- DCA Config Banner -->
-    @{
-        var dcaOpts = DcaOpts.CurrentValue;
-        var freq = dcaOpts.Schedule.Frequency;
-        var budget = dcaOpts.Schedule.BudgetPerCycle;
-        var symCount = dcaOpts.Symbols.Count;
-    }
+    <!-- DCA Config Banner — read from _dcaConfig loaded in C# -->
     <div class="dca-config-banner">
         <div class="dca-config-item">
             <span class="dca-config-lbl">Schedule</span>
-            <span class="dca-config-val dca-freq-badge dca-freq-@freq.ToLower()">@freq.ToUpper()</span>
+            <span class="dca-freq-badge dca-freq-@_dcaConfig.Frequency.ToLower()">@_dcaConfig.Frequency.ToUpper()</span>
         </div>
         <div class="dca-config-item">
             <span class="dca-config-lbl">Budget / cycle</span>
-            <span class="dca-config-val"><strong>@budget.ToString("F0")</strong> USDT</span>
+            <span class="dca-config-val"><strong>@_dcaConfig.Budget.ToString("F0")</strong> USDT</span>
         </div>
         <div class="dca-config-item">
             <span class="dca-config-lbl">Symbols</span>
             <span class="dca-config-val">
-                @foreach (var s in dcaOpts.Symbols)
+                @foreach (var s in _dcaConfig.Symbols)
                 {
-                    <span class="dca-sym-chip">@s.Symbol</span>
+                    <span class="dca-sym-chip">@s</span>
                 }
-                @if (!dcaOpts.Symbols.Any()) { <span class="st-dim">None configured</span> }
+                @if (!_dcaConfig.Symbols.Any()) { <span class="st-dim">None configured</span> }
             </span>
         </div>
         <div class="dca-config-item">
-            <span class="dca-config-lbl">DCA Enabled</span>
-            <span class="dca-config-val @(dcaOpts.Enabled ? "st-up" : "st-dn")">@(dcaOpts.Enabled ? "ON" : "OFF")</span>
+            <span class="dca-config-lbl">DCA</span>
+            <span class="@(_dcaConfig.Enabled ? "st-up" : "st-dn") dca-config-val">@(_dcaConfig.Enabled ? "ENABLED" : "DISABLED")</span>
         </div>
         <div class="dca-config-item">
             <span class="dca-config-lbl">Dip Bonus</span>
-            <span class="dca-config-val @(dcaOpts.DipBonus.Enabled ? "st-up" : "st-dim")">
-                @(dcaOpts.DipBonus.Enabled ? $"×{dcaOpts.DipBonus.Multiplier:F1} on -{dcaOpts.DipBonus.DropThresholdPct:F0}% dip" : "Off")
+            <span class="dca-config-val @(_dcaConfig.DipBonusEnabled ? "st-up" : "st-dim")">
+                @(_dcaConfig.DipBonusEnabled ? $"x{_dcaConfig.DipBonusMultiplier:F1} on -{_dcaConfig.DipDropPct:F0}% dip" : "Off")
             </span>
         </div>
     </div>
 
-    <!-- DCA KPI row -->
+    <!-- DCA KPIs -->
     <div class="st-kpi-row">
-        <div class="st-kpi">
-            <div class="st-kpi-label">Total Invested</div>
-            <div class="st-kpi-value">@_dcaStats.TotalInvested.ToString("F2") <span class="st-kpi-unit">USDT</span></div>
-        </div>
-        <div class="st-kpi">
-            <div class="st-kpi-label">Purchases</div>
-            <div class="st-kpi-value">@_dcaStats.TotalPurchases</div>
-        </div>
-        <div class="st-kpi">
-            <div class="st-kpi-label">Avg Price (BTC)</div>
-            <div class="st-kpi-value st-mono">@(_dcaStats.AvgPriceBySymbol.TryGetValue("BTCUSDT", out var bp) ? bp.ToString("F0") : "—")</div>
-        </div>
-        <div class="st-kpi">
-            <div class="st-kpi-label">Avg Price (ETH)</div>
-            <div class="st-kpi-value st-mono">@(_dcaStats.AvgPriceBySymbol.TryGetValue("ETHUSDT", out var ep) ? ep.ToString("F2") : "—")</div>
-        </div>
-        <div class="st-kpi">
-            <div class="st-kpi-label">Dip Buys</div>
-            <div class="st-kpi-value st-up">@_dcaStats.DipBonusCount</div>
-        </div>
-        <div class="st-kpi">
-            <div class="st-kpi-label">Avg / Cycle</div>
-            <div class="st-kpi-value">@_dcaStats.AvgPerCycle.ToString("F2") <span class="st-kpi-unit">USDT</span></div>
-        </div>
-        <div class="st-kpi">
-            <div class="st-kpi-label">Period</div>
-            <div class="st-kpi-value st-dim" style="font-size:13px">@_dcaStats.FirstDate.ToString("MMM d") — @_dcaStats.LastDate.ToString("MMM d yy")</div>
-        </div>
+        <div class="st-kpi"><div class="st-kpi-label">Total Invested</div>
+            <div class="st-kpi-value">@_dcaStats.TotalInvested.ToString("F2") <span class="st-kpi-unit">USDT</span></div></div>
+        <div class="st-kpi"><div class="st-kpi-label">Purchases</div>
+            <div class="st-kpi-value">@_dcaStats.TotalPurchases</div></div>
+        <div class="st-kpi"><div class="st-kpi-label">Avg / Cycle</div>
+            <div class="st-kpi-value">@_dcaStats.AvgPerCycle.ToString("F2") <span class="st-kpi-unit">USDT</span></div></div>
+        <div class="st-kpi"><div class="st-kpi-label">Dip Buys</div>
+            <div class="st-kpi-value @(_dcaStats.DipBonusCount > 0 ? "st-up" : "")">@_dcaStats.DipBonusCount</div></div>
+        @foreach (var kv in _dcaStats.AvgPriceBySymbol)
+        {
+            <div class="st-kpi">
+                <div class="st-kpi-label">Avg @kv.Key.Replace("USDT","")</div>
+                <div class="st-kpi-value st-mono" style="font-size:14px">@kv.Value.ToString("F2")</div>
+            </div>
+        }
+        <div class="st-kpi"><div class="st-kpi-label">Period</div>
+            <div class="st-kpi-value st-dim" style="font-size:12px">@_dcaStats.FirstDate.ToString("MMM d") — @_dcaStats.LastDate.ToString("MMM d yy")</div></div>
     </div>
 
     <div class="dca-body">
-
-        <!-- LEFT col: spend chart + symbol breakdown -->
         <div class="st-left">
-
-            <!-- Cumulative spend curve per symbol -->
+            <!-- Cumulative invest chart -->
             <div class="st-card">
-                <div class="st-card-title">Cumulative Invested by Symbol</div>
-                <div class="dca-legend">
-                    @foreach (var (sym, clr) in _dcaSymbolColors)
-                    {
-                        <span class="dca-legend-dot" style="background:@clr"></span>
-                        <span class="dca-legend-lbl">@sym.Replace("USDT","")</span>
-                    }
+                <div class="st-card-title">
+                    Cumulative Invested by Symbol
+                    <div class="dca-legend">
+                        @foreach (var sym in _dcaChartSeries.Keys)
+                        {
+                            var clr = SymbolColor(sym);
+                            <span class="dca-legend-dot" style="background:@clr"></span>
+                            <span class="dca-legend-lbl">@sym.Replace("USDT","")</span>
+                        }
+                    </div>
                 </div>
                 <div class="st-chart-wrap">
                     @if (_dcaChartSeries.Any())
                     {
                         <svg class="st-svg" viewBox="0 0 @_svgW @_svgH" preserveAspectRatio="none">
-                            @foreach (var (sym, series) in _dcaChartSeries)
+                            @foreach (var kvSeries in _dcaChartSeries)
                             {
-                                var clr = _dcaSymbolColors.TryGetValue(sym, out var c) ? c : "#60a5fa";
-                                var spts = BuildCurvePts(series, _svgW, _svgH);
-                                if (!string.IsNullOrEmpty(spts))
+                                var clr = SymbolColor(kvSeries.Key);
+                                var spts = BuildCurvePts(kvSeries.Value, _svgW, _svgH);
+                                @if (!string.IsNullOrEmpty(spts))
                                 {
                                     <polyline points="@spts" fill="none" stroke="@clr" stroke-width="2" stroke-linejoin="round" opacity="0.9"/>
                                 }
                             }
                         </svg>
                     }
-                    else { <div class="st-empty">No DCA purchases in selected range</div> }
+                    else
+                    {
+                        <div class="st-empty">No DCA purchases in selected range</div>
+                    }
                 </div>
             </div>
 
-            <!-- Grouped report: Daily / Weekly / Monthly -->
+            <!-- Periodic Report -->
             <div class="st-card">
                 <div class="st-card-title">
                     Periodic Report
@@ -370,12 +324,7 @@ else if (_activeTab == "dca")
                 <div class="dca-period-table-wrap">
                     <table class="st-trade-tbl">
                         <thead><tr>
-                            <th>Period</th>
-                            <th>Purchases</th>
-                            <th>Invested</th>
-                            <th>Avg Price</th>
-                            <th>Dip Buys</th>
-                            <th>Symbols</th>
+                            <th>Period</th><th>Buys</th><th>Invested</th><th>Avg Price</th><th>Dip</th><th>Symbols</th>
                         </tr></thead>
                         <tbody>
                             @foreach (var row in _dcaPeriodRows)
@@ -386,12 +335,7 @@ else if (_activeTab == "dca")
                                     <td class="st-mono dca-invested">@row.Invested.ToString("F2") <span class="st-dim">USDT</span></td>
                                     <td class="st-mono st-dim">@(row.AvgPrice > 0 ? row.AvgPrice.ToString("F2") : "—")</td>
                                     <td class="@(row.DipCount > 0 ? "st-up" : "st-dim")">@(row.DipCount > 0 ? row.DipCount.ToString() : "—")</td>
-                                    <td>
-                                        @foreach (var s in row.Symbols)
-                                        {
-                                            <span class="dca-sym-chip dca-sym-chip-sm">@s.Replace("USDT","")</span>
-                                        }
-                                    </td>
+                                    <td>@foreach (var s in row.Symbols) { <span class="dca-sym-chip dca-sym-chip-sm">@s.Replace("USDT","")</span> }</td>
                                 </tr>
                             }
                             @if (!_dcaPeriodRows.Any()) { <tr><td colspan="6" class="st-empty">No data in selected range</td></tr> }
@@ -401,51 +345,39 @@ else if (_activeTab == "dca")
             </div>
         </div>
 
-        <!-- RIGHT col: symbol breakdown + full purchase log -->
         <div class="st-right">
-
-            <!-- By Symbol summary -->
+            <!-- By Symbol -->
             <div class="st-card">
                 <div class="st-card-title">By Symbol</div>
                 <div class="st-sym-list">
                     @foreach (var row in _dcaBySymbol)
                     {
                         var maxInv = _dcaBySymbol.Count > 0 ? _dcaBySymbol.Max(r => r.TotalInvested) : 1m;
-                        var barW = maxInv > 0 ? (int)(100 * row.TotalInvested / maxInv) : 0;
-                        var clr = _dcaSymbolColors.TryGetValue(row.Symbol, out var c) ? c : "#60a5fa";
+                        var barW2 = maxInv > 0 ? (int)(100 * row.TotalInvested / maxInv) : 0;
+                        var clr2 = SymbolColor(row.Symbol);
                         <div class="st-sym-row">
                             <span class="st-sym-name">@row.Symbol.Replace("USDT","")</span>
-                            <div class="st-sym-bar-wrap">
-                                <div class="st-sym-bar" style="width:@barW%;background:@clr"></div>
-                            </div>
-                            <span class="st-sym-pnl" style="color:@clr">@row.TotalInvested.ToString("F0") <span class="st-dim" style="font-size:10px">USDT</span></span>
-                            <span class="st-sym-cnt">@row.Count ×</span>
+                            <div class="st-sym-bar-wrap"><div class="st-sym-bar" style="width:@barW2%;background:@clr2"></div></div>
+                            <span class="st-sym-pnl" style="color:@clr2">@row.TotalInvested.ToString("F0") <span class="st-dim" style="font-size:10px">USDT</span></span>
+                            <span class="st-sym-cnt">@row.Count x</span>
                         </div>
                         <div class="dca-sym-details">
-                            <span class="st-dim">Avg: <strong class="dca-avg-price">@row.AvgPrice.ToString("F2")</strong></span>
-                            <span class="st-dim">· Total qty: <strong>@row.TotalQty.ToString("F4")</strong></span>
-                            @if (row.DipCount > 0) { <span class="st-up">· 🎯 @row.DipCount dip</span> }
+                            <span class="st-dim">Avg cost: <strong>@row.AvgPrice.ToString("F2")</strong></span>
+                            <span class="st-dim"> · Qty: <strong>@row.TotalQty.ToString("F5")</strong></span>
+                            @if (row.DipCount > 0) { <span class="st-up"> · @row.DipCount dip buys</span> }
                         </div>
                     }
                     @if (!_dcaBySymbol.Any()) { <div class="st-empty">No data</div> }
                 </div>
             </div>
 
-            <!-- Full purchase log -->
+            <!-- Purchase Log -->
             <div class="st-card st-card-trades">
-                <div class="st-card-title">
-                    Purchase Log
-                    <span class="st-card-sub">(@_dcaPurchases.Count entries in range)</span>
-                </div>
+                <div class="st-card-title">Purchase Log <span class="st-card-sub">(@_dcaPurchases.Count in range)</span></div>
                 <div class="st-trade-scroll">
                     <table class="st-trade-tbl">
                         <thead><tr>
-                            <th>Time</th>
-                            <th>Symbol</th>
-                            <th>Price</th>
-                            <th>Qty</th>
-                            <th>Spent</th>
-                            <th>Dip</th>
+                            <th>Time</th><th>Symbol</th><th>Price</th><th>Qty</th><th>Spent</th><th>Dip</th>
                         </tr></thead>
                         <tbody>
                             @foreach (var p in _dcaPurchases.OrderByDescending(x => x.TimeUtc).Take(300))
@@ -456,7 +388,7 @@ else if (_activeTab == "dca")
                                     <td class="st-mono">@p.Price.ToString("F2")</td>
                                     <td class="st-mono">@p.Qty.ToString("F5")</td>
                                     <td class="st-mono dca-invested">@p.UsdtSpent.ToString("F2")</td>
-                                    <td class="@(p.DipBonusApplied ? "st-up" : "st-dim")">@(p.DipBonusApplied ? "🎯 DIP" : "—")</td>
+                                    <td class="@(p.DipBonusApplied ? "st-up" : "st-dim")">@(p.DipBonusApplied ? "DIP" : "—")</td>
                                 </tr>
                             }
                             @if (!_dcaPurchases.Any()) { <tr><td colspan="6" class="st-empty">No DCA purchases in selected range</td></tr> }
@@ -465,160 +397,115 @@ else if (_activeTab == "dca")
                 </div>
             </div>
         </div>
-
-    </div> <!-- /dca-body -->
+    </div>
 }
 
-</div> <!-- /st-root -->
+</div>
 
 <style>
-:root { --st-bg: #0a0d12; --st-bg2: #0f1623; --st-bg3: #111827; --st-bdr: #1e2d47; --st-acc: #3b82f6; --st-dim: #475569; --st-txt: #e2e8f0; --st-up: #22c55e; --st-dn: #ef4444; }
-
-.st-root { color: var(--st-txt); font-family: 'Segoe UI', system-ui, sans-serif; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
-
-/* Header */
-.st-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
-.st-header-left { display: flex; align-items: center; gap: 12px; }
-.st-title { font-size: 22px; font-weight: 800; color: var(--st-txt); margin: 0; letter-spacing: -.4px; }
-.st-mode-badge { font-size: 10px; font-weight: 800; letter-spacing: 1.5px; padding: 3px 10px; border-radius: 6px; }
-.st-mode-live { background: rgba(34,197,94,.15); color: #22c55e; border: 1px solid rgba(34,197,94,.3); }
-.st-mode-demo { background: rgba(234,179,8,.12); color: #eab308; border: 1px solid rgba(234,179,8,.3); }
-.st-header-right { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.st-mode-btn, .st-range-btn { padding: 5px 13px; border-radius: 6px; border: 1px solid var(--st-bdr); background: transparent; color: var(--st-dim); cursor: pointer; font-size: 12px; font-weight: 700; transition: all .12s; }
-.st-mode-btn:hover, .st-range-btn:hover { color: var(--st-txt); border-color: #334155; }
-.st-mode-btn-on, .st-range-btn-on { background: var(--st-acc)!important; border-color: var(--st-acc)!important; color: #fff!important; box-shadow: 0 2px 8px rgba(59,130,246,.3); }
-
-/* Tab switcher */
-.st-tab-btn { display: flex; align-items: center; gap: 5px; padding: 5px 13px; border-radius: 6px; border: 1px solid var(--st-bdr); background: transparent; color: var(--st-dim); cursor: pointer; font-size: 12px; font-weight: 700; transition: all .12s; }
-.st-tab-btn:hover { color: var(--st-txt); border-color: #334155; }
-.st-tab-btn-on { background: #1e2d47!important; border-color: #3b82f6!important; color: #60a5fa!important; }
-
-.st-sep { width: 1px; height: 22px; background: var(--st-bdr); margin: 0 4px; }
-.st-date-input { background: var(--st-bg3); border: 1px solid var(--st-bdr); color: var(--st-txt); border-radius: 6px; padding: 5px 8px; font-size: 12px; cursor: pointer; }
-.st-date-input:focus { outline: none; border-color: var(--st-acc); }
-.st-dim { color: var(--st-dim); font-size: 12px; }
-
-/* KPI */
-.st-kpi-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
-.st-kpi { background: var(--st-bg2); border: 1px solid var(--st-bdr); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
-.st-kpi-label { font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--st-dim); }
-.st-kpi-value { font-size: 18px; font-weight: 700; font-family: 'Cascadia Code','Fira Code',monospace; }
-.st-kpi-unit { font-size: 11px; font-weight: 600; opacity: .6; }
-.st-up { color: var(--st-up)!important; }
-.st-dn { color: var(--st-dn)!important; }
-.st-mono { font-family: monospace; }
-
-/* Layout */
-.st-body, .dca-body { display: grid; grid-template-columns: minmax(360px,1fr) minmax(360px,1fr); gap: 16px; align-items: start; }
-@@media (max-width: 1100px) { .st-body, .dca-body { grid-template-columns: 1fr; } }
-.st-left, .st-right { display: flex; flex-direction: column; gap: 16px; }
-
-/* Card */
-.st-card { background: var(--st-bg2); border: 1px solid var(--st-bdr); border-radius: 12px; padding: 18px 20px; }
-.st-card-title { font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--st-dim); margin-bottom: 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.st-card-sub { font-weight: 400; text-transform: none; letter-spacing: 0; }
-.st-empty { text-align: center; color: var(--st-dim); font-size: 13px; padding: 24px 0; }
-
-/* Chart */
-.st-chart-wrap { height: 160px; width: 100%; position: relative; overflow: hidden; }
-.st-svg { width: 100%; height: 100%; display: block; }
-
-/* Calendar */
-.st-calendar { overflow-x: auto; padding-bottom: 4px; }
-.st-cal-grid { display: grid; grid-template-columns: repeat(7, 36px); gap: 3px; width: fit-content; }
-.st-cal-dow { font-size: 9px; font-weight: 700; color: var(--st-dim); text-align: center; padding-bottom: 2px; }
-.st-cal-day { width: 36px; height: 36px; border-radius: 4px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: default; transition: transform .1s; gap: 1px; }
-.st-cal-day:hover { transform: scale(1.15); z-index: 1; position: relative; }
-.st-cal-num { font-size: 9px; color: rgba(255,255,255,.45); font-weight: 500; line-height: 1; }
-.st-cal-pnl { font-size: 10px; color: #fff; font-weight: 700; line-height: 1; letter-spacing: -.3px; }
-
-/* Long/Short */
-.st-split-row { display: flex; gap: 0; }
-.st-split-side { flex: 1; text-align: center; padding: 8px; }
-.st-split-label { font-size: 10px; font-weight: 800; letter-spacing: 1.5px; color: var(--st-dim); margin-bottom: 6px; }
-.st-split-val { font-size: 22px; font-weight: 800; font-family: monospace; }
-.st-split-sub, .st-split-wr { font-size: 11px; color: var(--st-dim); margin-top: 4px; }
-.st-split-divider { width: 1px; background: var(--st-bdr); margin: 8px 0; }
-
-/* Symbol list */
-.st-sym-list { display: flex; flex-direction: column; gap: 7px; }
-.st-sym-row { display: flex; align-items: center; gap: 10px; }
-.st-sym-name { font-size: 12px; font-weight: 700; font-family: monospace; width: 80px; flex-shrink: 0; color: var(--st-txt); }
-.st-sym-bar-wrap { flex: 1; height: 6px; background: rgba(255,255,255,.05); border-radius: 3px; overflow: hidden; }
-.st-sym-bar { height: 100%; border-radius: 3px; transition: width .3s; }
-.st-sym-bar-pos { background: var(--st-up); }
-.st-sym-bar-neg { background: var(--st-dn); }
-.st-sym-pnl { font-size: 12px; font-weight: 700; font-family: monospace; width: 80px; text-align: right; flex-shrink: 0; }
-.st-sym-cnt { font-size: 10px; color: var(--st-dim); width: 40px; text-align: right; flex-shrink: 0; }
-
-/* Reason */
-.st-reason-grid { display: flex; flex-direction: column; gap: 6px; }
-.st-reason-row { display: flex; align-items: center; gap: 10px; }
-.st-reason-label { width: 80px; font-size: 11px; font-weight: 700; color: var(--st-txt); flex-shrink: 0; }
-.st-reason-bar-wrap { flex: 1; height: 5px; background: rgba(255,255,255,.05); border-radius: 3px; overflow: hidden; }
-.st-reason-bar { height: 100%; background: var(--st-acc); border-radius: 3px; }
-.st-reason-cnt { font-size: 11px; color: var(--st-dim); width: 28px; text-align: right; flex-shrink: 0; }
-
-/* Trade table */
-.st-card-trades { padding-bottom: 0; }
-.st-trade-scroll { overflow-x: auto; overflow-y: auto; height: 300px; border-radius: 0 0 12px 12px; }
-.st-trade-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
-.st-trade-tbl th { text-align: left; padding: 8px 10px; background: var(--st-bg3); color: var(--st-dim); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; border-bottom: 1px solid var(--st-bdr); cursor: pointer; user-select: none; white-space: nowrap; position: sticky; top: 0; z-index: 1; }
-.st-trade-tbl th:hover { color: var(--st-txt); }
-.st-trade-tbl td { padding: 7px 10px; border-bottom: 1px solid rgba(30,45,71,.5); white-space: nowrap; }
-.st-trade-tbl tr:last-child td { border-bottom: none; }
-.st-tr-win { background: transparent; }
-.st-tr-loss { background: rgba(239,68,68,.02); }
-.st-trade-tbl tr:hover td { background: rgba(255,255,255,.02); }
-.st-sym-cell { font-weight: 700; }
-.st-reason-pill { border-radius: 4px; padding: 2px 7px; font-size: 10px; font-weight: 800; }
-.st-reason-sl { background: rgba(239,68,68,.15); color: #ef4444; }
-.st-reason-tp { background: rgba(34,197,94,.15); color: #22c55e; }
-.st-reason-manual { background: rgba(59,130,246,.15); color: #60a5fa; }
-.st-reason-other { background: rgba(148,163,184,.1); color: #94a3b8; }
-
-/* Loading */
-.st-loading { display: flex; align-items: center; justify-content: center; gap: 12px; height: 200px; color: var(--st-dim); font-size: 14px; }
-.st-spinner { width: 20px; height: 20px; border: 2px solid var(--st-bdr); border-top-color: var(--st-acc); border-radius: 50%; animation: st-spin .7s linear infinite; }
-@@keyframes st-spin { to { transform: rotate(360deg); } }
-
-/* ═══ DCA-specific styles ═══ */
-
-.dca-config-banner {
-    display: flex; align-items: center; gap: 0; flex-wrap: wrap;
-    background: #0d1b2e; border: 1px solid #1e3a5f; border-radius: 10px;
-    padding: 12px 20px; gap: 24px;
-}
-.dca-config-item { display: flex; align-items: center; gap: 8px; }
-.dca-config-lbl { font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--st-dim); }
-.dca-config-val { font-size: 13px; font-weight: 700; color: var(--st-txt); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-
-.dca-freq-badge { font-size: 10px; font-weight: 800; letter-spacing: 1.5px; padding: 3px 10px; border-radius: 6px; }
-.dca-freq-daily   { background: rgba(59,130,246,.15); color: #60a5fa; border: 1px solid rgba(59,130,246,.3); }
-.dca-freq-weekly  { background: rgba(168,85,247,.15); color: #c084fc; border: 1px solid rgba(168,85,247,.3); }
-.dca-freq-monthly { background: rgba(245,158,11,.12); color: #fbbf24; border: 1px solid rgba(245,158,11,.3); }
-
-.dca-sym-chip { display: inline-block; background: #1e2d47; color: #60a5fa; border: 1px solid #2563eb; border-radius: 5px; padding: 2px 8px; font-size: 11px; font-weight: 700; font-family: monospace; }
-.dca-sym-chip-sm { font-size: 10px; padding: 1px 6px; margin-right: 3px; }
-
-.dca-legend { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
-.dca-legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-.dca-legend-lbl { font-size: 11px; font-weight: 700; color: var(--st-dim); }
-
-.dca-period-tabs { display: flex; gap: 4px; margin-left: auto; }
-.dca-period-tab { padding: 3px 10px; border-radius: 5px; border: 1px solid var(--st-bdr); background: transparent; color: var(--st-dim); cursor: pointer; font-size: 11px; font-weight: 700; transition: all .12s; }
-.dca-period-tab:hover { color: var(--st-txt); }
-.dca-period-on { background: #1e2d47!important; border-color: var(--st-acc)!important; color: #60a5fa!important; }
-
-.dca-period-table-wrap { overflow-x: auto; }
-.dca-period-label { font-weight: 700; color: var(--st-txt); }
-.dca-invested { color: #60a5fa; font-weight: 700; }
-.dca-avg-price { color: var(--st-txt); }
-
-.dca-sym-details { font-size: 11px; color: var(--st-dim); margin: -3px 0 4px 0; padding-left: 2px; display: flex; gap: 8px; flex-wrap: wrap; }
-
-.dca-row-dip { background: rgba(34,197,94,.04)!important; }
-.dca-row-dip:hover td { background: rgba(34,197,94,.07)!important; }
+:root { --st-bg:#0a0d12;--st-bg2:#0f1623;--st-bg3:#111827;--st-bdr:#1e2d47;--st-acc:#3b82f6;--st-dim:#475569;--st-txt:#e2e8f0;--st-up:#22c55e;--st-dn:#ef4444; }
+.st-root { color:var(--st-txt);font-family:'Segoe UI',system-ui,sans-serif;padding:20px 24px;display:flex;flex-direction:column;gap:16px; }
+.st-header { display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px; }
+.st-header-left { display:flex;align-items:center;gap:12px; }
+.st-title { font-size:22px;font-weight:800;color:var(--st-txt);margin:0;letter-spacing:-.4px; }
+.st-mode-badge { font-size:10px;font-weight:800;letter-spacing:1.5px;padding:3px 10px;border-radius:6px; }
+.st-mode-live { background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.3); }
+.st-mode-demo { background:rgba(234,179,8,.12);color:#eab308;border:1px solid rgba(234,179,8,.3); }
+.st-header-right { display:flex;align-items:center;gap:6px;flex-wrap:wrap; }
+.st-tab-btn,.st-mode-btn,.st-range-btn { padding:5px 13px;border-radius:6px;border:1px solid var(--st-bdr);background:transparent;color:var(--st-dim);cursor:pointer;font-size:12px;font-weight:700;transition:all .12s; }
+.st-tab-btn:hover,.st-mode-btn:hover,.st-range-btn:hover { color:var(--st-txt);border-color:#334155; }
+.st-tab-btn-on { background:#1e2d47!important;border-color:#3b82f6!important;color:#60a5fa!important; }
+.st-mode-btn-on,.st-range-btn-on { background:var(--st-acc)!important;border-color:var(--st-acc)!important;color:#fff!important;box-shadow:0 2px 8px rgba(59,130,246,.3); }
+.st-sep { width:1px;height:22px;background:var(--st-bdr);margin:0 4px; }
+.st-date-input { background:var(--st-bg3);border:1px solid var(--st-bdr);color:var(--st-txt);border-radius:6px;padding:5px 8px;font-size:12px;cursor:pointer; }
+.st-date-input:focus { outline:none;border-color:var(--st-acc); }
+.st-dim { color:var(--st-dim);font-size:12px; }
+.st-kpi-row { display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px; }
+.st-kpi { background:var(--st-bg2);border:1px solid var(--st-bdr);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:4px; }
+.st-kpi-label { font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--st-dim); }
+.st-kpi-value { font-size:18px;font-weight:700;font-family:'Cascadia Code','Fira Code',monospace; }
+.st-kpi-unit { font-size:11px;font-weight:600;opacity:.6; }
+.st-up { color:var(--st-up)!important; }
+.st-dn { color:var(--st-dn)!important; }
+.st-mono { font-family:monospace; }
+.st-body,.dca-body { display:grid;grid-template-columns:minmax(360px,1fr) minmax(360px,1fr);gap:16px;align-items:start; }
+@@media (max-width:1100px) { .st-body,.dca-body { grid-template-columns:1fr; } }
+.st-left,.st-right { display:flex;flex-direction:column;gap:16px; }
+.st-card { background:var(--st-bg2);border:1px solid var(--st-bdr);border-radius:12px;padding:18px 20px; }
+.st-card-title { font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--st-dim);margin-bottom:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap; }
+.st-card-sub { font-weight:400;text-transform:none;letter-spacing:0; }
+.st-empty { text-align:center;color:var(--st-dim);font-size:13px;padding:24px 0; }
+.st-chart-wrap { height:160px;width:100%;position:relative;overflow:hidden; }
+.st-svg { width:100%;height:100%;display:block; }
+.st-calendar { overflow-x:auto;padding-bottom:4px; }
+.st-cal-grid { display:grid;grid-template-columns:repeat(7,36px);gap:3px;width:fit-content; }
+.st-cal-dow { font-size:9px;font-weight:700;color:var(--st-dim);text-align:center;padding-bottom:2px; }
+.st-cal-day { width:36px;height:36px;border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:default;transition:transform .1s;gap:1px; }
+.st-cal-day:hover { transform:scale(1.15);z-index:1;position:relative; }
+.st-cal-num { font-size:9px;color:rgba(255,255,255,.45);font-weight:500;line-height:1; }
+.st-cal-pnl { font-size:10px;color:#fff;font-weight:700;line-height:1;letter-spacing:-.3px; }
+.st-split-row { display:flex;gap:0; }
+.st-split-side { flex:1;text-align:center;padding:8px; }
+.st-split-label { font-size:10px;font-weight:800;letter-spacing:1.5px;color:var(--st-dim);margin-bottom:6px; }
+.st-split-val { font-size:22px;font-weight:800;font-family:monospace; }
+.st-split-sub,.st-split-wr { font-size:11px;color:var(--st-dim);margin-top:4px; }
+.st-split-divider { width:1px;background:var(--st-bdr);margin:8px 0; }
+.st-sym-list { display:flex;flex-direction:column;gap:7px; }
+.st-sym-row { display:flex;align-items:center;gap:10px; }
+.st-sym-name { font-size:12px;font-weight:700;font-family:monospace;width:80px;flex-shrink:0;color:var(--st-txt); }
+.st-sym-bar-wrap { flex:1;height:6px;background:rgba(255,255,255,.05);border-radius:3px;overflow:hidden; }
+.st-sym-bar { height:100%;border-radius:3px;transition:width .3s; }
+.st-sym-bar-pos { background:var(--st-up); }
+.st-sym-bar-neg { background:var(--st-dn); }
+.st-sym-pnl { font-size:12px;font-weight:700;font-family:monospace;width:80px;text-align:right;flex-shrink:0; }
+.st-sym-cnt { font-size:10px;color:var(--st-dim);width:36px;text-align:right;flex-shrink:0; }
+.st-reason-grid { display:flex;flex-direction:column;gap:6px; }
+.st-reason-row { display:flex;align-items:center;gap:10px; }
+.st-reason-label { width:80px;font-size:11px;font-weight:700;color:var(--st-txt);flex-shrink:0; }
+.st-reason-bar-wrap { flex:1;height:5px;background:rgba(255,255,255,.05);border-radius:3px;overflow:hidden; }
+.st-reason-bar { height:100%;background:var(--st-acc);border-radius:3px; }
+.st-reason-cnt { font-size:11px;color:var(--st-dim);width:28px;text-align:right;flex-shrink:0; }
+.st-card-trades { padding-bottom:0; }
+.st-trade-scroll { overflow-x:auto;overflow-y:auto;height:300px;border-radius:0 0 12px 12px; }
+.st-trade-tbl { width:100%;border-collapse:collapse;font-size:12px; }
+.st-trade-tbl th { text-align:left;padding:8px 10px;background:var(--st-bg3);color:var(--st-dim);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;border-bottom:1px solid var(--st-bdr);cursor:pointer;user-select:none;white-space:nowrap;position:sticky;top:0;z-index:1; }
+.st-trade-tbl th:hover { color:var(--st-txt); }
+.st-trade-tbl td { padding:7px 10px;border-bottom:1px solid rgba(30,45,71,.5);white-space:nowrap; }
+.st-trade-tbl tr:last-child td { border-bottom:none; }
+.st-tr-loss { background:rgba(239,68,68,.02); }
+.st-trade-tbl tr:hover td { background:rgba(255,255,255,.02); }
+.st-sym-cell { font-weight:700; }
+.st-reason-pill { border-radius:4px;padding:2px 7px;font-size:10px;font-weight:800; }
+.st-reason-sl { background:rgba(239,68,68,.15);color:#ef4444; }
+.st-reason-tp { background:rgba(34,197,94,.15);color:#22c55e; }
+.st-reason-manual { background:rgba(59,130,246,.15);color:#60a5fa; }
+.st-reason-other { background:rgba(148,163,184,.1);color:#94a3b8; }
+.st-loading { display:flex;align-items:center;justify-content:center;gap:12px;height:200px;color:var(--st-dim);font-size:14px; }
+.st-spinner { width:20px;height:20px;border:2px solid var(--st-bdr);border-top-color:var(--st-acc);border-radius:50%;animation:st-spin .7s linear infinite; }
+@@keyframes st-spin { to { transform:rotate(360deg); } }
+/* DCA styles */
+.dca-config-banner { display:flex;align-items:center;flex-wrap:wrap;gap:24px;background:#0d1b2e;border:1px solid #1e3a5f;border-radius:10px;padding:12px 20px; }
+.dca-config-item { display:flex;align-items:center;gap:8px; }
+.dca-config-lbl { font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--st-dim); }
+.dca-config-val { font-size:13px;font-weight:700;color:var(--st-txt);display:flex;align-items:center;gap:6px;flex-wrap:wrap; }
+.dca-freq-badge { font-size:10px;font-weight:800;letter-spacing:1.5px;padding:3px 10px;border-radius:6px; }
+.dca-freq-daily { background:rgba(59,130,246,.15);color:#60a5fa;border:1px solid rgba(59,130,246,.3); }
+.dca-freq-weekly { background:rgba(168,85,247,.15);color:#c084fc;border:1px solid rgba(168,85,247,.3); }
+.dca-freq-monthly { background:rgba(245,158,11,.12);color:#fbbf24;border:1px solid rgba(245,158,11,.3); }
+.dca-sym-chip { display:inline-block;background:#1e2d47;color:#60a5fa;border:1px solid #2563eb;border-radius:5px;padding:2px 8px;font-size:11px;font-weight:700;font-family:monospace; }
+.dca-sym-chip-sm { font-size:10px;padding:1px 6px;margin-right:3px; }
+.dca-legend { display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap; }
+.dca-legend-dot { width:10px;height:10px;border-radius:50%;flex-shrink:0; }
+.dca-legend-lbl { font-size:11px;font-weight:700;color:var(--st-dim); }
+.dca-period-tabs { display:flex;gap:4px;margin-left:auto; }
+.dca-period-tab { padding:3px 10px;border-radius:5px;border:1px solid var(--st-bdr);background:transparent;color:var(--st-dim);cursor:pointer;font-size:11px;font-weight:700;transition:all .12s; }
+.dca-period-tab:hover { color:var(--st-txt); }
+.dca-period-on { background:#1e2d47!important;border-color:var(--st-acc)!important;color:#60a5fa!important; }
+.dca-period-table-wrap { overflow-x:auto; }
+.dca-period-label { font-weight:700;color:var(--st-txt); }
+.dca-invested { color:#60a5fa;font-weight:700; }
+.dca-sym-details { font-size:11px;color:var(--st-dim);margin:-3px 0 4px 0;padding-left:2px;display:flex;gap:8px;flex-wrap:wrap; }
+.dca-row-dip { background:rgba(34,197,94,.04)!important; }
 </style>
 
 @code {
@@ -629,7 +516,12 @@ else if (_activeTab == "dca")
     DateTime _dateFrom = DateTime.Today.AddDays(-30);
     DateTime _dateTo = DateTime.Today;
 
-    // ── Trading stats ──────────────────────────────────────────────
+    static readonly Dictionary<string, string> _ranges = new()
+    {
+        ["7D"] = "7D", ["30D"] = "30D", ["90D"] = "90D", ["ALL"] = "All"
+    };
+
+    // Trading
     PerfStats _stats = new();
     Dictionary<DateTime, decimal> _dailyPnl = new();
     List<decimal> _cumulativePnl = new();
@@ -640,7 +532,8 @@ else if (_activeTab == "dca")
     string _tradeSort = "time";
     bool _tradeSortAsc = false;
 
-    // ── DCA state ──────────────────────────────────────────────────
+    // DCA
+    DcaConfigSnapshot _dcaConfig = new();
     List<DcaPurchaseRow> _dcaPurchases = new();
     DcaSummaryStats _dcaStats = new();
     List<DcaSymbolRow> _dcaBySymbol = new();
@@ -648,17 +541,13 @@ else if (_activeTab == "dca")
     Dictionary<string, List<decimal>> _dcaChartSeries = new();
     string _dcaPeriod = "weekly";
 
-    // Fixed colour palette per symbol (consistent across reloads)
-    static readonly Dictionary<string, string> _dcaSymbolColors = new()
+    static readonly Dictionary<string, string> _symColors = new()
     {
-        ["BTCUSDT"] = "#f59e0b",
-        ["ETHUSDT"] = "#60a5fa",
-        ["SOLUSDT"] = "#a78bfa",
-        ["BNBUSDT"] = "#fbbf24",
-        ["XRPUSDT"] = "#34d399",
+        ["BTCUSDT"] = "#f59e0b", ["ETHUSDT"] = "#60a5fa",
+        ["SOLUSDT"] = "#a78bfa", ["BNBUSDT"] = "#fbbf24",
+        ["XRPUSDT"] = "#34d399", ["ADAUSDT"] = "#22d3ee",
     };
-    string SymbolColor(string sym) =>
-        _dcaSymbolColors.TryGetValue(sym, out var c) ? c : "#94a3b8";
+    string SymbolColor(string sym) => _symColors.TryGetValue(sym, out var c) ? c : "#94a3b8";
 
     const int _svgW = 600, _svgH = 140;
 
@@ -675,7 +564,26 @@ else if (_activeTab == "dca")
             }
         }
         catch { }
+        // Snapshot DcaOptions into a plain struct — avoids IOptionsMonitor in template
+        SnapshotDcaConfig();
         await LoadData();
+    }
+
+    // Read DcaOptions once into a plain snapshot — avoids injecting IOptionsMonitor
+    // directly into the template (which requires Microsoft.Extensions.Options in scope).
+    void SnapshotDcaConfig()
+    {
+        var opts = DcaOpts.CurrentValue;
+        _dcaConfig = new DcaConfigSnapshot
+        {
+            Enabled        = opts.Enabled,
+            Frequency      = opts.Schedule?.Frequency ?? "Weekly",
+            Budget         = opts.Schedule?.BudgetPerCycle ?? 0,
+            Symbols        = opts.Symbols?.Select(s => s.Symbol).ToList() ?? new(),
+            DipBonusEnabled    = opts.DipBonus?.Enabled ?? false,
+            DipBonusMultiplier = opts.DipBonus?.Multiplier ?? 2m,
+            DipDropPct         = opts.DipBonus?.DropThresholdPct ?? 10m,
+        };
     }
 
     async Task SetTab(string tab)
@@ -703,12 +611,7 @@ else if (_activeTab == "dca")
         await LoadData();
     }
 
-    void SetDcaPeriod(string p)
-    {
-        _dcaPeriod = p;
-        ComputeDcaPeriodRows();
-        StateHasChanged();
-    }
+    void SetDcaPeriod(string p) { _dcaPeriod = p; ComputeDcaPeriodRows(); }
 
     async Task LoadData()
     {
@@ -726,14 +629,9 @@ else if (_activeTab == "dca")
                 LoadDcaData();
             }
         }
-        finally
-        {
-            _loading = false;
-            StateHasChanged();
-        }
+        finally { _loading = false; StateHasChanged(); }
     }
 
-    // ── Trading data loaders ────────────────────────────────────────
     Task<List<TradeRow>> LoadDemoTrades()
     {
         var rows = DemoAccount.GetSnapshot().History
@@ -755,27 +653,17 @@ else if (_activeTab == "dca")
         try
         {
             var from = new DateTime(_dateFrom.Year, _dateFrom.Month, _dateFrom.Day, 0, 0, 0, DateTimeKind.Utc);
-            var to   = new DateTime(_dateTo.Year, _dateTo.Month, _dateTo.Day, 23, 59, 59, DateTimeKind.Utc);
+            var to   = new DateTime(_dateTo.Year,   _dateTo.Month,   _dateTo.Day,   23, 59, 59, DateTimeKind.Utc);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             var client = Factory.TryCreateRestClient();
             if (client == null) return rows;
-            var incomeRes = await client.UsdFuturesApi.Account.GetIncomeHistoryAsync(
-                incomeType: "REALIZED_PNL",
-                startTime: from, endTime: to, limit: 1000, ct: cts.Token);
-            if (incomeRes.Success && incomeRes.Data != null)
+            var res = await client.UsdFuturesApi.Account.GetIncomeHistoryAsync(
+                incomeType: "REALIZED_PNL", startTime: from, endTime: to, limit: 1000, ct: cts.Token);
+            if (res.Success && res.Data != null)
             {
-                foreach (var inc in incomeRes.Data)
-                {
-                    rows.Add(new TradeRow
-                    {
-                        Symbol = inc.Symbol ?? "—",
-                        Side = inc.Income >= 0 ? "LONG" : "SHORT",
-                        Pnl = inc.Income,
-                        CloseReason = "Close",
-                        ClosedAt = inc.Timestamp,
-                        OpenedAt = inc.Timestamp,
-                    });
-                }
+                foreach (var inc in res.Data)
+                    rows.Add(new TradeRow { Symbol = inc.Symbol ?? "—", Side = inc.Income >= 0 ? "LONG" : "SHORT",
+                        Pnl = inc.Income, CloseReason = "Close", ClosedAt = inc.Timestamp, OpenedAt = inc.Timestamp });
             }
         }
         catch { }
@@ -794,41 +682,28 @@ else if (_activeTab == "dca")
         var losses = _trades.Where(t => t.Pnl < 0).ToList();
         decimal grossWin  = wins.Sum(t => t.Pnl);
         decimal grossLoss = Math.Abs(losses.Sum(t => t.Pnl));
-
-        _dailyPnl = _trades
-            .GroupBy(t => t.ClosedAt.Date)
-            .OrderBy(g => g.Key)
+        _dailyPnl = _trades.GroupBy(t => t.ClosedAt.Date).OrderBy(g => g.Key)
             .ToDictionary(g => g.Key, g => g.Sum(t => t.Pnl));
-
         decimal run = 0;
-        _cumulativePnl = _dailyPnl.OrderBy(kv => kv.Key)
-            .Select(kv => { run += kv.Value; return run; }).ToList();
+        _cumulativePnl = _dailyPnl.OrderBy(kv => kv.Key).Select(kv => { run += kv.Value; return run; }).ToList();
         _maxDayAbsPnl = _dailyPnl.Values.Select(Math.Abs).DefaultIfEmpty(1m).Max();
-
         decimal peak = 0, dd = 0; run = 0;
         foreach (var v in _cumulativePnl) { if (v > peak) peak = v; var cur = peak - v; if (cur > dd) dd = cur; }
-
         _bySymbol = _trades.GroupBy(t => t.Symbol)
             .Select(g => new SymRow { Symbol = g.Key, Pnl = g.Sum(t => t.Pnl), Count = g.Count() })
             .OrderByDescending(r => Math.Abs(r.Pnl)).ToList();
-
         _byReason = _trades.GroupBy(t => string.IsNullOrEmpty(t.CloseReason) ? "Close" : t.CloseReason)
             .OrderByDescending(g => g.Count()).ToDictionary(g => g.Key, g => g.Count());
-
-        var longs  = _trades.Where(t => t.Side == "LONG").ToList();
+        var longs = _trades.Where(t => t.Side == "LONG").ToList();
         var shorts = _trades.Where(t => t.Side == "SHORT").ToList();
-
         _stats = new PerfStats
         {
-            NetPnl = _trades.Sum(t => t.Pnl),
-            TotalTrades = _trades.Count,
+            NetPnl = _trades.Sum(t => t.Pnl), TotalTrades = _trades.Count,
             WinRate = 100m * wins.Count / _trades.Count,
             AvgWin = wins.Count > 0 ? wins.Average(t => t.Pnl) : 0,
             AvgLoss = losses.Count > 0 ? losses.Average(t => t.Pnl) : 0,
             ProfitFactor = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? 99.9m : 0,
-            MaxDrawdown = -dd,
-            BestTrade = _trades.Max(t => t.Pnl),
-            WorstTrade = _trades.Min(t => t.Pnl),
+            MaxDrawdown = -dd, BestTrade = _trades.Max(t => t.Pnl), WorstTrade = _trades.Min(t => t.Pnl),
             AvgDuration = ComputeAvgDuration(),
             LongPnl = longs.Sum(t => t.Pnl), ShortPnl = shorts.Sum(t => t.Pnl),
             LongTrades = longs.Count, LongWins = longs.Count(t => t.Pnl > 0), LongLosses = longs.Count(t => t.Pnl < 0),
@@ -836,40 +711,23 @@ else if (_activeTab == "dca")
         };
     }
 
-    // ── DCA data loaders ────────────────────────────────────────────
     void LoadDcaData()
     {
-        // Merge real + demo DCA history depending on mode
         var rawList = new List<DcaPurchaseRow>();
-
         if (_demoMode)
         {
-            var demo = DemoAccount.GetDcaSnapshot().History;
-            rawList.AddRange(demo
+            rawList.AddRange(DemoAccount.GetDcaSnapshot().History
                 .Where(p => p.TimeUtc.Date >= _dateFrom && p.TimeUtc.Date <= _dateTo)
-                .Select(p => new DcaPurchaseRow
-                {
-                    Symbol = p.Symbol, TimeUtc = p.TimeUtc,
-                    Price = p.Price, Qty = p.Qty,
-                    UsdtSpent = p.UsdtSpent, DipBonusApplied = p.DipBonusApplied,
-                }));
+                .Select(p => new DcaPurchaseRow { Symbol = p.Symbol, TimeUtc = p.TimeUtc, Price = p.Price, Qty = p.Qty, UsdtSpent = p.UsdtSpent, DipBonusApplied = p.DipBonusApplied }));
         }
         else
         {
-            var real = RealDcaHistory.Read().History;
-            rawList.AddRange(real
+            rawList.AddRange(RealDcaHistory.Read().History
                 .Where(p => p.TimeUtc.Date >= _dateFrom && p.TimeUtc.Date <= _dateTo)
-                .Select(p => new DcaPurchaseRow
-                {
-                    Symbol = p.Symbol, TimeUtc = p.TimeUtc,
-                    Price = p.Price, Qty = p.Qty,
-                    UsdtSpent = p.UsdtSpent, DipBonusApplied = p.DipBonusApplied,
-                }));
+                .Select(p => new DcaPurchaseRow { Symbol = p.Symbol, TimeUtc = p.TimeUtc, Price = p.Price, Qty = p.Qty, UsdtSpent = p.UsdtSpent, DipBonusApplied = p.DipBonusApplied }));
         }
-
         _dcaPurchases = rawList.OrderByDescending(p => p.TimeUtc).ToList();
 
-        // ── Summary KPIs ──────────────────────────────────────────
         _dcaStats = new DcaSummaryStats
         {
             TotalInvested  = rawList.Sum(p => p.UsdtSpent),
@@ -878,102 +736,64 @@ else if (_activeTab == "dca")
             FirstDate = rawList.Count > 0 ? rawList.Min(p => p.TimeUtc) : DateTime.Today,
             LastDate  = rawList.Count > 0 ? rawList.Max(p => p.TimeUtc) : DateTime.Today,
         };
-        // Avg cost per symbol
-        _dcaStats.AvgPriceBySymbol = rawList
-            .GroupBy(p => p.Symbol)
-            .ToDictionary(
-                g => g.Key,
-                g => g.Sum(p => p.UsdtSpent) > 0 && g.Sum(p => p.Qty) > 0
-                    ? g.Sum(p => p.UsdtSpent) / g.Sum(p => p.Qty) : 0m);
-        // Avg USDT per cycle — count distinct date-buckets as "cycles"
+        _dcaStats.AvgPriceBySymbol = rawList.GroupBy(p => p.Symbol)
+            .ToDictionary(g => g.Key, g => g.Sum(p => p.Qty) > 0 ? g.Sum(p => p.UsdtSpent) / g.Sum(p => p.Qty) : 0m);
         var cycles = rawList.Select(p => p.TimeUtc.Date).Distinct().Count();
         _dcaStats.AvgPerCycle = cycles > 0 ? _dcaStats.TotalInvested / cycles : 0;
 
-        // ── By Symbol ─────────────────────────────────────────────
-        _dcaBySymbol = rawList
-            .GroupBy(p => p.Symbol)
-            .Select(g => new DcaSymbolRow
-            {
-                Symbol = g.Key,
-                Count  = g.Count(),
-                TotalInvested = g.Sum(p => p.UsdtSpent),
-                TotalQty      = g.Sum(p => p.Qty),
-                AvgPrice      = g.Sum(p => p.Qty) > 0 ? g.Sum(p => p.UsdtSpent) / g.Sum(p => p.Qty) : 0,
-                DipCount      = g.Count(p => p.DipBonusApplied),
-            })
-            .OrderByDescending(r => r.TotalInvested)
-            .ToList();
+        _dcaBySymbol = rawList.GroupBy(p => p.Symbol)
+            .Select(g => new DcaSymbolRow { Symbol = g.Key, Count = g.Count(),
+                TotalInvested = g.Sum(p => p.UsdtSpent), TotalQty = g.Sum(p => p.Qty),
+                AvgPrice = g.Sum(p => p.Qty) > 0 ? g.Sum(p => p.UsdtSpent) / g.Sum(p => p.Qty) : 0,
+                DipCount = g.Count(p => p.DipBonusApplied) })
+            .OrderByDescending(r => r.TotalInvested).ToList();
 
-        // ── Cumulative chart series per symbol ────────────────────
         _dcaChartSeries = new Dictionary<string, List<decimal>>();
         foreach (var sym in _dcaBySymbol.Select(r => r.Symbol))
         {
             decimal cum = 0;
-            var series = rawList
-                .Where(p => p.Symbol == sym)
-                .OrderBy(p => p.TimeUtc)
-                .Select(p => { cum += p.UsdtSpent; return cum; })
-                .ToList();
+            var series = rawList.Where(p => p.Symbol == sym).OrderBy(p => p.TimeUtc)
+                .Select(p => { cum += p.UsdtSpent; return cum; }).ToList();
             if (series.Any()) _dcaChartSeries[sym] = series;
         }
-
-        // ── Period rows ───────────────────────────────────────────
         ComputeDcaPeriodRows();
     }
 
     void ComputeDcaPeriodRows()
     {
         if (!_dcaPurchases.Any()) { _dcaPeriodRows = new(); return; }
-
-        string PeriodKey(DateTime dt) => _dcaPeriod switch
+        string Key(DateTime dt) => _dcaPeriod switch
         {
             "daily"   => dt.ToString("yyyy-MM-dd"),
-            "weekly"  => $"{dt:yyyy} W{System.Globalization.ISOWeek.GetWeekOfYear(dt):D2}",
-            "monthly" => dt.ToString("yyyy-MM"),
-            _ => dt.ToString("yyyy-MM"),
+            "weekly"  => dt.ToString("yyyy") + " W" + System.Globalization.ISOWeek.GetWeekOfYear(dt).ToString("D2"),
+            _         => dt.ToString("yyyy-MM"),
         };
-        string PeriodLabel(string key) => _dcaPeriod switch
+        string Label(string key) => _dcaPeriod switch
         {
-            "daily"   => DateTime.Parse(key).ToString("MMM d, yyyy"),
-            "weekly"  => key, // "2026 W27"
-            "monthly" => DateTime.ParseExact(key, "yyyy-MM", null).ToString("MMMM yyyy"),
-            _ => key,
+            "daily"   => DateTime.TryParse(key, out var d) ? d.ToString("MMM d, yyyy") : key,
+            "weekly"  => key,
+            _         => DateTime.TryParseExact(key, "yyyy-MM", null, System.Globalization.DateTimeStyles.None, out var d2) ? d2.ToString("MMMM yyyy") : key,
         };
-
-        _dcaPeriodRows = _dcaPurchases
-            .GroupBy(p => PeriodKey(p.TimeUtc))
-            .OrderByDescending(g => g.Key)
-            .Select(g => new DcaPeriodRow
-            {
-                Label    = PeriodLabel(g.Key),
-                Count    = g.Count(),
+        _dcaPeriodRows = _dcaPurchases.GroupBy(p => Key(p.TimeUtc)).OrderByDescending(g => g.Key)
+            .Select(g => new DcaPeriodRow { Label = Label(g.Key), Count = g.Count(),
                 Invested = g.Sum(p => p.UsdtSpent),
                 AvgPrice = g.Sum(p => p.Qty) > 0 ? g.Sum(p => p.UsdtSpent) / g.Sum(p => p.Qty) : 0,
                 DipCount = g.Count(p => p.DipBonusApplied),
-                Symbols  = g.Select(p => p.Symbol).Distinct().ToList(),
-            })
+                Symbols  = g.Select(p => p.Symbol).Distinct().ToList() })
             .ToList();
     }
 
-    // ── SVG helpers ──────────────────────────────────────────────────
     string BuildCurvePts(List<decimal> vals, int w, int h)
     {
         if (vals.Count == 0) return "";
         var min = vals.Min(); var max = vals.Max();
         var range = max - min; if (range == 0) range = 1;
         return string.Join(" ", vals.Select((v, i) =>
-        {
-            double x = w * i / Math.Max(vals.Count - 1, 1);
-            double y = h - (double)((v - min) / range) * (h - 16) - 8;
-            return $"{x:F1},{y:F1}";
-        }));
+            $"{(w * i / Math.Max(vals.Count - 1, 1)):F1},{(h - (double)((v - min) / range) * (h - 16) - 8):F1}"));
     }
 
-    string BuildFillPath(string pts, int w, int h)
-    {
-        if (string.IsNullOrEmpty(pts)) return "";
-        return "M0," + h + " L" + pts.Replace(" ", " L") + " L" + w + "," + h + " Z";
-    }
+    string BuildFillPath(string pts, int w, int h) =>
+        string.IsNullOrEmpty(pts) ? "" : "M0," + h + " L" + pts.Replace(" ", " L") + " L" + w + "," + h + " Z";
 
     double PnlToY(decimal price, List<decimal> vals, int h)
     {
@@ -985,34 +805,24 @@ else if (_activeTab == "dca")
 
     string ComputeAvgDuration()
     {
-        var durs = _trades.Where(t => t.OpenedAt != t.ClosedAt)
-                          .Select(t => (t.ClosedAt - t.OpenedAt).TotalMinutes).ToList();
+        var durs = _trades.Where(t => t.OpenedAt != t.ClosedAt).Select(t => (t.ClosedAt - t.OpenedAt).TotalMinutes).ToList();
         if (!durs.Any()) return "—";
         var avg = durs.Average();
         return avg < 60 ? $"{(int)avg}m" : avg < 1440 ? $"{avg / 60:F1}h" : $"{avg / 1440:F1}d";
     }
 
-    void SetTradeSort(string field)
-    {
-        if (_tradeSort == field) _tradeSortAsc = !_tradeSortAsc;
-        else { _tradeSort = field; _tradeSortAsc = false; }
-    }
+    void SetTradeSort(string f) { if (_tradeSort == f) _tradeSortAsc = !_tradeSortAsc; else { _tradeSort = f; _tradeSortAsc = false; } }
 
-    IEnumerable<TradeRow> SortedTrades
+    IEnumerable<TradeRow> SortedTrades => _tradeSort switch
     {
-        get
-        {
-            if (_tradeSort == "sym")
-                return _tradeSortAsc ? _trades.OrderBy(t => t.Symbol) : (IEnumerable<TradeRow>)_trades.OrderByDescending(t => t.Symbol);
-            if (_tradeSort == "pnl")
-                return _tradeSortAsc ? _trades.OrderBy(t => t.Pnl) : (IEnumerable<TradeRow>)_trades.OrderByDescending(t => t.Pnl);
-            return _tradeSortAsc ? _trades.OrderBy(t => t.ClosedAt) : (IEnumerable<TradeRow>)_trades.OrderByDescending(t => t.ClosedAt);
-        }
-    }
+        "sym" => _tradeSortAsc ? _trades.OrderBy(t => t.Symbol) : (IEnumerable<TradeRow>)_trades.OrderByDescending(t => t.Symbol),
+        "pnl" => _tradeSortAsc ? _trades.OrderBy(t => t.Pnl) : (IEnumerable<TradeRow>)_trades.OrderByDescending(t => t.Pnl),
+        _     => _tradeSortAsc ? _trades.OrderBy(t => t.ClosedAt) : (IEnumerable<TradeRow>)_trades.OrderByDescending(t => t.ClosedAt),
+    };
 
     string SortArrow(string f) => _tradeSort == f ? (_tradeSortAsc ? "↑" : "↓") : "";
 
-    string ReasonClass(string r) => r?.ToUpper() switch
+    string ReasonClass(string r) => (r?.ToUpper()) switch
     {
         var s when s?.StartsWith("SL") == true => "st-reason-sl",
         var s when s?.StartsWith("TP") == true => "st-reason-tp",
@@ -1024,12 +834,10 @@ else if (_activeTab == "dca")
     {
         if (from == to) return "—";
         var d = to - from;
-        return d.TotalMinutes < 60 ? $"{(int)d.TotalMinutes}m"
-             : d.TotalHours < 24  ? $"{d.TotalHours:F1}h"
-             : $"{d.TotalDays:F1}d";
+        return d.TotalMinutes < 60 ? $"{(int)d.TotalMinutes}m" : d.TotalHours < 24 ? $"{d.TotalHours:F1}h" : $"{d.TotalDays:F1}d";
     }
 
-    // ── Models ────────────────────────────────────────────────────────
+    // Models
     record TradeRow
     {
         public string Symbol { get; init; } = "";
@@ -1043,13 +851,7 @@ else if (_activeTab == "dca")
         public DateTime ClosedAt { get; init; }
     }
 
-    sealed class SymRow
-    {
-        public string Symbol { get; init; } = "";
-        public decimal Pnl { get; init; }
-        public decimal AbsPnl => Math.Abs(Pnl);
-        public int Count { get; init; }
-    }
+    sealed class SymRow { public string Symbol { get; init; } = ""; public decimal Pnl { get; init; }; public decimal AbsPnl => Math.Abs(Pnl); public int Count { get; init; } }
 
     class PerfStats
     {
@@ -1059,7 +861,18 @@ else if (_activeTab == "dca")
         public string AvgDuration = "—";
     }
 
-    // DCA models
+    // Flat snapshot of DcaOptions — avoids using IOptionsMonitor in template markup
+    sealed class DcaConfigSnapshot
+    {
+        public bool Enabled { get; set; }
+        public string Frequency { get; set; } = "Weekly";
+        public decimal Budget { get; set; }
+        public List<string> Symbols { get; set; } = new();
+        public bool DipBonusEnabled { get; set; }
+        public decimal DipBonusMultiplier { get; set; } = 2m;
+        public decimal DipDropPct { get; set; } = 10m;
+    }
+
     sealed class DcaPurchaseRow
     {
         public string Symbol { get; set; } = "";
