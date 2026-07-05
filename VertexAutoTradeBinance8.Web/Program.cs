@@ -97,6 +97,12 @@ builder.Services.AddSingleton<EngineRuntimeSettings>();
  
 builder.Services.AddSingleton<ConfigAdvisorService>(); // ниже
 
+// BinanceTimeService — fetches Binance server time once and caches the
+// offset so all Web-side raw signed requests use an adjusted timestamp.
+// Prevents -1021 "Timestamp ahead of server time" errors caused by local
+// clock drift (Windows NTP can be 1-3 s off from Binance NTP servers).
+builder.Services.AddSingleton<BinanceTimeService>();
+
 
 // ========================================================================
 //  CORE SERVICES (общие для анализа и Dashboard)
@@ -207,3 +213,4 @@ ExecutedSignalService.ExecutedSignalsChanged += async () =>
 };
 
 app.Run();
+
