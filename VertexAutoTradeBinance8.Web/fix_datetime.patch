@@ -1,0 +1,11 @@
+--- a/VertexAutoTradeBinance8.Web/Pages/Components/MarketMiniChart.razor
++++ b/VertexAutoTradeBinance8.Web/Pages/Components/MarketMiniChart.razor
+@@ -303,7 +303,7 @@
+                 symbol, ki, limit: Math.Min(MaxBars, 200), ct: cts.Token);
+             if (!res.Success || res.Data == null) return null;
+             return res.Data.Select(k => new KlineDto(
+-                k.OpenTime.ToUnixTimeMilliseconds(),
++                new DateTimeOffset(k.OpenTime, TimeSpan.Zero).ToUnixTimeMilliseconds(),
+                 k.OpenPrice,
+                 k.HighPrice,
+                 k.LowPrice,
