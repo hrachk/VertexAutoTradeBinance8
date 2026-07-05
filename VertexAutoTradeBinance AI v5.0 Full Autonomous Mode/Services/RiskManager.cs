@@ -18,8 +18,6 @@ namespace VertexAutoTradeBinance8.Services
         private readonly AiSelfLearningService _ai;
         private readonly LiquidationRiskEngine _liqRisk;
 
-        private const decimal MaxMarginPercent = 0.12m; // 12% hard cap margin
-
         public string? LastRejectReason { get; private set; }
         public decimal LastBalanceUsdt { get; private set; }
 
@@ -230,8 +228,8 @@ namespace VertexAutoTradeBinance8.Services
             // balance < 50 path already returned early above via the
             // MICRO-ACCOUNT block — this code is only reachable when
             // balance >= 50, so the ternary was dead code. Use
-            // MaxMarginPercent unconditionally here.
-            decimal marginCapNotional = balance * MaxMarginPercent * leverage;
+            // trading.MaxMarginPercent unconditionally here.
+            decimal marginCapNotional = balance * trading.MaxMarginPercent * leverage;
 
             decimal finalNotional = Math.Min(riskNotional, Math.Min(leverageCapNotional, marginCapNotional));
             
@@ -290,10 +288,10 @@ namespace VertexAutoTradeBinance8.Services
 
             // Проверяем что не превышаем маржинальный cap
             decimal finalMargin = qty * entry / leverage;
-            if (finalMargin > balance * MaxMarginPercent && balance >= 50m)
+            if (finalMargin > balance * trading.MaxMarginPercent && balance >= 50m)
             {
                 // Обрезаем qty до cap
-                decimal cappedNotional = balance * MaxMarginPercent * leverage;
+                decimal cappedNotional = balance * trading.MaxMarginPercent * leverage;
                 qty = Math.Floor(cappedNotional / entry / step) * step;
 
                 // Но не ниже минимума
