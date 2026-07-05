@@ -13,6 +13,7 @@
 @inject MissedTradeFileService SignalSvc
 @inject BinanceClientFactory Factory
 @inject VertexAutoTradeBinance8.Services.BinanceAlgoOrderService AlgoOrders
+@inject VertexAutoTradeBinance8.Web.Services.BinanceTimeService BinanceTime
 @inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoAccount
 @inject VertexAutoTradeBinance8.Web.Services.RealDcaHistoryReader RealDcaHistory
 @inject IJSRuntime JS
@@ -5095,7 +5096,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             http.Timeout = TimeSpan.FromSeconds(8);
 
             var baseUrl = (opt.UseTestnet ? "https://testnet.binancefuture.com" : "https://fapi.binance.com");
-            var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var ts = await BinanceTime.NowMsAsync();
 
             var q = new List<KeyValuePair<string, string>>
             {
@@ -5120,6 +5121,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
             if (!resp.IsSuccessStatusCode)
             {
+                if (body.Contains("-1021")) BinanceTime.InvalidateSync();
                 _lastAlgoOrdersDebug = $"HTTP {(int)resp.StatusCode}: {body}";
                 return result;
             }
@@ -5326,7 +5328,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         http.Timeout = TimeSpan.FromSeconds(8);
 
         var baseUrl = opt.UseTestnet ? "https://testnet.binancefuture.com" : "https://fapi.binance.com";
-        var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var ts = await BinanceTime.NowMsAsync();
 
         var q = new List<KeyValuePair<string, string>>
         {
@@ -5922,3 +5924,4 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         public decimal Roi;
     }
 }
+
