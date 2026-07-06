@@ -256,6 +256,30 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
+            // Binance minimum notional check: futures requires qty*price >= minNotional.
+            // BTC/ETH threshold is $20, most alts $5. We use $20 as a safe universal floor
+            // because the exchange error is silent and wastes the cycle silently.
+            // The root cause of [DCA] Order failed: "notional must be no smaller than 20".
+            decimal notional = qty * currentPrice;
+            const decimal MinNotional = 20m;
+            if (notional < MinNotional)
+            {
+                // Try to bump qty to meet minimum
+                decimal minQty = Math.Ceiling(MinNotional / currentPrice / step) * step;
+                if (minQty * currentPrice <= finalUsdtAmount * 1.10m) // allow 10% overspend to meet notional
+                {
+                    _logger.LogInformation("[DCA] {symbol}: qty bumped {old} → {new} to meet ${min} notional (was ${notional:F2})",
+                        symbol, qty, minQty, MinNotional, notional);
+                    qty = minQty;
+                }
+                else
+                {
+                    _logger.LogWarning("[DCA] {symbol}: notional ${notional:F2} < ${min} and budget ${budget} USDT too small to fix — skipping",
+                        symbol, notional, MinNotional, finalUsdtAmount);
+                    return;
+                }
+            }
+
             var orderRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: symbol,
                 side: OrderSide.Buy,
@@ -412,3 +436,4 @@ namespace VertexAutoTradeBinance8.Services
         }
     }
 }
+
