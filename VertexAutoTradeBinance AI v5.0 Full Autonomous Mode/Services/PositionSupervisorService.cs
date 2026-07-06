@@ -697,6 +697,25 @@ namespace VertexAutoTradeBinance8.Services
                 // =====================================================
                 _entryTracker.OnPositionClosed(symbol, side);
 
+                // Belt-and-suspenders: reconcile ALL entry counters against
+                // current real positions so any counter that got stuck
+                // (e.g. liquidation bypassing our OnPositionClosed path)
+                // is cleaned up here automatically.
+                try
+                {
+                    var allPos = await client.UsdFuturesApi.Account
+                        .GetPositionInformationAsync(ct: ct);
+                    if (allPos.Success && allPos.Data != null)
+                    {
+                        var openKeys = allPos.Data
+                            .Where(p => Math.Abs(p.Quantity) > 0)
+                            .Select(p => $"{p.Symbol}_{p.PositionSide}")
+                            .ToList();
+                        _entryTracker.ReconcileWithRealPositions(openKeys);
+                    }
+                }
+                catch { /* reconcile is non-critical, never block supervisor */ }
+
                 var openOrders = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
                 if (openOrders.Success)
                 {
