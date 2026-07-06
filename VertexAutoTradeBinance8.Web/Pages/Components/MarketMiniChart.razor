@@ -17,7 +17,16 @@
     }
     else if (_bars.Count == 0)
     {
-        <div class="mc-empty">@_debugMsg</div>
+        <div class="mc-empty">
+            @if (string.IsNullOrEmpty(_debugMsg))
+            {
+                <div class="mc-spinner"></div>
+            }
+            else
+            {
+                <span style="font-size:11px;color:#2a3a50;font-family:monospace">@_debugMsg</span>
+            }
+        </div>
     }
     else
     {
@@ -87,6 +96,8 @@
 <style>
 .mc-wrap {
     position: relative;
+    display: flex;
+    flex-direction: column;
     width: 100%;
     height: 100%;
     min-height: 200px;
@@ -97,11 +108,15 @@
 }
 .mc-svg {
     display: block;
+    flex: 1;
     width: 100%;
     height: 100%;
+    min-height: 0; /* required for flex child to shrink */
 }
 .mc-empty {
     display: flex;
+    flex: 1;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     height: 100%;
@@ -109,7 +124,7 @@
     color: #2a3a50;
     font-size: 12px;
     font-family: 'Segoe UI', sans-serif;
-    gap: 10px;
+    gap: 6px;
 }
 .mc-spinner {
     width: 18px; height: 18px;
@@ -239,6 +254,8 @@
         // 2) Binance REST fallback
         if (klines == null || klines.Count == 0)
         {
+            _debugMsg = $"Snapshot miss · trying Binance REST…";
+            await InvokeAsync(StateHasChanged); // show interim message
             Console.WriteLine($"[MiniChart] Snapshot miss {sym}/{tf} — Binance REST");
             klines = await FetchBinanceAsync(sym, tf);
         }
@@ -253,6 +270,7 @@
             klines = klines.Skip(klines.Count - MaxBars).ToList();
 
         BuildChart(klines);
+        Console.WriteLine($"[MiniChart] Chart built: {_bars.Count} bars, {_priceTicks.Count} ticks, sym={sym} tf={tf}");
 
         try
         {
@@ -454,3 +472,4 @@
         public string Kind = "", Title = "", Detail = "";
     }
 }
+
