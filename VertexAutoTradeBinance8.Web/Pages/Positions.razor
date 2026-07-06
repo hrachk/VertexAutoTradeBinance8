@@ -40,10 +40,10 @@
         </div>
         <div class="p-hero-stats">
             <div class="p-demo-toggle">
-                <button class="p-mode-btn @(!_demoMode ? \"p-mode-on\" : \"\")"
-                        @onclick="() => SetDemoMode(false)">● Live</button>
-                <button class="p-mode-btn @(_demoMode ? \"p-mode-demo-on\" : \"\")"
-                        @onclick="() => SetDemoMode(true)">◑ Demo</button>
+                @{ var liveCls = !_demoMode ? "p-mode-btn p-mode-on" : "p-mode-btn"; }
+                @{ var demoCls = _demoMode  ? "p-mode-btn p-mode-demo-on" : "p-mode-btn"; }
+                <button class="@liveCls" @onclick="() => SetDemoMode(false)">&#9679; Live</button>
+                <button class="@demoCls" @onclick="() => SetDemoMode(true)">&#9681; Demo</button>
             </div>
             <div class="p-hdiv"></div>
             <div class="p-hstat @(_totalPnl >= 0 ? "h-pos" : "h-neg")">
@@ -1687,5 +1687,6 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
         _timer?.Dispose();
     }
 }
+
 
 
