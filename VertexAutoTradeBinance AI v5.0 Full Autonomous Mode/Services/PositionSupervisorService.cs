@@ -3011,6 +3011,24 @@ namespace VertexAutoTradeBinance8.Services
             private readonly string _apiKey;
             private readonly string _apiSecret;
             private readonly string _baseUrl;
+
+            // ── Server-time sync (fixes -1021 "timestamp ahead" errors) ──────
+            // Binance rejects signed requests when local clock differs from
+            // their NTP by more than 1000ms.  We fetch /fapi/v1/time once
+            // and cache the offset; recvWindow=5000 provides an extra safety
+            // buffer so occasional drift doesn't cause failures.
+            private long   _timeOffsetMs  = 0;
+            private DateTime _lastTimeSync = DateTime.MinValue;
+            private readonly SemaphoreSlim _timeSyncLock = new(1, 1);
+            private static readonly TimeSpan TimeSyncInterval = TimeSpan.FromMinutes(10);
+
+            // ── GetOpenAlgoOrders 20-second cache (fixes HTTP 429) ────────────
+            private readonly SemaphoreSlim _cacheLock = new(1, 1);
+            private List<BinanceAlgoOrderInfo>? _cachedOrders;
+            private string?   _cacheSymbol;
+            private DateTime  _cacheExpiry = DateTime.MinValue;
+            private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(20);
+
             public BinanceAlgoOrderRaw(IConfiguration cfg, IHttpClientFactory httpFactory, ILogger logger)
             {
                 _logger = logger;
@@ -3029,6 +3047,44 @@ namespace VertexAutoTradeBinance8.Services
                 _http = httpFactory.CreateClient("BinanceAlgoRaw");
                 _http.Timeout = TimeSpan.FromSeconds(8);
             }
+            private async Task<long> GetBinanceTimestampAsync(CancellationToken ct)
+            {
+                // Fast path
+                if (DateTime.UtcNow - _lastTimeSync < TimeSyncInterval)
+                    return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + _timeOffsetMs;
+
+                await _timeSyncLock.WaitAsync(ct);
+                try
+                {
+                    if (DateTime.UtcNow - _lastTimeSync < TimeSyncInterval)
+                        return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + _timeOffsetMs;
+
+                    try
+                    {
+                        using var req = new HttpRequestMessage(HttpMethod.Get, $"{_baseUrl}/fapi/v1/time");
+                        using var resp = await _http.SendAsync(req, ct);
+                        if (resp.IsSuccessStatusCode)
+                        {
+                            var body = await resp.Content.ReadAsStringAsync(ct);
+                            using var doc = System.Text.Json.JsonDocument.Parse(body);
+                            if (doc.RootElement.TryGetProperty("serverTime", out var st))
+                            {
+                                long serverMs = st.GetInt64();
+                                long localMs  = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                                _timeOffsetMs = serverMs - localMs;
+                                _lastTimeSync = DateTime.UtcNow;
+                                if (Math.Abs(_timeOffsetMs) > 500)
+                                    _logger.LogWarning("[ALGO-RAW] Clock offset={off}ms — timestamps adjusted", _timeOffsetMs);
+                            }
+                        }
+                    }
+                    catch { /* non-fatal — use local clock */ }
+                }
+                finally { _timeSyncLock.Release(); }
+
+                return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + _timeOffsetMs;
+            }
+
             public async Task<bool> PlaceConditionalAsync(
                 string symbol,
                 OrderSide side,
@@ -3047,20 +3103,21 @@ namespace VertexAutoTradeBinance8.Services
                     return false;
                 }
 
-                var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                var ts = await GetBinanceTimestampAsync(ct);
                 string D(decimal v) => v.ToString("0.########", CultureInfo.InvariantCulture);
 
                 var q = new List<KeyValuePair<string, string>>
                 {
-                    new("algoType", "CONDITIONAL"),
-                    new("symbol", symbol),
-                    new("side", side == OrderSide.Buy ? "BUY" : "SELL"),
-                    new("type", type),
-                    new("timestamp", ts.ToString(CultureInfo.InvariantCulture)),
+                    new("algoType",    "CONDITIONAL"),
+                    new("symbol",      symbol),
+                    new("side",        side == OrderSide.Buy ? "BUY" : "SELL"),
+                    new("type",        type),
+                    new("timestamp",   ts.ToString(CultureInfo.InvariantCulture)),
+                    new("recvWindow",  "5000"),
                     new("workingType", workingType),
                     new("triggerPrice", D(triggerPrice)),
                     new("positionSide", positionSide.ToString().ToUpperInvariant()),
-                    new("quantity", D(quantity))
+                    new("quantity",    D(quantity))
                 };
 
                 // CRITICAL FIX: this parameter previously didn't exist at
@@ -3143,10 +3200,23 @@ namespace VertexAutoTradeBinance8.Services
                     return result;
                 }
 
-                var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                // Fast path: return cached result (prevents 429)
+                var now = DateTime.UtcNow;
+                if (_cachedOrders != null && _cacheSymbol == symbol && now < _cacheExpiry)
+                    return _cachedOrders;
+
+                await _cacheLock.WaitAsync(ct);
+                try
+                {
+                    now = DateTime.UtcNow;
+                    if (_cachedOrders != null && _cacheSymbol == symbol && now < _cacheExpiry)
+                        return _cachedOrders;
+
+                var ts = await GetBinanceTimestampAsync(ct);
                 var q = new List<KeyValuePair<string, string>>
                 {
-                    new("timestamp", ts.ToString(CultureInfo.InvariantCulture)),
+                    new("timestamp",  ts.ToString(CultureInfo.InvariantCulture)),
+                    new("recvWindow", "5000"),
                 };
                 if (!string.IsNullOrEmpty(symbol)) q.Add(new("symbol", symbol));
 
@@ -3163,6 +3233,7 @@ namespace VertexAutoTradeBinance8.Services
                     var body = await resp.Content.ReadAsStringAsync(ct);
                     if (!resp.IsSuccessStatusCode)
                     {
+                        if (body.Contains("-1021")) _lastTimeSync = DateTime.MinValue;
                         _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
                         return result;
                     }
@@ -3202,18 +3273,26 @@ namespace VertexAutoTradeBinance8.Services
                 {
                     _logger.LogError(ex, "[ALGO-RAW] EX GetOpenAlgoOrdersAsync {symbol}", symbol);
                 }
+
+                // Cache even empty result to prevent 429 hammering
+                _cachedOrders = result;
+                _cacheSymbol  = symbol;
+                _cacheExpiry  = DateTime.UtcNow.Add(CacheTtl);
                 return result;
+                } // end cache lock try
+                finally { _cacheLock.Release(); }
             }
 
             public async Task<bool> CancelAlgoOrderAsync(long algoId, CancellationToken ct)
             {
                 if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret)) return false;
 
-                var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                var ts = await GetBinanceTimestampAsync(ct);
                 var q = new List<KeyValuePair<string, string>>
                 {
-                    new("algoId", algoId.ToString(CultureInfo.InvariantCulture)),
-                    new("timestamp", ts.ToString(CultureInfo.InvariantCulture)),
+                    new("algoId",     algoId.ToString(CultureInfo.InvariantCulture)),
+                    new("timestamp",  ts.ToString(CultureInfo.InvariantCulture)),
+                    new("recvWindow", "5000"),
                 };
                 var (query, rawQuery) = BuildQuery(q);
                 var sig = Sign(rawQuery, _apiSecret);
@@ -3463,3 +3542,4 @@ namespace VertexAutoTradeBinance8.Services
     }
 
 }
+
