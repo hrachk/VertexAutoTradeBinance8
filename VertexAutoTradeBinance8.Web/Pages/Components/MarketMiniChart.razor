@@ -1,395 +1,206 @@
+@* MarketMiniChart — pure JS/LightweightCharts rendering.
+   Blazor only: mounts the container, calls JS to draw, and disposes.
+   No SVG, no Blazor re-render loop issues, no flex/height CSS chain problems. *@
 @using VertexAutoTradeBinance8.Web.Models
 @using VertexAutoTradeBinance8.Services
 @inject VertexAutoTradeBinance8.Web.Services.MarketSnapshotFileService SnapSvc
-@inject VertexAutoTradeBinance8.Web.Services.DecisionMarkersFileService MarkerSvc
 @inject VertexAutoTradeBinance8.Services.BinanceClientFactory Factory
+@inject IJSRuntime JS
+@implements IAsyncDisposable
 
-<div class="mc-wrap"
-     @onwheel="OnWheel"
-     @onmousemove="OnMouseMove"
-     @onmouseleave="OnMouseLeave">
-
+<div id="@_containerId" class="mc-host">
     @if (_loading)
     {
-        <div class="mc-empty">
-            <div class="mc-spinner"></div>
-        </div>
+        <div class="mc-spinner-wrap"><div class="mc-spinner"></div></div>
     }
-    else if (_bars.Count == 0)
+    else if (!string.IsNullOrEmpty(_error))
     {
-        <div class="mc-empty">@_debugMsg</div>
-    }
-    else
-    {
-        <svg viewBox="0 0 800 260" class="mc-svg" preserveAspectRatio="none">
-
-            @* Grid lines + price labels *@
-            @foreach (var t in _priceTicks)
-            {
-                var ty = IC(t.Y);
-                <line x1="8" y1="@ty" x2="752" y2="@ty" stroke="#0f1825" stroke-width="1"/>
-                <svg:text x="796" y="@ty" text-anchor="end" dominant-baseline="middle" class="mc-tick">@t.Label</svg:text>
-            }
-
-            @* Time labels *@
-            @for (int ti = 0; ti < _bars.Count; ti += Math.Max(1, _bars.Count / 6))
-            {
-                var tb = _bars[ti];
-                <svg:text x="@IC(tb.X)" y="252" text-anchor="middle" class="mc-tick">@tb.TimeLabel</svg:text>
-            }
-
-            @* Price line *@
-            @if (_priceLinePath.Length > 0)
-            {
-                <path d="@_priceLinePath" class="mc-priceline"/>
-            }
-
-            @* Wicks *@
-            @foreach (var b in _bars)
-            {
-                <line x1="@IC(b.X)" y1="@IC(b.YHigh)" x2="@IC(b.X)" y2="@IC(b.YLow)"
-                      class="@(b.IsUp ? "mc-wick mc-wick-up" : "mc-wick mc-wick-dn")"/>
-            }
-
-            @* Bodies *@
-            @foreach (var b in _bars)
-            {
-                <rect x="@IC(b.BodyX)" y="@IC(b.BodyY)"
-                      width="@IC(b.BodyW)" height="@IC(b.BodyH)"
-                      class="@(b.IsUp ? "mc-body mc-body-up" : "mc-body mc-body-dn")"/>
-            }
-
-            @* Decision markers *@
-            @foreach (var mk in _markers)
-            {
-                var mkx = IC(mk.X); var mky = IC(mk.Y);
-                <circle cx="@mkx" cy="@mky" r="4"
-                        class="mc-mk mc-mk-@mk.Kind"
-                        @onmouseenter="@(() => _tip = mk)"/>
-            }
-
-        </svg>
-
-        @if (_tip != null)
-        {
-            var tx = IC(_tip.Tx); var ty2 = IC(_tip.Ty);
-            <div class="mc-tooltip" style="left:@(tx)px;top:@(ty2)px">
-                <div class="mc-tt-title">@_tip.Title</div>
-                @if (!string.IsNullOrEmpty(_tip.Detail))
-                {
-                    <div class="mc-tt-body">@_tip.Detail</div>
-                }
-            </div>
-        }
+        <div class="mc-error">@_error</div>
     }
 </div>
 
 <style>
-.mc-wrap {
+.mc-host {
     position: relative;
     width: 100%;
     height: 260px;
     background: #07090f;
     overflow: hidden;
-    user-select: none;
-    cursor: crosshair;
 }
-.mc-svg {
-    display: block;
-    width: 100%;
-    height: 100%;
-}
-.mc-empty {
+.mc-spinner-wrap {
+    position: absolute;
+    inset: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    height: 100%;
-    min-height: 200px;
-    color: #2a3a50;
-    font-size: 12px;
-    font-family: 'Segoe UI', sans-serif;
-    gap: 10px;
 }
 .mc-spinner {
-    width: 18px; height: 18px;
+    width: 20px; height: 20px;
     border: 2px solid #1a2535;
     border-top-color: #3b82f6;
     border-radius: 50%;
     animation: mc-spin 0.7s linear infinite;
 }
 @@keyframes mc-spin { to { transform: rotate(360deg); } }
-.mc-tick {
-    font-size: 9px;
-    fill: #2a3a50;
-    font-family: 'JetBrains Mono','Fira Code',monospace;
-}
-.mc-wick      { stroke-width: 1; }
-.mc-wick-up   { stroke: #1a6644; }
-.mc-wick-dn   { stroke: #7a2030; }
-.mc-body-up   { fill: #00d68f; }
-.mc-body-dn   { fill: #ff4d6a; }
-.mc-priceline {
-    fill: none;
-    stroke: rgba(59,130,246,0.3);
-    stroke-width: 1;
-    stroke-linejoin: round;
-}
-.mc-mk        { stroke: none; cursor: pointer; }
-.mc-mk-entry  { fill: #00d68f; }
-.mc-mk-reject { fill: #ff4d6a; }
-.mc-mk-eval   { fill: #ffd166; }
-.mc-mk-conf   { fill: #a855f7; }
-.mc-mk-late   { fill: #ff4d6a; opacity: 0.6; }
-.mc-mk-vol    { fill: #4a6080; }
-.mc-mk-other  { fill: #3b82f6; }
-.mc-tooltip {
+.mc-error {
     position: absolute;
-    background: #0f1623;
-    border: 1px solid #1e2d47;
-    border-radius: 8px;
-    padding: 8px 12px;
-    pointer-events: none;
-    z-index: 200;
-    min-width: 150px;
-    max-width: 240px;
-    box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    color: #2a3a50;
+    font-family: monospace;
+    padding: 8px;
+    text-align: center;
 }
-.mc-tt-title { font-size: 12px; font-weight: 700; color: #dce8f5; margin-bottom: 3px; }
-.mc-tt-body  { font-size: 11px; color: #4a6080; line-height: 1.5; }
 </style>
 
 @code {
     [Parameter] public string Symbol    { get; set; } = "";
-    [Parameter] public string Timeframe { get; set; } = "FiveMinutes";
+    [Parameter] public string Timeframe { get; set; } = "FifteenMinutes";
     [Parameter] public int    MaxBars   { get; set; } = 120;
 
-    const double W = 800, H = 260;
-    const double PadTop = 12, PadBot = 22, PadLeft = 8, PadRight = 50;
+    // Stable container ID — stays the same for the lifetime of this
+    // component instance so JS can always find the div.
+    readonly string _containerId = "mc-" + Guid.NewGuid().ToString("N")[..8];
 
-    bool   _loading        = true;
-    string _debugMsg       = "";
-    string _priceLinePath  = "";
+    bool   _loading = true;
+    string _error   = "";
 
-    List<Bar>    _bars       = new();
-    List<Tick>   _priceTicks = new();
-    List<Marker> _markers    = new();
-    Marker?      _tip;
-    double       _mouseX, _mouseY;
+    // Track last rendered params to avoid redundant JS calls
+    string _lastSym = "";
+    string _lastTf  = "";
 
-    // Format double as InvariantCulture string for SVG attributes.
-    // CRITICAL: without InvariantCulture, locales with comma decimal separator
-    // produce "123,45" which SVG rejects — chart renders blank.
-    static string IC(double v) =>
-        v.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
-
-    protected override async Task OnParametersSetAsync()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        _loading       = true;
-        _tip           = null;
-        _debugMsg      = "";
-        _bars          = new();
-        _priceTicks    = new();
-        _markers       = new();
-        _priceLinePath = "";
-        await InvokeAsync(StateHasChanged);
+        // Only reload when Symbol or Timeframe actually changes
+        var sym = Symbol?.Trim().ToUpperInvariant() ?? "";
+        var tf  = Timeframe ?? "FifteenMinutes";
 
-        if (string.IsNullOrWhiteSpace(Symbol))
+        if (sym == _lastSym && tf == _lastTf && !firstRender)
+            return;
+
+        _lastSym = sym;
+        _lastTf  = tf;
+
+        await RenderChartAsync(sym, tf);
+    }
+
+    async Task RenderChartAsync(string sym, string tf)
+    {
+        _loading = true;
+        _error   = "";
+        StateHasChanged();
+
+        if (string.IsNullOrEmpty(sym))
         {
-            _loading  = false;
-            _debugMsg = "no symbol";
-            await InvokeAsync(StateHasChanged);
+            _loading = false;
+            _error   = "no symbol";
+            StateHasChanged();
             return;
         }
 
-        await LoadAndBuildAsync();
-
-        _loading = false;
-        await InvokeAsync(StateHasChanged);
-    }
-
-    async Task LoadAndBuildAsync()
-    {
-        var sym = Symbol.Trim().ToUpperInvariant();
-        var tf  = NormalizeTf(Timeframe);
-
-        List<KlineDto>? klines = null;
-
-        // 1) Try snapshot file
-        try
-        {
-            var all = await SnapSvc.LoadAsync();
-            if (all != null && all.Count > 0)
-            {
-                var s = all.FirstOrDefault(x =>
-                            x.Symbol.Equals(sym, StringComparison.OrdinalIgnoreCase) &&
-                            x.Timeframe.Equals(tf,  StringComparison.OrdinalIgnoreCase))
-                        ?? all.FirstOrDefault(x =>
-                            x.Symbol.Equals(sym, StringComparison.OrdinalIgnoreCase));
-
-                if (s?.Klines?.Count > 0)
-                {
-                    klines = s.Klines.ToList();
-                    Console.WriteLine($"[MiniChart] Snap hit: {s.Symbol}/{s.Timeframe} {klines.Count} bars");
-                }
-                else
-                {
-                    var avail = all.Count > 0 ? string.Join(", ", all.Take(3).Select(x => x.Symbol+":"+x.Timeframe)) : "empty";
-                    Console.WriteLine($"[MiniChart] Snap miss: {sym}/{tf}. Available: {avail}");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[MiniChart] SnapSvc error: {ex.Message}");
-        }
-
-        // 2) Binance REST fallback
-        if (klines == null || klines.Count == 0)
-        {
-            Console.WriteLine($"[MiniChart] Snapshot miss {sym}/{tf} — Binance REST");
-            klines = await FetchBinanceAsync(sym, tf);
-        }
+        // Load klines
+        var klines = await LoadKlinesAsync(sym, tf);
 
         if (klines == null || klines.Count == 0)
         {
-            _debugMsg = $"No data: {sym}/{tf}";
+            _loading = false;
+            _error   = $"No data: {sym}";
+            StateHasChanged();
             return;
         }
 
         if (klines.Count > MaxBars)
             klines = klines.Skip(klines.Count - MaxBars).ToList();
 
-        BuildChart(klines);
+        // Build JS-ready array: [{time, open, high, low, close}]
+        // time must be Unix seconds (LW Charts requirement)
+        var bars = klines.Select(k => new
+        {
+            time  = k.OpenTime / 1000,   // ms → seconds
+            open  = (double)k.Open,
+            high  = (double)k.High,
+            low   = (double)k.Low,
+            close = (double)k.Close,
+        }).ToArray();
+
+        _loading = false;
+        StateHasChanged();
+
+        // Give Blazor one frame to remove the spinner div before JS touches the container
+        await Task.Delay(30);
 
         try
         {
-            var mkrs = await MarkerSvc.LoadAsync(sym, tf);
-            if (mkrs?.Count > 0) BuildMarkers(mkrs);
+            await JS.InvokeVoidAsync("miniChartInit", _containerId, bars);
         }
-        catch { /* markers optional */ }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[MiniChart] JS init error: {ex.Message}");
+            _error = "Chart init failed";
+            StateHasChanged();
+        }
     }
 
-    void BuildChart(List<KlineDto> klines)
+    async Task<List<KlineDto>?> LoadKlinesAsync(string sym, string tf)
     {
-        var bars    = new List<Bar>(klines.Count);
-        var ticks   = new List<Tick>(6);
-        var pline   = new System.Text.StringBuilder();
-
-        decimal lo = klines.Min(k => k.Low);
-        decimal hi = klines.Max(k => k.High);
-        if (hi <= lo) { hi = lo + 1; }
-
-        double plotW = W - PadLeft - PadRight;
-        double plotH = H - PadTop - PadBot;
-        double step  = plotW / Math.Max(klines.Count, 1);
-        double bodyW = Math.Max(1.5, step * 0.6);
-
-        double PY(decimal price) =>
-            PadTop + (double)(1m - (price - lo) / (hi - lo)) * plotH;
-
-        for (int i = 0; i < klines.Count; i++)
+        // 1) Snapshot file (written by Engine every 45s)
+        try
         {
-            var k  = klines[i];
-            double cx = PadLeft + (i + 0.5) * step;
-            double yH = PY(k.High), yL = PY(k.Low);
-            double yO = PY(k.Open), yC = PY(k.Close);
-            bool   up = k.Close >= k.Open;
-
-            bars.Add(new Bar
+            var all = await SnapSvc.LoadAsync();
+            if (all?.Count > 0)
             {
-                X      = cx,
-                YHigh  = yH, YLow  = yL,
-                BodyX  = cx - bodyW / 2,
-                BodyY  = Math.Min(yO, yC),
-                BodyW  = bodyW,
-                BodyH  = Math.Max(1.0, Math.Abs(yO - yC)),
-                IsUp   = up,
-                CloseY = yC,
-                TimeLabel = UnixToTime(k.OpenTime)
-            });
+                // Exact match first, then any TF for this symbol
+                var s = all.FirstOrDefault(x =>
+                            x.Symbol.Equals(sym, StringComparison.OrdinalIgnoreCase) &&
+                            x.Timeframe.Equals(tf, StringComparison.OrdinalIgnoreCase))
+                        ?? all.FirstOrDefault(x =>
+                            x.Symbol.Equals(sym, StringComparison.OrdinalIgnoreCase));
 
-            pline.Append(i == 0
-                ? $"M {IC(cx)} {IC(yC)}"
-                : $" L {IC(cx)} {IC(yC)}");
-        }
-
-        // 6 price ticks
-        for (int i = 0; i <= 5; i++)
-        {
-            decimal price = lo + (hi - lo) * i / 5m;
-            ticks.Add(new Tick { Y = PY(price), Label = FmtPrice(price) });
-        }
-
-        _bars          = bars;
-        _priceTicks    = ticks;
-        _priceLinePath = pline.ToString();
-    }
-
-    void BuildMarkers(IReadOnlyList<UiDecisionMarker> mkrs)
-    {
-        if (_bars.Count == 0) return;
-        var result = new List<Marker>();
-
-        foreach (var m in mkrs)
-        {
-            // Find nearest bar by timestamp
-            int best = 0; long bestD = long.MaxValue;
-            for (int i = 0; i < _bars.Count; i++)
-            {
-                // bars don't store OpenTimeMs in this rewrite;
-                // rebuild with index-proportional time estimation
-                // — markers will be placed at bar 0 if we can't match.
-                // A future improvement: restore OpenTimeMs to Bar.
-                best = 0; break;
+                if (s?.Klines?.Count > 0)
+                {
+                    Console.WriteLine($"[MiniChart] Snap: {s.Symbol}/{s.Timeframe} {s.Klines.Count} bars");
+                    return s.Klines.ToList();
+                }
+                Console.WriteLine($"[MiniChart] Snap miss: {sym}/{tf}. Have {all.Count} series: " +
+                    string.Join(", ", all.Take(4).Select(x => $"{x.Symbol}:{x.Timeframe}")));
             }
-            var bar = _bars[best];
-            var kind = m.Type switch
-            {
-                UiMarkerType.EntryAllowed    => "entry",
-                UiMarkerType.EntryRejected   => "reject",
-                UiMarkerType.Evaluated       => "eval",
-                UiMarkerType.ConfidenceBelow => "conf",
-                UiMarkerType.BlockedLate     => "late",
-                UiMarkerType.LowVolume       => "vol",
-                _                            => "other"
-            };
-            result.Add(new Marker
-            {
-                X = bar.X, Y = Math.Max(6, bar.CloseY - 14),
-                Tx = Math.Min(W - 200, _mouseX + 12),
-                Ty = Math.Min(H - 80,  _mouseY + 12),
-                Kind = kind,
-                Title  = MarkerTitle(m),
-                Detail = m.Details ?? ""
-            });
         }
-        _markers = result;
-    }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[MiniChart] Snap error: {ex.Message}");
+        }
 
-    async Task OnWheel(WheelEventArgs e)
-    {
-        MaxBars = e.DeltaY < 0
-            ? Math.Max(20,  MaxBars - 15)
-            : Math.Min(500, MaxBars + 15);
-        await LoadAndBuildAsync();
-        await InvokeAsync(StateHasChanged);
+        // 2) Binance REST fallback
+        Console.WriteLine($"[MiniChart] REST fallback: {sym}/{tf}");
+        return await FetchBinanceAsync(sym, tf);
     }
-
-    void OnMouseMove(MouseEventArgs e) { _mouseX = e.OffsetX; _mouseY = e.OffsetY; }
-    void OnMouseLeave() => _tip = null;
 
     async Task<List<KlineDto>?> FetchBinanceAsync(string sym, string tf)
     {
         try
         {
             var client = Factory.TryCreateRestClient();
-            if (client == null) return null;
+            if (client == null)
+            {
+                Console.WriteLine("[MiniChart] REST: no client (ApiKey empty?)");
+                return null;
+            }
             if (!TfMap.TryGetValue(tf, out var interval))
                 interval = Binance.Net.Enums.KlineInterval.FifteenMinutes;
+
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var res = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
                 sym, interval, limit: Math.Min(MaxBars, 200), ct: cts.Token);
-            if (!res.Success || res.Data == null) return null;
+
+            if (!res.Success || res.Data == null)
+            {
+                Console.WriteLine($"[MiniChart] REST failed: {res.Error?.Message}");
+                return null;
+            }
+            Console.WriteLine($"[MiniChart] REST OK: {res.Data.Count()} bars");
             return res.Data.Select(k => new KlineDto(
                 ((DateTimeOffset)DateTime.SpecifyKind(k.OpenTime, DateTimeKind.Utc))
                     .ToUnixTimeMilliseconds(),
@@ -398,7 +209,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[MiniChart] Binance REST failed: {ex.Message}");
+            Console.WriteLine($"[MiniChart] REST exception: {ex.Message}");
             return null;
         }
     }
@@ -414,51 +225,9 @@
         ["OneDay"]         = Binance.Net.Enums.KlineInterval.OneDay,
     };
 
-    static string NormalizeTf(string tf) => tf switch
+    public async ValueTask DisposeAsync()
     {
-        "1m"  or "OneMinute"      => "OneMinute",
-        "5m"  or "FiveMinutes"    => "FiveMinutes",
-        "15m" or "FifteenMinutes" => "FifteenMinutes",
-        "30m" or "ThirtyMinutes"  => "ThirtyMinutes",
-        "1h"  or "OneHour"        => "OneHour",
-        "4h"  or "FourHour"       => "FourHour",
-        "1D"  or "1d" or "OneDay" => "OneDay",
-        _ => tf
-    };
-
-    static string UnixToTime(long ms) =>
-        DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime().ToString("HH:mm");
-
-    static string FmtPrice(decimal p)
-    {
-        if (p >= 10000) return p.ToString("F0");
-        if (p >= 100)   return p.ToString("F1");
-        if (p >= 1)     return p.ToString("F2");
-        return p.ToString("F4");
-    }
-
-    static string MarkerTitle(UiDecisionMarker m) => m.Type switch
-    {
-        UiMarkerType.Evaluated       => "Сигнал проанализирован",
-        UiMarkerType.BlockedLate     => "Опоздали ко входу",
-        UiMarkerType.LowVolume       => "Низкий объём",
-        UiMarkerType.ConfidenceBelow => "Недостаточная уверенность",
-        UiMarkerType.EntryAllowed    => "Вход разрешён",
-        UiMarkerType.EntryRejected   => "Вход отклонён",
-        _ => "Событие"
-    };
-
-    sealed class Bar
-    {
-        public double X, YHigh, YLow, BodyX, BodyY, BodyW, BodyH, CloseY;
-        public bool   IsUp;
-        public string TimeLabel = "";
-    }
-    sealed class Tick   { public double Y;  public string Label = ""; }
-    sealed class Marker
-    {
-        public double X, Y, Tx, Ty;
-        public string Kind = "", Title = "", Detail = "";
+        try { await JS.InvokeVoidAsync("miniChartDestroy", _containerId); }
+        catch { }
     }
 }
-
