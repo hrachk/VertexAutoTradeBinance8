@@ -69,23 +69,55 @@ namespace VertexAutoTradeBinance8.Services
             // Контролирует DCA — не более 2 входов на одну сторону
             private readonly ConcurrentDictionary<string, int> _active = new();
 
+            // _lastEntry: timestamp of last RegisterEntry per key.
+            // Safety TTL: if a position was closed outside the bot (liquidation,
+            // manual close via Binance app) and OnPositionClosed was never called,
+            // the counter would remain permanently blocking new entries. The TTL
+            // (4 hours) resets the counter automatically as a last resort.
+            // 4h is long enough to cover any real multi-DCA position lifetime
+            // but short enough to recover from a missed close event.
+            private readonly ConcurrentDictionary<string, DateTime> _lastEntry = new();
+            private static readonly TimeSpan EntryTtl = TimeSpan.FromHours(4);
+
             private string Key(string symbol, PositionSide side) => $"{symbol}_{side}";
 
             public int GetActiveEntries(string symbol, PositionSide side)
-                => _active.GetOrAdd(Key(symbol, side), 0);
+                => _active.TryGetValue(Key(symbol, side), out var v) ? v : 0;
 
             // Вызывается при каждом успешном входе
             public void RegisterEntry(string symbol, PositionSide side)
-                => _active.AddOrUpdate(Key(symbol, side), 1, (_, v) => v + 1);
+            {
+                var key = Key(symbol, side);
+                _active.AddOrUpdate(key, 1, (_, v) => v + 1);
+                _lastEntry[key] = DateTime.UtcNow;
+            }
 
             // Вызывается при полном закрытии позиции — сбрасывает счётчик
             // После закрытия бот может снова войти (глобальный cap контролирует MAX_GLOBAL_POSITIONS=4)
             public void OnPositionClosed(string symbol, PositionSide side)
-                => _active.TryRemove(Key(symbol, side), out _);
+            {
+                var key = Key(symbol, side);
+                _active.TryRemove(key, out _);
+                _lastEntry.TryRemove(key, out _);
+            }
 
-            // Проверяет лимит активных входов на одну сторону
+            // Проверяет лимит активных входов на одну сторону.
+            // Safety TTL: if the entry counter is stale (position closed outside
+            // the bot — liquidation, manual Binance app close — and OnPositionClosed
+            // was never called), auto-reset after EntryTtl (4h) so the bot
+            // can trade the symbol again without needing a restart.
             public bool CanEnter(string symbol, PositionSide side, out string reason)
             {
+                var key = Key(symbol, side);
+
+                // TTL check — reset stale counter
+                if (_lastEntry.TryGetValue(key, out var lastTs) &&
+                    DateTime.UtcNow - lastTs > EntryTtl)
+                {
+                    _active.TryRemove(key, out _);
+                    _lastEntry.TryRemove(key, out _);
+                }
+
                 int active = GetActiveEntries(symbol, side);
 
                 if (active >= MAX_ENTRIES_PER_SYMBOL)
@@ -107,6 +139,28 @@ namespace VertexAutoTradeBinance8.Services
 
             public bool TryReserveSlot(string symbol, PositionSide side, int max)
                 => CanEnter(symbol, side, out _);
+
+            /// <summary>
+            /// Belt-and-suspenders: reconcile active-entry counters against a
+            /// live snapshot of real open positions. Any symbol+side that has a
+            /// counter but NO real position on exchange is forcibly reset.
+            /// Called by PositionSupervisorService on each monitoring cycle so
+            /// counters can never get permanently stuck even if OnPositionClosed
+            /// is missed (e.g. liquidation handled entirely by the exchange).
+            /// </summary>
+            public void ReconcileWithRealPositions(IReadOnlyList<string> openKeys)
+            {
+                // openKeys format: "SOLUSDT_Long", "BTCUSDT_Short" — same as our Key()
+                var openSet = new HashSet<string>(openKeys, StringComparer.OrdinalIgnoreCase);
+                foreach (var key in _active.Keys.ToList())
+                {
+                    if (!openSet.Contains(key))
+                    {
+                        _active.TryRemove(key, out _);
+                        _lastEntry.TryRemove(key, out _);
+                    }
+                }
+            }
         }
 
         public class CooldownGuard
@@ -2588,3 +2642,4 @@ namespace VertexAutoTradeBinance8.Services
      
     }
 }
+
