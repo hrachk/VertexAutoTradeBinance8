@@ -7,6 +7,7 @@
 @inject IHttpClientFactory HttpClientFactory
 @inject Microsoft.Extensions.Options.IOptionsMonitor<VertexAutoTradeBinance8.Configuration.BinanceOptions> BinanceOpts
 @inject VertexAutoTradeBinance8.Web.Services.BinanceTimeService BinanceTime
+@inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoSvc
 @implements IDisposable
 
 <PageTitle>Positions — Vertex</PageTitle>
@@ -38,6 +39,13 @@
             </div>
         </div>
         <div class="p-hero-stats">
+            <div class="p-demo-toggle">
+                <button class="p-mode-btn @(!_demoMode ? \"p-mode-on\" : \"\")"
+                        @onclick="() => SetDemoMode(false)">● Live</button>
+                <button class="p-mode-btn @(_demoMode ? \"p-mode-demo-on\" : \"\")"
+                        @onclick="() => SetDemoMode(true)">◑ Demo</button>
+            </div>
+            <div class="p-hdiv"></div>
             <div class="p-hstat @(_totalPnl >= 0 ? "h-pos" : "h-neg")">
                 <div class="p-hstat-val">
                     @(_totalPnl >= 0 ? "+" : "")@_totalPnl.ToString("F4")
@@ -542,7 +550,7 @@
                         @foreach (var tf in new[]{("OneMinute","1m"),("FiveMinutes","5m"),("FifteenMinutes","15m"),("OneHour","1h"),("FourHour","4h"),("OneDay","1D")})
                         {
                             <button class="p-tf-btn @(_miniTf==tf.Item1?"p-tf-on":"")"
-                                    @onclick="() => _miniTf = tf.Item1">@tf.Item2</button>
+                                    @onclick="async () => { _miniTf = tf.Item1; await InvokeAsync(StateHasChanged); }">@tf.Item2</button>
                         }
                         <button class="p-modal-x" @onclick="() => _miniPos = null">✕</button>
                     </div>
@@ -840,6 +848,13 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
 @@keyframes live-pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
 .p-card{cursor:pointer;transition:border-color .15s;}
 .p-mini-modal{background:var(--bg3);border:1px solid var(--bdr2);border-radius:16px;width:700px;max-width:95vw;box-shadow:0 24px 80px rgba(0,0,0,.7);animation:slideUp .25s ease;}
+
+.p-demo-toggle{display:flex;gap:4px;align-items:center;}
+.p-mode-btn{padding:4px 12px;border-radius:6px;border:1px solid var(--bdr);background:transparent;color:var(--dim);cursor:pointer;font-size:11px;font-weight:700;transition:all .12s;}
+.p-mode-btn:hover{color:var(--txt);border-color:#334155;}
+.p-mode-on{background:#1e3a5f!important;border-color:#3b82f6!important;color:#60a5fa!important;}
+.p-mode-demo-on{background:#451a03!important;border-color:#f59e0b!important;color:#fbbf24!important;}
+
 .p-mini-chart-wrap{height:260px;overflow:hidden;border-top:1px solid var(--bdr);border-bottom:1px solid var(--bdr);}
 .p-mini-stats{display:grid;grid-template-columns:repeat(4,1fr);}
 .p-ms{padding:12px 16px;border-right:1px solid var(--bdr);}
@@ -1093,7 +1108,78 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
     // ── Mini popup ───────────────────────────────────────────
     PosRow? _miniPos;
     string  _miniTf = "FifteenMinutes";
-    void OpenMiniStats(PosRow p) => _miniPos = p;
+    bool    _demoMode = false;
+
+    void OpenMiniStats(PosRow p)
+    {
+        _miniPos = p;
+        _miniTf  = "FifteenMinutes"; // reset TF on each new position
+        InvokeAsync(StateHasChanged);
+    }
+
+    async Task SetDemoMode(bool demo)
+    {
+        _demoMode = demo;
+        await LoadDemoData();
+    }
+
+    async Task LoadDemoData()
+    {
+        var snap = DemoSvc.GetSnapshot();
+        // Build PosRow list from DemoPosition
+        var demoPos = snap.Positions.Select(p =>
+        {
+            var livePrice = LiveState.GetLastPrice(p.Symbol);
+            var mark = livePrice > 0 ? livePrice : p.EntryPrice;
+            var pnl  = p.UnrealizedPnl(mark);
+            var roi  = p.Roi(mark);
+            var liq  = p.LiqPrice;
+            var sizeUsdt   = p.Qty * mark;
+            var marginRatio = p.Margin > 0 ? Math.Abs(pnl) / p.Margin : 0m;
+            return new PosRow(
+                p.Symbol, p.Side, p.Leverage,
+                sizeUsdt, p.EntryPrice, mark, liq,
+                p.Margin, marginRatio, pnl, roi);
+        }).ToList();
+
+        // Build OrdRow list from DemoPendingOrders
+        var demoOrders = snap.PendingOrders.Select(o => new OrdRow(
+            0L, o.Symbol,
+            o.Type == VertexAutoTradeBinance8.Web.Demo.DemoOrderType.Limit ? "LIMIT" : "STOP_MARKET",
+            o.Side, o.Side, // side = positionSide for demo
+            o.TriggerPrice, o.TriggerPrice,
+            o.Qty, 0m, false, o.CreatedAtUtc
+        )).ToList();
+
+        // Build history rows from DemoClosedTrade
+        var demoHist = snap.History
+            .OrderByDescending(t => t.ClosedAtUtc)
+            .Take(50)
+            .Select(t => new HistRow(
+                0L, t.Symbol, "MARKET", t.Side,
+                t.ExitPrice, t.ExitPrice, t.Qty, t.Qty,
+                t.CloseReason, t.ClosedAtUtc
+            )).ToList();
+
+        _positions  = demoPos;
+        _openOrders = demoOrders;
+        _histOrders = demoHist;
+        _totalPnl   = demoPos.Sum(p => p.Pnl);
+        _realizedPnlToday = snap.History
+            .Where(t => t.ClosedAtUtc.Date == DateTime.UtcNow.Date)
+            .Sum(t => t.RealizedPnl);
+        // Build PnlRow list from demo closed trades for history tab
+        _pnlRows = snap.History
+            .OrderByDescending(t => t.ClosedAtUtc)
+            .Take(50)
+            .Select(t => new PnlRow(
+                t.Symbol, t.Side, t.EntryPrice, t.ExitPrice,
+                t.Qty, t.RealizedPnl,
+                t.EntryPrice > 0 ? (t.ExitPrice - t.EntryPrice) / t.EntryPrice * 100m * (t.Side == "LONG" ? 1 : -1) : 0m,
+                0m, t.ClosedAtUtc))
+            .ToList();
+        StateHasChanged();
+    }
 
     // ── Partial close ────────────────────────────────────────
     PosRow? _partialPos;
@@ -1601,4 +1687,5 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
         _timer?.Dispose();
     }
 }
+
 
