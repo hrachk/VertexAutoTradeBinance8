@@ -851,7 +851,7 @@ else if (_activeTab == "dca")
         public DateTime ClosedAt { get; init; }
     }
 
-    sealed class SymRow { public string Symbol { get; init; } = ""; public decimal Pnl { get; init; }; public decimal AbsPnl => Math.Abs(Pnl); public int Count { get; init; } }
+    sealed class SymRow { public string Symbol { get; init; } = ""; public decimal Pnl { get; init; } public decimal AbsPnl => Math.Abs(Pnl); public int Count { get; init; } }
 
     class PerfStats
     {

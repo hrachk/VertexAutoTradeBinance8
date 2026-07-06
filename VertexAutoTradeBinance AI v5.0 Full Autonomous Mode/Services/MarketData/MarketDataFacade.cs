@@ -648,7 +648,7 @@ namespace VertexAutoTradeBinance8.Services
                 {
                     using var restClient = _factory.CreateRestClient();
 
-                    CryptoExchange.Net.Objects.WebCallResult<IEnumerable<Binance.Net.Interfaces.IBinanceKline>> rest;
+                    CryptoExchange.Net.Objects.WebCallResult<Binance.Net.Interfaces.IBinanceKline[]> rest;
                     try
                     {
                         rest = await restClient.UsdFuturesApi.ExchangeData.GetKlinesAsync(
