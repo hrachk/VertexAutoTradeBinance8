@@ -1129,7 +1129,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
         // Build PosRow list from DemoPosition
         var demoPos = snap.Positions.Select(p =>
         {
-            var livePrice = LiveState.GetLastPrice(p.Symbol);
+            var livePrice = GetLivePrice(p.Symbol);
             var mark = livePrice > 0 ? livePrice : p.EntryPrice;
             var pnl  = p.UnrealizedPnl(mark);
             var roi  = p.Roi(mark);
@@ -1687,6 +1687,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
         _timer?.Dispose();
     }
 }
+
 
 
 
