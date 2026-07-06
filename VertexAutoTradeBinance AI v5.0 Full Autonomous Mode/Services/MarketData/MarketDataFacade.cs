@@ -83,6 +83,17 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _restLocks = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, decimal> _lastPrice = new();
 
+        // ── REST Circuit Breaker ──────────────────────────────────────────
+        // When a network-level error (DNS, TCP refused, timeout) is detected
+        // we open the circuit for _circuitOpenDuration so subsequent symbols
+        // in the same warmup batch don't each wait for their own timeout.
+        // Pattern: Closed → (N consecutive network failures) → Open → (timer) → Closed
+        private volatile bool _circuitOpen = false;
+        private DateTime _circuitOpenUntil = DateTime.MinValue;
+        private int _consecutiveNetworkFailures = 0;
+        private const int CircuitOpenThreshold = 2;  // failures before opening
+        private static readonly TimeSpan _circuitOpenDuration = TimeSpan.FromMinutes(2);
+
 
         public event Action<string, decimal>? RealtimePrice;
 
@@ -618,19 +629,60 @@ namespace VertexAutoTradeBinance8.Services
 
                 _lastRestFetchUtc[key] = DateTime.UtcNow;
 
+                // ── Circuit breaker check ─────────────────────────────────
+                if (_circuitOpen)
+                {
+                    if (DateTime.UtcNow < _circuitOpenUntil)
+                    {
+                        _logger.LogDebug("[MD][CB] Circuit OPEN — skipping REST for {symbol} {tf}", symbol, tf);
+                        return ws;
+                    }
+                    // Time elapsed → half-open: try one request
+                    _circuitOpen = false;
+                    _consecutiveNetworkFailures = 0;
+                    _logger.LogInformation("[MD][CB] Circuit HALF-OPEN — probing {symbol} {tf}", symbol, tf);
+                }
+
                 await _globalRestLimiter.WaitAsync(ct).ConfigureAwait(false);
                 try
                 {
                     using var restClient = _factory.CreateRestClient();
 
-                    var rest = await restClient.UsdFuturesApi.ExchangeData.GetKlinesAsync(
-                        symbol: symbol,
-                        interval: tf,
-                        limit: need,
-                        ct: ct).ConfigureAwait(false);
+                    CryptoExchange.Net.Objects.WebCallResult<IEnumerable<Binance.Net.Interfaces.IBinanceKline>> rest;
+                    try
+                    {
+                        rest = await restClient.UsdFuturesApi.ExchangeData.GetKlinesAsync(
+                            symbol: symbol,
+                            interval: tf,
+                            limit: need,
+                            ct: ct).ConfigureAwait(false);
+                    }
+                    catch (Exception netEx) when (
+                        netEx is System.Net.Http.HttpRequestException ||
+                        netEx is TaskCanceledException ||
+                        netEx is System.Net.Sockets.SocketException)
+                    {
+                        // Network-level failure (DNS, TCP refused, timeout)
+                        int fails = Interlocked.Increment(ref _consecutiveNetworkFailures);
+                        _logger.LogError("[MD][KLINES] Network error loading klines for {symbol}: {msg}", symbol, netEx.Message);
+                        if (fails >= CircuitOpenThreshold)
+                        {
+                            _circuitOpen = true;
+                            _circuitOpenUntil = DateTime.UtcNow.Add(_circuitOpenDuration);
+                            _logger.LogCritical("[MD][CB] Circuit OPENED after {n} failures — REST paused for {min} min", fails, _circuitOpenDuration.TotalMinutes);
+                        }
+                        return ws;
+                    }
 
                     if (!rest.Success || rest.Data == null)
+                    {
+                        // API-level failure (rate limit, auth, etc.) — don't trip circuit
+                        _logger.LogWarning("[MD][KLINES] REST failed for {symbol} {tf}: {err}", symbol, tf, rest.Error?.Message);
                         return ws;
+                    }
+
+                    // Success → reset circuit breaker
+                    Interlocked.Exchange(ref _consecutiveNetworkFailures, 0);
 
                     foreach (var k in rest.Data)
                     {
@@ -737,3 +789,4 @@ namespace VertexAutoTradeBinance8.Services
             _restLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
     }
 }
+
