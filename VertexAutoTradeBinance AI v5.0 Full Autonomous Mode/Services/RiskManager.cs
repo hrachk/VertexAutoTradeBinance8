@@ -93,11 +93,21 @@ namespace VertexAutoTradeBinance8.Services
             // STOP % и базовый риск
             // -----------------------------
             decimal slDistance = Math.Abs(entry - stop);
-            const decimal MinSlPercent = 0.002m; // 0.2%
-            decimal slPercent = Math.Max(slDistance / entry, MinSlPercent);
 
-            if (slDistance / entry < MinSlPercent)
-                _logger.LogWarning("[RISK] SL too close for {symbol}, forcing min {MinSlPercent:P2}", signal.Symbol, MinSlPercent);
+            // Minimum SL distance scales with leverage.
+            // At 19-25x, a 0.2% SL sits only 3-4% away from liquidation price —
+            // dangerously close. Formula: minSL = 0.5% base + 0.02% per leverage unit.
+            // Examples: 10x→0.7%, 19x→0.88%, 25x→1.0%
+            decimal minSlPct = 0.005m + leverage * 0.0002m;  // 0.5% + 0.02% per lev
+            minSlPct = Math.Clamp(minSlPct, 0.005m, 0.015m); // floor 0.5%, ceil 1.5%
+
+            decimal rawSlPct = entry > 0 ? slDistance / entry : 0m;
+            decimal slPercent = Math.Max(rawSlPct, minSlPct);
+
+            if (rawSlPct < minSlPct)
+                _logger.LogWarning(
+                    "[RISK] SL too close for {symbol} (lev={lev}x): {raw:P2} < min {min:P2} — forcing floor",
+                    signal.Symbol, leverage, rawSlPct, minSlPct);
 
             // -----------------------------
             // BASE RISK + Safety Multiplier
@@ -107,19 +117,12 @@ namespace VertexAutoTradeBinance8.Services
                 : GetDynamicBaseRisk(balance);
 
             decimal safetyMult = signal.SafetyRiskMultiplier > 0 ? signal.SafetyRiskMultiplier : 1m;
-            decimal finalRisk =
-     CalculateAdaptiveRisk(signal, baseRisk, riskMult);
+            decimal winRate = _ai.GetWinRate(signal.Side);
+            decimal finalRisk = CalculateAdaptiveRisk(signal, baseRisk, riskMult, winRate);
 
-            // =============================================================
-            // AI WINRATE ADJUSTMENT
-            // =============================================================
-            var winRate = _ai.GetWinRate(signal.Side);
-
-            if (winRate < 0.45m)
-                finalRisk *= 0.7m;
-            else if (winRate > 0.60m)
-                finalRisk *= 1.2m;
-
+            // WinRate adjustment is now applied INSIDE CalculateAdaptiveRisk
+            // (before the clamp) — removed from here to avoid bypassing the
+            // [0.2%, 5%] safety ceiling.
 
             if (finalRisk <= 0)
             {
@@ -177,7 +180,9 @@ namespace VertexAutoTradeBinance8.Services
                 decimal rawNotional = riskBudgetMicro / slPercent;
 
                 // Не больше 60% баланса × leverage (маржинальный лимит)
-                decimal maxNotionalMicro = balance * leverage * 0.60m;
+                // Cap at 35% of max leverage capacity (was 60%).
+                // Prevents micro-account from over-concentrating on a single trade.
+                decimal maxNotionalMicro = balance * leverage * 0.35m;
                 decimal targetNotional   = Math.Min(rawNotional, maxNotionalMicro);
 
                 // Минимум 5$ notional (иначе Binance отклонит)
@@ -223,7 +228,9 @@ namespace VertexAutoTradeBinance8.Services
             // Notional calculation (normal balance >= 50$)
             // -----------------------------
             decimal riskNotional = riskBudget / slPercent;
-            decimal leverageCapNotional = balance * leverage * 0.98m;
+            // 90% of max leverage capacity — 98% leaves no buffer for
+            // funding rates, price gaps, or exchange rounding.
+            decimal leverageCapNotional = balance * leverage * 0.90m;
 
             // balance < 50 path already returned early above via the
             // MICRO-ACCOUNT block — this code is only reachable when
@@ -437,9 +444,10 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         private decimal CalculateAdaptiveRisk(
-    TradeSignal signal,
-    decimal baseRisk,
-    decimal riskMult)
+            TradeSignal signal,
+            decimal baseRisk,
+            decimal riskMult,
+            decimal winRate = 0.5m)
         {
             decimal confidence = signal.Confidence ?? 0.6m;
             decimal liquidity = signal.LiquidityScore ?? 0.8m;
@@ -506,6 +514,16 @@ namespace VertexAutoTradeBinance8.Services
             if (signal.LiquiditySoftWarning)
                 safety *= 0.75m;
 
+            // ── WinRate adjustment (applied before clamp) ────────────────
+            // Good winrate → slightly more, poor winrate → scale back.
+            // Kept tight (±15%) so it doesn't dominate the risk decision.
+            decimal winRateMult =
+                winRate < 0.40m ? 0.75m :   // poor  → -25%
+                winRate < 0.45m ? 0.85m :   // below avg → -15%
+                winRate > 0.65m ? 1.15m :   // strong → +15%
+                winRate > 0.55m ? 1.05m :   // decent → +5%
+                1.0m;
+
             decimal risk =
                 baseRisk
                 * riskMult
@@ -513,9 +531,13 @@ namespace VertexAutoTradeBinance8.Services
                 * liqMult
                 * volMult
                 * aiMult
-                * safety;
+                * safety
+                * winRateMult;
 
-            return Math.Clamp(risk, 0.002m, 0.05m);
+            // Clamp: floor 0.3% (minimum meaningful trade), ceil 4%
+            // (lowered from 5% — at 19-25x leverage 4% is already aggressive).
+            return Math.Clamp(risk, 0.003m, 0.04m);
         }
     }
 }
+
