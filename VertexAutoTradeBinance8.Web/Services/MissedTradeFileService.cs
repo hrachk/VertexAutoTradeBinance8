@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Web.Models;
@@ -9,22 +9,38 @@ namespace VertexAutoTradeBinance8.Web.Services
     {
         private readonly string _filePath;
         private readonly ILogger<MissedTradeFileService> _logger;
-        private static readonly JsonSerializerOptions JsonOptions = new()
+
+        private const int MaxRetries     = 4;
+        private const int RetryDelayMs   = 25;
+
+        // Hard guard: if the file is somehow larger than this, truncate
+        // it immediately rather than skipping the read entirely — so the
+        // Web UI always has SOMETHING to show instead of going blank.
+        // Root cause of growth is fixed on the Engine side (MaxRecords=500
+        // + compact JSON), but this guard handles any already-bloated file.
+        private const long MaxFileSizeBytes = 10L * 1024 * 1024; // 10 MB
+
+        // How many records the Web is willing to display. Mirrors the
+        // Engine's MaxRecords = 500 so the trim never needs to fire here
+        // in normal operation; it's a belt-and-suspenders fallback.
+        private const int MaxDisplayRecords = 500;
+
+        private static readonly JsonSerializerOptions _jsonOptions = new()
         {
             PropertyNameCaseInsensitive = true,
-            ReadCommentHandling = JsonCommentHandling.Skip,
-            AllowTrailingCommas = true,
+            PropertyNamingPolicy        = JsonNamingPolicy.CamelCase,
+            ReadCommentHandling         = JsonCommentHandling.Skip,
+            AllowTrailingCommas         = true,
+            NumberHandling              = JsonNumberHandling.AllowReadingFromString,
             Converters =
             {
-                new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: true)
+                new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, true)
             }
         };
 
-        private const int MaxRetries = 4;
-        private const int RetryDelayMs = 25;
-        private const long MaxFileSizeBytes = 10 * 1024 * 1024; // 10 MB hard guard
-
-        public MissedTradeFileService(IWebHostEnvironment env, IConfiguration cfg,
+        public MissedTradeFileService(
+            IWebHostEnvironment env,
+            IConfiguration cfg,
             ILogger<MissedTradeFileService> logger)
         {
             var root = cfg["SharedData:Root"];
@@ -34,20 +50,6 @@ namespace VertexAutoTradeBinance8.Web.Services
 
             _logger = logger;
         }
-
-        private static readonly JsonSerializerOptions _jsonOptions = new()
-        {
-            PropertyNameCaseInsensitive = true,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            ReadCommentHandling = JsonCommentHandling.Skip,
-            AllowTrailingCommas = true,
-            NumberHandling = JsonNumberHandling.AllowReadingFromString,
-            Converters =
-    {
-        new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, true)
-    }
-        };
-
 
         public async Task<List<MissedTradeRecord>> LoadAsync(CancellationToken ct = default)
         {
@@ -62,111 +64,158 @@ namespace VertexAutoTradeBinance8.Web.Services
                 {
                     var fi = new FileInfo(_filePath);
 
-                    // ===== HARD FILE GUARDS =====
-                    if (!fi.Exists)
-                        return new();
-
-                    if (fi.Length == 0)
+                    if (!fi.Exists || fi.Length == 0)
                         return new();
 
                     if (fi.Length > MaxFileSizeBytes)
                     {
-                        _logger.LogError(
-                            "[WEB][MissedTrades] File too large ({size} bytes), skipping read",
-                            fi.Length);
-                        return new();
+                        // File grew beyond the hard guard — this means the Engine
+                        // ran without the MaxRecords fix for a long time.
+                        // Truncate to the most recent MaxDisplayRecords entries
+                        // so the UI recovers immediately without waiting for
+                        // someone to manually delete the file.
+                        _logger.LogWarning(
+                            "[WEB][MissedTrades] File too large ({size:N0} bytes) — truncating to last {max} records",
+                            fi.Length, MaxDisplayRecords);
+
+                        await TruncateFileAsync(ct);
+
+                        // Re-check size after truncation
+                        fi.Refresh();
+                        if (fi.Length > MaxFileSizeBytes)
+                        {
+                            _logger.LogError(
+                                "[WEB][MissedTrades] Truncation failed — file still {size:N0} bytes, skipping",
+                                fi.Length);
+                            return new();
+                        }
                     }
 
-                    // ===== LOCK-FREE READ =====
                     await using var fs = new FileStream(
                         _filePath,
-                        FileMode.Open,
-                        FileAccess.Read,
+                        FileMode.Open, FileAccess.Read,
                         FileShare.ReadWrite | FileShare.Delete,
                         bufferSize: 64 * 1024,
                         FileOptions.SequentialScan);
 
-                    // ===== JSON SAFE DESERIALIZE =====
                     var data = await JsonSerializer.DeserializeAsync<List<MissedTradeRecord>>(
-                        fs,
-                        _jsonOptions,
-                        ct);
+                        fs, _jsonOptions, ct);
 
                     if (data == null)
                         return new();
 
-                    return data;
+                    // Belt-and-suspenders: cap what we return to the UI
+                    return data.Count > MaxDisplayRecords
+                        ? data.GetRange(data.Count - MaxDisplayRecords, MaxDisplayRecords)
+                        : data;
                 }
                 catch (JsonException ex)
                 {
-                    // JSON might be mid-replace → retry allowed
                     _logger.LogWarning(
                         ex,
                         "[WEB][MissedTrades] JSON parse failed (attempt {attempt}/{max})",
-                        attempt,
-                        MaxRetries);
+                        attempt, MaxRetries);
                 }
                 catch (IOException ex)
                 {
-                    // File locked / replace window → retry allowed
                     _logger.LogWarning(
                         ex,
                         "[WEB][MissedTrades] IO contention (attempt {attempt}/{max})",
-                        attempt,
-                        MaxRetries);
+                        attempt, MaxRetries);
                 }
                 catch (OperationCanceledException)
                 {
-                    throw; // правильная отмена
+                    throw;
                 }
                 catch (Exception ex)
                 {
-                    // Любая другая ошибка — лог и graceful fallback
-                    _logger.LogError(
-                        ex,
-                        "[WEB][MissedTrades] Unexpected error while reading file");
+                    _logger.LogError(ex, "[WEB][MissedTrades] Unexpected error");
                     return new();
                 }
 
-                // ===== BACKOFF =====
                 if (attempt < MaxRetries)
                     await Task.Delay(RetryDelayMs * attempt, ct);
             }
 
-            // ===== FINAL SAFE FALLBACK =====
             _logger.LogWarning(
-                "[WEB][MissedTrades] Failed to load after {max} attempts",
-                MaxRetries);
-
+                "[WEB][MissedTrades] Failed to load after {max} attempts", MaxRetries);
             return new();
         }
 
+        /// <summary>
+        /// Reads the entire file, keeps only the last MaxDisplayRecords
+        /// entries, and rewrites it — used when the file grew beyond the
+        /// hard size limit (Engine running without the MaxRecords cap fix).
+        /// </summary>
+        private async Task TruncateFileAsync(CancellationToken ct)
+        {
+            try
+            {
+                List<MissedTradeRecord> all;
 
+                await using (var fs = new FileStream(
+                    _filePath,
+                    FileMode.Open, FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete,
+                    bufferSize: 128 * 1024,
+                    FileOptions.SequentialScan))
+                {
+                    all = await JsonSerializer.DeserializeAsync<List<MissedTradeRecord>>(
+                              fs, _jsonOptions, ct)
+                          ?? new();
+                }
+
+                var trimmed = all.Count > MaxDisplayRecords
+                    ? all.GetRange(all.Count - MaxDisplayRecords, MaxDisplayRecords)
+                    : all;
+
+                var tmp = _filePath + ".webtmp";
+                await using (var fs = new FileStream(
+                    tmp,
+                    FileMode.Create, FileAccess.Write,
+                    FileShare.None))
+                {
+                    await JsonSerializer.SerializeAsync(fs, trimmed, _jsonOptions, ct);
+                    await fs.FlushAsync(ct);
+                }
+
+                File.Replace(tmp, _filePath, _filePath + ".webbak",
+                    ignoreMetadataErrors: true);
+
+                _logger.LogInformation(
+                    "[WEB][MissedTrades] Truncated {before} → {after} records",
+                    all.Count, trimmed.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[WEB][MissedTrades] TruncateFileAsync failed");
+            }
+        }
+
+        // Sync fallback (used by legacy callers) — same logic, synchronous
         public List<MissedTradeRecord> Load()
         {
             if (!File.Exists(_filePath))
                 return new();
 
-            string json;
-
-            using var fs = new FileStream(
-                _filePath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite);
-
-            using var sr = new StreamReader(fs);
-            json = sr.ReadToEnd();
-
             try
             {
+                using var fs = new FileStream(
+                    _filePath, FileMode.Open, FileAccess.Read,
+                    FileShare.ReadWrite);
+                using var sr = new StreamReader(fs);
+                var json = sr.ReadToEnd();
 
-                return JsonSerializer.Deserialize<List<MissedTradeRecord>>(json, JsonOptions)
-                       ?? new();
+                var data = JsonSerializer.Deserialize<List<MissedTradeRecord>>(json, _jsonOptions)
+                           ?? new();
+
+                return data.Count > MaxDisplayRecords
+                    ? data.GetRange(data.Count - MaxDisplayRecords, MaxDisplayRecords)
+                    : data;
             }
             catch
             {
-                return new(); // если формат временно испорчен
+                return new();
             }
         }
     }
