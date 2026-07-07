@@ -2571,6 +2571,16 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 _chartInitDone = true;
                 _jsReady = true;
                 _chartInitError = "";
+
+                // Init drawing tools overlay + toolbar
+                try
+                {
+                    await JS.InvokeVoidAsync("chartDrawingTools.init", $"chartContainer-{_chartInstanceId}");
+                    if (!string.IsNullOrEmpty(_activeSym) && !string.IsNullOrEmpty(_activeTf))
+                        await JS.InvokeVoidAsync("chartDrawingTools.loadDrawings",
+                            $"chartContainer-{_chartInstanceId}", $"{_activeSym}:{_activeTf}");
+                }
+                catch { /* drawing tools are non-critical */ }
             }
             else
             {
@@ -2992,6 +3002,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     async Task PickTf(string tf)
     {
+        // Save drawings for current sym:tf before switching TF
+        if (!string.IsNullOrEmpty(_activeSym) && !string.IsNullOrEmpty(_activeTf))
+            try { await JS.InvokeVoidAsync("chartDrawingTools.saveDrawings",
+                $"chartContainer-{_chartInstanceId}", $"{_activeSym}:{_activeTf}"); } catch { }
+
         _activeTf = tf;
         ResolveSelected();
 
@@ -3214,6 +3229,11 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     void Pick(MarketSeries s)
     {
+        // Save drawings for the current sym:tf before switching
+        if (!string.IsNullOrEmpty(_activeSym) && !string.IsNullOrEmpty(_activeTf))
+            _ = JS.InvokeVoidAsync("chartDrawingTools.saveDrawings",
+                $"chartContainer-{_chartInstanceId}", $"{_activeSym}:{_activeTf}");
+
         _activeSym = s.Symbol;
         _activeTf  = s.Timeframe;
         _orderPanelDismissed = false;
@@ -3237,6 +3257,9 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _ = RenderCharts();
         _ = JS.InvokeVoidAsync("stickyStack.recalc");
         _ = SaveSelectionState();
+        // Load drawings for the new sym:tf (fire-and-forget, after RenderCharts)
+        _ = JS.InvokeVoidAsync("chartDrawingTools.loadDrawings",
+            $"chartContainer-{_chartInstanceId}", $"{_activeSym}:{_activeTf}");
     }
 
     // Row click in the ALL INSTRUMENTS table: same as ticker click —
@@ -5924,4 +5947,5 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         public decimal Roi;
     }
 }
+
 
