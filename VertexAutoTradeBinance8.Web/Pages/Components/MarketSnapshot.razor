@@ -2571,16 +2571,6 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 _chartInitDone = true;
                 _jsReady = true;
                 _chartInitError = "";
-
-                // Init drawing tools overlay + toolbar
-                try
-                {
-                    await JS.InvokeVoidAsync("chartDrawingTools.init", $"chartContainer-{_chartInstanceId}");
-                    if (!string.IsNullOrEmpty(_activeSym) && !string.IsNullOrEmpty(_activeTf))
-                        await JS.InvokeVoidAsync("chartDrawingTools.loadDrawings",
-                            $"chartContainer-{_chartInstanceId}", $"{_activeSym}:{_activeTf}");
-                }
-                catch { /* drawing tools are non-critical */ }
             }
             else
             {
@@ -2624,6 +2614,26 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                 // actually being populated by the concurrent calls
                 // that just completed.
                 await CleanupOrphanedProtectiveOrdersAsync();
+
+                // Safety net: if there is no selected position AND
+                // no position open for the active symbol, make sure
+                // the chart lines are gone. This catches edge cases
+                // where the cleanup in LoadAllOpenPositions fires
+                // but the JS call failed or was missed.
+                if (_selectedPosition == null && _chartInitDone &&
+                    !string.IsNullOrEmpty(_activeSym) &&
+                    !_allPositions.Any(p => p.Symbol == _activeSym))
+                {
+                    try
+                    {
+                        await JS.InvokeVoidAsync("marketChart.hidePositionLines",
+                            $"chartContainer-{_chartInstanceId}");
+                        await JS.InvokeVoidAsync("marketChart.hideTpSlLines",
+                            $"chartContainer-{_chartInstanceId}");
+                    }
+                    catch { }
+                }
+
                 if (_tpSlEditMode && _selectedPosition != null)
                 {
                     // Per performance audit: only redraw if the actual
@@ -3002,11 +3012,6 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     async Task PickTf(string tf)
     {
-        // Save drawings for current sym:tf before switching TF
-        if (!string.IsNullOrEmpty(_activeSym) && !string.IsNullOrEmpty(_activeTf))
-            try { await JS.InvokeVoidAsync("chartDrawingTools.saveDrawings",
-                $"chartContainer-{_chartInstanceId}", $"{_activeSym}:{_activeTf}"); } catch { }
-
         _activeTf = tf;
         ResolveSelected();
 
@@ -3229,11 +3234,6 @@ html,body{background:var(--bg)!important;color:var(--txt);}
 
     void Pick(MarketSeries s)
     {
-        // Save drawings for the current sym:tf before switching
-        if (!string.IsNullOrEmpty(_activeSym) && !string.IsNullOrEmpty(_activeTf))
-            _ = JS.InvokeVoidAsync("chartDrawingTools.saveDrawings",
-                $"chartContainer-{_chartInstanceId}", $"{_activeSym}:{_activeTf}");
-
         _activeSym = s.Symbol;
         _activeTf  = s.Timeframe;
         _orderPanelDismissed = false;
@@ -3257,9 +3257,6 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         _ = RenderCharts();
         _ = JS.InvokeVoidAsync("stickyStack.recalc");
         _ = SaveSelectionState();
-        // Load drawings for the new sym:tf (fire-and-forget, after RenderCharts)
-        _ = JS.InvokeVoidAsync("chartDrawingTools.loadDrawings",
-            $"chartContainer-{_chartInstanceId}", $"{_activeSym}:{_activeTf}");
     }
 
     // Row click in the ALL INSTRUMENTS table: same as ticker click —
@@ -4659,9 +4656,60 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             // of leaving it dangling.
             if (_selectedPosition != null)
             {
-                _selectedPosition = _allPositions.FirstOrDefault(p =>
-                    p.Symbol == _selectedPosition.Symbol && p.Side == _selectedPosition.Side)
-                    ?? _selectedPosition;
+                var refreshed = _allPositions.FirstOrDefault(p =>
+                    p.Symbol == _selectedPosition.Symbol && p.Side == _selectedPosition.Side);
+
+                if (refreshed == null)
+                {
+                    // Position was open last tick but is gone now — it closed
+                    // (TP hit, SL hit, manual close, or liquidation).
+                    // Clear all chart lines immediately so the user never sees
+                    // stale TP/SL/Entry/PnL lines on a closed position.
+                    var closedSym  = _selectedPosition.Symbol;
+                    var closedSide = _selectedPosition.Side;
+                    _selectedPosition  = null;
+                    _activeSignal      = null;
+                    _tpSlEditMode      = true;   // reset for next position
+                    _lastTpSlSnapshot  = null;
+
+                    await InvokeAsync(async () =>
+                    {
+                        try
+                        {
+                            // Hide all position-related lines on the chart
+                            await JS.InvokeVoidAsync("marketChart.hidePositionLines",
+                                $"chartContainer-{_chartInstanceId}");
+                            await JS.InvokeVoidAsync("marketChart.hideTpSlLines",
+                                $"chartContainer-{_chartInstanceId}");
+                        }
+                        catch { /* JS cleanup is best-effort */ }
+
+                        StateHasChanged();
+                    });
+                    return;
+                }
+
+                // Position still open — re-point reference to fresh instance
+                _selectedPosition = refreshed;
+            }
+            else
+            {
+                // No position selected — but check if chart is showing lines
+                // for a symbol that no longer has an open position.
+                // This covers: chart was on SOLUSDT with lines shown,
+                // user deselected, position closes → lines still on chart.
+                if (!string.IsNullOrEmpty(_activeSym) &&
+                    !_allPositions.Any(p => p.Symbol == _activeSym))
+                {
+                    try
+                    {
+                        await JS.InvokeVoidAsync("marketChart.hidePositionLines",
+                            $"chartContainer-{_chartInstanceId}");
+                        await JS.InvokeVoidAsync("marketChart.hideTpSlLines",
+                            $"chartContainer-{_chartInstanceId}");
+                    }
+                    catch { }
+                }
             }
 
             await InvokeAsync(StateHasChanged);
@@ -4888,7 +4936,28 @@ html,body{background:var(--bg)!important;color:var(--txt);}
             if (!res.Success || res.Data == null) { _currentPosition = null; return; }
 
             var p = res.Data.FirstOrDefault(x => x.Quantity != 0);
-            if (p == null) { _currentPosition = null; return; }
+            if (p == null)
+            {
+                // Position fully closed — clear lines immediately
+                bool hadPosition = _currentPosition != null;
+                _currentPosition = null;
+                if (hadPosition)
+                {
+                    await InvokeAsync(async () =>
+                    {
+                        try
+                        {
+                            await JS.InvokeVoidAsync("marketChart.hidePositionLines",
+                                $"chartContainer-{_chartInstanceId}");
+                            await JS.InvokeVoidAsync("marketChart.hideTpSlLines",
+                                $"chartContainer-{_chartInstanceId}");
+                        }
+                        catch { }
+                        StateHasChanged();
+                    });
+                }
+                return;
+            }
 
             var side   = p.Quantity > 0 ? "LONG" : "SHORT";
             var size   = Math.Abs(p.Quantity * p.EntryPrice);
