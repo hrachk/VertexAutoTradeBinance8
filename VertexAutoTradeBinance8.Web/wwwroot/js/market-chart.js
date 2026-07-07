@@ -1440,4 +1440,10 @@
         },
     };
 
+    // Expose the private sessions Map to companion scripts
+    // (chart-drawing-tools.js) so they can access priceToCoordinate
+    // and chart references without duplicating state.
+    window._vertexChartSessions = sessions;
+
 })();
+
