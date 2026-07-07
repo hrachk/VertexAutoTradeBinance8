@@ -746,13 +746,13 @@
             </div>
         </div>
 
-        <div class="st-card st-card-warn">
-            <div class="st-card-head"><div class="st-card-title">⚠ Execution</div></div>
+        <div class="st-card">
+            <div class="st-card-head"><div class="st-card-title">🔁 AutoTrade — Order Execution</div></div>
             <div class="st-card-sub">
-                appsettings.json currently has this under <code>SignalOnlyMode:EnableExecution</code>,
-                but the Engine's TradingOptions binding actually reads <code>Trading:EnableExecution</code> —
-                a path mismatch that means the JSON value is silently ignored and defaults to enabled.
-                This toggle writes to the path the Engine ACTUALLY reads.
+                Controls whether the Engine places real orders on Binance.
+                When OFF — signals are generated and logged as missed trades,
+                but no real orders are sent. Applies within seconds, no restart needed.
+                Writes to <code>Trading:EnableExecution</code> in appsettings.runtime.json.
             </div>
             <div class="st-toggle-row">
                 <label class="st-toggle">
@@ -1686,3 +1686,4 @@
     .st-field-row{grid-template-columns:1fr;}
 }
 </style>
+
