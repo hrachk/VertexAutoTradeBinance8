@@ -54,13 +54,19 @@ namespace VertexAutoTradeBinance8.Services
             return scale;
         }
 
+        // effectiveLeverage: already computed by TradingWorker as
+        //   configLeverage × aiLevMult (clamped to [40%, 100%] of config).
+        // Passing it as a parameter avoids re-reading trading.Leverage here
+        // and ensures RiskManager uses the SAME value that was set on exchange.
+        // If not provided (0), falls back to trading.Leverage.
         public decimal GetPropDeskQtyFinal(
             TradeSignal signal,
             decimal balance,
             decimal step,
             decimal minQty,
             decimal riskMult,
-            TradingOptions trading)
+            TradingOptions trading,
+            decimal effectiveLeverage = 0m)
         {
             LastRejectReason = null;
 
@@ -82,7 +88,11 @@ namespace VertexAutoTradeBinance8.Services
                 return 0;
             }
 
-            decimal leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
+            // Use passed effectiveLeverage (config × AI mult) if provided,
+            // otherwise fall back to config value directly.
+            decimal leverage = effectiveLeverage > 0
+                ? effectiveLeverage
+                : (trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m));
             if (leverage <= 0)
             {
                 LastRejectReason = "Invalid leverage";
