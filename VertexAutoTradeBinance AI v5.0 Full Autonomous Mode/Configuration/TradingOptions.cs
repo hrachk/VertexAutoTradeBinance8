@@ -31,6 +31,14 @@ public class TradingOptions
     /// Prevents WS / warmup storm.
     /// </summary>
     public int StartupSubscriptionCap { get; set; } = 8;
+
+    /// <summary>
+    /// Controls whether the Engine places real orders on Binance.
+    /// false = signal-only / dry-run mode: signals are generated and logged
+    /// but NO orders are sent. PositionSupervisor continues to run normally
+    /// (SL/BE management of already-open positions is unaffected).
+    /// Toggle from Web UI: Settings → "AutoTrade — Order Execution".
+    /// </summary>
     public bool EnableExecution { get; set; } = true;
 
     /// <summary>
@@ -38,4 +46,21 @@ public class TradingOptions
     /// Default 0.12 = 12%. Previously hardcoded as const decimal in RiskManager.
     /// </summary>
     public decimal MaxMarginPercent { get; set; } = 0.12m;
+
+    /// <summary>
+    /// Whether PositionSupervisor is allowed to manage Take-Profit orders.
+    ///
+    /// true  (default) — Supervisor places Emergency TP when none exists,
+    ///                    and runs partial-close / trailing logic normally.
+    ///
+    /// false — Supervisor leaves all TP orders untouched. Use this when
+    ///         you place your own TP orders manually on Binance and do not
+    ///         want the bot to interfere, cancel, or re-place them.
+    ///         SL and Break-Even management continue to work normally.
+    ///
+    /// Toggle from Web UI: Settings → "Supervisor TP Management".
+    /// Writes to Trading:SupervisorManageTP in appsettings.runtime.json.
+    /// Applies within seconds, no restart needed.
+    /// </summary>
+    public bool SupervisorManageTP { get; set; } = true;
 } 
