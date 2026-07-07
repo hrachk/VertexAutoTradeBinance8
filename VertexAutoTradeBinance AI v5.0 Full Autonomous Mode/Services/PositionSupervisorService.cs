@@ -91,6 +91,18 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ConcurrentDictionary<string, bool> _beOverrideForStrongTrend = new();
         private readonly ConcurrentDictionary<string, decimal> _lastSl = new();
         private readonly IOptionsMonitor<TradingOptions> _tradingOptions;
+        private readonly IOptionsMonitor<DcaOptions> _dcaOptions;
+
+        /// <summary>
+        /// Returns true if the symbol is in the DCA accumulation list
+        /// (Dca:Symbols in appsettings). DCA positions are long-term
+        /// and need wider TP/SL distances than short-term signal trades.
+        /// </summary>
+        private bool IsDcaSymbol(string symbol)
+            => _dcaOptions.CurrentValue.Enabled &&
+               _dcaOptions.CurrentValue.Symbols.Any(s =>
+                   s.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
+
         public PositionSupervisorService(
             ILogger<PositionSupervisorService> logger,
             BinanceClientFactory factory,
@@ -108,7 +120,9 @@ namespace VertexAutoTradeBinance8.Services
             ReverseProbeEngine reverseProbe, PositionLifecycleTracker lifecycle,
             EntryTracker entryTracker,
             FundingRateService fundingRate,
-            IOptionsMonitor<TradingSettings> tradingSettings, IOptionsMonitor<TradingOptions> tradingOptions)
+            IOptionsMonitor<TradingSettings> tradingSettings,
+            IOptionsMonitor<TradingOptions> tradingOptions,
+            IOptionsMonitor<DcaOptions> dcaOptions)
         {
             _logger = logger;
             _factory = factory;
@@ -132,6 +146,7 @@ namespace VertexAutoTradeBinance8.Services
             _accountState = accountState;
             _tradingSettings = tradingSettings;
             _tradingOptions = tradingOptions;
+            _dcaOptions = dcaOptions;
         }
 
 
@@ -271,6 +286,12 @@ namespace VertexAutoTradeBinance8.Services
             // protected: trailing SL, break-even moves, partial closes all continue.
             // Do NOT add an early return here based on EnableExecution.
 
+            // DCA detection: symbols in Dca:Symbols list get wider
+            // TP/SL/BE thresholds (long-term accumulation, not short-term signal)
+            bool _isDca = IsDcaSymbol(symbol);
+            if (_isDca)
+                _logger.LogDebug("[SUPERVISOR][{symbol}] DCA position detected — using wide TP/SL/BE multipliers", symbol);
+
             using var client = _factory.CreateRestClient();
 
             // 0) MANUAL SIGNAL INJECTION
@@ -389,18 +410,29 @@ namespace VertexAutoTradeBinance8.Services
                 if (ATR <= 0) return;
 
                 bool isToxic = _tradingSettings.CurrentValue.ToxicSymbols.Contains(symbol);
+                bool isDcaPos = IsDcaSymbol(symbol);
 
-                decimal STEP = ATR * 0.5m;           // шаг BE
-                decimal PARTIAL_STEP = ATR * 2m;     // шаг partial close
-                decimal PARTIAL_SIZE = isToxic ? 0.42m : 0.34m;
-                decimal MIN_BUFFER = ATR * (isToxic ? 0.5m : 0.3m);
+                // ── DCA vs Signal-trade multipliers ─────────────────────────────
+                // DCA positions are long-term accumulation (weekly/monthly buys).
+                // They need WIDER distances so Supervisor doesn't fire partial
+                // closes or move BE on normal intraday noise:
+                //   BE trigger: 3.0×ATR (vs 1.3× for short-term signals)
+                //   Partial step: 5.0×ATR (vs 2.0×)
+                //   SL buffer: 1.2×ATR (vs 0.3-0.5×) — wide buffer, long-term hold
+                //   Partial size: 20% (vs 34-42%) — smaller partial, preserve position
+                decimal STEP         = ATR * (isDcaPos ? 1.0m  : 0.5m);
+                decimal PARTIAL_STEP = ATR * (isDcaPos ? 5.0m  : 2.0m);
+                decimal PARTIAL_SIZE = isDcaPos ? 0.20m : (isToxic ? 0.42m : 0.34m);
+                decimal MIN_BUFFER   = ATR * (isDcaPos ? 1.2m  : (isToxic ? 0.5m : 0.3m));
 
                 bool skipSoftFilters = _beOverrideForStrongTrend.ContainsKey(keyProbe);
 
                 // =========================
                 // SAFE ZONE → не дергать SL
+                // DCA: 3.0×ATR — only move BE after significant move
+                // Signal: 1.3×ATR — standard short-term threshold
                 // =========================
-                decimal BE_TRIGGER = ATR * 1.3m;     // перенос BE только после 1.3 ATR (было 1.0 — слишком агрессивно при DVOL=37)
+                decimal BE_TRIGGER = ATR * (isDcaPos ? 3.0m : 1.3m);
                 if (roi < BE_TRIGGER && !skipSoftFilters) return;
 
                 // =========================
@@ -2611,16 +2643,29 @@ namespace VertexAutoTradeBinance8.Services
                     }
                     catch { }
 
-                    // TP считаем от mark price (позиция уже могла уйти от entry)
-                    // Используем ATR×2.0 — достаточно далеко чтобы не сработать сразу
+                    // DCA positions: TP at 8% ROI from entry (long-term hold).
+                    // Signal positions: TP at ATR×2.0 from mark (short-term).
                     decimal basePrice = markNow > 0 ? markNow : entryPrice;
-                    trigger = side == PositionSide.Long
-                        ? basePrice + atr * 2.0m
-                        : basePrice - atr * 2.0m;
-
-                    _logger.LogInformation(
-                        "[SUPERVISOR][{symbol}][{side}] TP from ATR: entry={entry} mark={mark} atr={atr} → tp={tp}",
-                        symbol, side, entryPrice, basePrice, atr, trigger);
+                    bool isDcaEmergency = IsDcaSymbol(symbol);
+                    if (isDcaEmergency)
+                    {
+                        // 8% from entry — conservative long-term TP
+                        trigger = side == PositionSide.Long
+                            ? entryPrice * 1.08m
+                            : entryPrice * 0.92m;
+                        _logger.LogInformation(
+                            "[SUPERVISOR][{symbol}][{side}] DCA emergency TP at 8% ROI: entry={entry} → tp={tp}",
+                            symbol, side, entryPrice, trigger);
+                    }
+                    else
+                    {
+                        trigger = side == PositionSide.Long
+                            ? basePrice + atr * 2.0m
+                            : basePrice - atr * 2.0m;
+                        _logger.LogInformation(
+                            "[SUPERVISOR][{symbol}][{side}] TP from ATR: entry={entry} mark={mark} atr={atr} → tp={tp}",
+                            symbol, side, entryPrice, basePrice, atr, trigger);
+                    }
                 }
 
                 // ==========================================================
