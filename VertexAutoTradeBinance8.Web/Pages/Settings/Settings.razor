@@ -762,6 +762,24 @@
             </div>
         </div>
 
+        <div class="st-card">
+            <div class="st-card-head"><div class="st-card-title">🎯 Supervisor TP Management</div></div>
+            <div class="st-card-sub">
+                When <strong>ON</strong> — Supervisor automatically places emergency TP orders
+                when none exist, and runs partial-close / trailing logic.<br/>
+                When <strong>OFF</strong> — Supervisor does <em>not</em> touch any TP orders.
+                Use this when you place your own TP orders manually on Binance
+                and do not want the bot to interfere or overwrite them.<br/>
+                <strong>SL and Break-Even management always work regardless of this setting.</strong>
+            </div>
+            <div class="st-toggle-row">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("Trading:SupervisorManageTP", true)" @onchange="OnSupervisorManageTPToggle" />
+                    <span>Supervisor manages TP orders (off = manual TP mode)</span>
+                </label>
+            </div>
+        </div>
+
         <div class="st-card st-card-muted">
             <div class="st-card-head"><div class="st-card-title">Debug (not currently read by Engine)</div></div>
             <div class="st-toggle-row">
@@ -775,6 +793,7 @@
     </div>;
 
     private Task OnEnableExecutionToggle(ChangeEventArgs e) => SetAsync("Trading:EnableExecution", (bool)(e.Value ?? true));
+    private Task OnSupervisorManageTPToggle(ChangeEventArgs e) => SetAsync("Trading:SupervisorManageTP", (bool)(e.Value ?? true));
     private Task OnDebugToggle(ChangeEventArgs e) => SetAsync("Debug:EnableStrategyDebug", (bool)(e.Value ?? true));
 
     private RenderFragment DataArchiveTab() => @<div class="st-grid">
@@ -1686,4 +1705,5 @@
     .st-field-row{grid-template-columns:1fr;}
 }
 </style>
+
 
