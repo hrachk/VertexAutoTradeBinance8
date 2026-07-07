@@ -78,16 +78,33 @@
                 </div>
                 <div class="sig-panel-right">
                     <button class="sig-hidden-toggle @(_showHiddenSignals ? "sig-hidden-toggle-on" : "")"
-                            @onclick="ToggleHiddenSignals" title="Signals that expired in the last hour">
-                        Hidden Signals
-                        @if (_recentExpiredSignals.Count > 0)
+                            @onclick="ToggleHiddenSignals"
+                            title="@(_showHiddenSignals ? "Back to live signals" : "Show all signals from the last hour (archive)")"
+                        @if (_showHiddenSignals)
                         {
-                            <span class="sig-hidden-count">@_recentExpiredSignals.Count</span>
+                            <span>▶ Live</span>
+                        }
+                        else
+                        {
+                            <span>📋 History</span>
+                            @if (_recentExpiredSignals.Count > 0)
+                            {
+                                <span class="sig-hidden-count">@_recentExpiredSignals.Count</span>
+                            }
                         }
                     </button>
-                    @if (_signals.Any() && !_showHiddenSignals)
+                    @if (!_showHiddenSignals)
                     {
-                        <div class="sig-panel-sub">Click a signal to trade manually</div>
+                        <div class="sig-panel-sub">
+                            @if (_signals.Any())
+                            { <text>Click a signal to trade manually</text> }
+                            else
+                            { <text>No live signals — click History to see last hour</text> }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="sig-panel-sub">Signal archive · last 1 hour</div>
                     }
                     <div class="sig-pager @(DisplayedSignals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
                         @for (int p = 0; p < _sigPageCount; p++)
@@ -2739,6 +2756,18 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                     .OrderByDescending(s => s.Time)
                     .Take(12)
                     .ToList();
+
+                // 1-hour archive: all signals in last hour regardless of TTL or expiry.
+                // One entry per symbol (most recent), ordered newest first.
+                // This is what the "History" button shows — a complete recent picture.
+                var archiveCutoff = DateTime.UtcNow.AddHours(-ExpiredSignalArchiveHours);
+                _signalArchive1h = allSigs
+                    .Where(s => s.Entry > 0 && s.StopLoss > 0
+                                && s.Time >= archiveCutoff
+                                && s.Stage != "BLOCKED")
+                    .OrderByDescending(s => s.Time)
+                    .Take(ExpiredSignalArchiveMaxCount)
+                    .ToList();
             }
             catch { }
 
@@ -3337,7 +3366,12 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // from the page entirely. Pagination/TTL logic elsewhere stays
     // scoped to the real _signals list (that's about live signal
     // lifecycle, not which list is currently being displayed).
-    List<MissedTradeRecord> DisplayedSignals => _showHiddenSignals ? _recentExpiredSignals : _signals;
+    // Archive mode shows ALL signals from the last hour — both
+    // currently live ones AND ones that already expired/faded.
+    // This gives a complete "what happened in the last hour" view
+    // regardless of individual signal TTLs.
+    List<MissedTradeRecord> DisplayedSignals =>
+        _showHiddenSignals ? _signalArchive1h : _signals;
 
     async Task ToggleHiddenSignals()
     {
@@ -3365,8 +3399,14 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     // signals via a new "Hidden Signals" tab, since they'd otherwise
     // vanish from the page entirely the moment they expire.
     const int ExpiredSignalArchiveHours = 1;
-    const int ExpiredSignalArchiveMaxCount = 30;
+    const int ExpiredSignalArchiveMaxCount = 60;  // increased — now holds ALL 1h signals
     List<MissedTradeRecord> _recentExpiredSignals = new();
+
+    // Complete 1-hour archive: every signal we have seen in the
+    // last hour, whether currently live or already expired.
+    // Populated by LoadData() as signals arrive, pruned on sweep.
+    // Powers the "History" button archive view.
+    List<MissedTradeRecord> _signalArchive1h = new();
     bool _showHiddenSignals;
 
     // Pinned signal cards stay expanded regardless of hover state —
@@ -3668,23 +3708,54 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         decimal relAtr = sig.Entry > 0 ? sig.ATR / sig.Entry : 0.003m;
         if (relAtr <= 0) relAtr = 0.003m;
 
-        // More volatile symbols invalidate faster; calmer symbols stay relevant longer.
-        // Tuned so a "typical" ~0.3% ATR signal lives ~40 min, scaling inversely with volatility.
+        // Base lifetime inversely proportional to volatility:
+        // calm symbol (low ATR) → signal stays relevant longer.
+        // Tuned so a typical 0.3% ATR signal lives ~40 min.
         double lifeMinutes = (double)(0.12m / relAtr);
         lifeMinutes = Math.Clamp(lifeMinutes, 10, 150);
 
-        // Per direct request: a signal the bot would never actually
-        // trade (below the real confidence threshold, or RR weaker
-        // than the regime requires) shouldn't linger on screen as long
-        // as a genuinely tradeable one — cap its max lifetime much
-        // lower, regardless of how calm the symbol's volatility is.
+        // ── Trend-strength extension ───────────────────────────────────
+        // If the regime at signal time was a strong trend AND the slope
+        // was significant, the market context that generated this signal
+        // is likely still valid — extend TTL so the signal stays visible
+        // while the trend persists.
+        //
+        //   StrongTrend + strong slope (|slope| ≥ 0.015) → 2.5× extension
+        //   StrongTrend + moderate slope                  → 1.7× extension
+        //   NormalTrend (Trending regime)                 → 1.3× extension
+        //   Range / Squeeze / other                       → no extension
+        //
+        // This directly implements the request: "if trend is still
+        // active keep the signal longer while trend doesn't weaken."
+        var regime    = sig.Regime;
+        var slope     = sig.Slope;
+        bool isStrong = regime == VertexAutoTradeBinance8.Models.MarketRegime.StrongUpTrend
+                     || regime == VertexAutoTradeBinance8.Models.MarketRegime.StrongDownTrend
+                     || sig.SmartType == "SmartStrongTrend";
+        bool isTrend  = regime == VertexAutoTradeBinance8.Models.MarketRegime.Trending;
+        bool strongSlope = Math.Abs(slope) >= 0.015m;
+
+        if      (isStrong && strongSlope) lifeMinutes *= 2.5;
+        else if (isStrong)                lifeMinutes *= 1.7;
+        else if (isTrend)                 lifeMinutes *= 1.3;
+
+        lifeMinutes = Math.Clamp(lifeMinutes, 10, 240); // extended ceiling: 4h for strong trends
+
+        // ── Weak signal handling ───────────────────────────────────────
+        // A signal the bot would never trade (below confidence threshold
+        // or RR below regime minimum) shouldn't linger as long as a
+        // genuinely tradeable one — cap at 8 min base + 2-3 min grace.
         decimal sigTp1 = sig.TakeProfits?.FirstOrDefault() ?? 0m;
         decimal rr = sig.StopLoss > 0 && sig.Entry > 0 && sigTp1 > 0
             ? Math.Abs(sigTp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry)
             : 0m;
         var (belowThreshold, lowRr, _) = IsWeakSignal(sig, sig.Confidence, rr);
         if (belowThreshold || lowRr)
-            lifeMinutes = Math.Min(lifeMinutes, 8);
+        {
+            // +2 min grace on top of the original 8 min cap,
+            // so a borderline weak signal has a brief extra window.
+            lifeMinutes = Math.Min(lifeMinutes, 10.0);
+        }
 
         double remaining = lifeMinutes - ageMin;
         double pct = Math.Clamp(remaining / lifeMinutes * 100.0, 0, 100);
