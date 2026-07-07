@@ -413,8 +413,11 @@ namespace VertexAutoTradeBinance8.Services
 
                 // =========================
                 // PARTIAL CLOSE (раз в уровень)
+                // Gated on SupervisorManageTP — when false, the user
+                // manages their own TP/close orders and we must not
+                // interfere by triggering partial closes from here.
                 // =========================
-                if (!skipSoftFilters)
+                if (!skipSoftFilters && _tradingOptions.CurrentValue.SupervisorManageTP)
                 {
                     int partialLevel = (int)(roi / PARTIAL_STEP);
                     int prevPartial = (int)_beStage.GetOrAdd(keyProbe, BeStage.None);
@@ -743,7 +746,12 @@ namespace VertexAutoTradeBinance8.Services
                 // forever, sitting on the exchange as a dangling
                 // STOP/TAKE_PROFIT order with no position behind it.
                 var algoOrdersToClean = await _algoRaw.GetOpenAlgoOrdersAsync(symbol, ct);
-                foreach (var algo in algoOrdersToClean.Where(o => o.PositionSide == side && (o.IsStop || o.IsTakeProfit)))
+                // When SupervisorManageTP=false, only clean up SL/BE orders
+                // (Supervisor did not place any TP orders, so do not cancel user ones)
+                var algoCleanPredicate = _tradingOptions.CurrentValue.SupervisorManageTP
+                    ? (Func<BinanceAlgoOrderInfo, bool>)(o => o.PositionSide == side && (o.IsStop || o.IsTakeProfit))
+                    : (Func<BinanceAlgoOrderInfo, bool>)(o => o.PositionSide == side && o.IsStop);
+                foreach (var algo in algoOrdersToClean.Where(algoCleanPredicate))
                 {
                     var cancelled = await _algoRaw.CancelAlgoOrderAsync(algo.AlgoId, ct);
                     if (cancelled)
@@ -885,11 +893,21 @@ namespace VertexAutoTradeBinance8.Services
 
                 if (existingTps == 0)
                 {
-                    await CreateEmergencyTPAsync(client, symbol, side, qtyAbs, entry, signal, ct);
-
-                    _logger.LogWarning(
-                        "[SUPERVISOR][{symbol}][{side}] Emergency TP created (no TP orders found)",
-                        symbol, side);
+                    // Only place emergency TP if SupervisorManageTP=true.
+                    // When false — user manages their own TP orders manually.
+                    if (_tradingOptions.CurrentValue.SupervisorManageTP)
+                    {
+                        await CreateEmergencyTPAsync(client, symbol, side, qtyAbs, entry, signal, ct);
+                        _logger.LogWarning(
+                            "[SUPERVISOR][{symbol}][{side}] Emergency TP created (no TP orders found)",
+                            symbol, side);
+                    }
+                    else
+                    {
+                        _logger.LogDebug(
+                            "[SUPERVISOR][{symbol}][{side}] SupervisorManageTP=false — no TP orders but NOT creating emergency (user manages manually)",
+                            symbol, side);
+                    }
                 }
                 else
                 {
@@ -3563,4 +3581,5 @@ namespace VertexAutoTradeBinance8.Services
     }
 
 }
+
 
