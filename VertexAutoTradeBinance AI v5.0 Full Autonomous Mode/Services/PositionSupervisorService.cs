@@ -265,11 +265,13 @@ namespace VertexAutoTradeBinance8.Services
         }
         public async Task SuperviseAsync(string symbol, TradeSignal? lastSignal, CancellationToken ct)
         {
-            if (!_tradingOptions.CurrentValue.EnableExecution)
-                return;
+            // NOTE: EnableExecution=false only blocks NEW entries (OrderExecutor).
+            // Supervisor always runs — it manages TP/SL/BE of ALREADY OPEN positions.
+            // A position opened before the user toggled AutoTrade OFF must still be
+            // protected: trailing SL, break-even moves, partial closes all continue.
+            // Do NOT add an early return here based on EnableExecution.
 
-
-                using var client = _factory.CreateRestClient();
+            using var client = _factory.CreateRestClient();
 
             // 0) MANUAL SIGNAL INJECTION
             if (lastSignal == null)
