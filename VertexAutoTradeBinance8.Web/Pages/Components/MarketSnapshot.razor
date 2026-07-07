@@ -3732,7 +3732,8 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         bool isStrong = regime == VertexAutoTradeBinance8.Models.MarketRegime.StrongUpTrend
                      || regime == VertexAutoTradeBinance8.Models.MarketRegime.StrongDownTrend
                      || sig.SmartType == "SmartStrongTrend";
-        bool isTrend  = regime == VertexAutoTradeBinance8.Models.MarketRegime.Trending;
+        bool isTrend  = regime == VertexAutoTradeBinance8.Models.MarketRegime.UpTrend
+                     || regime == VertexAutoTradeBinance8.Models.MarketRegime.DownTrend;
         bool strongSlope = Math.Abs(slope) >= 0.015m;
 
         if      (isStrong && strongSlope) lifeMinutes *= 2.5;
@@ -6101,5 +6102,6 @@ html,body{background:var(--bg)!important;color:var(--txt);}
         public decimal Roi;
     }
 }
+
 
 
