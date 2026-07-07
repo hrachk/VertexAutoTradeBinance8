@@ -909,13 +909,49 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
+            // ── Effective leverage: config base × AI market multiplier ──────
+            // AiLeverageService returns a regime/ATR/winrate multiplier (0.30–2.0×)
+            // applied on top of the config leverage from appsettings.
+            // This is where trading.Leverage (19 or 25 from config) actually gets
+            // used and modulated — RiskManager receives the final effective value.
+            decimal configLeverage = trading.Leverage > 0
+                ? (decimal)trading.Leverage
+                : (signal.Leverage ?? 10m);
+
+            decimal aiLevMult = 1.0m;
+            try
+            {
+                // Need klines for AiLeverageService — use cached from MarketDataFacade
+                var klines4lev = await _marketDataFacade
+                    .GetKlinesAsync(symbol, tf, 60, ct)
+                    .ConfigureAwait(false);
+
+                if (klines4lev?.Count >= 30)
+                    aiLevMult = _aiLeverage.Calculate(symbol, tf, klines4lev.ToList());
+            }
+            catch { /* non-critical — fall back to 1.0x */ }
+
+            // Apply AI multiplier but cap result within safe bounds:
+            //   floor: 40% of config leverage (never go below this)
+            //   ceil:  100% of config leverage (AI cannot INCREASE leverage,
+            //          only reduce — prevents over-leveraging on risky regimes)
+            decimal effectiveLeverage = Math.Clamp(
+                configLeverage * aiLevMult,
+                configLeverage * 0.40m,  // floor: 40% of config
+                configLeverage * 1.00m); // ceil:  config max (no AI boost)
+
+            _logger.LogInformation(
+                "[LEVERAGE][{sym}] config={cfg}x aiMult={mult:F2} → effective={eff:F1}x",
+                symbol, configLeverage, aiLevMult, effectiveLeverage);
+
             var qty = _risk.GetPropDeskQtyFinal(
                 signal,
                 balance,
                 step,
                 minQty,
                 riskMult,
-                trading);
+                trading,
+                effectiveLeverage);
 
             if (qty <= 0)
             {
@@ -964,8 +1000,9 @@ namespace VertexAutoTradeBinance8
                 signal.EntryPrice = realtimePrice;
             }
 
-            var leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
-            var result = await _executor.ExecuteAsync(signal, qty, ct, leverage);
+            // Use the same effective leverage computed above for ExecuteAsync
+            // so the exchange is set to the same leverage used in qty calculation.
+            var result = await _executor.ExecuteAsync(signal, qty, ct, (decimal)effectiveLeverage);
 
 
 
@@ -1287,3 +1324,4 @@ namespace VertexAutoTradeBinance8
         }
     }
 }
+
