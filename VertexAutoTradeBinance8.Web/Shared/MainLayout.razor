@@ -168,17 +168,16 @@
         _autoTradeEnabled = !_autoTradeEnabled;
         try
         {
-            // SignalOnlyMode:EnableExecution - confirmed this is the
-            // key that actually takes effect (Program.cs registers
-            // Configure<TradingOptions> twice for the same default
-            // options, once for "Trading" and once for
-            // "SignalOnlyMode" - the second registration wins as the
-            // effective value the Engine's _tradingOptions.CurrentValue
-            // resolves to). Written through the same shared runtime-
-            // override file mechanism already used for DCA settings -
-            // the Engine's own IOptionsMonitor picks this up live, no
-            // restart needed.
-            await RuntimeCfg.SetValueAsync("SignalOnlyMode:EnableExecution", _autoTradeEnabled);
+            // One button controls both flags atomically:
+            //   ON  → Engine opens real positions + Supervisor manages TP
+            //   OFF → Engine dry-run only         + Supervisor leaves TP alone
+            //
+            // Path: Trading:EnableExecution (NOT the removed SignalOnlyMode section)
+            // Path: Trading:SupervisorManageTP
+            // Both written to appsettings.runtime.json via RuntimeConfigService.
+            // Engine picks up via reloadOnChange within seconds, no restart needed.
+            await RuntimeCfg.SetValueAsync("Trading:EnableExecution",    _autoTradeEnabled);
+            await RuntimeCfg.SetValueAsync("Trading:SupervisorManageTP", _autoTradeEnabled);
         }
         catch
         {
@@ -198,7 +197,9 @@
         try
         {
             var cfg = await RuntimeCfg.GetEffectiveConfigAsync();
-            var node = cfg["SignalOnlyMode"]?["EnableExecution"];
+            // Read Trading:EnableExecution (the correct path).
+            // Falls back to true if the key is absent (default = trading enabled).
+            var node = cfg["Trading"]?["EnableExecution"];
             if (node != null) _autoTradeEnabled = node.GetValue<bool>();
         }
         catch { }
@@ -240,3 +241,4 @@
         catch { }
     }
 }
+
