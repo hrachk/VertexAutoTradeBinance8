@@ -2079,7 +2079,7 @@ html,body{background:var(--bg)!important;color:var(--txt);}
                         {
                             var lv = pv;
                             <button class="mk-lev-pre @(_levVal==lv?"mk-lev-pre-on":"")"
-                                    @onclick="() => _levVal = lv">@lv×</button>
+                                    @onclick="() => SetLevVal(lv)">@lv×</button>
                         }
                     }
                 </div>
@@ -4249,7 +4249,21 @@ html,body{background:var(--bg)!important;color:var(--txt);}
     }
 
     void OnLevInput(ChangeEventArgs e)
-        => _levVal = int.TryParse(e.Value?.ToString(), out var v) ? Math.Clamp(v, 1, _levMax) : _levVal;
+    {
+        if (int.TryParse(e.Value?.ToString(), out var v))
+            SetLevVal(v);
+    }
+
+    // Centralised lever-value setter — used by both the range slider
+    // (OnLevInput) and the preset buttons. Calling StateHasChanged here
+    // is required so the preset highlights and the big-number display
+    // re-render immediately after a preset click (void @onclick handlers
+    // do NOT auto-trigger a re-render in Blazor Server by default).
+    void SetLevVal(int v)
+    {
+        _levVal = Math.Clamp(v, 1, _levMax);
+        StateHasChanged();
+    }
 
     async Task SaveLev()
     {
