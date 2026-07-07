@@ -405,8 +405,51 @@
                                @onchange="@((ChangeEventArgs e) => OnCooldownSecondsChanged(profileKey, e))" />
                     </div>
                 </div>
+
+                <div class="st-field">
+                    <label>Max Margin Per Trade <span class="st-field-hint">fraction of balance (0.12 = 12%)</span></label>
+                    <input title="Max margin fraction of balance per single position" class="st-input" type="number" step="0.01" min="0.01" max="0.50"
+                           value="@GetDecimal($"{profileKey}:MaxMarginPercent", 0.12m)"
+                           @onchange="@((ChangeEventArgs e) => OnMaxMarginPercentChanged(profileKey, e))" />
+                </div>
             </div>
         }
+
+        <div class="st-card st-card-wide">
+            <div class="st-card-head">
+                <div class="st-card-title">🤖 AI Signal Confidence Thresholds</div>
+                <span class="st-live-pill">● live</span>
+            </div>
+            <div class="st-card-sub">
+                Minimum AI confidence score (0–1) required for a signal to pass the AI confirmation gate (step 3 of the signal pipeline).
+                Lower = more signals pass, higher = fewer but higher-quality signals.
+                <strong>Default 0.40</strong> was lowered from 0.52 which was blocking too many trades.
+                BTC/ETH use separate lower thresholds because the AI is better calibrated for them.
+            </div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>Default (all other symbols)</label>
+                    <input title="Min AI confidence for all symbols except BTC/ETH" class="st-input" type="number"
+                           step="0.01" min="0.10" max="0.95"
+                           value="@GetDecimal("SignalConfidence:Default:MinEntry", 0.40m)"
+                           @onchange="OnConfDefaultChanged" />
+                </div>
+                <div class="st-field">
+                    <label>BTCUSDT</label>
+                    <input title="Min AI confidence for BTC" class="st-input" type="number"
+                           step="0.01" min="0.10" max="0.95"
+                           value="@GetDecimal("SignalConfidence:BTC:MinEntry", 0.42m)"
+                           @onchange="OnConfBtcChanged" />
+                </div>
+                <div class="st-field">
+                    <label>ETHUSDT</label>
+                    <input title="Min AI confidence for ETH" class="st-input" type="number"
+                           step="0.01" min="0.10" max="0.95"
+                           value="@GetDecimal("SignalConfidence:ETH:MinEntry", 0.43m)"
+                           @onchange="OnConfEthChanged" />
+                </div>
+            </div>
+        </div>
 
         <div class="st-card st-card-wide st-card-muted">
             <div class="st-card-head"><div class="st-card-title">Base Risk / Notional Guards</div></div>
@@ -434,6 +477,10 @@
 
     private Task OnBaseRiskPercentChanged(ChangeEventArgs e) => SetAsync("Trading:BaseRiskPercent", ParseDecimalOr(e.Value, 0m));
     private Task OnMinNotionalGuardPercentChanged(ChangeEventArgs e) => SetAsync("Trading:MinNotionalGuardPercent", ParseDecimalOr(e.Value, 0m));
+    private Task OnMaxMarginPercentChanged(string profileKey, ChangeEventArgs e) => SetAsync($"{profileKey}:MaxMarginPercent", ParseDecimalOr(e.Value, 0.12m));
+    private Task OnConfDefaultChanged(ChangeEventArgs e) => SetAsync("SignalConfidence:Default:MinEntry", ParseDecimalOr(e.Value, 0.40m));
+    private Task OnConfBtcChanged(ChangeEventArgs e) => SetAsync("SignalConfidence:BTC:MinEntry", ParseDecimalOr(e.Value, 0.42m));
+    private Task OnConfEthChanged(ChangeEventArgs e) => SetAsync("SignalConfidence:ETH:MinEntry", ParseDecimalOr(e.Value, 0.43m));
 
     private RenderFragment MeanRevTab() => @<div class="st-grid">
 
@@ -544,9 +591,23 @@
                 <label>Time-Stop (bars) <span class="st-field-hint">force-close if the mean hasn't been reached</span></label>
                 <input title="Time-Stop (bars) force-close if the mean hasn't been reached" class="st-input" type="number" value="@GetInt("MeanReversion:TimeStopBars", 12)" @onchange="OnMrTimeStopChanged" />
             </div>
+            <div class="st-field">
+                <label>Signal Cooldown (minutes) <span class="st-field-hint">minimum gap between consecutive MR signals on the same symbol</span></label>
+                <input title="Signal Cooldown (minutes)" class="st-input" type="number" min="1" max="120"
+                       value="@GetMrCooldownMinutes()"
+                       @onchange="OnMrSignalCooldownChanged" />
+            </div>
         </div>
 
     </div>;
+
+    private int GetMrCooldownMinutes()
+    {
+        // Stored as "HH:mm:ss" timespan string — convert to minutes for display
+        var raw = GetStr("MeanReversion:SignalCooldown", "00:10:00");
+        if (TimeSpan.TryParse(raw, out var ts)) return (int)ts.TotalMinutes;
+        return 10;
+    }
 
     private Task OnMrWindowChanged(ChangeEventArgs e) => SetAsync("MeanReversion:Window", ParseIntOr(e.Value, 20));
     private Task OnMrEntrySigmaChanged(ChangeEventArgs e) => SetAsync("MeanReversion:EntrySigma", ParseDecimalOr(e.Value, 2.0m));
@@ -561,10 +622,20 @@
     private Task OnMrStopAtrPadChanged(ChangeEventArgs e) => SetAsync("MeanReversion:StopAtrPad", ParseDecimalOr(e.Value, 0.3m));
     private Task OnMrMinRrChanged(ChangeEventArgs e) => SetAsync("MeanReversion:MinRewardRiskRatio", ParseDecimalOr(e.Value, 1.2m));
     private Task OnMrTimeStopChanged(ChangeEventArgs e) => SetAsync("MeanReversion:TimeStopBars", ParseIntOr(e.Value, 12));
+    private Task OnMrSignalCooldownChanged(ChangeEventArgs e)
+    {
+        int minutes = ParseIntOr(e.Value, 10) ?? 10;
+        var ts = TimeSpan.FromMinutes(Math.Clamp(minutes, 1, 120));
+        return SetAsync("MeanReversion:SignalCooldown", ts.ToString(@"hh\:mm\:ss"));
+    }
 
     private string _newSymbolInput = "";
+    private string _newToxicSymbolInput = "";
+    private string _newStrongTrendInput = "";
 
     private void OnNewSymbolInputChanged(ChangeEventArgs e) => _newSymbolInput = e.Value?.ToString() ?? "";
+    private void OnNewToxicSymbolInputChanged(ChangeEventArgs e) => _newToxicSymbolInput = e.Value?.ToString() ?? "";
+    private void OnNewStrongTrendInputChanged(ChangeEventArgs e) => _newStrongTrendInput = e.Value?.ToString() ?? "";
 
     private RenderFragment SymbolsTab() => @<div class="st-grid">
 
@@ -639,12 +710,99 @@
             <div class="st-field-row">
                 <div class="st-field">
                     <label>Dump Threshold (%)</label>
-                    <input title="Pause new auto-entries if BTC's 24h change drops to this value or below (negative number)" class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcDumpThreshold", -5.0m)" @onchange="OnBtcDumpThresholdChanged" />
+                    <input title="Pause new auto-entries if BTC's 24h change drops to this value or below (negative number)" class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcDumpThreshold", -1.8m)" @onchange="OnBtcDumpThresholdChanged" />
                 </div>
                 <div class="st-field">
                     <label>Squeeze Threshold (%)</label>
-                    <input title="Pause new auto-entries if BTC's 24h change rises to this value or above (positive number)" class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcSqueezeThreshold", 6.0m)" @onchange="OnBtcSqueezeThresholdChanged" />
+                    <input title="Pause new auto-entries if BTC's 24h change rises to this value or above (positive number)" class="st-input" type="number" step="0.1" value="@GetDecimal("SymbolSelection:Auto:BtcSqueezeThreshold", 1.8m)" @onchange="OnBtcSqueezeThresholdChanged" />
                 </div>
+            </div>
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head">
+                <div class="st-card-title">📊 Dynamic Universe Cap</div>
+                <span class="st-live-pill">● live</span>
+            </div>
+            <div class="st-card-sub">Limits how many symbols the Engine monitors simultaneously, scaled by current market volatility. Lower cap = less CPU/RAM/WS connections during high-volatility periods.</div>
+            <div class="st-toggle-row">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("SymbolSelection:DynamicCap:Enabled", true)" @onchange="OnDynCapEnabledToggle" />
+                    <span>Enable dynamic cap scaling</span>
+                </label>
+            </div>
+            <div class="st-field-row" style="margin-top:10px;">
+                <div class="st-field">
+                    <label>Cap (Low volatility)</label>
+                    <input title="Max symbols when market volatility is low" class="st-input" type="number" min="5" max="60"
+                           value="@GetInt("SymbolSelection:DynamicCap:CapLowVol", 18)" @onchange="OnCapLowVolChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Cap (Mid volatility)</label>
+                    <input title="Max symbols when market volatility is medium" class="st-input" type="number" min="5" max="60"
+                           value="@GetInt("SymbolSelection:DynamicCap:CapMidVol", 20)" @onchange="OnCapMidVolChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Cap (High volatility)</label>
+                    <input title="Max symbols when market volatility is high" class="st-input" type="number" min="5" max="60"
+                           value="@GetInt("SymbolSelection:DynamicCap:CapHighVol", 22)" @onchange="OnCapHighVolChanged" />
+                </div>
+            </div>
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head">
+                <div class="st-card-title">⚠️ Toxic Symbols</div>
+                <span class="st-live-pill">● live</span>
+            </div>
+            <div class="st-card-sub">
+                Symbols in this list get more conservative Supervisor parameters:
+                partial close size <strong>42%</strong> (vs 34%), SL buffer <strong>ATR × 0.5</strong> (vs 0.3),
+                and SL cooldown <strong>3 seconds</strong> (vs 1.2s).
+                Use for highly manipulated or low-liquidity symbols that trigger frequent false BE moves.
+            </div>
+            <div class="st-tag-list">
+                @foreach (var sym in GetStrList("TradingSettings:ToxicSymbols"))
+                {
+                    <span class="st-tag">
+                        @sym
+                        <button class="st-tag-x" @onclick="() => RemoveToxicSymbol(sym)">✕</button>
+                    </span>
+                }
+                @if (!GetStrList("TradingSettings:ToxicSymbols").Any())
+                {
+                    <span style="font-size:12px;color:var(--st-dim);font-style:italic;">No toxic symbols configured</span>
+                }
+            </div>
+            <div class="st-add-row">
+                <input class="st-input" placeholder="e.g. PEPEUSDT" value="@_newToxicSymbolInput"
+                       @onchange="OnNewToxicSymbolInputChanged" />
+                <button class="st-btn-add" @onclick="AddToxicSymbol">+ Add</button>
+            </div>
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head">
+                <div class="st-card-title">⭐ Strong Trend Assets</div>
+                <span class="st-live-pill">● live</span>
+            </div>
+            <div class="st-card-sub">
+                Symbols in this list receive the "strong trend" treatment from Supervisor — BE is not moved until price confirms trend continuation,
+                preserving position in strong directional moves. Default: BTCUSDT.
+            </div>
+            <div class="st-tag-list">
+                @foreach (var sym in GetStrList("StrongTrendAssets"))
+                {
+                    <span class="st-tag">
+                        @sym
+                        <button class="st-tag-x" @onclick="() => RemoveStrongTrendAsset(sym)">✕</button>
+                    </span>
+                }
+            </div>
+            <div class="st-add-row">
+                <input class="st-input" placeholder="e.g. BTCUSDT" value="@_newStrongTrendInput"
+                       @onchange="OnNewStrongTrendInputChanged" />
+                <button class="st-btn-add" @onclick="AddStrongTrendAsset">+ Add</button>
             </div>
         </div>
 
@@ -671,66 +829,112 @@
         await SetListAsync("SymbolSelection:Pinned", list);
     }
 
+    private async Task AddToxicSymbol()
+    {
+        var sym = _newToxicSymbolInput.Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(sym)) return;
+        if (!sym.EndsWith("USDT")) sym += "USDT";
+        var list = GetStrList("TradingSettings:ToxicSymbols");
+        if (!list.Contains(sym)) { list.Add(sym); await SetListAsync("TradingSettings:ToxicSymbols", list); }
+        _newToxicSymbolInput = "";
+    }
+
+    private async Task RemoveToxicSymbol(string sym)
+    {
+        var list = GetStrList("TradingSettings:ToxicSymbols");
+        list.Remove(sym);
+        await SetListAsync("TradingSettings:ToxicSymbols", list);
+    }
+
+    private async Task AddStrongTrendAsset()
+    {
+        var sym = _newStrongTrendInput.Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(sym)) return;
+        if (!sym.EndsWith("USDT")) sym += "USDT";
+        var list = GetStrList("StrongTrendAssets");
+        if (!list.Contains(sym)) { list.Add(sym); await SetListAsync("StrongTrendAssets", list); }
+        _newStrongTrendInput = "";
+    }
+
+    private async Task RemoveStrongTrendAsset(string sym)
+    {
+        var list = GetStrList("StrongTrendAssets");
+        list.Remove(sym);
+        await SetListAsync("StrongTrendAssets", list);
+    }
+
     private Task OnSymModeChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Mode", e.Value?.ToString() ?? "Auto");
     private Task OnTopVolumeCountChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:TopVolumeCount", ParseIntOr(e.Value, 12));
     private Task OnFinalUniverseCapChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:FinalUniverseCap", ParseIntOr(e.Value, 10));
     private Task OnMinPriceChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:MinPrice", ParseDecimalOr(e.Value, 0.045m));
     private Task OnMin24hVolLongChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:Min24hVolumeLong", ParseDecimalOr(e.Value, 1800000m));
     private Task OnBtcFilterToggle(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:EnableBtcFilter", (bool)(e.Value ?? true));
-    private Task OnBtcDumpThresholdChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:BtcDumpThreshold", ParseDecimalOr(e.Value, -5.0m));
-    private Task OnBtcSqueezeThresholdChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:BtcSqueezeThreshold", ParseDecimalOr(e.Value, 6.0m));
+    private Task OnBtcDumpThresholdChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:BtcDumpThreshold", ParseDecimalOr(e.Value, -1.8m));
+    private Task OnBtcSqueezeThresholdChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:Auto:BtcSqueezeThreshold", ParseDecimalOr(e.Value, 1.8m));
+    private Task OnDynCapEnabledToggle(ChangeEventArgs e) => SetAsync("SymbolSelection:DynamicCap:Enabled", (bool)(e.Value ?? true));
+    private Task OnCapLowVolChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:DynamicCap:CapLowVol", ParseIntOr(e.Value, 18));
+    private Task OnCapMidVolChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:DynamicCap:CapMidVol", ParseIntOr(e.Value, 20));
+    private Task OnCapHighVolChanged(ChangeEventArgs e) => SetAsync("SymbolSelection:DynamicCap:CapHighVol", ParseIntOr(e.Value, 22));
 
     private RenderFragment ExitsTab() => @<div class="st-grid">
 
-        <div class="st-card st-card-wide st-card-warn">
+        <div class="st-card st-card-wide">
             <div class="st-card-head">
-                <div class="st-card-title">⚠ Not Currently Wired to the Engine</div>
+                <div class="st-card-title">🎯 How Exits Work</div>
             </div>
             <div class="st-card-sub">
-                The <code>TakeProfit</code> and <code>PositionSupervisor</code> config sections exist in
-                appsettings.json but no Engine code currently reads these specific values — exits are
-                actually governed by the SL/TP placed directly on each signal at entry time, plus the
-                Mean-Reversion time-stop (editable in the Mean-Reversion tab). Editing these fields below
-                will persist the values, but they won't change live behavior until a future update wires
-                them into the supervisor. Shown here for visibility, not because they're active.
+                Exits are managed by <strong>PositionSupervisor</strong> using ATR-based dynamic logic — not static config values.
+                SL/TP levels are placed at entry time by OrderExecutor, then Supervisor trails and adjusts them automatically.
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px;">
+                <div style="background:var(--st-bg3);border:1px solid var(--st-bdr);border-radius:10px;padding:14px;">
+                    <div style="font-size:12px;font-weight:700;color:#60a5fa;margin-bottom:8px;">📈 Signal Positions</div>
+                    <div style="font-size:12px;color:var(--st-dim);line-height:1.7;">
+                        BE trigger: <code>ATR × 1.3</code><br/>
+                        Partial close step: <code>ATR × 2.0</code><br/>
+                        Partial size: <code>34%</code> (42% toxic)<br/>
+                        SL buffer: <code>ATR × 0.3–0.5</code>
+                    </div>
+                </div>
+                <div style="background:var(--st-bg3);border:1px solid var(--st-bdr);border-radius:10px;padding:14px;">
+                    <div style="font-size:12px;font-weight:700;color:#34d399;margin-bottom:8px;">📅 DCA Positions</div>
+                    <div style="font-size:12px;color:var(--st-dim);line-height:1.7;">
+                        BE trigger: <code>ATR × 3.0</code><br/>
+                        Partial close step: <code>ATR × 5.0</code><br/>
+                        Partial size: <code>20%</code><br/>
+                        SL buffer: <code>ATR × 1.2</code>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <div class="st-card">
-            <div class="st-card-head"><div class="st-card-title">TakeProfit (legacy, unwired)</div></div>
+        <div class="st-card st-card-wide">
+            <div class="st-card-head"><div class="st-card-title">🔁 AutoTrade & Supervisor Controls</div></div>
+            <div class="st-card-sub">Key execution switches — also available in the Engine tab.</div>
+            <div class="st-toggle-row">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("Trading:EnableExecution", true)" @onchange="OnEnableExecutionToggle" />
+                    <span>Enable real order execution (off = signal-only / dry-run)</span>
+                </label>
+            </div>
+            <div class="st-toggle-row">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("Trading:SupervisorManageTP", true)" @onchange="OnSupervisorManageTPToggle" />
+                    <span>Supervisor manages TP orders (off = you place your own TP manually)</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="st-card st-card-wide">
+            <div class="st-card-head"><div class="st-card-title">⏱ Mean-Reversion Time-Stop</div></div>
+            <div class="st-card-sub">Force-close a Mean-Reversion position after N closed bars if the mean wasn't reached. Editable in the Mean-Reversion tab.</div>
             <div class="st-field">
-                <label>ATR Period</label>
-                <input title="ATR Period" class="st-input" type="number" value="@GetInt("TakeProfit:AtrPeriod", 14)" @onchange="OnTpAtrPeriodChanged" />
-            </div>
-            <div class="st-field-row">
-                <div class="st-field"><label>TP1 × ATR</label><input title="TP1 × ATR" class="st-input" type="number" step="0.05" value="@GetDecimal("TakeProfit:Tp1Multiplier", 0.85m)" @onchange="OnTp1MultChanged" /></div>
-                <div class="st-field"><label>TP2 × ATR</label><input title="TP2 × ATR" class="st-input" type="number" step="0.05" value="@GetDecimal("TakeProfit:Tp2Multiplier", 1.5m)" @onchange="OnTp2MultChanged" /></div>
-                <div class="st-field"><label>TP3 × ATR</label><input title="TP3 × ATR" class="st-input" type="number" step="0.05" value="@GetDecimal("TakeProfit:Tp3Multiplier", 2.0m)" @onchange="OnTp3MultChanged" /></div>
-            </div>
-        </div>
-
-        <div class="st-card">
-            <div class="st-card-head"><div class="st-card-title">Position Supervisor (legacy, unwired)</div></div>
-            <div class="st-field-row">
-                <div class="st-field"><label>Stage 1 % (Major)</label><input title="Stage 1 % (Major)" class="st-input" type="number" step="0.01" value="@GetDecimal("PositionSupervisor:Stage1PercentMajor", 0.45m)" @onchange="OnPsStage1MajorChanged" /></div>
-                <div class="st-field"><label>Stage 1 % (Minor)</label><input title="Stage 1 % (Minor)" class="st-input" type="number" step="0.01" value="@GetDecimal("PositionSupervisor:Stage1PercentMinor", 0.35m)" @onchange="OnPsStage1MinorChanged" /></div>
-            </div>
-            <div class="st-field-row">
-                <div class="st-field"><label>BE Trigger R (Major)</label><input title="BE Trigger R (Major)" class="st-input" type="number" step="0.05" value="@GetDecimal("PositionSupervisor:BeTriggerRMajor", 1.3m)" @onchange="OnPsBeTriggerMajorChanged" /></div>
-                <div class="st-field"><label>BE Trigger R (Minor)</label><input title="BE Trigger R (Minor)" class="st-input" type="number" step="0.05" value="@GetDecimal("PositionSupervisor:BeTriggerRMinor", 0.55m)" @onchange="OnPsBeTriggerMinorChanged" /></div>
+                <label>Time-Stop (bars)</label>
+                <input title="Time-Stop (bars)" class="st-input" type="number" value="@GetInt("MeanReversion:TimeStopBars", 12)" @onchange="OnMrTimeStopChanged" />
             </div>
         </div>
 
     </div>;
-
-    private Task OnTpAtrPeriodChanged(ChangeEventArgs e) => SetAsync("TakeProfit:AtrPeriod", ParseIntOr(e.Value, 14));
-    private Task OnTp1MultChanged(ChangeEventArgs e) => SetAsync("TakeProfit:Tp1Multiplier", ParseDecimalOr(e.Value, 0.85m));
-    private Task OnTp2MultChanged(ChangeEventArgs e) => SetAsync("TakeProfit:Tp2Multiplier", ParseDecimalOr(e.Value, 1.5m));
-    private Task OnTp3MultChanged(ChangeEventArgs e) => SetAsync("TakeProfit:Tp3Multiplier", ParseDecimalOr(e.Value, 2.0m));
-    private Task OnPsStage1MajorChanged(ChangeEventArgs e) => SetAsync("PositionSupervisor:Stage1PercentMajor", ParseDecimalOr(e.Value, 0.45m));
-    private Task OnPsStage1MinorChanged(ChangeEventArgs e) => SetAsync("PositionSupervisor:Stage1PercentMinor", ParseDecimalOr(e.Value, 0.35m));
-    private Task OnPsBeTriggerMajorChanged(ChangeEventArgs e) => SetAsync("PositionSupervisor:BeTriggerRMajor", ParseDecimalOr(e.Value, 1.3m));
-    private Task OnPsBeTriggerMinorChanged(ChangeEventArgs e) => SetAsync("PositionSupervisor:BeTriggerRMinor", ParseDecimalOr(e.Value, 0.55m));
 
     private RenderFragment EngineTab() => @<div class="st-grid">
 
@@ -780,8 +984,94 @@
             </div>
         </div>
 
+        <div class="st-card">
+            <div class="st-card-head">
+                <div class="st-card-title">🛡 HedgeKill</div>
+                <span class="st-live-pill">● live</span>
+            </div>
+            <div class="st-card-sub">
+                HedgeKill manages conflicting hedge positions (simultaneous LONG+SHORT on the same symbol).
+                <strong>Hybrid</strong> mode closes the losing side at a fraction when the net loss exceeds the threshold.
+                <strong>Safe</strong> = only closes on hard loss. <strong>Aggressive</strong> = closes faster.
+            </div>
+            <div class="st-field">
+                <label>Mode</label>
+                <select class="st-select" value="@GetStr("HedgeKill:Mode", "Hybrid")" @onchange="OnHedgeKillModeChanged">
+                    <option value="Safe">Safe — only on hard loss</option>
+                    <option value="Hybrid">Hybrid — balanced (recommended)</option>
+                    <option value="Aggressive">Aggressive — close faster</option>
+                </select>
+            </div>
+            <div class="st-field-row" style="margin-top:10px;">
+                <div class="st-field">
+                    <label>Net OK threshold ($) <span class="st-field-hint">don't kill if net PnL ≥ this</span></label>
+                    <input class="st-input" type="number" step="0.5"
+                           value="@GetDecimal("HedgeKill:NetOkUsd", 3.5m)" @onchange="OnHedgeNetOkChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Hard Net loss ($) <span class="st-field-hint">negative — force kill at this loss</span></label>
+                    <input class="st-input" type="number" step="0.5"
+                           value="@GetDecimal("HedgeKill:HardNetUsd", -3.0m)" @onchange="OnHedgeHardNetChanged" />
+                </div>
+            </div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>Hard Loser ($) <span class="st-field-hint">single position loss threshold</span></label>
+                    <input class="st-input" type="number" step="0.5"
+                           value="@GetDecimal("HedgeKill:HardLoserUsd", 8.0m)" @onchange="OnHedgeHardLoserChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Loser Close Fraction <span class="st-field-hint">0.70 = close 70% of losing side</span></label>
+                    <input class="st-input" type="number" step="0.05" min="0.1" max="1.0"
+                           value="@GetDecimal("HedgeKill:LoserCloseFraction", 0.70m)" @onchange="OnHedgeLoserFracChanged" />
+                </div>
+            </div>
+            <div class="st-toggle-row" style="margin-top:8px;">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("HedgeKill:UseCooldown", true)" @onchange="OnHedgeCooldownToggle" />
+                    <span>Use cooldown between kills</span>
+                </label>
+            </div>
+            @if (GetBool("HedgeKill:UseCooldown", true))
+            {
+                <div class="st-field">
+                    <label>Cooldown (minutes)</label>
+                    <input class="st-input" type="number" min="1" max="60"
+                           value="@GetInt("HedgeKill:CooldownMinutes", 12)" @onchange="OnHedgeCooldownMinChanged" />
+                </div>
+            }
+        </div>
+
+        <div class="st-card">
+            <div class="st-card-head">
+                <div class="st-card-title">🗄 Historical Data Archive</div>
+                <span class="st-live-pill">● live</span>
+            </div>
+            <div class="st-card-sub">
+                Background service that builds a permanent OHLCV archive under <code>datadb/</code>.
+                Used for backtesting and chart display when live data isn't available yet.
+            </div>
+            <div class="st-toggle-row">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("HistoricalData:Enabled", true)" @onchange="OnHistDataEnabledToggle" />
+                    <span>Enable historical data loader</span>
+                </label>
+            </div>
+            <div class="st-field" style="margin-top:10px;">
+                <label>Fetch interval (seconds) <span class="st-field-hint">how often the loader runs</span></label>
+                <input class="st-input" type="number" min="60" max="3600" step="60"
+                       value="@GetInt("HistoricalData:IntervalSeconds", 300)" @onchange="OnHistIntervalChanged" />
+            </div>
+            <div class="st-toggle-row">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("HistoricalData:IncludePinnedSymbols", true)" @onchange="OnHistIncludePinnedToggle" />
+                    <span>Auto-include Pinned symbols</span>
+                </label>
+            </div>
+        </div>
+
         <div class="st-card st-card-muted">
-            <div class="st-card-head"><div class="st-card-title">Debug (not currently read by Engine)</div></div>
+            <div class="st-card-head"><div class="st-card-title">🐞 Debug</div></div>
             <div class="st-toggle-row">
                 <label class="st-toggle">
                     <input type="checkbox" checked="@GetBool("Debug:EnableStrategyDebug", true)" @onchange="OnDebugToggle" />
@@ -795,6 +1085,16 @@
     private Task OnEnableExecutionToggle(ChangeEventArgs e) => SetAsync("Trading:EnableExecution", (bool)(e.Value ?? true));
     private Task OnSupervisorManageTPToggle(ChangeEventArgs e) => SetAsync("Trading:SupervisorManageTP", (bool)(e.Value ?? true));
     private Task OnDebugToggle(ChangeEventArgs e) => SetAsync("Debug:EnableStrategyDebug", (bool)(e.Value ?? true));
+    private Task OnHedgeKillModeChanged(ChangeEventArgs e) => SetAsync("HedgeKill:Mode", e.Value?.ToString() ?? "Hybrid");
+    private Task OnHedgeNetOkChanged(ChangeEventArgs e) => SetAsync("HedgeKill:NetOkUsd", ParseDecimalOr(e.Value, 3.5m));
+    private Task OnHedgeHardNetChanged(ChangeEventArgs e) => SetAsync("HedgeKill:HardNetUsd", ParseDecimalOr(e.Value, -3.0m));
+    private Task OnHedgeHardLoserChanged(ChangeEventArgs e) => SetAsync("HedgeKill:HardLoserUsd", ParseDecimalOr(e.Value, 8.0m));
+    private Task OnHedgeLoserFracChanged(ChangeEventArgs e) => SetAsync("HedgeKill:LoserCloseFraction", ParseDecimalOr(e.Value, 0.70m));
+    private Task OnHedgeCooldownToggle(ChangeEventArgs e) => SetAsync("HedgeKill:UseCooldown", (bool)(e.Value ?? true));
+    private Task OnHedgeCooldownMinChanged(ChangeEventArgs e) => SetAsync("HedgeKill:CooldownMinutes", ParseIntOr(e.Value, 12));
+    private Task OnHistDataEnabledToggle(ChangeEventArgs e) => SetAsync("HistoricalData:Enabled", (bool)(e.Value ?? true));
+    private Task OnHistIntervalChanged(ChangeEventArgs e) => SetAsync("HistoricalData:IntervalSeconds", ParseIntOr(e.Value, 300));
+    private Task OnHistIncludePinnedToggle(ChangeEventArgs e) => SetAsync("HistoricalData:IncludePinnedSymbols", (bool)(e.Value ?? true));
 
     private RenderFragment DataArchiveTab() => @<div class="st-grid">
 
@@ -1705,5 +2005,6 @@
     .st-field-row{grid-template-columns:1fr;}
 }
 </style>
+
 
 
