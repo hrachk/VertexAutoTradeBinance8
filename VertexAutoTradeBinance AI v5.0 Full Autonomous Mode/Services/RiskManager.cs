@@ -59,6 +59,48 @@ namespace VertexAutoTradeBinance8.Services
         // Passing it as a parameter avoids re-reading trading.Leverage here
         // and ensures RiskManager uses the SAME value that was set on exchange.
         // If not provided (0), falls back to trading.Leverage.
+        /// <summary>
+        /// Computes the effective leverage to use for a given symbol/timeframe.
+        /// Result = configLeverage × AiLeverageService.Calculate(),
+        /// clamped so AI can only REDUCE leverage (never increase above config).
+        /// Call this from TradingWorker BEFORE GetPropDeskQtyFinal so both
+        /// qty calculation and ExecuteAsync use the same leverage value.
+        /// </summary>
+        public decimal GetEffectiveLeverage(
+            string symbol,
+            Binance.Net.Enums.KlineInterval tf,
+            IReadOnlyList<Binance.Net.Interfaces.IBinanceKline> klines,
+            TradingOptions trading)
+        {
+            decimal configLev = trading.Leverage > 0 ? (decimal)trading.Leverage : 10m;
+
+            decimal aiMult = 1.0m;
+            try
+            {
+                if (klines?.Count >= 30)
+                {
+                    var castKlines = klines
+                        .OfType<Binance.Net.Objects.Models.Futures.BinanceFuturesUsdtKline>()
+                        .ToList();
+                    if (castKlines.Count >= 30)
+                        aiMult = _aiLeverage.Calculate(symbol, tf, castKlines);
+                }
+            }
+            catch { /* non-critical — use 1.0x */ }
+
+            // AI can only reduce leverage, never increase above config ceiling
+            decimal effective = Math.Clamp(
+                configLev * aiMult,
+                configLev * 0.40m,   // floor: never below 40% of config
+                configLev * 1.00m);  // ceil:  never above config value
+
+            _logger.LogInformation(
+                "[LEV][{sym}] config={cfg}x aiMult={mult:F2} → effective={eff:F1}x",
+                symbol, configLev, aiMult, effective);
+
+            return effective;
+        }
+
         public decimal GetPropDeskQtyFinal(
             TradeSignal signal,
             decimal balance,
