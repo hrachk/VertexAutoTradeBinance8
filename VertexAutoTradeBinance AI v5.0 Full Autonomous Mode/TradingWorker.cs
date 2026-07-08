@@ -909,40 +909,20 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
-            // ── Effective leverage: config base × AI market multiplier ──────
-            // AiLeverageService returns a regime/ATR/winrate multiplier (0.30–2.0×)
-            // applied on top of the config leverage from appsettings.
-            // This is where trading.Leverage (19 or 25 from config) actually gets
-            // used and modulated — RiskManager receives the final effective value.
-            decimal configLeverage = trading.Leverage > 0
-                ? (decimal)trading.Leverage
-                : (signal.Leverage ?? 10m);
+            // ── Effective leverage: config × AiLeverageService multiplier ───
+            // Computed inside _risk.GetEffectiveLeverage (which owns AiLeverageService)
+            // so TradingWorker does not need a direct reference to AiLeverageService.
 
-            decimal aiLevMult = 1.0m;
-            try
-            {
-                // Need klines for AiLeverageService — use cached from MarketDataFacade
-                var klines4lev = await _marketDataFacade
-                    .GetKlinesAsync(symbol, tf, 60, ct)
-                    .ConfigureAwait(false);
+            // GetEffectiveLeverage lives in RiskManager (which owns AiLeverageService).
+            // It fetches klines internally via the passed klines arg and returns
+            // configLev × aiMult clamped so AI can only reduce, never increase.
+            var klines4lev = await _marketDataFacade
+                .GetKlinesAsync(symbol, tf, 60, ct)
+                .ConfigureAwait(false);
 
-                if (klines4lev?.Count >= 30)
-                    aiLevMult = _aiLeverage.Calculate(symbol, tf, klines4lev.ToList());
-            }
-            catch { /* non-critical — fall back to 1.0x */ }
+            decimal effectiveLeverage = _risk.GetEffectiveLeverage(
+                symbol, tf, klines4lev, trading);
 
-            // Apply AI multiplier but cap result within safe bounds:
-            //   floor: 40% of config leverage (never go below this)
-            //   ceil:  100% of config leverage (AI cannot INCREASE leverage,
-            //          only reduce — prevents over-leveraging on risky regimes)
-            decimal effectiveLeverage = Math.Clamp(
-                configLeverage * aiLevMult,
-                configLeverage * 0.40m,  // floor: 40% of config
-                configLeverage * 1.00m); // ceil:  config max (no AI boost)
-
-            _logger.LogInformation(
-                "[LEVERAGE][{sym}] config={cfg}x aiMult={mult:F2} → effective={eff:F1}x",
-                symbol, configLeverage, aiLevMult, effectiveLeverage);
 
             var qty = _risk.GetPropDeskQtyFinal(
                 signal,
