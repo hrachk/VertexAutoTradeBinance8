@@ -657,16 +657,17 @@
                  It is self-contained with its own buttons, state, and event listeners.
                  We make it draggable after init via InitDraggableElementsAsync(). -->
 
-            <div class="mk-tpsl-overlay">
-                <div class="mk-tpsl-btn-wrapper" id="mk-tpsl-btn-wrapper">
-                    <div class="mk-tpsl-drag-grip" title="Drag to move">
-                        <span></span><span></span><span></span>
-                    </div>
-                    <button class="mk-tpsl-btn @(_tpSlEditMode ? "mk-tpsl-btn-on" : "")" @onclick="ToggleTpSlEdit" title="Show/hide existing TP/SL lines">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6M9 8h6M17 16h6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                        TP/SL
-                    </button>
+            <!-- TP/SL toggle button — draggable, outside mk-tpsl-overlay -->
+            <div class="mk-tpsl-btn-wrapper" id="mk-tpsl-btn-wrapper">
+                <div class="mk-tpsl-drag-grip" title="Drag to move">
+                    <span></span><span></span><span></span>
                 </div>
+                <button class="mk-tpsl-btn @(_tpSlEditMode ? "mk-tpsl-btn-on" : "")" @onclick="ToggleTpSlEdit" title="Show/hide existing TP/SL lines">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6M9 8h6M17 16h6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    TP/SL
+                </button>
+            </div>
+            <div class="mk-tpsl-overlay">
                 </div>
             }
         </div>
@@ -1715,7 +1716,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .mk-title-block{display:flex;align-items:center;gap:10px;}
 .mk-icon{font-size:18px;}
 .mk-title{font-family:var(--mono);font-size:11px;font-weight:800;letter-spacing:2px;color:var(--cyan);}
-.mk-sub{font-size:9px;color:var(--dim2);margin-top:1px;}
+.mk-sub{font-size:9px;color:var(--dim2);margin-top:0px;}
 .mk-hright{display:flex;align-items:center;gap:20px;}
 .mk-demo-toggle{display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;border:1px solid var(--bdr);background:var(--bg3);color:var(--dim);font-size:11px;font-weight:700;letter-spacing:.5px;cursor:pointer;transition:all .2s;}
 .mk-demo-toggle:hover{border-color:var(--acc);}
@@ -1767,7 +1768,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .mk-stats{position:sticky;z-index:23;display:grid;grid-template-columns:repeat(12,1fr);gap:1px;background:var(--bdr);border-bottom:1px solid var(--bdr);}
 .mk-s{background:var(--bg2);padding:8px 12px;}
 .mk-sl{font-size:8px;letter-spacing:.8px;color:var(--dim);font-weight:700;text-transform:uppercase;}
-.mk-sv{font-family:var(--mono);font-size:13px;font-weight:700;margin-top:2px;}
+.mk-sv{font-family:var(--mono);font-size:14px;font-weight:700;margin-top:1px;}
 
 /* CHARTS */
 .mk-charts-area{background:var(--bg2);padding:16px 20px;border-bottom:1px solid var(--bdr);position:relative;}
@@ -1787,17 +1788,14 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .mk-chart-container-wrap:not(.mk-chart-maximized)::after{content:'';position:absolute;right:2px;bottom:2px;width:14px;height:14px;background:repeating-linear-gradient(135deg,var(--dim) 0 1.5px,transparent 1.5px 4px);opacity:.5;pointer-events:none;}
 
 .mk-tpsl-overlay{position:absolute;top:56px;left:8px;z-index:5;pointer-events:none;display:flex;align-items:center;gap:8px;}
-.mk-tpsl-btn-wrapper{position:absolute;top:8px;right:52px;z-index:8;user-select:none;touch-action:none;display:flex;align-items:center;gap:0;background:rgba(8,13,26,.92);border:1px solid var(--bdr2);border-radius:7px;overflow:hidden;backdrop-filter:blur(8px);box-shadow:0 2px 12px rgba(0,0,0,.4);cursor:grab;}.mk-tpsl-btn-wrapper:active{cursor:grabbing;}.mk-tpsl-drag-grip{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:2px;width:14px;padding:5px 3px;border-right:1px solid var(--bdr);opacity:.4;}.mk-tpsl-drag-grip span{display:block;width:8px;height:1.5px;background:var(--t1);border-radius:1px;}.mk-tpsl-btn{pointer-events:auto;display:flex;align-items:center;gap:6px;background:transparent;border:none;color:var(--dim);padding:5px 10px;font-size:11.5px;font-weight:600;cursor:pointer;transition:color .15s,background .15s;}
+.mk-tpsl-btn-wrapper{position:absolute;top:8px;right:46px;z-index:9;user-select:none;touch-action:none;display:flex;align-items:center;gap:0;background:rgba(8,13,26,.92);border:1px solid var(--bdr2);border-radius:7px;overflow:hidden;backdrop-filter:blur(8px);box-shadow:0 2px 12px rgba(0,0,0,.4);cursor:grab;pointer-events:auto;}.mk-tpsl-btn-wrapper:active{cursor:grabbing;}.mk-tpsl-drag-grip{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:2px;width:14px;padding:5px 3px;border-right:1px solid var(--bdr);opacity:.4;}.mk-tpsl-drag-grip span{display:block;width:8px;height:1.5px;background:var(--t1);border-radius:1px;}.mk-tpsl-btn{pointer-events:auto;display:flex;align-items:center;gap:6px;background:transparent;border:none;color:var(--dim);padding:5px 10px;font-size:11.5px;font-weight:600;cursor:pointer;transition:color .15s,background .15s;}
 .mk-tpsl-btn svg{width:13px;height:13px;}
 
 /* DRAWING TOOLS TOOLBAR */
-.mk-draw-toolbar{position:absolute;left:10px;top:10px;z-index:10;display:flex;flex-direction:column;gap:3px;background:rgba(8,13,26,.92);border:1px solid var(--bdr2);border-radius:8px;padding:5px 4px;box-shadow:0 4px 20px rgba(0,0,0,.5);backdrop-filter:blur(8px);user-select:none;touch-action:none;}.mk-draw-drag-handle{width:24px;height:14px;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:3px;cursor:grab;opacity:.4;transition:opacity .15s;padding:0 4px;margin:1px auto 0;}.mk-draw-drag-handle:hover{opacity:.9;cursor:grab;}.mk-draw-drag-handle:active{cursor:grabbing;}.mk-draw-drag-handle span{display:block;width:16px;height:1.5px;background:var(--t1);border-radius:1px;}
-.mk-draw-btn{width:32px;height:32px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--dim);cursor:pointer;display:grid;place-items:center;transition:all .12s;font-size:13px;}
-.mk-draw-btn:hover{background:rgba(255,255,255,.05);color:var(--txt2);}
-.mk-draw-btn.mk-draw-btn-on{background:var(--cyan-d);border-color:var(--cyan-b);color:var(--cyan);}
-.mk-draw-divider{height:1px;background:var(--bdr);margin:2px 3px;}
-.mk-draw-count{text-align:center;font-size:8px;color:var(--cyan);font-family:var(--mono);font-weight:700;display:none;margin-top:2px;}
-.mk-draw-count.mk-draw-count-show{display:block;}
+/* mk-draw-toolbar removed — CDT chart-drawing-tools.js manages its own toolbar with inline styles */
+
+
+
 
 .mk-tpsl-btn:hover{color:var(--txt);border-color:var(--acc);}
 .mk-tpsl-btn-on{background:rgba(59,130,246,0.15);border-color:var(--acc);color:var(--acc);}
@@ -1887,7 +1885,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-dot{width:7px;height:7px;border-radius:50%;background:var(--grn);animation:pulse 1.5s infinite;}
 @@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(34,197,94,.4);}50%{box-shadow:0 0 0 6px rgba(34,197,94,0);}}
 .sig-count{background:var(--cyan);color:#04060e;font-size:9px;font-weight:800;padding:1px 5px;border-radius:5px;font-family:var(--mono);}
-.sig-panel-sub{font-size:9px;color:var(--dim2);white-space:nowrap;}
+.sig-panel-sub{font-size:9px;color:var(--t3);white-space:nowrap;}
 .sig-hidden-toggle{display:flex;align-items:center;gap:5px;padding:3px 9px;border-radius:5px;border:1px solid var(--bdr2);background:var(--bg3);color:var(--dim);font-size:9px;font-weight:700;cursor:pointer;flex-shrink:0;}
 .sig-hidden-toggle:hover{border-color:var(--acc);}
 .sig-hidden-toggle.sig-hidden-toggle-on{background:var(--cyan-d);border-color:var(--cyan-b);color:var(--cyan);}
@@ -2067,9 +2065,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .ord-position-box{margin-top:4px;padding:14px 16px;background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;display:flex;flex-direction:column;gap:10px;}
 .ord-position-head{display:flex;align-items:center;justify-content:space-between;}
 .ord-position-title{font-size:11px;letter-spacing:1px;color:var(--dim);font-weight:700;text-transform:uppercase;}
-.ord-position-pnl-hero{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:12px 16px 12px 20px;border-bottom:1px solid var(--bdr);margin-bottom:0;position:relative;background:var(--bg3);}
+.ord-position-pnl-hero{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:14px 16px 14px 20px;border-bottom:1px solid var(--bdr);margin-bottom:0;position:relative;background:var(--bg3);}
 .ord-position-pnl-hero::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:0 2px 2px 0;background:var(--red);}
-.ord-position-pnl-hero-v{font-size:26px;font-weight:800;letter-spacing:-1px;line-height:1;font-family:var(--mono);}
+.ord-position-pnl-hero-v{font-size:28px;font-weight:800;letter-spacing:-1.5px;line-height:1;font-family:var(--mono);}
 .ord-position-roi-hero{font-size:15px;font-weight:700;}
 .ord-position-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;background:transparent;border-radius:0;padding:12px 16px;border:none;border-bottom:1px solid var(--bdr);}
 .ord-position-cell{display:flex;flex-direction:column;gap:4px;}
