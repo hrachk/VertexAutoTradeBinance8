@@ -376,6 +376,19 @@ namespace VertexAutoTradeBinance8.Services
             // 4) SMART TRAILING / BE / PARTIAL CLOSE
             async Task ProbeSide(BinancePositionDetailsUsdt? pos, PositionSide side)
             {
+                // MANUAL POSITION GUARD: if the last signal is manual (user opened
+                // position manually via UI), do NOT move their SL via ProbeSide.
+                // The user placed their own SL/TP intentionally — Supervisor must
+                // not override it. Only emergency SL/TP creation (HandleSideAsync)
+                // is allowed for manual positions (as a safety net).
+                if (lastSignal?.IsManual == true)
+                {
+                    _logger.LogDebug(
+                        "[SUPERVISOR][{sym}][{side}] Manual position — skip SL trailing/BE-move",
+                        symbol, side);
+                    return;
+                }
+
                 if (pos == null || Math.Abs(pos.Quantity) < POSITION_EPS)
                 {
                     var key = BuildExitKey(symbol, side, pos?.EntryPrice ?? 0m);
@@ -497,7 +510,15 @@ namespace VertexAutoTradeBinance8.Services
                 // COOLDOWN
                 // =========================
                 var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                var cooldown = isToxic ? 3000 : 1200;
+                // Cooldown scaled to market volatility:
+                // VolatileChop/StrongTrend: longer wait to avoid rapid SL flapping
+                // during high-volatility moves (was causing rapid SL duplication).
+                var cooldown = _regimeNow switch
+                {
+                    MarketRegime.VolatileChop => 8000,
+                    MarketRegime.StrongUpTrend or MarketRegime.StrongDownTrend => 5000,
+                    _ => isToxic ? 4000 : 2500
+                };
                 if (_beMoved.TryGetValue(keyProbe, out var lastMove) && now - lastMove < cooldown) return;
 
                 // =========================
@@ -597,11 +618,17 @@ namespace VertexAutoTradeBinance8.Services
             // top of every previous one. This is THE root cause of SL
             // orders multiplying rapidly that was reported.
             var algoOrders = await _algoRaw.GetOpenAlgoOrdersAsync(symbol, ct);
+            // Cancel ALL existing algo SL orders for this side —
+            // not just BE_-prefixed ones. When user places SL via
+            // Binance UI, it lands as an algo order with a random
+            // clientAlgoId (no prefix). Cancelling only BE_-prefixed
+            // orders was leaving the user's original SL alive,
+            // causing duplicate SL orders during BE-moves.
+            // GUARD: only do this for non-manual positions — for
+            // manual positions, ProbeSide already returns early.
             var currentSlList = algoOrders
                 .Where(o => o.IsStop &&
-                            o.PositionSide == side &&
-                            o.ClientAlgoId != null &&
-                            o.ClientAlgoId.StartsWith(BE_PREFIX))
+                            o.PositionSide == side)
                 .ToList();
 
             foreach (var currentSl in currentSlList)
@@ -907,12 +934,15 @@ namespace VertexAutoTradeBinance8.Services
                 // =====================================================
 
                 // ❗ SL отсутствует → ставим аварийный (один раз)
-                if (sl == null && !algoSlExists)
+                // For MANUAL positions: only create emergency SL if truly none exists
+                // (both regular AND algo). Never replace a user-placed SL.
+                bool noSlAnywhere = sl == null && !algoSlExists;
+                if (noSlAnywhere)
                 {
                     await CreateEmergencySLAsync(client, symbol, side, qtyAbs, entry, signal, ct);
 
                     _logger.LogWarning(
-                        "[SUPERVISOR][{symbol}][{side}] Emergency SL created",
+                        "[SUPERVISOR][{symbol}][{side}] Emergency SL created (no SL found anywhere)",
                         symbol, side);
                 }
 
@@ -925,13 +955,23 @@ namespace VertexAutoTradeBinance8.Services
 
                 if (existingTps == 0)
                 {
-                    // Only place emergency TP if SupervisorManageTP=true.
-                    // When false — user manages their own TP orders manually.
-                    if (_tradingOptions.CurrentValue.SupervisorManageTP)
+                    // Only place emergency TP if SupervisorManageTP=true AND
+                    // this is NOT a manual position (user placed their own TP).
+                    // GetOpenAlgoOrdersAsync has 20s cache — it may falsely return
+                    // 0 TPs for a few seconds after user places one. For manual
+                    // positions skip emergency TP entirely to avoid conflicts.
+                    bool isManualPos = signal?.IsManual == true;
+                    if (_tradingOptions.CurrentValue.SupervisorManageTP && !isManualPos)
                     {
                         await CreateEmergencyTPAsync(client, symbol, side, qtyAbs, entry, signal, ct);
                         _logger.LogWarning(
                             "[SUPERVISOR][{symbol}][{side}] Emergency TP created (no TP orders found)",
+                            symbol, side);
+                    }
+                    else if (isManualPos)
+                    {
+                        _logger.LogDebug(
+                            "[SUPERVISOR][{symbol}][{side}] Manual position — skip Emergency TP (user manages their own)",
                             symbol, side);
                     }
                     else
@@ -2126,6 +2166,14 @@ namespace VertexAutoTradeBinance8.Services
             IReadOnlyList<BinanceFuturesUsdtKline> klines,
             CancellationToken ct)
         {
+            // MANUAL POSITION GUARD: never auto-close partial on manual positions.
+            // The user manages their own exits when trading manually.
+            if (signal?.IsManual == true)
+            {
+                _logger.LogDebug("[EARLY-TP][{sym}][{side}] Manual position — skip early partial", symbol, side);
+                return;
+            }
+
             // Блокируем, если LiquidityGuard сигналит опасность (не лезем в рынок лишний раз)
             if (_liquidityGuard.LastDanger?.Block == true)
                 return;
@@ -3453,6 +3501,11 @@ namespace VertexAutoTradeBinance8.Services
             CancellationToken ct)
         {
 
+            // MANUAL POSITION GUARD: never harvest profits on manual positions.
+            // User decides when to take profits when trading manually.
+            if (signal?.IsManual == true)
+                return;
+
             // ==========================================================
             // 🔒 BLOCK HARVEST right after EARLY-TP (Binance sync lag)
             // ==========================================================
@@ -3626,5 +3679,6 @@ namespace VertexAutoTradeBinance8.Services
     }
 
 }
+
 
 
