@@ -41,7 +41,7 @@ a, .btn-link {
 
 /* 👇 ЭТО КЛЮЧ */
 .app-body {
-    padding-top: calc(var(--vertex-header-h) + 38px); /* header + topnav */
+    padding-top: calc(var(--vertex-header-h) + 38px); /* header(44px) + topnav(38px) */
     height: 100vh;
     overflow: hidden; /* ОСТАВЛЯЕМ */
 }
@@ -2088,7 +2088,7 @@ compact-card {
 /* ==== HEADER ==== */
 .vertex-header {
     position: sticky;
-    top: 38px;
+    top: 0;
     z-index: 2000;
     height: var(--vertex-header-h);
     display: flex;
@@ -2904,7 +2904,7 @@ compact-card {
 /* ===== Desktop top navigation (replaces sidebar on wide screens) ===== */
 .vertex-topnav {
     position: sticky;
-    top: 0;
+    top: var(--vertex-header-h);
     z-index: 2100;
     display: flex;
     align-items: center;
