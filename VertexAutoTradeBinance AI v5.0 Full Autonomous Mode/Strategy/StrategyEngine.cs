@@ -450,7 +450,7 @@ namespace VertexAutoTradeBinance8.Strategy
                         // Pass signal confidence and IsSuperSignal for regime-aware TP
                         var (_, tp1M, tp2M, tp3M) = GetAtrConfig(
                             decisionTf,
-                            confidence: signal.Confidence,
+                            confidence: signal.Confidence ?? 0.55m,  // decimal? → decimal
                             isSuperSignal: signal.IsSuperSignal);
                         bool isLong = signal.Side == SignalSide.Buy;
                         signal.TakeProfits = new List<decimal>
