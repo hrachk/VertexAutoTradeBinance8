@@ -1407,7 +1407,7 @@ compact-card {
 
 :root {
     --brain-beat: 2.8s; /* общий ритм мозга */
-    --vertex-header-h: 58px;
+    --vertex-header-h: 44px;
 }
 
 @keyframes brainBeat {
@@ -2094,11 +2094,12 @@ compact-card {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 16px;
-    background: rgba(6, 10, 18, 0.78);
-    -webkit-backdrop-filter: blur(10px);
-    backdrop-filter: blur(10px);
-    border-bottom: 1px solid rgba(255,255,255,0.08);
+    padding: 0 14px;
+    background: rgba(4, 6, 14, 0.96);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(30,45,71,0.9);
+    box-shadow: 0 1px 0 rgba(34,211,238,.05);
 }
 
 .vertex-left {
@@ -2118,14 +2119,16 @@ compact-card {
 .vertex-title {
     font-weight: 800;
     letter-spacing: 0.4px;
-    font-size: 16px;
+    font-size: 13px;
     white-space: nowrap;
+    color: #e8eef6;
 }
 
 .vertex-subtitle {
-    font-size: 12px;
-    opacity: 0.75;
+    font-size: 10px;
+    opacity: 0.6;
     white-space: nowrap;
+    color: #a78bfa;
 }
 
 /* Logo - аккуратно и крупнее */
@@ -2205,30 +2208,33 @@ compact-card {
 .autotrade-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    padding: 8px 12px;
-    border-radius: 12px;
-    font-size: 12px;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 8px;
+    font-size: 10px;
     font-weight: 700;
     letter-spacing: .3px;
     cursor: pointer;
-    border: 1px solid rgba(255,255,255,0.10);
-    background: rgba(255,255,255,0.06);
-    color: #94a3b8;
+    border: 1px solid rgba(30,45,71,0.9);
+    background: rgba(8,13,26,0.9);
+    color: #4a6080;
     transition: all .15s;
+    font-family: 'JetBrains Mono', monospace;
 }
 .autotrade-toggle:hover {
     border-color: rgba(255,255,255,0.22);
 }
 .autotrade-toggle.autotrade-on {
-    background: rgba(34,197,94,0.12);
-    border-color: rgba(34,197,94,0.35);
-    color: #4ade80;
+    background: rgba(16,185,129,0.1);
+    border-color: rgba(16,185,129,0.35);
+    color: #10b981;
+    box-shadow: 0 0 0 1px rgba(16,185,129,.1);
 }
 .autotrade-toggle.autotrade-off {
-    background: rgba(239,68,68,0.12);
-    border-color: rgba(239,68,68,0.35);
-    color: #f87171;
+    background: rgba(239,68,68,0.08);
+    border-color: rgba(239,68,68,0.3);
+    color: #ef4444;
+    box-shadow: 0 0 0 1px rgba(239,68,68,.08);
 }
 .autotrade-toggle.demo-mode-on {
     background: rgba(234,179,8,0.14);
@@ -2246,11 +2252,11 @@ compact-card {
 .strategy-mode-pill {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
-    border-radius: 12px;
-    border: 1px solid rgba(255,255,255,0.10);
-    background: rgba(255,255,255,0.06);
+    gap: 5px;
+    padding: 4px 8px;
+    border-radius: 7px;
+    border: 1px solid rgba(30,45,71,0.9);
+    background: rgba(8,13,26,0.9);
 }
 
 .strategy-mode-icon {
@@ -2261,9 +2267,10 @@ compact-card {
 .strategy-mode-select {
     background: transparent;
     border: none;
-    color: #e2e8f0;
-    font-size: 12px;
-    font-family: inherit;
+    color: #f59e0b;
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
     cursor: pointer;
     outline: none;
 }
@@ -2849,12 +2856,12 @@ compact-card {
 .user-badge {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-left: 14px;
-    padding: 6px 12px 6px 6px;
-    border-radius: 20px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    gap: 8px;
+    margin-left: 10px;
+    padding: 4px 10px 4px 4px;
+    border-radius: 8px;
+    background: rgba(8, 13, 26, 0.9);
+    border: 1px solid rgba(30, 45, 71, 0.9);
     cursor: default;
     transition: background 0.15s, border-color 0.15s;
 }
@@ -2863,13 +2870,13 @@ compact-card {
     border-color: rgba(255, 196, 0, 0.25);
 }
 .user-badge-avatar {
-    width: 28px;
-    height: 28px;
+    width: 24px;
+    height: 24px;
     border-radius: 50%;
     background: linear-gradient(135deg, #f0b90b, #d99e00);
     color: #0a0d12;
-    font-weight: 700;
-    font-size: 13px;
+    font-weight: 800;
+    font-size: 11px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2881,13 +2888,13 @@ compact-card {
     line-height: 1.25;
 }
 .user-badge-name {
-    font-size: 12.5px;
-    font-weight: 600;
-    color: #e8e8e8;
+    font-size: 11px;
+    font-weight: 700;
+    color: #e8eef6;
 }
 .user-badge-id {
-    font-size: 10.5px;
-    color: rgba(255, 255, 255, 0.45);
+    font-size: 8px;
+    color: rgba(255, 255, 255, 0.3);
 }
 @media (max-width: 700px) {
     .user-badge-info { display: none; }
@@ -2901,11 +2908,11 @@ compact-card {
     z-index: 1900;
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding: 0 20px;
-    height: 44px;
-    background: #0d1117;
-    border-bottom: 1px solid #1e2535;
+    gap: 2px;
+    padding: 0 16px;
+    height: 38px;
+    background: #080d1a;
+    border-bottom: 1px solid #1e2d47;
     overflow-x: auto;
     scrollbar-width: none;
 }
@@ -2914,34 +2921,35 @@ compact-card {
 .vt-link {
     display: flex;
     align-items: center;
-    gap: 7px;
-    padding: 8px 14px;
-    border-radius: 8px;
-    color: #8b97ab;
-    font-size: 13px;
+    gap: 5px;
+    padding: 5px 9px;
+    border-radius: 6px;
+    color: #4a6080;
+    font-size: 11px;
     font-weight: 500;
     text-decoration: none;
     white-space: nowrap;
     transition: background 0.15s, color 0.15s;
 }
 .vt-link svg {
-    width: 16px;
-    height: 16px;
+    width: 13px;
+    height: 13px;
     flex-shrink: 0;
+    opacity: 0.7;
 }
 .vt-link:hover {
-    background: rgba(255, 255, 255, 0.05);
-    color: #e8e8e8;
+    background: rgba(255, 255, 255, 0.04);
+    color: #b0bfcf;
 }
 .vt-link.active {
-    background: rgba(59, 130, 246, 0.12);
-    color: #3b82f6;
+    background: rgba(34, 211, 238, 0.1);
+    color: #22d3ee;
     font-weight: 600;
 }
 .vt-link-feature.active,
 .vt-link-feature:hover {
-    background: rgba(34, 197, 94, 0.12);
-    color: #22c55e;
+    background: rgba(16, 185, 129, 0.1);
+    color: #10b981;
 }
 .vt-sep {
     width: 1px;
