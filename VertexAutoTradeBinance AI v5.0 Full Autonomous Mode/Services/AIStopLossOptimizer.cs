@@ -74,11 +74,26 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
+        /// <summary>
+        /// Optimizes Stop Loss placement using dynamic ATR distance and structure-aware logic.
+        /// Also applies regime-aware TP boost to signal.TakeProfits (in-place update).
+        ///
+        /// SL improvements:
+        ///  - Anti-stophunt: push SL past recent significant wick if wicked past our SL
+        ///  - Dynamic floor: min SL = ATR × dynMult (regime-aware: wider in chop/range)
+        ///  - Low-vol tighten: in quiet+trend, trim SL by 30% to improve RR
+        ///
+        /// TP improvements:
+        ///  - If signal already has TakeProfits (from StrategyEngine with regime boost):
+        ///    apply additional confidence/trend fine-tuning.
+        ///  - If signal has no TPs (emergency fallback): build from ATR × 1.5/2.5/3.5.
+        ///  - MeanReversion signals: TP never touched (thesis = return to mean).
+        /// </summary>
         public decimal OptimizeSlAndTp(
-    string symbol,
-    IReadOnlyList<BinanceFuturesUsdtKline> klines,
-    TradeSignal signal,
-    AiDecision decision)
+            string symbol,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            TradeSignal signal,
+            AiDecision decision)
         {
             if (klines == null || klines.Count < 10)
                 return signal.StopLoss;
@@ -90,76 +105,97 @@ namespace VertexAutoTradeBinance8.Services
             if (atr14 <= 0m)
                 return signal.StopLoss;
 
-            decimal oldSl = signal.StopLoss;
-            decimal newSl = oldSl;
+            bool isLong     = signal.Side == SignalSide.Buy;
+            decimal oldSl   = signal.StopLoss;
+            decimal newSl   = oldSl;
+            decimal dist    = Math.Abs(signal.EntryPrice - oldSl);
+            bool isMeanRev  = signal.Reason?.StartsWith("MEANREV_", StringComparison.OrdinalIgnoreCase) == true;
 
-
-            decimal dist = Math.Abs(signal.EntryPrice - oldSl);
-
-            // ==========================
-            // 1) низкий шум + тренд → чуть поджать SL
-            // ==========================
+            // ── 1. Low-vol + trend: tighten SL by 30% to improve RR ──────────
             if ((decision.Trend == "UP" || decision.Trend == "DOWN") &&
-                decision.AtrPct < 0.0015m &&         // < 0.15 %
+                decision.AtrPct < 0.0015m &&
                 dist > atr14 * 0.5m)
             {
                 decimal tighten = dist * 0.30m;
-                if (signal.Side == SignalSide.Buy)
-                    newSl = signal.EntryPrice - (dist - tighten);
-                else
-                    newSl = signal.EntryPrice + (dist - tighten);
+                newSl = isLong
+                    ? signal.EntryPrice - (dist - tighten)
+                    : signal.EntryPrice + (dist - tighten);
             }
 
-            // ==========================
-            // 2) анти-стопхант по хвостам
-            // ==========================
+            // ── 2. Anti-stophunt: push SL past significant wick ──────────────
             decimal upperWick = last.HighPrice - Math.Max(last.OpenPrice, last.ClosePrice);
             decimal lowerWick = Math.Min(last.OpenPrice, last.ClosePrice) - last.LowPrice;
 
-            if (signal.Side == SignalSide.Buy && lowerWick > atr14 * 1.2m)
+            if (isLong && lowerWick > atr14 * 1.2m)
             {
                 var candidate = last.LowPrice - atr14 * 0.2m;
                 if (candidate < newSl) newSl = candidate;
             }
-            else if (signal.Side == SignalSide.Sell && upperWick > atr14 * 1.2m)
+            else if (!isLong && upperWick > atr14 * 1.2m)
             {
                 var candidate = last.HighPrice + atr14 * 0.2m;
                 if (candidate > newSl) newSl = candidate;
             }
 
-
-
-            // =======================
-            // Динамическая настройка SL
-            // =======================
-            decimal dynMult = GetDynamicSlAtrMult(decision.Trend, decision.AtrPct);
-            decimal minDist = atr14 * dynMult;
+            // ── 3. Dynamic SL floor (regime-aware minimum distance) ───────────
+            decimal dynMult     = GetDynamicSlAtrMult(decision.Trend, decision.AtrPct);
+            decimal minDist     = atr14 * dynMult;
             decimal currentDist = Math.Abs(signal.EntryPrice - newSl);
             if (currentDist < minDist)
             {
-                // Расширяем SL до нужной глубины
-                if (signal.Side == SignalSide.Buy)
-                    newSl = signal.EntryPrice - minDist;
-                else
-                    newSl = signal.EntryPrice + minDist;
+                newSl = isLong
+                    ? signal.EntryPrice - minDist
+                    : signal.EntryPrice + minDist;
             }
 
-            // =======================
-            // Динамическая настройка TP
-            // =======================
-            decimal tp = signal.EntryPrice + (atr14 * 2); // TP на 2x ATR от Entry
-            if (signal.Side == SignalSide.Sell)
+            // ── 4. TP optimization ────────────────────────────────────────────
+            // MeanReversion: never touch TPs (thesis = price returns to mean).
+            if (!isMeanRev)
             {
-                tp = signal.EntryPrice - (atr14 * 2); // Для продажи TP будет ниже
+                if (signal.TakeProfits != null && signal.TakeProfits.Count > 0)
+                {
+                    // TP already set by StrategyEngine (with regime boost).
+                    // Apply small confidence fine-tune only if TP seems too small.
+                    decimal tp1 = signal.TakeProfits[0];
+                    decimal tp1Dist = Math.Abs(tp1 - signal.EntryPrice);
+                    decimal slDist  = Math.Abs(signal.EntryPrice - newSl);
+
+                    // If RR1 < 1.4 after SL adjustment, push TP1 a bit further
+                    if (slDist > 0 && tp1Dist / slDist < 1.4m)
+                    {
+                        decimal targetDist = slDist * 1.5m; // target RR = 1.5
+                        decimal diff = targetDist - tp1Dist;
+                        int dir = isLong ? 1 : -1;
+                        signal.TakeProfits[0] = tp1 + dir * diff;
+                        _logger.LogInformation(
+                            "[TP_ADJUST][{sym}] TP1 pushed for RR≥1.5: {old:F4}→{new:F4}",
+                            symbol, tp1, signal.TakeProfits[0]);
+                    }
+                }
+                else
+                {
+                    // No TPs at all: build minimal fallback
+                    decimal slD  = Math.Abs(signal.EntryPrice - newSl);
+                    int dir = isLong ? 1 : -1;
+                    signal.TakeProfits = new System.Collections.Generic.List<decimal>
+                    {
+                        signal.EntryPrice + dir * slD * 1.5m,  // RR = 1.5
+                        signal.EntryPrice + dir * slD * 2.5m,  // RR = 2.5
+                        signal.EntryPrice + dir * slD * 3.5m,  // RR = 3.5
+                    };
+                    _logger.LogInformation(
+                        "[TP_FALLBACK][{sym}] Built TP from SL dist: TP1={tp1:F4} TP2={tp2:F4} TP3={tp3:F4}",
+                        symbol, signal.TakeProfits[0], signal.TakeProfits[1], signal.TakeProfits[2]);
+                }
             }
 
-            // Логируем изменения SL и TP
             _logger.LogInformation(
-                "AI-SL/TP Updated: Symbol={Symbol}, oldSL={Old:F4}, newSL={New:F4}, TP={Tp:F4}, atr={Atr:F4}, trend={Trend}, dynMult={Mult:F2}",
-                symbol, oldSl, newSl, tp, atr14, decision.Trend, dynMult);
+                "[SL_OPT][{sym}] oldSL={old:F4} → newSL={new:F4} | atr={atr:F6} dynMult={mult:F2} trend={trend} isMeanRev={mr}",
+                symbol, oldSl, newSl, atr14, dynMult, decision.Trend, isMeanRev);
 
             return newSl;
         }
 
     }
 }
+
