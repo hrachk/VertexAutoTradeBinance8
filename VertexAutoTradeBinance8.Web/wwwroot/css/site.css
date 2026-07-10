@@ -41,7 +41,7 @@ a, .btn-link {
 
 /* 👇 ЭТО КЛЮЧ */
 .app-body {
-    padding-top: var(--vertex-header-h);
+    padding-top: calc(var(--vertex-header-h) + 38px); /* header + topnav */
     height: 100vh;
     overflow: hidden; /* ОСТАВЛЯЕМ */
 }
@@ -2088,7 +2088,7 @@ compact-card {
 /* ==== HEADER ==== */
 .vertex-header {
     position: sticky;
-    top: 0;
+    top: 38px;
     z-index: 2000;
     height: var(--vertex-header-h);
     display: flex;
@@ -2904,8 +2904,8 @@ compact-card {
 /* ===== Desktop top navigation (replaces sidebar on wide screens) ===== */
 .vertex-topnav {
     position: sticky;
-    top: var(--vertex-header-h);
-    z-index: 1900;
+    top: 0;
+    z-index: 2100;
     display: flex;
     align-items: center;
     gap: 2px;
@@ -2922,18 +2922,18 @@ compact-card {
     display: flex;
     align-items: center;
     gap: 5px;
-    padding: 5px 9px;
+    padding: 5px 10px;
     border-radius: 6px;
     color: #4a6080;
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 500;
     text-decoration: none;
     white-space: nowrap;
     transition: background 0.15s, color 0.15s;
 }
 .vt-link svg {
-    width: 13px;
-    height: 13px;
+    width: 14px;
+    height: 14px;
     flex-shrink: 0;
     opacity: 0.7;
 }
