@@ -447,7 +447,11 @@ namespace VertexAutoTradeBinance8.Strategy
                     if (signal.TakeProfits == null || signal.TakeProfits.Count == 0)
                     {
                         decimal atr = Atr(working, 14, working.Count - 1);
-                        var (_, tp1M, tp2M, tp3M) = GetAtrConfig(decisionTf);
+                        // Pass signal confidence and IsSuperSignal for regime-aware TP
+                        var (_, tp1M, tp2M, tp3M) = GetAtrConfig(
+                            decisionTf,
+                            confidence: signal.Confidence,
+                            isSuperSignal: signal.IsSuperSignal);
                         bool isLong = signal.Side == SignalSide.Buy;
                         signal.TakeProfits = new List<decimal>
                         {
@@ -761,35 +765,64 @@ namespace VertexAutoTradeBinance8.Strategy
 
         // ----------------------------- CORE HELPERS -----------------------------
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        /// <summary>
+        /// Returns (SL, TP1, TP2, TP3) ATR multipliers.
+        /// SL stays constant regardless of regime — it is always protective.
+        /// TP multipliers scale with regime strength, signal confidence, and super-signal.
+        /// tpBoost = regimeMult × confMult × superMult, clamped [0.70, 2.00].
+        /// </summary>
         private static (decimal slMult, decimal tp1Mult, decimal tp2Mult, decimal tp3Mult)
-      GetAtrConfig(KlineInterval interval)
+            GetAtrConfig(
+                KlineInterval interval,
+                MarketRegime regime = MarketRegime.Range,
+                decimal confidence = 0.55m,
+                bool isSuperSignal = false)
         {
-            // =====================================================
-            // SCALPING CONFIG — ATR мультипликаторы
-            // На 1M/5M работаем как скальперы:
-            //   SL tight (0.6-0.9 ATR)
-            //   TP1 близко (0.9-1.2 ATR) — быстрая фиксация
-            //   TP2/TP3 для runner
-            // =====================================================
-            return interval switch
+            // ── Base multipliers per timeframe ───────────────────────────────
+            var (sl, tp1base, tp2base, tp3base) = interval switch
             {
-                KlineInterval.OneMinute
-                    => (0.6m, 0.9m, 1.6m, 2.5m),   // скальпинг: SL tight, TP1 быстрый
-
-                KlineInterval.FiveMinutes
-                    => (0.9m, 1.4m, 2.2m, 3.4m),   // scalp/intraday ratio ≈ 1.57
-
-                KlineInterval.FifteenMinutes
-                    => (1.2m, 1.8m, 2.8m, 4.3m),
-
-                KlineInterval.OneHour or KlineInterval.FourHour
-                    => (1.8m, 2.5m, 3.9m, 6.0m),
-
-                KlineInterval.OneDay
-                    => (2.5m, 3.5m, 5.5m, 8.5m),
-
+                KlineInterval.OneMinute      => (0.6m,  0.9m,  1.6m,  2.5m),
+                KlineInterval.ThreeMinutes   => (0.7m,  1.1m,  1.9m,  2.9m),
+                KlineInterval.FiveMinutes    => (0.9m,  1.4m,  2.2m,  3.4m),
+                KlineInterval.FifteenMinutes => (1.2m,  1.8m,  2.8m,  4.3m),
+                KlineInterval.ThirtyMinutes  => (1.5m,  2.1m,  3.3m,  5.0m),
+                KlineInterval.OneHour        => (1.8m,  2.5m,  3.9m,  6.0m),
+                KlineInterval.TwoHour        => (2.0m,  2.7m,  4.2m,  6.4m),
+                KlineInterval.FourHour       => (2.0m,  2.8m,  4.4m,  6.8m),
+                KlineInterval.OneDay         => (2.5m,  3.5m,  5.5m,  8.5m),
                 _ => (0.9m, 1.4m, 2.2m, 3.4m)
             };
+
+            // ── Regime multiplier for TP (SL unchanged) ─────────────────────
+            // Strong trend: momentum carries price further → wider TP targets.
+            // Volatile chop: price reverses quickly → take profit fast.
+            decimal regimeMult = regime switch
+            {
+                MarketRegime.StrongUpTrend or MarketRegime.StrongDownTrend => 1.40m,
+                MarketRegime.UpTrend or MarketRegime.DownTrend             => 1.15m,
+                MarketRegime.Squeeze                                        => 1.10m,
+                MarketRegime.VolatileChop                                   => 0.80m,
+                _ => 1.00m
+            };
+
+            // ── Confidence multiplier ────────────────────────────────────────
+            decimal confMult = confidence >= 0.72m ? 1.20m
+                             : confidence >= 0.60m ? 1.08m
+                             : confidence >= 0.52m ? 1.00m
+                             : 0.90m;
+
+            // ── Super-signal boost ───────────────────────────────────────────
+            decimal superMult = isSuperSignal ? 1.20m : 1.00m;
+
+            // ── Combined TP boost, clamped ───────────────────────────────────
+            decimal tpBoost = Math.Clamp(regimeMult * confMult * superMult, 0.70m, 2.00m);
+
+            // 1m in StrongTrend: promote to 5m multipliers (don't scalp a runner)
+            if (interval == KlineInterval.OneMinute &&
+                (regime == MarketRegime.StrongUpTrend || regime == MarketRegime.StrongDownTrend))
+                return (sl, 1.4m * tpBoost, 2.2m * tpBoost, 3.4m * tpBoost);
+
+            return (sl, tp1base * tpBoost, tp2base * tpBoost, tp3base * tpBoost);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1092,7 +1125,13 @@ namespace VertexAutoTradeBinance8.Strategy
             if (!up && !down)
                 return null;
 
-            var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(interval);
+            // Derive regime from EMA slope for GetAtrConfig boost
+            decimal slopeAbs = Math.Abs(slope);
+            MarketRegime liqRegime =
+                slopeAbs > 0.60m ? (up ? MarketRegime.StrongUpTrend : MarketRegime.StrongDownTrend) :
+                slopeAbs > 0.30m ? (up ? MarketRegime.UpTrend : MarketRegime.DownTrend) :
+                MarketRegime.Range;
+            var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(interval, liqRegime);
 
             // ================= LONG =================
             if (up)
@@ -4622,3 +4661,4 @@ namespace VertexAutoTradeBinance8.Strategy
 
     }
 }
+
