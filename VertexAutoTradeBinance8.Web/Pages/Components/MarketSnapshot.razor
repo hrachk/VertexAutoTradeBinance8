@@ -650,7 +650,11 @@
 
             @if (_selectedPosition != null)
             {
-                <!-- DRAWING TOOLS TOOLBAR -->
+            <!-- position exists — chart lines active -->
+            }
+            <!-- DRAWING TOOLS TOOLBAR — always visible when chart is loaded -->
+            @if (_chartInitDone)
+            {
             <div class="mk-draw-toolbar" id="mk-draw-toolbar">
                 <button class="mk-draw-btn @(_activeTool == "H" ? "mk-draw-btn-on" : "")" id="mk-dt-h" title="Horizontal Line [H]"
                         @onclick='() => SetDrawTool("H")'>
@@ -691,7 +695,8 @@
                         @onclick="ClearAllDrawings" style="font-size:11px">✕</button>
                 <div class="mk-draw-count @(_drawingCount > 0 ? "mk-draw-count-show" : "")"
                      id="mk-draw-count">@_drawingCount</div>
-            </div>
+            </div><!-- /mk-draw-toolbar -->
+            }<!-- /if chartInitDone -->
 
             <div class="mk-tpsl-overlay">
                     <button class="mk-tpsl-btn @(_tpSlEditMode ? "mk-tpsl-btn-on" : "")" @onclick="ToggleTpSlEdit" title="Show/hide existing TP/SL lines">
@@ -1671,6 +1676,9 @@
 <style>
 :root{--bg:#04060e;--bg2:#080d1a;--bg3:#0d1424;--bg4:#111c30;--bg5:#162035;--bdr:#1e2d47;--bdr2:#253450;--acc:#3b82f6;--grn:#10b981;--grn-d:rgba(16,185,129,.1);--grn-b:rgba(16,185,129,.22);--red:#ef4444;--red-d:rgba(239,68,68,.1);--red-b:rgba(239,68,68,.22);--yel:#f59e0b;--yel-d:rgba(245,158,11,.1);--cyan:#22d3ee;--cyan-d:rgba(34,211,238,.1);--cyan-b:rgba(34,211,238,.22);--purp:#a78bfa;--txt:#e8eef6;--txt2:#b0bfcf;--dim:#4a6080;--dim2:#2d3f5e;--mono:'JetBrains Mono','Fira Code',monospace;}
 html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothing:antialiased;}
+/* Hide ALL scrollbars globally — functional scrolling is kept via JS/CSS */
+*{scrollbar-width:none!important;-ms-overflow-style:none!important;}
+*::-webkit-scrollbar{display:none!important;}
 .mk{font-family:'Inter','Segoe UI',sans-serif;background:var(--bg);min-height:100vh;padding-bottom:48px;}
 .up{color:var(--grn)!important;}.dn{color:var(--red)!important;}.mk-dim{color:var(--dim)!important;}
 
@@ -1755,7 +1763,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .mk-chart-maximize:hover{color:var(--txt);border-color:var(--acc);}
 .mk-chart-maximize svg{width:15px;height:15px;}
 
-.mk-chart-container-wrap{width:100%;height:540px;min-height:260px;max-height:900px;transition:none;position:relative;resize:vertical;overflow:hidden;}
+.mk-chart-container-wrap{width:100%;height:540px;min-height:260px;max-height:900px;transition:none;position:relative;resize:vertical;overflow:hidden;contain:layout paint;}
 .mk-chart-container-wrap:not(.mk-chart-maximized)::after{content:'';position:absolute;right:2px;bottom:2px;width:14px;height:14px;background:repeating-linear-gradient(135deg,var(--dim) 0 1.5px,transparent 1.5px 4px);opacity:.5;pointer-events:none;}
 
 .mk-tpsl-overlay{position:absolute;top:56px;left:8px;z-index:5;pointer-events:none;display:flex;align-items:center;gap:8px;}
@@ -1826,7 +1834,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .mk-chart-head-left{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
 .mk-legend{display:flex;gap:14px;font-size:11px;color:var(--dim);}
 /* TICKER BAR */
-.mk-ticker-bar{position:sticky;z-index:25;background:var(--bg2);border-bottom:1px solid var(--bdr);overflow-x:auto;scrollbar-width:none;cursor:grab;}
+.mk-ticker-bar{position:sticky;z-index:25;background:var(--bg2);border-bottom:1px solid var(--bdr);overflow-x:auto;scrollbar-width:none;cursor:grab;touch-action:pan-x;overscroll-behavior-x:contain;}
 .mk-ticker-bar::-webkit-scrollbar{display:none;}
 .mk-ticker-scroll{display:flex;align-items:center;padding:0 4px;width:max-content;}
 .mk-tk{display:inline-flex;align-items:center;gap:5px;padding:8px 14px;background:transparent;border:none;border-right:1px solid var(--bdr);cursor:pointer;transition:background .15s;white-space:nowrap;flex-shrink:0;}
@@ -1868,7 +1876,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-cards::-webkit-scrollbar{display:none;}
 
 /* Signal card */
-.sig-card{flex-shrink:0;width:auto;max-width:280px;min-height:0;background:var(--bg3);border:1px solid var(--bdr2);border-radius:6px;padding:5px 10px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.sig-card{flex-shrink:0;width:auto;max-width:280px;min-height:0;background:var(--bg3);border:1px solid var(--bdr2);border-radius:6px;padding:5px 10px;cursor:pointer;transition:border-color .15s,box-shadow .15s;position:relative;overflow:hidden;}
 .sig-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:10px 0 0 10px;}
 .sc-buy::before{background:var(--grn);}
 .sc-sell::before{background:var(--red);}
@@ -1899,7 +1907,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 /* Expanded details — hidden by default (height:0, no padding), grows
    open on hover via max-height transition. Kept in the DOM always (not
    display:none) so hover doesn't have to wait on a layout reflow. */
-.sig-card{flex-shrink:0;width:auto;max-width:280px;min-height:0;background:var(--bg3);border:1px solid var(--bdr2);border-radius:6px;padding:5px 10px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.sig-card{flex-shrink:0;width:auto;max-width:280px;min-height:0;background:var(--bg3);border:1px solid var(--bdr2);border-radius:6px;padding:5px 10px;cursor:pointer;transition:border-color .15s,box-shadow .15s;position:relative;overflow:hidden;}
 .sig-card.sc-pinned{overflow:visible;border-color:var(--acc);box-shadow:0 0 0 1px rgba(59,130,246,.2);}
 .sc-pin-btn{background:none;border:none;font-size:11px;opacity:.35;cursor:pointer;padding:0 2px;line-height:1;flex-shrink:0;}
 .sc-pin-btn:hover{opacity:.8;}
@@ -1955,7 +1963,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-pager-label{font-size:10px;color:var(--dim);font-family:var(--mono);margin-left:2px;}
 
 /* ORDER PANEL */
-.ord-panel{margin:0;background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.4);}
+.ord-panel{margin:0;background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.4);contain:layout;}
 .ord-panel-demo{border-color:var(--yel);box-shadow:0 0 0 1px rgba(234,179,8,.25);}
 .ord-selected-label{font-size:11px;letter-spacing:1.5px;color:var(--acc);font-weight:700;text-transform:uppercase;padding:10px 18px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
 .ord-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--bdr);background:var(--bg3);}
@@ -4961,15 +4969,15 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     return;
                 }
 
-                // Position still open — re-point reference to fresh instance
+                // Position still open — re-point reference to fresh instance.
+                // No StateHasChanged here: TickAsync calls it after all tasks
+                // complete, avoiding the double-render that caused panel flicker.
                 _selectedPosition = refreshed;
             }
             else
             {
-                // No position selected — but check if chart is showing lines
-                // for a symbol that no longer has an open position.
-                // This covers: chart was on SOLUSDT with lines shown,
-                // user deselected, position closes → lines still on chart.
+                // No position selected — check if chart has stale lines for
+                // a symbol that no longer has an open position.
                 if (!string.IsNullOrEmpty(_activeSym) &&
                     !_allPositions.Any(p => p.Symbol == _activeSym))
                 {
@@ -4983,8 +4991,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     catch { }
                 }
             }
-
-            await InvokeAsync(StateHasChanged);
+            // StateHasChanged deferred to TickAsync which calls it
+            // after all concurrent tasks complete — prevents double render.
         }
         catch { _lastPositionsFetchOk = false; }
         finally { _positionsLoading = false; _ooPanelNeedsAutoFit = true; InvalidateDisplayedPositionsCache(); TryResolvePendingPositionRestore(); }
