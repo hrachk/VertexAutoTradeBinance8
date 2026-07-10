@@ -19,10 +19,17 @@ window.vertex = {
 
   if (!window.vertexUi) window.vertexUi = {};
 
-  window.vertexUi.makeDraggable = function(elementId, handleId) {
+  window.vertexUi.makeDraggable = function(elementId, handleId, _retries) {
     const el     = document.getElementById(elementId);
     const handle = document.getElementById(handleId);
-    if (!el || !handle) return;
+    if (!el || !handle) {
+      // Blazor DOM may not be ready yet — retry up to 10 times × 100ms
+      const retries = (_retries || 0);
+      if (retries < 10) {
+        setTimeout(() => window.vertexUi.makeDraggable(elementId, handleId, retries + 1), 100);
+      }
+      return;
+    }
 
     // Restore saved position
     const saved = sessionStorage.getItem('vx_drag_' + elementId);
