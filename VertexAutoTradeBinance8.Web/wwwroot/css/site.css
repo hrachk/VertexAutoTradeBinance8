@@ -41,9 +41,11 @@ a, .btn-link {
 
 /* 👇 ЭТО КЛЮЧ */
 .app-body {
-    padding-top: calc(var(--vertex-header-h) + 38px); /* header(44px) + topnav(38px) */
+    /* No padding-top needed: vertex-header and vertex-topnav are
+       position:sticky elements that stack above their scroll container,
+       they do NOT consume space inside .app-body flow. */
     height: 100vh;
-    overflow: hidden; /* ОСТАВЛЯЕМ */
+    overflow: hidden;
 }
 
 /* 👇 НО sidebar должен скроллиться сам */
