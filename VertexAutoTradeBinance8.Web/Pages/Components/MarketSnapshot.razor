@@ -2641,6 +2641,16 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     string? _activeTool = null;
     int _drawingCount = 0;
 
+    async Task InitDraggableElementsAsync()
+    {
+        // DOM must contain the toolbar elements before calling makeDraggable.
+        // Called after StateHasChanged() + Task.Delay(80) in OnAfterRenderAsync.
+        try { await JS.InvokeVoidAsync("vertexUi.makeDraggable",
+            "mk-draw-toolbar", "mk-draw-drag-handle"); } catch { }
+        try { await JS.InvokeVoidAsync("vertexUi.makeDraggable",
+            "mk-tpsl-btn-wrapper", "mk-tpsl-btn-wrapper"); } catch { }
+    }
+
     void SetDrawTool(string tool)
     {
         _activeTool = (_activeTool == tool) ? null : tool;
@@ -2694,6 +2704,11 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         if (firstRender)
         {
             await InitChartAsync();
+            // Give Blazor one render cycle to add _chartInitDone=true
+            // elements to the DOM, then init draggable UI elements.
+            StateHasChanged();
+            await Task.Delay(80);
+            await InitDraggableElementsAsync();
 
             // Restore the full page state the user was last looking
             // at (symbol/timeframe, demo mode, active tab, selected
@@ -2849,9 +2864,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 _chartInitError = "";
                 // Initialize drawing tools overlay for this chart container
                 try { await JS.InvokeVoidAsync("chartDrawingTools.init", $"chartContainer-{_chartInstanceId}"); } catch { }
-                // Make toolbar and tpsl button draggable
-                try { await JS.InvokeVoidAsync("vertexUi.makeDraggable", "mk-draw-toolbar", "mk-draw-drag-handle"); } catch { }
-                try { await JS.InvokeVoidAsync("vertexUi.makeDraggable", "mk-tpsl-btn-wrapper", "mk-tpsl-btn-wrapper"); } catch { }
+                // Draggable init deferred to OnAfterRenderAsync after DOM update
             }
             else
             {
