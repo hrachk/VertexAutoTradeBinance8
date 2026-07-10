@@ -36,47 +36,76 @@
         <div class="mk-hright">
             @if (_demoMode)
             {
-                <div class="mk-hbal">
-                    <span class="mk-hbal-l">Demo Balance</span>
-                    <span class="mk-hbal-v mono">$@_demoSnapshot.Balance.ToString("F2")</span>
-                </div>
-                <div class="mk-hbal mk-hbal-main">
-                    <span class="mk-hbal-l">Demo Equity</span>
-                    <span class="mk-hbal-v-main mono @(_demoUnrealizedTotal >= 0 ? "up" : "dn")">$@((_demoSnapshot.Balance + _demoUnrealizedTotal).ToString("F2"))</span>
+                <div class="mk-hbal-strip">
+                    <div class="mk-hbal-item">
+                        <span class="mk-hbal-l">Demo Balance</span>
+                        <span class="mk-hbal-v mono">$@_demoSnapshot.Balance.ToString("F2")</span>
+                    </div>
+                    <div class="mk-hbal-sep"></div>
+                    <div class="mk-hbal-item">
+                        <span class="mk-hbal-l">Demo Equity</span>
+                        <span class="mk-hbal-v-main mono @(_demoUnrealizedTotal >= 0 ? "up" : "dn")">$@((_demoSnapshot.Balance + _demoUnrealizedTotal).ToString("F2"))</span>
+                    </div>
                 </div>
             }
             else
             {
-                <div class="mk-hbal">
-                    <span class="mk-hbal-l">Wallet</span>
-                    <span class="mk-hbal-v mono">$@_acctWalletBalance.ToString("F2")</span>
-                </div>
-                <div class="mk-hbal mk-hbal-main">
-                    <span class="mk-hbal-l">Available</span>
-                    <span class="mk-hbal-v-main mono">$@_acctAvailableBalance.ToString("F2")</span>
+                <div class="mk-hbal-strip">
+                    <div class="mk-hbal-item">
+                        <span class="mk-hbal-l">Wallet</span>
+                        <span class="mk-hbal-v mono">$@_acctWalletBalance.ToString("F2")</span>
+                    </div>
+                    <div class="mk-hbal-sep"></div>
+                    <div class="mk-hbal-item mk-hbal-item-avail">
+                        <span class="mk-hbal-l mk-hbal-l-avail">Available</span>
+                        <span class="mk-hbal-v-main mono">$@_acctAvailableBalance.ToString("F2")</span>
+                    </div>
                 </div>
             }
         </div>
     </div>
 
     <div class="mk-sticky-top">
-    <!-- LIVE SIGNALS — moved above the ticker bar -->
+    <!-- LIVE SIGNALS — compact horizontal strip -->
     <div class="sig-panel">
             <div class="sig-panel-head">
                 <div class="sig-panel-title">
                     <span class="sig-dot"></span>
                     LIVE SIGNALS
                     <span class="sig-count">@DisplayedSignals.Count</span>
-                    <div class="mk-header-scan">
-                        <span class="mk-header-scan-dot"></span>
-                        Detecting
-                        @if (_symbols.Any())
-                        {
-                            <span class="mk-header-scan-sym">@_symbols[_scanSymIdx % _symbols.Count]</span>
-                        }
-                    </div>
                 </div>
-                <div class="sig-panel-right">
+                <div class="mk-header-scan">
+                    <span class="mk-header-scan-dot"></span>
+                    Detecting
+                    @if (_symbols.Any())
+                    {
+                        <span class="mk-header-scan-sym">@_symbols[_scanSymIdx % _symbols.Count]</span>
+                    }
+                </div>
+            </div>
+            <div class="sig-panel-right">
+                    <div class="sig-pager @(DisplayedSignals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
+                        @for (int p = 0; p < _sigPageCount; p++)
+                        {
+                            int pageIdx = p;
+                            <span class="sig-pager-dot @(pageIdx == _sigPage ? "active" : "")"
+                                  @onclick="() => GoToSigPage(pageIdx)"></span>
+                        }
+                        <span class="sig-pager-label">@(_sigPage+1)/@_sigPageCount</span>
+                    </div>
+                    @if (!_showHiddenSignals)
+                    {
+                        <div class="sig-panel-sub">
+                            @if (_signals.Any())
+                            { <text>Click a signal to trade manually</text> }
+                            else
+                            { <text>No live signals — click History to see last hour</text> }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="sig-panel-sub">Signal archive · last 1 hour</div>
+                    }
                     <button class="sig-hidden-toggle @(_showHiddenSignals ? "sig-hidden-toggle-on" : "")"
                             @onclick="ToggleHiddenSignals"
                             title="@(_showHiddenSignals ? "Back to live signals" : "Show all signals from the last hour (archive)")">
@@ -93,28 +122,6 @@
                             }
                         }
                     </button>
-                    @if (!_showHiddenSignals)
-                    {
-                        <div class="sig-panel-sub">
-                            @if (_signals.Any())
-                            { <text>Click a signal to trade manually</text> }
-                            else
-                            { <text>No live signals — click History to see last hour</text> }
-                        </div>
-                    }
-                    else
-                    {
-                        <div class="sig-panel-sub">Signal archive · last 1 hour</div>
-                    }
-                    <div class="sig-pager @(DisplayedSignals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
-                        @for (int p = 0; p < _sigPageCount; p++)
-                        {
-                            int pageIdx = p;
-                            <span class="sig-pager-dot @(pageIdx == _sigPage ? "active" : "")"
-                                  @onclick="() => GoToSigPage(pageIdx)"></span>
-                        }
-                        <span class="sig-pager-label">@(_sigPage+1)/@_sigPageCount</span>
-                    </div>
                 </div>
             </div>
             @if (DisplayedSignals.Any())
@@ -1605,11 +1612,19 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .up{color:var(--grn)!important;}.dn{color:var(--red)!important;}.mk-dim{color:var(--dim)!important;}
 
 /* HEADER */
-.mk-header{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
-.mk-title-block{display:flex;align-items:center;gap:14px;}
-.mk-icon{font-size:28px;}
-.mk-title{font-family:var(--mono);font-size:14px;font-weight:800;letter-spacing:3px;color:var(--cyan);}
-.mk-sub{font-size:11px;color:var(--dim);margin-top:3px;}
+.mk-header{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;background:var(--bg2);border-bottom:1px solid var(--bdr);height:44px;}
+.mk-hbal-strip{display:flex;align-items:center;gap:0;background:var(--bg3);border:1px solid var(--bdr2);border-radius:8px;overflow:hidden;}
+.mk-hbal-item{display:flex;flex-direction:column;align-items:flex-end;padding:4px 12px;gap:1px;}
+.mk-hbal-item-avail{background:rgba(34,211,238,.05);}
+.mk-hbal-sep{width:1px;height:28px;background:var(--bdr2);}
+.mk-hbal-l{font-size:7px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;font-weight:600;}
+.mk-hbal-l-avail{color:var(--cyan);opacity:.8;}
+.mk-hbal-v{font-size:11px;font-weight:600;color:var(--txt2);font-family:var(--mono);}
+.mk-hbal-v-main{font-size:14px;font-weight:700;color:var(--cyan);font-family:var(--mono);letter-spacing:-.3px;}
+.mk-title-block{display:flex;align-items:center;gap:10px;}
+.mk-icon{font-size:18px;}
+.mk-title{font-family:var(--mono);font-size:11px;font-weight:800;letter-spacing:2px;color:var(--cyan);}
+.mk-sub{font-size:9px;color:var(--dim2);margin-top:1px;}
 .mk-hright{display:flex;align-items:center;gap:20px;}
 .mk-demo-toggle{display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;border:1px solid var(--bdr);background:var(--bg3);color:var(--dim);font-size:11px;font-weight:700;letter-spacing:.5px;cursor:pointer;transition:all .2s;}
 .mk-demo-toggle:hover{border-color:var(--acc);}
@@ -1622,7 +1637,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .mk-hbal-v-main{font-size:18px;font-weight:700;color:var(--cyan);font-family:var(--mono);letter-spacing:-.3px;}
 .mk-hbal-main{position:relative;}
 .mk-hbal-main::before{content:"Available";position:absolute;right:0;top:-12px;font-size:7px;color:var(--cyan);text-transform:uppercase;letter-spacing:.6px;font-weight:700;opacity:.7;}
-.mk-header-scan{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);background:var(--bg3);padding:4px 10px;border-radius:20px;border:1px solid var(--bdr);margin-left:8px;}
+.mk-header-scan{display:flex;align-items:center;gap:5px;font-size:9px;color:var(--dim);background:transparent;padding:0;border-radius:0;border:none;margin-left:6px;}
 .mk-header-scan-dot{width:6px;height:6px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px rgba(56,189,248,0.7);animation:mkHeaderScanPulse 1.6s ease-in-out infinite;flex-shrink:0;}
 @@keyframes mkHeaderScanPulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.4;transform:scale(0.7);}}
 .mk-header-scan-sym{color:#38bdf8;font-family:var(--mono);font-weight:600;}
@@ -1775,22 +1790,22 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
 /* SIGNAL PANEL */
 .mk-sticky-top{position:sticky;z-index:26;background:var(--bg2);box-shadow:0 4px 12px rgba(0,0,0,.25);}
-.sig-panel{padding:10px 20px;border-bottom:1px solid var(--bdr);background:var(--bg2);}
-.sig-panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
-.sig-panel-title{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:2px;color:var(--txt);}
+.sig-panel{padding:6px 14px;border-bottom:1px solid var(--bdr);background:var(--bg2);display:flex;align-items:center;gap:10px;}
+.sig-panel-head{display:flex;align-items:center;gap:8px;flex-shrink:0;}
+.sig-panel-title{display:flex;align-items:center;gap:6px;font-size:9px;font-weight:700;letter-spacing:1.5px;color:var(--dim);text-transform:uppercase;}
 .sig-dot{width:7px;height:7px;border-radius:50%;background:var(--grn);animation:pulse 1.5s infinite;}
 @@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(34,197,94,.4);}50%{box-shadow:0 0 0 6px rgba(34,197,94,0);}}
-.sig-count{background:var(--acc);color:#fff;font-size:10px;padding:1px 6px;border-radius:8px;font-family:sans-serif;}
-.sig-panel-sub{font-size:11px;color:var(--dim);}
-.sig-hidden-toggle{display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:14px;border:1px solid var(--bdr);background:var(--bg3);color:var(--dim);font-size:11px;font-weight:600;cursor:pointer;}
+.sig-count{background:var(--cyan);color:#04060e;font-size:9px;font-weight:800;padding:1px 5px;border-radius:5px;font-family:var(--mono);}
+.sig-panel-sub{font-size:9px;color:var(--dim2);white-space:nowrap;}
+.sig-hidden-toggle{display:flex;align-items:center;gap:5px;padding:3px 9px;border-radius:5px;border:1px solid var(--bdr2);background:var(--bg3);color:var(--dim);font-size:9px;font-weight:700;cursor:pointer;flex-shrink:0;}
 .sig-hidden-toggle:hover{border-color:var(--acc);}
-.sig-hidden-toggle.sig-hidden-toggle-on{background:rgba(59,130,246,.12);border-color:var(--acc);color:var(--acc);}
+.sig-hidden-toggle.sig-hidden-toggle-on{background:var(--cyan-d);border-color:var(--cyan-b);color:var(--cyan);}
 .sig-hidden-count{background:var(--bg2);border-radius:8px;padding:0 6px;font-size:10px;}
-.sig-cards{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none;}
+.sig-cards{display:flex;gap:8px;overflow-x:auto;padding-bottom:0;scrollbar-width:none;flex:1;}
 .sig-cards::-webkit-scrollbar{display:none;}
 
 /* Signal card */
-.sig-card{flex-shrink:0;width:260px;min-height:0;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.sig-card{flex-shrink:0;width:220px;min-height:0;background:var(--bg3);border:1px solid var(--bdr2);border-radius:8px;padding:7px 11px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
 .sig-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:10px 0 0 10px;}
 .sc-buy::before{background:var(--grn);}
 .sc-sell::before{background:var(--red);}
@@ -1798,13 +1813,13 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sc-active{border-color:var(--acc)!important;background:rgba(59,130,246,.08)!important;}
 .sc-below-threshold{opacity:.7;}
 .sc-threshold-badge{font-size:9.5px;font-weight:700;color:#eab308;background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.3);border-radius:5px;padding:2px 7px;margin-bottom:6px;display:inline-block;cursor:help;}
-.sc-top{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
+.sc-top{display:flex;align-items:center;gap:6px;margin-bottom:4px;}
 .sc-sym-wrap{display:flex;align-items:baseline;gap:3px;}
-.sc-sym{font-family:var(--mono);font-size:14px;font-weight:700;}
+.sc-sym{font-family:var(--mono);font-size:12px;font-weight:800;color:var(--txt);}
 .sc-usdt{font-size:9px;color:var(--dim);}
-.sc-side{font-size:10px;font-weight:700;padding:2px 6px;border-radius:3px;white-space:nowrap;}
-.sc-side-b{background:rgba(34,197,94,.15);color:var(--grn);}
-.sc-side-s{background:rgba(239,68,68,.15);color:var(--red);}
+.sc-side{font-size:8px;font-weight:800;padding:1px 5px;border-radius:3px;white-space:nowrap;letter-spacing:.3px;}
+.sc-side-b{background:var(--grn-d);color:var(--grn);border:1px solid rgba(16,185,129,.2);}
+.sc-side-s{background:var(--red-d);color:var(--red);border:1px solid rgba(239,68,68,.2);}
 .sc-ago{margin-left:auto;color:#94a3b8;font-weight:500;font-size:10px;}
 .sc-conf-wrap{height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;}
 .sc-conf-bar{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--acc),var(--grn));}
@@ -1821,7 +1836,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 /* Expanded details — hidden by default (height:0, no padding), grows
    open on hover via max-height transition. Kept in the DOM always (not
    display:none) so hover doesn't have to wait on a layout reflow. */
-.sig-card{flex-shrink:0;width:260px;min-height:0;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.sig-card{flex-shrink:0;width:220px;min-height:0;background:var(--bg3);border:1px solid var(--bdr2);border-radius:8px;padding:7px 11px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
 .sig-card.sc-pinned{overflow:visible;border-color:var(--acc);box-shadow:0 0 0 1px rgba(59,130,246,.2);}
 .sc-pin-btn{background:none;border:none;font-size:11px;opacity:.35;cursor:pointer;padding:0 2px;line-height:1;flex-shrink:0;}
 .sc-pin-btn:hover{opacity:.8;}
@@ -1868,7 +1883,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-card.sc-removing{opacity:0!important;max-width:0!important;padding-left:0!important;padding-right:0!important;margin:0!important;overflow:hidden;border-width:0;}
 
 /* Pager */
-.sig-panel-right{display:flex;align-items:center;gap:12px;}
+.sig-panel-right{display:flex;align-items:center;gap:8px;flex-shrink:0;margin-left:auto;}
 .sig-pager{display:flex;align-items:center;gap:5px;}
 .sig-pager-hidden{visibility:hidden;}
 .sig-pager-dot{width:6px;height:6px;border-radius:50%;background:var(--bdr);cursor:pointer;transition:background .2s,transform .2s;}
