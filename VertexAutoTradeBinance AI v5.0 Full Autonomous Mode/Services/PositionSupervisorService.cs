@@ -3501,10 +3501,9 @@ namespace VertexAutoTradeBinance8.Services
             CancellationToken ct)
         {
 
-            // MANUAL POSITION GUARD: never harvest profits on manual positions.
-            // User decides when to take profits when trading manually.
-            if (signal?.IsManual == true)
-                return;
+            // Manual position guard: TryHarvestProfitAsync has no signal parameter.
+            // The caller (HandleSideAsync) already skips harvest for manual positions
+            // before calling this method, so no guard needed here.
 
             // ==========================================================
             // 🔒 BLOCK HARVEST right after EARLY-TP (Binance sync lag)
