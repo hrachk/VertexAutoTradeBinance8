@@ -719,6 +719,34 @@
              wallet balance, unrealized PnL, open positions count+total.
              Compact, single row, sits right above the positions table. -->
         <div class="mk-acct-summary">
+            @if (_demoMode)
+            {
+            <div class="mk-acct-item">
+                <div class="mk-acct-label">Demo Balance</div>
+                <div class="mk-acct-value mono">$@_demoSnapshot.Balance.ToString("F2")</div>
+            </div>
+            <div class="mk-acct-item">
+                <div class="mk-acct-label">Realized PnL (demo)</div>
+                @{ var demoRealized = _demoSnapshot.History.Sum(t => t.RealizedPnl); }
+                <div class="mk-acct-value mono @(demoRealized >= 0 ? "up" : "dn")">
+                    @(demoRealized >= 0 ? "+" : "")@demoRealized.ToString("F2")
+                </div>
+            </div>
+            <div class="mk-acct-item">
+                <div class="mk-acct-label">Demo Equity</div>
+                <div class="mk-acct-value mono @(_demoUnrealizedTotal >= 0 ? "up" : "dn")">
+                    $@((_demoSnapshot.Balance + _demoUnrealizedTotal).ToString("F2"))
+                </div>
+            </div>
+            <div class="mk-acct-item">
+                <div class="mk-acct-label">Unrealized PnL</div>
+                <div class="mk-acct-value mono @(_demoUnrealizedTotal >= 0 ? "up" : "dn")">
+                    @(_demoUnrealizedTotal >= 0 ? "+" : "")@_demoUnrealizedTotal.ToString("F2")
+                </div>
+            </div>
+            }
+            else
+            {
             <div class="mk-acct-item">
                 <div class="mk-acct-label">Margin Balance</div>
                 <div class="mk-acct-value mono">$@_acctMarginBalance.ToString("F2")</div>
@@ -739,6 +767,7 @@
                     @(_acctUnrealizedPnl >= 0 ? "+" : "")@_acctUnrealizedPnl.ToString("F2")
                 </div>
             </div>
+            }
             <div class="mk-acct-item">
                 <div class="mk-acct-label">Open Positions</div>
                 <div class="mk-acct-value mono">@DisplayedPositions.Count <span class="mk-acct-sub">($@DisplayedPositions.Sum(p => p.Size).ToString("F2"))</span></div>
@@ -1119,14 +1148,21 @@
                 @if (!_manualTradeCollapsed)
                 {
 
-                <!-- Available balance — visible always, so the user can size
-                     a manual order with the same context other exchanges show. -->
+                <!-- Available balance — DEMO uses demo balance, LIVE uses acct available -->
                 <div class="ord-balance-row">
                     <span class="ord-balance-l">Available</span>
-                    <span class="ord-balance-v mono">$@_acctAvailableBalance.ToString("F2")</span>
-                    @if (_acctMarginBalance != _acctWalletBalance)
+                    @if (_demoMode)
                     {
-                        <span class="ord-balance-sub mk-dim">Margin: $@_acctMarginBalance.ToString("F2")</span>
+                        <span class="ord-balance-v mono">$@_demoSnapshot.Balance.ToString("F2")</span>
+                        <span class="ord-balance-sub mk-dim">Demo account</span>
+                    }
+                    else
+                    {
+                        <span class="ord-balance-v mono">$@_acctAvailableBalance.ToString("F2")</span>
+                        @if (_acctMarginBalance != _acctWalletBalance)
+                        {
+                            <span class="ord-balance-sub mk-dim">Margin: $@_acctMarginBalance.ToString("F2")</span>
+                        }
                     }
                 </div>
 
@@ -1381,7 +1417,7 @@
                 ? Math.Abs(pos.LiqPrice - pos.MarkPrice) / pos.MarkPrice * 100m
                 : 0m;
             <div class="ord-panel">
-                <div class="ord-selected-label">Selected Position</div>
+                <div class="ord-selected-label">Selected Position@(_demoMode ? " (Demo)" : "")</div>
                 <div class="ord-head">
                     <div class="ord-title">
                         <span class="sc-side @(posIsLong?"sc-side-b":"sc-side-s") ord-badge">
@@ -1489,16 +1525,36 @@
                         }
 
                         @{
-                            var posTps = _openOrders
-                                .Where(o => o.Symbol == pos.Symbol && o.ReduceOnly &&
-                                    (o.Type == "TAKE_PROFIT_MARKET" || o.Type == "TAKE_PROFIT" || o.Type == "LIMIT") &&
-                                    o.Side == (posIsLong ? "SELL" : "BUY"))
+                            // DEMO: TP/SL orders live in _demoSnapshot.PendingOrders
+                            // LIVE: TP/SL orders live in _openOrders
+                            IEnumerable<OpenOrderRow> tpslSource;
+                            if (_demoMode)
+                            {
+                                tpslSource = _demoSnapshot.PendingOrders
+                                    .Where(o => o.Symbol == pos.Symbol)
+                                    .Select(o => new OpenOrderRow
+                                    {
+                                        Symbol     = o.Symbol,
+                                        Side       = posIsLong ? "SELL" : "BUY",
+                                        Type       = o.Type == DemoOrderType.Limit ? "TAKE_PROFIT" : "STOP_MARKET",
+                                        Price      = o.TriggerPrice,
+                                        Qty        = o.Qty,
+                                        ReduceOnly = true,
+                                        OrderId    = 0L, // demo orders use string Id, not used here
+                                    });
+                            }
+                            else
+                            {
+                                tpslSource = _openOrders
+                                    .Where(o => o.Symbol == pos.Symbol && o.ReduceOnly &&
+                                        o.Side == (posIsLong ? "SELL" : "BUY"));
+                            }
+                            var posTps = tpslSource
+                                .Where(o => o.Type == "TAKE_PROFIT_MARKET" || o.Type == "TAKE_PROFIT" || o.Type == "LIMIT")
                                 .OrderBy(o => posIsLong ? o.Price : -o.Price)
                                 .ToList();
-                            var posSlOrder = _openOrders
-                                .FirstOrDefault(o => o.Symbol == pos.Symbol && o.ReduceOnly &&
-                                    (o.Type == "STOP_MARKET" || o.Type == "STOP") &&
-                                    o.Side == (posIsLong ? "SELL" : "BUY"));
+                            var posSlOrder = tpslSource
+                                .FirstOrDefault(o => o.Type == "STOP_MARKET" || o.Type == "STOP");
                         }
                         @if (posTps.Any() || posSlOrder != null)
                         {
@@ -2814,28 +2870,35 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 // down to whichever single call takes longest, rather
                 // than the sum of all three sequential round-trips.
                 var loadDataTask = LoadData();
-                var loadOrdersTask = LoadOpenOrdersAsync();
-                var loadPositionsTask = LoadAllOpenPositionsAsync();
-                var loadCurrentPosTask = _activeSignal != null
+                // DEMO: skip Binance positions/orders calls — demo data is always
+                // in memory via DemoAccount, updated by OnLivePriceTicked events.
+                // LIVE: run all three concurrently to minimize tick latency.
+                var loadOrdersTask    = _demoMode ? Task.CompletedTask : LoadOpenOrdersAsync();
+                var loadPositionsTask = _demoMode ? Task.CompletedTask : LoadAllOpenPositionsAsync();
+                var loadCurrentPosTask = (!_demoMode && _activeSignal != null)
                     ? LoadCurrentPositionAsync(_activeSignal.Symbol)
                     : Task.CompletedTask;
                 await Task.WhenAll(loadDataTask, loadOrdersTask, loadPositionsTask, loadCurrentPosTask);
 
                 SweepExpiredSignals();
-                // Still strictly sequential after the above - this
-                // depends on both _openOrders and _allPositions
-                // actually being populated by the concurrent calls
-                // that just completed.
-                await CleanupOrphanedProtectiveOrdersAsync();
+                // CleanupOrphanedProtectiveOrders only makes sense in LIVE mode:
+                // in DEMO, _openOrders and _allPositions are always empty (demo
+                // uses _demoSnapshot instead), so there's nothing to clean up.
+                if (!_demoMode)
+                    await CleanupOrphanedProtectiveOrdersAsync();
 
                 // Safety net: if there is no selected position AND
                 // no position open for the active symbol, make sure
                 // the chart lines are gone. This catches edge cases
                 // where the cleanup in LoadAllOpenPositions fires
                 // but the JS call failed or was missed.
+                // Safety net: hide chart lines if no position is selected AND
+                // no position exists for the active symbol.
+                // DEMO: uses DisplayedPositions (which reads _demoSnapshot.Positions)
+                // LIVE: uses _allPositions
                 if (_selectedPosition == null && _chartInitDone &&
                     !string.IsNullOrEmpty(_activeSym) &&
-                    !_allPositions.Any(p => p.Symbol == _activeSym))
+                    !DisplayedPositions.Any(p => p.Symbol == _activeSym))
                 {
                     try
                     {
