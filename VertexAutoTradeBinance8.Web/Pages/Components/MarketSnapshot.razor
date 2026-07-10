@@ -1460,15 +1460,82 @@
                             }
                         </div>
 
-                                        @if (pos.LiqPrice > 0)
+                        @if (pos.LiqPrice > 0)
                         {
-                            <div class="ord-position-liq-warn">
-                                ⚠ Liquidation @FmtP(pos.LiqPrice) — @liqDistPct.ToString("F1")% от mark price
+                            @{
+                                // Progress bar: 0% = entry, 100% = liquidation
+                                decimal liqRange = Math.Abs(pos.EntryPrice - pos.LiqPrice);
+                                decimal liqProgress = liqRange > 0
+                                    ? Math.Clamp(Math.Abs(pos.MarkPrice - pos.EntryPrice) / liqRange * 100, 0, 100)
+                                    : 0;
+                            }
+                            <div class="ord-liq-section">
+                                <div class="ord-liq-head">
+                                    <span class="ord-liq-title">Distance to Liquidation</span>
+                                    <span class="ord-liq-pct">@liqProgress.ToString("F0")% toward liq</span>
+                                </div>
+                                <div class="ord-liq-track">
+                                    <div class="ord-liq-fill" style="width:@(liqProgress.ToString("F1"))%"></div>
+                                    <div class="ord-liq-cursor" style="left:@(liqProgress.ToString("F1"))%"></div>
+                                </div>
+                                <div class="ord-liq-labels">
+                                    <span class="up">Entry @FmtP(pos.EntryPrice)</span>
+                                    <span class="mk-dim">▼ @FmtP(pos.MarkPrice)</span>
+                                    <span class="dn">Liq @FmtP(pos.LiqPrice)</span>
+                                </div>
+                            </div>
+                        }
+
+                        @{
+                            var posTps = _openOrders
+                                .Where(o => o.Symbol == pos.Symbol && o.ReduceOnly &&
+                                    (o.Type == "TAKE_PROFIT_MARKET" || o.Type == "TAKE_PROFIT" || o.Type == "LIMIT") &&
+                                    o.Side == (posIsLong ? "SELL" : "BUY"))
+                                .OrderBy(o => posIsLong ? o.Price : -o.Price)
+                                .ToList();
+                            var posSlOrder = _openOrders
+                                .FirstOrDefault(o => o.Symbol == pos.Symbol && o.ReduceOnly &&
+                                    (o.Type == "STOP_MARKET" || o.Type == "STOP") &&
+                                    o.Side == (posIsLong ? "SELL" : "BUY"));
+                        }
+                        @if (posTps.Any() || posSlOrder != null)
+                        {
+                            <div class="ord-tpsl-section">
+                                <div class="ord-tpsl-head">
+                                    <span class="ord-tpsl-title">Take Profit · Stop Loss</span>
+                                    <span class="ord-tpsl-edit" @onclick="ToggleTpSlEdit">Edit</span>
+                                </div>
+                                @for (int ti = 0; ti < posTps.Count; ti++)
+                                {
+                                    var tp = posTps[ti];
+                                    decimal tpDist = pos.EntryPrice > 0
+                                        ? Math.Abs(tp.Price - pos.EntryPrice) / pos.EntryPrice * 100 : 0;
+                                    decimal tpBarW = Math.Min(tpDist / 15m * 100m, 100m);
+                                    int tpIdx = ti + 1;
+                                    <div class="ord-tp-row">
+                                        <span class="ord-tp-lbl up">TP@(tpIdx)</span>
+                                        <div class="ord-tp-track"><div class="ord-tp-fill ord-tp-fill-g" style="width:@(tpBarW.ToString("F1"))%"></div></div>
+                                        <span class="ord-tp-price up mono">@FmtP(tp.Price)</span>
+                                        <span class="ord-tp-pct up">+@(tpDist.ToString("F2"))%</span>
+                                    </div>
+                                }
+                                @if (posSlOrder != null)
+                                {
+                                    <div class="ord-sl-sep"></div>
+                                    decimal slDist = pos.EntryPrice > 0
+                                        ? Math.Abs(posSlOrder.Price - pos.EntryPrice) / pos.EntryPrice * 100 : 0;
+                                    <div class="ord-tp-row">
+                                        <span class="ord-tp-lbl dn">SL</span>
+                                        <div class="ord-tp-track"><div class="ord-tp-fill ord-tp-fill-r" style="width:100%"></div></div>
+                                        <span class="ord-tp-price dn mono">@FmtP(posSlOrder.Price)</span>
+                                        <span class="ord-tp-pct dn">-@(slDist.ToString("F2"))%</span>
+                                    </div>
+                                }
                             </div>
                         }
                     </div>
 
-                    <div class="ord-actions" style="margin-top:16px;">
+                    <div class="ord-actions" style="margin-top:12px;">
                         <button class="ord-cancel-btn" @onclick="ClosePositionPanel">Close Panel</button>
                         <button class="ord-submit-btn osb-sell" disabled="@_orderLoading"
                                 @onclick="() => ClosePositionRow(pos)">
@@ -1684,7 +1751,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 @@media(max-width:1300px){.mk-body-grid{grid-template-columns:1fr;}.mk-body-grid-with-panel{grid-template-columns:1fr;}}
 .mk-main-col{min-width:0;display:flex;flex-direction:column;gap:16px;}
 .mk-charts-col-main{min-width:0;}
-.mk-charts-col-side{min-width:0;display:flex;flex-direction:column;gap:16px;}
+.mk-charts-col-side{min-width:0;display:flex;flex-direction:column;gap:10px;}
 .mk-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px;}
 
 .mk-chart-maximize{flex-shrink:0;width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;color:var(--dim);cursor:pointer;transition:all .15s;}
@@ -1804,7 +1871,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-cards::-webkit-scrollbar{display:none;}
 
 /* Signal card */
-.sig-card{flex-shrink:0;width:220px;min-height:0;background:var(--bg3);border:1px solid var(--bdr2);border-radius:8px;padding:7px 11px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.sig-card{flex-shrink:0;width:auto;max-width:280px;min-height:0;background:var(--bg3);border:1px solid var(--bdr2);border-radius:6px;padding:5px 10px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
 .sig-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:10px 0 0 10px;}
 .sc-buy::before{background:var(--grn);}
 .sc-sell::before{background:var(--red);}
@@ -1812,15 +1879,15 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sc-active{border-color:var(--acc)!important;background:rgba(59,130,246,.08)!important;}
 .sc-below-threshold{opacity:.7;}
 .sc-threshold-badge{font-size:9.5px;font-weight:700;color:#eab308;background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.3);border-radius:5px;padding:2px 7px;margin-bottom:6px;display:inline-block;cursor:help;}
-.sc-top{display:flex;align-items:center;gap:6px;margin-bottom:4px;}
+.sc-top{display:flex;align-items:center;gap:6px;margin-bottom:0;}
 .sc-sym-wrap{display:flex;align-items:baseline;gap:3px;}
-.sc-sym{font-family:var(--mono);font-size:12px;font-weight:800;color:var(--txt);}
-.sc-usdt{font-size:9px;color:var(--dim);}
+.sc-sym{font-family:var(--mono);font-size:11px;font-weight:800;color:var(--txt);}
+.sc-usdt{font-size:8px;color:var(--dim2);}
 .sc-side{font-size:8px;font-weight:800;padding:1px 5px;border-radius:3px;white-space:nowrap;letter-spacing:.3px;}
 .sc-side-b{background:var(--grn-d);color:var(--grn);border:1px solid rgba(16,185,129,.2);}
 .sc-side-s{background:var(--red-d);color:var(--red);border:1px solid rgba(239,68,68,.2);}
 .sc-ago{margin-left:auto;color:#94a3b8;font-weight:500;font-size:10px;}
-.sc-conf-wrap{height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;}
+.sc-conf-wrap{height:2px;background:var(--bdr);border-radius:2px;overflow:hidden;margin-top:3px;}
 .sc-conf-bar{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--acc),var(--grn));}
 
 /* Compact-state warning strip (shown collapsed; the full badges with
@@ -1835,7 +1902,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 /* Expanded details — hidden by default (height:0, no padding), grows
    open on hover via max-height transition. Kept in the DOM always (not
    display:none) so hover doesn't have to wait on a layout reflow. */
-.sig-card{flex-shrink:0;width:220px;min-height:0;background:var(--bg3);border:1px solid var(--bdr2);border-radius:8px;padding:7px 11px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.sig-card{flex-shrink:0;width:auto;max-width:280px;min-height:0;background:var(--bg3);border:1px solid var(--bdr2);border-radius:6px;padding:5px 10px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
 .sig-card.sc-pinned{overflow:visible;border-color:var(--acc);box-shadow:0 0 0 1px rgba(59,130,246,.2);}
 .sc-pin-btn{background:none;border:none;font-size:11px;opacity:.35;cursor:pointer;padding:0 2px;line-height:1;flex-shrink:0;}
 .sc-pin-btn:hover{opacity:.8;}
@@ -1930,7 +1997,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .ord-notional-warn{color:var(--yel);}
 .ord-lev-max{font-size:11px;color:var(--dim);font-weight:400;margin-left:4px;}
 .otk-on{color:var(--acc)!important;background:rgba(59,130,246,.15);font-weight:700;}
-.ord-body{padding:10px 14px;display:flex;flex-direction:column;gap:9px;}
+.ord-body{padding:0;display:flex;flex-direction:column;gap:0;}
 .ord-row{display:flex;flex-direction:column;gap:5px;}
 .ord-label{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;}
 .ord-input-wrap{display:flex;align-items:center;background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;overflow:hidden;transition:border-color .15s;}
@@ -1960,7 +2027,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .ord-tp-add:hover{background:rgba(59,130,246,.15);}
 .ord-error{padding:8px 12px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.2);border-radius:6px;font-size:12px;color:var(--red);}
 .ord-ok{padding:8px 12px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2);border-radius:6px;font-size:12px;color:var(--grn);}
-.ord-actions{display:flex;gap:8px;}
+.ord-actions{display:flex;gap:6px;padding:10px 14px;}
 .ord-cancel-btn{flex:1;background:var(--bg2);border:1px solid var(--bdr);color:var(--dim);padding:10px;border-radius:7px;font-size:13px;cursor:pointer;transition:all .15s;}
 .ord-cancel-btn:hover{color:var(--txt);border-color:var(--bdr);}
 .ord-submit-btn{flex:2;border:none;padding:10px;border-radius:7px;font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:8px;}
@@ -1975,10 +2042,11 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .ord-position-box{margin-top:4px;padding:14px 16px;background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;display:flex;flex-direction:column;gap:10px;}
 .ord-position-head{display:flex;align-items:center;justify-content:space-between;}
 .ord-position-title{font-size:11px;letter-spacing:1px;color:var(--dim);font-weight:700;text-transform:uppercase;}
-.ord-position-pnl-hero{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:4px 0 12px;border-bottom:1px solid var(--bdr);margin-bottom:12px;position:relative;}.ord-position-pnl-hero::before{content:"";position:absolute;left:-16px;top:0;bottom:0;width:3px;border-radius:0 2px 2px 0;background:var(--red);}
-.ord-position-pnl-hero-v{font-size:26px;font-weight:800;letter-spacing:-1px;line-height:1;font-family:var(--mono);}
+.ord-position-pnl-hero{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding:10px 14px 10px 18px;border-bottom:1px solid var(--bdr);margin-bottom:0;position:relative;background:var(--bg3);}
+.ord-position-pnl-hero::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:0 2px 2px 0;background:var(--red);}
+.ord-position-pnl-hero-v{font-size:24px;font-weight:800;letter-spacing:-1px;line-height:1;font-family:var(--mono);}
 .ord-position-roi-hero{font-size:15px;font-weight:700;}
-.ord-position-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;background:var(--bg3);border-radius:8px;padding:10px;border:1px solid var(--bdr);}
+.ord-position-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px;background:transparent;border-radius:0;padding:10px 14px;border:none;border-bottom:1px solid var(--bdr);}
 .ord-position-cell{display:flex;flex-direction:column;gap:4px;}
 .ord-position-l{font-size:11px;color:var(--dim);letter-spacing:.5px;}
 .ord-position-v{font-size:12px;color:var(--txt);font-weight:600;font-family:var(--mono);}
@@ -1986,6 +2054,29 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .ord-position-pnl.dn,.ord-position-roi.dn{color:var(--red);}
 .ord-position-roi{font-size:12px;font-weight:600;}
 .ord-position-liq-warn{padding:6px 10px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:6px;font-size:10px;color:var(--yel);display:flex;align-items:center;gap:6px;font-family:var(--mono);font-weight:500;}
+/* Liq progress bar */
+.ord-liq-section{padding:8px 0 4px;border-top:1px solid var(--bdr);margin-top:8px;}
+.ord-liq-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;}
+.ord-liq-title{font-size:8px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;}
+.ord-liq-pct{font-size:9px;font-weight:700;color:var(--yel);font-family:var(--mono);}
+.ord-liq-track{height:5px;background:var(--bg3);border-radius:3px;overflow:hidden;margin-bottom:4px;position:relative;}
+.ord-liq-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,var(--grn) 0%,var(--yel) 55%,var(--red) 100%);}
+.ord-liq-cursor{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--red);border-radius:1px;}
+.ord-liq-labels{display:flex;justify-content:space-between;font-size:8px;font-family:var(--mono);}
+/* TP/SL bars in position panel */
+.ord-tpsl-section{padding:8px 0 4px;border-top:1px solid var(--bdr);margin-top:8px;}
+.ord-tpsl-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
+.ord-tpsl-title{font-size:8px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;}
+.ord-tpsl-edit{font-size:9px;color:var(--cyan);cursor:pointer;font-weight:600;}
+.ord-tp-row{display:flex;align-items:center;gap:5px;margin-bottom:3px;}
+.ord-tp-lbl{font-size:8px;font-weight:800;width:20px;font-family:var(--mono);flex-shrink:0;}
+.ord-tp-track{flex:1;height:3px;background:var(--bdr);border-radius:2px;overflow:hidden;}
+.ord-tp-fill{height:100%;border-radius:2px;}
+.ord-tp-fill-g{background:var(--grn);opacity:.6;}
+.ord-tp-fill-r{background:var(--red);opacity:.45;}
+.ord-tp-price{font-size:9px;font-weight:600;width:62px;text-align:right;}
+.ord-tp-pct{font-size:8px;font-family:var(--mono);width:40px;text-align:right;}
+.ord-sl-sep{height:1px;background:var(--bdr);margin:5px 0;}
 .ord-add-to-pos-btn{width:100%;margin-top:10px;padding:9px;background:rgba(59,130,246,.08);border:1px dashed var(--acc);border-radius:6px;color:var(--acc);font-size:12px;font-weight:600;cursor:pointer;}
 .ord-add-to-pos-btn:hover{background:rgba(59,130,246,.15);}
 .ord-add-to-pos-box{margin-top:10px;padding:12px;background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;display:flex;flex-direction:column;gap:10px;}
