@@ -1462,7 +1462,6 @@
 
                         @if (pos.LiqPrice > 0)
                         {
-                            // Progress bar: 0% = entry, 100% = liquidation
                             decimal liqRange = Math.Abs(pos.EntryPrice - pos.LiqPrice);
                             decimal liqProgress = liqRange > 0
                                 ? Math.Clamp(Math.Abs(pos.MarkPrice - pos.EntryPrice) / liqRange * 100, 0, 100)
@@ -1520,8 +1519,8 @@
                                 @if (posSlOrder != null)
                                 {
                                     <div class="ord-sl-sep"></div>
-                                    @{ decimal slDist = pos.EntryPrice > 0
-                                        ? Math.Abs(posSlOrder.Price - pos.EntryPrice) / pos.EntryPrice * 100 : 0; }
+                                    decimal slDist = pos.EntryPrice > 0
+                                        ? Math.Abs(posSlOrder.Price - pos.EntryPrice) / pos.EntryPrice * 100 : 0;
                                     <div class="ord-tp-row">
                                         <span class="ord-tp-lbl dn">SL</span>
                                         <div class="ord-tp-track"><div class="ord-tp-fill ord-tp-fill-r" style="width:100%"></div></div>
