@@ -652,55 +652,10 @@
             {
             <!-- position exists — chart lines active -->
             }
-            <!-- DRAWING TOOLS TOOLBAR — always visible when chart is loaded -->
-            @if (_chartInitDone)
-            {
-            <div class="mk-draw-toolbar" id="mk-draw-toolbar">
-                <!-- Drag handle -->
-                <div class="mk-draw-drag-handle" id="mk-draw-drag-handle" title="Drag to move">
-                    <span></span><span></span><span></span>
-                </div>
-                <button class="mk-draw-btn @(_activeTool == "H" ? "mk-draw-btn-on" : "")" id="mk-dt-h" title="Horizontal Line [H]"
-                        @onclick='() => SetDrawTool("H")'>
-                    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <line x1="2" y1="9" x2="16" y2="9" stroke="currentColor" stroke-width="1.6" stroke-dasharray="5 2"/>
-                        <circle cx="2" cy="9" r="1.5" fill="currentColor"/>
-                        <circle cx="16" cy="9" r="1.5" fill="currentColor"/>
-                    </svg>
-                </button>
-                <button class="mk-draw-btn @(_activeTool == "T" ? "mk-draw-btn-on" : "")" id="mk-dt-t" title="Trend Line [T]"
-                        @onclick='() => SetDrawTool("T")'>
-                    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <line x1="3" y1="15" x2="15" y2="3" stroke="currentColor" stroke-width="1.6"/>
-                        <circle cx="3" cy="15" r="2" fill="currentColor"/>
-                        <circle cx="15" cy="3" r="2" fill="currentColor"/>
-                    </svg>
-                </button>
-                <button class="mk-draw-btn @(_activeTool == "R" ? "mk-draw-btn-on" : "")" id="mk-dt-r" title="Rectangle / Zone [R]"
-                        @onclick='() => SetDrawTool("R")'>
-                    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <rect x="3" y="5" width="12" height="8" rx="1" stroke="currentColor" stroke-width="1.4" fill="rgba(59,130,246,.15)"/>
-                    </svg>
-                </button>
-                <button class="mk-draw-btn @(_activeTool == "F" ? "mk-draw-btn-on" : "")" id="mk-dt-f" title="Fibonacci [F]"
-                        @onclick='() => SetDrawTool("F")'>
-                    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <line x1="2" y1="3"  x2="16" y2="3"  stroke="#ef4444" stroke-width="1.1"/>
-                        <line x1="2" y1="7"  x2="16" y2="7"  stroke="#f97316" stroke-width="1.1"/>
-                        <line x1="2" y1="10" x2="16" y2="10" stroke="#a855f7" stroke-width="1.5"/>
-                        <line x1="2" y1="13" x2="16" y2="13" stroke="#3b82f6" stroke-width="1.1"/>
-                        <line x1="2" y1="16" x2="16" y2="16" stroke="#22c55e" stroke-width="1.1"/>
-                    </svg>
-                </button>
-                <div class="mk-draw-divider"></div>
-                <button class="mk-draw-btn" title="Remove last drawing [Del]"
-                        @onclick="RemoveLastDrawing" style="font-size:12px">⌫</button>
-                <button class="mk-draw-btn" title="Clear all drawings"
-                        @onclick="ClearAllDrawings" style="font-size:11px">✕</button>
-                <div class="mk-draw-count @(_drawingCount > 0 ? "mk-draw-count-show" : "")"
-                     id="mk-draw-count">@_drawingCount</div>
-            </div><!-- /mk-draw-toolbar -->
-            }<!-- /if chartInitDone -->
+            <!-- Drawing tools toolbar is injected by chart-drawing-tools.js
+                 via injectToolbar(containerId) during chartDrawingTools.init().
+                 It is self-contained with its own buttons, state, and event listeners.
+                 We make it draggable after init via InitDraggableElementsAsync(). -->
 
             <div class="mk-tpsl-overlay">
                 <div class="mk-tpsl-btn-wrapper" id="mk-tpsl-btn-wrapper">
@@ -2643,10 +2598,11 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     async Task InitDraggableElementsAsync()
     {
-        // DOM must contain the toolbar elements before calling makeDraggable.
-        // Called after StateHasChanged() + Task.Delay(80) in OnAfterRenderAsync.
-        try { await JS.InvokeVoidAsync("vertexUi.makeDraggable",
-            "mk-draw-toolbar", "mk-draw-drag-handle"); } catch { }
+        // chart-drawing-tools.js injects its own toolbar inside chartContainer.
+        // We find it by container id and make it draggable.
+        try { await JS.InvokeVoidAsync("vertexUi.makeCdtToolbarDraggable",
+            $"chartContainer-{_chartInstanceId}"); } catch { }
+        // TP/SL button wrapper
         try { await JS.InvokeVoidAsync("vertexUi.makeDraggable",
             "mk-tpsl-btn-wrapper", "mk-tpsl-btn-wrapper"); } catch { }
     }
