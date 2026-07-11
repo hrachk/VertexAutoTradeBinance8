@@ -55,7 +55,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // effectiveLeverage: already computed by TradingWorker as
-        //   configLeverage × aiLevMult (clamped to [40%, 100%] of config).
+        //   configLeverage × aiLevMult (clamped to [70%, 100%] of config).
         // Passing it as a parameter avoids re-reading trading.Leverage here
         // and ensures RiskManager uses the SAME value that was set on exchange.
         // If not provided (0), falls back to trading.Leverage.
@@ -91,7 +91,7 @@ namespace VertexAutoTradeBinance8.Services
             // AI can only reduce leverage, never increase above config ceiling
             decimal effective = Math.Clamp(
                 configLev * aiMult,
-                configLev * 0.40m,   // floor: never below 40% of config
+                configLev * 0.70m,   // floor: 70% of config (raised from 40% — 19x×0.4=7.6x was too low)
                 configLev * 1.00m);  // ceil:  never above config value
 
             _logger.LogInformation(
