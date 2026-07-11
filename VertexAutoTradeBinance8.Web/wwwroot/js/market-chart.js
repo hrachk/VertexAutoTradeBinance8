@@ -488,6 +488,12 @@
                         const kind = session.draggingLineKind === 'sl' ? 'SL' :
                             (session.tpLines.length > 1 ? `TP${session.draggingLineIdx + 1}` : 'TP');
                         try { session.draggingLine.applyOptions({ price, title: `${kind} ${fmtPrice(price)}` }); } catch (err) {}
+                        // Keep tpLines[].price in sync so findNearbyDraggableLine
+                        // uses the current visual position, not the original price.
+                        if (session.draggingLineKind === 'tp') {
+                            const tp = session.tpLines.find(t => t.index === session.draggingLineIdx);
+                            if (tp) tp.price = price;
+                        }
                     }
                     container.style.cursor = 'grabbing';
                     return;
@@ -551,20 +557,21 @@
                 // since this needs to know WHICH TP index moved when
                 // there are multiple).
                 if (session.draggingLine) {
-                    const rect = container.getBoundingClientRect();
-                    const y = e.clientY - rect.top;
-                    const price = candleSeries.coordinateToPrice(y);
+                    // Use the line's own committed price (from applyOptions during
+                    // mousemove) rather than coordinateToPrice(mouseup Y) — avoids
+                    // a 1-pixel slip if mouse moved between last move and up event.
+                    const committedPrice = session.draggingLine.options().price;
                     const kind = session.draggingLineKind;
-                    const idx = session.draggingLineIdx;
+                    const idx  = session.draggingLineIdx;
                     session.draggingLine = null;
                     session.draggingLineKind = null;
                     session.draggingLineIdx = null;
                     container.style.cursor = 'crosshair';
-                    if (price != null) {
+                    if (committedPrice != null && committedPrice > 0) {
                         if (kind === 'sl') {
-                            if (session.onSlChanged) session.onSlChanged(price);
+                            if (session.onSlChanged) session.onSlChanged(committedPrice);
                         } else if (kind === 'tp') {
-                            if (session.onTpChangedAt) session.onTpChangedAt(idx, price);
+                            if (session.onTpChangedAt) session.onTpChangedAt(idx, committedPrice);
                         }
                     }
                     return;
@@ -788,8 +795,13 @@
                     s.entryBtnTp.style.border = 'none';
                     s.entryBtnTp.style.cursor = 'pointer';
                     s.entryBtnTp.style.background = '#22c55e';
-                    s.entryBtnTp.style.color = '#0a0d12';
+                    s.entryBtnTp.style.color = '#000';
                     s.entryBtnTp.style.transform = 'translateY(-50%)';
+                    s.entryBtnTp.style.boxShadow = '0 1px 4px rgba(0,0,0,0.5)';
+                    s.entryBtnTp.style.letterSpacing = '0.5px';
+                    s.entryBtnTp.style.transition = 'opacity .15s';
+                    s.entryBtnTp.onmouseenter = () => s.entryBtnTp.style.opacity = '1';
+                    s.entryBtnTp.onmouseleave = () => s.entryBtnTp.style.opacity = '0.9';
                     s.entryBtnTp.onclick = () => this.promptAddTp(containerId);
                     s.entryBtnTp.addEventListener('mousedown', (ev) => ev.stopPropagation());
                     container.appendChild(s.entryBtnTp);
@@ -806,8 +818,13 @@
                     s.entryBtnSl.style.border = 'none';
                     s.entryBtnSl.style.cursor = 'pointer';
                     s.entryBtnSl.style.background = '#ef4444';
-                    s.entryBtnSl.style.color = '#0a0d12';
+                    s.entryBtnSl.style.color = '#000';
                     s.entryBtnSl.style.transform = 'translateY(-50%)';
+                    s.entryBtnSl.style.boxShadow = '0 1px 4px rgba(0,0,0,0.5)';
+                    s.entryBtnSl.style.letterSpacing = '0.5px';
+                    s.entryBtnSl.style.transition = 'opacity .15s';
+                    s.entryBtnSl.onmouseenter = () => s.entryBtnSl.style.opacity = '1';
+                    s.entryBtnSl.onmouseleave = () => s.entryBtnSl.style.opacity = '0.9';
                     s.entryBtnSl.onclick = () => this.promptAddSl(containerId);
                     s.entryBtnSl.addEventListener('mousedown', (ev) => ev.stopPropagation());
                     container.appendChild(s.entryBtnSl);
@@ -836,21 +853,23 @@
 
         repositionEntryButtons(containerId) {
             const s = sessions.get(containerId);
-            if (!s || !s.entryBtnTp || !s.entryBtnSl || !s.entryPrice) return;
-            const y = s.candleSeries.priceToCoordinate(s.entryPrice);
+            if (!s || !s.entryBtnTp || !s.entryBtnSl) return;
+            // Buttons follow the LIVE PRICE line (pnlLine), not the static
+            // entry line — they sit right next to the current market price
+            // so the user can quickly add TP/SL relative to where price IS now.
+            const trackPrice = s.lastPnlPrice || s.entryPrice;
+            if (!trackPrice) return;
+            const y = s.candleSeries.priceToCoordinate(trackPrice);
             if (y == null) return;
 
-            // Per direct report: positioned relative to the chart's
-            // actual right price-scale width, next to the Entry line's
-            // own native price label, rather than a fixed offset from
-            // the left that drifted disconnected from the line itself.
             let scaleWidth = 60;
             try { scaleWidth = s.chart.priceScale('right').width() || 60; } catch (e) {}
 
-            s.entryBtnSl.style.right = (scaleWidth + 50) + 'px';
-            s.entryBtnSl.style.top = y + 'px';
-            s.entryBtnTp.style.right = (scaleWidth + 84) + 'px';
-            s.entryBtnTp.style.top = y + 'px';
+            // SL (red) left of TP (green), both centered on the live price line Y
+            s.entryBtnTp.style.right = (scaleWidth + 50) + 'px';
+            s.entryBtnTp.style.top   = y + 'px';
+            s.entryBtnSl.style.right = (scaleWidth + 84) + 'px';
+            s.entryBtnSl.style.top   = y + 'px';
         },
 
         // Per direct confirmation: a single combined prompt asking for
@@ -1224,6 +1243,9 @@
             s.pnlLabelEl.style.color = '#0a0d12';
             s.pnlLabelEl.textContent = `${sign}${pnl.toFixed(2)} USDT`;
 
+            // Reposition TP/SL quick-add buttons to follow the live price line Y
+            this.repositionEntryButtons(containerId);
+
             // Per direct report: keep this label tracking scroll/zoom
             // synchronously, not only on the next price tick - subscribes
             // once per session (not per call), repositioning using the
@@ -1233,6 +1255,7 @@
                     if (s.lastPnlPrice == null || !s.entryPrice) return;
                     const yy = s.candleSeries.priceToCoordinate(s.lastPnlPrice);
                     if (yy != null && s.pnlLabelEl) s.pnlLabelEl.style.top = yy + 'px';
+                    this.repositionEntryButtons(containerId); // keep buttons on live price during scroll/zoom
 
                     // Also recalculate X - barSpacing changes on zoom,
                     // so "last bar + 3 bar widths" would otherwise
