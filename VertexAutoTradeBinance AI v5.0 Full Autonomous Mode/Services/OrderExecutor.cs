@@ -327,8 +327,35 @@ namespace VertexAutoTradeBinance8.Services
                     }
                 }
 
+                // Read the CURRENT leverage the user has set on the exchange.
+                // If the user manually set a HIGHER leverage than what we
+                // calculated — do NOT downgrade it. We only enforce our
+                // value if it is HIGHER than what the exchange currently has
+                // (i.e. we need to bring it DOWN for safety, or UP to match config).
+                // This prevents the bot from overriding a user-set 40x with 10x.
+                int leverageToSet = (int)leverage;
+                try
+                {
+                    var posInfoForLev = await client.UsdFuturesApi.Account
+                        .GetPositionInformationAsync(symbol: signal.Symbol, ct: ct);
+                    if (posInfoForLev.Success && posInfoForLev.Data != null)
+                    {
+                        var posEntry = posInfoForLev.Data.FirstOrDefault();
+                        int currentExchangeLev = posEntry?.Leverage ?? 0;
+                        if (currentExchangeLev > leverageToSet)
+                        {
+                            _logger.LogInformation(
+                                "[LEVERAGE][{symbol}] Exchange leverage {cur}x > our calc {calc}x — preserving user setting",
+                                signal.Symbol, currentExchangeLev, leverageToSet);
+                            leverageToSet = currentExchangeLev; // keep user's value
+                        }
+                    }
+                }
+                catch { /* non-critical — proceed with our calculated leverage */ }
+
                 var setLevResult = await client.UsdFuturesApi.Account.ChangeInitialLeverageAsync(
-                    signal.Symbol, (int)leverage, ct: ct);
+                    signal.Symbol, leverageToSet, ct: ct);
+                leverage = leverageToSet; // update for downstream margin math
 
                 if (!setLevResult.Success)
                 {
