@@ -280,9 +280,10 @@ namespace VertexAutoTradeBinance8.Services
             // Notional calculation (normal balance >= 50$)
             // -----------------------------
             decimal riskNotional = riskBudget / slPercent;
-            // 90% of max leverage capacity — 98% leaves no buffer for
-            // funding rates, price gaps, or exchange rounding.
-            decimal leverageCapNotional = balance * leverage * 0.90m;
+            // 95% of max leverage capacity — leaves a 5% buffer for
+            // funding rates, price gaps, and exchange rounding.
+            // Was 90% which unnecessarily left 10% unused capacity.
+            decimal leverageCapNotional = balance * leverage * 0.95m;
 
             // balance < 50 path already returned early above via the
             // MICRO-ACCOUNT block — this code is only reachable when
@@ -406,8 +407,10 @@ namespace VertexAutoTradeBinance8.Services
 
         private decimal GetDynamicBaseRisk(decimal balance)
         {
-            if (balance <= 100m) return 0.025m;
-            if (balance <= 500m) return 0.02m;
+            // Raised from 2.5%/2.0% — at 19x leverage these were producing
+            // notionals barely above MinNotional for typical balance ranges.
+            if (balance <= 100m) return 0.035m;  // was 2.5%
+            if (balance <= 500m) return 0.030m;  // was 2.0%
             if (balance <= 1000m) return 0.015m;
             if (balance <= 5000m) return 0.012m;
             if (balance <= 10000m) return 0.01m;
@@ -495,101 +498,119 @@ namespace VertexAutoTradeBinance8.Services
             return 0m;
         }
 
+        /// <summary>
+        /// Professional Kelly-fraction adaptive risk sizing.
+        ///
+        /// Formula: baseRisk × riskMult × confMult × regimeMult × liqMult
+        ///          × volMult × aiMult × safetyMult × winRateMult
+        ///
+        /// Key changes from prior version:
+        /// - confMult extended to 1.35× at ≥0.80 confidence (high conviction = size up)
+        /// - IsSuperSignal: +25% boost on top of confMult
+        /// - regimeMult: StrongTrend +15%, VolatileChop -30%
+        /// - winRateMult range widened: 0.70×-1.20× (was 0.75×-1.15×)
+        /// - clamp floor 0.5% (was 0.3%), ceil 6% (was 4%)
+        ///   At 19× leverage, 6% risk = 6%×19=114% notional — hard-capped
+        ///   by MaxMarginPercent downstream so this never over-exposes.
+        /// </summary>
         private decimal CalculateAdaptiveRisk(
             TradeSignal signal,
             decimal baseRisk,
             decimal riskMult,
             decimal winRate = 0.5m)
         {
-            decimal confidence = signal.Confidence ?? 0.6m;
-            decimal liquidity = signal.LiquidityScore ?? 0.8m;
-            decimal aiQuality = signal.AiQuality ?? 0.6m;
+            decimal confidence = signal.Confidence ?? 0.60m;
+            decimal liquidity  = signal.LiquidityScore ?? 0.80m;
+            decimal aiQuality  = signal.AiQuality ?? 0.60m;
+            decimal atr        = signal.Atr ?? 0m;
+            decimal price      = signal.EntryPrice;
 
-            decimal atr = signal.Atr ?? 0m;
-            decimal price = signal.EntryPrice;
+            decimal volatility = price > 0 && atr > 0 ? atr / price : 0.01m;
 
-            decimal volatility =
-                price > 0 && atr > 0
-                ? atr / price
-                : 0.01m;
-
-            // -------------------------
-            // CONFIDENCE
-            // -------------------------
-
+            // ── CONFIDENCE MULTIPLIER ────────────────────────────────────
+            // Higher confidence = higher edge = scale up position.
+            // ≥0.80 is the "high conviction" zone — meaningfully size up.
             decimal confMult =
-                confidence < 0.4m ? 0.7m :
-                confidence < 0.6m ? 0.9m :
-                confidence < 0.8m ? 1.0m :
-                1.15m;
+                confidence < 0.40m ? 0.60m :   // very low — likely borderline signal
+                confidence < 0.52m ? 0.80m :    // below MinEntry threshold zone
+                confidence < 0.65m ? 1.00m :    // normal confidence
+                confidence < 0.80m ? 1.18m :    // good confidence
+                1.35m;                           // high conviction — full size up
 
-            // -------------------------
-            // LIQUIDITY
-            // -------------------------
+            // Super-signal bonus: verified confluence of multiple timeframes
+            if (signal.IsSuperSignal)
+                confMult = Math.Min(confMult * 1.25m, 1.60m); // cap at 1.60×
 
+            // ── REGIME MULTIPLIER ────────────────────────────────────────
+            // Strong trend = higher momentum expectancy → size up.
+            // Chop/range = noisy signals → size down.
+            decimal regimeMult = signal.Regime switch
+            {
+                "StrongUpTrend" or "StrongDownTrend" => 1.15m,
+                "UpTrend"       or "DownTrend"       => 1.05m,
+                "Squeeze"                            => 1.00m,
+                "VolatileChop"                       => 0.70m,
+                _ => 1.00m
+            };
+
+            // ── LIQUIDITY MULTIPLIER ─────────────────────────────────────
             decimal liqMult =
-                liquidity < 0.4m ? 0.6m :
-                liquidity < 0.7m ? 0.8m :
-                1.0m;
+                liquidity < 0.40m ? 0.60m :
+                liquidity < 0.65m ? 0.82m :
+                1.00m;
 
-            // -------------------------
-            // VOLATILITY
-            // -------------------------
-
+            // ── VOLATILITY MULTIPLIER ────────────────────────────────────
+            // Very high ATR/price → position can get wiped on normal moves.
+            // Very low ATR/price → quiet market, safe to size normally.
             decimal volMult =
-                volatility > 0.035m ? 0.6m :
-                volatility > 0.02m ? 0.8m :
-                volatility < 0.005m ? 1.1m :
-                1m;
+                volatility > 0.040m ? 0.55m :   // extreme vol → very small
+                volatility > 0.025m ? 0.78m :   // high vol → reduce
+                volatility < 0.004m ? 1.12m :   // ultra-quiet → slight boost
+                1.00m;
 
-            // -------------------------
-            // AI QUALITY
-            // -------------------------
-
+            // ── AI QUALITY MULTIPLIER ────────────────────────────────────
             decimal aiMult =
-                aiQuality < 0.4m ? 0.8m :
-                aiQuality > 0.7m ? 1.1m :
-                1m;
+                aiQuality < 0.40m ? 0.80m :
+                aiQuality > 0.72m ? 1.12m :
+                1.00m;
 
-            // -------------------------
-            // SAFETY
-            // -------------------------
-
-            decimal safety =
-                signal.SafetyRiskMultiplier > 0
+            // ── SAFETY / OVERRIDE ────────────────────────────────────────
+            decimal safety = signal.SafetyRiskMultiplier > 0
                 ? signal.SafetyRiskMultiplier
-                : 1m;
+                : 1.00m;
 
-            if (signal.HighTfSafetyMode)
-                safety *= 0.7m;
+            if (signal.HighTfSafetyMode)     safety *= 0.70m;
+            if (signal.LiquiditySoftWarning) safety *= 0.75m;
 
-            if (signal.LiquiditySoftWarning)
-                safety *= 0.75m;
-
-            // ── WinRate adjustment (applied before clamp) ────────────────
-            // Good winrate → slightly more, poor winrate → scale back.
-            // Kept tight (±15%) so it doesn't dominate the risk decision.
+            // ── WIN RATE MULTIPLIER ──────────────────────────────────────
+            // Widen range vs prior version — strong track record justifies
+            // larger size; consistently poor win-rate signals degraded edge.
             decimal winRateMult =
-                winRate < 0.40m ? 0.75m :   // poor  → -25%
-                winRate < 0.45m ? 0.85m :   // below avg → -15%
-                winRate > 0.65m ? 1.15m :   // strong → +15%
-                winRate > 0.55m ? 1.05m :   // decent → +5%
-                1.0m;
+                winRate < 0.38m ? 0.70m :   // very poor → -30%
+                winRate < 0.44m ? 0.85m :   // below avg → -15%
+                winRate > 0.68m ? 1.20m :   // strong → +20%
+                winRate > 0.58m ? 1.08m :   // decent → +8%
+                1.00m;
 
             decimal risk =
                 baseRisk
                 * riskMult
                 * confMult
+                * regimeMult
                 * liqMult
                 * volMult
                 * aiMult
                 * safety
                 * winRateMult;
 
-            // Clamp: floor 0.3% (minimum meaningful trade), ceil 4%
-            // (lowered from 5% — at 19-25x leverage 4% is already aggressive).
-            return Math.Clamp(risk, 0.003m, 0.04m);
+            // Floor 0.5%: never risk less than this — at $300 balance
+            // and 19× leverage, 0.5% = $28.5 notional, still tradeable.
+            // Ceil 6%: never exceed this — MaxMarginPercent will cap
+            // actual exposure downstream. At 19× leverage, 6% risk
+            // = 6/1% × SL%  which is bounded by the margin cap.
+            return Math.Clamp(risk, 0.005m, 0.06m);
         }
     }
 }
+
 
