@@ -30,16 +30,20 @@ namespace VertexAutoTradeBinance8.Services
         // no reason to compete with the trading engine's own REST budget.
         private static readonly SemaphoreSlim _restGate = new(1, 1);
 
+        private readonly DataDbSymbolFeed? _symbolFeed;
+
         public HistoricalDataLoaderService(
             HistoricalDataStore store,
             BinanceClientFactory factory,
             IConfiguration cfg,
-            ILogger<HistoricalDataLoaderService> logger)
+            ILogger<HistoricalDataLoaderService> logger,
+            DataDbSymbolFeed? symbolFeed = null)
         {
-            _store = store;
-            _factory = factory;
-            _cfg = cfg;
-            _logger = logger;
+            _store      = store;
+            _factory    = factory;
+            _cfg        = cfg;
+            _logger     = logger;
+            _symbolFeed = symbolFeed;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -80,26 +84,33 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-            // Explicit symbols (HistoricalData:Symbols) + optionally the
-            // real trading universe's pinned list (SymbolSelection:Pinned)
-            // — IncludePinnedSymbols defaults to true so the archive
-            // naturally tracks whatever's actually being traded without
-            // needing the same list maintained by hand in two places.
-            // Set to false if this archive should only ever cover an
-            // explicit, hand-picked list, independent of trading config.
-            var explicitSymbols = _cfg.GetSection("HistoricalData:Symbols").Get<string[]>() ?? Array.Empty<string>();
-            var includePinned = _cfg.GetValue("HistoricalData:IncludePinnedSymbols", true);
-            var pinnedSymbols = includePinned
-                ? (_cfg.GetSection("SymbolSelection:Pinned").Get<string[]>() ?? Array.Empty<string>())
-                : Array.Empty<string>();
-
-            var symbols = explicitSymbols
-                .Concat(pinnedSymbols)
-                .Select(s => s.Trim().ToUpperInvariant())
-                .Where(s => s.Length > 0)
-                .Distinct()
-                .OrderBy(s => s)
-                .ToArray();
+            // ── Symbol resolution via DataDbSymbolFeed ───────────────────
+            // DataDbSymbolFeed aggregates ALL sources without calling Binance:
+            //   • HistoricalData:Symbols (appsettings explicit list)
+            //   • SymbolSelection:Pinned
+            //   • Live trading universe (SymbolRegistryService.ActiveSymbols)
+            //   • Currently open positions (picks up manual trades on any symbol)
+            //   • Symbols seen since last restart (via NotifySignal/NotifyExecution)
+            // Falls back to old appsettings-only logic if feed not registered.
+            string[] symbols;
+            if (_symbolFeed != null)
+            {
+                symbols = await _symbolFeed.GetSymbolsAsync(stoppingToken);
+            }
+            else
+            {
+                // Legacy fallback: appsettings + pinned only
+                var explicitSymbols = _cfg.GetSection("HistoricalData:Symbols").Get<string[]>() ?? Array.Empty<string>();
+                var includePinned   = _cfg.GetValue("HistoricalData:IncludePinnedSymbols", true);
+                var pinnedSymbols   = includePinned
+                    ? (_cfg.GetSection("SymbolSelection:Pinned").Get<string[]>() ?? Array.Empty<string>())
+                    : Array.Empty<string>();
+                symbols = explicitSymbols
+                    .Concat(pinnedSymbols)
+                    .Select(s => s.Trim().ToUpperInvariant())
+                    .Where(s => s.Length > 0)
+                    .Distinct().OrderBy(s => s).ToArray();
+            }
 
             var timeframes = _cfg.GetSection("HistoricalData:Timeframes").Get<string[]>() ?? new[] { "15m" };
             int barsPerFetch = _cfg.GetValue("HistoricalData:BarsPerFetch", 500);
@@ -359,3 +370,4 @@ namespace VertexAutoTradeBinance8.Services
         }
     }
 }
+
