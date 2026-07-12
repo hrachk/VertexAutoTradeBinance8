@@ -262,7 +262,6 @@ public class Program
                     // when ready to start backfilling.
                     // =====================================================
                     services.AddSingleton<VertexAutoTradeBinance8.Services.HistoricalData.HistoricalDataStore>();
-                    services.AddSingleton<VertexAutoTradeBinance8.Services.HistoricalData.DataDbSymbolFeed>();
                     services.AddHostedService<HistoricalDataLoaderService>();
 
                     // ===== SYMBOL REGISTRY =====
@@ -364,6 +363,10 @@ public class Program
                     services.AddSingleton<OpenPositionSymbolTracker>();
                     services.AddSingleton<IOpenPositionSymbolSource>(
                         sp => sp.GetRequiredService<OpenPositionSymbolTracker>());
+                    // DataDbSymbolFeed aggregates: appsettings list + Pinned +
+                    // live universe (SymbolRegistryService) + open positions +
+                    // seen signals. Registered AFTER all sources it depends on.
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.HistoricalData.DataDbSymbolFeed>();
 
 
                     services.AddSingleton<IBootGate, BootGate>();
@@ -433,4 +436,5 @@ public class Program
         }
     }
 }
+
 
