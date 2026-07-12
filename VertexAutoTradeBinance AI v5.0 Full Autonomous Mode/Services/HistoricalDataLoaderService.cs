@@ -95,7 +95,7 @@ namespace VertexAutoTradeBinance8.Services
             string[] symbols;
             if (_symbolFeed != null)
             {
-                symbols = await _symbolFeed.GetSymbolsAsync(stoppingToken);
+                symbols = await _symbolFeed.GetSymbolsAsync(ct);
             }
             else
             {
