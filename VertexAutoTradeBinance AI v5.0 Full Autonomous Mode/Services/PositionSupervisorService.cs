@@ -388,9 +388,9 @@ namespace VertexAutoTradeBinance8.Services
                 {
                     if (pos == null || Math.Abs(pos.Quantity) < POSITION_EPS) return;
 
-                    decimal currentQty = Math.Abs(pos.Quantity);
-                    decimal entry      = pos.EntryPrice;
-                    var manualKey      = BuildExitKey(symbol, side, entry);
+                    decimal currentQty  = Math.Abs(pos.Quantity);
+                    decimal manualEntry = pos.EntryPrice; // renamed from 'entry' — avoids conflict with ProbeSide's own 'entry' below
+                    var manualKey       = BuildExitKey(symbol, side, manualEntry);
 
                     // Track initial qty the first time we see this manual position.
                     // _lastSl doubles as a convenient ConcurrentDictionary available here.
@@ -402,7 +402,7 @@ namespace VertexAutoTradeBinance8.Services
                         _lastSl[mqtyKey] = currentQty;
                         _logger.LogDebug(
                             "[SUPERVISOR][{sym}][{side}] Manual pos recorded: initQty={qty:F4} entry={e:F4}",
-                            symbol, side, currentQty, entry);
+                            symbol, side, currentQty, manualEntry);
                         return;
                     }
 
@@ -436,13 +436,13 @@ namespace VertexAutoTradeBinance8.Services
 
                     _logger.LogInformation(
                         "[SUPERVISOR][{sym}][{side}] Manual pos TP1 fired " +
-                        "(qty {cur:F4} < {init:F4}) → moving SL to BE={entry:F4}",
-                        symbol, side, currentQty, initialQty, entry);
+                        "(qty {cur:F4} < {init:F4}) → moving SL to BE={e:F4}",
+                        symbol, side, currentQty, initialQty, manualEntry);
 
                     try
                     {
                         await PlaceStopLossAtBeAsync(client, symbol, side,
-                            currentQty, entry, pos, ct);
+                            currentQty, manualEntry, pos, ct);
                     }
                     catch (Exception ex)
                     {
