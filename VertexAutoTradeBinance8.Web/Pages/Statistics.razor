@@ -148,37 +148,84 @@ else if (_activeTab == "trading")
                 </div>
             </div>
 
-            <!-- Calendar heatmap -->
-            <div class="st-card" style="resize:vertical;overflow:auto;min-height:240px;">
+            <!-- Calendar heatmap — month-by-month like Binance -->
+            <div class="st-card" style="resize:vertical;overflow:auto;min-height:260px;">
                 <div class="st-card-hd">
                     <span class="st-card-icon">🗓</span>
                     <span class="st-card-title">Daily PnL Calendar</span>
                 </div>
                 <div class="st-calendar">
                     @{
-                        var calStart = new DateTime(_dateTo.Year, _dateTo.Month, 1).AddMonths(-2);
-                        var calDays  = Enumerable.Range(0, 90).Select(i => calStart.AddDays(i)).ToList();
-                        var firstDow = (int)calStart.DayOfWeek;
+                        // Build list of months to show based on selected date range
+                        var calMonths = new System.Collections.Generic.List<DateTime>();
+                        var mCursor  = new DateTime(_dateFrom.Year, _dateFrom.Month, 1);
+                        var mEnd     = new DateTime(_dateTo.Year,   _dateTo.Month,   1);
+                        while (mCursor <= mEnd) { calMonths.Add(mCursor); mCursor = mCursor.AddMonths(1); }
                     }
-                    <div class="st-cal-grid">
-                        @foreach (var dow in new[] { "S","M","T","W","T","F","S" })
-                        { <div class="st-cal-dow">@dow</div> }
-                        @for (int i = 0; i < firstDow; i++) { <div></div> }
-                        @foreach (var day in calDays.Where(d => d <= _dateTo))
-                        {
-                            var pnl = _dailyPnl.TryGetValue(day.Date, out var v) ? v : 0m;
-                            var intensity = pnl != 0 ? Math.Min(Math.Abs(pnl) / Math.Max(_maxDayAbsPnl, 1m), 1m) : 0m;
-                            var alpha = 0.15m + intensity * 0.75m;
-                            var bg = pnl > 0 ? $"rgba(34,197,94,{alpha:F2})"
-                                   : pnl < 0 ? $"rgba(239,68,68,{alpha:F2})"
-                                   : "rgba(255,255,255,.03)";
-                            var tip = day.ToString("MMM d") + ": " + (pnl >= 0 ? "+" : "") + pnl.ToString("F2") + " USDT";
-                            var pnlShort = pnl == 0 ? "" : (pnl >= 0 ? "+" : "") + (Math.Abs(pnl) >= 10 ? ((int)Math.Abs(pnl)).ToString() : Math.Abs(pnl).ToString("F1"));
-                            <div class="st-cal-day" style="background:@bg" title="@tip">
-                                <span class="st-cal-num">@day.Day</span>
-                                @if (pnl != 0) { <span class="st-cal-pnl">@pnlShort</span> }
+                    <div class="st-cal-months">
+                    @foreach (var month in calMonths)
+                    {
+                        var daysInMonth  = DateTime.DaysInMonth(month.Year, month.Month);
+                        var startDow     = (int)month.DayOfWeek; // 0=Sun
+                        var monthPnl     = Enumerable.Range(1, daysInMonth)
+                                            .Select(d => new DateTime(month.Year, month.Month, d))
+                                            .Where(d => _dailyPnl.ContainsKey(d))
+                                            .Sum(d => _dailyPnl[d]);
+                        var mpSign       = monthPnl > 0 ? "+" : "";
+                        var mpColor      = monthPnl > 0 ? "var(--st-up)" : monthPnl < 0 ? "var(--st-dn)" : "var(--st-dim)";
+
+                        <div class="st-cal-month">
+                            <!-- Month header -->
+                            <div class="st-cal-mhd">
+                                <span class="st-cal-mname">@month.ToString("MMMM yyyy")</span>
+                                @if (monthPnl != 0)
+                                {
+                                    <span class="st-cal-mtotal" style="color:@mpColor">
+                                        @mpSign@monthPnl.ToString("F2") USDT
+                                    </span>
+                                }
                             </div>
-                        }
+                            <!-- Day-of-week header -->
+                            <div class="st-cal-grid">
+                                @foreach (var dow in new[] { "Sun","Mon","Tue","Wed","Thu","Fri","Sat" })
+                                { <div class="st-cal-dow">@dow</div> }
+                                @* Empty cells before month start *@
+                                @for (int i = 0; i < startDow; i++) { <div class="st-cal-empty"></div> }
+                                @* Day cells *@
+                                @for (int d = 1; d <= daysInMonth; d++)
+                                {
+                                    var day = new DateTime(month.Year, month.Month, d);
+                                    if (day > _dateTo) { <div class="st-cal-empty"></div> continue; }
+                                    var pnl = _dailyPnl.TryGetValue(day, out var v) ? v : 0m;
+                                    var isToday = day.Date == DateTime.Today;
+                                    var intensity = pnl != 0
+                                        ? (double)Math.Min(Math.Abs(pnl) / Math.Max(_maxDayAbsPnl, 1m), 1m)
+                                        : 0.0;
+                                    // opacity: 0.18 (min) → 0.92 (max) — low trades still visible
+                                    var alpha = pnl != 0 ? 0.18 + intensity * 0.74 : 0.0;
+                                    var bg = pnl > 0 ? $"rgba(16,185,129,{alpha:F2})"
+                                           : pnl < 0 ? $"rgba(239,68,68,{alpha:F2})"
+                                           : "rgba(255,255,255,0.03)";
+                                    var border = isToday ? "1px solid rgba(59,130,246,.7)" : "none";
+                                    var pnlStr = pnl == 0 ? "" :
+                                        (pnl > 0 ? "+" : "") +
+                                        (Math.Abs(pnl) >= 100 ? ((int)Math.Abs(pnl)).ToString() :
+                                         Math.Abs(pnl) >= 10  ? Math.Abs(pnl).ToString("F1") :
+                                                                  Math.Abs(pnl).ToString("F2"));
+                                    var tip = $"{day:ddd MMM d}: {(pnl >= 0 ? "+" : "")}{pnl:F2} USDT";
+                                    <div class="st-cal-day @(isToday ? "st-cal-today" : "")"
+                                         style="background:@bg;border:@border"
+                                         title="@tip">
+                                        <span class="st-cal-num">@d</span>
+                                        @if (pnl != 0)
+                                        {
+                                            <span class="st-cal-pnl @(pnl > 0 ? "st-cal-pos" : "st-cal-neg")">@pnlStr</span>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
                     </div>
                 </div>
             </div>
@@ -775,34 +822,77 @@ else if (_activeTab == "dca")
 .st-svg { width: 100%; height: 100%; display: block; }
 
 /* ── CALENDAR ─────────────────────────────────────────────────────── */
-.st-calendar { overflow-x: auto; padding-bottom: 4px; }
+.st-calendar { overflow-x: auto; }
+/* Month-by-month layout */
+.st-cal-months { display: flex; flex-direction: column; gap: 20px; }
+.st-cal-month  { display: flex; flex-direction: column; gap: 6px; }
+.st-cal-mhd {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding-bottom: 2px;
+    border-bottom: 1px solid var(--st-bdr);
+}
+.st-cal-mname {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--st-txt);
+    letter-spacing: .2px;
+}
+.st-cal-mtotal {
+    font-size: 11px;
+    font-weight: 700;
+    font-family: monospace;
+}
 .st-cal-grid {
     display: grid;
-    grid-template-columns: repeat(7, 38px);
+    grid-template-columns: repeat(7, 1fr);
     gap: 3px;
-    width: fit-content;
 }
 .st-cal-dow {
     font-size: 9px;
     font-weight: 700;
     color: var(--st-dim);
     text-align: center;
-    padding-bottom: 3px;
+    padding: 2px 0 4px;
+    text-transform: uppercase;
+    letter-spacing: .5px;
 }
+.st-cal-empty { border-radius: 6px; }
 .st-cal-day {
-    width: 38px; height: 38px;
+    aspect-ratio: 1;
+    min-height: 36px;
     border-radius: 6px;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     cursor: default;
-    transition: transform .12s;
+    transition: transform .12s, box-shadow .12s;
     gap: 1px;
+    position: relative;
 }
-.st-cal-day:hover { transform: scale(1.15); z-index: 1; position: relative; }
-.st-cal-num  { font-size: 9px;  color: rgba(255,255,255,.38); font-weight: 500; line-height: 1; }
-.st-cal-pnl  { font-size: 10px; color: #fff; font-weight: 800; line-height: 1; letter-spacing: -.3px; }
+.st-cal-day:hover {
+    transform: scale(1.08);
+    z-index: 2;
+    box-shadow: 0 2px 8px rgba(0,0,0,.4);
+}
+.st-cal-today { box-shadow: 0 0 0 1px rgba(59,130,246,.7) !important; }
+.st-cal-num {
+    font-size: 9px;
+    color: rgba(255,255,255,.45);
+    font-weight: 600;
+    line-height: 1;
+}
+.st-cal-pnl {
+    font-size: 9.5px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -.3px;
+    font-family: monospace;
+}
+.st-cal-pos { color: #fff; }
+.st-cal-neg { color: #fff; }
 
 /* ── LONG / SHORT ─────────────────────────────────────────────────── */
 .st-split-row { display: flex; }
@@ -1371,3 +1461,4 @@ else if (_activeTab == "dca")
 
     public void Dispose() { }
 }
+
