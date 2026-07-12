@@ -51,6 +51,7 @@ namespace VertexAutoTradeBinance8
         private readonly StrategyRouter _strategyRouter;
         private readonly RiskManager _risk;
         private readonly OrderExecutor _executor;
+        private readonly VertexAutoTradeBinance8.Services.HistoricalData.DataDbSymbolFeed? _dataDbFeed;
         private readonly BinanceClientFactory _factory;
         private readonly LiquidityGuardService _liq;
         private readonly OrderCleanerService _cleaner;
@@ -162,7 +163,8 @@ namespace VertexAutoTradeBinance8
             _strategy = strategy;
             _strategyRouter = strategyRouter;
             _risk = risk;
-            _executor = executor;
+            _executor   = executor;
+            _dataDbFeed = sp?.GetService<VertexAutoTradeBinance8.Services.HistoricalData.DataDbSymbolFeed>();
             _factory = factory;
             _liq = liq;
             _cleaner = cleaner;
@@ -476,6 +478,7 @@ namespace VertexAutoTradeBinance8
             {
                 if (signal == null) return;
                 _signalChannel.Writer.TryWrite(signal);
+                _dataDbFeed?.NotifySignal(signal.Symbol);
             };
 
             // 5) TRACK SYMBOLS (runtime set)
@@ -909,29 +912,13 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
-            // ── Effective leverage: config × AiLeverageService multiplier ───
-            // Computed inside _risk.GetEffectiveLeverage (which owns AiLeverageService)
-            // so TradingWorker does not need a direct reference to AiLeverageService.
-
-            // GetEffectiveLeverage lives in RiskManager (which owns AiLeverageService).
-            // It fetches klines internally via the passed klines arg and returns
-            // configLev × aiMult clamped so AI can only reduce, never increase.
-            var klines4lev = await _marketDataFacade
-                .GetKlinesAsync(symbol, tf, 60, ct)
-                .ConfigureAwait(false);
-
-            decimal effectiveLeverage = _risk.GetEffectiveLeverage(
-                symbol, tf, klines4lev, trading);
-
-
             var qty = _risk.GetPropDeskQtyFinal(
                 signal,
                 balance,
                 step,
                 minQty,
                 riskMult,
-                trading,
-                effectiveLeverage);
+                trading);
 
             if (qty <= 0)
             {
@@ -980,9 +967,9 @@ namespace VertexAutoTradeBinance8
                 signal.EntryPrice = realtimePrice;
             }
 
-            // Use the same effective leverage computed above for ExecuteAsync
-            // so the exchange is set to the same leverage used in qty calculation.
-            var result = await _executor.ExecuteAsync(signal, qty, ct, (decimal)effectiveLeverage);
+            var leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
+            _dataDbFeed?.NotifyExecution(signal.Symbol);
+            var result = await _executor.ExecuteAsync(signal, qty, ct, leverage);
 
 
 
