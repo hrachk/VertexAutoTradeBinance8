@@ -149,7 +149,7 @@ else if (_activeTab == "trading")
             </div>
 
             <!-- Calendar heatmap — month-by-month like Binance -->
-            <div class="st-card" style="resize:vertical;overflow:auto;min-height:260px;">
+            <div class="st-card" style="resize:vertical;overflow:auto;min-height:180px;">
                 <div class="st-card-hd">
                     <span class="st-card-icon">🗓</span>
                     <span class="st-card-title">Daily PnL Calendar</span>
@@ -824,75 +824,85 @@ else if (_activeTab == "dca")
 /* ── CALENDAR ─────────────────────────────────────────────────────── */
 .st-calendar { overflow-x: auto; }
 /* Month-by-month layout */
-.st-cal-months { display: flex; flex-direction: column; gap: 20px; }
-.st-cal-month  { display: flex; flex-direction: column; gap: 6px; }
+.st-cal-months { display: flex; flex-direction: column; gap: 16px; }
+.st-cal-month  { display: flex; flex-direction: column; gap: 4px; }
 .st-cal-mhd {
     display: flex;
     align-items: baseline;
     gap: 10px;
-    padding-bottom: 2px;
+    padding-bottom: 4px;
     border-bottom: 1px solid var(--st-bdr);
 }
 .st-cal-mname {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 700;
     color: var(--st-txt);
     letter-spacing: .2px;
 }
 .st-cal-mtotal {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
     font-family: monospace;
 }
+/* Grid: 7 equal columns — cells scale with card width automatically */
 .st-cal-grid {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
-    gap: 3px;
+    gap: 2px;
+    width: 100%;
 }
 .st-cal-dow {
-    font-size: 9px;
+    font-size: 8px;
     font-weight: 700;
     color: var(--st-dim);
     text-align: center;
-    padding: 2px 0 4px;
+    padding: 1px 0 3px;
     text-transform: uppercase;
-    letter-spacing: .5px;
+    letter-spacing: .3px;
 }
-.st-cal-empty { border-radius: 6px; }
+/* Empty cells maintain grid shape */
+.st-cal-empty {
+    aspect-ratio: 1.4;
+    border-radius: 4px;
+}
+/* Day cells — compact, fluid, responsive to card resize */
 .st-cal-day {
-    aspect-ratio: 1;
-    min-height: 36px;
-    border-radius: 6px;
+    aspect-ratio: 1.4;        /* wider than tall — fits date + PnL comfortably */
+    border-radius: 4px;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     cursor: default;
-    transition: transform .12s, box-shadow .12s;
-    gap: 1px;
+    transition: transform .1s, box-shadow .1s;
+    gap: 0px;
     position: relative;
+    overflow: hidden;
+    min-width: 0;
+    min-height: 0;
 }
 .st-cal-day:hover {
-    transform: scale(1.08);
+    transform: scale(1.06);
     z-index: 2;
-    box-shadow: 0 2px 8px rgba(0,0,0,.4);
+    box-shadow: 0 2px 6px rgba(0,0,0,.45);
 }
-.st-cal-today { box-shadow: 0 0 0 1px rgba(59,130,246,.7) !important; }
+.st-cal-today { outline: 1px solid rgba(59,130,246,.75); outline-offset: -1px; }
 .st-cal-num {
-    font-size: 9px;
-    color: rgba(255,255,255,.45);
+    font-size: clamp(7px, 1.1vw, 9px);
+    color: rgba(255,255,255,.4);
     font-weight: 600;
-    line-height: 1;
+    line-height: 1.1;
 }
 .st-cal-pnl {
-    font-size: 9.5px;
+    font-size: clamp(7px, 1vw, 9px);
     font-weight: 800;
-    line-height: 1;
-    letter-spacing: -.3px;
+    line-height: 1.1;
+    letter-spacing: -.2px;
     font-family: monospace;
+    white-space: nowrap;
 }
-.st-cal-pos { color: #fff; }
-.st-cal-neg { color: #fff; }
+.st-cal-pos { color: rgba(255,255,255,.95); }
+.st-cal-neg { color: rgba(255,255,255,.95); }
 
 /* ── LONG / SHORT ─────────────────────────────────────────────────── */
 .st-split-row { display: flex; }
