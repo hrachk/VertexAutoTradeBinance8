@@ -262,6 +262,7 @@ public class Program
                     // when ready to start backfilling.
                     // =====================================================
                     services.AddSingleton<VertexAutoTradeBinance8.Services.HistoricalData.HistoricalDataStore>();
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.HistoricalData.DataDbSymbolFeed>();
                     services.AddHostedService<HistoricalDataLoaderService>();
 
                     // ===== SYMBOL REGISTRY =====
@@ -432,3 +433,4 @@ public class Program
         }
     }
 }
+
