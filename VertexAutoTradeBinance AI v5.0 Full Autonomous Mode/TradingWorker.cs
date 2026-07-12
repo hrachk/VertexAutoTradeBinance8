@@ -153,7 +153,8 @@ namespace VertexAutoTradeBinance8
             IStrategyPreFilter pre, MarketContextService marketContext, SimulatedTradeService sim, AiMarketRegimeService marketRegime, BinanceHistoryImporter importer
             , RealtimePriceService price, SymbolInfoService symbolInfo,
             FundingRateService fundingRate,
-            RealtimeMomentumDetector momentum)
+            RealtimeMomentumDetector momentum,
+            VertexAutoTradeBinance8.Services.HistoricalData.DataDbSymbolFeed? dataDbFeed = null)
         {
             _logger = logger;
             _options = options.Value;
@@ -164,7 +165,7 @@ namespace VertexAutoTradeBinance8
             _strategyRouter = strategyRouter;
             _risk = risk;
             _executor   = executor;
-            _dataDbFeed = sp?.GetService<VertexAutoTradeBinance8.Services.HistoricalData.DataDbSymbolFeed>();
+            _dataDbFeed = dataDbFeed;
             _factory = factory;
             _liq = liq;
             _cleaner = cleaner;
