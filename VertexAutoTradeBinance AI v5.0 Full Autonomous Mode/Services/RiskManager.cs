@@ -544,14 +544,15 @@ namespace VertexAutoTradeBinance8.Services
             // ── REGIME MULTIPLIER ────────────────────────────────────────
             // Strong trend = higher momentum expectancy → size up.
             // Chop/range = noisy signals → size down.
-            decimal regimeMult = signal.Regime switch
-            {
-                "StrongUpTrend" or "StrongDownTrend" => 1.15m,
-                "UpTrend"       or "DownTrend"       => 1.05m,
-                "Squeeze"                            => 1.00m,
-                "VolatileChop"                       => 0.70m,
-                _ => 1.00m
-            };
+            // TradeSignal.Reason encodes the regime context set by StrategyEngine
+            // e.g. "PULLBACK_EMA21_STRONG_UP", "MEANREV_RANGE", "LIQ_GRAB_CHOP"
+            var reason = (signal.Reason ?? string.Empty).ToUpperInvariant();
+            decimal regimeMult =
+                reason.Contains("STRONG_UP") || reason.Contains("STRONG_DOWN") ? 1.15m :
+                reason.Contains("_UP")       || reason.Contains("_DOWN")       ? 1.05m :
+                reason.Contains("CHOP")      || reason.Contains("VOLATILE")    ? 0.70m :
+                reason.Contains("RANGE")     || reason.Contains("MEANREV")     ? 0.95m :
+                1.00m;
 
             // ── LIQUIDITY MULTIPLIER ─────────────────────────────────────
             decimal liqMult =
