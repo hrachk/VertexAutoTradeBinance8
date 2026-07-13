@@ -781,8 +781,8 @@ namespace VertexAutoTradeBinance8.Strategy
             // ── Base multipliers per timeframe ───────────────────────────────
             var (sl, tp1base, tp2base, tp3base) = interval switch
             {
-                KlineInterval.OneMinute      => (0.6m,  0.9m,  1.6m,  2.5m),
-                KlineInterval.ThreeMinutes   => (0.7m,  1.1m,  1.9m,  2.9m),
+                KlineInterval.OneMinute      => (0.8m,  1.3m,  2.2m,  3.3m), // raised: 15m-blended ATR makes these realistic
+                KlineInterval.ThreeMinutes   => (0.9m,  1.3m,  2.1m,  3.2m), // raised for stability
                 KlineInterval.FiveMinutes    => (0.9m,  1.4m,  2.2m,  3.4m),
                 KlineInterval.FifteenMinutes => (1.2m,  1.8m,  2.8m,  4.3m),
                 KlineInterval.ThirtyMinutes  => (1.5m,  2.1m,  3.3m,  5.0m),
@@ -1080,6 +1080,40 @@ namespace VertexAutoTradeBinance8.Strategy
             return false;
         }
 
+        /// <summary>
+        /// Returns a stabilised ATR for SL/TP sizing on short timeframes.
+        /// On 1m/3m/5m, single-bar ATR is very small and leads to tiny SL
+        /// distances that are immediately triggered by normal noise.
+        /// Solution: blend short-TF ATR with 15m ATR (weighted average).
+        /// This keeps entry on the fast TF but sizes SL/TP more realistically.
+        /// </summary>
+        private decimal GetStabilisedAtr(
+            string symbol,
+            KlineInterval interval,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            int index)
+        {
+            decimal atrFast = Atr(klines, 14, index);
+            if (interval != KlineInterval.OneMinute &&
+                interval != KlineInterval.ThreeMinutes &&
+                interval != KlineInterval.FiveMinutes)
+                return atrFast; // only blend on short TFs
+
+            // Try to get 15m klines for stable ATR reference
+            var klines15m = _marketData?.GetBufferedKlines(symbol, KlineInterval.FifteenMinutes);
+            if (klines15m == null || klines15m.Count < 20)
+                return atrFast;
+
+            decimal atr15m = Atr(klines15m, 14, klines15m.Count - 1);
+            if (atr15m <= 0) return atrFast;
+
+            // Blend: 30% fast TF + 70% 15m ATR
+            // The 15m ATR gives a realistic "what size move can happen"
+            // that is immune to 1m candle noise.
+            decimal blended = atrFast * 0.30m + atr15m * 0.70m;
+            return Math.Max(blended, atrFast); // never go below fast ATR
+        }
+
         private TradeSignal? TryLiquidityGrab(
        string symbol,
        KlineInterval interval,
@@ -1099,8 +1133,8 @@ namespace VertexAutoTradeBinance8.Strategy
             if (price <= 0)
                 return null;
 
-            // --- ATR ---
-            decimal atr = Atr(klines, 14, last - 1);
+            // --- ATR — use stabilised blend for short TFs ---
+            decimal atr = GetStabilisedAtr(symbol, interval, klines, last - 1);
             if (atr <= 0 || atr / price < 0.0010m)
                 return null;
 
@@ -4661,4 +4695,5 @@ namespace VertexAutoTradeBinance8.Strategy
 
     }
 }
+
 
