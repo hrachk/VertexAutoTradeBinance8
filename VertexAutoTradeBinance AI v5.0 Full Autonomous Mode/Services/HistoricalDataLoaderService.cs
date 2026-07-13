@@ -164,6 +164,19 @@ namespace VertexAutoTradeBinance8.Services
                 "[DATADB-LOADER] Cycle done in {elapsed:F1}s: {ok} ok, {failed} failed ({symCount} symbols x {tfCount} timeframes)",
                 sw.Elapsed.TotalSeconds, ok, failed, symbols.Length, timeframes.Length);
 
+            // ── Synthesise 1W and 1M candles from 1D data ─────────────────
+            // Binance Futures perpetuals don't serve these TFs natively.
+            // We aggregate stored 1D bars into weekly/monthly candles and
+            // save them as synthetic entries in the same datadb store.
+            // This gives the AI full macro context (weekly/monthly levels)
+            // without any additional REST calls to Binance.
+            if (timeframes.Any(t => t.Equals("1D", StringComparison.OrdinalIgnoreCase)))
+            {
+                try { await SynthesiseHigherTfAsync(symbols, ct); }
+                catch (Exception ex)
+                    { _logger.LogWarning(ex, "[DATADB-LOADER] SynthesiseHigherTf failed (non-critical)"); }
+            }
+
             // Deep backfill (extending history BACKWARD in time, toward
             // each symbol's actual listing date) runs far less often than
             // the forward-sync pass above — it's a one-time-ish job per
@@ -376,5 +389,67 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
     }
-}
 
+    // ══════════════════════════════════════════════════════════════════════
+    // SYNTHETIC HIGHER TIMEFRAME CANDLE AGGREGATION
+    // Builds 3D / 1W / 1M candles from stored 1D data.
+    // No REST calls — pure in-memory aggregation → save to store.
+    // ══════════════════════════════════════════════════════════════════════
+    private async Task SynthesiseHigherTfAsync(string[] symbols, CancellationToken ct)
+    {
+        // (groupSize, tfLabel) — built from 1D bars stored in datadb
+        var synths = new[] { (3, "3D"), (7, "1W"), (30, "1M") };
+
+        foreach (var symbol in symbols)
+        {
+            if (ct.IsCancellationRequested) return;
+
+            // Load stored 1D candles (use LoadAsync which is the correct store API)
+            var daily = await _store.LoadAsync(symbol, "1D", ct);
+            if (daily == null || daily.Count < 7) continue;
+
+            foreach (var (groupSize, tfLabel) in synths)
+            {
+                try
+                {
+                    var aggregated = AggregateCandles(daily, groupSize);
+                    if (aggregated.Count > 0)
+                        await _store.AppendAsync(symbol, tfLabel, aggregated, ct);
+                    _logger.LogDebug(
+                        "[SYNTH] {sym}/{tf}: {n} synthetic candles written",
+                        symbol, tfLabel, aggregated.Count);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[SYNTH] {sym}/{tf} failed (non-critical)", symbol, tfLabel);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Aggregates consecutive 1D candles into higher-TF bars.
+    /// HistoricalKline is a positional record: (OpenTime, Open, High, Low, Close, Volume)
+    /// </summary>
+    private static List<HistoricalKline> AggregateCandles(
+        IReadOnlyList<HistoricalKline> source, int groupSize)
+    {
+        var result  = new List<HistoricalKline>();
+        var ordered = source.OrderBy(k => k.OpenTime).ToList();
+
+        for (int i = 0; i + groupSize <= ordered.Count; i += groupSize)
+        {
+            var group = ordered.GetRange(i, groupSize);
+            result.Add(new HistoricalKline(
+                OpenTime: group[0].OpenTime,
+                Open:     group[0].Open,
+                High:     group.Max(k => k.High),
+                Low:      group.Min(k => k.Low),
+                Close:    group[^1].Close,
+                Volume:   group.Sum(k => k.Volume)
+            ));
+        }
+        return result;
+    }
+}
+}
