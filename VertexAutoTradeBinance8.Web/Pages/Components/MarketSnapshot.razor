@@ -3463,55 +3463,53 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
 
+            // tfName = the string key used in _activeTf and Series.Timeframe
+            // (e.g. "OneMinute", "FiveMinutes" — matches KlineInterval.ToString())
             var tfs = new[]
             {
-                (KlineInterval.OneMinute,     "1m",  300),
-                (KlineInterval.FiveMinutes,   "5m",  300),
-                (KlineInterval.FifteenMinutes,"15m", 200),
-                (KlineInterval.OneHour,       "1h",  200),
+                (KlineInterval.OneMinute,      "OneMinute",      300),
+                (KlineInterval.FiveMinutes,    "FiveMinutes",    300),
+                (KlineInterval.FifteenMinutes, "FifteenMinutes", 200),
+                (KlineInterval.OneHour,        "OneHour",        200),
             };
 
-            foreach (var (tf, tfLabel, limit) in tfs)
+            foreach (var (tf, tfName, limit) in tfs)
             {
-                if (symbol != _activeSym) break; // user moved away
+                if (symbol != _activeSym) break; // user switched symbol
                 try
                 {
                     var res = await client.UsdFuturesApi.ExchangeData
                         .GetKlinesAsync(symbol, tf, limit: limit, ct: cts.Token);
                     if (!res.Success || res.Data == null) continue;
 
+                    // KlineDto: (long OpenTime, decimal Open, High, Low, Close, Volume)
+                    // OpenTime is DateTimeOffset on Binance response → ToUnixTimeMilliseconds()
                     var klines = res.Data.Select(k => new KlineDto(
-                        OpenTime:  (long)k.OpenTime.ToUnixTimeMilliseconds(),
-                        Open:  k.OpenPrice,
-                        High:  k.HighPrice,
-                        Low:   k.LowPrice,
-                        Close: k.ClosePrice,
-                        Volume: k.Volume,
-                        CloseTime: (long)k.CloseTime.ToUnixTimeMilliseconds()
+                        OpenTime: k.OpenTime.ToUnixTimeMilliseconds(),
+                        Open:     k.OpenPrice,
+                        High:     k.HighPrice,
+                        Low:      k.LowPrice,
+                        Close:    k.ClosePrice,
+                        Volume:   k.Volume
                     )).ToList();
 
                     if (klines.Count == 0) continue;
 
-                    // Inject into Series
-                    var existing = Series.FirstOrDefault(s =>
-                        s.Symbol == symbol && s.Timeframe == tf);
-                    if (existing != null)
+                    // Inject into Series (type: List<MarketSeries>)
+                    // MarketSeries(string Symbol, string Timeframe, IReadOnlyList<KlineDto> Klines)
+                    var existingIdx = Series.FindIndex(s =>
+                        s.Symbol == symbol && s.Timeframe == tfName);
+                    if (existingIdx >= 0)
                     {
-                        var idx = Series.IndexOf(existing);
-                        Series[idx] = existing with { Klines = klines };
+                        Series[existingIdx] = Series[existingIdx] with { Klines = klines };
                     }
                     else
                     {
-                        Series.Add(new KlineSnapshotEntry
-                        {
-                            Symbol = symbol,
-                            Timeframe = tf,
-                            Klines = klines,
-                        });
+                        Series.Add(new MarketSeries(symbol, tfName, klines));
                     }
 
-                    // If this is the active TF, re-render immediately
-                    if (symbol == _activeSym && tf == _activeTf)
+                    // Re-render chart if this is the currently viewed TF
+                    if (symbol == _activeSym && tfName == _activeTf)
                     {
                         ResolveSelected();
                         await InvokeAsync(async () =>
@@ -3523,7 +3521,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogDebug(ex, "[EMERGENCY] Failed to fetch {sym}/{tf}", symbol, tfLabel);
+                    // No _logger in Blazor component — write to console
+                    Console.WriteLine($"[EMERGENCY] {symbol}/{tfName} failed: {ex.Message}");
                 }
             }
         }
