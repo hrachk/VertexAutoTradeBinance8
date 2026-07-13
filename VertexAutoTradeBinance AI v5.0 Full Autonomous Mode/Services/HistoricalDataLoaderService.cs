@@ -388,7 +388,7 @@ namespace VertexAutoTradeBinance8.Services
                 default: tf = default; return false;
             }
         }
-    }
+    
 
     // ══════════════════════════════════════════════════════════════════════
     // SYNTHETIC HIGHER TIMEFRAME CANDLE AGGREGATION
