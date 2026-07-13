@@ -4228,7 +4228,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             var client = Factory.TryCreateRestClient();
             if (client == null) { return; }
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
 
             // Round to the symbol's tick size if known, otherwise leave
             // as-is — better to place a slightly-off-tick order than to
@@ -4253,11 +4253,20 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             OpenOrderRow? existing;
             if (!isStopLoss && tpIndex.HasValue)
             {
+                // Match by PRICE proximity, not by array index.
+                // JS tpLines[] order can differ from C# OrderBy(Price) sort
+                // (e.g. when new TPs are added mid-session), causing the wrong
+                // TP order to be cancelled when dragging the second or third level.
+                // Using the closest-price match is always correct regardless of order.
                 var tpOrders = _openOrders
                     .Where(o => MatchesThisPosition(o) && o.Type.Contains("TAKE_PROFIT"))
-                    .OrderBy(o => pos.Side == "LONG" ? o.Price : -o.Price)
                     .ToList();
-                existing = tpIndex.Value >= 0 && tpIndex.Value < tpOrders.Count ? tpOrders[tpIndex.Value] : null;
+                // First try: exact price match (within tick size tolerance)
+                decimal tolerance = _symTickSize > 0 ? _symTickSize * 3 : newPrice * 0.001m;
+                existing = tpOrders.FirstOrDefault(o => Math.Abs(o.Price - newPrice) <= tolerance);
+                // Fallback: nearest TP order by price distance
+                if (existing == null && tpOrders.Count > 0)
+                    existing = tpOrders.MinBy(o => Math.Abs(o.Price - newPrice));
             }
             else
             {
@@ -4294,9 +4303,22 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
             if (!r.Success)
             {
-                // Surface the failure where the order-panel error
-                // message already shows up, rather than failing silently.
-                _orderError = $"{(isStopLoss ? "SL" : "TP")} update failed: {r.Error?.Message}";
+                // Retry once — conditional orders occasionally fail with
+                // transient errors (rate limit, network blip) on first attempt.
+                await Task.Delay(800, cts.Token);
+                r = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                    symbol: pos.Symbol,
+                    side: closeSide,
+                    type: isStopLoss ? ConditionalOrderType.StopMarket : ConditionalOrderType.TakeProfitMarket,
+                    quantity: pos.Qty,
+                    positionSide: posSide,
+                    triggerPrice: price,
+                    workingType: WorkingType.Mark,
+                    clientOrderId: clientOrderId + "_R",
+                    priceProtect: true,
+                    ct: cts.Token);
+                if (!r.Success)
+                    _orderError = $"{(isStopLoss ? "SL" : "TP")} update failed: {r.Error?.Message}";
             }
 
             await LoadOpenOrdersAsync();
@@ -4308,8 +4330,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         }
         finally
         {
-            _slTpDragBusy = false;
-            await InvokeAsync(StateHasChanged);
+            _slTpDragBusy = false; // release BEFORE StateHasChanged — prevents
+                                   // next drag being blocked if SHC throws
+            StateHasChanged();
         }
     }
 
