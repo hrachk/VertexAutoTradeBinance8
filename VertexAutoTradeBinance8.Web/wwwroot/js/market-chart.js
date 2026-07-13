@@ -417,7 +417,7 @@
                 return vline;
             }
 
-            const NEAR_LINE_PX = 10;
+            const NEAR_LINE_PX = 18; // wider grab zone — 10px was too tight
 
             function nearEntryLine(y) {
                 if (!session.entryPrice) return false;
@@ -446,6 +446,23 @@
                     }
                 }
                 return null;
+            }
+
+            // Shared drag-start logic (mouse and touch)
+            function startLineDrag(clientY, e) {
+                if (!session.entryPrice) return false;
+                const rect = container.getBoundingClientRect();
+                const y = clientY - rect.top;
+                const nearby = findNearbyDraggableLine(y);
+                if (nearby) {
+                    session.draggingLine = nearby.line;
+                    session.draggingLineKind = nearby.kind;
+                    session.draggingLineIdx = nearby.index;
+                    container.style.cursor = 'grabbing';
+                    if (e) e.preventDefault();
+                    return true;
+                }
+                return false;
             }
 
             container.addEventListener('mousedown', (e) => {
@@ -600,9 +617,66 @@
             container.addEventListener('mouseleave', () => {
                 if (session.dragging) { session.dragging = false; removePreview(); }
                 if (session.draggingLine) {
+                    // Cursor left chart while dragging — commit the last known
+                    // price instead of silently discarding. Previously this caused
+                    // the visual line to snap back but the order to stay unchanged,
+                    // making the user think the drag "failed" for no reason.
+                    const committedPrice = session.draggingLine.options().price;
+                    const kind = session.draggingLineKind;
+                    const idx  = session.draggingLineIdx;
                     session.draggingLine = null;
                     session.draggingLineKind = null;
                     session.draggingLineIdx = null;
+                    container.style.cursor = 'crosshair';
+                    if (committedPrice != null && committedPrice > 0) {
+                        if (kind === 'sl') {
+                            if (session.onSlChanged) session.onSlChanged(committedPrice);
+                        } else if (kind === 'tp') {
+                            if (session.onTpChangedAt) session.onTpChangedAt(idx, committedPrice);
+                        }
+                    }
+                }
+            }, listenerOpts);
+
+            // Touch drag for SL/TP lines
+            container.addEventListener('touchstart', (e) => {
+                if (!e.touches.length) return;
+                const touch = e.touches[0];
+                if (startLineDrag(touch.clientY, e)) {
+                    e.stopPropagation(); // prevent chart pan when dragging a line
+                }
+            }, { ...listenerOpts, passive: false });
+
+            container.addEventListener('touchmove', (e) => {
+                if (!session.draggingLine || !e.touches.length) return;
+                e.preventDefault();
+                const touch = e.touches[0];
+                const rect = container.getBoundingClientRect();
+                const y = touch.clientY - rect.top;
+                const price = candleSeries.coordinateToPrice(y);
+                if (price != null) {
+                    const kind = session.draggingLineKind === 'sl' ? 'SL' :
+                        (session.tpLines.length > 1 ? `TP${session.draggingLineIdx + 1}` : 'TP');
+                    try { session.draggingLine.applyOptions({ price, title: `${kind} ${fmtPrice(price)}` }); } catch(err) {}
+                    if (session.draggingLineKind === 'tp') {
+                        const tp = session.tpLines.find(t => t.index === session.draggingLineIdx);
+                        if (tp) tp.price = price;
+                    }
+                }
+            }, { ...listenerOpts, passive: false });
+
+            container.addEventListener('touchend', (e) => {
+                if (!session.draggingLine) return;
+                const committedPrice = session.draggingLine.options().price;
+                const kind = session.draggingLineKind;
+                const idx  = session.draggingLineIdx;
+                session.draggingLine = null;
+                session.draggingLineKind = null;
+                session.draggingLineIdx = null;
+                container.style.cursor = 'crosshair';
+                if (committedPrice != null && committedPrice > 0) {
+                    if (kind === 'sl' && session.onSlChanged) session.onSlChanged(committedPrice);
+                    else if (kind === 'tp' && session.onTpChangedAt) session.onTpChangedAt(idx, committedPrice);
                 }
             }, listenerOpts);
 
