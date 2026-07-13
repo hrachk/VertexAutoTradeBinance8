@@ -3155,6 +3155,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         }
     }
 
+    bool _emergencyFetchInProgress;
+
     void PickSym(string sym, bool autoSelectExistingPosition = true)
     {
         _activeSym = sym;
@@ -3165,6 +3167,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         if (available != null) _activeTf = available.Timeframe;
         ResolveSelected();
         CalcStats();
+        // If this symbol has no klines (e.g. manually opened position
+        // on a coin not in the bot universe), trigger emergency fetch
+        if (Selected == null || Selected.Klines.Count < 5)
+            _ = EmergencyFetchKlinesAsync(sym);
 
         if (autoSelectExistingPosition)
         {
@@ -3439,6 +3445,93 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     }
 
     const int DefaultBarsCount = 300;
+
+    /// <summary>
+    /// Emergency kline fetch — called when a symbol is selected that has
+    /// no data in the file cache (e.g. manually opened position on a coin
+    /// outside the bot universe). Fetches 1m/5m/15m/1h directly from
+    /// Binance REST, injects into Series, and re-renders the chart.
+    /// </summary>
+    async Task EmergencyFetchKlinesAsync(string symbol)
+    {
+        if (_emergencyFetchInProgress) return;
+        _emergencyFetchInProgress = true;
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return;
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+            var tfs = new[]
+            {
+                (KlineInterval.OneMinute,     "1m",  300),
+                (KlineInterval.FiveMinutes,   "5m",  300),
+                (KlineInterval.FifteenMinutes,"15m", 200),
+                (KlineInterval.OneHour,       "1h",  200),
+            };
+
+            foreach (var (tf, tfLabel, limit) in tfs)
+            {
+                if (symbol != _activeSym) break; // user moved away
+                try
+                {
+                    var res = await client.UsdFuturesApi.ExchangeData
+                        .GetKlinesAsync(symbol, tf, limit: limit, ct: cts.Token);
+                    if (!res.Success || res.Data == null) continue;
+
+                    var klines = res.Data.Select(k => new KlineDto(
+                        OpenTime:  (long)k.OpenTime.ToUnixTimeMilliseconds(),
+                        Open:  k.OpenPrice,
+                        High:  k.HighPrice,
+                        Low:   k.LowPrice,
+                        Close: k.ClosePrice,
+                        Volume: k.Volume,
+                        CloseTime: (long)k.CloseTime.ToUnixTimeMilliseconds()
+                    )).ToList();
+
+                    if (klines.Count == 0) continue;
+
+                    // Inject into Series
+                    var existing = Series.FirstOrDefault(s =>
+                        s.Symbol == symbol && s.Timeframe == tf);
+                    if (existing != null)
+                    {
+                        var idx = Series.IndexOf(existing);
+                        Series[idx] = existing with { Klines = klines };
+                    }
+                    else
+                    {
+                        Series.Add(new KlineSnapshotEntry
+                        {
+                            Symbol = symbol,
+                            Timeframe = tf,
+                            Klines = klines,
+                        });
+                    }
+
+                    // If this is the active TF, re-render immediately
+                    if (symbol == _activeSym && tf == _activeTf)
+                    {
+                        ResolveSelected();
+                        await InvokeAsync(async () =>
+                        {
+                            StateHasChanged();
+                            await RenderCharts();
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[EMERGENCY] Failed to fetch {sym}/{tf}", symbol, tfLabel);
+                }
+            }
+        }
+        finally
+        {
+            _emergencyFetchInProgress = false;
+        }
+    }
 
     async Task RenderCharts()
     {
