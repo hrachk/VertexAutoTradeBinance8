@@ -194,7 +194,7 @@ namespace VertexAutoTradeBinance8.Services
             // =============================================================
             decimal minNotional = trading.MinNotional > 0 ? trading.MinNotional : 5m;
 
-            if (balance < 50m)
+            if (balance < 150m)
             {
                 // ═══════════════════════════════════════════════════════════
                 // INTELLIGENT MICRO-ACCOUNT MODE ($10-50)
@@ -208,12 +208,14 @@ namespace VertexAutoTradeBinance8.Services
                 // ═══════════════════════════════════════════════════════════
 
                 // Базовый риск 2% баланса
-                decimal microRisk = 0.02m;
+                // Progressive base risk: scales with balance
+                // $50-100: 2.0%, $100-150: 2.5%, $150+: falls into normal path
+                decimal microRisk = balance < 100m ? 0.020m : 0.025m;
 
                 // Корректируем на win rate AI
                 var wr = _ai.GetWinRate(signal.Side);
-                if (wr < 0.45m)       microRisk = 0.015m; // плохой WR → осторожнее
-                else if (wr >= 0.60m) microRisk = 0.025m; // хороший WR → чуть больше
+                if (wr < 0.45m)       microRisk *= 0.80m; // плохой WR → осторожнее
+                else if (wr >= 0.60m) microRisk *= 1.20m; // хороший WR → чуть больше
 
                 // Корректируем на confidence сигнала
                 if (signal.Confidence >= 0.70m) microRisk *= 1.2m;
@@ -223,7 +225,7 @@ namespace VertexAutoTradeBinance8.Services
                 if (signal.SizeMultiplier > 0m)
                     microRisk *= Math.Clamp(signal.SizeMultiplier, 0.5m, 1.5m);
 
-                microRisk = Math.Clamp(microRisk, 0.010m, 0.030m); // 1%-3% жёсткий лимит
+                microRisk = Math.Clamp(microRisk, 0.015m, 0.045m); // 1.5%-4.5% для малого баланса
 
                 // Рискуем X% баланса
                 decimal riskBudgetMicro = balance * microRisk;
@@ -234,7 +236,7 @@ namespace VertexAutoTradeBinance8.Services
                 // Не больше 60% баланса × leverage (маржинальный лимит)
                 // Cap at 35% of max leverage capacity (was 60%).
                 // Prevents micro-account from over-concentrating on a single trade.
-                decimal maxNotionalMicro = balance * leverage * 0.35m;
+                decimal maxNotionalMicro = balance * leverage * 0.50m; // raised from 35%
                 decimal targetNotional   = Math.Min(rawNotional, maxNotionalMicro);
 
                 // Минимум 5$ notional (иначе Binance отклонит)
@@ -407,10 +409,11 @@ namespace VertexAutoTradeBinance8.Services
 
         private decimal GetDynamicBaseRisk(decimal balance)
         {
-            // Raised from 2.5%/2.0% — at 19x leverage these were producing
-            // notionals barely above MinNotional for typical balance ranges.
-            if (balance <= 100m) return 0.035m;  // was 2.5%
-            if (balance <= 500m) return 0.030m;  // was 2.0%
+            // Progressive base risk — scales with account size
+            if (balance <= 100m)  return 0.040m;  // aggressive for growth
+            if (balance <= 200m)  return 0.035m;  // still growth mode
+            if (balance <= 500m)  return 0.030m;  // standard
+            if (balance <= 2000m) return 0.025m;  // conservative
             if (balance <= 1000m) return 0.015m;
             if (balance <= 5000m) return 0.012m;
             if (balance <= 10000m) return 0.01m;
@@ -531,11 +534,12 @@ namespace VertexAutoTradeBinance8.Services
             // Higher confidence = higher edge = scale up position.
             // ≥0.80 is the "high conviction" zone — meaningfully size up.
             decimal confMult =
-                confidence < 0.40m ? 0.60m :   // very low — likely borderline signal
-                confidence < 0.52m ? 0.80m :    // below MinEntry threshold zone
-                confidence < 0.65m ? 1.00m :    // normal confidence
-                confidence < 0.80m ? 1.18m :    // good confidence
-                1.35m;                           // high conviction — full size up
+                confidence < 0.40m ? 0.60m :   // very low — borderline
+                confidence < 0.52m ? 0.82m :   // below MinEntry
+                confidence < 0.65m ? 1.00m :   // normal
+                confidence < 0.72m ? 1.15m :   // good
+                confidence < 0.80m ? 1.28m :   // high
+                1.40m;                          // very high conviction
 
             // Super-signal bonus: verified confluence of multiple timeframes
             if (signal.IsSuperSignal)
@@ -609,9 +613,10 @@ namespace VertexAutoTradeBinance8.Services
             // Ceil 6%: never exceed this — MaxMarginPercent will cap
             // actual exposure downstream. At 19× leverage, 6% risk
             // = 6/1% × SL%  which is bounded by the margin cap.
-            return Math.Clamp(risk, 0.005m, 0.06m);
+            return Math.Clamp(risk, 0.005m, 0.08m); // raised ceiling 6%→8% for high-conviction signals
         }
     }
 }
+
 
 
