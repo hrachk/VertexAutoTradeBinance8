@@ -47,6 +47,16 @@ NeDqpYLccfBacvbxw1K0Cq714RxGLLJHyMCHkuDqortnytjCuanwh3JcJfV823b0
 
 ===================================================================
 
+===HR=
+
+API Key
+Thi5CD9pzhGEzpnmjIlfPVOgWZqLfgs96IjEnrOagg3yFU8nzVwMKSBoMxDWzScw
+Secret Key
+9AlKUvqAZUXXbHtKmGSrlg0apJE5FLNkl3uklEsKefF0hEzbw2pKVkt9mj7qlC3S
+
+=============
+
+
 install_service_client_001.bat   1 client
 
 @echo off
