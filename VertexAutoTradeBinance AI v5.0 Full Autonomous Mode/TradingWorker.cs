@@ -1117,34 +1117,67 @@ namespace VertexAutoTradeBinance8
 
         private async Task WarmupMarketDataForTrackedAsync(CancellationToken ct)
         {
-            // Warm only NEW symbols
-            // =====================================================
-            // WARMUP BATCH LIMIT (ANTI-STORM)
-            // =====================================================
+            // ── 1. Universe symbols (existing logic) ─────────────────────
             var toWarm = _tracked.Keys
-            .Except(_warm.Keys, StringComparer.OrdinalIgnoreCase)
-            .Take(3)
-            .ToList();
+                .Except(_warm.Keys, StringComparer.OrdinalIgnoreCase)
+                .Take(3)
+                .ToList();
 
-            if (toWarm.Count == 0)
-                return;
+            // ── 2. Position symbols NOT in universe ──────────────────────
+            // When user opens a position manually on any coin (e.g. ZECUSDT
+            // that is NOT in the bot's trading universe), that symbol has
+            // no WS subscription → no kline buffer → Web shows empty chart.
+            // We detect such symbols here and emergency-bootstrap them.
+            var positionSymbols = _cachedPositionSymbols ?? new List<string>();
+            var unknownPositionSyms = positionSymbols
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s.Trim().ToUpperInvariant())
+                .Except(_warm.Keys, StringComparer.OrdinalIgnoreCase)
+                .Except(toWarm, StringComparer.OrdinalIgnoreCase)
+                .Take(2) // max 2 extra per cycle to avoid REST storm
+                .ToList();
 
-            foreach (var s in toWarm)
+            var allToWarm = toWarm.Concat(unknownPositionSyms).Distinct().ToList();
+            if (allToWarm.Count == 0) return;
+
+            foreach (var s in allToWarm)
             {
+                bool isPositionOnly = unknownPositionSyms.Contains(s, StringComparer.OrdinalIgnoreCase);
                 try
                 {
-                    // WS warmup (safe, sequential)
-                    await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneMinute, 20, ct);
-                    await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FiveMinutes, 20, ct);
-                    await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FifteenMinutes, 20, ct);
+                    if (isPositionOnly)
+                    {
+                        // Emergency bootstrap: more bars for chart display
+                        // (300 bars = full default chart view)
+                        _logger.LogInformation(
+                            "[BOOT][MD] Emergency bootstrap for manual position symbol {sym}", s);
+                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneMinute,    300, ct);
+                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FiveMinutes,  300, ct);
+                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FifteenMinutes, 300, ct);
+                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneHour,      200, ct);
+                        // Also add to universe so WS stays live
+                        var extended = _symbols.ActiveSymbols
+                            .Append(s)
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+                        _marketDataFacade.ApplyUniverse(extended);
+                        // Notify DataDbSymbolFeed so history is persisted
+                        _dataDbFeed?.NotifyPosition(s);
+                    }
+                    else
+                    {
+                        // Normal universe warmup
+                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneMinute,    20, ct);
+                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FiveMinutes,  20, ct);
+                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FifteenMinutes, 20, ct);
+                    }
 
                     _warm.TryAdd(s, 0);
-                    _logger.LogInformation("[BOOT][MD] warmup ok {sym}", s);
+                    _logger.LogInformation("[BOOT][MD] warmup ok {sym} (positionOnly={p})", s, isPositionOnly);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogDebug(ex, "[BOOT][MD] warmup failed {sym}", s);
-                    // do not add to _warm -> will retry later
                 }
             }
         }
