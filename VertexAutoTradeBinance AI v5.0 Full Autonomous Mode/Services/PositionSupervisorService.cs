@@ -646,10 +646,36 @@ namespace VertexAutoTradeBinance8.Services
             // the API weight unnecessarily.
             var sharedOrders = await LoadOrdersAsync(client, symbol);
 
+            // ── MANUAL POSITION POLICY ──────────────────────────────────────
+            // If lastSignal.IsManual == true: user opened this position
+            // manually via Binance UI or our chart. They placed their own
+            // TP/SL orders. We MUST NOT touch them.
+            //
+            // HandleSideAsync is completely skipped for manual positions.
+            // ProbeSide handles the only allowed intervention:
+            //   Phase 0 (before TP1): do nothing at all
+            //   Phase 1 (after TP1 fires, qty drops >5%): move SL to BE once
+            // ─────────────────────────────────────────────────────────────────
+            bool isManualPosition = lastSignal?.IsManual == true;
+
             if (hasLong)
-                await HandleSideAsync(client, symbol, PositionSide.Long, longPos!, sharedOrders, lastSignal, klines1m, ct);
+            {
+                if (!isManualPosition)
+                    await HandleSideAsync(client, symbol, PositionSide.Long, longPos!, sharedOrders, lastSignal, klines1m, ct);
+                else
+                    _logger.LogDebug(
+                        "[SUPERVISOR][{sym}][LONG] Manual position — HandleSideAsync skipped (user manages own TP/SL)",
+                        symbol);
+            }
             if (hasShort)
-                await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, sharedOrders, lastSignal, klines1m, ct);
+            {
+                if (!isManualPosition)
+                    await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, sharedOrders, lastSignal, klines1m, ct);
+                else
+                    _logger.LogDebug(
+                        "[SUPERVISOR][{sym}][SHORT] Manual position — HandleSideAsync skipped (user manages own TP/SL)",
+                        symbol);
+            }
         }
 
         // ===== PLACE BE SL =====
@@ -1002,8 +1028,9 @@ namespace VertexAutoTradeBinance8.Services
                 // =====================================================
 
                 // ❗ SL отсутствует → ставим аварийный (один раз)
-                // For MANUAL positions: only create emergency SL if truly none exists
-                // (both regular AND algo). Never replace a user-placed SL.
+                // NOTE: HandleSideAsync is now only called for non-manual positions
+                // (manual positions are guarded at the call site in SuperviseAsync).
+                // This emergency SL logic is therefore always for bot-opened positions.
                 bool noSlAnywhere = sl == null && !algoSlExists;
                 if (noSlAnywhere)
                 {
