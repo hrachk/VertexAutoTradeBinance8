@@ -434,15 +434,25 @@ namespace VertexAutoTradeBinance8.Services
                     // Mark BE as moved BEFORE placing order (idempotent)
                     _lastSl[beKey] = 1m;
 
+                    // Professional approach: SL at slightly POSITIVE territory,
+                    // not at exact entry (entry = breakeven = 0 profit after fees).
+                    // Add 0.08% buffer above entry for LONG (below for SHORT).
+                    // This covers typical Binance taker fee (0.04%) × 2 sides
+                    // so the position closes in actual profit, not at zero.
+                    const decimal BE_BUFFER_PCT = 0.0008m; // 0.08%
+                    decimal bePrice = side == PositionSide.Long
+                        ? manualEntry * (1m + BE_BUFFER_PCT)  // LONG: SL above entry
+                        : manualEntry * (1m - BE_BUFFER_PCT); // SHORT: SL below entry
+
                     _logger.LogInformation(
                         "[SUPERVISOR][{sym}][{side}] Manual pos TP1 fired " +
-                        "(qty {cur:F4} < {init:F4}) → moving SL to BE={e:F4}",
-                        symbol, side, currentQty, initialQty, manualEntry);
+                        "(qty {cur:F4} < {init:F4}) → moving SL to BE+buf={e:F4} (entry={entry:F4})",
+                        symbol, side, currentQty, initialQty, bePrice, manualEntry);
 
                     try
                     {
                         await PlaceStopLossAtBeAsync(client, symbol, side,
-                            currentQty, manualEntry, pos, ct);
+                            currentQty, bePrice, pos, ct);
                     }
                     catch (Exception ex)
                     {
