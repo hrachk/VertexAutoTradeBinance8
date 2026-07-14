@@ -475,9 +475,13 @@
                 // entry-armed "create new TP/SL" gesture below.
                 const nearby = findNearbyDraggableLine(y);
                 if (nearby) {
-                    session.draggingLine = nearby.line;
+                    session.draggingLine    = nearby.line;
                     session.draggingLineKind = nearby.kind;
-                    session.draggingLineIdx = nearby.index;
+                    session.draggingLineIdx  = nearby.index;
+                    // Save original price BEFORE drag starts — C# needs
+                    // this to find the existing order on the exchange
+                    // (which is still at the old price until we cancel it).
+                    session.draggingLineOriginalPrice = nearby.line.options().price;
                     container.style.cursor = 'grabbing';
                     e.preventDefault();
                     return;
@@ -594,11 +598,16 @@
                     }
                     if (committedPrice != null && committedPrice > 0) {
                         if (kind === 'sl') {
-                            if (session.onSlChanged) session.onSlChanged(committedPrice);
+                            const origPriceSl = session.draggingLineOriginalPrice || committedPrice;
+                            if (session.onSlChanged) session.onSlChanged(committedPrice, origPriceSl);
                         } else if (kind === 'tp') {
-                            if (session.onTpChangedAt) session.onTpChangedAt(idx, committedPrice);
+                            // Pass BOTH new price AND original price so C# can find
+                            // the existing order (still at old price on exchange)
+                            const origPrice = session.draggingLineOriginalPrice || committedPrice;
+                            if (session.onTpChangedAt) session.onTpChangedAt(idx, committedPrice, origPrice);
                         }
                     }
+                    session.draggingLineOriginalPrice = null;
                     return;
                 }
 
