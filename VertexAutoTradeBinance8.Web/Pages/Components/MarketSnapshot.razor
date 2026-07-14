@@ -5488,6 +5488,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // own piece of the UI once ready - the position panel itself
         // is already visible and correct at this point.
         await LoadOpenOrdersAsync();
+        // Load tickSize+stepSize so drag TP/SL works without precision errors
+        _ = LoadSymbolPrecisionAsync(pos.Symbol);
 
         _dotNetRef ??= DotNetObjectReference.Create(this);
         try { await JS.InvokeVoidAsync("marketChart.bindSlTpCallbacks", $"chartContainer-{_chartInstanceId}", _dotNetRef); } catch { }
