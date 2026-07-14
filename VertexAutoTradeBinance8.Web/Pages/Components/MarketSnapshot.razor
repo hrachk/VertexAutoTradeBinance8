@@ -4471,7 +4471,35 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             // Round to the symbol's tick size if known, otherwise leave
             // as-is — better to place a slightly-off-tick order than to
             // silently snap to a wrong precision.
-            decimal price = _symTickSize > 0 ? Math.Round(newPrice / _symTickSize) * _symTickSize : newPrice;
+        // Always fetch tickSize/stepSize fresh — _symTickSize may be 0
+        // (not loaded for this symbol) causing division by zero → NaN/∞
+        // → Binance "Precision over maximum defined for asset" error.
+        decimal tickSize = _symTickSize > 0 ? _symTickSize : 0m;
+        decimal stepSize = _symStep     > 0 ? _symStep     : 0m;
+        if (tickSize <= 0 || stepSize <= 0)
+        {
+            try
+            {
+                using var cts2 = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var ei = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync(cts2.Token);
+                if (ei.Success)
+                {
+                    var sym = ei.Data.Symbols.FirstOrDefault(x => x.Name == pos.Symbol);
+                    if (sym != null)
+                    {
+                        if (tickSize <= 0) tickSize = sym.PriceFilter?.TickSize   ?? 0m;
+                        if (stepSize <= 0) stepSize = sym.LotSizeFilter?.StepSize ?? 0m;
+                        if (tickSize > 0) _symTickSize = tickSize;
+                        if (stepSize > 0) _symStep     = stepSize;
+                    }
+                }
+            }
+            catch { /* non-critical — fall back to raw precision */ }
+        }
+
+            decimal price = tickSize > 0
+                ? Math.Round(newPrice / tickSize, MidpointRounding.ToEven) * tickSize
+                : Math.Round(newPrice, 8);
 
             bool isLong = pos.Side == "LONG";
             var closeSide = isLong ? OrderSide.Sell : OrderSide.Buy;
