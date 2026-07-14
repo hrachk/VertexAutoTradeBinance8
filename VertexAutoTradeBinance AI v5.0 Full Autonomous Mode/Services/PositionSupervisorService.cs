@@ -386,83 +386,15 @@ namespace VertexAutoTradeBinance8.Services
                 // ─────────────────────────────────────────────────────────────────
                 if (lastSignal?.IsManual == true)
                 {
-                    if (pos == null || Math.Abs(pos.Quantity) < POSITION_EPS) return;
-
-                    decimal currentQty  = Math.Abs(pos.Quantity);
-                    decimal manualEntry = pos.EntryPrice; // renamed from 'entry' — avoids conflict with ProbeSide's own 'entry' below
-                    var manualKey       = BuildExitKey(symbol, side, manualEntry);
-
-                    // Track initial qty the first time we see this manual position.
-                    // _lastSl doubles as a convenient ConcurrentDictionary available here.
-                    // We use a separate key suffix _mqty to avoid colliding with SL tracking.
-                    var mqtyKey = manualKey + "_mqty";
-                    if (!_lastSl.ContainsKey(mqtyKey))
-                    {
-                        // First time seeing this position — record initial qty, do nothing yet.
-                        _lastSl[mqtyKey] = currentQty;
-                        _logger.LogDebug(
-                            "[SUPERVISOR][{sym}][{side}] Manual pos recorded: initQty={qty:F4} entry={e:F4}",
-                            symbol, side, currentQty, manualEntry);
-                        return;
-                    }
-
-                    decimal initialQty = _lastSl[mqtyKey];
-
-                    // Check if TP1 has fired: qty decreased meaningfully (>5% reduction)
-                    bool tp1Hit = initialQty > 0 && currentQty < initialQty * 0.95m;
-
-                    if (!tp1Hit)
-                    {
-                        _logger.LogDebug(
-                            "[SUPERVISOR][{sym}][{side}] Manual pos waiting for TP1 " +
-                            "(qty {cur:F4}/{init:F4})",
-                            symbol, side, currentQty, initialQty);
-                        return; // Phase 0: freeze, do nothing
-                    }
-
-                    // Phase 1: TP1 fired — move SL to break-even ONCE
-                    var beKey = manualKey + "_be_moved";
-                    if (_lastSl.ContainsKey(beKey))
-                    {
-                        // Already moved BE for this position — nothing more to do
-                        _logger.LogDebug(
-                            "[SUPERVISOR][{sym}][{side}] Manual pos: BE already moved",
-                            symbol, side);
-                        return;
-                    }
-
-                    // Mark BE as moved BEFORE placing order (idempotent)
-                    _lastSl[beKey] = 1m;
-
-                    // Professional approach: SL at slightly POSITIVE territory,
-                    // not at exact entry (entry = breakeven = 0 profit after fees).
-                    // Add 0.08% buffer above entry for LONG (below for SHORT).
-                    // This covers typical Binance taker fee (0.04%) × 2 sides
-                    // so the position closes in actual profit, not at zero.
-                    const decimal BE_BUFFER_PCT = 0.0008m; // 0.08%
-                    decimal bePrice = side == PositionSide.Long
-                        ? manualEntry * (1m + BE_BUFFER_PCT)  // LONG: SL above entry
-                        : manualEntry * (1m - BE_BUFFER_PCT); // SHORT: SL below entry
-
-                    _logger.LogInformation(
-                        "[SUPERVISOR][{sym}][{side}] Manual pos TP1 fired " +
-                        "(qty {cur:F4} < {init:F4}) → moving SL to BE+buf={e:F4} (entry={entry:F4})",
-                        symbol, side, currentQty, initialQty, bePrice, manualEntry);
-
-                    try
-                    {
-                        await PlaceStopLossAtBeAsync(client, symbol, side,
-                            currentQty, bePrice, pos, ct);
-                    }
-                    catch (Exception ex)
-                    {
-                        // Non-critical — log and continue; user's original SL still protects
-                        _logger.LogWarning(
-                            "[SUPERVISOR][{sym}][{side}] Manual BE move failed: {err}",
-                            symbol, side, ex.Message);
-                        _lastSl.TryRemove(beKey, out _); // allow retry next cycle
-                    }
-                    return; // Never fall into the normal SL-trailing logic for manual positions
+                    // HANDS OFF — user opened this position manually and placed
+                    // their own TP/SL orders. Supervisor does NOTHING.
+                    // No BE move, no emergency SL, no trailing, no interference.
+                    // The user's orders stand exactly as placed until they decide
+                    // to change them. ProbeSide exits immediately for all manual positions.
+                    _logger.LogDebug(
+                        "[SUPERVISOR][{sym}][{side}] Manual position — complete hands-off",
+                        symbol, side);
+                    return;
                 }
 
                 if (pos == null || Math.Abs(pos.Quantity) < POSITION_EPS)
@@ -473,8 +405,7 @@ namespace VertexAutoTradeBinance8.Services
                     _beLevel.TryRemove(key, out _);
                     _beMoved.TryRemove(key, out _);
                     _lastSl.TryRemove(key, out _);
-                    _lastSl.TryRemove(key + "_mqty", out _); // manual qty tracking
-                    _lastSl.TryRemove(key + "_be_moved", out _); // manual BE flag
+                    // (no manual tracking keys — complete hands-off approach)
                     _beOverrideForStrongTrend.TryRemove(key, out _);
                     return;
                 }
