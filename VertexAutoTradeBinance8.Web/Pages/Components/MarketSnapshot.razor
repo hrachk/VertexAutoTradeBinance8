@@ -4500,11 +4500,11 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     .Where(o => MatchesThisPosition(o) && o.Type.Contains("TAKE_PROFIT"))
                     .ToList();
                 // First try: exact price match (within tick size tolerance)
-                decimal tolerance = _symTickSize > 0 ? _symTickSize * 3 : newPrice * 0.001m;
-                existing = tpOrders.FirstOrDefault(o => Math.Abs(o.Price - newPrice) <= tolerance);
-                // Fallback: nearest TP order by price distance
+                // Use searchPrice (original price before drag) to find the order
+                decimal tolerance = _symTickSize > 0 ? _symTickSize * 3 : searchPrice * 0.001m;
+                existing = tpOrders.FirstOrDefault(o => Math.Abs(o.Price - searchPrice) <= tolerance);
                 if (existing == null && tpOrders.Count > 0)
-                    existing = tpOrders.MinBy(o => Math.Abs(o.Price - newPrice));
+                    existing = tpOrders.MinBy(o => Math.Abs(o.Price - searchPrice));
             }
             else
             {
