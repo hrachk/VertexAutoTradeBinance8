@@ -814,6 +814,11 @@
 
             @if (_ooActiveTab == "history")
             {
+                <div class="mk-pos-toolbar">
+                    <label class="mk-pos-filter-cb">
+                        <input type="checkbox" @bind="_posFilterCurrentSym" /> Only <strong>@_activeSym</strong>
+                    </label>
+                </div>
                 @if (_demoMode)
                 {
                     @if (_demoSnapshot.History.Count == 0)
@@ -830,7 +835,14 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                @foreach (var t in _demoSnapshot.History.OrderByDescending(t => t.ClosedAtUtc))
+                                @{
+                    var histFiltered = (_posFilterCurrentSym && !string.IsNullOrEmpty(_activeSym))
+                        ? _demoSnapshot.History.Where(t => t.Symbol == _activeSym).ToList()
+                        : (IEnumerable<object>)_demoSnapshot.History;
+                }
+                @foreach (var t in _demoSnapshot.History
+                    .Where(t => !_posFilterCurrentSym || string.IsNullOrEmpty(_activeSym) || t.Symbol == _activeSym)
+                    .OrderByDescending(t => t.ClosedAtUtc))
                                 {
                                     <tr>
                                         <td>@t.Symbol.Replace("USDT","")</td>
@@ -877,7 +889,8 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                @foreach (var t in _realHistory)
+                                @foreach (var t in _realHistory
+                                    .Where(t => !_posFilterCurrentSym || string.IsNullOrEmpty(_activeSym) || t.Symbol == _activeSym))
                                 {
                                     <tr>
                                         <td>@t.Symbol.Replace("USDT","")</td>
@@ -1093,6 +1106,26 @@
                 else
                 {
                     <div class="mk-oo-scroll">
+                        <!-- Filter + sub-tabs: Standard / Algo -->
+                        <div class="mk-pos-toolbar">
+                            <label class="mk-pos-filter-cb">
+                                <input type="checkbox" @bind="_posFilterCurrentSym" /> Only <strong>@_activeSym</strong>
+                            </label>
+                            <div class="mk-ord-subtabs">
+                                <button class="mk-ord-subtab @(_ordSubTab=="standard"?"mk-ord-subtab-on":"")" @onclick='()=>_ordSubTab="standard"'>Standard</button>
+                                <button class="mk-ord-subtab @(_ordSubTab=="algo"?"mk-ord-subtab-on":"")" @onclick='()=>_ordSubTab="algo"'>Algo (TP/SL)</button>
+                            </div>
+                        </div>
+                        @{
+                            var ordersFiltered = (_posFilterCurrentSym && !string.IsNullOrEmpty(_activeSym))
+                                ? _openOrders.Where(o => o.Symbol == _activeSym).ToList()
+                                : _openOrders;
+                            // Split: algo = TP/SL orders (ReduceOnly conditional), standard = everything else
+                            bool isAlgoOrder(OpenOrderRow o) => o.Type.Contains("TAKE_PROFIT") || o.Type.Contains("STOP") || o.ReduceOnly;
+                            var standardOrders = ordersFiltered.Where(o => !isAlgoOrder(o)).ToList();
+                            var algoOrders    = ordersFiltered.Where(o =>  isAlgoOrder(o)).ToList();
+                            var ordersToShow  = _ordSubTab == "algo" ? algoOrders : standardOrders;
+                        }
                         <table class="mk-oo-tbl">
                             <thead>
                                 <tr>
@@ -1101,7 +1134,11 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                @foreach (var o in _openOrders)
+                                @if (ordersToShow.Count == 0)
+                                {
+                                    <tr><td colspan="7" class="mk-oo-empty">No @_ordSubTab orders@(_posFilterCurrentSym ? $" for {_activeSym}" : "")</td></tr>
+                                }
+                                @foreach (var o in ordersToShow)
                                 {
                                     <tr class="mk-oo-row-clickable" @onclick="() => PickSym(o.Symbol)">
                                         <td class="mk-oo-sym">@o.Symbol</td>
@@ -1110,7 +1147,12 @@
                                         <td class="mk-mono">@(o.Price > 0 ? FmtP(o.Price) : "Market")</td>
                                         <td class="mk-mono">@o.Qty.ToString("G8")</td>
                                         <td class="mk-mono mk-dim">@o.Filled.ToString("G8")</td>
-                                        <td @onclick:stopPropagation="true">
+                                        <td @onclick:stopPropagation="true" style="display:flex;gap:4px;align-items:center;">
+                                            <button class="mk-oo-fill-now" title="Execute at current market price immediately"
+                                                    disabled="@(_cancellingOrderId == o.OrderId)"
+                                                    @onclick="() => FillOrderAtMarketAsync(o)">
+                                                ⚡ Fill Now
+                                            </button>
                                             <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
                                                     @onclick="() => CancelOpenOrderAsync(o)">
                                                 @(_cancellingOrderId == o.OrderId ? "…" : "Cancel")
@@ -2329,6 +2371,16 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .vx-modal-cancel:hover{border-color:#334155;color:#94a3b8;}
 .vx-modal-confirm{flex:2;padding:10px;border-radius:8px;border:none;background:linear-gradient(135deg,#10b981,#059669);color:#fff;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 4px 14px rgba(16,185,129,.3);transition:all .14s;letter-spacing:.1px;}
 .vx-modal-confirm:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(16,185,129,.4);}
+
+/* ── Orders sub-tabs ─────────────────────────────────────────── */
+.mk-ord-subtabs{display:flex;gap:3px;}
+.mk-ord-subtab{padding:4px 10px;border-radius:5px;border:1px solid var(--bdr);background:transparent;color:var(--dim);font-size:11px;font-weight:700;cursor:pointer;transition:all .12s;}
+.mk-ord-subtab:hover{color:var(--txt);border-color:var(--bdr2);}
+.mk-ord-subtab-on{background:rgba(59,130,246,.12)!important;border-color:rgba(59,130,246,.4)!important;color:#60a5fa!important;}
+/* Fill Now button */
+.mk-oo-fill-now{background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);color:#f59e0b;font-size:11px;font-weight:800;padding:3px 8px;border-radius:5px;cursor:pointer;transition:all .12s;white-space:nowrap;}
+.mk-oo-fill-now:hover{background:rgba(245,158,11,.2);border-color:rgba(245,158,11,.6);}
+.mk-oo-fill-now:disabled{opacity:.4;cursor:not-allowed;}
 </style>
 
 @if (_levPos != null)
@@ -3489,7 +3541,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     // KlineDto: (long OpenTime, decimal Open, High, Low, Close, Volume)
                     // OpenTime is DateTimeOffset on Binance response → ToUnixTimeMilliseconds()
                     var klines = res.Data.Select(k => new KlineDto(
-                        OpenTime: k.OpenTime.ToUnixTimeMilliseconds(),
+                        OpenTime: new DateTimeOffset(k.OpenTime, TimeSpan.Zero).ToUnixTimeMilliseconds(),
                         Open:     k.OpenPrice,
                         High:     k.HighPrice,
                         Low:      k.LowPrice,
@@ -5646,6 +5698,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     List<OpenOrderRow> _openOrders = new();
     string _lastAlgoOrdersDebug = "";
     string _ooActiveTab = "positions";
+    string _ordSubTab   = "algo";  // default to Algo tab (TP/SL orders most relevant)
 
     void ShowPositionsTab() { _ooActiveTab = "positions"; _ = SaveSelectionState(); }
     void ShowOrdersTab() { _ooActiveTab = "orders"; _ = SaveSelectionState(); }
@@ -5970,6 +6023,51 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         }
 
         await LoadOpenOrdersAsync();
+    }
+
+        // Fill Now — cancel the conditional order and immediately
+    // execute a Market order for the same qty/side.
+    async Task FillOrderAtMarketAsync(OpenOrderRow row)
+    {
+        if (_orderLoading) return;
+        _cancellingOrderId = row.OrderId;
+        _orderError = string.Empty;
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) { _orderError = "No Binance connection"; return; }
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+            // Cancel first — then market fill
+            await CancelOpenOrderAsync(row);
+            await Task.Delay(300);
+
+            var side = row.Side == "BUY" ? OrderSide.Buy : OrderSide.Sell;
+            var posSide = !string.IsNullOrEmpty(row.PositionSide) && row.PositionSide != "BOTH"
+                ? Enum.TryParse<PositionSide>(row.PositionSide, true, out var ps) ? ps : PositionSide.Both
+                : PositionSide.Both;
+            var qty = row.Qty - row.Filled;
+            if (qty <= 0) { _orderError = "Order already fully filled"; return; }
+
+            var r = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: row.Symbol,
+                side: side,
+                type: FuturesOrderType.Market,
+                quantity: qty,
+                positionSide: posSide,
+                reduceOnly: row.ReduceOnly,
+                ct: cts.Token);
+
+            if (!r.Success)
+                _orderError = $"Fill Now failed: {r.Error?.Message}";
+        }
+        catch (Exception ex) { _orderError = ex.Message; }
+        finally
+        {
+            _cancellingOrderId = null;
+            await LoadOpenOrdersAsync();
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     async Task CancelOpenOrderAsync(OpenOrderRow row)
