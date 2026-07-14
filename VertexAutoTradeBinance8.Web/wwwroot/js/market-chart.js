@@ -261,11 +261,17 @@
                 return v.toFixed(2);
             }
 
+            let _lastTooltipX = -999, _lastTooltipTime = 0;
             chart.subscribeCrosshairMove((param) => {
                 if (!param.point || !param.time || param.point.y < 0) {
                     tooltip.style.display = 'none';
+                    _lastTooltipX = -999;
                     return;
                 }
+                // Skip re-render if same candle as last time
+                if (param.time === _lastTooltipTime && Math.abs(param.point.x - _lastTooltipX) < 2) return;
+                _lastTooltipTime = param.time;
+                _lastTooltipX = param.point.x;
                 const candleData = param.seriesData.get(candleSeries);
                 const volData = param.seriesData.get(volumeSeries);
                 if (!candleData) {
@@ -507,14 +513,17 @@
                     const price = candleSeries.coordinateToPrice(y);
                     if (price != null) {
                         const kind = session.draggingLineKind === 'sl' ? 'SL' :
-                            (session.tpLines.length > 1 ? `TP${session.draggingLineIdx + 1}` : 'TP');
+                            (session.tpLines && session.tpLines.length > 1
+                                ? `TP${session.draggingLineIdx + 1}` : 'TP');
                         try { session.draggingLine.applyOptions({ price, title: `${kind} ${fmtPrice(price)}` }); } catch (err) {}
-                        // Keep tpLines[].price in sync so findNearbyDraggableLine
-                        // uses the current visual position, not the original price.
-                        if (session.draggingLineKind === 'tp') {
+                        if (session.draggingLineKind === 'tp' && session.tpLines) {
                             const tp = session.tpLines.find(t => t.index === session.draggingLineIdx);
                             if (tp) tp.price = price;
                         }
+                        // Instantly reposition the pill for this line (no subscription delay)
+                        // We call repositionAllPills directly so the pill tracks the cursor.
+                        const pnlFor = session._lastPnlFor || null;
+                        this.repositionAllPills(containerId, pnlFor);
                     }
                     container.style.cursor = 'grabbing';
                     return;
@@ -1021,6 +1030,7 @@
                 const d = s.side === 'LONG' ? 1 : -1;
                 return (price - s.entryPrice) * d * s.qty;
             };
+            s._lastPnlFor = pnlFor; // store for drag mousemove access
 
             if (sl > 0) {
                 s.slLine = s.candleSeries.createPriceLine({
@@ -1050,22 +1060,28 @@
             this.repositionAllPills(containerId, pnlFor);
 
             if (!s.tpSlPillRangeSub) {
-                // Subscribe to BOTH time-axis scroll/zoom (X) and
-                // price-scale zoom (Y) so pills track their lines on
-                // every visual change, not only horizontal scroll.
                 const self = this;
+                // Subscribe ONCE to visible-range changes (X scroll / zoom).
                 s.tpSlPillRangeSub = () => self.repositionAllPills(containerId, pnlFor);
                 s.chart.timeScale().subscribeVisibleLogicalRangeChange(s.tpSlPillRangeSub);
-                // Price-scale (Y axis) zoom also changes pixel coordinates
-                // of every price level — subscribe separately so pills
-                // stay locked to their line when the user pinches/scrolls
-                // the price axis vertically.
+
+                // Subscribe to price-scale changes (Y zoom/pan).
+                // LightweightCharts v5 fires subscribeVisiblePriceRangeChange on
+                // the right price scale for vertical drag/pinch events.
                 s.tpSlPriceScaleSub = s.tpSlPillRangeSub;
-                try { s.chart.priceScale('right').applyOptions({}); } catch (e) {}
-                // Use crosshair move as a reliable per-frame update trigger —
-                // it fires on every render tick when the mouse is over the chart.
-                s.tpSlCrosshairSub = s.tpSlPillRangeSub;
-                s.chart.subscribeCrosshairMove(s.tpSlCrosshairSub);
+                try {
+                    s.chart.priceScale('right')
+                        .subscribePriceRangeChange(s.tpSlPriceScaleSub);
+                } catch(e) { /* older build — no subscribepricerangechange */ }
+
+                // ResizeObserver: reposition when the chart container resizes
+                // (window resize, panel drag, etc.) — no events fire for this.
+                if (!s._pillResizeObs) {
+                    s._pillResizeObs = new ResizeObserver(() =>
+                        self.repositionAllPills(containerId, pnlFor));
+                    const chartEl = s.chart.chartElement?.() || container.querySelector('td') || container;
+                    s._pillResizeObs.observe(container);
+                }
             }
         },
 
@@ -1163,6 +1179,10 @@
             const s = sessions.get(containerId);
             if (!s) return;
 
+            // Quick dirty check: skip if no visible lines to position
+            if (!s.slLine && (!s.tpLines || s.tpLines.length === 0) &&
+                !s.entryLine && !s.liqLine && !s.beLine) return;
+
             let scaleWidth = 60;
             try { scaleWidth = s.chart.priceScale('right').width() || 60; } catch (e) {}
             const rightOffset = scaleWidth + 50;
@@ -1246,7 +1266,10 @@
             }
             s.tpPills = [];
             if (s.tpSlPillRangeSub) { try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s.tpSlPillRangeSub); } catch (e) {} s.tpSlPillRangeSub = null; }
-            if (s.tpSlCrosshairSub) { try { s.chart.unsubscribeCrosshairMove(s.tpSlCrosshairSub); } catch (e) {} s.tpSlCrosshairSub = null; }
+            // tpSlCrosshairSub was removed from performance refactor — no unsub needed
+            if (s._pillResizeObs) { s._pillResizeObs.disconnect(); s._pillResizeObs = null; }
+            try { if (s.tpSlPriceScaleSub) s.chart.priceScale('right').unsubscribePriceRangeChange(s.tpSlPriceScaleSub); } catch(e) {}
+            s.tpSlPriceScaleSub = null;
         },
 
         // Refreshes the live market-price line with the current PnL —
