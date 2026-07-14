@@ -5125,6 +5125,28 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         }
     }
 
+    // Lightweight version: only loads tickSize + stepSize (no qty/balance).
+    // Used by SelectPosition so drag TP/SL works without precision errors.
+    async Task LoadSymbolPrecisionAsync(string symbol)
+    {
+        if (string.IsNullOrEmpty(symbol)) return;
+        // Skip if already loaded for this exact symbol
+        if (_symTickSize > 0 && _symStep > 0 && _activeSym == symbol) return;
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return;
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+            var ei = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync(cts.Token);
+            if (!ei.Success) return;
+            var s = ei.Data.Symbols.FirstOrDefault(x => x.Name == symbol);
+            if (s == null) return;
+            _symTickSize = s.PriceFilter?.TickSize   ?? 0.0001m;
+            _symStep     = s.LotSizeFilter?.StepSize ?? 0.001m;
+        }
+        catch { /* non-critical */ }
+    }
+
     async Task LoadSymbolInfoAndSuggestQty(MissedTradeRecord sig)
     {
         try
