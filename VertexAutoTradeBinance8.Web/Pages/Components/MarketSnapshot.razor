@@ -4399,21 +4399,21 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     bool _slTpDragBusy;
 
     [JSInvokable]
-    public async Task OnSlDragged(decimal price)
+    public async Task OnSlDragged(decimal price, decimal originalPrice = 0)
     {
-        // Freeze periodic TP/SL redraw so the line stays visible
-        // while we cancel old order + place new one (takes 1-3s)
         _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
         if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
-        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: true, newPrice: price);
+        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: true,
+            newPrice: price, originalPrice: originalPrice > 0 ? originalPrice : price);
     }
 
     [JSInvokable]
-    public async Task OnTpDragged(decimal price)
+    public async Task OnTpDragged(decimal price, decimal originalPrice = 0)
     {
         _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
         if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
-        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false, newPrice: price);
+        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false,
+            newPrice: price, originalPrice: originalPrice > 0 ? originalPrice : price);
     }
 
     // Fired when dragging a SPECIFIC TP line (one of possibly several)
@@ -4431,8 +4431,14 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             originalPrice: originalPrice > 0 ? originalPrice : price);
     }
 
-    async Task ReplaceProtectiveOrderAsync(ActivePositionInfo pos, bool isStopLoss, decimal newPrice, int? tpIndex = null)
+    async Task ReplaceProtectiveOrderAsync(
+        ActivePositionInfo pos, bool isStopLoss, decimal newPrice,
+        int? tpIndex = null, decimal originalPrice = 0)
     {
+        // searchPrice: the OLD price of the order (before drag).
+        // Used to find the existing exchange order — which is still
+        // at that price until we cancel it.
+        decimal searchPrice = originalPrice > 0 ? originalPrice : newPrice;
         // CRITICAL SAFETY CHECK: this previously never checked
         // _demoMode at all, meaning dragging a TP/SL line while in
         // demo mode was attempting to place a REAL order on the
