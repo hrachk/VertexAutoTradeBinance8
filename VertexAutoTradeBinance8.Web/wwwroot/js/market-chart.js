@@ -584,6 +584,14 @@
                     session.draggingLineKind = null;
                     session.draggingLineIdx = null;
                     container.style.cursor = 'crosshair';
+                    // Apply any showTpSlLines call that was deferred during drag
+                    if (session._pendingTpSlArgs) {
+                        const p = session._pendingTpSlArgs;
+                        session._pendingTpSlArgs = null;
+                        // Small delay so the visual line stays at drag position
+                        // briefly while C# places the new order (avoid flicker)
+                        setTimeout(() => this.showTpSlLines(containerId, p.entry, p.sl, p.tps, p.side), 800);
+                    }
                     if (committedPrice != null && committedPrice > 0) {
                         if (kind === 'sl') {
                             if (session.onSlChanged) session.onSlChanged(committedPrice);
@@ -986,6 +994,12 @@
         showTpSlLines(containerId, entry, sl, tps, side) {
             const s = sessions.get(containerId);
             if (!s) return;
+            // If user is actively dragging a line, defer this update
+            // by stashing the args and applying them after mouseup.
+            if (s.draggingLine) {
+                s._pendingTpSlArgs = { entry, sl, tps, side };
+                return;
+            }
             this.hideTpSlLines(containerId);
 
             // pnlFor reads s.side/s.qty/s.entryPrice dynamically on every
@@ -1208,6 +1222,10 @@
         hideTpSlLines(containerId) {
             const s = sessions.get(containerId);
             if (!s) return;
+            // Never destroy lines while user is actively dragging one —
+            // a C# ShowTpSlLines call mid-drag would erase the line
+            // the user is currently holding.
+            if (s.draggingLine) return;
             if (s.slLine) { try { s.candleSeries.removePriceLine(s.slLine); } catch (e) {} s.slLine = null; }
             for (const tp of (s.tpLines || [])) {
                 try { s.candleSeries.removePriceLine(tp.line); } catch (e) {}
