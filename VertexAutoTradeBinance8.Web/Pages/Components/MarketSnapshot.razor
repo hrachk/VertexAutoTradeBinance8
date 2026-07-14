@@ -4536,9 +4536,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 ? pos.Qty  // SL always closes full position
                 : (existing?.Qty ?? pos.Qty);  // TP: keep original partial qty
 
-            // Round to lot step
-            if (_symStep > 0 && orderQty > 0)
-                orderQty = Math.Floor(orderQty / _symStep) * _symStep;
+            // Round qty to lot step
+            if (stepSize > 0 && orderQty > 0)
+                orderQty = Math.Floor(orderQty / stepSize) * stepSize;
             if (orderQty <= 0) orderQty = pos.Qty; // safety fallback
 
             var r = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
