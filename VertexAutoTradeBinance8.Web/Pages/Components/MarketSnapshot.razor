@@ -4422,11 +4422,13 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     // line" replaces the 2nd TP order found in that same order, not
     // just whichever TP happened to be found first.
     [JSInvokable]
-    public async Task OnTpDraggedAt(int tpIndex, decimal price)
+    public async Task OnTpDraggedAt(int tpIndex, decimal price, decimal originalPrice = 0)
     {
         _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
         if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
-        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false, newPrice: price, tpIndex: tpIndex);
+        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false,
+            newPrice: price, tpIndex: tpIndex,
+            originalPrice: originalPrice > 0 ? originalPrice : price);
     }
 
     async Task ReplaceProtectiveOrderAsync(ActivePositionInfo pos, bool isStopLoss, decimal newPrice, int? tpIndex = null)
