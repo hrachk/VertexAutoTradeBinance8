@@ -835,7 +835,12 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                @foreach (var t in _demoSnapshot.History
+                                @{
+                    var histFiltered = (_posFilterCurrentSym && !string.IsNullOrEmpty(_activeSym))
+                        ? _demoSnapshot.History.Where(t => t.Symbol == _activeSym).ToList()
+                        : (IEnumerable<object>)_demoSnapshot.History;
+                }
+                @foreach (var t in _demoSnapshot.History
                     .Where(t => !_posFilterCurrentSym || string.IsNullOrEmpty(_activeSym) || t.Symbol == _activeSym)
                     .OrderByDescending(t => t.ClosedAtUtc))
                                 {
@@ -4394,22 +4399,21 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     bool _slTpDragBusy;
 
     [JSInvokable]
-    public async Task OnSlDragged(decimal price, decimal originalPrice = 0)
+    public async Task OnSlDragged(decimal price)
     {
+        // Freeze periodic TP/SL redraw so the line stays visible
+        // while we cancel old order + place new one (takes 1-3s)
         _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
         if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
-        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: true,
-            newPrice: price,
-            originalPrice: originalPrice > 0 ? originalPrice : price);
+        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: true, newPrice: price);
     }
 
     [JSInvokable]
-    public async Task OnTpDragged(decimal price, decimal originalPrice = 0)
+    public async Task OnTpDragged(decimal price)
     {
         _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
         if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
-        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false,
-            newPrice: price, originalPrice: originalPrice > 0 ? originalPrice : price);
+        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false, newPrice: price);
     }
 
     // Fired when dragging a SPECIFIC TP line (one of possibly several)
@@ -4418,23 +4422,15 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     // line" replaces the 2nd TP order found in that same order, not
     // just whichever TP happened to be found first.
     [JSInvokable]
-    public async Task OnTpDraggedAt(int tpIndex, decimal price, decimal originalPrice = 0)
+    public async Task OnTpDraggedAt(int tpIndex, decimal price)
     {
         _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
         if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
-        // originalPrice = price before drag — used to find the existing order on exchange
-        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false,
-            newPrice: price, tpIndex: tpIndex,
-            originalPrice: originalPrice > 0 ? originalPrice : price);
+        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false, newPrice: price, tpIndex: tpIndex);
     }
 
-    async Task ReplaceProtectiveOrderAsync(
-        ActivePositionInfo pos, bool isStopLoss, decimal newPrice,
-        int? tpIndex = null, decimal originalPrice = 0)
+    async Task ReplaceProtectiveOrderAsync(ActivePositionInfo pos, bool isStopLoss, decimal newPrice, int? tpIndex = null)
     {
-        // originalPrice: price BEFORE drag — used to find the order on exchange.
-        // Exchange still has the order at the old price until we cancel it.
-        decimal searchPrice = originalPrice > 0 ? originalPrice : newPrice;
         // CRITICAL SAFETY CHECK: this previously never checked
         // _demoMode at all, meaning dragging a TP/SL line while in
         // demo mode was attempting to place a REAL order on the
@@ -4495,17 +4491,15 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 var tpOrders = _openOrders
                     .Where(o => MatchesThisPosition(o) && o.Type.Contains("TAKE_PROFIT"))
                     .ToList();
-                // Search by ORIGINAL price (before drag) — the exchange order
-                // is still at that price; newPrice is where user wants it moved.
-                decimal tolerance = _symTickSize > 0 ? _symTickSize * 3 : searchPrice * 0.002m;
-                existing = tpOrders.FirstOrDefault(o => Math.Abs(o.Price - searchPrice) <= tolerance);
-                // Fallback: nearest TP order by distance from original price
+                // First try: exact price match (within tick size tolerance)
+                decimal tolerance = _symTickSize > 0 ? _symTickSize * 3 : newPrice * 0.001m;
+                existing = tpOrders.FirstOrDefault(o => Math.Abs(o.Price - newPrice) <= tolerance);
+                // Fallback: nearest TP order by price distance
                 if (existing == null && tpOrders.Count > 0)
-                    existing = tpOrders.MinBy(o => Math.Abs(o.Price - searchPrice));
+                    existing = tpOrders.MinBy(o => Math.Abs(o.Price - newPrice));
             }
             else
             {
-                // For SL: find by type only (only one SL per position side)
                 existing = _openOrders.FirstOrDefault(o =>
                     MatchesThisPosition(o) &&
                     (isStopLoss ? o.Type.Contains("STOP") : o.Type.Contains("TAKE_PROFIT")));
@@ -6055,14 +6049,16 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             var qty = row.Qty - row.Filled;
             if (qty <= 0) { _orderError = "Order already fully filled"; return; }
 
+            // In hedge mode: use PositionSide (LONG/SHORT), set reduceOnly=false.
+            // reduceOnly is only for non-hedge mode and is incompatible with
+            // explicit positionSide — Binance returns error if both are set.
             var r = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol: row.Symbol,
-                side: side,
-                type: FuturesOrderType.Market,
-                quantity: qty,
+                symbol:       row.Symbol,
+                side:         side,
+                type:         FuturesOrderType.Market,
+                quantity:     qty,
                 positionSide: posSide,
-                reduceOnly: row.ReduceOnly,
-                ct: cts.Token);
+                ct:           cts.Token);
 
             if (!r.Success)
                 _orderError = $"Fill Now failed: {r.Error?.Message}";
