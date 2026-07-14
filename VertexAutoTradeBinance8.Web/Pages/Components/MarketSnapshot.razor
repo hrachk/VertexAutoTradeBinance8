@@ -2987,7 +2987,11 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                         .Where(MatchesThisPos)
                         .OrderBy(o => o.OrderId)
                         .Select(o => $"{o.OrderId}:{o.Price}"));
-                    if (currentTpSlSnapshot != _lastTpSlSnapshot)
+                    // Skip redraw during drag-freeze window:
+                    // user just dragged a line, old order was cancelled,
+                    // new order not yet confirmed — snapshot diff would
+                    // see "no TP orders" and erase the line.
+                    if (currentTpSlSnapshot != _lastTpSlSnapshot && !IsTpSlDragFrozen)
                     {
                         _lastTpSlSnapshot = currentTpSlSnapshot;
                         // Re-render with the now-current order list — this
@@ -4345,6 +4349,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     [JSInvokable]
     public async Task OnSlDragged(decimal price)
     {
+        // Freeze periodic TP/SL redraw so the line stays visible
+        // while we cancel old order + place new one (takes 1-3s)
+        _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
         if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
         await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: true, newPrice: price);
     }
@@ -4352,6 +4359,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     [JSInvokable]
     public async Task OnTpDragged(decimal price)
     {
+        _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
         if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
         await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false, newPrice: price);
     }
@@ -4364,6 +4372,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     [JSInvokable]
     public async Task OnTpDraggedAt(int tpIndex, decimal price)
     {
+        _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
         if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
         await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false, newPrice: price, tpIndex: tpIndex);
     }
@@ -4785,6 +4794,11 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     // "TP/SL" toggle - overriding the previous session's deliberate
     // "matches Binance, not automatic" design choice.
     bool _tpSlEditMode = true;
+    // When user drags a TP/SL line, we suppress the periodic
+    // snapshot-diff redraw for 10s so the line doesn't
+    // disappear between cancel-old-order and place-new-order.
+    DateTime _tpSlDragFreezeUntil = DateTime.MinValue;
+    bool IsTpSlDragFrozen => DateTime.UtcNow < _tpSlDragFreezeUntil;
 
     // ── Leverage editor ──────────────────────────────────────────────
     ActivePositionInfo? _levPos;
