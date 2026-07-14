@@ -602,7 +602,7 @@
                     // showTpSlLines. Without this freeze, showTpSlLines calls
                     // hideTpSlLines first (to reset), which DELETES the line
                     // the user just moved — making it look like drag failed.
-                    session._tpSlHideFreezeUntil = Date.now() + 8000;
+                    session._tpSlHideFreezeUntil = Date.now() + 30000; // 30s — cleared by next showTpSlLines call
                     // Apply any showTpSlLines call that was deferred during drag
                     if (session._pendingTpSlArgs) {
                         const p = session._pendingTpSlArgs;
@@ -1028,6 +1028,9 @@
                 s._pendingTpSlArgs = { entry, sl, tps, side };
                 return;
             }
+            // Clear the post-drag freeze — C# just sent us fresh data,
+            // safe to redraw with confirmed order prices now.
+            s._tpSlHideFreezeUntil = 0;
             this.hideTpSlLines(containerId);
 
             // pnlFor reads s.side/s.qty/s.entryPrice dynamically on every
