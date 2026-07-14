@@ -597,13 +597,23 @@
                     session.draggingLineKind = null;
                     session.draggingLineIdx = null;
                     container.style.cursor = 'crosshair';
+                    // Freeze hideTpSlLines for 8s after drag completes.
+                    // C# will cancel old order, place new one, then call
+                    // showTpSlLines. Without this freeze, showTpSlLines calls
+                    // hideTpSlLines first (to reset), which DELETES the line
+                    // the user just moved — making it look like drag failed.
+                    session._tpSlHideFreezeUntil = Date.now() + 8000;
                     // Apply any showTpSlLines call that was deferred during drag
                     if (session._pendingTpSlArgs) {
                         const p = session._pendingTpSlArgs;
                         session._pendingTpSlArgs = null;
                         // Small delay so the visual line stays at drag position
                         // briefly while C# places the new order (avoid flicker)
-                        setTimeout(() => this.showTpSlLines(containerId, p.entry, p.sl, p.tps, p.side), 800);
+                        // Lift freeze so the deferred showTpSlLines can redraw
+                        setTimeout(() => {
+                            if (session._tpSlHideFreezeUntil) session._tpSlHideFreezeUntil = 0;
+                            this.showTpSlLines(containerId, p.entry, p.sl, p.tps, p.side);
+                        }, 800);
                     }
                     if (committedPrice != null && committedPrice > 0) {
                         if (kind === 'sl') {
@@ -1251,10 +1261,13 @@
         hideTpSlLines(containerId) {
             const s = sessions.get(containerId);
             if (!s) return;
-            // Never destroy lines while user is actively dragging one —
-            // a C# ShowTpSlLines call mid-drag would erase the line
-            // the user is currently holding.
+            // Guard 1: never destroy during active drag
             if (s.draggingLine) return;
+            // Guard 2: freeze for 8s after drag completes.
+            // C# needs time to cancel old order and place new one.
+            // During this window, showTpSlLines will call us — we
+            // must not erase lines or the drag looks like it failed.
+            if (s._tpSlHideFreezeUntil && Date.now() < s._tpSlHideFreezeUntil) return;
             if (s.slLine) { try { s.candleSeries.removePriceLine(s.slLine); } catch (e) {} s.slLine = null; }
             for (const tp of (s.tpLines || [])) {
                 try { s.candleSeries.removePriceLine(tp.line); } catch (e) {}
@@ -1436,9 +1449,9 @@
         bindSlTpCallbacks(containerId, dotNetRef) {
             const s = sessions.get(containerId);
             if (!s) return;
-            s.onSlChanged = (price) => dotNetRef.invokeMethodAsync('OnSlDragged', price);
-            s.onTpChanged = (price) => dotNetRef.invokeMethodAsync('OnTpDragged', price);
-            s.onTpChangedAt = (index, price) => dotNetRef.invokeMethodAsync('OnTpDraggedAt', index, price);
+            s.onSlChanged    = (price, origPrice) => dotNetRef.invokeMethodAsync('OnSlDragged', price, origPrice || price);
+            s.onTpChanged    = (price, origPrice) => dotNetRef.invokeMethodAsync('OnTpDragged', price, origPrice || price);
+            s.onTpChangedAt  = (index, price, origPrice) => dotNetRef.invokeMethodAsync('OnTpDraggedAt', index, price, origPrice || price);
             s.onNewTpRequested = (price) => dotNetRef.invokeMethodAsync('OnNewTpRequested', price);
             s.onNewTpRequestedWithPercent = (price, pct) => dotNetRef.invokeMethodAsync('OnNewTpRequestedWithPercent', price, pct);
             s.onCancelProtectiveLevel = (kind, index) => dotNetRef.invokeMethodAsync('OnCancelProtectiveLevel', kind, index);
