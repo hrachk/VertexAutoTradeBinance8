@@ -405,6 +405,7 @@ namespace VertexAutoTradeBinance8.Services
                     _beLevel.TryRemove(key, out _);
                     _beMoved.TryRemove(key, out _);
                     _lastSl.TryRemove(key, out _);
+                    _lastSl.TryRemove(key + "_peak", out _); // peak qty tracking
                     // (no manual tracking keys — complete hands-off approach)
                     _beOverrideForStrongTrend.TryRemove(key, out _);
                     return;
@@ -454,8 +455,38 @@ namespace VertexAutoTradeBinance8.Services
                 // DCA: 3.0×ATR — only move BE after significant move
                 // Signal: 1.3×ATR — standard short-term threshold
                 // =========================
+                // ── PROFESSIONAL BE TRIGGER ──────────────────────────────────
+                // Move SL to BE only after the 2nd TP has been filled.
+                // Detection: track peak qty at position open, check current.
+                // Typical TP allocation (50%/30%/20%):
+                //   After TP1: qty ≈ 50% of peak (dropped ~50%)
+                //   After TP2: qty ≈ 20% of peak (dropped ~80%) ← BE trigger
+                // For DCA: only trigger after roi > 3×ATR AND qty < 50% peak.
+                // For signal trades: trigger after qty < 40% of peak.
+                //
+                // Peak qty tracking: we use _beLevel as a proxy —
+                // on first visit record peak qty in _lastSl[key+"_peak"].
+                var peakKey = keyProbe + "_peak";
+                if (!_lastSl.ContainsKey(peakKey) || _lastSl[peakKey] < qty)
+                    _lastSl[peakKey] = qty; // update peak on first call or size-up
+                decimal peakQty = _lastSl[peakKey];
+
+                // Did TP2 fire? qty should be below 45% of peak
+                bool tp2Fired = peakQty > 0 && qty < peakQty * 0.45m;
+
+                // DCA: also require minimum roi > 3×ATR
                 decimal BE_TRIGGER = ATR * (isDcaPos ? 3.0m : 1.3m);
-                if (roi < BE_TRIGGER && !skipSoftFilters) return;
+
+                // Gate: for bot positions, require EITHER:
+                //   a) tp2Fired (2 TPs executed → BE is clearly safe), OR
+                //   b) roi > 4×ATR (price moved so far that BE is trivially safe)
+                //   c) skipSoftFilters (StrongTrend override from risk manager)
+                bool beConditionMet = tp2Fired
+                    || (roi >= ATR * 4.0m)
+                    || skipSoftFilters;
+
+                if (!beConditionMet && !isDcaPos) return;
+                if (isDcaPos && roi < BE_TRIGGER && !skipSoftFilters) return;
 
                 // =========================
                 // LEVEL CONTROL (анти-спам)
@@ -597,26 +628,33 @@ namespace VertexAutoTradeBinance8.Services
             //   Phase 0 (before TP1): do nothing at all
             //   Phase 1 (after TP1 fires, qty drops >5%): move SL to BE once
             // ─────────────────────────────────────────────────────────────────
-            bool isManualPosition = lastSignal?.IsManual == true;
+            // ── MANUAL POSITION GUARD ─────────────────────────────────────────
+            // CASE A: lastSignal.IsManual == true  → clearly manual
+            // CASE B: lastSignal == null AND position already has algo SL or TP
+            //         → user placed their own orders (Binance UI / our chart)
+            //         → DetectManualAsync may have missed it, but orders prove it.
+            // In both cases: ZERO interference from Supervisor.
+            // ──────────────────────────────────────────────────────────────────
+            bool hasUserAlgoOrders = sharedOrders.Any(o =>
+                o.Symbol == symbol && (
+                    o.Type == FuturesOrderType.TakeProfit ||
+                    o.Type == FuturesOrderType.TakeProfitMarket ||
+                    o.Type == FuturesOrderType.Stop ||
+                    o.Type == FuturesOrderType.StopMarket));
 
-            if (hasLong)
-            {
-                if (!isManualPosition)
-                    await HandleSideAsync(client, symbol, PositionSide.Long, longPos!, sharedOrders, lastSignal, klines1m, ct);
-                else
-                    _logger.LogDebug(
-                        "[SUPERVISOR][{sym}][LONG] Manual position — HandleSideAsync skipped (user manages own TP/SL)",
-                        symbol);
-            }
-            if (hasShort)
-            {
-                if (!isManualPosition)
-                    await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, sharedOrders, lastSignal, klines1m, ct);
-                else
-                    _logger.LogDebug(
-                        "[SUPERVISOR][{sym}][SHORT] Manual position — HandleSideAsync skipped (user manages own TP/SL)",
-                        symbol);
-            }
+            bool isManualPosition =
+                lastSignal?.IsManual == true ||
+                (lastSignal == null && hasUserAlgoOrders);
+
+            if (isManualPosition)
+                _logger.LogDebug(
+                    "[SUPERVISOR][{sym}] Manual — hands-off (IsManual={m} hasAlgoOrders={a})",
+                    symbol, lastSignal?.IsManual, hasUserAlgoOrders);
+
+            if (hasLong && !isManualPosition)
+                await HandleSideAsync(client, symbol, PositionSide.Long, longPos!, sharedOrders, lastSignal, klines1m, ct);
+            if (hasShort && !isManualPosition)
+                await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, sharedOrders, lastSignal, klines1m, ct);
         }
 
         // ===== PLACE BE SL =====
@@ -3714,6 +3752,7 @@ namespace VertexAutoTradeBinance8.Services
     }
 
 }
+
 
 
 
