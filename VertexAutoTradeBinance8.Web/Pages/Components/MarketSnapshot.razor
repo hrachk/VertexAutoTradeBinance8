@@ -1140,7 +1140,7 @@
                                 }
                                 @foreach (var o in ordersToShow)
                                 {
-                                    bool isEditing = _editingOrderId == o.OrderId;
+                                    bool isEditing = _editingOrderId == o.OrderId.ToString();
                                     <tr class="mk-oo-row-clickable @(isEditing ? "mk-oo-editing" : "")" @onclick="() => PickSym(o.Symbol)">
                                         <td class="mk-oo-sym">@o.Symbol</td>
                                         <td class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</td>
@@ -6212,7 +6212,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     void StartOrderEdit(OpenOrderRow row)
     {
-        _editingOrderId = row.OrderId;
+        _editingOrderId = row.OrderId.ToString();
         _editPrice      = row.Price;
         _editQty        = row.Qty - row.Filled;
         _editError      = string.Empty;
