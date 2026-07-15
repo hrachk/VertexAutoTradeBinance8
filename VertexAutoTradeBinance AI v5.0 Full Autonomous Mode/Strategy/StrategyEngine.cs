@@ -771,6 +771,70 @@ namespace VertexAutoTradeBinance8.Strategy
         /// TP multipliers scale with regime strength, signal confidence, and super-signal.
         /// tpBoost = regimeMult × confMult × superMult, clamped [0.70, 2.00].
         /// </summary>
+        /// <summary>
+        /// Enforces professional minimum TP distances as % of entry price.
+        /// ATR-based TPs can be tiny on low-volatility or short TF signals.
+        /// This ensures RR is always ≥ 2:1 at TP1, regardless of ATR size.
+        ///
+        /// Floor values (% of entry):
+        ///   Range/Squeeze:   TP1 ≥ 3.0%  TP2 ≥ 5.0%  TP3 ≥ 7.0%
+        ///   Trend:           TP1 ≥ 3.5%  TP2 ≥ 6.0%  TP3 ≥ 8.5%
+        ///   StrongTrend:     TP1 ≥ 4.0%  TP2 ≥ 7.0%  TP3 ≥ 10.0%
+        ///
+        /// In StrongTrend × high confidence these let the trade run far.
+        /// </summary>
+        private static void EnsureMinimumTpDistances(
+            TradeSignal signal,
+            bool isLong,
+            MarketRegime regime,
+            decimal confidence)
+        {
+            var tps = signal.TakeProfits;
+            if (tps == null || tps.Count == 0 || signal.EntryPrice <= 0) return;
+
+            // ── Minimum % floors per regime ─────────────────────────────
+            decimal tp1MinPct, tp2MinPct, tp3MinPct;
+            switch (regime)
+            {
+                case MarketRegime.StrongUpTrend:
+                case MarketRegime.StrongDownTrend:
+                    tp1MinPct = 0.040m; tp2MinPct = 0.070m; tp3MinPct = 0.100m;
+                    break;
+                case MarketRegime.UpTrend:
+                case MarketRegime.DownTrend:
+                    tp1MinPct = 0.035m; tp2MinPct = 0.060m; tp3MinPct = 0.085m;
+                    break;
+                default: // Range, Squeeze, Chop
+                    tp1MinPct = 0.030m; tp2MinPct = 0.050m; tp3MinPct = 0.070m;
+                    break;
+            }
+
+            // Confidence boost: high-conviction signals get wider targets
+            if (confidence >= 0.72m)
+            {
+                tp1MinPct *= 1.15m;
+                tp2MinPct *= 1.10m;
+                tp3MinPct *= 1.05m;
+            }
+
+            decimal e    = signal.EntryPrice;
+            decimal sign = isLong ? 1m : -1m;
+
+            // Apply floor: take MAX of ATR-based and %-based target
+            if (isLong)
+            {
+                if (tps.Count > 0) tps[0] = Math.Max(tps[0], e * (1m + tp1MinPct));
+                if (tps.Count > 1) tps[1] = Math.Max(tps[1], e * (1m + tp2MinPct));
+                if (tps.Count > 2) tps[2] = Math.Max(tps[2], e * (1m + tp3MinPct));
+            }
+            else
+            {
+                if (tps.Count > 0) tps[0] = Math.Min(tps[0], e * (1m - tp1MinPct));
+                if (tps.Count > 1) tps[1] = Math.Min(tps[1], e * (1m - tp2MinPct));
+                if (tps.Count > 2) tps[2] = Math.Min(tps[2], e * (1m - tp3MinPct));
+            }
+        }
+
         private static (decimal slMult, decimal tp1Mult, decimal tp2Mult, decimal tp3Mult)
             GetAtrConfig(
                 KlineInterval interval,
@@ -1212,7 +1276,8 @@ namespace VertexAutoTradeBinance8.Strategy
                 }
                     };
 
-                    NormalizeEntryAndSl(signal);
+                                        EnsureMinimumTpDistances(signal, isLong: true, regime, confidence);
+NormalizeEntryAndSl(signal);
                     return signal;
                 }
             }
@@ -1258,7 +1323,8 @@ namespace VertexAutoTradeBinance8.Strategy
                 {
                     entry - atr * tp1Mult,
                     entry - atr * tp2Mult,
-                    entry - atr * tp3Mult
+                                EnsureMinimumTpDistances(signal, isLong: false, regime, confidence);
+    entry - atr * tp3Mult
                 }
                     };
 
@@ -1545,7 +1611,8 @@ namespace VertexAutoTradeBinance8.Strategy
                     IsSuperSignal = true,
                     TakeProfits = new List<decimal>
             {
-                entry + atrShort * tp1Mult,
+                EnsureMinimumTpDistances(signal, isLong: false, regime, confidence);
+        entry + atrShort * tp1Mult,
                 entry + atrShort * tp2Mult,
                 entry + atrShort * tp3Mult
             }
@@ -1583,7 +1650,8 @@ namespace VertexAutoTradeBinance8.Strategy
                     Timeframe = interval.ToString(),
                     Time = c.CloseTime,
                     Reason = "VOLATILITY_EXPANSION_BREAKOUT_SHORT_V2",
-                    IsSuperSignal = true,
+                    IsSuperSignal = tru                    EnsureMinimumTpDistances(signal, isLong: false, regime, confidence);
+e,
                     TakeProfits = new List<decimal>
             {
                 entry - atrShort * tp1Mult,
@@ -3157,7 +3225,8 @@ namespace VertexAutoTradeBinance8.Strategy
                     Symbol      = symbol,
                     Side        = SignalSide.Buy,
                     Reason      = "RANGE_BOUND_LONG",
-                    Atr         = atr,
+                            EnsureMinimumTpDistances(signal, isLong: false, regime, confidence);
+      Atr         = atr,
                     EntryPrice  = entry,
                     StopLoss    = sl,
                     Confidence  = smart.Confidence * 0.90m,
@@ -3198,7 +3267,8 @@ namespace VertexAutoTradeBinance8.Strategy
                 var signal = new TradeSignal
                 {
                     Symbol      = symbol,
-                    Side        = SignalSide.Sell,
+              EnsureMinimumTpDistances(signal, isLong: true, regime, confidence);
+             Side        = SignalSide.Sell,
                     Reason      = "RANGE_BOUND_SHORT",
                     Atr         = atr,
                     EntryPrice  = entry,
@@ -4695,5 +4765,6 @@ namespace VertexAutoTradeBinance8.Strategy
 
     }
 }
+
 
 
