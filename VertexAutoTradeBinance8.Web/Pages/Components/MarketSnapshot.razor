@@ -1140,23 +1140,67 @@
                                 }
                                 @foreach (var o in ordersToShow)
                                 {
-                                    <tr class="mk-oo-row-clickable" @onclick="() => PickSym(o.Symbol)">
+                                    bool isEditing = _editingOrderId == o.OrderId;
+                                    <tr class="mk-oo-row-clickable @(isEditing ? "mk-oo-editing" : "")" @onclick="() => PickSym(o.Symbol)">
                                         <td class="mk-oo-sym">@o.Symbol</td>
                                         <td class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</td>
-                                        <td class="mk-dim">@o.Type @(o.ReduceOnly ? "(R)" : "")</td>
-                                        <td class="mk-mono">@(o.Price > 0 ? FmtP(o.Price) : "Market")</td>
-                                        <td class="mk-mono">@o.Qty.ToString("G8")</td>
+                                        <td class="mk-dim" style="font-size:11px">@o.Type @(o.ReduceOnly ? "(R)" : "")</td>
+                                        @* ── Price cell ── *@
+                                        <td @onclick:stopPropagation="true">
+                                            @if (isEditing)
+                                            {
+                                                <input class="mk-oo-edit-input" type="number" step="any"
+                                                       @bind="_editPrice" @bind:event="oninput"
+                                                       @onkeydown="@(async (e) => { if (e.Key=="Enter") await SaveOrderEditAsync(o); if (e.Key=="Escape") CancelOrderEdit(); })"
+                                                       placeholder="Price" />
+                                            }
+                                            else
+                                            {
+                                                <span class="mk-mono mk-oo-editable-val" title="Click Edit to modify">
+                                                    @(o.Price > 0 ? FmtP(o.Price) : "Market")
+                                                </span>
+                                            }
+                                        </td>
+                                        @* ── Qty cell ── *@
+                                        <td @onclick:stopPropagation="true">
+                                            @if (isEditing)
+                                            {
+                                                <input class="mk-oo-edit-input" type="number" step="any"
+                                                       @bind="_editQty" @bind:event="oninput"
+                                                       @onkeydown="@(async (e) => { if (e.Key=="Enter") await SaveOrderEditAsync(o); if (e.Key=="Escape") CancelOrderEdit(); })"
+                                                       placeholder="Qty" />
+                                            }
+                                            else
+                                            {
+                                                <span class="mk-mono mk-oo-editable-val">@o.Qty.ToString("G8")</span>
+                                            }
+                                        </td>
                                         <td class="mk-mono mk-dim">@o.Filled.ToString("G8")</td>
-                                        <td @onclick:stopPropagation="true" style="display:flex;gap:4px;align-items:center;">
-                                            <button class="mk-oo-fill-now" title="Execute at current market price immediately"
-                                                    disabled="@(_cancellingOrderId == o.OrderId)"
-                                                    @onclick="() => FillOrderAtMarketAsync(o)">
-                                                ⚡ Fill Now
-                                            </button>
-                                            <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
-                                                    @onclick="() => CancelOpenOrderAsync(o)">
-                                                @(_cancellingOrderId == o.OrderId ? "…" : "Cancel")
-                                            </button>
+                                        <td @onclick:stopPropagation="true" style="display:flex;gap:4px;align-items:center;white-space:nowrap">
+                                            @if (isEditing)
+                                            {
+                                                <button class="mk-oo-save" disabled="@_editSaving"
+                                                        @onclick="() => SaveOrderEditAsync(o)">
+                                                    @(_editSaving ? "…" : "✓ Save")
+                                                </button>
+                                                <button class="mk-oo-edit-cancel" @onclick="CancelOrderEdit">✕</button>
+                                                @if (!string.IsNullOrEmpty(_editError))
+                                                { <span class="mk-oo-edit-err">@_editError</span> }
+                                            }
+                                            else
+                                            {
+                                                <button class="mk-oo-edit-btn" title="Edit price / qty"
+                                                        @onclick="() => StartOrderEdit(o)">
+                                                    ✎ Edit
+                                                </button>
+                                                <button class="mk-oo-fill-now" title="Execute at market now"
+                                                        disabled="@(_cancellingOrderId == o.OrderId)"
+                                                        @onclick="() => FillOrderAtMarketAsync(o)">⚡ Fill Now</button>
+                                                <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
+                                                        @onclick="() => CancelOpenOrderAsync(o)">
+                                                    @(_cancellingOrderId == o.OrderId ? "…" : "Cancel")
+                                                </button>
+                                            }
                                         </td>
                                     </tr>
                                 }
@@ -2381,6 +2425,34 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .mk-oo-fill-now{background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);color:#f59e0b;font-size:11px;font-weight:800;padding:3px 8px;border-radius:5px;cursor:pointer;transition:all .12s;white-space:nowrap;}
 .mk-oo-fill-now:hover{background:rgba(245,158,11,.2);border-color:rgba(245,158,11,.6);}
 .mk-oo-fill-now:disabled{opacity:.4;cursor:not-allowed;}
+
+/* ── Editable orders ──────────────────────────────────────────── */
+.mk-oo-editing { background: rgba(59,130,246,.06) !important; }
+.mk-oo-editable-val { cursor: default; }
+.mk-oo-edit-btn {
+    background: rgba(59,130,246,.1); border: 1px solid rgba(59,130,246,.35);
+    color: #60a5fa; font-size: 11px; font-weight: 700;
+    padding: 3px 8px; border-radius: 5px; cursor: pointer;
+    transition: all .12s; white-space: nowrap;
+}
+.mk-oo-edit-btn:hover { background: rgba(59,130,246,.2); }
+.mk-oo-edit-input {
+    width: 84px; background: #0c1220; border: 1px solid #3b82f6;
+    color: #f1f5f9; font-size: 12px; font-family: monospace;
+    padding: 3px 6px; border-radius: 5px; outline: none;
+}
+.mk-oo-save {
+    background: rgba(16,185,129,.15); border: 1px solid rgba(16,185,129,.4);
+    color: #10b981; font-size: 11px; font-weight: 800;
+    padding: 3px 10px; border-radius: 5px; cursor: pointer; white-space: nowrap;
+}
+.mk-oo-save:hover { background: rgba(16,185,129,.25); }
+.mk-oo-edit-cancel {
+    background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.25);
+    color: #ef4444; font-size: 12px; font-weight: 700;
+    padding: 3px 8px; border-radius: 5px; cursor: pointer;
+}
+.mk-oo-edit-err { font-size: 10px; color: #f87171; max-width: 120px; }
 </style>
 
 @if (_levPos != null)
@@ -3212,6 +3284,12 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     }
 
     bool _emergencyFetchInProgress;
+    // Inline order editing
+    string? _editingOrderId;
+    decimal _editPrice;
+    decimal _editQty;
+    string  _editError = string.Empty;
+    bool    _editSaving;
 
     void PickSym(string sym, bool autoSelectExistingPosition = true)
     {
@@ -6130,6 +6208,93 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             await LoadOpenOrdersAsync();
             await InvokeAsync(StateHasChanged);
         }
+    }
+
+    void StartOrderEdit(OpenOrderRow row)
+    {
+        _editingOrderId = row.OrderId;
+        _editPrice      = row.Price;
+        _editQty        = row.Qty - row.Filled;
+        _editError      = string.Empty;
+        _editSaving     = false;
+        StateHasChanged();
+    }
+
+    void CancelOrderEdit()
+    {
+        _editingOrderId = null;
+        _editError      = string.Empty;
+        StateHasChanged();
+    }
+
+    async Task SaveOrderEditAsync(OpenOrderRow row)
+    {
+        if (_editPrice <= 0 || _editQty <= 0)
+        { _editError = "Price and Qty must be > 0"; return; }
+
+        _editSaving = true; _editError = string.Empty;
+        StateHasChanged();
+
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) { _editError = "No connection"; return; }
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+            // Round to tick size
+            await LoadSymbolPrecisionAsync(row.Symbol);
+            decimal price = _symTickSize > 0
+                ? Math.Round(_editPrice / _symTickSize, MidpointRounding.ToEven) * _symTickSize
+                : Math.Round(_editPrice, 8);
+            decimal qty = _symStep > 0
+                ? Math.Floor(_editQty / _symStep) * _symStep
+                : Math.Round(_editQty, 8);
+
+            // Cancel old order
+            await CancelOpenOrderAsync(row);
+            await Task.Delay(300);
+
+            // Determine order type and side
+            var side    = row.Side == "BUY" ? OrderSide.Buy : OrderSide.Sell;
+            var posSide = !string.IsNullOrEmpty(row.PositionSide) && row.PositionSide != "BOTH"
+                ? Enum.TryParse<PositionSide>(row.PositionSide, true, out var ps) ? ps : PositionSide.Both
+                : PositionSide.Both;
+
+            bool isAlgo = row.Type.Contains("TAKE_PROFIT") || row.Type.Contains("STOP");
+            if (isAlgo)
+            {
+                // Re-place as conditional (algo) order at new price
+                var ct2 = row.Type.Contains("TAKE_PROFIT")
+                    ? ConditionalOrderType.TakeProfitMarket
+                    : ConditionalOrderType.StopMarket;
+                var r = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                    symbol: row.Symbol, side: side, type: ct2,
+                    quantity: qty, positionSide: posSide,
+                    triggerPrice: price, workingType: WorkingType.Mark,
+                    priceProtect: true, ct: cts.Token);
+                if (!r.Success) _editError = r.Error?.Message ?? "Failed";
+            }
+            else
+            {
+                // Re-place as limit order
+                var r = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    symbol: row.Symbol, side: side,
+                    type: FuturesOrderType.Limit,
+                    quantity: qty, price: price,
+                    positionSide: posSide,
+                    timeInForce: TimeInForce.GoodTillCanceled,
+                    ct: cts.Token);
+                if (!r.Success) _editError = r.Error?.Message ?? "Failed";
+            }
+
+            if (string.IsNullOrEmpty(_editError))
+            {
+                _editingOrderId = null;
+                await LoadOpenOrdersAsync();
+            }
+        }
+        catch (Exception ex) { _editError = ex.Message; }
+        finally { _editSaving = false; StateHasChanged(); }
     }
 
     async Task CancelOpenOrderAsync(OpenOrderRow row)
