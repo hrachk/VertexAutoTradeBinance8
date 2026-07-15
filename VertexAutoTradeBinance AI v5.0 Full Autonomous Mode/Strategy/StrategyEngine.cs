@@ -786,8 +786,8 @@ namespace VertexAutoTradeBinance8.Strategy
         private static void EnsureMinimumTpDistances(
             TradeSignal signal,
             bool isLong,
-            MarketRegime regime,
-            decimal confidence)
+            MarketRegime regime = MarketRegime.Range,
+            decimal confidence = 0.55m)
         {
             var tps = signal.TakeProfits;
             if (tps == null || tps.Count == 0 || signal.EntryPrice <= 0) return;
@@ -1274,10 +1274,8 @@ namespace VertexAutoTradeBinance8.Strategy
                     entry + atr * tp2Mult,
                     entry + atr * tp3Mult
                 }
-                    };
-
-                                        EnsureMinimumTpDistances(signal, isLong: true, regime, confidence);
-NormalizeEntryAndSl(signal);
+                    EnsureMinimumTpDistances(signal, isLong: true);
+                    };NormalizeEntryAndSl(signal);
                     return signal;
                 }
             }
@@ -1322,12 +1320,11 @@ NormalizeEntryAndSl(signal);
                         TakeProfits = new List<decimal>
                 {
                     entry - atr * tp1Mult,
-                    entry - atr * tp2Mult,
-                                EnsureMinimumTpDistances(signal, isLong: false, regime, confidence);
-    entry - atr * tp3Mult
+                    entry - atr * tp2Mult,    entry - atr * tp3Mult
                 }
                     };
 
+                    EnsureMinimumTpDistances(signal, isLong: false);
                     NormalizeEntryAndSl(signal);
                     return signal;
                 }
@@ -1610,14 +1607,13 @@ NormalizeEntryAndSl(signal);
                     Reason = "VOLATILITY_EXPANSION_BREAKOUT_LONG_V2",
                     IsSuperSignal = true,
                     TakeProfits = new List<decimal>
-            {
-                EnsureMinimumTpDistances(signal, isLong: false, regime, confidence);
-        entry + atrShort * tp1Mult,
+            {        entry + atrShort * tp1Mult,
                 entry + atrShort * tp2Mult,
                 entry + atrShort * tp3Mult
             }
                 };
 
+                EnsureMinimumTpDistances(signal, isLong: true);
                 NormalizeEntryAndSl(signal);
                 return signal;
             }
@@ -1650,8 +1646,7 @@ NormalizeEntryAndSl(signal);
                     Timeframe = interval.ToString(),
                     Time = c.CloseTime,
                     Reason = "VOLATILITY_EXPANSION_BREAKOUT_SHORT_V2",
-                    IsSuperSignal = tru                    EnsureMinimumTpDistances(signal, isLong: false, regime, confidence);
-e,
+                    IsSuperSignal = true,
                     TakeProfits = new List<decimal>
             {
                 entry - atrShort * tp1Mult,
@@ -1660,6 +1655,7 @@ e,
             }
                 };
 
+                EnsureMinimumTpDistances(signal, isLong: false);
                 NormalizeEntryAndSl(signal);
                 return signal;
             }
@@ -3224,9 +3220,7 @@ e,
                 {
                     Symbol      = symbol,
                     Side        = SignalSide.Buy,
-                    Reason      = "RANGE_BOUND_LONG",
-                            EnsureMinimumTpDistances(signal, isLong: false, regime, confidence);
-      Atr         = atr,
+                    Reason      = "RANGE_BOUND_LONG",      Atr         = atr,
                     EntryPrice  = entry,
                     StopLoss    = sl,
                     Confidence  = smart.Confidence * 0.90m,
@@ -3234,6 +3228,7 @@ e,
                     TakeProfits = new List<decimal> { tp1, tp2 }
                 };
 
+                EnsureMinimumTpDistances(signal, isLong: true);
                 NormalizeEntryAndSl(signal);
                 return signal;
             }
@@ -3266,9 +3261,7 @@ e,
 
                 var signal = new TradeSignal
                 {
-                    Symbol      = symbol,
-              EnsureMinimumTpDistances(signal, isLong: true, regime, confidence);
-             Side        = SignalSide.Sell,
+                    Symbol      = symbol,             Side        = SignalSide.Sell,
                     Reason      = "RANGE_BOUND_SHORT",
                     Atr         = atr,
                     EntryPrice  = entry,
@@ -3278,6 +3271,7 @@ e,
                     TakeProfits = new List<decimal> { tp1, tp2 }
                 };
 
+                EnsureMinimumTpDistances(signal, isLong: false);
                 NormalizeEntryAndSl(signal);
                 return signal;
             }
