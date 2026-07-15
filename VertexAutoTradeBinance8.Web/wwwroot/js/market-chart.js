@@ -1343,14 +1343,15 @@
                 s.pnlLabelEl.style.position = 'absolute';
                 s.pnlLabelEl.style.pointerEvents = 'none';
                 s.pnlLabelEl.style.zIndex = '5';
-                s.pnlLabelEl.style.padding = '3px 10px';
+                s.pnlLabelEl.style.padding = '2px 8px';
                 s.pnlLabelEl.style.borderRadius = '4px';
-                s.pnlLabelEl.style.fontSize = '12px';
+                s.pnlLabelEl.style.fontSize = '11px';
                 s.pnlLabelEl.style.fontWeight = '700';
                 s.pnlLabelEl.style.fontFamily = 'monospace';
                 s.pnlLabelEl.style.transform = 'translateY(-50%)';
-                s.pnlLabelEl.style.boxShadow = '0 1px 4px rgba(0,0,0,.35)';
-                s.pnlLabelEl.style.transition = 'top .12s ease-out, background .15s ease-out';
+                s.pnlLabelEl.style.boxShadow = '0 1px 4px rgba(0,0,0,.25)';
+                s.pnlLabelEl.style.opacity = '0.82';
+                s.pnlLabelEl.style.transition = 'top .12s ease-out, background .15s, opacity .15s';
                 if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
                 container.appendChild(s.pnlLabelEl);
             }
@@ -1366,7 +1367,7 @@
                     const lastBar = s.lastKlinesRaw[s.lastKlinesRaw.length - 1];
                     const lastX = s.chart.timeScale().timeToCoordinate(Math.floor(lastBar.openTime / 1000));
                     const barSpacing = s.chart.timeScale().options().barSpacing || 6;
-                    if (lastX != null) pnlLabelX = lastX + barSpacing * 3;
+                    if (lastX != null) pnlLabelX = lastX + barSpacing * 8;
                 }
             } catch (e) {}
             if (pnlLabelX != null) {
@@ -1407,7 +1408,7 @@
                             const lastBar = s.lastKlinesRaw[s.lastKlinesRaw.length - 1];
                             const lastX = s.chart.timeScale().timeToCoordinate(Math.floor(lastBar.openTime / 1000));
                             const barSpacing = s.chart.timeScale().options().barSpacing || 6;
-                            if (lastX != null) s.pnlLabelEl.style.left = (lastX + barSpacing * 3) + 'px';
+                            if (lastX != null) s.pnlLabelEl.style.left = (lastX + barSpacing * 8) + 'px';
                         }
                     } catch (e) {}
                 };
