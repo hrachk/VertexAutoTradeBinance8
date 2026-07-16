@@ -1422,12 +1422,28 @@ namespace VertexAutoTradeBinance8.Strategy
                 confirmTags += "_HTF";
             }
 
-            var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(interval);
+            // Resolve regime from EMA slope — critical for correct TP width
+            // Without this, pullback in a strong uptrend gets Range TP targets
+            // which are 40% too tight (1.15× vs 1.40× regimeMult)
+            MarketRegime pbRegime;
+            if (trendUp)
+                pbRegime = ema21Slope > 0.20m ? MarketRegime.StrongUpTrend : MarketRegime.UpTrend;
+            else
+                pbRegime = ema21Slope < -0.20m ? MarketRegime.StrongDownTrend : MarketRegime.DownTrend;
+
+            var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(interval, pbRegime);
 
             if (longRejection)
             {
-                // SL под низом свечи отбоя (или под EMA55 если ближе)
-                decimal slLevel = Math.Min(c0.LowPrice, c1.LowPrice) - atr * slMult * 0.5m;
+                // SL: under the lowest low of the last 5 bars (structure-based)
+                // + buffer of 0.25×ATR to avoid stop-hunt at exact swing low
+                int lookbackSl = Math.Min(5, i);
+                decimal swingLow = klines.Skip(i - lookbackSl).Take(lookbackSl + 1)
+                    .Min(k => k.LowPrice);
+                decimal slLevel = swingLow - atr * 0.25m;
+                // Fallback: if structure SL is too far, use candle-based
+                decimal candleSl = Math.Min(c0.LowPrice, c1.LowPrice) - atr * 0.3m;
+                if (entry - slLevel > atr * 2.5m) slLevel = candleSl; // don't risk >2.5ATR
                 decimal entry   = c0.ClosePrice + atr * 0.03m;
                 decimal risk    = entry - slLevel;
                 if (risk < atr * 0.3m || risk > atr * 3.0m) return null;
@@ -1448,13 +1464,19 @@ namespace VertexAutoTradeBinance8.Strategy
                         entry + atr * tp3Mult
                     }
                 };
+                EnsureMinimumTpDistances(s, isLong: true);
                 NormalizeEntryAndSl(s);
                 return s;
             }
 
             if (shortRejection)
             {
-                decimal slLevel = Math.Max(c0.HighPrice, c1.HighPrice) + atr * slMult * 0.5m;
+                // SL: above the highest high of last 5 bars + 0.25×ATR buffer
+                decimal swingHigh = klines.Skip(i - Math.Min(5, i)).Take(Math.Min(5, i) + 1)
+                    .Max(k => k.HighPrice);
+                decimal slLevel = swingHigh + atr * 0.25m;
+                decimal candleSlShort = Math.Max(c0.HighPrice, c1.HighPrice) + atr * 0.3m;
+                if (slLevel - entry > atr * 2.5m) slLevel = candleSlShort;
                 decimal entry   = c0.ClosePrice - atr * 0.03m;
                 decimal risk    = slLevel - entry;
                 if (risk < atr * 0.3m || risk > atr * 3.0m) return null;
@@ -1475,6 +1497,7 @@ namespace VertexAutoTradeBinance8.Strategy
                         entry - atr * tp3Mult
                     }
                 };
+                EnsureMinimumTpDistances(s, isLong: false);
                 NormalizeEntryAndSl(s);
                 return s;
             }
@@ -1563,7 +1586,10 @@ namespace VertexAutoTradeBinance8.Strategy
             if (!strongCloseUp && !strongCloseDown)
                 return null;
 
-            var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(interval);
+            // VolatilityExpansion = breakout from squeeze → always StrongTrend TP targets
+            var (slMult, tp1Mult, tp2Mult, tp3Mult) = GetAtrConfig(
+                interval,
+                strongCloseUp ? MarketRegime.StrongUpTrend : MarketRegime.StrongDownTrend);
 
             // ============================================================
             // LONG
@@ -4747,6 +4773,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
     }
 }
+
 
 
 
