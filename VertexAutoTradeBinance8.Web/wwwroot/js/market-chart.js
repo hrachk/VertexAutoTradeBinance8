@@ -261,20 +261,17 @@
                 return v.toFixed(2);
             }
 
-            let _lastTooltipX = -999, _lastTooltipTime = 0, _lastTooltipY = -999;
+            let _lastTooltipX = -999, _lastTooltipTime = 0;
             chart.subscribeCrosshairMove((param) => {
                 if (!param.point || !param.time || param.point.y < 0) {
-                    if (tooltip.style.display !== 'none') tooltip.style.display = 'none';
+                    tooltip.style.display = 'none';
                     _lastTooltipX = -999;
                     return;
                 }
-                // Skip if same candle AND mouse moved < 4px in both axes
-                if (param.time === _lastTooltipTime &&
-                    Math.abs(param.point.x - _lastTooltipX) < 4 &&
-                    Math.abs(param.point.y - _lastTooltipY) < 4) return;
+                // Skip re-render if same candle as last time
+                if (param.time === _lastTooltipTime && Math.abs(param.point.x - _lastTooltipX) < 2) return;
                 _lastTooltipTime = param.time;
                 _lastTooltipX = param.point.x;
-                _lastTooltipY = param.point.y;
                 const candleData = param.seriesData.get(candleSeries);
                 const volData = param.seriesData.get(volumeSeries);
                 if (!candleData) {
@@ -523,33 +520,20 @@
                             const tp = session.tpLines.find(t => t.index === session.draggingLineIdx);
                             if (tp) tp.price = price;
                         }
-                        // Reposition pill via RAF — browser batches DOM writes
-                        // to the next frame instead of thrashing layout on every pixel
-                        if (!session._dragRafPending) {
-                            session._dragRafPending = true;
-                            const self2 = this;
-                            const pnlFor2 = session._lastPnlFor || null;
-                            requestAnimationFrame(() => {
-                                session._dragRafPending = false;
-                                self2.repositionAllPills(containerId, pnlFor2);
-                            });
-                        }
+                        // Instantly reposition the pill for this line (no subscription delay)
+                        // We call repositionAllPills directly so the pill tracks the cursor.
+                        const pnlFor = session._lastPnlFor || null;
+                        this.repositionAllPills(containerId, pnlFor);
                     }
                     container.style.cursor = 'grabbing';
                     return;
                 }
 
                 if (!session.dragging) {
-                    // Throttle cursor-change check to 30fps — no need to check
-                    // every 1px move whether we're near a line
-                    const nowMs = Date.now();
-                    if (nowMs - (session._lastCursorCheck || 0) > 32) {
-                        session._lastCursorCheck = nowMs;
-                        const rect = container.getBoundingClientRect();
-                        const y = e.clientY - rect.top;
-                        const nearby = findNearbyDraggableLine(y);
-                        container.style.cursor = nearby ? 'grab' : (nearEntryLine(y) ? 'grab' : 'crosshair');
-                    }
+                    const rect = container.getBoundingClientRect();
+                    const y = e.clientY - rect.top;
+                    const nearby = findNearbyDraggableLine(y);
+                    container.style.cursor = nearby ? 'grab' : (nearEntryLine(y) ? 'grab' : 'crosshair');
                     return;
                 }
 
@@ -1094,24 +1078,21 @@
                 s.tpSlPillRangeSub = () => self.repositionAllPills(containerId, pnlFor);
                 s.chart.timeScale().subscribeVisibleLogicalRangeChange(s.tpSlPillRangeSub);
 
-                // NOTE: subscribeVisibleLogicalRangeChange above already fires
-                // on both X scroll/zoom AND Y price-axis changes in LCV5.
-                // No need for a separate priceScale subscription — it caused
-                // double pill repositioning on every scroll/zoom event.
-                // s.tpSlPriceScaleSub intentionally removed.
+                // Subscribe to price-scale changes (Y zoom/pan).
+                // LightweightCharts v5 fires subscribeVisiblePriceRangeChange on
+                // the right price scale for vertical drag/pinch events.
+                s.tpSlPriceScaleSub = s.tpSlPillRangeSub;
+                try {
+                    s.chart.priceScale('right')
+                        .subscribePriceRangeChange(s.tpSlPriceScaleSub);
+                } catch(e) { /* older build — no subscribepricerangechange */ }
 
                 // ResizeObserver: reposition when the chart container resizes
                 // (window resize, panel drag, etc.) — no events fire for this.
                 if (!s._pillResizeObs) {
-                    // Debounce: reposition only 100ms after resize settles
-                    let _resizeTimer = null;
-                    s._pillResizeObs = new ResizeObserver(() => {
-                        if (_resizeTimer) clearTimeout(_resizeTimer);
-                        _resizeTimer = setTimeout(() => {
-                            s._cachedScaleWidth = null; // invalidate on resize
-                            self.repositionAllPills(containerId, pnlFor);
-                        }, 100);
-                    });
+                    s._pillResizeObs = new ResizeObserver(() =>
+                        self.repositionAllPills(containerId, pnlFor));
+                    const chartEl = s.chart.chartElement?.() || container.querySelector('td') || container;
                     s._pillResizeObs.observe(container);
                 }
             }
@@ -1215,12 +1196,9 @@
             if (!s.slLine && (!s.tpLines || s.tpLines.length === 0) &&
                 !s.entryLine && !s.liqLine && !s.beLine) return;
 
-            // Cache priceScale width — reading it forces a layout recalc.
-            // Update only when it might have changed (init or resize).
-            if (!s._cachedScaleWidth) {
-                try { s._cachedScaleWidth = s.chart.priceScale('right').width() || 60; } catch(e) { s._cachedScaleWidth = 60; }
-            }
-            const rightOffset = s._cachedScaleWidth + 50;
+            let scaleWidth = 60;
+            try { scaleWidth = s.chart.priceScale('right').width() || 60; } catch (e) {}
+            const rightOffset = scaleWidth + 50;
             const MIN_GAP = 20; // px between pill centres (pill height = 18px)
 
             // 1. Collect all pills with a valid on-screen Y coordinate.
@@ -1306,10 +1284,8 @@
             if (s.tpSlPillRangeSub) { try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s.tpSlPillRangeSub); } catch (e) {} s.tpSlPillRangeSub = null; }
             // tpSlCrosshairSub was removed from performance refactor — no unsub needed
             if (s._pillResizeObs) { s._pillResizeObs.disconnect(); s._pillResizeObs = null; }
-            // tpSlPriceScaleSub removed — no longer subscribed
-            // NOTE: chart.remove() belongs only in disposeSession, NOT here.
-            // hideTpSlLines only cleans up pill DOM elements and subscriptions —
-            // destroying the chart here kills candle rendering.
+            try { if (s.tpSlPriceScaleSub) s.chart.priceScale('right').unsubscribePriceRangeChange(s.tpSlPriceScaleSub); } catch(e) {}
+            s.tpSlPriceScaleSub = null;
         },
 
         // Refreshes the live market-price line with the current PnL —
@@ -1634,5 +1610,4 @@
     window._vertexChartSessions = sessions;
 
 })();
-
 
