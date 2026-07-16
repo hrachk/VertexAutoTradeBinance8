@@ -2763,16 +2763,16 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == timeframe);
             if (idx < 0) return;
 
-            var klines = Series[idx].Klines.ToList();
+            // Mutate the list in-place instead of ToList() copy on every close
+            var klines = Series[idx].Klines;
             if (klines.Count > 0 && klines[^1].OpenTime == kline.OpenTime)
-                klines[^1] = kline;          // finalize the candle that was forming live
+                klines[klines.Count - 1] = kline;
             else
-                klines.Add(kline);           // new bar
+                klines.Add(kline);
 
             if (klines.Count > 500)
                 klines.RemoveRange(0, klines.Count - 500);
-
-            Series[idx] = Series[idx] with { Klines = klines };
+            // Series record already references same list — no need to reassign
 
             if (symbol != _activeSym || timeframe != _activeTf) return;
 
@@ -3142,13 +3142,19 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     {
         try
         {
-            while (!_cts.Token.IsCancellationRequested)
+            int _lastScanSymIdx = -1;
+        while (!_cts.Token.IsCancellationRequested)
             {
                 await Task.Delay(1400, _cts.Token);
                 if (!_signals.Any() && _symbols.Count > 0)
                 {
                     _scanSymIdx = (_scanSymIdx + 1) % _symbols.Count;
-                    await InvokeAsync(StateHasChanged);
+                    // Only trigger re-render when the displayed symbol changed
+                    if (_scanSymIdx != _lastScanSymIdx)
+                    {
+                        _lastScanSymIdx = _scanSymIdx;
+                        await InvokeAsync(StateHasChanged);
+                    }
                 }
             }
         }
@@ -3796,10 +3802,17 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         if (_mergedKlines == null || _mergedKlines.Count == 0)
             return Task.FromResult(Array.Empty<object>());
 
-        var older = _mergedKlines.Where(kv => kv.Key < beforeOpenTimeMs).ToList();
-        var slice = older.Count <= count ? older : older.GetRange(older.Count - count, count);
-
-        return Task.FromResult(slice.Select(kv => ToJsKline(kv.Key, kv.Value)).ToArray());
+        // SortedDictionary keys are sorted ascending — use efficient range
+        // instead of .Where() which iterates the whole dictionary.
+        // TakeWhile stops at first key >= beforeOpenTimeMs = O(k) not O(n).
+        var keys = _mergedKlines.Keys
+            .TakeWhile(k => k < beforeOpenTimeMs)
+            .ToList();
+        int start = Math.Max(0, keys.Count - count);
+        var slice = keys.Skip(start)
+            .Select(k => ToJsKline(k, _mergedKlines[k]))
+            .ToArray();
+        return Task.FromResult(slice);
     }
 
     void Pick(MarketSeries s)
@@ -6904,6 +6917,13 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         _timer?.Dispose();
         _dotNetRef?.Dispose();
         try { await JS.InvokeVoidAsync("stickyStack.dispose"); } catch { }
+        // Dispose the chart session to free LightweightCharts internals,
+        // RAF loops, and event listeners — prevents memory leak on navigation
+        try
+        {
+            await JS.InvokeVoidAsync("marketChart.disposeSession",
+                $"chartContainer-{_chartInstanceId}");
+        } catch { }
     }
 
     // Stable identity comparison — needed because demo positions get
@@ -6934,6 +6954,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
