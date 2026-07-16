@@ -530,44 +530,29 @@ namespace VertexAutoTradeBinance8.Services
                 }
 
                 // =========================
-                // CALC NEW SL
+                // CALC BE PRICE
                 // =========================
-                decimal baseDistance = ATR * 1.2m;
-                decimal profitDistance = side == PositionSide.Long
-                    ? mark - entry
-                    : entry - mark;
-                decimal dynamicBuffer = Math.Max(ATR * 0.8m, MIN_BUFFER);
-
-                decimal newSl =
-                    profitDistance <= 0
-                        ? entry
-                        : profitDistance < baseDistance
-                            ? (side == PositionSide.Long ? mark - dynamicBuffer : mark + dynamicBuffer)
-                            : (side == PositionSide.Long ? mark - baseDistance : mark + baseDistance);
-
-                if (skipSoftFilters)
-                    newSl = entry;
+                // BE = entry + small buffer covering taker fees (0.08% each side)
+                // This is NOT a trailing SL — it moves ONCE to protect the position.
+                // After this move, Supervisor never touches SL again for this position.
+                const decimal BE_BUFFER = 0.0010m; // 0.10% — covers fees + tiny cushion
+                decimal newSl = side == PositionSide.Long
+                    ? entry * (1m + BE_BUFFER)   // LONG: SL slightly above entry
+                    : entry * (1m - BE_BUFFER);  // SHORT: SL slightly below entry
 
                 // =========================
-                // DIFF CHECK → не дергать SL на шум
+                // ONE-TIME GUARD — BE moves ONCE only
                 // =========================
-                decimal lastPlacedSl = _lastSl.GetOrAdd(keyProbe, 0m);
-                if (Math.Abs(lastPlacedSl - newSl) < ATR * 0.2m) return;
-
-                // =========================
-                // COOLDOWN
-                // =========================
+                // After BE is placed, _beMoved is set and ProbeSide
+                // will never reach this point again for this position.
                 var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                // Cooldown scaled to market volatility:
-                // VolatileChop/StrongTrend: longer wait to avoid rapid SL flapping
-                // during high-volatility moves (was causing rapid SL duplication).
-                var cooldown = _regimeNow switch
+                if (_beMoved.TryGetValue(keyProbe, out var lastMove) && lastMove > 0)
                 {
-                    MarketRegime.VolatileChop => 8000,
-                    MarketRegime.StrongUpTrend or MarketRegime.StrongDownTrend => 5000,
-                    _ => isToxic ? 4000 : 2500
-                };
-                if (_beMoved.TryGetValue(keyProbe, out var lastMove) && now - lastMove < cooldown) return;
+                    _logger.LogDebug(
+                        "[SUPERVISOR][{sym}][{side}] BE already placed — skip",
+                        symbol, side);
+                    return; // BE placed once and never again for this position
+                }
 
                 // =========================
                 // CANCEL CURRENT SL
