@@ -261,17 +261,20 @@
                 return v.toFixed(2);
             }
 
-            let _lastTooltipX = -999, _lastTooltipTime = 0;
+            let _lastTooltipX = -999, _lastTooltipTime = 0, _lastTooltipY = -999;
             chart.subscribeCrosshairMove((param) => {
                 if (!param.point || !param.time || param.point.y < 0) {
                     tooltip.style.display = 'none';
                     _lastTooltipX = -999;
                     return;
                 }
-                // Skip re-render if same candle as last time
-                if (param.time === _lastTooltipTime && Math.abs(param.point.x - _lastTooltipX) < 2) return;
+                // Skip if mouse moved < 3px and same candle — no visible change
+                if (param.time === _lastTooltipTime &&
+                    Math.abs(param.point.x - _lastTooltipX) < 3 &&
+                    Math.abs(param.point.y - _lastTooltipY) < 3) return;
                 _lastTooltipTime = param.time;
                 _lastTooltipX = param.point.x;
+                _lastTooltipY = param.point.y;
                 const candleData = param.seriesData.get(candleSeries);
                 const volData = param.seriesData.get(volumeSeries);
                 if (!candleData) {
@@ -1286,6 +1289,9 @@
             if (s._pillResizeObs) { s._pillResizeObs.disconnect(); s._pillResizeObs = null; }
             try { if (s.tpSlPriceScaleSub) s.chart.priceScale('right').unsubscribePriceRangeChange(s.tpSlPriceScaleSub); } catch(e) {}
             s.tpSlPriceScaleSub = null;
+            // Remove chart instance to free LightweightCharts internal RAF + observers
+            try { if (s.chart) { s.chart.remove(); } } catch(e) {}
+            s.chart = null;
         },
 
         // Refreshes the live market-price line with the current PnL —
@@ -1610,4 +1616,5 @@
     window._vertexChartSessions = sessions;
 
 })();
+
 
