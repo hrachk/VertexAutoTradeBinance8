@@ -103,12 +103,16 @@ namespace VertexAutoTradeBinance8.Strategy
                 return;
             }
 
-            if (mode == StrategyMode.Auto && !await IsTrendRegimeNowAsync(signal.Symbol))
+            if (mode == StrategyMode.Auto)
             {
-                _logger.LogDebug(
-                    "[ROUTER][{symbol}] Trend signal suppressed — regime no longer trend-like at routing time",
-                    signal.Symbol);
-                return;
+                Enum.TryParse<KlineInterval>(signal.Timeframe, ignoreCase: true, out var trendTf);
+                if (!await IsTrendRegimeNowAsync(signal.Symbol, trendTf))
+                {
+                    _logger.LogDebug(
+                        "[ROUTER][{symbol}] Trend signal suppressed — {tf} regime no longer trend-like",
+                        signal.Symbol, trendTf);
+                    return;
+                }
             }
 
             OnSignalGenerated?.Invoke(signal);
@@ -126,20 +130,25 @@ namespace VertexAutoTradeBinance8.Strategy
                 return;
             }
 
-            if (mode == StrategyMode.Auto && !await IsRangeRegimeNowAsync(signal.Symbol))
+            if (mode == StrategyMode.Auto)
             {
-                _logger.LogDebug(
-                    "[ROUTER][{symbol}] Mean-reversion signal suppressed — regime no longer range-like at routing time",
-                    signal.Symbol);
-                return;
+                Enum.TryParse<KlineInterval>(signal.Timeframe, ignoreCase: true, out var rangeTf);
+                if (!await IsRangeRegimeNowAsync(signal.Symbol, rangeTf))
+                {
+                    _logger.LogDebug(
+                        "[ROUTER][{symbol}] MeanReversion signal suppressed — {tf} regime not range-like",
+                        signal.Symbol, rangeTf);
+                    return;
+                }
             }
 
             OnSignalGenerated?.Invoke(signal);
         }
 
-        private async Task<bool> IsTrendRegimeNowAsync(string symbol)
+        private async Task<bool> IsTrendRegimeNowAsync(
+            string symbol, KlineInterval tf = KlineInterval.FiveMinutes)
         {
-            var smart = await EvaluateCurrentRegimeAsync(symbol);
+            var smart = await EvaluateCurrentRegimeAsync(symbol, tf);
             if (smart == null) return true; // fail-open: don't block on a data hiccup
 
             return smart.BaseRegime is MarketRegime.UpTrend or MarketRegime.DownTrend
@@ -147,26 +156,34 @@ namespace VertexAutoTradeBinance8.Strategy
                 || smart.SmartType is SmartRegimeType.SmartTrend or SmartRegimeType.SmartStrongTrend;
         }
 
-        private async Task<bool> IsRangeRegimeNowAsync(string symbol)
+        private async Task<bool> IsRangeRegimeNowAsync(
+            string symbol, KlineInterval tf = KlineInterval.FiveMinutes)
         {
-            var smart = await EvaluateCurrentRegimeAsync(symbol);
+            var smart = await EvaluateCurrentRegimeAsync(symbol, tf);
             if (smart == null) return true; // fail-open: don't block on a data hiccup
 
             return smart.BaseRegime == MarketRegime.Range
                 || smart.SmartType is SmartRegimeType.SmartRange or SmartRegimeType.SmartSqueeze;
         }
 
-        private async Task<SmartRegimeInfo?> EvaluateCurrentRegimeAsync(string symbol)
+        private async Task<SmartRegimeInfo?> EvaluateCurrentRegimeAsync(
+            string symbol,
+            KlineInterval signalTf = KlineInterval.FiveMinutes)
         {
             try
             {
-                // Use the same default reactive timeframe the trend engine
-                // operates on for regime classification consistency.
-                var klines = await _marketData.GetKlinesAsync(symbol, KlineInterval.FiveMinutes, need: 80);
+                // Use the signal's OWN timeframe for regime check.
+                // Previously always used 5m which caused false blocks:
+                // a valid 1h uptrend signal was checked against 5m regime
+                // which might be Range → signal suppressed incorrectly.
+                // Now: 1h signal → check 1h regime; 15m signal → check 15m regime.
+                var tf = signalTf;
+                int need = signalTf >= KlineInterval.OneHour ? 60 : 80;
+                var klines = await _marketData.GetKlinesAsync(symbol, tf, need: need);
 
-                if (klines == null || klines.Count < 60) return null;
+                if (klines == null || klines.Count < 50) return null;
 
-                return _smartRegimeService.Evaluate(symbol, KlineInterval.FiveMinutes, klines);
+                return _smartRegimeService.Evaluate(symbol, tf, klines);
             }
             catch (Exception ex)
             {
@@ -176,3 +193,4 @@ namespace VertexAutoTradeBinance8.Strategy
         }
     }
 }
+
