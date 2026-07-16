@@ -479,22 +479,67 @@ namespace VertexAutoTradeBinance8.Services
                     _lastSl[peakKey] = qty; // update peak on first call or size-up
                 decimal peakQty = _lastSl[peakKey];
 
-                // Did TP2 fire? qty should be below 45% of peak
-                bool tp2Fired = peakQty > 0 && qty < peakQty * 0.45m;
-
-                // DCA: also require minimum roi > 3×ATR
                 decimal BE_TRIGGER = ATR * (isDcaPos ? 3.0m : 1.3m);
 
-                // Gate: for bot positions, require EITHER:
-                //   a) tp2Fired (2 TPs executed → BE is clearly safe), OR
-                //   b) roi > 4×ATR (price moved so far that BE is trivially safe)
-                //   c) skipSoftFilters (StrongTrend override from risk manager)
-                bool beConditionMet = tp2Fired
-                    || (roi >= ATR * 4.0m)
-                    || skipSoftFilters;
+                // ── Which phase? ─────────────────────────────────────────
+                bool tp1Fired = peakQty > 0 && qty < peakQty * 0.55m;
+                bool tp2Fired = peakQty > 0 && qty < peakQty * 0.30m;
 
-                if (!beConditionMet && !isDcaPos) return;
-                if (isDcaPos && roi < BE_TRIGGER && !skipSoftFilters) return;
+                // Phase 0: nothing fired → DO NOT touch SL at all
+                if (!tp1Fired && !skipSoftFilters)
+                {
+                    _logger.LogDebug(
+                        "[SUPERVISOR][{sym}][{side}] Phase 0 — no TP fired, leaving SL alone",
+                        symbol, side);
+                    return;
+                }
+
+                bool beConditionMet;
+                if (tp2Fired || skipSoftFilters || (isDcaPos && roi >= BE_TRIGGER))
+                {
+                    // Phase 2: TP2 fired → BE immediately, no retest needed
+                    beConditionMet = true;
+                    _logger.LogInformation(
+                        "[SUPERVISOR][{sym}][{side}] Phase 2 — TP2 fired → BE now",
+                        symbol, side);
+                }
+                else
+                {
+                    // Phase 1: TP1 fired → check retest before BE
+                    // Retest = price pulled back AND held above structure:
+                    //   LONG: mark still > entry + 1.5×ATR (above TP1 zone)
+                    //   SHORT: mark still < entry - 1.5×ATR
+                    decimal tp1Zone = side == PositionSide.Long
+                        ? entry + ATR * 1.5m
+                        : entry - ATR * 1.5m;
+                    bool priceAboveTp1Zone = side == PositionSide.Long
+                        ? mark > tp1Zone
+                        : mark < tp1Zone;
+
+                    // EMA21 intact? Price must not have broken below EMA21
+                    decimal ema21 = klines != null && klines.Count >= 21
+                        ? klines.Skip(klines.Count - 21).Average(k => (decimal)k.ClosePrice)
+                        : 0m;
+                    bool ema21Intact = ema21 <= 0m || (
+                        side == PositionSide.Long
+                            ? mark > ema21 * 0.998m   // LONG: above EMA21
+                            : mark < ema21 * 1.002m); // SHORT: below EMA21
+
+                    beConditionMet = priceAboveTp1Zone && ema21Intact;
+                    if (!beConditionMet)
+                    {
+                        _logger.LogDebug(
+                            "[SUPERVISOR][{sym}][{side}] Phase 1 — TP1 fired, " +
+                            "waiting retest (mark={m:F4} tp1Zone={z:F4} ema={e:F4} ema21Ok={ok})",
+                            symbol, side, mark, tp1Zone, ema21, ema21Intact);
+                        return; // SL untouched — wait for retest
+                    }
+                    _logger.LogInformation(
+                        "[SUPERVISOR][{sym}][{side}] Phase 1 — retest confirmed → BE",
+                        symbol, side);
+                }
+
+                if (!beConditionMet) return;
 
                 // =========================
                 // LEVEL CONTROL (анти-спам)
