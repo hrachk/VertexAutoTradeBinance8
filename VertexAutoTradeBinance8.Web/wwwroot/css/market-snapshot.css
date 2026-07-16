@@ -91,3 +91,51 @@
         background: #0b1220;
         color: #e5e7eb;
     }
+
+
+/* ── Risk bar (FIX2) ─────────────────────────────────────────── */
+.mk-risk-bar-wrap{display:flex;flex-direction:column;gap:2px;}
+.mk-risk-bar{height:3px;background:#1a2540;border-radius:2px;overflow:hidden;width:56px;}
+.mk-risk-bar-fill{height:100%;border-radius:2px;transition:width .3s;}
+.mk-risk-pct{font-size:9px;font-weight:700;}
+
+/* ── Unrealized PnL muted (FIX1) ────────────────────────────── */
+.mk-acct-unreal-val{font-size:13px!important;opacity:.85;}
+
+/* ── Leverage presets (FIX3) ─────────────────────────────────── */
+.ord-lev-presets{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;}
+.ord-lev-preset{
+  padding:4px 9px;border-radius:5px;
+  font-size:11px;font-weight:700;
+  background:#111929;border:1px solid #1a2540;
+  color:#4a5878;cursor:pointer;transition:all .12s;
+}
+.ord-lev-preset:hover{color:#8898bb;border-color:#243050;}
+.ord-lev-preset-on{
+  color:#6e94ff!important;
+  background:rgba(77,124,255,.12)!important;
+  border-color:rgba(77,124,255,.4)!important;
+}
+
+/* ── Hot badge (FIX4) ────────────────────────────────────────── */
+.mk-hot-badge{font-size:10px;margin-left:2px;vertical-align:middle;}
+
+/* ── Position buttons cleaner (FIX5) ────────────────────────── */
+.mk-pos-partial-btn2{
+  padding:3px 9px;border-radius:4px;
+  font-size:10px;font-weight:700;
+  background:rgba(77,124,255,.08);
+  border:1px solid rgba(77,124,255,.25);
+  color:#6e94ff;cursor:pointer;transition:all .12s;
+}
+.mk-pos-partial-btn2:hover{background:rgba(77,124,255,.18);}
+.mk-pos-partial-btn2:disabled{opacity:.4;cursor:not-allowed;}
+.mk-pos-close-btn{
+  padding:3px 10px;border-radius:4px;
+  font-size:10px;font-weight:700;
+  background:rgba(255,68,102,.08);
+  border:1px solid rgba(255,68,102,.28);
+  color:#ff4466;cursor:pointer;transition:all .12s;
+}
+.mk-pos-close-btn:hover{background:rgba(255,68,102,.18);}
+.mk-pos-close-btn:disabled{opacity:.4;cursor:not-allowed;}
