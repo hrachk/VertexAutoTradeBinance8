@@ -426,27 +426,90 @@
                 <strong>Default 0.40</strong> was lowered from 0.52 which was blocking too many trades.
                 BTC/ETH use separate lower thresholds because the AI is better calibrated for them.
             </div>
+            <!-- MinEntry row -->
             <div class="st-field-row">
                 <div class="st-field">
-                    <label>Default (all other symbols)</label>
+                    <label>Min Entry — Default</label>
                     <input title="Min AI confidence for all symbols except BTC/ETH" class="st-input" type="number"
                            step="0.01" min="0.10" max="0.95"
-                           value="@GetDecimal("SignalConfidence:Default:MinEntry", 0.40m)"
+                           value="@GetDecimal("SignalConfidence:Default:MinEntry", 0.46m)"
                            @onchange="OnConfDefaultChanged" />
                 </div>
                 <div class="st-field">
-                    <label>BTCUSDT</label>
+                    <label>Min Entry — BTC</label>
                     <input title="Min AI confidence for BTC" class="st-input" type="number"
                            step="0.01" min="0.10" max="0.95"
-                           value="@GetDecimal("SignalConfidence:BTC:MinEntry", 0.42m)"
+                           value="@GetDecimal("SignalConfidence:BTC:MinEntry", 0.40m)"
                            @onchange="OnConfBtcChanged" />
                 </div>
                 <div class="st-field">
-                    <label>ETHUSDT</label>
+                    <label>Min Entry — ETH</label>
                     <input title="Min AI confidence for ETH" class="st-input" type="number"
                            step="0.01" min="0.10" max="0.95"
-                           value="@GetDecimal("SignalConfidence:ETH:MinEntry", 0.43m)"
+                           value="@GetDecimal("SignalConfidence:ETH:MinEntry", 0.40m)"
                            @onchange="OnConfEthChanged" />
+                </div>
+            </div>
+            <!-- Confidence Bands (Medium / High thresholds) -->
+            <div class="st-card-sub" style="margin-top:12px;font-size:11px;">
+                <strong>Confidence Bands</strong> — thresholds that unlock higher risk sizing.
+                Medium band = confMult 1.15×, High band = confMult 1.28-1.40×.
+            </div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>Medium Band From — Default</label>
+                    <input class="st-input" type="number" step="0.01" min="0.30" max="0.90"
+                           value="@GetDecimal("SignalConfidence:Default:Bands:MediumFrom", 0.52m)"
+                           @onchange="e => SetAsync("SignalConfidence:Default:Bands:MediumFrom", ParseDecimalOr(e.Value, 0.52m))" />
+                </div>
+                <div class="st-field">
+                    <label>High Band From — Default</label>
+                    <input class="st-input" type="number" step="0.01" min="0.40" max="0.95"
+                           value="@GetDecimal("SignalConfidence:Default:Bands:HighFrom", 0.65m)"
+                           @onchange="e => SetAsync("SignalConfidence:Default:Bands:HighFrom", ParseDecimalOr(e.Value, 0.65m))" />
+                </div>
+                <div class="st-field">
+                    <label>Medium Band From — BTC</label>
+                    <input class="st-input" type="number" step="0.01" min="0.30" max="0.90"
+                           value="@GetDecimal("SignalConfidence:BTC:Bands:MediumFrom", 0.42m)"
+                           @onchange="e => SetAsync("SignalConfidence:BTC:Bands:MediumFrom", ParseDecimalOr(e.Value, 0.42m))" />
+                </div>
+                <div class="st-field">
+                    <label>High Band From — BTC</label>
+                    <input class="st-input" type="number" step="0.01" min="0.30" max="0.90"
+                           value="@GetDecimal("SignalConfidence:BTC:Bands:HighFrom", 0.45m)"
+                           @onchange="e => SetAsync("SignalConfidence:BTC:Bands:HighFrom", ParseDecimalOr(e.Value, 0.45m))" />
+                </div>
+            </div>
+            <!-- Early TP ATR multipliers -->
+            <div class="st-card-sub" style="margin-top:12px;font-size:11px;">
+                <strong>Early TP ATR Multipliers</strong> — how many ATRs from entry to set TP1 at medium/high confidence.
+                Larger = TP further away, smaller = closer (quicker take profit).
+            </div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>Early TP Medium — Default</label>
+                    <input class="st-input" type="number" step="0.05" min="0.1" max="5.0"
+                           value="@GetDecimal("SignalConfidence:Default:EarlyTpAtr:Medium", 0.5m)"
+                           @onchange="e => SetAsync("SignalConfidence:Default:EarlyTpAtr:Medium", ParseDecimalOr(e.Value, 0.5m))" />
+                </div>
+                <div class="st-field">
+                    <label>Early TP High — Default</label>
+                    <input class="st-input" type="number" step="0.05" min="0.1" max="5.0"
+                           value="@GetDecimal("SignalConfidence:Default:EarlyTpAtr:High", 0.5m)"
+                           @onchange="e => SetAsync("SignalConfidence:Default:EarlyTpAtr:High", ParseDecimalOr(e.Value, 0.5m))" />
+                </div>
+                <div class="st-field">
+                    <label>Early TP Medium — BTC</label>
+                    <input class="st-input" type="number" step="0.05" min="0.1" max="5.0"
+                           value="@GetDecimal("SignalConfidence:BTC:EarlyTpAtr:Medium", 0.50m)"
+                           @onchange="e => SetAsync("SignalConfidence:BTC:EarlyTpAtr:Medium", ParseDecimalOr(e.Value, 0.50m))" />
+                </div>
+                <div class="st-field">
+                    <label>Early TP High — BTC</label>
+                    <input class="st-input" type="number" step="0.05" min="0.1" max="5.0"
+                           value="@GetDecimal("SignalConfidence:BTC:EarlyTpAtr:High", 0.52m)"
+                           @onchange="e => SetAsync("SignalConfidence:BTC:EarlyTpAtr:High", ParseDecimalOr(e.Value, 0.52m))" />
                 </div>
             </div>
         </div>
@@ -2005,6 +2068,7 @@
     .st-field-row{grid-template-columns:1fr;}
 }
 </style>
+
 
 
 
