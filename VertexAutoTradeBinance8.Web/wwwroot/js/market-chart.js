@@ -1289,9 +1289,9 @@
             if (s._pillResizeObs) { s._pillResizeObs.disconnect(); s._pillResizeObs = null; }
             try { if (s.tpSlPriceScaleSub) s.chart.priceScale('right').unsubscribePriceRangeChange(s.tpSlPriceScaleSub); } catch(e) {}
             s.tpSlPriceScaleSub = null;
-            // Remove chart instance to free LightweightCharts internal RAF + observers
-            try { if (s.chart) { s.chart.remove(); } } catch(e) {}
-            s.chart = null;
+            // NOTE: chart.remove() belongs only in disposeSession, NOT here.
+            // hideTpSlLines only cleans up pill DOM elements and subscriptions —
+            // destroying the chart here kills candle rendering.
         },
 
         // Refreshes the live market-price line with the current PnL —
