@@ -517,8 +517,9 @@ namespace VertexAutoTradeBinance8.Services
                         : mark < tp1Zone;
 
                     // EMA21 intact? Price must not have broken below EMA21
-                    decimal ema21 = klines != null && klines.Count >= 21
-                        ? klines.Skip(klines.Count - 21).Average(k => (decimal)k.ClosePrice)
+                    // klines1m is available via closure from SuperviseAsync outer scope
+                    decimal ema21 = klines1m != null && klines1m.Count >= 21
+                        ? klines1m.Skip(klines1m.Count - 21).Average(k => (decimal)k.ClosePrice)
                         : 0m;
                     bool ema21Intact = ema21 <= 0m || (
                         side == PositionSide.Long
