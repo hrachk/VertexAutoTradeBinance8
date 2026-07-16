@@ -2763,16 +2763,17 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == timeframe);
             if (idx < 0) return;
 
-            // Mutate the list in-place instead of ToList() copy on every close
-            var klines = Series[idx].Klines;
+            // IReadOnlyList<KlineDto> — must copy, mutate, reassign
+            var klines = Series[idx].Klines.ToList();
             if (klines.Count > 0 && klines[^1].OpenTime == kline.OpenTime)
-                klines[klines.Count - 1] = kline;
+                klines[^1] = kline;
             else
                 klines.Add(kline);
 
             if (klines.Count > 500)
                 klines.RemoveRange(0, klines.Count - 500);
-            // Series record already references same list — no need to reassign
+
+            Series[idx] = Series[idx] with { Klines = klines };
 
             if (symbol != _activeSym || timeframe != _activeTf) return;
 
