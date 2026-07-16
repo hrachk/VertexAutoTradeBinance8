@@ -75,6 +75,11 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ConcurrentDictionary<string, int> _beLevel = new();
         private readonly ConcurrentDictionary<string, DateTime> _pendingReset = new();
         private readonly ConcurrentDictionary<string, bool> _finalCleanupDone = new();
+        // Cooldown: prevents placing a new SL order within 5 minutes of the last one.
+        // Without this, if GetOpenAlgoOrdersAsync returns stale/empty data (e.g. during
+        // Binance API lag), the supervisor places a duplicate SL every supervisor tick.
+        private readonly ConcurrentDictionary<string, DateTime> _slPlacedAt = new();
+        private static readonly TimeSpan SlCooldown = TimeSpan.FromMinutes(5);
         private const decimal POSITION_EPS = 0.000001m;
 
         private readonly IOptionsMonitor<TradingSettings> _tradingSettings;
@@ -408,6 +413,9 @@ namespace VertexAutoTradeBinance8.Services
                     _lastSl.TryRemove(key + "_peak", out _); // peak qty tracking
                     // (no manual tracking keys — complete hands-off approach)
                     _beOverrideForStrongTrend.TryRemove(key, out _);
+                    // Clean up SL cooldown so next position on same symbol starts fresh
+                    foreach (var k in _slPlacedAt.Keys.Where(k => k.StartsWith(key)).ToList())
+                        _slPlacedAt.TryRemove(k, out _);
                     return;
                 }
 
@@ -1013,11 +1021,25 @@ namespace VertexAutoTradeBinance8.Services
                 bool noSlAnywhere = sl == null && !algoSlExists;
                 if (noSlAnywhere)
                 {
-                    await CreateEmergencySLAsync(client, symbol, side, qtyAbs, entry, signal, ct);
-
-                    _logger.LogWarning(
-                        "[SUPERVISOR][{symbol}][{side}] Emergency SL created (no SL found anywhere)",
-                        symbol, side);
+                    // Cooldown guard: don't spam SL orders every tick.
+                    // If GetOpenAlgoOrdersAsync returned stale data, the order
+                    // is likely already on the exchange — wait 5 min before retry.
+                    var slCooldownKey = $"{symbol}_{side}_{entry:F4}";
+                    if (_slPlacedAt.TryGetValue(slCooldownKey, out var lastPlaced) &&
+                        DateTime.UtcNow - lastPlaced < SlCooldown)
+                    {
+                        _logger.LogDebug(
+                            "[SUPERVISOR][{sym}][{side}] SL cooldown active — skip (last placed {ago:F0}s ago)",
+                            symbol, side, (DateTime.UtcNow - lastPlaced).TotalSeconds);
+                    }
+                    else
+                    {
+                        _slPlacedAt[slCooldownKey] = DateTime.UtcNow;
+                        await CreateEmergencySLAsync(client, symbol, side, qtyAbs, entry, signal, ct);
+                        _logger.LogWarning(
+                            "[SUPERVISOR][{symbol}][{side}] Emergency SL created (no SL found)",
+                            symbol, side);
+                    }
                 }
 
                 // ❗ TP отсутствует → ставим аварийный
@@ -1771,7 +1793,9 @@ namespace VertexAutoTradeBinance8.Services
 
                 var entry = p.EntryPrice;
 
-                // set emergency SL/TP for probe immediately
+                // set emergency SL/TP for probe immediately (no cooldown here — probe runs once)
+                var probeCooldownKey = $"{symbol}_{probeSide}_{entry:F4}";
+                _slPlacedAt[probeCooldownKey] = DateTime.UtcNow;
                 await CreateEmergencySLAsync(c, symbol, probeSide, probeQty, entry, signal: null, token);
                 await CreateEmergencyTPAsync(c, symbol, probeSide, probeQty, entry, signal: null, token);
 
