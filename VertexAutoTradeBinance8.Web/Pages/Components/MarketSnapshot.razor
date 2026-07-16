@@ -463,13 +463,7 @@
                         {
                             <span class="mk-side-rank">@(rank - sideOpenPosSymbols.Count)</span>
                         }
-                        <span class="mk-side-sym">
-                            @s.Symbol
-                            @if (Math.Abs(chg) >= 10m && !sideOpenPosSymbols.Contains(s.Symbol))
-                            {
-                                <span class="mk-hot-badge" title="High momentum: @chg.ToString("F1")%">🔥</span>
-                            }
-                        </span>
+                        <span class="mk-side-sym">@s.Symbol</span>
                         <span class="mk-side-price mono">@FmtP(last)</span>
                         <span class="mk-side-chg @(chg>=0?"up":"dn")">@(chg>=0?"+":"")@chg.ToString("F1")%</span>
                     </div>
@@ -782,22 +776,16 @@
                 <div class="mk-acct-label">Wallet Balance</div>
                 <div class="mk-acct-value mono">$@_acctWalletBalance.ToString("F2")</div>
             </div>
-            <div class="mk-acct-item mk-acct-unreal">
+            <div class="mk-acct-item">
                 <div class="mk-acct-label">Unrealized PnL</div>
-                <!-- Smaller font+muted style so red doesn't dominate the stats bar -->
-                <div class="mk-acct-value mk-acct-unreal-val mono @(_acctUnrealizedPnl >= 0 ? "up" : "dn")">
+                <div class="mk-acct-value mono @(_acctUnrealizedPnl >= 0 ? "up" : "dn")">
                     @(_acctUnrealizedPnl >= 0 ? "+" : "")@_acctUnrealizedPnl.ToString("F2")
                 </div>
             </div>
             }
             <div class="mk-acct-item">
                 <div class="mk-acct-label">Open Positions</div>
-                <div class="mk-acct-value mono">
-                    @DisplayedPositions.Count
-                    <span class="mk-acct-sub @(DisplayedPositions.Sum(p=>p.Pnl) >= 0 ? "up" : "dn")">
-                        (@(DisplayedPositions.Sum(p=>p.Pnl) >= 0 ? "+" : "")$@DisplayedPositions.Sum(p => p.Pnl).ToString("F2"))
-                    </span>
-                </div>
+                <div class="mk-acct-value mono">@DisplayedPositions.Count <span class="mk-acct-sub">($@DisplayedPositions.Sum(p => p.Size).ToString("F2"))</span></div>
             </div>
         </div>
 
@@ -952,7 +940,7 @@
                             <thead>
                                 <tr>
                                     <th>Symbol</th><th>Side</th><th>Lev</th>
-                                    <th>Entry</th><th>Mark</th><th>Liq</th><th style="min-width:70px;">Risk</th><th>Size</th><th>Margin</th><th>PnL</th><th>ROI</th><th></th>
+                                    <th>Entry</th><th>Mark</th><th>Liq</th><th>Size</th><th>Margin</th><th>PnL</th><th>ROI</th><th></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -1015,24 +1003,6 @@
                                         <td class="mk-mono">@FmtP(pos.EntryPrice)</td>
                                         <td class="mk-mono">@FmtP(pos.MarkPrice)</td>
                                         <td class="mk-mono mk-liq">@(pos.LiqPrice > 0 ? FmtP(pos.LiqPrice) : "—")</td>
-                                        @{
-                                            decimal riskPct2 = 0m;
-                                            if (pos.LiqPrice > 0 && pos.EntryPrice > 0)
-                                            {
-                                                decimal totalR = Math.Abs(pos.EntryPrice - pos.LiqPrice);
-                                                decimal usedR  = Math.Abs(pos.MarkPrice  - pos.LiqPrice);
-                                                riskPct2 = totalR > 0 ? Math.Clamp((1m - usedR / totalR) * 100m, 0m, 100m) : 0m;
-                                            }
-                                            string riskClr = riskPct2 > 70 ? "#ff4466" : riskPct2 > 40 ? "#f0b429" : "#00d48b";
-                                        }
-                                        <td style="padding:4px 8px;min-width:70px;">
-                                            <div class="mk-risk-bar-wrap">
-                                                <div class="mk-risk-bar">
-                                                    <div class="mk-risk-bar-fill" style="width:@riskPct2.ToString("F0")%;background:@riskClr"></div>
-                                                </div>
-                                                <span class="mk-risk-pct" style="color:@riskClr">@riskPct2.ToString("F0")%</span>
-                                            </div>
-                                        </td>
                                         <td class="mk-mono">@pos.Size.ToString("F2")</td>
                                         <td class="mk-mono mk-dim">@pos.Margin.ToString("F2")</td>
                                         <td class="mk-mono @(pos.Pnl >= 0 ? "up" : "dn")">@(pos.Pnl >= 0 ? "+" : "")@pos.Pnl.ToString("F2")</td>
@@ -1323,11 +1293,11 @@
                             <input type="range" min="1" max="@_symMaxLev" step="1"
                                    class="ord-lev-slider" title="Leverage"
                                    @bind="_orderLeverage" @bind:event="oninput" />
-                            <div class="ord-lev-presets">
-                                @foreach (var v in new[]{1,3,5,10,20,50}.Where(v => v <= _symMaxLev))
+                            <div class="ord-lev-ticks">
+                                @foreach (var v in new[]{1,5,10,20,30,50}.Where(v => v <= _symMaxLev))
                                 {
-                                    <button class="ord-lev-preset @(_orderLeverage==v?"ord-lev-preset-on":"")"
-                                            @onclick="()=>_orderLeverage=v">@v×</button>
+                                    <span class="ord-lev-tick @(_orderLeverage==v?"otk-on":"")"
+                                          @onclick="()=>_orderLeverage=v">@v×</span>
                                 }
                             </div>
                         </div>
@@ -2483,6 +2453,176 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     padding: 3px 8px; border-radius: 5px; cursor: pointer;
 }
 .mk-oo-edit-err { font-size: 10px; color: #f87171; max-width: 120px; }
+
+/* ═══════════════════════════════════════════════════════════════
+   REDESIGN OVERRIDES — injected to match concept screen
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 1. Stats bar — compact horizontal layout */
+.mk-stats{
+  display:flex!important;
+  grid-template-columns:unset!important;
+  gap:0!important;
+  background:var(--bg2);
+  border:none;
+  border-bottom:1px solid var(--bdr);
+  padding:0;
+  border-radius:0;
+}
+.mk-s{
+  padding:6px 14px!important;
+  border-right:1px solid var(--bdr);
+  display:flex;
+  flex-direction:column;
+  gap:1px;
+  background:var(--bg2);
+}
+.mk-sl{font-size:9px!important;letter-spacing:.6px;}
+.mk-sv{font-size:13px!important;font-weight:600!important;letter-spacing:0;}
+
+/* 2. Account summary bar — tighter, inline */
+.mk-acct-summary{
+  border-radius:0!important;
+  border-left:none!important;
+  border-right:none!important;
+  border-top:none!important;
+  padding:8px 16px!important;
+  gap:0!important;
+  margin:0!important;
+}
+.mk-acct-item{
+  padding:0 16px!important;
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+}
+.mk-acct-label{
+  font-size:9px!important;
+  letter-spacing:.6px;
+}
+.mk-acct-value{
+  font-size:15px!important;
+  font-weight:700!important;
+  letter-spacing:-.2px;
+}
+/* Unrealized PnL — visually quieter */
+.mk-acct-unreal .mk-acct-value{
+  font-size:13px!important;
+  opacity:.8;
+}
+
+/* 3. Positions table — tighter rows */
+.mk-pos-table td{
+  padding:5px 8px!important;
+  font-size:11px!important;
+}
+.mk-pos-table th{
+  padding:5px 8px!important;
+  font-size:9px!important;
+  letter-spacing:.5px;
+}
+
+/* 4. Partial / Close buttons — distinct colors */
+.mk-pos-partial-btn2{
+  padding:3px 10px!important;
+  border-radius:5px!important;
+  font-size:10px!important;
+  font-weight:700!important;
+  background:rgba(59,130,246,.1)!important;
+  border:1px solid rgba(59,130,246,.3)!important;
+  color:#60a5fa!important;
+  transition:all .12s;
+}
+.mk-pos-partial-btn2:hover{background:rgba(59,130,246,.2)!important;}
+.mk-pos-close-btn{
+  padding:3px 10px!important;
+  border-radius:5px!important;
+  font-size:10px!important;
+  font-weight:700!important;
+  background:rgba(239,68,68,.08)!important;
+  border:1px solid rgba(239,68,68,.3)!important;
+  color:#ef4444!important;
+  transition:all .12s;
+}
+.mk-pos-close-btn:hover{background:rgba(239,68,68,.18)!important;}
+
+/* 5. Leverage preset buttons (instead of ticks) */
+.ord-lev-presets{
+  display:flex;gap:5px;flex-wrap:wrap;
+  padding:4px 12px;
+}
+.ord-lev-preset{
+  padding:5px 10px;border-radius:5px;
+  font-size:11px;font-weight:700;
+  background:var(--bg3);
+  border:1px solid var(--bdr);
+  color:var(--dim);
+  cursor:pointer;transition:all .12s;
+}
+.ord-lev-preset:hover{color:var(--txt);border-color:var(--bdr2);}
+.ord-lev-preset-on{
+  color:#60a5fa!important;
+  background:rgba(59,130,246,.12)!important;
+  border-color:rgba(59,130,246,.4)!important;
+}
+
+/* 6. Signal strip — compact */
+.sig-card{
+  border-radius:6px!important;
+  padding:3px 9px!important;
+  font-size:11px!important;
+}
+
+/* 7. Positions panel — cleaner */
+.mk-oo-panel{
+  border-radius:0!important;
+  border-left:none!important;
+  border-right:none!important;
+  border-bottom:none!important;
+  padding:12px 14px!important;
+  resize:none!important;
+}
+.mk-oo-tab{
+  font-size:12px!important;
+  padding:6px 14px!important;
+  font-weight:600!important;
+}
+.mk-oo-tab-on{
+  background:rgba(59,130,246,.15)!important;
+  color:#60a5fa!important;
+  box-shadow:none!important;
+  border-radius:6px!important;
+}
+
+/* 8. Risk bar (new column) */
+.mk-risk-bar-wrap{display:flex;flex-direction:column;gap:2px;min-width:64px;}
+.mk-risk-bar{height:3px;background:var(--bg4);border-radius:2px;overflow:hidden;}
+.mk-risk-bar-fill{height:100%;border-radius:2px;}
+.mk-risk-pct{font-size:9px;font-weight:700;}
+
+/* 9. Hot badge */
+.mk-hot-badge{font-size:9px;margin-left:2px;}
+
+/* 10. Right panel (ord-panel) — cleaner buy/sell */
+.ord-side-btn{
+  font-size:13px!important;
+  font-weight:800!important;
+  padding:10px!important;
+  border-radius:7px!important;
+}
+
+/* 11. DCA badge */
+.mk-dca-badge{
+  font-size:8px!important;
+  font-weight:800!important;
+  padding:1px 4px!important;
+  border-radius:3px!important;
+  background:rgba(59,130,246,.15)!important;
+  color:#60a5fa!important;
+  border:1px solid rgba(59,130,246,.3)!important;
+  margin-left:4px;
+  vertical-align:middle;
+}
 </style>
 
 @if (_levPos != null)
