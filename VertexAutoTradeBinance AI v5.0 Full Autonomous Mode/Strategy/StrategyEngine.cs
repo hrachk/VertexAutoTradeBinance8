@@ -1441,10 +1441,10 @@ namespace VertexAutoTradeBinance8.Strategy
                 decimal swingLow = klines.Skip(i - lookbackSl).Take(lookbackSl + 1)
                     .Min(k => k.LowPrice);
                 decimal slLevel = swingLow - atr * 0.25m;
+                decimal entry   = c0.ClosePrice + atr * 0.03m;
                 // Fallback: if structure SL is too far, use candle-based
                 decimal candleSl = Math.Min(c0.LowPrice, c1.LowPrice) - atr * 0.3m;
                 if (entry - slLevel > atr * 2.5m) slLevel = candleSl; // don't risk >2.5ATR
-                decimal entry   = c0.ClosePrice + atr * 0.03m;
                 decimal risk    = entry - slLevel;
                 if (risk < atr * 0.3m || risk > atr * 3.0m) return null;
                 decimal tp1 = entry + atr * tp1Mult;
@@ -1475,9 +1475,9 @@ namespace VertexAutoTradeBinance8.Strategy
                 decimal swingHigh = klines.Skip(i - Math.Min(5, i)).Take(Math.Min(5, i) + 1)
                     .Max(k => k.HighPrice);
                 decimal slLevel = swingHigh + atr * 0.25m;
+                decimal entry   = c0.ClosePrice - atr * 0.03m;
                 decimal candleSlShort = Math.Max(c0.HighPrice, c1.HighPrice) + atr * 0.3m;
                 if (slLevel - entry > atr * 2.5m) slLevel = candleSlShort;
-                decimal entry   = c0.ClosePrice - atr * 0.03m;
                 decimal risk    = slLevel - entry;
                 if (risk < atr * 0.3m || risk > atr * 3.0m) return null;
                 decimal tp1 = entry - atr * tp1Mult;
