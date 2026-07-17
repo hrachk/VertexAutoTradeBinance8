@@ -253,20 +253,7 @@
       }
       else
       {
-        @{
-            // Flatten Symbols[].Regimes[] → group by Regime
-            var regGroups = (AiState.Snapshot.Symbols ?? [])
-                .SelectMany(s => s.Regimes ?? [])
-                .GroupBy(x => x.Regime)
-                .Select(g => new {
-                    Regime = g.Key,
-                    Trades = g.Sum(x => x.Trades),
-                    Wins   = g.Sum(x => x.Wins)
-                })
-                .OrderByDescending(x => x.Trades)
-                .Take(3);
-        }
-        @foreach (var rg in regGroups)
+        @foreach (var rg in GetRegimeGroups())
         {
           var total = rg.Trades;
           var wins  = rg.Wins;
@@ -524,6 +511,18 @@
         MarketRegime.Squeeze         => "Squeeze",
         _                            => "—",
     };
+
+    // Helper: flatten Symbols[].Regimes[] grouped by regime
+    // Declared as method because Razor @{ } blocks are not visible
+    // across @foreach boundaries — vars declared in @{ } die after the block.
+    record RegimeGroup(MarketRegime Regime, int Trades, int Wins);
+    IEnumerable<RegimeGroup> GetRegimeGroups() =>
+        (AiState?.Snapshot?.Symbols ?? [])
+            .SelectMany(s => s.Regimes ?? [])
+            .GroupBy(x => x.Regime)
+            .Select(g => new RegimeGroup(g.Key, g.Sum(x => x.Trades), g.Sum(x => x.Wins)))
+            .OrderByDescending(x => x.Trades)
+            .Take(3);
 
     public void Dispose()
     {
