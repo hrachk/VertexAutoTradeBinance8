@@ -1,51 +1,512 @@
-﻿@page "/ai-pulse"
+@page "/ai-pulse"
+@using VertexAutoTradeBinance8.Services
+@using VertexAutoTradeBinance8.Strategy
 @inject IJSRuntime JS
-@inject AiPulseUiState Pulse
+@inject IAiPulseEngine Pulse
+@inject AiRuntimeDataProvider Runtime
+@inject EngineStateService EngineStateSvc
+@implements IDisposable
 
-<PageTitle>AI Pulse Engine</PageTitle>
+<PageTitle>AI Pulse · Vertex</PageTitle>
 
-<div class="ai-pulse-root" style="position:relative; width:100%; height:300px;">
+<style>
+:root{
+  --p0:#050810;--p1:#070c18;--p2:#0a1020;--p3:#0e1628;--p4:#141e35;
+  --pb:#192640;--pb2:#1e2f50;
+  --gn:#00d48b;--gn2:#00ff88;--yn:#f0b429;--yn2:#ffe066;
+  --cn:#22d3ee;--rd:#ff3366;--ac:#4d7cff;
+  --t1:#e8f0ff;--t2:#6a8ab0;--t3:#334560;
+  --mn:'JetBrains Mono','Fira Code',monospace;
+}
+.vp{display:flex;flex-direction:column;gap:12px;padding:12px;background:var(--p0);min-height:100vh;}
 
-    <canvas id="aiPulseCanvasV1" style="width:100%; height:100%;"></canvas>
+/* topbar */
+.vp-top{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--p1);border:1px solid var(--pb);border-radius:10px;}
+.vp-logo{font-size:11px;font-weight:800;letter-spacing:1.5px;background:linear-gradient(135deg,var(--ac),var(--cn));-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.vp-ldot{width:7px;height:7px;border-radius:50%;background:var(--gn);box-shadow:0 0 8px var(--gn);animation:vpb 1.2s infinite;}
+.vp-ltxt{font-size:10px;font-weight:700;color:var(--gn);}
+@keyframes vpb{0%,100%{opacity:1}50%{opacity:.2}}
+.vp-top-r{margin-left:auto;display:flex;gap:14px;}
+.vp-ts{display:flex;flex-direction:column;align-items:center;}
+.vp-tv{font-family:var(--mn);font-size:15px;font-weight:700;color:var(--t1);}
+.vp-tv sub{font-size:10px;color:var(--t2);}
+.vp-tv.gn{color:var(--gn);}
+.vp-tv.rd{color:var(--rd);}
+.vp-tv.bl{color:var(--ac);}
+.vp-tl{font-size:8px;font-weight:700;letter-spacing:.7px;color:var(--t3);text-transform:uppercase;}
+.vp-vsep{width:1px;height:26px;background:var(--pb);}
 
-    <div class="ai-pulse-overlay" style="position:absolute; top:0; left:0; width:100%; height:100%; display:flex; flex-direction:column; justify-content:center; align-items:center; pointer-events:none;">
-        <div class="ai-pulse-title">AI Pulse Engine v1</div>
+/* pulse card */
+.vp-pc{background:var(--p1);border:1px solid var(--pb);border-radius:10px;overflow:hidden;}
+.vp-phd{display:flex;align-items:center;gap:7px;padding:10px 14px 5px;}
+.vp-pico{color:var(--cn);font-size:12px;}
+.vp-ptit{font-size:12px;font-weight:800;letter-spacing:.4px;color:var(--cn);}
+.vp-psub{font-size:9px;color:var(--t3);}
+#vp-cv{width:100%;height:110px;display:block;}
+.vp-pm{display:flex;align-items:stretch;border-top:1px solid var(--pb);background:rgba(0,0,0,.2);}
+.vp-pmet{flex:1;display:flex;flex-direction:column;align-items:center;padding:8px 6px;border-right:1px solid var(--pb);gap:2px;}
+.vp-pmet:last-child{border-right:none;}
+.vp-pmv{font-family:var(--mn);font-size:19px;font-weight:700;color:var(--t1);letter-spacing:-.5px;}
+.vp-pmv sub{font-size:10px;color:var(--t2);}
+.vp-pml{font-size:8px;font-weight:700;letter-spacing:.6px;color:var(--t3);text-transform:uppercase;}
+.vp-vw{flex:2;display:flex;align-items:center;gap:8px;padding:8px 12px;border-right:1px solid var(--pb);}
+.vp-vbar{flex:1;height:4px;background:var(--p4);border-radius:2px;overflow:hidden;}
+.vp-vfill{height:100%;background:linear-gradient(90deg,var(--gn),var(--cn));border-radius:2px;transition:width .5s;}
+.vp-vlbl{font-size:8px;font-weight:800;letter-spacing:.7px;color:var(--t3);}
+/* pulse mode badge */
+.vp-mode{font-size:9px;font-weight:800;letter-spacing:.5px;padding:2px 8px;border-radius:4px;border:1px solid;}
+.vp-calm{background:rgba(77,124,255,.1);border-color:rgba(77,124,255,.3);color:var(--ac);}
+.vp-alert{background:rgba(240,180,41,.1);border-color:rgba(240,180,41,.3);color:var(--yn);}
+.vp-aggressive{background:rgba(255,51,102,.1);border-color:rgba(255,51,102,.3);color:var(--rd);}
 
-        <div class="ai-pulse-status" style="display:flex; align-items:center; gap:8px; margin-top:8px;">
-            <span class="ai-pulse-dot @Pulse.Mode.ToString().ToLower()" style="width:12px; height:12px; border-radius:50%; display:inline-block; background-color:#4dd0ff;"></span>
-            <span class="ai-pulse-mode">@Pulse.Mode</span>
-            <span class="ai-pulse-value">@Pulse.MarketPulseSmooth.ToString("0.000")</span>
-        </div>
+/* grid */
+.vp-gr{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+@@media(max-width:660px){.vp-gr{grid-template-columns:1fr}}
+
+/* card */
+.vp-cd{background:var(--p1);border:1px solid var(--pb);border-radius:10px;padding:13px;}
+.vp-chd{display:flex;align-items:center;gap:6px;margin-bottom:11px;}
+.vp-cico{color:var(--yn);font-size:12px;}
+.vp-ctit{font-size:11px;font-weight:800;letter-spacing:.3px;}
+
+/* symbol row */
+.vp-sy{padding:8px 0;border-bottom:1px solid rgba(25,38,64,.5);}
+.vp-sy:last-child{border-bottom:none;}
+.vp-sy1{display:flex;align-items:center;gap:6px;margin-bottom:5px;}
+.vp-sn{font-size:12px;font-weight:800;min-width:85px;color:var(--t1);}
+.vp-rb{font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;}
+.vp-sup{background:rgba(0,212,139,.12);border:1px solid rgba(0,212,139,.28);color:var(--gn);}
+.vp-up{background:rgba(0,200,120,.08);border:1px solid rgba(0,200,120,.2);color:#00c878;}
+.vp-rng{background:rgba(240,180,41,.08);border:1px solid rgba(240,180,41,.22);color:var(--yn);}
+.vp-dn{background:rgba(255,51,102,.1);border:1px solid rgba(255,51,102,.25);color:var(--rd);}
+.vp-sdn{background:rgba(255,30,80,.14);border:1px solid rgba(255,30,80,.3);color:#ff2050;}
+.vp-pct{font-family:var(--mn);font-size:12px;font-weight:700;margin-left:auto;}
+.vp-pct.gn{color:var(--gn)} .vp-pct.yn{color:var(--yn)} .vp-pct.rd{color:var(--rd)} .vp-pct.dm{color:var(--t2)}
+.vp-sb{font-size:8px;font-weight:800;letter-spacing:.3px;padding:2px 6px;border-radius:3px;border:1px solid;}
+.vp-hot{background:rgba(255,80,30,.12);border-color:rgba(255,80,30,.3);color:#ff6020;}
+.vp-rdy{background:rgba(0,212,139,.08);border-color:rgba(0,212,139,.3);color:var(--gn);}
+.vp-wt{background:rgba(240,180,41,.08);border-color:rgba(240,180,41,.3);color:var(--yn);}
+.vp-slp{background:rgba(51,69,96,.4);border-color:var(--pb);color:var(--t3);}
+.vp-spk{width:100%;height:30px;margin:3px 0;display:block;}
+.vp-bw{display:flex;align-items:center;gap:5px;}
+.vp-b{flex:1;height:2px;background:var(--p4);border-radius:1px;overflow:hidden;}
+.vp-bf{height:100%;border-radius:1px;transition:width .7s;}
+.vp-bgn{background:linear-gradient(90deg,var(--gn),var(--gn2));}
+.vp-byn{background:linear-gradient(90deg,var(--yn),var(--yn2));}
+.vp-brd{background:linear-gradient(90deg,var(--rd),#ff6688);}
+.vp-bdm{background:var(--pb2);}
+.vp-bpct{font-family:var(--mn);font-size:9px;color:var(--t3);}
+
+/* exposure */
+.vp-ex{padding:7px 0;border-bottom:1px solid rgba(25,38,64,.5);}
+.vp-ex:last-child{border-bottom:none;}
+.vp-ex1{display:flex;align-items:center;gap:5px;}
+.vp-en{font-size:12px;font-weight:800;flex:1;}
+.vp-ep{font-family:var(--mn);font-size:16px;font-weight:700;color:var(--gn);}
+.vp-ear{font-size:11px;margin-left:1px;}
+.vp-ear.up{color:var(--gn)}.vp-ear.dn{color:var(--rd)}.vp-ear.fl{color:var(--yn)}
+.vp-risky{font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:rgba(255,51,102,.1);border:1px solid rgba(255,51,102,.28);color:var(--rd);}
+.vp-rdot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--rd);box-shadow:0 0 6px var(--rd);animation:vpb .8s infinite;margin-left:3px;}
+
+/* insight */
+.vp-ins{margin-bottom:11px;}
+.vp-inn{font-size:11px;font-weight:700;}
+.vp-insu{font-size:9px;color:var(--t3);margin-bottom:5px;}
+.vp-inch{height:48px;width:100%;display:block;margin-bottom:5px;}
+.vp-insr{display:flex;align-items:center;gap:5px;}
+.vp-insv{font-family:var(--mn);font-size:12px;font-weight:700;color:var(--gn);min-width:34px;}
+.vp-insb{flex:1;height:2px;background:var(--p4);border-radius:1px;overflow:hidden;}
+.vp-insbf{height:100%;background:linear-gradient(90deg,var(--gn),var(--cn));border-radius:1px;transition:width .5s;}
+.vp-insp{font-family:var(--mn);font-size:9px;color:var(--t3);}
+
+/* empty */
+.vp-mt{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px;color:var(--t3);font-size:11px;gap:5px;}
+.vp-mtico{font-size:26px;opacity:.35;}
+
+/* compact list */
+.vp-cl{border-top:1px solid var(--pb);margin-top:7px;padding-top:7px;display:flex;flex-direction:column;gap:6px;}
+.vp-cli{display:flex;align-items:center;gap:5px;}
+.vp-cln{font-size:11px;flex:1;}
+</style>
+
+<div class="vp">
+
+  <!-- TOPBAR -->
+  <div class="vp-top">
+    <div class="vp-logo">VERTEX AUTOTRADE AI</div>
+    <div class="vp-ldot"></div>
+    <span class="vp-ltxt">LIVE</span>
+    <div class="vp-top-r">
+      <div class="vp-ts">
+        <div class="vp-tv bl">@_symCount</div>
+        <div class="vp-tl">Symbols</div>
+      </div>
+      <div class="vp-vsep"></div>
+      <div class="vp-ts">
+        <div class="vp-tv @(_winRate >= 50 ? "gn" : "rd")">@_winRate<sub>%</sub></div>
+        <div class="vp-tl">Win Rate</div>
+      </div>
+      <div class="vp-vsep"></div>
+      <div class="vp-ts">
+        <div class="vp-tv">@_hotCount</div>
+        <div class="vp-tl">🔥 Hot</div>
+      </div>
+      <div class="vp-vsep"></div>
+      <div class="vp-ts">
+        <div class="vp-tv bl">@_thinkCount</div>
+        <div class="vp-tl">💭 Thinking</div>
+      </div>
+      <div class="vp-vsep"></div>
+      <div class="vp-ts">
+        <div class="vp-tv">@_cycles</div>
+        <div class="vp-tl">Cycles/min</div>
+      </div>
+      <div class="vp-vsep"></div>
+      <div class="vp-ts">
+        <div class="vp-tv" style="font-size:12px;color:var(--t2);">@_runtime<sub>s</sub></div>
+        <div class="vp-tl">Runtime</div>
+      </div>
     </div>
+  </div>
+
+  <!-- AI PULSE CANVAS -->
+  <div class="vp-pc">
+    <div class="vp-phd">
+      <span class="vp-pico">◈</span>
+      <div>
+        <div class="vp-ptit">AI PULSE</div>
+        <div class="vp-psub">Neuron Activity · @_sortedSyms.Count symbols · <span class="vp-mode vp-@_pulseMode.ToLower()">@_pulseMode</span></div>
+      </div>
+    </div>
+    <canvas id="vp-cv" height="110"></canvas>
+    <div class="vp-pm">
+      <div class="vp-vw">
+        <span class="vp-vlbl">VOLATILITY</span>
+        <div class="vp-vbar"><div class="vp-vfill" style="width:@_avgVol.ToString("F0")%"></div></div>
+      </div>
+      <div class="vp-pmet">
+        <div class="vp-pmv">@_avgVol.ToString("F0")<sub>%</sub></div>
+        <div class="vp-pml">Volatility</div>
+      </div>
+      <div class="vp-pmet">
+        <div class="vp-pmv">@_marketPulse.ToString("F3")</div>
+        <div class="vp-pml">Market Pulse</div>
+      </div>
+      <div class="vp-pmet">
+        <div class="vp-pmv">@_tracked</div>
+        <div class="vp-pml">▦ Tracked</div>
+      </div>
+      <div class="vp-pmet">
+        <div class="vp-pmv" style="color:var(--@(_confLvl=="HIGH"?"gn":_confLvl=="MEDIUM"?"yn":"rd"))">@_confPct<sub>%</sub></div>
+        <div class="vp-pml">Confidence</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW 1 -->
+  <div class="vp-gr">
+
+    <!-- Live Market Processing -->
+    <div class="vp-cd">
+      <div class="vp-chd"><span class="vp-cico">⚡</span><span class="vp-ctit">Live Market Processing</span></div>
+      @if (!_sortedSyms.Any())
+      {
+        <div class="vp-mt"><div class="vp-mtico">🧠</div><div>Waiting for AI data…</div></div>
+      }
+      else
+      {
+        @foreach (var s in _sortedSyms.Take(5))
+        {
+          var pwr = (double)s.SmoothedPulse;
+          var lvl = PulseLevel(pwr);
+          var pct = Math.Min(99, (int)(s.Confidence * 100));
+          var barCls = lvl==3?"vp-bgn":lvl==2?"vp-byn":"vp-bdm";
+          var pctCls = lvl==3?"gn":lvl==2?"yn":"dm";
+          var stCls  = lvl==3?"vp-hot":lvl==2?"vp-rdy":lvl==1?"vp-wt":"vp-slp";
+          var stLbl  = lvl==3?"🔥 HOT":lvl==2?"READY":lvl==1?"WAIT":"SLEEP";
+          var regCls = RegCss(s.Regime);
+          var regLbl = RegShort(s.Regime);
+          <div class="vp-sy">
+            <div class="vp-sy1">
+              <span class="vp-sn">@s.Symbol</span>
+              <span class="vp-rb @regCls">@regLbl</span>
+              <span class="vp-pct @pctCls">@pct%</span>
+              <span class="vp-sb @stCls">@stLbl</span>
+            </div>
+            <canvas id="vp-spk-@s.Symbol.ToLower()" class="vp-spk"
+                    data-p="@pwr.ToString("F4")" data-r="@((int)s.Regime)"></canvas>
+            <div class="vp-bw">
+              <div class="vp-b"><div class="vp-bf @barCls" style="width:@pct%"></div></div>
+              <span class="vp-bpct">@pct%</span>
+            </div>
+          </div>
+        }
+      }
+    </div>
+
+    <!-- AI Learning Insights -->
+    <div class="vp-cd">
+      <div class="vp-chd"><span class="vp-cico">⚡</span><span class="vp-ctit">AI Learning Insights</span></div>
+      @if (AiState?.Snapshot?.RegimeStats == null || !AiState.Snapshot.RegimeStats.Any())
+      {
+        <div class="vp-mt"><div class="vp-mtico">📊</div><div>No learning data yet…</div></div>
+      }
+      else
+      {
+        @foreach (var kv in AiState.Snapshot.RegimeStats.Take(3))
+        {
+          var total = kv.Value.Trades;
+          var wins  = kv.Value.Wins;
+          var sc    = total > 0 ? (double)wins / total * 100 : 0;
+          var bw    = (int)Math.Clamp(sc, 0, 100);
+          <div class="vp-ins">
+            <div class="vp-inn">@kv.Key.ToString().ToUpperInvariant()</div>
+            <div class="vp-insu">@total events · AVG @sc.ToString("F1")</div>
+            <canvas id="vp-ins-@kv.Key.ToString().ToLower()" class="vp-inch"
+                    data-sc="@sc.ToString("F2")" style="width:100%"></canvas>
+            <div class="vp-insr">
+              <span class="vp-insv">@sc.ToString("F1")</span>
+              <div class="vp-insb"><div class="vp-insbf" style="width:@bw%"></div></div>
+              <span class="vp-insp">@bw%</span>
+            </div>
+          </div>
+        }
+        <div style="border-top:1px solid var(--pb);padding-top:7px;margin-top:4px;">
+          <div style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Recent Patterns</div>
+          <div style="display:flex;gap:5px;flex-wrap:wrap;">
+            @foreach (var t in (AiState?.Trades ?? []).GroupBy(t => t.Regime).Take(4))
+            {
+              var tw = t.Count(x => x.PnlPct >= 0);
+              var tt = t.Count();
+              var wr = tt > 0 ? tw * 100 / tt : 0;
+              var col = wr >= 60 ? "var(--gn)" : wr >= 40 ? "var(--yn)" : "var(--rd)";
+              <span style="font-size:8px;padding:2px 6px;border-radius:3px;background:rgba(255,255,255,.04);border:1px solid var(--pb);color:@col;">
+                @t.Key.ToString().Replace("Trend","T") @wr%
+              </span>
+            }
+          </div>
+        </div>
+      }
+    </div>
+  </div>
+
+  <!-- ROW 2 -->
+  <div class="vp-gr">
+
+    <!-- AI Exposure Matrix — charts -->
+    <div class="vp-cd">
+      <div class="vp-chd"><span class="vp-cico">⚡</span><span class="vp-ctit">AI Exposure Matrix</span></div>
+      @if (!_hotSyms.Any())
+      {
+        <div class="vp-mt"><div class="vp-mtico">📡</div><div>No hot symbols</div></div>
+      }
+      else
+      {
+        @foreach (var s in _hotSyms.Take(4))
+        {
+          var pct  = (s.SmoothedPulse * 100m).ToString("F1");
+          var pctI = (int)(s.SmoothedPulse * 100m);
+          var isRisky = false; // could add logic later
+          var regCls = RegCss(s.Regime);
+          var regLbl = RegShort(s.Regime);
+          var arrowCls = s.Pulse > s.SmoothedPulse ? "up" : s.Pulse < s.SmoothedPulse * 0.95m ? "dn" : "fl";
+          var arrowChr = arrowCls=="up" ? "↗" : arrowCls=="dn" ? "↘" : "→";
+          var epColor  = arrowCls=="up" ? "var(--gn)" : arrowCls=="dn" ? "var(--rd)" : "var(--yn)";
+          var barCls   = arrowCls=="up" ? "vp-bgn" : arrowCls=="dn" ? "vp-brd" : "vp-byn";
+          <div class="vp-ex">
+            <div class="vp-ex1">
+              <span class="vp-en">@s.Symbol</span>
+              <span class="vp-rb @regCls" style="font-size:8px;">@regLbl</span>
+              <span class="vp-ep" style="color:@epColor">@pct<span class="vp-ear @arrowCls">%@arrowChr</span></span>
+            </div>
+            <canvas id="vp-exp-@s.Symbol.ToLower()" style="width:100%;height:34px;display:block;margin:3px 0;"
+                    data-p="@((double)s.SmoothedPulse)" data-up="@(arrowCls=="up"?"1":"0")"></canvas>
+            <div class="vp-bw">
+              <div class="vp-b"><div class="vp-bf @barCls" style="width:@pctI%"></div></div>
+              <span class="vp-bpct">@pctI%</span>
+            </div>
+          </div>
+        }
+      }
+    </div>
+
+    <!-- AI Exposure — full list -->
+    <div class="vp-cd">
+      <div class="vp-chd"><span class="vp-cico">⚡</span><span class="vp-ctit">AI Exposure Matrix</span></div>
+      @if (!_sortedSyms.Any())
+      {
+        <div class="vp-mt"><div class="vp-mtico">📡</div><div>No data</div></div>
+      }
+      else
+      {
+        @foreach (var s in _hotSyms.Take(3))
+        {
+          var pct = (s.SmoothedPulse * 100m).ToString("F1");
+          var arrowCls = s.Pulse > s.SmoothedPulse ? "up" : "fl";
+          var arrowChr = arrowCls=="up" ? "↗" : "→";
+          var regLbl = RegShort(s.Regime);
+          var regCls = RegCss(s.Regime);
+          <div class="vp-ex">
+            <div class="vp-ex1">
+              <span class="vp-en">@s.Symbol</span>
+              <span class="vp-ep">@pct<span class="vp-ear @arrowCls">%@arrowChr</span></span>
+            </div>
+            <span class="vp-rb @regCls" style="font-size:8px;">@regLbl</span>
+          </div>
+        }
+        <div class="vp-cl">
+          @foreach (var s in _sortedSyms.Skip(3).Take(9))
+          {
+            var pct   = (int)(s.SmoothedPulse * 100m);
+            var lvl   = PulseLevel((double)s.SmoothedPulse);
+            var isRsk = false;
+            var regLbl = RegShort(s.Regime);
+            var barClr = lvl>=2 ? "var(--gn2)" : "var(--pb2)";
+            var txtClr = isRsk ? "var(--rd)" : "var(--t2)";
+            <div class="vp-cli">
+              <span class="vp-cln" style="color:@txtClr;font-weight:@(lvl>=2?"700":"400")">@s.Symbol</span>
+              <span style="font-size:8px;color:var(--t3);">@regLbl</span>
+              <span style="font-family:var(--mn);font-size:10px;color:var(--t2);">@pct%</span>
+              <div style="width:42px;height:2px;background:var(--p4);border-radius:1px;overflow:hidden;">
+                <div style="width:@pct%;height:100%;background:@barClr;border-radius:1px;"></div>
+              </div>
+            </div>
+          }
+        </div>
+      }
+    </div>
+  </div>
 
 </div>
 
 @code {
-    private DotNetObjectReference<AiPulse>? _ref;
+    AiRuntimeState? AiState => Runtime.Current;
+
+    List<SymbolPulseSnapshot> _sortedSyms = [];
+    List<SymbolPulseSnapshot> _hotSyms    = [];
+
+    int    _symCount, _hotCount, _thinkCount, _winRate, _runtime;
+    int    _cycles, _tracked, _confPct;
+    double _avgVol, _marketPulse;
+    string _pulseMode = "Calm";
+    string _confLvl   = "LOW";
+
+    System.Threading.Timer? _ticker;
+
+    protected override void OnInitialized()
+    {
+        Runtime.OnUpdated += OnAiUpdated;
+        OnAiUpdated();
+        // Refresh engine metrics every 3s
+        _ticker = new System.Threading.Timer(_ =>
+            InvokeAsync(() => { LoadEngineMetrics(); StateHasChanged(); }),
+            null, 0, 3000);
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
-        {
-            _ref = DotNetObjectReference.Create(this);
-            await JS.InvokeVoidAsync("AiPulseV1.start", _ref);
-        }
+        if (firstRender) await DrawAll();
     }
 
-    [JSInvokable]
-    public object GetPulse()
+    void OnAiUpdated()
     {
-        // Возвращаем актуальное значение пульса
-        return new
-        {
-            value = (double)Pulse.MarketPulseSmooth,
-            raw = (double)Pulse.MarketPulse,
-            mode = Pulse.Mode.ToString()
-        };
+        RebuildSymbols();
+        CalcStats();
+        InvokeAsync(async () => { StateHasChanged(); await DrawAll(); });
     }
+
+    void RebuildSymbols()
+    {
+        var syms = Pulse.Symbols.Values
+            .OrderByDescending(s => s.SmoothedPulse)
+            .ToList();
+        _sortedSyms = syms;
+        _hotSyms    = syms.Where(s => PulseLevel((double)s.SmoothedPulse) >= 2).ToList();
+        _hotCount   = syms.Count(s => PulseLevel((double)s.SmoothedPulse) == 3);
+        _thinkCount = syms.Count(s => PulseLevel((double)s.SmoothedPulse) == 2);
+        _symCount   = syms.Count;
+        _avgVol     = syms.Any() ? (double)syms.Average(s => s.SmoothedPulse) * 100 : 0;
+        _marketPulse = (double)Pulse.Market.SmoothedPulse;
+        _pulseMode  = Pulse.Market.Mode.ToString();
+    }
+
+    void CalcStats()
+    {
+        if (AiState?.Trades == null) return;
+        var wins = AiState.Trades.Count(t => t.PnlPct >= 0);
+        var tot  = AiState.Trades.Count;
+        _winRate = tot > 0 ? wins * 100 / tot : 0;
+    }
+
+    void LoadEngineMetrics()
+    {
+        var eng = EngineStateSvc.Load();
+        if (eng == null) return;
+        _cycles  = eng.CyclesPerMinute;
+        _tracked = eng.TrackedSymbols;
+        _confPct = eng.ConfidencePercent;
+        _confLvl = eng.ConfidenceLevel ?? "LOW";
+        _runtime = (int)(DateTime.UtcNow - (AiState?.LoadedAtUtc ?? DateTime.UtcNow)).TotalSeconds;
+    }
+
+    async Task DrawAll()
+    {
+        try
+        {
+            var pwrs = _sortedSyms.Select(s => (double)s.SmoothedPulse).Take(60).ToArray();
+            await JS.InvokeVoidAsync("vpDrawPulse", "vp-cv", pwrs);
+
+            foreach (var s in _sortedSyms.Take(5))
+            {
+                var id = "vp-spk-" + s.Symbol.ToLower();
+                await JS.InvokeVoidAsync("vpDrawSparkline", id,
+                    (double)s.SmoothedPulse, (int)s.Regime, false);
+            }
+            foreach (var s in _hotSyms.Take(4))
+            {
+                var id = "vp-exp-" + s.Symbol.ToLower();
+                var up = s.Pulse > s.SmoothedPulse * 1.01m;
+                await JS.InvokeVoidAsync("vpDrawExposure", id,
+                    (double)s.SmoothedPulse, up ? 0.3 : -0.1);
+            }
+            if (AiState?.Snapshot?.RegimeStats != null)
+                foreach (var kv in AiState.Snapshot.RegimeStats.Take(3))
+                {
+                    var id = "vp-ins-" + kv.Key.ToString().ToLower();
+                    var sc = kv.Value.Trades > 0
+                        ? (double)kv.Value.Wins / kv.Value.Trades * 100 : 0;
+                    await JS.InvokeVoidAsync("vpDrawInsight", id, sc);
+                }
+        }
+        catch { }
+    }
+
+    int PulseLevel(double p) => p >= 0.0035 ? 3 : p >= 0.0015 ? 2 : p >= 0.0005 ? 1 : 0;
+
+    string RegCss(MarketRegime r) => r switch
+    {
+        MarketRegime.StrongUpTrend   => "vp-sup",
+        MarketRegime.UpTrend         => "vp-up",
+        MarketRegime.Range           => "vp-rng",
+        MarketRegime.DownTrend       => "vp-dn",
+        MarketRegime.StrongDownTrend => "vp-sdn",
+        _                            => "vp-rng",
+    };
+
+    string RegShort(MarketRegime r) => r switch
+    {
+        MarketRegime.StrongUpTrend   => "StrongUpTrend",
+        MarketRegime.UpTrend         => "UpTrend",
+        MarketRegime.Range           => "Range",
+        MarketRegime.DownTrend       => "DownTrend",
+        MarketRegime.StrongDownTrend => "StrongDownTrend",
+        MarketRegime.Squeeze         => "Squeeze",
+        _                            => "—",
+    };
 
     public void Dispose()
     {
-        _ref?.Dispose();
+        Runtime.OnUpdated -= OnAiUpdated;
+        _ticker?.Dispose();
     }
 }
