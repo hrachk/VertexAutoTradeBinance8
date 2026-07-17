@@ -247,22 +247,36 @@
     <!-- AI Learning Insights -->
     <div class="vp-cd">
       <div class="vp-chd"><span class="vp-cico">⚡</span><span class="vp-ctit">AI Learning Insights</span></div>
-      @if (AiState?.Snapshot?.RegimeStats == null || !AiState.Snapshot.RegimeStats.Any())
+      @if (AiState?.Snapshot?.Symbols == null || !AiState.Snapshot.Symbols.Any(s => s.Regimes?.Any() == true))
       {
         <div class="vp-mt"><div class="vp-mtico">📊</div><div>No learning data yet…</div></div>
       }
       else
       {
-        @foreach (var kv in AiState.Snapshot.RegimeStats.Take(3))
+        @{
+            // Flatten Symbols[].Regimes[] → group by Regime
+            var regGroups = (AiState.Snapshot.Symbols ?? [])
+                .SelectMany(s => s.Regimes ?? [])
+                .GroupBy(x => x.Regime)
+                .Select(g => new {
+                    Regime = g.Key,
+                    Trades = g.Sum(x => x.Trades),
+                    Wins   = g.Sum(x => x.Wins)
+                })
+                .OrderByDescending(x => x.Trades)
+                .Take(3);
+        }
+        @foreach (var rg in regGroups)
         {
-          var total = kv.Value.Trades;
-          var wins  = kv.Value.Wins;
+          var total = rg.Trades;
+          var wins  = rg.Wins;
           var sc    = total > 0 ? (double)wins / total * 100 : 0;
           var bw    = (int)Math.Clamp(sc, 0, 100);
+          var rgKey = rg.Regime.ToString();
           <div class="vp-ins">
-            <div class="vp-inn">@kv.Key.ToString().ToUpperInvariant()</div>
+            <div class="vp-inn">@rgKey.ToUpperInvariant()</div>
             <div class="vp-insu">@total events · AVG @sc.ToString("F1")</div>
-            <canvas id="vp-ins-@kv.Key.ToString().ToLower()" class="vp-inch"
+            <canvas id="vp-ins-@rgKey.ToLower()" class="vp-inch"
                     data-sc="@sc.ToString("F2")" style="width:100%"></canvas>
             <div class="vp-insr">
               <span class="vp-insv">@sc.ToString("F1")</span>
@@ -469,14 +483,21 @@
                 await JS.InvokeVoidAsync("vpDrawExposure", id,
                     (double)s.SmoothedPulse, up ? 0.3 : -0.1);
             }
-            if (AiState?.Snapshot?.RegimeStats != null)
-                foreach (var kv in AiState.Snapshot.RegimeStats.Take(3))
+            if (AiState?.Snapshot?.Symbols != null)
+            {
+                var rgs = AiState.Snapshot.Symbols
+                    .SelectMany(s => s.Regimes ?? [])
+                    .GroupBy(x => x.Regime)
+                    .Select(g => new { Regime = g.Key, Trades = g.Sum(x => x.Trades), Wins = g.Sum(x => x.Wins) })
+                    .OrderByDescending(x => x.Trades)
+                    .Take(3);
+                foreach (var rg in rgs)
                 {
-                    var id = "vp-ins-" + kv.Key.ToString().ToLower();
-                    var sc = kv.Value.Trades > 0
-                        ? (double)kv.Value.Wins / kv.Value.Trades * 100 : 0;
+                    var id = "vp-ins-" + rg.Regime.ToString().ToLower();
+                    var sc = rg.Trades > 0 ? (double)rg.Wins / rg.Trades * 100 : 0;
                     await JS.InvokeVoidAsync("vpDrawInsight", id, sc);
                 }
+            }
         }
         catch { }
     }
