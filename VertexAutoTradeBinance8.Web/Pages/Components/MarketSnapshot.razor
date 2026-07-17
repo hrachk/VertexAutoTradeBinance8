@@ -4701,7 +4701,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // monitor watches them directly.
         if (_demoMode)
         {
-            decimal price = _symTickSize > 0 ? Math.Round(newPrice / _symTickSize) * _symTickSize : newPrice;
+            decimal price = RoundPrice(newPrice);
             DemoAccount.UpdatePositionProtectiveLevel(pos.Id, isStopLoss, price, tpIndex);
             RefreshDemoSnapshot();
             await RefreshPositionLines();
@@ -4912,7 +4912,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     {
         if (_demoMode)
         {
-            decimal tpDemoPrice = _symTickSize > 0 ? Math.Round(price / _symTickSize) * _symTickSize : price;
+            decimal tpDemoPrice = RoundPrice(price);
             decimal tpDemoQty = pos.Qty * (pct / 100m);
             DemoAccount.UpdatePositionProtectiveLevel(pos.Id, isStopLoss: false, tpDemoPrice, tpIndex: null, newTpQty: tpDemoQty);
             RefreshDemoSnapshot();
@@ -6827,7 +6827,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 // Position - same rounding/leverage/hedge-mode
                 // handling as Market above, just a GTC Limit order
                 // instead of an immediate Market fill.
-                decimal limitPrice = _symTickSize > 0 ? Math.Round(_addToPosPrice / _symTickSize) * _symTickSize : _addToPosPrice;
+                decimal limitPrice = _symTickSize > 0 ? RoundPrice(_addToPosPrice) : _addToPosPrice;
 
                 await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: pos.Symbol,
