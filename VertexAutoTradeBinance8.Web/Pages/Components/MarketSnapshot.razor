@@ -4603,7 +4603,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         if (_addToPositionOpen && _selectedPosition != null)
         {
             _addToPosType = "Limit";
-            _addToPosPrice = _symTickSize > 0 ? Math.Round(price / _symTickSize) * _symTickSize : price;
+            _addToPosPrice = _symTickSize > 0 ? RoundPrice(price) : price;
             await InvokeAsync(StateHasChanged);
             return;
         }
@@ -4631,7 +4631,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         if (_orderType == "Market") _orderType = "Limit";
 
         _orderPrice = _symTickSize > 0
-            ? Math.Round(price / _symTickSize) * _symTickSize
+            ? RoundPrice(price)
             : price;
 
         await SuggestQtyForPrice(_orderPrice);
@@ -6439,7 +6439,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             // Round to tick size
             await LoadSymbolPrecisionAsync(row.Symbol);
             decimal price = _symTickSize > 0
-                ? Math.Round(_editPrice / _symTickSize, MidpointRounding.ToEven) * _symTickSize
+                ? RoundPrice(_editPrice)
                 : Math.Round(_editPrice, 8);
             decimal qty = _symStep > 0
                 ? Math.Floor(_editQty / _symStep) * _symStep
@@ -6560,7 +6560,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out var v)) return;
         _orderPrice = _symTickSize > 0
-            ? Math.Round(v / _symTickSize) * _symTickSize
+            ? RoundPrice(v)
             : v;
     }
 
@@ -6569,7 +6569,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         if (!decimal.TryParse(e.Value?.ToString(),
             System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out var v)) { _manualSlPrice = 0; return; }
-        _manualSlPrice = _symTickSize > 0 ? Math.Round(v / _symTickSize) * _symTickSize : v;
+        _manualSlPrice = _symTickSize > 0 ? RoundPrice(v) : v;
     }
 
     void AddManualTp()
@@ -6592,7 +6592,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         if (!decimal.TryParse(e.Value?.ToString(),
             System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out var v)) { _manualTps[idx].Price = 0; return; }
-        _manualTps[idx].Price = _symTickSize > 0 ? Math.Round(v / _symTickSize) * _symTickSize : v;
+        _manualTps[idx].Price = _symTickSize > 0 ? RoundPrice(v) : v;
     }
 
     void OnManualTpPctChange(int idx, ChangeEventArgs e)
@@ -6965,7 +6965,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
             // Round price to tickSize
             decimal tick  = _symTickSize > 0 ? _symTickSize : 0.0001m;
-            decimal price = tick > 0 ? Math.Round(_orderPrice / tick) * tick : _orderPrice;
+            decimal price = tick > 0 ? RoundPrice(_orderPrice, tick) : _orderPrice;
 
             // Set leverage
             try { await client.UsdFuturesApi.Account.ChangeInitialLeverageAsync(
