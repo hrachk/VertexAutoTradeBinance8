@@ -4904,34 +4904,11 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             if (client == null) return;
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
 
-            // Ensure tickSize/stepSize are loaded — same fallback as ReplaceProtectiveOrderAsync
-            decimal tpTickSize = _symTickSize > 0 ? _symTickSize : 0m;
-            decimal tpStepSize = _symStep     > 0 ? _symStep     : 0m;
-            if (tpTickSize <= 0 || tpStepSize <= 0)
-            {
-                try
-                {
-                    using var cts3 = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                    var ei3 = await client.UsdFuturesApi.ExchangeData.GetExchangeInfoAsync(cts3.Token);
-                    if (ei3.Success)
-                    {
-                        var sym3 = ei3.Data.Symbols.FirstOrDefault(x => x.Name == pos.Symbol);
-                        if (sym3 != null)
-                        {
-                            if (tpTickSize <= 0) { tpTickSize = sym3.PriceFilter?.TickSize   ?? 0m; _symTickSize = tpTickSize; }
-                            if (tpStepSize <= 0) { tpStepSize = sym3.LotSizeFilter?.StepSize ?? 0m; _symStep     = tpStepSize; }
-                        }
-                    }
-                }
-                catch { /* fall back to raw price */ }
-            }
-
-            // MidpointRounding.ToEven matches Binance tick-size enforcement
-            decimal tpPrice = tpTickSize > 0
-                ? Math.Round(price / tpTickSize, MidpointRounding.ToEven) * tpTickSize
-                : Math.Round(price, 8);
-            decimal tpQty = pos.Qty * (pct / 100m);
-            if (tpStepSize > 0) tpQty = Math.Floor(tpQty / tpStepSize) * tpStepSize;
+            if (_symTickSize <= 0 || _symStep <= 0)
+                await LoadSymbolPrecisionAsync(pos.Symbol);
+            decimal tpPrice = RoundPrice(price);
+            decimal tpQty   = pos.Qty * (pct / 100m);
+            if (_symStep > 0) tpQty = Math.Floor(tpQty / _symStep) * _symStep;
             if (tpQty <= 0) { _orderError = "New TP quantity too small after rounding"; return; }
 
             bool isLong = pos.Side == "LONG";
