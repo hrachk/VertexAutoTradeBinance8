@@ -1,6 +1,8 @@
 @page "/ai-pulse"
+@using VertexAutoTradeBinance8.Models
 @using VertexAutoTradeBinance8.Services
 @using VertexAutoTradeBinance8.Strategy
+@using VertexAutoTradeBinance8.Web.Services
 @inject IJSRuntime JS
 @inject IAiPulseEngine Pulse
 @inject AiRuntimeDataProvider Runtime
@@ -25,7 +27,7 @@
 .vp-logo{font-size:11px;font-weight:800;letter-spacing:1.5px;background:linear-gradient(135deg,var(--ac),var(--cn));-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
 .vp-ldot{width:7px;height:7px;border-radius:50%;background:var(--gn);box-shadow:0 0 8px var(--gn);animation:vpb 1.2s infinite;}
 .vp-ltxt{font-size:10px;font-weight:700;color:var(--gn);}
-@keyframes vpb{0%,100%{opacity:1}50%{opacity:.2}}
+@@keyframes vpb{0%,100%{opacity:1}50%{opacity:.2}}
 .vp-top-r{margin-left:auto;display:flex;gap:14px;}
 .vp-ts{display:flex;flex-direction:column;align-items:center;}
 .vp-tv{font-family:var(--mn);font-size:15px;font-weight:700;color:var(--t1);}
