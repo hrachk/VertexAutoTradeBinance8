@@ -460,25 +460,25 @@
                     <label>Medium Band From — Default</label>
                     <input class="st-input" type="number" step="0.01" min="0.30" max="0.90"
                            value="@GetDecimal("SignalConfidence:Default:Bands:MediumFrom", 0.52m)"
-                           @onchange="e => SetAsync("SignalConfidence:Default:Bands:MediumFrom", ParseDecimalOr(e.Value, 0.52m))" />
+                           @onchange="OnConfDefaultBandMediumChanged" />
                 </div>
                 <div class="st-field">
                     <label>High Band From — Default</label>
                     <input class="st-input" type="number" step="0.01" min="0.40" max="0.95"
                            value="@GetDecimal("SignalConfidence:Default:Bands:HighFrom", 0.65m)"
-                           @onchange="e => SetAsync("SignalConfidence:Default:Bands:HighFrom", ParseDecimalOr(e.Value, 0.65m))" />
+                           @onchange="OnConfDefaultBandHighChanged" />
                 </div>
                 <div class="st-field">
                     <label>Medium Band From — BTC</label>
                     <input class="st-input" type="number" step="0.01" min="0.30" max="0.90"
                            value="@GetDecimal("SignalConfidence:BTC:Bands:MediumFrom", 0.42m)"
-                           @onchange="e => SetAsync("SignalConfidence:BTC:Bands:MediumFrom", ParseDecimalOr(e.Value, 0.42m))" />
+                           @onchange="OnConfBtcBandMediumChanged" />
                 </div>
                 <div class="st-field">
                     <label>High Band From — BTC</label>
                     <input class="st-input" type="number" step="0.01" min="0.30" max="0.90"
                            value="@GetDecimal("SignalConfidence:BTC:Bands:HighFrom", 0.45m)"
-                           @onchange="e => SetAsync("SignalConfidence:BTC:Bands:HighFrom", ParseDecimalOr(e.Value, 0.45m))" />
+                           @onchange="OnConfBtcBandHighChanged" />
                 </div>
             </div>
             <!-- Early TP ATR multipliers -->
@@ -491,25 +491,25 @@
                     <label>Early TP Medium — Default</label>
                     <input class="st-input" type="number" step="0.05" min="0.1" max="5.0"
                            value="@GetDecimal("SignalConfidence:Default:EarlyTpAtr:Medium", 0.5m)"
-                           @onchange="e => SetAsync("SignalConfidence:Default:EarlyTpAtr:Medium", ParseDecimalOr(e.Value, 0.5m))" />
+                           @onchange="OnConfDefaultEarlyTpMediumChanged" />
                 </div>
                 <div class="st-field">
                     <label>Early TP High — Default</label>
                     <input class="st-input" type="number" step="0.05" min="0.1" max="5.0"
                            value="@GetDecimal("SignalConfidence:Default:EarlyTpAtr:High", 0.5m)"
-                           @onchange="e => SetAsync("SignalConfidence:Default:EarlyTpAtr:High", ParseDecimalOr(e.Value, 0.5m))" />
+                           @onchange="OnConfDefaultEarlyTpHighChanged" />
                 </div>
                 <div class="st-field">
                     <label>Early TP Medium — BTC</label>
                     <input class="st-input" type="number" step="0.05" min="0.1" max="5.0"
                            value="@GetDecimal("SignalConfidence:BTC:EarlyTpAtr:Medium", 0.50m)"
-                           @onchange="e => SetAsync("SignalConfidence:BTC:EarlyTpAtr:Medium", ParseDecimalOr(e.Value, 0.50m))" />
+                           @onchange="OnConfBtcEarlyTpMediumChanged" />
                 </div>
                 <div class="st-field">
                     <label>Early TP High — BTC</label>
                     <input class="st-input" type="number" step="0.05" min="0.1" max="5.0"
                            value="@GetDecimal("SignalConfidence:BTC:EarlyTpAtr:High", 0.52m)"
-                           @onchange="e => SetAsync("SignalConfidence:BTC:EarlyTpAtr:High", ParseDecimalOr(e.Value, 0.52m))" />
+                           @onchange="OnConfBtcEarlyTpHighChanged" />
                 </div>
             </div>
         </div>
@@ -541,9 +541,19 @@
     private Task OnBaseRiskPercentChanged(ChangeEventArgs e) => SetAsync("Trading:BaseRiskPercent", ParseDecimalOr(e.Value, 0m));
     private Task OnMinNotionalGuardPercentChanged(ChangeEventArgs e) => SetAsync("Trading:MinNotionalGuardPercent", ParseDecimalOr(e.Value, 0m));
     private Task OnMaxMarginPercentChanged(string profileKey, ChangeEventArgs e) => SetAsync($"{profileKey}:MaxMarginPercent", ParseDecimalOr(e.Value, 0.12m));
-    private Task OnConfDefaultChanged(ChangeEventArgs e) => SetAsync("SignalConfidence:Default:MinEntry", ParseDecimalOr(e.Value, 0.40m));
-    private Task OnConfBtcChanged(ChangeEventArgs e) => SetAsync("SignalConfidence:BTC:MinEntry", ParseDecimalOr(e.Value, 0.42m));
-    private Task OnConfEthChanged(ChangeEventArgs e) => SetAsync("SignalConfidence:ETH:MinEntry", ParseDecimalOr(e.Value, 0.43m));
+    private Task OnConfDefaultChanged(ChangeEventArgs e) => SetAsync("SignalConfidence:Default:MinEntry", ParseDecimalOr(e.Value, 0.46m));
+    private Task OnConfBtcChanged(ChangeEventArgs e)     => SetAsync("SignalConfidence:BTC:MinEntry", ParseDecimalOr(e.Value, 0.40m));
+    private Task OnConfEthChanged(ChangeEventArgs e)     => SetAsync("SignalConfidence:ETH:MinEntry", ParseDecimalOr(e.Value, 0.40m));
+    // Bands
+    private Task OnConfDefaultBandMediumChanged(ChangeEventArgs e) => SetAsync("SignalConfidence:Default:Bands:MediumFrom", ParseDecimalOr(e.Value, 0.52m));
+    private Task OnConfDefaultBandHighChanged(ChangeEventArgs e)   => SetAsync("SignalConfidence:Default:Bands:HighFrom",   ParseDecimalOr(e.Value, 0.65m));
+    private Task OnConfBtcBandMediumChanged(ChangeEventArgs e)     => SetAsync("SignalConfidence:BTC:Bands:MediumFrom",     ParseDecimalOr(e.Value, 0.42m));
+    private Task OnConfBtcBandHighChanged(ChangeEventArgs e)       => SetAsync("SignalConfidence:BTC:Bands:HighFrom",       ParseDecimalOr(e.Value, 0.45m));
+    // EarlyTpAtr
+    private Task OnConfDefaultEarlyTpMediumChanged(ChangeEventArgs e) => SetAsync("SignalConfidence:Default:EarlyTpAtr:Medium", ParseDecimalOr(e.Value, 0.5m));
+    private Task OnConfDefaultEarlyTpHighChanged(ChangeEventArgs e)   => SetAsync("SignalConfidence:Default:EarlyTpAtr:High",   ParseDecimalOr(e.Value, 0.5m));
+    private Task OnConfBtcEarlyTpMediumChanged(ChangeEventArgs e)     => SetAsync("SignalConfidence:BTC:EarlyTpAtr:Medium",     ParseDecimalOr(e.Value, 0.50m));
+    private Task OnConfBtcEarlyTpHighChanged(ChangeEventArgs e)       => SetAsync("SignalConfidence:BTC:EarlyTpAtr:High",       ParseDecimalOr(e.Value, 0.52m));
 
     private RenderFragment MeanRevTab() => @<div class="st-grid">
 
