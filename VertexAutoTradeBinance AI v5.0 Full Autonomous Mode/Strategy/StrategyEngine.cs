@@ -50,6 +50,7 @@ namespace VertexAutoTradeBinance8.Strategy
         private readonly TestModeOptions _test;
         private readonly ConfidenceResolver _confidenceCfg;
         private readonly FundingRateService _fundingRate;
+        private readonly FearGreedService? _fearGreed;
 
         // =====================================================
         // SLOPE THRESHOLDS для паттернов
@@ -129,7 +130,8 @@ namespace VertexAutoTradeBinance8.Strategy
             LiquidityGuardService liquidityGuardService,
             FundingRateService fundingRate,
             ConfidenceResolver confidenceCfg, DecisionMarkerSink decisionMarkers,
-            IOptionsMonitor<Configuration.PullbackEntryOptions> pullbackEntryOpt)
+            IOptionsMonitor<Configuration.PullbackEntryOptions> pullbackEntryOpt,
+            FearGreedService? fearGreed = null)
         {
             _logger = logger;
             _correlationService = correlationService;
@@ -146,6 +148,7 @@ namespace VertexAutoTradeBinance8.Strategy
             _confidenceCfg = confidenceCfg;
             _decisionMarkers = decisionMarkers;
             _pullbackEntryOpt = pullbackEntryOpt;
+            _fearGreed = fearGreed;
 
             _logger.LogWarning(
                 "[CONFIG][STRATEGY] Trading TF={tf} | TestMode={enabled} Level={level}",
