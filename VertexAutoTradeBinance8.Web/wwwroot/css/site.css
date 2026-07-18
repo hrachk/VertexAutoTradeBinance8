@@ -4245,3 +4245,283 @@ compact-card {
 /* Redesign V2 corner badge */
 .corner { display: none !important; }
 
+
+/* ═══════════════════════════════════════════════════════════════════════
+   VERTEX — TYPOGRAPHY SCALE FIX v1
+   Professional exchange sizing (Binance/Bybit/OKX reference)
+   All !important to override inline styles in MarketSnapshot.razor
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Global base — overrides every conflicting body/html rule above */
+html { font-size: 14px !important; }
+
+body {
+  font-size: 13px !important;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+  line-height: 1.5 !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   VERTEX — TYPOGRAPHY SCALE FIX
+   Professional exchange font sizes (Binance/Bybit/OKX reference)
+   
+   Scale system:
+     xs:   10px — micro labels, badges
+     sm:   11px — secondary labels, timestamps  
+     base: 13px — main body, table cells, inputs
+     md:   14px — symbol names, important values
+     lg:   16px — prices, key metrics
+     xl:   20px — hero PnL numbers
+     2xl:  26px — position PnL hero
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. GLOBAL BASE ─────────────────────────────────────────── */
+html {
+  font-size: 14px !important;
+}
+
+body {
+  font-size: 13px !important;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+  line-height: 1.5 !important;
+}
+
+/* ── 2. HEADER & NAV ────────────────────────────────────────── */
+.vertex-title    { font-size: 12px !important; }
+.vertex-subtitle { font-size: 9px  !important; }
+
+.vt-link { font-size: 12px !important; }
+
+.vx-chip      { font-size: 11px !important; }
+.vx-chip-mode { font-size: 11px !important; }
+.vx-mode-select { font-size: 11px !important; }
+
+.autotrade-toggle      { font-size: 11px !important; }
+.strategy-mode-select  { font-size: 11px !important; }
+
+/* ── 3. TICKER BAR ──────────────────────────────────────────── */
+.mk-tk-sym   { font-size: 11px !important; }
+.mk-tk-price { font-size: 10.5px !important; }
+.mk-tk-chg   { font-size: 10.5px !important; }
+
+/* ── 4. SIGNAL CARDS ────────────────────────────────────────── */
+.sig-panel-title { font-size: 11px !important; }
+.sig-count       { font-size: 10px !important; }
+.sc-sym          { font-size: 12px !important; }
+.sc-side         { font-size: 11px !important; }
+.sc-ago          { font-size: 10px !important; }
+.sc-usdt         { font-size: 10px !important; }
+.sc-conf         { font-size: 11px !important; }
+.sc-rr           { font-size: 10px !important; }
+.sc-atr          { font-size: 10px !important; }
+.sc-warn-strip   { font-size: 10px !important; }
+.sc-pl           { font-size: 11px !important; }
+.sc-pv           { font-size: 12px !important; }
+.sc-foot         { font-size: 11px !important; }
+.mk-header-scan  { font-size: 11px !important; }
+
+/* ── 5. STATS BAR (symbol details) ─────────────────────────── */
+.mk-sl  { font-size: 9px  !important; }  /* labels */
+.mk-sv  { font-size: 12px !important; }  /* values */
+.mk-dim { font-size: 12px !important; }
+
+/* ── 6. SIDEBAR ─────────────────────────────────────────────── */
+.mk-side-tab    { font-size: 11px !important; }
+.mk-side-rank   { font-size: 10px !important; }
+.mk-side-sym    { font-size: 12px !important; }
+.mk-side-price  { font-size: 11px !important; }
+.mk-side-chg    { font-size: 11px !important; }
+.mk-side-search { font-size: 12px !important; }
+
+/* ── 7. CHART HEADER ─────────────────────────────────────────── */
+.mk-max-sym    { font-size: 15px !important; }
+.mk-max-price  { font-size: 20px !important; }
+.mk-max-tf     { font-size: 12px !important; }
+.mk-legend     { font-size: 11px !important; }
+.mk-tf-btn     { font-size: 11px !important; }
+
+/* ── 8. ACCOUNT BAR ─────────────────────────────────────────── */
+.mk-acct-label      { font-size: 9px  !important; }
+.mk-acct-value      { font-size: 15px !important; }
+.mk-acct-unreal-val { font-size: 13px !important; }
+.mk-acct-sub        { font-size: 10px !important; }
+
+/* ── 9. POSITIONS TABLE ─────────────────────────────────────── */
+.mk-oo-tab   { font-size: 11px !important; }
+.mk-oo-count { font-size: 10px !important; }
+.mk-oo-mode-badge { font-size: 10px !important; }
+
+.mk-oo-tbl thead th { font-size: 9.5px  !important; }
+.mk-oo-tbl td       { font-size: 11.5px !important; }
+.mk-oo-sym          { font-size: 12px  !important; }
+.mk-lev-chip        { font-size: 9.5px !important; }
+.mk-dca-badge       { font-size: 9px   !important; }
+.mk-risk-pct        { font-size: 9.5px !important; }
+
+.mk-pos-partial-btn2 { font-size: 10.5px !important; }
+.mk-pos-close-btn    { font-size: 10.5px !important; }
+
+/* Position sort buttons */
+.mk-sort-btn  { font-size: 11px !important; }
+.mk-pos-filter-cb { font-size: 11px !important; }
+
+/* History/Orders table */
+.mk-mono { font-size: 11.5px !important; }
+
+/* ── 10. ORDER PANEL ─────────────────────────────────────────── */
+.ord-title       { font-size: 12px !important; }
+.ord-sym         { font-size: 12px !important; }
+.ord-balance-l   { font-size: 9px  !important; }
+.ord-balance-v   { font-size: 16px !important; }
+.ord-balance-sub { font-size: 10px !important; }
+.ord-tt          { font-size: 11px !important; }
+.ord-label       { font-size: 9px  !important; }
+.ord-input       { font-size: 13px !important; }
+.ord-input-sfx   { font-size: 12px !important; }
+.ord-lev-val     { font-size: 13px !important; }
+.ord-lev-max     { font-size: 10px !important; }
+.ord-lev-tick    { font-size: 11px !important; }
+.ord-price-hint  { font-size: 10px !important; }
+.ord-notional    { font-size: 11px !important; }
+.ord-error       { font-size: 11px !important; }
+.ord-ok          { font-size: 11px !important; }
+.ord-submit-btn  { font-size: 13px !important; }
+.ord-cancel-btn  { font-size: 11px !important; }
+.ord-lev-l       { font-size: 10px !important; }
+.ord-lev-v       { font-size: 12px !important; }
+.ord-lev-use     { font-size: 10px !important; }
+
+/* TP rows in order form */
+.ord-tp-row input { font-size: 12px !important; }
+.ord-tp-pct-sfx  { font-size: 11px !important; }
+.ord-tp-total    { font-size: 10px !important; }
+.ord-tp-add      { font-size: 11px !important; }
+.ord-tp-remove   { font-size: 12px !important; }
+
+/* ── 11. POSITION PANEL (selected position) ─────────────────── */
+.ord-selected-label          { font-size: 10px !important; }
+.ord-position-pnl-hero-v     { font-size: 28px !important; }
+.ord-position-roi-hero        { font-size: 14px !important; }
+.ord-position-l              { font-size: 9.5px !important; }
+.ord-position-v              { font-size: 12px  !important; }
+.ord-position-close-btn      { font-size: 13px  !important; }
+.ord-liq-title               { font-size: 10px  !important; }
+.ord-liq-pct                 { font-size: 11px  !important; }
+.ord-tpsl-title              { font-size: 10px  !important; }
+.ord-tp-price                { font-size: 12px  !important; }
+.ord-tp-pct                  { font-size: 11px  !important; }
+.ord-tp-lbl                  { font-size: 10px  !important; }
+.ord-pos-orders-title        { font-size: 11px  !important; }
+.ord-pos-order-type          { font-size: 11px  !important; }
+.ord-pos-order-top           { font-size: 11px  !important; }
+
+/* Add to position box */
+.ord-add-to-pos-btn  { font-size: 12px !important; }
+.ord-add-to-pos-head { font-size: 12px !important; }
+.ord-type-tab        { font-size: 11px !important; }
+.nord-submit-btn     { font-size: 12px !important; }
+.ord-success         { font-size: 11px !important; }
+
+/* ── 12. LEVERAGE MODAL ─────────────────────────────────────── */
+.mk-lev-msym    { font-size: 14px !important; }
+.mk-lev-msub    { font-size: 11px !important; }
+.mk-lev-big     { font-size: 32px !important; }
+.mk-lev-maxhint { font-size: 11px !important; }
+.mk-lev-pre     { font-size: 12px !important; }
+.mk-lev-prev-row { font-size: 12px !important; }
+.mk-lev-err     { font-size: 11px !important; }
+.mk-lev-cancel  { font-size: 12px !important; }
+.mk-lev-confirm { font-size: 13px !important; }
+
+/* ── 13. SIGNALS PAGE (Missed Trades) ───────────────────────── */
+.mt-head     { font-size: 16px !important; }
+.mt-sub      { font-size: 12px !important; }
+.mt-sym      { font-size: 14px !important; }
+.mt-side     { font-size: 12px !important; }
+.mt-entry    { font-size: 13px !important; }
+.mt-label    { font-size: 10px !important; }
+.mt-value    { font-size: 12px !important; }
+.mt-badge    { font-size: 10.5px !important; }
+.mt-filter   { font-size: 12px !important; }
+
+/* ── 14. SETTINGS PAGE ──────────────────────────────────────── */
+.st-card-title  { font-size: 13px !important; }
+.st-card-sub    { font-size: 12px !important; }
+.st-field label { font-size: 12px !important; }
+.st-input       { font-size: 13px !important; }
+.st-toggle span { font-size: 12px !important; }
+.st-live-pill   { font-size: 10px !important; }
+.st-tab         { font-size: 12px !important; }
+
+/* ── 15. STATISTICS PAGE ────────────────────────────────────── */
+.stat-kpi-val   { font-size: 24px !important; }
+.stat-kpi-lbl   { font-size: 11px !important; }
+.stat-month-ttl { font-size: 12px !important; }
+.stat-day       { font-size: 12px !important; }
+.stat-pnl       { font-size: 12px !important; }
+
+/* ── 16. AI DASHBOARD ───────────────────────────────────────── */
+.ai-db-title    { font-size: 14px !important; }
+.ai-db-val      { font-size: 20px !important; }
+.ai-db-label    { font-size: 11px !important; }
+.ai-sym-name    { font-size: 13px !important; }
+.ai-conf-txt    { font-size: 12px !important; }
+
+/* ── 17. ENGINE PAGE ────────────────────────────────────────── */
+.eng-title   { font-size: 14px !important; }
+.eng-label   { font-size: 11px !important; }
+.eng-value   { font-size: 13px !important; }
+.eng-status  { font-size: 12px !important; }
+
+/* ── 18. POSITIONS CSS FILE overrides ───────────────────────── */
+.pos-table th { font-size: 10px !important; }
+.pos-table td { font-size: 12px !important; }
+.pos-sym      { font-size: 13px !important; }
+.pos-pnl      { font-size: 13px !important; }
+
+/* ── 19. GENERAL INPUT / BUTTON / FORM ──────────────────────── */
+input[type="text"],
+input[type="number"],
+input[type="email"],
+select,
+textarea {
+  font-size: 13px !important;
+}
+
+button:not(.menu-toggle):not(.ord-lev-slider):not(.ord-close-x):not(.mk-close-x):not(.mk-lev-cancel) {
+  font-size: 12px !important;
+}
+
+/* NavMenu items */
+.nav-item, .nav-link {
+  font-size: 13px !important;
+}
+
+/* Table defaults */
+table { font-size: 12px !important; }
+th    { font-size: 10px !important; }
+td    { font-size: 12px !important; }
+
+/* Tooltips and tiny badges — these CAN stay small */
+[title]:hover::after, .tooltip { font-size: 11px !important; }
+.badge, .chip { font-size: 10px !important; }
+
+/* ── 20. OVERRIDE our own V3 redesign tiny sizes ────────────── */
+/* The V3 redesign used 7-9px which is too small — fix here */
+.mk-sl   { font-size: 9.5px  !important; }
+.mk-acct-label { font-size: 9.5px !important; }
+.ord-label     { font-size: 9.5px !important; }
+.ord-balance-l { font-size: 9.5px !important; }
+.mk-oo-tbl thead th { font-size: 10px !important; }
+.mk-side-rank  { font-size: 10.5px !important; }
+.mk-risk-pct   { font-size: 10px !important; }
+.mk-dca-badge  { font-size: 9.5px !important; }
+.mk-lev-chip   { font-size: 9.5px !important; }
+.ord-position-l { font-size: 10px !important; }
+.ord-tp-lbl     { font-size: 10.5px !important; }
+
+/* Ensure no text goes below 9.5px anywhere visible */
+.mk-side-sym  { font-size: 12px !important; }
+.mk-side-price{ font-size: 11px !important; }
+.mk-side-chg  { font-size: 11px !important; }
+.mk-oo-tbl td { font-size: 11.5px !important; }
