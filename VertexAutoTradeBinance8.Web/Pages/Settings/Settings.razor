@@ -354,6 +354,37 @@
             }
         </div>
 
+        <div class="st-card">
+            <div class="st-card-head">
+                <div class="st-card-title">⚡ Controlled Trend Engine</div>
+                <span class="st-live-pill">● live</span>
+            </div>
+            <div class="st-card-sub">
+                Parameters for the AdaptiveEngine in Controlled Trend regime — tight directional moves with low volatility.
+                RiskBias scales position size (0.65 = 65% of normal). MinRR is the minimum acceptable Risk/Reward.
+            </div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>Risk Bias <span class="st-field-hint">position size multiplier in controlled trend (0.65 = 65%)</span></label>
+                    <input class="st-input" type="number" step="0.05" min="0.1" max="1.0"
+                           value="@GetDecimal("AdaptiveEngine:ControlledTrend:RiskBias", 0.65m)"
+                           @onchange="OnCtRiskBiasChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Min RR <span class="st-field-hint">skip signal if RR below this</span></label>
+                    <input class="st-input" type="number" step="0.1" min="0.5" max="3.0"
+                           value="@GetDecimal("AdaptiveEngine:ControlledTrend:MinRR", 1.2m)"
+                           @onchange="OnCtMinRrChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Min Slope (strong) <span class="st-field-hint">minimum trend slope to qualify</span></label>
+                    <input class="st-input" type="number" step="0.001" min="0.001" max="0.05"
+                           value="@GetDecimal("AdaptiveEngine:ControlledTrend:MinSlopeStrong", 0.003m)"
+                           @onchange="OnCtMinSlopeChanged" />
+                </div>
+            </div>
+        </div>
+
     </div>;
 
     private Task OnEmaPeriodChanged(ChangeEventArgs e) => SetAsync("Strategy:PullbackEntry:EmaPeriod", ParseIntOr(e.Value, 21));
@@ -554,6 +585,22 @@
     private Task OnConfDefaultEarlyTpHighChanged(ChangeEventArgs e)   => SetAsync("SignalConfidence:Default:EarlyTpAtr:High",   ParseDecimalOr(e.Value, 0.5m));
     private Task OnConfBtcEarlyTpMediumChanged(ChangeEventArgs e)     => SetAsync("SignalConfidence:BTC:EarlyTpAtr:Medium",     ParseDecimalOr(e.Value, 0.50m));
     private Task OnConfBtcEarlyTpHighChanged(ChangeEventArgs e)       => SetAsync("SignalConfidence:BTC:EarlyTpAtr:High",       ParseDecimalOr(e.Value, 0.52m));
+    // TakeProfit multipliers + parts
+    private Task OnTp1MultChanged(ChangeEventArgs e)  => SetAsync("TakeProfit:Tp1Multiplier", ParseDecimalOr(e.Value, 1.5m));
+    private Task OnTp2MultChanged(ChangeEventArgs e)  => SetAsync("TakeProfit:Tp2Multiplier", ParseDecimalOr(e.Value, 2.5m));
+    private Task OnTp3MultChanged(ChangeEventArgs e)  => SetAsync("TakeProfit:Tp3Multiplier", ParseDecimalOr(e.Value, 3.5m));
+    private Task OnTp1PartChanged(ChangeEventArgs e)  => SetAsync("TakeProfit:Tp1Part",       ParseDecimalOr(e.Value, 0.40m));
+    private Task OnTp2PartChanged(ChangeEventArgs e)  => SetAsync("TakeProfit:Tp2Part",       ParseDecimalOr(e.Value, 0.35m));
+    private Task OnTp3PartChanged(ChangeEventArgs e)  => SetAsync("TakeProfit:Tp3Part",       ParseDecimalOr(e.Value, 0.25m));
+    // PositionSupervisor BE triggers
+    private Task OnBeTriggerRMinorChanged(ChangeEventArgs e)  => SetAsync("PositionSupervisor:BeTriggerRMinor",     ParseDecimalOr(e.Value, 0.58m));
+    private Task OnBeTriggerRMajorChanged(ChangeEventArgs e)  => SetAsync("PositionSupervisor:BeTriggerRMajor",     ParseDecimalOr(e.Value, 1.1m));
+    private Task OnStage1MinorChanged(ChangeEventArgs e)      => SetAsync("PositionSupervisor:Stage1PercentMinor",  ParseDecimalOr(e.Value, 0.25m));
+    private Task OnStage1MajorChanged(ChangeEventArgs e)      => SetAsync("PositionSupervisor:Stage1PercentMajor",  ParseDecimalOr(e.Value, 0.35m));
+    // AdaptiveEngine ControlledTrend
+    private Task OnCtRiskBiasChanged(ChangeEventArgs e)  => SetAsync("AdaptiveEngine:ControlledTrend:RiskBias",       ParseDecimalOr(e.Value, 0.65m));
+    private Task OnCtMinRrChanged(ChangeEventArgs e)      => SetAsync("AdaptiveEngine:ControlledTrend:MinRR",          ParseDecimalOr(e.Value, 1.2m));
+    private Task OnCtMinSlopeChanged(ChangeEventArgs e)   => SetAsync("AdaptiveEngine:ControlledTrend:MinSlopeStrong", ParseDecimalOr(e.Value, 0.003m));
 
     private RenderFragment MeanRevTab() => @<div class="st-grid">
 
@@ -632,21 +679,51 @@
             </div>
             <div class="st-field">
                 <label>Correlation Threshold</label>
-                <input title="Only trade in Range/Squeeze regime
-                
-            
-        
+                <input class="st-input" type="number" step="0.05" value="@GetDecimal("MeanReversion:BtcCorrelationThreshold", 0.6m)" @onchange="OnMrBtcThresholdChanged" />
+            </div>
+        </div>
 
-        
-            BTC Correlation Guard
-            
-                
-                    
-                    Skip if BTC itself is at a matching extreme
-                
-            
-            
-                Correlation Threshold" class="st-input" type="number" step="0.05" value="@GetDecimal("MeanReversion:BtcCorrelationThreshold", 0.6m)" @onchange="OnMrBtcThresholdChanged" />
+        <div class="st-card">
+            <div class="st-card-head">
+                <div class="st-card-title">📊 Entry Quality Filters</div>
+                <span class="st-live-pill">● live</span>
+            </div>
+            <div class="st-card-sub">Additional filters applied before a MeanReversion signal is accepted.</div>
+            <div class="st-field">
+                <label>Entry Z-Score Sigma <span class="st-field-hint">|Z| must exceed this to trigger entry (2.0 = 2 std deviations)</span></label>
+                <input class="st-input" type="number" step="0.1" min="0.5" max="5.0"
+                       value="@GetDecimal("MeanReversion:EntrySigma", 2.0m)"
+                       @onchange="OnMrEntrySigmaChanged" />
+            </div>
+            <div class="st-field">
+                <label>Volume Surge Multiplier <span class="st-field-hint">current volume must be this × average to qualify</span></label>
+                <input class="st-input" type="number" step="0.1" min="0.5" max="5.0"
+                       value="@GetDecimal("MeanReversion:VolumeSurgeMultiplier", 1.5m)"
+                       @onchange="OnMrVolMultChanged" />
+            </div>
+            <div class="st-field">
+                <label>Min Reward/Risk Ratio</label>
+                <input class="st-input" type="number" step="0.1" min="0.5" max="5.0"
+                       value="@GetDecimal("MeanReversion:MinRewardRiskRatio", 1.2m)"
+                       @onchange="OnMrMinRrChanged" />
+            </div>
+            <div class="st-field">
+                <label>SL ATR Padding <span class="st-field-hint">buffer added beyond the Z-score reversal point</span></label>
+                <input class="st-input" type="number" step="0.05" min="0.0" max="2.0"
+                       value="@GetDecimal("MeanReversion:StopAtrPad", 0.3m)"
+                       @onchange="OnMrStopAtrPadChanged" />
+            </div>
+            <div class="st-toggle-row" style="margin-top:8px;">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("MeanReversion:RequireReversalConfirmation", true)" @onchange="OnMrReversalToggle" />
+                    <span>Require reversal candle confirmation</span>
+                </label>
+            </div>
+            <div class="st-toggle-row">
+                <label class="st-toggle">
+                    <input type="checkbox" checked="@GetBool("MeanReversion:RequireRangeRegime", true)" @onchange="OnMrRangeRegimeToggle" />
+                    <span>Only trade in Range/Squeeze regime (strongly recommended)</span>
+                </label>
             </div>
         </div>
 
@@ -1004,6 +1081,103 @@
             <div class="st-field">
                 <label>Time-Stop (bars)</label>
                 <input title="Time-Stop (bars)" class="st-input" type="number" value="@GetInt("MeanReversion:TimeStopBars", 12)" @onchange="OnMrTimeStopChanged" />
+            </div>
+        </div>
+
+        <div class="st-card st-card-wide">
+            <div class="st-card-head">
+                <div class="st-card-title">📐 Take Profit Levels (ATR Multipliers)</div>
+                <span class="st-live-pill">● live</span>
+            </div>
+            <div class="st-card-sub">
+                ATR multipliers that set how far each TP is placed from the entry price.
+                TP1 should be ≥ 1.5× ATR to guarantee RR ≥ 1:1 (SL is typically 1–1.5×ATR).
+                These apply to pullback/liquidity/indicator signals — PriceAction signals use R-multiples (1R/2R/3R) independently.
+            </div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>TP1 Multiplier (× ATR)</label>
+                    <input class="st-input" type="number" step="0.1" min="0.5" max="5"
+                           value="@GetDecimal("TakeProfit:Tp1Multiplier", 1.5m)"
+                           @onchange="OnTp1MultChanged" />
+                </div>
+                <div class="st-field">
+                    <label>TP2 Multiplier (× ATR)</label>
+                    <input class="st-input" type="number" step="0.1" min="1" max="8"
+                           value="@GetDecimal("TakeProfit:Tp2Multiplier", 2.5m)"
+                           @onchange="OnTp2MultChanged" />
+                </div>
+                <div class="st-field">
+                    <label>TP3 Multiplier (× ATR)</label>
+                    <input class="st-input" type="number" step="0.1" min="1.5" max="12"
+                           value="@GetDecimal("TakeProfit:Tp3Multiplier", 3.5m)"
+                           @onchange="OnTp3MultChanged" />
+                </div>
+            </div>
+            <div class="st-card-sub" style="margin-top:10px;">
+                <strong>Position allocation per TP level</strong> — how much of the position closes at each target.
+            </div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>TP1 Part (fraction, e.g. 0.40 = 40%)</label>
+                    <input class="st-input" type="number" step="0.05" min="0.1" max="0.8"
+                           value="@GetDecimal("TakeProfit:Tp1Part", 0.40m)"
+                           @onchange="OnTp1PartChanged" />
+                </div>
+                <div class="st-field">
+                    <label>TP2 Part</label>
+                    <input class="st-input" type="number" step="0.05" min="0.1" max="0.8"
+                           value="@GetDecimal("TakeProfit:Tp2Part", 0.35m)"
+                           @onchange="OnTp2PartChanged" />
+                </div>
+                <div class="st-field">
+                    <label>TP3 Part (runner)</label>
+                    <input class="st-input" type="number" step="0.05" min="0.05" max="0.5"
+                           value="@GetDecimal("TakeProfit:Tp3Part", 0.25m)"
+                           @onchange="OnTp3PartChanged" />
+                </div>
+            </div>
+        </div>
+
+        <div class="st-card st-card-wide">
+            <div class="st-card-head">
+                <div class="st-card-title">🛡 Position Supervisor — Break-Even Triggers</div>
+                <span class="st-live-pill">● live</span>
+            </div>
+            <div class="st-card-sub">
+                Controls when Supervisor moves SL to break-even and closes partial positions.
+                R = risk distance (|entry − SL|). Minor = smaller/newer positions. Major = larger well-confirmed positions.
+            </div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>BE Trigger R — Minor <span class="st-field-hint">move SL to BE when price reaches entry + R×this</span></label>
+                    <input class="st-input" type="number" step="0.05" min="0.3" max="2.0"
+                           value="@GetDecimal("PositionSupervisor:BeTriggerRMinor", 0.58m)"
+                           @onchange="OnBeTriggerRMinorChanged" />
+                </div>
+                <div class="st-field">
+                    <label>BE Trigger R — Major <span class="st-field-hint">more conservative, waits for stronger confirmation</span></label>
+                    <input class="st-input" type="number" step="0.05" min="0.5" max="3.0"
+                           value="@GetDecimal("PositionSupervisor:BeTriggerRMajor", 1.1m)"
+                           @onchange="OnBeTriggerRMajorChanged" />
+                </div>
+            </div>
+            <div class="st-card-sub" style="margin-top:10px;">
+                <strong>Stage 1 partial close size</strong> — how much of the position to close at first TP trigger.
+            </div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>Stage 1 Close % — Minor</label>
+                    <input class="st-input" type="number" step="0.05" min="0.1" max="0.9"
+                           value="@GetDecimal("PositionSupervisor:Stage1PercentMinor", 0.25m)"
+                           @onchange="OnStage1MinorChanged" />
+                </div>
+                <div class="st-field">
+                    <label>Stage 1 Close % — Major</label>
+                    <input class="st-input" type="number" step="0.05" min="0.1" max="0.9"
+                           value="@GetDecimal("PositionSupervisor:Stage1PercentMajor", 0.35m)"
+                           @onchange="OnStage1MajorChanged" />
+                </div>
             </div>
         </div>
 
