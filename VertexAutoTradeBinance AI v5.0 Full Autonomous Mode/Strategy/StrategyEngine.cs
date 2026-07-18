@@ -2544,6 +2544,30 @@ namespace VertexAutoTradeBinance8.Strategy
             else
                 baseSignal = pullback ?? earlyTrend ?? continuation ?? liquidity ?? priceAction;
 
+            // ── Fear & Greed macro bias ──────────────────────────────
+            // Boost confidence when signal agrees with macro sentiment.
+            // Penalise when fighting macro (Extreme Fear + SHORT = bad idea).
+            if (baseSignal != null && _fearGreed != null)
+            {
+                var fg = _fearGreed.Current;
+                if (!fg.IsStale && fg.SideBias != 0)
+                {
+                    bool agrees = (fg.SideBias > 0 && baseSignal.Side == SignalSide.Buy) ||
+                                  (fg.SideBias < 0 && baseSignal.Side == SignalSide.Sell);
+                    if (baseSignal.Confidence.HasValue)
+                    {
+                        baseSignal.Confidence = agrees
+                            ? Math.Clamp(baseSignal.Confidence.Value * fg.ConfidenceBoost, 0m, 0.98m)
+                            : Math.Clamp(baseSignal.Confidence.Value / fg.ConfidenceBoost, 0m, 0.98m);
+                    }
+                    _logger.LogDebug(
+                        "[FG][{sym}] Index={idx} Bias={bias} Agrees={ag} → conf={c:F2}",
+                        symbol, fg.Index,
+                        fg.SideBias > 0 ? "LONG" : "SHORT",
+                        agrees, baseSignal.Confidence ?? 0m);
+                }
+            }
+
             //if (baseSignal == null)
             //{
             //    _engineState.LastEntryDecision = "NO_BASE_PATTERN";
