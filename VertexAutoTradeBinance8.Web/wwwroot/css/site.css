@@ -2282,6 +2282,98 @@ compact-card {
     color: #e2e8f0;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   VX REDESIGN — hexagon logo + chip status pills
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Hexagon logo mark */
+.vx-logo-mark {
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.vertex-title {
+    font-size: 11px !important;
+    font-weight: 900 !important;
+    letter-spacing: 2px !important;
+    color: #f4f8ff !important;
+}
+.vertex-subtitle {
+    font-size: 8px !important;
+    opacity: 1 !important;
+    letter-spacing: 1.4px !important;
+    color: #3d5a7a !important;
+}
+
+/* Chip base */
+.vx-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 20px;
+    font-size: 10px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity .12s;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: .3px;
+    border: 1px solid transparent;
+    background: transparent;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.vx-chip:hover { opacity: .82; }
+
+.vx-chip-client  { background: #0f1d32; border-color: #1d3050; color: #7a9cc0; cursor: default; }
+.vx-chip-live    { background: rgba(16,185,129,.08); border-color: rgba(16,185,129,.28); color: #34d399; }
+.vx-chip-demo    { background: rgba(234,179,8,.12);  border-color: rgba(234,179,8,.35);  color: #fcd34d; }
+.vx-chip-autoon  { background: rgba(16,185,129,.09); border-color: rgba(16,185,129,.3);  color: #34d399; }
+.vx-chip-autooff { background: rgba(239,68,68,.08);  border-color: rgba(239,68,68,.28);  color: #f87171; }
+.vx-chip-mode    {
+    background: rgba(6,182,212,.08);
+    border-color: rgba(6,182,212,.22);
+    color: #22d3ee;
+    gap: 4px;
+}
+
+/* Dots */
+.vx-dot {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.vx-dot-grn { background: #10b981; box-shadow: 0 0 5px #10b981; }
+.vx-dot-red { background: #ef4444; box-shadow: 0 0 5px #ef4444; }
+.vx-dot-yel { background: #f59e0b; box-shadow: 0 0 5px #f59e0b; }
+.vx-dot-pulse { animation: vxPulse 1.6s ease-in-out infinite; }
+@keyframes vxPulse { 0%,100%{opacity:1} 50%{opacity:.22} }
+
+/* Mode select inside chip */
+.vx-mode-select {
+    background: transparent;
+    border: none;
+    color: #22d3ee;
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    cursor: pointer;
+    outline: none;
+    letter-spacing: .3px;
+}
+.vx-mode-select option { background: #0a1422; color: #e2e8f0; }
+.vx-chip-mode-icon { font-size: 11px; opacity: .7; }
+
+/* Hide old user-badge in redesign */
+.user-badge { display: none !important; }
+
+
+
 .vertex-status-dot {
     width: 8px;
     height: 8px;
@@ -2959,3 +3051,4 @@ compact-card {
     margin: 0 6px;
     flex-shrink: 0;
 }
+
