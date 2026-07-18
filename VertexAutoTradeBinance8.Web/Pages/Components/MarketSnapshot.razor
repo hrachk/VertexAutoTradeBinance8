@@ -5201,6 +5201,33 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         if (_selectedPosition == null) return;
         var pos = _selectedPosition;
 
+        // ── DEMO MODE: SL/TP are embedded in DemoPosition directly —
+        // there are no real exchange orders in _openOrders in demo mode.
+        // Read the protective levels from the live DemoPosition instead.
+        if (_demoMode)
+        {
+            var demoPos = _demoSnapshot.Positions.FirstOrDefault(p => p.Id == pos.Id);
+            decimal sl_demo = demoPos?.StopLoss ?? 0m;
+            decimal[] tps_demo = demoPos?.TakeProfits
+                .OrderBy(t => pos.Side == "LONG" ? t.Price : -t.Price)
+                .Select(t => t.Price)
+                .ToArray() ?? Array.Empty<decimal>();
+
+            // Snapshot for change-detection (demo uses Id:Price format)
+            _lastTpSlSnapshot = string.Join("|",
+                tps_demo.Select((p, i) => $"tp{i}:{p}")
+                    .Append($"sl:{sl_demo}"));
+
+            try
+            {
+                await JS.InvokeVoidAsync("marketChart.showTpSlLines",
+                    $"chartContainer-{_chartInstanceId}", pos.EntryPrice, sl_demo, tps_demo, pos.Side);
+            }
+            catch { }
+            return;
+        }
+
+        // ── LIVE MODE: read from real open orders as before ───────────
         // Filter by PositionSide too, not just Symbol — critical for
         // hedge-mode accounts where the same symbol can have
         // simultaneous LONG and SHORT positions, each with their own
@@ -6830,6 +6857,17 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
                 _orderSuccess = $"[DEMO] Opened {side} {_orderQty} {_activeSignal.Symbol.Replace("USDT","")} @ {FmtP(price)}" +
                     (slPrice.HasValue || tpLevels.Count > 0 ? " · SL/TP set" : "");
+
+                // Auto-select the newly opened demo position so TP/SL lines
+                // appear on the chart immediately without the user having to
+                // manually click the position row in the table.
+                RefreshDemoSnapshot();
+                var newDemoPos = DisplayedPositions
+                    .FirstOrDefault(p => p.Symbol == _activeSignal.Symbol && p.Side == side);
+                if (newDemoPos != null)
+                {
+                    await SelectPosition(newDemoPos);
+                }
             }
             else
             {
@@ -7083,6 +7121,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
