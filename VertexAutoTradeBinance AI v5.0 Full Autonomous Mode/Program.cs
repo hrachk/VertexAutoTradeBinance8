@@ -232,6 +232,8 @@ public class Program
                     services.AddSingleton<RealtimePriceService>();
 
                     services.AddSingleton<MarketContextService>();
+                    services.AddSingleton<FearGreedService>();
+                    services.AddHostedService(sp => sp.GetRequiredService<FearGreedService>());
                     services.AddSingleton<WsKlineSubscriber>();
                     services.AddSingleton<MarketDataFacade>();
                     services.AddSingleton<MarketStateService>();
@@ -436,5 +438,6 @@ public class Program
         }
     }
 }
+
 
 
