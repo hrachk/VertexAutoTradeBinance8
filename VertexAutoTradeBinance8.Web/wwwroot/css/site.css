@@ -3052,3 +3052,657 @@ compact-card {
     flex-shrink: 0;
 }
 
+
+
+
+/* ═══════════════════════════════════════════════════════════════════════
+   VERTEX REDESIGN V2 — Full visual overhaul
+   Scope: header, nav, ticker, stats bar, sidebar, positions table,
+          order panel, account bar. No Razor logic touched.
+   Palette: deep-space navy + electric teal #06b6d4 signature accent
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── CSS variables ──────────────────────────────────────────────────── */
+:root {
+  --vx-ink0:   #020508;
+  --vx-ink1:   #060b12;
+  --vx-ink2:   #0a1220;
+  --vx-ink3:   #0f1b2f;
+  --vx-ink4:   #162438;
+  --vx-ink5:   #1c2f48;
+  --vx-bdr:    #162438;
+  --vx-bdr2:   #1c2f48;
+  --vx-teal:   #06b6d4;
+  --vx-tealL:  #22d3ee;
+  --vx-grn:    #10b981;
+  --vx-grnL:   #34d399;
+  --vx-red:    #ef4444;
+  --vx-redL:   #f87171;
+  --vx-yel:    #f59e0b;
+  --vx-yelL:   #fcd34d;
+  --vx-pur:    #8b5cf6;
+  --vx-t0:     #f0f6ff;
+  --vx-t1:     #c4d4ec;
+  --vx-t2:     #7090b4;
+  --vx-t3:     #344e6a;
+  --vx-t4:     #1a2e44;
+  --vx-mono:   'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* ── HEADER ─────────────────────────────────────────────────────────── */
+.vertex-header {
+  height: 40px !important;
+  background: var(--vx-ink1) !important;
+  border-bottom: 1px solid var(--vx-bdr) !important;
+  box-shadow: none !important;
+  padding: 0 12px !important;
+}
+
+.vertex-left { gap: 8px !important; }
+
+.vertex-brand { line-height: 1.1 !important; }
+
+.vertex-title {
+  font-size: 11px !important;
+  font-weight: 900 !important;
+  letter-spacing: 2px !important;
+  color: var(--vx-t0) !important;
+  text-transform: uppercase;
+}
+
+.vertex-subtitle {
+  font-size: 8px !important;
+  font-weight: 500 !important;
+  letter-spacing: 1.4px !important;
+  color: var(--vx-t3) !important;
+  opacity: 1 !important;
+  text-transform: uppercase;
+}
+
+/* ── NAV ─────────────────────────────────────────────────────────────── */
+.vertex-topnav {
+  height: 32px !important;
+  background: var(--vx-ink1) !important;
+  border-bottom: 1px solid var(--vx-bdr) !important;
+  padding: 0 10px !important;
+  gap: 1px !important;
+  top: 40px !important;
+}
+
+.vt-link {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  padding: 0 10px !important;
+  height: 32px !important;
+  border-radius: 0 !important;
+  color: var(--vx-t3) !important;
+  gap: 5px !important;
+  border-bottom: 2px solid transparent !important;
+  transition: color .1s, border-color .1s !important;
+}
+
+.vt-link svg {
+  width: 12px !important;
+  height: 12px !important;
+  opacity: .6 !important;
+}
+
+.vt-link:hover {
+  background: transparent !important;
+  color: var(--vx-t2) !important;
+}
+
+.vt-link.active {
+  background: transparent !important;
+  color: var(--vx-t0) !important;
+  border-bottom-color: var(--vx-teal) !important;
+  font-weight: 700 !important;
+}
+
+.vt-link-feature.active,
+.vt-link-feature:hover {
+  background: transparent !important;
+  color: var(--vx-t0) !important;
+  border-bottom-color: var(--vx-teal) !important;
+}
+
+.vt-sep { background: var(--vx-bdr) !important; height: 14px !important; margin: 0 2px !important; }
+
+/* ── TICKER BAR ─────────────────────────────────────────────────────── */
+.mk-ticker-bar {
+  background: var(--vx-ink1) !important;
+  border-bottom: 1px solid var(--vx-bdr) !important;
+  height: 26px !important;
+}
+
+.mk-tk {
+  border-radius: 3px !important;
+  padding: 2px 7px !important;
+  font-size: 9.5px !important;
+  gap: 4px !important;
+  border: 1px solid transparent !important;
+}
+
+.mk-tk.mk-tk-sel {
+  background: var(--vx-ink4) !important;
+  border-color: var(--vx-bdr2) !important;
+}
+
+.mk-tk-sym { color: var(--vx-t2) !important; font-weight: 700 !important; }
+.mk-tk-price { color: var(--vx-t2) !important; font-size: 9px !important; }
+.mk-tk-chg { font-family: var(--vx-mono) !important; font-size: 8.5px !important; }
+
+/* ── SYMBOL STATS BAR ───────────────────────────────────────────────── */
+.mk-stats {
+  background: var(--vx-ink1) !important;
+  border-bottom: 1px solid var(--vx-bdr) !important;
+  padding: 0 10px !important;
+  height: 36px !important;
+  gap: 16px !important;
+}
+
+.mk-s { gap: 2px !important; }
+.mk-sl {
+  font-size: 7.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: .5px !important;
+  text-transform: uppercase !important;
+  color: var(--vx-t4) !important;
+}
+
+.mk-sv {
+  font-family: var(--vx-mono) !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  color: var(--vx-t1) !important;
+}
+
+/* Price hero in chart head */
+.mk-max-price {
+  font-family: var(--vx-mono) !important;
+  font-size: 18px !important;
+  font-weight: 700 !important;
+  letter-spacing: -.4px !important;
+}
+
+/* ── SIDEBAR ─────────────────────────────────────────────────────────── */
+.mk-side-tbl {
+  background: var(--vx-ink1) !important;
+  border-right: 1px solid var(--vx-bdr) !important;
+}
+
+.mk-side-tbl-title { display: none !important; }
+
+.mk-side-tabs {
+  background: var(--vx-ink1) !important;
+  border-bottom: 1px solid var(--vx-bdr) !important;
+  padding: 4px 6px !important;
+  gap: 2px !important;
+}
+
+.mk-side-tab {
+  font-size: 9.5px !important;
+  font-weight: 700 !important;
+  border-radius: 3px !important;
+  padding: 4px !important;
+  color: var(--vx-t3) !important;
+}
+
+.mk-side-tab.mk-side-tab-on {
+  background: var(--vx-ink3) !important;
+  color: var(--vx-t0) !important;
+}
+
+.mk-side-row {
+  border-left: 2px solid transparent !important;
+  padding: 4px 8px 4px 6px !important;
+  gap: 4px !important;
+}
+
+.mk-side-row.mk-side-row-sel {
+  background: var(--vx-ink3) !important;
+  border-left-color: var(--vx-teal) !important;
+}
+
+.mk-side-row:hover { background: var(--vx-ink2) !important; }
+
+.mk-side-rank { font-size: 7.5px !important; color: var(--vx-t4) !important; }
+.mk-side-sym  { font-size: 10.5px !important; font-weight: 700 !important; color: var(--vx-t2) !important; }
+.mk-side-row.mk-side-row-sel .mk-side-sym { color: var(--vx-t0) !important; }
+.mk-side-price { font-family: var(--vx-mono) !important; font-size: 9.5px !important; color: var(--vx-t2) !important; }
+.mk-side-chg   { font-family: var(--vx-mono) !important; font-size: 9.5px !important; font-weight: 700 !important; }
+
+.mk-side-search-wrap {
+  padding: 5px 6px !important;
+  border-bottom: 1px solid var(--vx-bdr) !important;
+}
+
+.mk-side-search {
+  background: var(--vx-ink3) !important;
+  border: 1px solid var(--vx-bdr2) !important;
+  border-radius: 5px !important;
+  color: var(--vx-t0) !important;
+  font-size: 10px !important;
+}
+
+/* ── TF BUTTONS ─────────────────────────────────────────────────────── */
+.mk-tf-bar { gap: 1px !important; }
+
+.mk-tf-btn {
+  font-size: 9.5px !important;
+  font-weight: 700 !important;
+  padding: 2px 6px !important;
+  border-radius: 3px !important;
+  color: var(--vx-t3) !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+}
+
+.mk-tf-btn:hover { color: var(--vx-t2) !important; background: var(--vx-ink3) !important; }
+
+.mk-tf-btn.mk-tf-btn-sel {
+  background: var(--vx-ink4) !important;
+  border-color: var(--vx-bdr2) !important;
+  color: var(--vx-t0) !important;
+}
+
+/* ── ACCOUNT BAR ────────────────────────────────────────────────────── */
+.mk-acct-summary {
+  background: var(--vx-ink1) !important;
+  border-top: 1px solid var(--vx-bdr) !important;
+  height: 44px !important;
+  padding: 0 10px !important;
+}
+
+.mk-acct-item {
+  padding: 0 12px !important;
+  border-right: 1px solid var(--vx-bdr) !important;
+  gap: 2px !important;
+}
+
+.mk-acct-label {
+  font-size: 7.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: .5px !important;
+  text-transform: uppercase !important;
+  color: var(--vx-t4) !important;
+}
+
+.mk-acct-value {
+  font-family: var(--vx-mono) !important;
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  letter-spacing: -.3px !important;
+}
+
+/* Unrealized PnL — quieter so it doesn't visually dominate */
+.mk-acct-unreal-val {
+  font-size: 12px !important;
+  opacity: .75 !important;
+}
+
+/* ── POSITIONS TABLE ─────────────────────────────────────────────────── */
+.mk-oo-panel {
+  background: var(--vx-ink1) !important;
+  border-top: 1px solid var(--vx-bdr) !important;
+}
+
+.mk-oo-tabs {
+  height: 30px !important;
+  background: var(--vx-ink1) !important;
+  border-bottom: 1px solid var(--vx-bdr) !important;
+  padding: 0 8px !important;
+  gap: 2px !important;
+}
+
+.mk-oo-tab {
+  font-size: 9.5px !important;
+  font-weight: 700 !important;
+  padding: 3px 9px !important;
+  border-radius: 5px !important;
+  color: var(--vx-t3) !important;
+}
+
+.mk-oo-tab.mk-oo-tab-on {
+  background: var(--vx-ink3) !important;
+  color: var(--vx-t0) !important;
+}
+
+.mk-oo-count {
+  font-size: 7.5px !important;
+  font-weight: 900 !important;
+  padding: 0 4px !important;
+  border-radius: 8px !important;
+  background: var(--vx-teal) !important;
+  color: #000 !important;
+}
+
+.mk-oo-mode-badge { font-size: 7.5px !important; font-weight: 800 !important; }
+.mk-oo-mode-live  { color: var(--vx-grnL) !important; }
+.mk-oo-mode-demo  { color: var(--vx-yelL) !important; }
+
+/* Positions table header */
+.mk-pos-table th {
+  font-size: 7.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: .5px !important;
+  text-transform: uppercase !important;
+  color: var(--vx-t4) !important;
+  border-bottom: 1px solid var(--vx-bdr) !important;
+  padding: 3px 7px !important;
+  background: var(--vx-ink1) !important;
+}
+
+.mk-pos-table td {
+  padding: 4px 7px !important;
+  border-bottom: 1px solid rgba(22,36,56,.5) !important;
+  font-size: 9.5px !important;
+}
+
+.mk-pos-row.mk-pos-row-sel td { background: rgba(6,182,212,.04) !important; }
+.mk-pos-row:hover td { background: rgba(255,255,255,.013) !important; }
+
+.mk-oo-sym { font-size: 10.5px !important; font-weight: 800 !important; color: var(--vx-t0) !important; }
+
+/* Lev chip */
+.mk-lev-chip {
+  font-size: 7.5px !important;
+  font-weight: 800 !important;
+  padding: 1px 4px !important;
+  border-radius: 2px !important;
+  background: rgba(139,92,246,.1) !important;
+  border: 1px solid rgba(139,92,246,.2) !important;
+  color: #c4b5fd !important;
+}
+
+/* Liq price warning */
+.mk-liq { color: var(--vx-redL) !important; }
+
+/* DCA badge */
+.mk-dca-badge {
+  font-size: 6.5px !important;
+  font-weight: 900 !important;
+  padding: 1px 3px !important;
+  border-radius: 2px !important;
+  background: rgba(139,92,246,.1) !important;
+  border: 1px solid rgba(139,92,246,.22) !important;
+  color: #c4b5fd !important;
+  letter-spacing: .3px !important;
+}
+
+/* Risk bar (FIX2 already added — enhance) */
+.mk-risk-bar {
+  height: 2px !important;
+  background: var(--vx-ink4) !important;
+  border-radius: 1px !important;
+  width: 60px !important;
+}
+
+.mk-risk-bar-fill { border-radius: 1px !important; }
+.mk-risk-pct { font-family: var(--vx-mono) !important; font-size: 7.5px !important; }
+
+/* Action buttons */
+.mk-pos-partial-btn2 {
+  padding: 2px 7px !important;
+  border-radius: 3px !important;
+  font-size: 8.5px !important;
+  font-weight: 800 !important;
+  background: rgba(6,182,212,.07) !important;
+  border: 1px solid rgba(6,182,212,.2) !important;
+  color: var(--vx-tealL) !important;
+}
+.mk-pos-partial-btn2:hover { background: rgba(6,182,212,.15) !important; }
+
+.mk-pos-close-btn {
+  padding: 2px 9px !important;
+  border-radius: 3px !important;
+  font-size: 8.5px !important;
+  font-weight: 800 !important;
+  background: rgba(239,68,68,.07) !important;
+  border: 1px solid rgba(239,68,68,.22) !important;
+  color: var(--vx-redL) !important;
+}
+.mk-pos-close-btn:hover { background: rgba(239,68,68,.15) !important; }
+
+/* ── ORDER / POSITION PANEL ─────────────────────────────────────────── */
+.ord-panel {
+  background: var(--vx-ink1) !important;
+  border-left: 1px solid var(--vx-bdr) !important;
+}
+
+.ord-head {
+  background: var(--vx-ink1) !important;
+  border-bottom: 1px solid var(--vx-bdr) !important;
+  height: 40px !important;
+  padding: 0 11px !important;
+}
+
+.ord-title { font-size: 10.5px !important; font-weight: 800 !important; color: var(--vx-t1) !important; }
+.ord-sym   { font-size: 10.5px !important; font-weight: 700 !important; color: var(--vx-tealL) !important; }
+
+.ord-close-x {
+  background: var(--vx-ink3) !important;
+  border: 1px solid var(--vx-bdr2) !important;
+  border-radius: 3px !important;
+  color: var(--vx-t3) !important;
+  width: 20px !important; height: 20px !important;
+}
+
+.ord-type-tabs {
+  padding: 4px 9px !important;
+  gap: 2px !important;
+  border-bottom: 1px solid var(--vx-bdr) !important;
+}
+
+.ord-tt {
+  font-size: 9.5px !important;
+  font-weight: 700 !important;
+  border-radius: 3px !important;
+  padding: 4px !important;
+  color: var(--vx-t3) !important;
+}
+
+.ord-tt.ord-tt-on {
+  background: var(--vx-ink3) !important;
+  color: var(--vx-t0) !important;
+}
+
+.ord-body { padding: 7px 9px !important; gap: 6px !important; }
+
+.ord-label {
+  font-size: 7.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: .5px !important;
+  text-transform: uppercase !important;
+  color: var(--vx-t4) !important;
+}
+
+.ord-input {
+  background: var(--vx-ink3) !important;
+  border: 1px solid var(--vx-bdr2) !important;
+  border-radius: 5px !important;
+  color: var(--vx-t0) !important;
+  font-size: 12px !important;
+}
+
+.ord-input:focus { border-color: var(--vx-teal) !important; }
+
+/* Leverage slider */
+.ord-lev-slider {
+  height: 2px !important;
+  border-radius: 1px !important;
+  background: var(--vx-ink4) !important;
+}
+
+.ord-lev-slider::-webkit-slider-thumb {
+  background: var(--vx-teal) !important;
+  box-shadow: 0 0 6px rgba(6,182,212,.5) !important;
+}
+
+.ord-lev-val {
+  font-family: var(--vx-mono) !important;
+  font-size: 12px !important;
+  font-weight: 800 !important;
+  color: var(--vx-tealL) !important;
+}
+
+/* Leverage preset buttons */
+.ord-lev-ticks button,
+.ord-lev-tick {
+  font-size: 9.5px !important;
+  font-weight: 800 !important;
+  background: var(--vx-ink3) !important;
+  border: 1px solid var(--vx-bdr) !important;
+  color: var(--vx-t3) !important;
+  border-radius: 3px !important;
+  padding: 3px 7px !important;
+}
+
+.ord-lev-tick.ord-lev-tick-on {
+  color: var(--vx-tealL) !important;
+  border-color: rgba(6,182,212,.35) !important;
+  background: rgba(6,182,212,.08) !important;
+}
+
+/* Submit buttons */
+.ord-submit-btn {
+  border-radius: 7px !important;
+  font-size: 12px !important;
+  font-weight: 900 !important;
+  padding: 10px !important;
+  letter-spacing: .2px !important;
+}
+
+.ord-submit-btn.osb-buy {
+  background: linear-gradient(135deg, rgba(16,185,129,.18), rgba(52,211,153,.09)) !important;
+  border: 1.5px solid rgba(16,185,129,.4) !important;
+  color: var(--vx-grnL) !important;
+  box-shadow: 0 3px 14px rgba(16,185,129,.1) !important;
+}
+
+.ord-submit-btn.osb-sell {
+  background: linear-gradient(135deg, rgba(239,68,68,.16), rgba(248,113,113,.08)) !important;
+  border: 1.5px solid rgba(239,68,68,.38) !important;
+  color: var(--vx-redL) !important;
+  box-shadow: 0 3px 14px rgba(239,68,68,.08) !important;
+}
+
+.ord-cancel-btn {
+  background: var(--vx-ink3) !important;
+  border: 1px solid var(--vx-bdr2) !important;
+  color: var(--vx-t2) !important;
+  border-radius: 6px !important;
+  font-size: 10.5px !important;
+  font-weight: 700 !important;
+}
+
+/* Balance row in panel */
+.ord-balance-row {
+  border-bottom: 1px solid var(--vx-bdr) !important;
+  padding: 8px 11px !important;
+}
+
+.ord-balance-l { font-size: 7.5px !important; color: var(--vx-t4) !important; }
+.ord-balance-v {
+  font-family: var(--vx-mono) !important;
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  color: var(--vx-t0) !important;
+}
+
+/* Position PnL hero */
+.ord-position-pnl-hero {
+  padding: 10px 11px !important;
+  border-bottom: 1px solid var(--vx-bdr) !important;
+}
+
+.ord-position-pnl-hero-v {
+  font-family: var(--vx-mono) !important;
+  font-size: 26px !important;
+  font-weight: 800 !important;
+  letter-spacing: -.5px !important;
+}
+
+.ord-position-roi-hero {
+  font-family: var(--vx-mono) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+}
+
+/* TP/SL section in position panel */
+.ord-tp-row { gap: 6px !important; align-items: center !important; }
+.ord-tp-lbl { font-size: 7.5px !important; font-weight: 800 !important; }
+.ord-tp-price { font-family: var(--vx-mono) !important; font-size: 11px !important; font-weight: 700 !important; }
+
+/* Close position button */
+.ord-position-close-btn {
+  background: rgba(239,68,68,.09) !important;
+  border: 1.5px solid rgba(239,68,68,.3) !important;
+  color: var(--vx-redL) !important;
+  border-radius: 7px !important;
+  font-size: 12px !important;
+  font-weight: 900 !important;
+}
+
+/* ── SIGNAL CARDS ─────────────────────────────────────────────────────── */
+.sig-panel {
+  background: var(--vx-ink1) !important;
+  border-bottom: 1px solid var(--vx-bdr) !important;
+}
+
+.sig-panel-head { padding: 0 10px !important; height: 28px !important; }
+.sig-panel-title {
+  font-size: 8.5px !important;
+  font-weight: 800 !important;
+  color: var(--vx-grnL) !important;
+  letter-spacing: .5px !important;
+  text-transform: uppercase !important;
+}
+
+.sig-dot {
+  background: var(--vx-grn) !important;
+  box-shadow: 0 0 6px var(--vx-grn) !important;
+}
+
+.sig-card {
+  border-radius: 4px !important;
+  background: var(--vx-ink2) !important;
+  border: 1px solid var(--vx-bdr) !important;
+}
+
+.sig-card.sig-card-long  { border-left: 2px solid var(--vx-grnL) !important; }
+.sig-card.sig-card-short { border-left: 2px solid var(--vx-redL) !important; }
+.sig-card:hover { border-color: var(--vx-bdr2) !important; }
+.sig-card.sig-card-active { background: var(--vx-ink3) !important; border-color: var(--vx-teal) !important; }
+
+/* ── CHART HEADER ─────────────────────────────────────────────────────── */
+.mk-chart-head {
+  background: var(--vx-ink1) !important;
+  border-bottom: 1px solid var(--vx-bdr) !important;
+  height: 40px !important;
+  padding: 0 10px !important;
+}
+
+.mk-max-sym {
+  font-size: 14px !important;
+  font-weight: 900 !important;
+  color: var(--vx-t0) !important;
+  letter-spacing: -.3px !important;
+}
+
+/* ── HOT BADGE ──────────────────────────────────────────────────────── */
+.mk-hot-badge { font-size: 8.5px !important; color: var(--vx-yelL) !important; }
+
+/* ── GENERAL REFINEMENTS ─────────────────────────────────────────────── */
+.mono, .mk-mono { font-family: var(--vx-mono) !important; }
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 3px !important; height: 3px !important; }
+::-webkit-scrollbar-track { background: transparent !important; }
+::-webkit-scrollbar-thumb { background: var(--vx-ink5) !important; border-radius: 3px !important; }
+::-webkit-scrollbar-thumb:hover { background: var(--vx-bdr2) !important; }
+
+/* Position table LONG/SHORT text */
+.mk-pos-table td .up, td .long-side { color: var(--vx-grnL) !important; font-weight: 800 !important; font-size: 8px !important; }
+.mk-pos-table td .dn, td .short-side { color: var(--vx-redL) !important; font-weight: 800 !important; font-size: 8px !important; }
+
