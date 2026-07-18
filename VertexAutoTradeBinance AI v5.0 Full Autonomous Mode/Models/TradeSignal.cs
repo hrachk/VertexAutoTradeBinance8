@@ -78,6 +78,37 @@ public class TradeSignal
     public decimal? Confidence { get; set; }
     public bool ForceFullExit { get; set; } = false;
     public decimal? TimeStopBars { get; set; }
+
+    // ── Price Action fields (added for professional strategy) ────────
+    /// <summary>Market structure: HH/HL (bullish) or LH/LL (bearish)</summary>
+    public string? MarketStructure { get; set; }
+
+    /// <summary>Detected chart pattern: SYM TRIANGLE, PARALLEL RANGE, etc.</summary>
+    public string? PatternLabel { get; set; }
+
+    /// <summary>Pattern confidence 0-100 (like JonyDong "99")</summary>
+    public int PatternConfidence { get; set; }
+
+    /// <summary>MOMO score 0-100: RSI×0.40 + ROC×0.35 + MACD×0.25</summary>
+    public decimal MomoScore { get; set; }
+
+    /// <summary>Volume as multiple of 20-bar average (0.3x, 1.5x, etc.)</summary>
+    public decimal VolumeRatio { get; set; } = 1m;
+
+    /// <summary>VWAP position: "ABV", "BLW", "AT"</summary>
+    public string? VwapPosition { get; set; }
+
+    /// <summary>Nearest support level from S/R analysis</summary>
+    public decimal? NearestSupport { get; set; }
+
+    /// <summary>Nearest resistance level from S/R analysis</summary>
+    public decimal? NearestResistance { get; set; }
+
+    /// <summary>R-multiple at TP1 (should be ≥ 1.0)</summary>
+    public decimal RRatio { get; set; } = 0m;
+
+    /// <summary>Action hint from pattern: "WAIT BREAK DOWN", "WAIT BREAK UP"</summary>
+    public string? PatternAction { get; set; }
    
 
     public   decimal GetTpPart(int index)
@@ -111,3 +142,4 @@ public class TradeSignal
     }
 
 }
+
