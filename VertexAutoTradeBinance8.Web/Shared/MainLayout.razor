@@ -10,41 +10,54 @@
             <span class="burger"></span>
         </button>
 
-        <img src="images/vertexailogo.png" class="vertex-logo" alt="Vertex" />
+        <!-- Signature hexagon logo mark -->
+        <div class="vx-logo-mark" aria-hidden="true">
+            <svg viewBox="0 0 26 26" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <polygon points="13,1 24,7 24,19 13,25 2,19 2,7" stroke="#06b6d4" stroke-width="1.4" fill="rgba(6,182,212,.05)"/>
+                <polygon points="13,5.5 20.5,9.5 20.5,16.5 13,20.5 5.5,16.5 5.5,9.5" stroke="#22d3ee" stroke-width=".9" fill="rgba(6,182,212,.09)"/>
+                <circle cx="13" cy="13" r="2.5" fill="#06b6d4" opacity=".95"/>
+                <line x1="13" y1="5.5" x2="13" y2="20.5" stroke="#06b6d4" stroke-width=".4" opacity=".35"/>
+                <line x1="5.5" y1="9.5" x2="20.5" y2="16.5" stroke="#06b6d4" stroke-width=".4" opacity=".35"/>
+                <line x1="20.5" y1="9.5" x2="5.5" y2="16.5" stroke="#06b6d4" stroke-width=".4" opacity=".35"/>
+            </svg>
+        </div>
 
         <div class="vertex-brand">
-            <div class="vertex-title">VERTEX AUTOTRADE AI</div>
-            <div class="vertex-subtitle">Quant Engine v8</div>
+            <div class="vertex-title">VERTEX</div>
+            <div class="vertex-subtitle">AutoTrade AI</div>
         </div>
     </div>
 
     <div class="vertex-right">
-        <div class="user-badge">
-            <div class="user-badge-avatar">@(Client.Name?.Length > 0 ? Client.Name[0].ToString().ToUpper() : "?")</div>
-            <div class="user-badge-info">
-                <div class="user-badge-name">@Client.Name</div>
-                <div class="user-badge-id">@Client.Id</div>
-            </div>
+        <!-- Client chip -->
+        <div class="vx-chip vx-chip-client">
+            <span class="vx-dot vx-dot-grn vx-dot-pulse"></span>
+            @Client.Name
         </div>
 
-        <button class="autotrade-toggle @(_demoModeEnabled ? "demo-mode-on" : "")"
-                @onclick="ToggleDemoModeHeader" title="@(_demoModeEnabled ? "Demo trading active — virtual balance, real live prices. Click to return to Live." : "Switch to Demo trading (virtual balance, real live prices, risk-free)")">
-            <span class="autotrade-dot"></span>
+        <!-- LIVE / DEMO toggle -->
+        <button class="vx-chip @(_demoModeEnabled ? "vx-chip-demo" : "vx-chip-live")"
+                @onclick="ToggleDemoModeHeader"
+                title="@(_demoModeEnabled ? "Demo trading active. Click to return to Live." : "Switch to Demo trading (risk-free)")">
+            <span class="vx-dot @(_demoModeEnabled ? "vx-dot-yel" : "vx-dot-grn")"></span>
             @(_demoModeEnabled ? "DEMO" : "LIVE")
         </button>
 
-        <button class="autotrade-toggle @(_autoTradeEnabled ? "autotrade-on" : "autotrade-off")"
-                @onclick="ToggleAutoTrade" title="@(_autoTradeEnabled ? "Bot can open real positions automatically. Click to pause." : "Bot is signal-only — it will NOT open real positions automatically. Click to resume.")">
-            <span class="autotrade-dot"></span>
+        <!-- AutoTrade toggle -->
+        <button class="vx-chip @(_autoTradeEnabled ? "vx-chip-autoon" : "vx-chip-autooff")"
+                @onclick="ToggleAutoTrade"
+                title="@(_autoTradeEnabled ? "Bot opens real positions automatically. Click to pause." : "Bot is signal-only. Click to resume.")">
+            <span class="vx-dot @(_autoTradeEnabled ? "vx-dot-grn" : "vx-dot-red")"></span>
             AutoTrade @(_autoTradeEnabled ? "ON" : "OFF")
         </button>
 
-        <div class="strategy-mode-pill">
-            <span class="strategy-mode-icon">⚙</span>
-            <select class="strategy-mode-select" title="Strategy Mode" value="@_strategyMode" @onchange="OnStrategyModeChanged">
-                <option value="Auto">Auto (Regime-based)</option>
+        <!-- Strategy mode -->
+        <div class="vx-chip vx-chip-mode">
+            <span class="vx-chip-mode-icon">⚙</span>
+            <select class="vx-mode-select" title="Strategy Mode" value="@_strategyMode" @onchange="OnStrategyModeChanged">
+                <option value="Auto">Auto · Regime-based</option>
                 <option value="TrendOnly">Trend Only</option>
-                <option value="MeanReversionOnly">Mean-Reversion Only</option>
+                <option value="MeanReversionOnly">MeanReversion Only</option>
             </select>
         </div>
     </div>
@@ -228,5 +241,6 @@
         catch { }
     }
 }
+
 
 
