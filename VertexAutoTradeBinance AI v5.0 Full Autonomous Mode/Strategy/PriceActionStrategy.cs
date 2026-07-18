@@ -243,22 +243,35 @@ namespace VertexAutoTradeBinance8.Strategy
             if (!string.IsNullOrEmpty(msi.StructLabel))
                 tags += $"_{msi.StructLabel.Replace("/", "")}";
 
+            decimal rratio = slDist > 0 ? Math.Abs(tp1 - entry) / slDist : 0m;
+
             return new TradeSignal
             {
-                Symbol         = symbol,
-                Side           = isLong ? SignalSide.Buy : SignalSide.Sell,
-                Reason         = reason + tags,
-                Atr            = atr,
-                EntryPrice     = entry,
-                StopLoss       = stopLoss,
-                EntryRangeLow  = entry - atr * 0.10m,
-                EntryRangeHigh = entry + atr * 0.10m,
-                TakeProfits    = new List<decimal> { tp1, tp2, tp3 },
-                TakeProfit     = tp1,
-                Confidence     = Math.Clamp(confidence, 0.30m, 0.95m),
-                IsSuperSignal  = msi.PatternConfidence >= 90 && msi.MomoScore >= 60m,
-                Time           = DateTime.UtcNow,
-                Timeframe      = interval.ToString(),
+                Symbol            = symbol,
+                Side              = isLong ? SignalSide.Buy : SignalSide.Sell,
+                Reason            = reason + tags,
+                Atr               = atr,
+                EntryPrice        = entry,
+                StopLoss          = stopLoss,
+                EntryRangeLow     = entry - atr * 0.10m,
+                EntryRangeHigh    = entry + atr * 0.10m,
+                TakeProfits       = new List<decimal> { tp1, tp2, tp3 },
+                TakeProfit        = tp1,
+                Confidence        = Math.Clamp(confidence, 0.30m, 0.95m),
+                IsSuperSignal     = msi.PatternConfidence >= 90 && msi.MomoScore >= 60m,
+                Time              = DateTime.UtcNow,
+                Timeframe         = interval.ToString(),
+                // PA enrichment fields
+                MarketStructure   = msi.StructLabel,
+                PatternLabel      = msi.PatternLabel,
+                PatternConfidence = msi.PatternConfidence,
+                PatternAction     = msi.PatternAction,
+                MomoScore         = msi.MomoScore,
+                VolumeRatio       = msi.VolumeRatio,
+                VwapPosition      = msi.VwapPosition,
+                NearestSupport    = msi.NearestSupport > 0 ? msi.NearestSupport : null,
+                NearestResistance = msi.NearestResistance > 0 ? msi.NearestResistance : null,
+                RRatio            = rratio,
             };
         }
 
