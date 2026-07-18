@@ -2466,6 +2466,20 @@ namespace VertexAutoTradeBinance8.Strategy
             TradeSignal? continuation = null;
             TradeSignal? liquidity = null;
 
+            // ── PRICE ACTION STRATEGY (professional structure-based) ──
+            // Runs first on every regime as a high-quality override.
+            // Uses: Market Structure (LH/LL, HH/HL), S/R levels,
+            //       Pattern detection (SYM TRIANGLE, PARALLEL RANGE),
+            //       MOMO score, Volume relative, Structural SL,
+            //       R-Multiple TPs (1R/2R/3R like professional bots).
+            TradeSignal? priceAction = PriceActionStrategy.TryEntry(symbol, tf, klines);
+            if (priceAction != null)
+            {
+                _logger.LogDebug(
+                    "[PA][{sym}][{tf}] Price action signal: {reason} conf={conf:F2}",
+                    symbol, tf, priceAction.Reason, priceAction.Confidence ?? 0m);
+            }
+
 
             // =========================
             // PATTERN PRIORITY (НЕ БЛОКИРУЕТ)
@@ -2522,7 +2536,13 @@ namespace VertexAutoTradeBinance8.Strategy
             // =========================
             // FINAL PICK
             // =========================
-            baseSignal = pullback ?? earlyTrend ?? continuation ?? liquidity;
+            // Price action signal gets priority if confidence >= 0.55
+            // (structure-based entries are inherently higher quality).
+            // Otherwise fall back to indicator-based signals.
+            if (priceAction?.Confidence >= 0.55m)
+                baseSignal = priceAction;
+            else
+                baseSignal = pullback ?? earlyTrend ?? continuation ?? liquidity ?? priceAction;
 
             //if (baseSignal == null)
             //{
@@ -4773,6 +4793,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
     }
 }
+
 
 
 
