@@ -1606,7 +1606,7 @@
                         {
                             decimal liqRange = Math.Abs(pos.EntryPrice - pos.LiqPrice);
                             decimal liqProgress = liqRange > 0
-                                ? Math.Clamp(Math.Abs(pos.MarkPrice - pos.EntryPrice) / liqRange * 100, 0, 100)
+                                ? Math.Clamp(Math.Abs(pos.MarkPrice - pos.EntryPrice) / liqRange * 100m, 0m, 100m)
                                 : 0;
                             <div class="ord-liq-section">
                                 <div class="ord-liq-head">
@@ -4790,8 +4790,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 : (existing?.Qty ?? pos.Qty);  // TP: keep original partial qty
 
             // Round qty to lot step
-            if (stepSize > 0 && orderQty > 0)
-                orderQty = Math.Floor(orderQty / stepSize) * stepSize;
+            if (_symStep > 0 && orderQty > 0)
+                orderQty = Math.Floor(orderQty / _symStep) * _symStep;
             if (orderQty <= 0) orderQty = pos.Qty; // safety fallback
 
             var r = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
@@ -5069,6 +5069,16 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     // BOTH the entry and exit fees before it's genuinely break-even,
     // not merely back at the price it was opened at.
     const decimal TakerFeeRate = 0.0005m;
+
+    // Rounds a price to the symbol tick size using banker's rounding
+    // (MidpointRounding.ToEven) — same rounding Binance enforces.
+    // When called with no explicit tick, falls back to _symTickSize.
+    decimal RoundPrice(decimal price, decimal? tick = null)
+    {
+        decimal t = tick ?? (_symTickSize > 0 ? _symTickSize : 0m);
+        if (t <= 0) return price;
+        return Math.Round(price / t, MidpointRounding.ToEven) * t;
+    }
     decimal ComputeBreakEvenPrice(ActivePositionInfo pos)
     {
         if (pos.EntryPrice <= 0) return 0m;
@@ -5485,7 +5495,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     {
                         decimal stopDistPct = stopDist / sig.Entry;
                         decimal safeLeverage = stopDistPct > 0 ? 1m / (2m * stopDistPct) : 20m;
-                        int suggestedLev = (int)Math.Floor(Math.Clamp(safeLeverage, 1m, 20m));
+                        int suggestedLev = (int)Math.Floor((double)Math.Clamp(safeLeverage, 1m, 20m));
                         _orderLeverage = Math.Min(suggestedLev, _symMaxLev > 0 ? _symMaxLev : suggestedLev);
                         if (_orderLeverage < 1) _orderLeverage = 1;
                     }
