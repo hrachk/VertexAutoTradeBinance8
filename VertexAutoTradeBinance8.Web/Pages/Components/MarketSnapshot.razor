@@ -566,9 +566,12 @@
                 }
             </div>
         <div class="mk-legend">
-                <span style="color:#38bdf8">── EMA21</span>
-                <span style="color:#a855f7">── EMA55</span>
-                <span style="color:#ef4444">RSI · ── OB 70 / OS 30</span>
+                <span class="mk-legend-item"><span class="mk-legend-line" style="background:#38bdf8"></span> EMA21</span>
+                <span class="mk-legend-item"><span class="mk-legend-line" style="background:#a855f7"></span> EMA55</span>
+                <span class="mk-legend-sep"></span>
+                <span class="mk-legend-item" style="color:#94a3b8">RSI</span>
+                <span class="mk-legend-item mk-legend-ob">OB 70</span>
+                <span class="mk-legend-item mk-legend-os">OS 30</span>
             </div>
             <button class="mk-chart-maximize" @onclick="ToggleChartMaximized" title="Maximize chart">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -7138,6 +7141,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
