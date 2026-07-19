@@ -541,7 +541,7 @@
                 const y = e.clientY - rect.top;
                 const x = e.clientX - rect.left;
                 const price = candleSeries.coordinateToPrice(y);
-                if (price == null || price <= 0 || !session.entryPrice) return;
+                if (price == null || !session.entryPrice) return;
 
                 const isLong = session.side === 'LONG';
                 // Which side of entry decides TP vs SL, same as a
@@ -654,10 +654,7 @@
                 const y = e.clientY - rect.top;
                 const price = candleSeries.coordinateToPrice(y);
                 removePreview();
-                // Guard: coordinateToPrice returns null OR a negative number
-                // when the mouse is above/below the chart's visible price axis.
-                // Never send price <= 0 to the server (Binance rejects it).
-                if (price == null || price <= 0 || !session.entryPrice) return;
+                if (price == null || !session.entryPrice) return;
 
                 const isLong = session.side === 'LONG';
                 const isProfitSide = isLong ? price > session.entryPrice : price < session.entryPrice;
@@ -1306,6 +1303,188 @@
             try { if (s.tpSlPriceScaleSub) s.chart.priceScale('right').unsubscribePriceRangeChange(s.tpSlPriceScaleSub); } catch(e) {}
             s.tpSlPriceScaleSub = null;
         },
+
+        // ═══════════════════════════════════════════════════════════════
+        // OPEN ORDER LINES — shows pending orders as price lines on chart
+        // Each order gets a labelled horizontal line at its trigger price.
+        // Types: LIMIT, STOP_MARKET, TAKE_PROFIT_MARKET, STOP, TAKE_PROFIT.
+        // Lines are color-coded: green=buy/TP, red=sell/SL, yellow=limit.
+        // Called from C# after LoadOpenOrdersAsync with current symbol orders.
+        // ═══════════════════════════════════════════════════════════════
+        showOpenOrderLines(containerId, orders) {
+            const s = sessions.get(containerId);
+            if (!s || !s.candleSeries) return;
+
+            // Remove any existing order lines first
+            this.hideOpenOrderLines(containerId);
+
+            if (!Array.isArray(orders) || orders.length === 0) return;
+
+            s.openOrderLines = [];
+            s.openOrderPills = [];
+
+            const container = document.getElementById(containerId);
+
+            for (const order of orders) {
+                if (!order.price || order.price <= 0) continue;
+
+                // Color logic:
+                // TAKE_PROFIT / TAKE_PROFIT_MARKET → green
+                // STOP / STOP_MARKET               → red
+                // LIMIT BUY                         → teal
+                // LIMIT SELL                        → orange
+                const type = (order.type || '').toUpperCase();
+                const side = (order.side || '').toUpperCase();
+
+                let color, lineStyle, labelPrefix;
+
+                if (type.includes('TAKE_PROFIT')) {
+                    color = '#22c55e';
+                    lineStyle = LightweightCharts.LineStyle.Dashed;
+                    labelPrefix = 'TP';
+                } else if (type.includes('STOP')) {
+                    color = '#ef4444';
+                    lineStyle = LightweightCharts.LineStyle.Dashed;
+                    labelPrefix = 'SL';
+                } else {
+                    // LIMIT or other
+                    color = side === 'BUY' ? '#22d3ee' : '#f97316';
+                    lineStyle = LightweightCharts.LineStyle.Dotted;
+                    labelPrefix = side === 'BUY' ? 'BUY' : 'SELL';
+                }
+
+                const fmtQty = order.qty > 0
+                    ? (order.qty < 1 ? order.qty.toFixed(4) : order.qty.toFixed(2))
+                    : '';
+                const lineTitle = `${labelPrefix} ${fmtQty}`.trim();
+
+                // Create the price line
+                let line;
+                try {
+                    line = s.candleSeries.createPriceLine({
+                        price: order.price,
+                        color: color,
+                        lineWidth: 1,
+                        lineStyle: lineStyle,
+                        axisLabelVisible: true,
+                        title: lineTitle,
+                    });
+                } catch (e) { continue; }
+
+                // Create pill label at right edge of chart
+                if (container) {
+                    const pill = document.createElement('div');
+                    pill.className = 'ord-line-pill';
+                    pill.style.cssText = `
+                        position:absolute; right:0; z-index:7;
+                        display:flex; align-items:center; gap:4px;
+                        height:18px; padding:0 8px; border-radius:3px 0 0 3px;
+                        background:${color}22; border:1px solid ${color}55;
+                        border-right:none; pointer-events:none;
+                        font-size:10px; font-weight:700; color:${color};
+                        font-family:'JetBrains Mono',monospace;
+                        white-space:nowrap; line-height:1;
+                        transition: top 50ms linear;
+                    `;
+                    // Dot indicator
+                    const dot = document.createElement('span');
+                    dot.style.cssText = `
+                        width:5px; height:5px; border-radius:50%;
+                        background:${color}; flex-shrink:0;
+                        box-shadow:0 0 4px ${color};
+                    `;
+                    pill.appendChild(dot);
+
+                    const txt = document.createElement('span');
+                    txt.textContent = lineTitle;
+                    pill.appendChild(txt);
+
+                    // Price text
+                    const priceSpan = document.createElement('span');
+                    priceSpan.style.opacity = '0.7';
+                    priceSpan.textContent = ' ' + order.price.toFixed(
+                        order.price < 0.01 ? 6 : order.price < 1 ? 4 : order.price < 100 ? 3 : 2
+                    );
+                    pill.appendChild(priceSpan);
+
+                    container.appendChild(pill);
+                    s.openOrderPills.push({ pill, price: order.price });
+                }
+
+                s.openOrderLines.push({ line, price: order.price, color, order });
+            }
+
+            // Position pills
+            this._repositionOrderPills(containerId);
+
+            // Subscribe to range changes to keep pills tracking
+            if (s.openOrderLines.length > 0 && !s._orderPillRangeSub) {
+                const self = this;
+                s._orderPillRangeSub = () => self._repositionOrderPills(containerId);
+                s.chart.timeScale().subscribeVisibleLogicalRangeChange(s._orderPillRangeSub);
+                try {
+                    s.chart.priceScale('right').subscribePriceRangeChange(s._orderPillRangeSub);
+                } catch(e) {}
+            }
+        },
+
+        _repositionOrderPills(containerId) {
+            const s = sessions.get(containerId);
+            if (!s || !s.openOrderPills || !s.candleSeries) return;
+
+            let scaleWidth = 60;
+            try { scaleWidth = s.chart.priceScale('right').width() || 60; } catch(e) {}
+
+            const MIN_GAP = 20;
+            const entries = [];
+
+            for (const { pill, price } of s.openOrderPills) {
+                const y = s.candleSeries.priceToCoordinate(price);
+                if (y == null) { pill.style.display = 'none'; continue; }
+                pill.style.display = 'flex';
+                entries.push({ pill, price, trueY: y, y });
+            }
+
+            // Sort by Y (top first = highest price first)
+            entries.sort((a, b) => a.trueY - b.trueY);
+
+            // Collision avoidance: push down overlapping pills
+            for (let i = 1; i < entries.length; i++) {
+                const needed = entries[i-1].y + MIN_GAP;
+                if (entries[i].y < needed) entries[i].y = needed;
+            }
+
+            for (const { pill, y } of entries) {
+                pill.style.right = scaleWidth + 'px';
+                pill.style.top = (y - 9) + 'px';  // center on line
+            }
+        },
+
+        hideOpenOrderLines(containerId) {
+            const s = sessions.get(containerId);
+            if (!s) return;
+
+            // Remove price lines
+            for (const { line } of (s.openOrderLines || [])) {
+                try { s.candleSeries.removePriceLine(line); } catch(e) {}
+            }
+            s.openOrderLines = [];
+
+            // Remove pills
+            for (const { pill } of (s.openOrderPills || [])) {
+                try { pill.remove(); } catch(e) {}
+            }
+            s.openOrderPills = [];
+
+            // Unsubscribe range listener
+            if (s._orderPillRangeSub) {
+                try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s._orderPillRangeSub); } catch(e) {}
+                try { s.chart.priceScale('right').unsubscribePriceRangeChange(s._orderPillRangeSub); } catch(e) {}
+                s._orderPillRangeSub = null;
+            }
+        },
+
+        // ═══════════════════════════════════════════════════════════════
 
         // Refreshes the live market-price line with the current PnL —
         // moved OFF the Entry line's title (which is what made it
