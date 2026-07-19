@@ -3152,3 +3152,22 @@ compact-card {
   display: none !important;
 }
 
+
+/* ── TF кнопки внутри chart-head — справа ─────────────────── */
+.mk-chart-tf-bar {
+  display: flex !important;
+  align-items: center !important;
+  gap: 1px !important;
+  margin-left: auto !important;  /* прижимаем вправо */
+  flex-shrink: 1 !important;
+  flex-wrap: nowrap !important;
+  overflow: hidden !important;
+  min-width: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+}
+/* Убираем отдельную строку TF если она ещё рендерится */
+.mk-tf-bar.mk-tf-bar-inline {
+  display: none !important;
+}
