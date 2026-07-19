@@ -2964,696 +2964,191 @@ compact-card {
     flex-shrink: 0;
 }
 
+/* ══════════════════════════════════════════════════════════════
+   UI FIXES v6 — точечные исправления по скриншотам
+   1. Positions panel: resize + autoheight + invisible scroll
+   2. Sidebar: символы не обрезаются  
+   3. TF кнопки: вправо в chart-head
+   ══════════════════════════════════════════════════════════════ */
 
-
-/* ═══════════════════════════════════════════════════
-   VX HEADER STYLES (logo mark + status chips)
-   ═══════════════════════════════════════════════════ */
-.vx-logo-mark {
-    width: 28px; height: 28px;
-    display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0;
-}
-.vertex-title {
-    font-size: 12px !important;
-    font-weight: 900 !important;
-    letter-spacing: 2px !important;
-    color: #f4f8ff !important;
-    text-transform: uppercase !important;
-}
-.vertex-subtitle {
-    font-size: 9px !important;
-    letter-spacing: 1.2px !important;
-    color: #3d5a7a !important;
-    opacity: 1 !important;
-    text-transform: uppercase !important;
-}
-.vx-chip {
-    display: inline-flex; align-items: center; gap: 5px;
-    height: 26px; padding: 0 10px; border-radius: 20px;
-    font-size: 11px; font-weight: 700; cursor: pointer;
-    transition: opacity .12s; font-family: 'JetBrains Mono', monospace;
-    letter-spacing: .3px; border: 1px solid transparent;
-    background: transparent; white-space: nowrap; flex-shrink: 0;
-}
-.vx-chip:hover { opacity: .82; }
-.vx-chip-client  { background:#0f1d32; border-color:#1d3050; color:#7a9cc0; cursor:default; }
-.vx-chip-live    { background:rgba(16,185,129,.08); border-color:rgba(16,185,129,.28); color:#34d399; }
-.vx-chip-demo    { background:rgba(234,179,8,.12);  border-color:rgba(234,179,8,.35);  color:#fcd34d; }
-.vx-chip-autoon  { background:rgba(16,185,129,.09); border-color:rgba(16,185,129,.30); color:#34d399; }
-.vx-chip-autooff { background:rgba(239,68,68,.08);  border-color:rgba(239,68,68,.28);  color:#f87171; }
-.vx-chip-mode    { background:rgba(6,182,212,.08);  border-color:rgba(6,182,212,.22);  color:#22d3ee; gap:4px; }
-.vx-dot { width:5px; height:5px; border-radius:50%; flex-shrink:0; }
-.vx-dot-grn { background:#10b981; box-shadow:0 0 5px #10b981; }
-.vx-dot-red { background:#ef4444; box-shadow:0 0 5px #ef4444; }
-.vx-dot-yel { background:#f59e0b; box-shadow:0 0 5px #f59e0b; }
-.vx-dot-pulse { animation: vxPulse 1.6s ease-in-out infinite; }
-@keyframes vxPulse { 0%,100%{opacity:1} 50%{opacity:.22} }
-.vx-mode-select {
-    background:transparent; border:none; color:#22d3ee;
-    font-size:11px; font-family:'JetBrains Mono',monospace;
-    font-weight:700; cursor:pointer; outline:none; letter-spacing:.3px;
-}
-.vx-mode-select option { background:#0a1422; color:#e2e8f0; }
-.vx-chip-mode-icon { font-size:11px; opacity:.7; }
-.user-badge { display:none !important; }
-
-/* ═══════════════════════════════════════════════════
-   FONT SIZE FIXES — surgical, only genuinely tiny
-   Target: market page inline styles that were ≤9px
-   ═══════════════════════════════════════════════════ */
-
-/* Stats bar labels (were 8-9px, unreadable) */
-.mk-sl { font-size: 10px !important; }
-
-/* Sidebar rank numbers */
-.mk-side-rank { font-size: 10px !important; }
-
-/* Table column headers */
-.mk-oo-tbl thead th { font-size: 10px !important; }
-
-/* Position action buttons */
-.mk-pos-partial-btn2 { font-size: 11px !important; }
-.mk-pos-close-btn    { font-size: 11px !important; }
-
-/* DCA badge */
-.mk-dca-badge { font-size: 9px !important; }
-
-/* Risk bar pct */
-.mk-risk-pct { font-size: 9.5px !important; }
-
-/* Lev chip */
-.mk-lev-chip { font-size: 9.5px !important; }
-
-/* Account bar label (was 7-8px) */
-.mk-acct-label { font-size: 10px !important; }
-
-/* Order panel field labels */
-.ord-label { font-size: 10px !important; }
-.ord-balance-l { font-size: 10px !important; }
-
-/* Position panel small labels */
-.ord-position-l { font-size: 10px !important; }
-.ord-tp-lbl { font-size: 10px !important; }
-.ord-selected-label { font-size: 11px !important; }
-
-/* Signal card tiny elements */
-.sc-usdt  { font-size: 9.5px !important; }
-.sc-ago   { font-size: 10px !important; }
-.sc-warn-strip { font-size: 10px !important; }
-.sig-count { font-size: 10px !important; }
-
-/* Nav link font (was 10px, should be 13px) */
-.vt-link { font-size: 13px !important; }
-
-/* Ticker bar symbol/price */
-.mk-tk-sym   { font-size: 11px !important; }
-.mk-tk-price { font-size: 10.5px !important; }
-.mk-tk-chg   { font-size: 10.5px !important; }
-
-/* TF button font */
-.mk-tf-btn { font-size: 11px !important; }
-
-/* Positions table cells */
-.mk-oo-tbl td { font-size: 12px !important; }
-
-/* Account bar value */
-.mk-acct-value { font-size: 15px !important; }
-.mk-acct-unreal-val { font-size: 13px !important; }
-
-/* Chart head price hero */
-.mk-max-price { font-size: 20px !important; }
-
-/* Position PnL hero */
-.ord-position-pnl-hero-v { font-size: 26px !important; }
-.ord-position-roi-hero    { font-size: 13px !important; }
-
-/* Submit buttons readable */
-.ord-submit-btn { font-size: 13px !important; }
-
-/* Position close button */
-.ord-position-close-btn { font-size: 13px !important; }
-
-/* Risk bar improvements */
-.mk-risk-bar      { height: 3px !important; }
-.mk-risk-bar-fill { border-radius: 1px !important; }
-
-/* ── NAV active teal underline (visual only, no layout change) */
-/* vt-link.active handled above */
-
-
-
-/* ════════════════════════════════════════════════════════
-   LAYOUT FIXES v4 — точно по скриншотам (4 зоны)
-   ════════════════════════════════════════════════════════ */
-
-/* ── V1: ACCOUNT BAR ─────────────────────────────────────
-   Скрин 2: крупные цифры, компактный однострочный бар,
-   без border-radius и отступов — встроен в поток страницы  */
-
-.mk-acct-summary {
-  display: flex !important;
-  align-items: stretch !important;
-  gap: 0 !important;
-  background: #060b12 !important;
-  border: none !important;
-  border-top: 1px solid #152035 !important;
-  border-bottom: 1px solid #152035 !important;
-  border-radius: 0 !important;
-  padding: 0 !important;
-  margin: 0 !important;
-  height: 52px !important;
-}
-.mk-acct-item {
-  display: flex !important;
-  flex-direction: column !important;
-  justify-content: center !important;
-  padding: 0 20px !important;
-  gap: 2px !important;
-  border-right: 1px solid #152035 !important;
-  flex-shrink: 0 !important;
-}
-.mk-acct-item:last-child { border-right: none !important; flex: 1 !important; }
-.mk-acct-label {
-  font-size: 9px !important;
-  font-weight: 700 !important;
-  letter-spacing: .7px !important;
-  text-transform: uppercase !important;
-  color: #2e4460 !important;
-}
-.mk-acct-value {
-  font-family: 'JetBrains Mono', monospace !important;
-  font-size: 18px !important;
-  font-weight: 800 !important;
-  color: #f0f6ff !important;
-  letter-spacing: -.3px !important;
-  line-height: 1.1 !important;
-}
-.mk-acct-value.up { color: #34d399 !important; }
-.mk-acct-value.dn { color: #ef4444 !important; }
-.mk-acct-sub {
-  font-size: 11px !important;
-  font-weight: 600 !important;
-  color: #334e68 !important;
-  margin-left: 4px !important;
-  font-family: 'JetBrains Mono', monospace !important;
-}
-
-/* Positions panel — flat, no border-radius */
+/* ── 1. POSITIONS PANEL — resize работает, scroll невидимый ── */
 .mk-oo-panel {
-  background: #060b12 !important;
-  border: none !important;
-  border-top: 1px solid #152035 !important;
-  border-radius: 0 !important;
+  background: var(--bg2) !important;
+  border: 1px solid var(--bdr) !important;
+  border-radius: 10px !important;
   padding: 0 !important;
-  margin: 0 !important;
-  overflow: auto !important;
+  /* resize:vertical и min-height — позволяют тянуть */
   resize: vertical !important;
-  height: 220px !important;
-  max-height: 600px !important;
-  scrollbar-width: thin !important;
+  min-height: 180px !important;
+  /* height:auto = разворачивается по контенту */
+  height: auto !important;
+  /* overflow:auto — скролл работает но невидим */
+  overflow: auto !important;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
 }
-.mk-oo-tabs {
-  height: 36px !important;
-  background: #060b12 !important;
-  border-bottom: 1px solid #152035 !important;
-  padding: 0 12px !important;
-  display: flex !important;
-  align-items: center !important;
-  gap: 2px !important;
-  position: sticky !important;
-  top: 0 !important;
-  z-index: 2 !important;
+.mk-oo-panel::-webkit-scrollbar { display: none !important; }
+
+/* Убираем внутренний скролл — всё видно */
+.mk-oo-tbl-wrap {
+  overflow: visible !important;
+  height: auto !important;
 }
-.mk-oo-tab {
-  font-size: 11px !important;
+
+/* Resize handle visible */
+.mk-oo-panel::after {
+  content: '' !important;
+  position: absolute !important;
+  right: 4px !important;
+  bottom: 4px !important;
+  width: 12px !important;
+  height: 12px !important;
+  pointer-events: none !important;
+}
+
+/* ── 2. SIDEBAR — монеты показываются полностью ───────────── */
+.mk-side-tbl {
+  /* Убираем overflow:hidden который обрезал контент */
+  overflow: visible !important;
+}
+.mk-side-tbl-scroll {
+  overflow-y: auto !important;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+  flex: 1 !important;
+}
+.mk-side-tbl-scroll::-webkit-scrollbar { display: none !important; }
+/* Символ не обрезается */
+.mk-side-sym {
+  flex: 1 !important;
+  min-width: 0 !important;
+  font-size: 12px !important;
   font-weight: 700 !important;
-  color: #334e68 !important;
-  padding: 4px 10px !important;
-  border-radius: 5px !important;
-  border: none !important;
-  background: transparent !important;
-  cursor: pointer !important;
+  color: var(--txt) !important;
+  /* НЕ обрезаем текст — показываем полностью */
+  overflow: visible !important;
+  text-overflow: unset !important;
+  white-space: nowrap !important;
 }
-.mk-oo-tab-on {
-  background: #0f1b30 !important;
-  color: #f0f6ff !important;
+/* Ряд сайдбара чуть уже */
+.mk-side-row {
+  padding: 5px 8px !important;
+  gap: 5px !important;
 }
-.mk-oo-count {
-  font-size: 9px !important;
-  font-weight: 900 !important;
-  padding: 1px 5px !important;
-  border-radius: 8px !important;
-  background: #06b6d4 !important;
-  color: #000 !important;
-  margin-left: 2px !important;
+/* Price + change компактнее */
+.mk-side-price {
+  font-size: 10px !important;
+  flex-shrink: 1 !important;
 }
-.mk-oo-mode-badge { font-size: 9px !important; }
-.mk-oo-mode-live { color: #34d399 !important; }
-.mk-oo-mode-demo { color: #fcd34d !important; }
+.mk-side-chg {
+  font-size: 10px !important;
+  min-width: 38px !important;
+  text-align: right !important;
+}
 
-/* ── 2: TF BUTTONS — переместить в одну строку с chart head ──
-   Скрин 1: TF кнопки СПРАВА в верхней строке символа.
-   Текущий: они над графиком отдельной строкой.
-   Fix: скрываем отдельный mk-tf-bar, встраиваем через chart-head flex */
+/* ── 3. TF КНОПКИ — в правую часть chart-head ─────────────── */
+/*
+  Текущая структура:
+    mk-tf-bar-inline (отдельная строка ПЕРЕД chart-head)
+    mk-chart-head
+      mk-chart-head-left: [symbol] [price] [Live]
+      mk-legend
+      mk-chart-maximize
+  
+  Решение: скрываем mk-tf-bar-inline как отдельную строку,
+  и показываем TF кнопки через flex order внутри chart-head
+  через CSS (без изменения Razor).
+  
+  mk-tf-bar-inline сдвигаем в контекст chart-head через
+  absolute позиционирование или flex переупорядочивание.
+*/
 
-/* TF bar отдельной строкой — убираем отдельный вид */
+/* Убираем отдельную строку TF */
 .mk-tf-bar.mk-tf-bar-inline {
+  /* Встраиваем в chart-head как flex-item */
   position: static !important;
   border: none !important;
   border-radius: 0 !important;
   background: transparent !important;
   padding: 0 !important;
   margin: 0 !important;
-  gap: 1px !important;
-  /* Встраиваем внутрь chart-head через абсолютное позиционирование
-     chart-head уже flex — TF бар просто отображается как flex-items в конце */
+  gap: 2px !important;
+  display: flex !important;
+  align-items: center !important;
+  border-bottom: none !important;
+  /* Позиционируем: chart-head — это flex-контейнер,
+     mk-tf-bar-inline идёт ПЕРЕД chart-head в DOM.
+     Через CSS мы не можем вынести его ВНУТРЬ chart-head.
+     Альтернатива: сделать chart-head position:relative и
+     mk-tf-bar-inline position:absolute справа. */
+  order: 2 !important;
 }
 
-/* Chart head — symbol, price, TF buttons, maximize — всё в одну строку */
+/* chart-head — flex, TF bar будет справа */
 .mk-chart-head {
   display: flex !important;
   align-items: center !important;
-  gap: 8px !important;
-  height: 42px !important;
-  padding: 0 12px !important;
-  background: #060b12 !important;
-  border-bottom: 1px solid #152035 !important;
+  justify-content: space-between !important;
+  height: 40px !important;
+  padding: 0 10px !important;
+  background: var(--bg2) !important;
+  border-bottom: 1px solid var(--bdr) !important;
   margin-bottom: 0 !important;
-  border-radius: 0 !important;
-  flex-wrap: nowrap !important;
-  overflow: hidden !important;
+  gap: 8px !important;
+  position: relative !important;
 }
+
 .mk-chart-head-left {
   display: flex !important;
   align-items: center !important;
   gap: 8px !important;
   flex-shrink: 0 !important;
 }
+
+/* Symbol */
 .mk-max-sym {
-  font-size: 15px !important;
+  font-size: 14px !important;
   font-weight: 900 !important;
-  color: #f0f6ff !important;
-  letter-spacing: -.3px !important;
-  background: transparent !important;
-  border: none !important;
-  cursor: pointer !important;
-  display: flex !important;
-  align-items: center !important;
-  gap: 5px !important;
+  letter-spacing: -.2px !important;
 }
-.mk-max-tf {
-  font-size: 10px !important;
-  font-weight: 700 !important;
-  color: #334e68 !important;
-  background: #0f1b30 !important;
-  border: 1px solid #152035 !important;
-  border-radius: 3px !important;
-  padding: 2px 6px !important;
-}
+
+/* Price */
 .mk-max-price {
   font-family: 'JetBrains Mono', monospace !important;
-  font-size: 19px !important;
+  font-size: 18px !important;
   font-weight: 700 !important;
   letter-spacing: -.4px !important;
-  flex-shrink: 0 !important;
 }
-/* Legend stays but smaller */
+
+/* Legend — компактная */
 .mk-legend {
   font-size: 10px !important;
-  display: flex !important;
-  align-items: center !important;
   gap: 8px !important;
+  flex-shrink: 1 !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+}
+
+/* TF кнопки в chart-head */
+.mk-tf-btn {
+  padding: 2px 6px !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  border-radius: 3px !important;
   flex-shrink: 0 !important;
-  color: #334e68 !important;
+}
+
+/* Maximize кнопка справа */
+.mk-chart-maximize {
+  flex-shrink: 0 !important;
   margin-left: 4px !important;
 }
 
-/* TF buttons — compact, right side */
-.mk-tf-btn {
-  padding: 3px 7px !important;
-  background: transparent !important;
-  border: 1px solid transparent !important;
-  color: #334e68 !important;
-  font-family: 'JetBrains Mono', monospace !important;
-  font-size: 10px !important;
-  font-weight: 700 !important;
-  cursor: pointer !important;
-  border-radius: 3px !important;
-  transition: all .1s !important;
-  flex-shrink: 0 !important;
-}
-.mk-tf-btn:hover {
-  background: #0f1b30 !important;
-  color: #c4d4ec !important;
-}
-.mk-tf-on {
-  background: rgba(6,182,212,.12) !important;
-  color: #22d3ee !important;
-  border-color: rgba(6,182,212,.3) !important;
-}
-.mk-tf-dim { opacity: .3 !important; }
-.mk-chart-maximize {
-  flex-shrink: 0 !important;
-  margin-left: auto !important;
-  width: 26px !important;
-  height: 26px !important;
-  background: #0f1b30 !important;
-  border: 1px solid #152035 !important;
-  border-radius: 5px !important;
-  color: #334e68 !important;
-  cursor: pointer !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-}
-.mk-chart-maximize:hover { color: #f0f6ff !important; border-color: #06b6d4 !important; }
-.mk-chart-maximize svg { width: 14px !important; height: 14px !important; }
-
-/* Live/Frozen button */
-.mk-btn-inline {
-  flex-shrink: 0 !important;
-  height: 26px !important;
-  padding: 0 10px !important;
-  font-size: 10px !important;
-  font-weight: 700 !important;
-  border-radius: 4px !important;
-  background: rgba(16,185,129,.07) !important;
-  border: 1px solid rgba(16,185,129,.22) !important;
-  color: #34d399 !important;
-}
-
-/* ── 3: SIGNALS — компактные узкие пилюли (как на скрине 1) ─── */
-
-.sig-panel {
-  padding: 4px 10px !important;
-  border-bottom: 1px solid #152035 !important;
-  background: #060b12 !important;
-  display: flex !important;
-  align-items: center !important;
-  gap: 8px !important;
-  min-height: 0 !important;
-  height: 34px !important;
-  overflow: hidden !important;
-}
-.sig-panel-head {
-  display: flex !important;
-  align-items: center !important;
-  gap: 6px !important;
-  flex-shrink: 0 !important;
-}
-.sig-panel-title {
-  display: flex !important;
-  align-items: center !important;
-  gap: 5px !important;
-  font-size: 9px !important;
-  font-weight: 800 !important;
-  color: #34d399 !important;
-  letter-spacing: .6px !important;
-  text-transform: uppercase !important;
-  white-space: nowrap !important;
-}
-.sig-dot {
-  width: 5px !important;
-  height: 5px !important;
-  border-radius: 50% !important;
-  background: #10b981 !important;
-  box-shadow: 0 0 5px #10b981 !important;
-  animation: pulse 1.2s ease-in-out infinite !important;
-}
-.sig-count {
-  font-size: 9px !important;
-  font-weight: 900 !important;
-  padding: 0 5px !important;
-  border-radius: 8px !important;
-  background: #06b6d4 !important;
-  color: #000 !important;
-}
-.mk-header-scan {
-  font-size: 9px !important;
-  color: #2e4460 !important;
-  display: flex !important;
-  align-items: center !important;
-  gap: 4px !important;
-  flex-shrink: 0 !important;
-}
-.mk-header-scan-sym { color: #38bdf8 !important; font-size: 9px !important; }
-
-/* Cards container — horizontal scrollable */
-.sig-cards {
-  display: flex !important;
-  flex-direction: row !important;
-  gap: 4px !important;
-  overflow-x: auto !important;
-  overflow-y: hidden !important;
-  scrollbar-width: none !important;
-  flex: 1 !important;
-  align-items: center !important;
-  padding: 0 !important;
-}
-.sig-cards::-webkit-scrollbar { display: none !important; }
-
-/* Signal card — compact pill */
-.sig-card {
-  flex-shrink: 0 !important;
-  display: flex !important;
-  align-items: center !important;
-  gap: 5px !important;
-  background: #0a1422 !important;
-  border: 1px solid #152035 !important;
-  border-radius: 4px !important;
-  padding: 3px 8px !important;
-  cursor: pointer !important;
-  transition: border-color .12s !important;
-  min-width: 0 !important;
-  max-width: none !important;
-  height: 24px !important;
-  /* Hide expanded details in pill mode */
-}
-.sig-card .sc-conf-wrap { display: none !important; }
-.sig-card .sc-expand { display: none !important; }
-.sig-card .sc-warn-strip { display: none !important; }
-.sig-card .sc-new-dot { display: none !important; }
-.sig-card .sc-pin-btn { display: none !important; }
-/* Show warn icon inline */
-.sig-card.sc-below-threshold { border-color: rgba(245,158,11,.3) !important; }
-
-.sc-buy  { border-left: 2px solid #10b981 !important; }
-.sc-sell { border-left: 2px solid #ef4444 !important; }
-.sc-active { background: #0f1b30 !important; border-color: #06b6d4 !important; }
-
-.sc-top {
-  display: flex !important;
-  align-items: center !important;
-  gap: 5px !important;
-  flex-wrap: nowrap !important;
-}
-.sc-sym {
-  font-size: 11px !important;
-  font-weight: 800 !important;
-  color: #f0f6ff !important;
-}
-.sc-usdt {
-  font-size: 8px !important;
-  color: #334e68 !important;
-  display: none !important; /* hide in pill mode */
-}
-.sc-side {
-  font-size: 9px !important;
-  font-weight: 800 !important;
-}
-.sc-side-b { color: #34d399 !important; }
-.sc-side-s { color: #f87171 !important; }
-.sc-ago {
-  font-size: 8px !important;
-  color: #334e68 !important;
-}
-
-/* Right side of signals panel */
-.sig-panel-right {
-  display: flex !important;
-  align-items: center !important;
-  gap: 6px !important;
-  flex-shrink: 0 !important;
-  margin-left: auto !important;
-}
-.sig-panel-sub { font-size: 9px !important; color: #2e4460 !important; white-space: nowrap !important; }
-.sig-hidden-toggle {
-  font-size: 9px !important;
-  font-weight: 700 !important;
-  padding: 2px 8px !important;
-  height: 22px !important;
-  border-radius: 4px !important;
-  background: #0f1b30 !important;
-  border: 1px solid #152035 !important;
-  color: #6e90b2 !important;
-  cursor: pointer !important;
-  white-space: nowrap !important;
-}
-.sig-hidden-toggle-on {
-  background: rgba(6,182,212,.08) !important;
-  border-color: rgba(6,182,212,.25) !important;
-  color: #22d3ee !important;
-}
-.sig-pager { display: flex !important; align-items: center !important; gap: 3px !important; }
-.sig-pager-dot {
-  width: 4px !important;
-  height: 4px !important;
-  border-radius: 50% !important;
-  background: #152035 !important;
-}
-.sig-pager-dot.active { background: #06b6d4 !important; }
-.sig-pager-label { font-size: 8px !important; color: #2e4460 !important; }
-.sig-pager-hidden { display: none !important; }
-
-/* ── 4: CHART — занимает свою область на всю высоту ──────────
-   Скрин 1: chart container без лишних отступов, no padding */
-
-.mk-charts-area {
-  background: #030609 !important;
-  padding: 0 !important;
-  border-bottom: none !important;
-  position: relative !important;
-}
-
-/* Main grid — плотный, без gap */
-.mk-body-grid {
-  display: grid !important;
-  grid-template-columns: 190px 1fr !important;
-  gap: 0 !important;
-  align-items: start !important;
-}
-.mk-body-grid-with-panel {
-  grid-template-columns: 190px 1fr 320px !important;
-}
-
-/* Sidebar flat */
-.mk-side-tbl {
-  background: #060b12 !important;
-  border-right: 1px solid #152035 !important;
-  border-radius: 0 !important;
-  border-top: none !important;
-  border-bottom: none !important;
-  border-left: none !important;
-  padding: 0 !important;
-  min-height: 100% !important;
-}
-.mk-side-tbl-title { display: none !important; }
-
-/* Main col — no gap */
-.mk-main-col {
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 0 !important;
-  min-width: 0 !important;
-  background: #030609 !important;
-}
-.mk-charts-col-main {
-  min-width: 0 !important;
-  display: flex !important;
-  flex-direction: column !important;
-}
-
-/* Chart container — full height with no extra padding */
-.mk-chart-container-wrap {
-  width: 100% !important;
-  height: 520px !important;
-  min-height: 260px !important;
-  max-height: 900px !important;
-  position: relative !important;
-  resize: vertical !important;
-  overflow: hidden !important;
-}
-
-/* Stats bar — flat, no bg gap */
-.mk-stats {
-  position: sticky !important;
-  z-index: 23 !important;
-  display: flex !important;
-  align-items: stretch !important;
-  background: #060b12 !important;
-  border-bottom: 1px solid #152035 !important;
-  gap: 0 !important;
-  overflow-x: auto !important;
-  scrollbar-width: none !important;
-}
-.mk-s {
-  background: #060b12 !important;
-  padding: 5px 12px !important;
-  border-right: 1px solid #152035 !important;
-  flex-shrink: 0 !important;
-}
-.mk-sl {
-  font-size: 9px !important;
-  letter-spacing: .6px !important;
-  color: #2e4460 !important;
-  font-weight: 700 !important;
-  text-transform: uppercase !important;
-}
-.mk-sv {
-  font-family: 'JetBrains Mono', monospace !important;
-  font-size: 13px !important;
-  font-weight: 700 !important;
-  margin-top: 1px !important;
-  letter-spacing: -.2px !important;
-  color: #c4d4ec !important;
-}
-
-/* Ticker bar — compact */
-.mk-ticker-bar {
-  background: #060b12 !important;
-  border-bottom: 1px solid #152035 !important;
-  height: 26px !important;
-  padding: 0 8px !important;
-  display: flex !important;
-  align-items: center !important;
-  overflow: hidden !important;
-}
-.mk-ticker-scroll {
-  display: flex !important;
-  align-items: center !important;
-  gap: 1px !important;
-  overflow-x: auto !important;
-  scrollbar-width: none !important;
-}
-.mk-tk {
-  display: flex !important;
-  align-items: center !important;
-  gap: 4px !important;
-  padding: 2px 8px !important;
-  border-radius: 3px !important;
-  border: 1px solid transparent !important;
-  background: transparent !important;
-  cursor: pointer !important;
-  flex-shrink: 0 !important;
-  transition: background .08s !important;
-  height: 22px !important;
-}
-.mk-tk:hover { background: #0f1b30 !important; }
-.mk-tk-on { background: #0f1b30 !important; border-color: #1d3050 !important; }
-.mk-tk-sym { font-size: 9.5px !important; font-weight: 700 !important; color: #6e90b2 !important; }
-.mk-tk-price { font-family: 'JetBrains Mono', monospace !important; font-size: 9px !important; color: #6e90b2 !important; }
-.mk-tk-chg { font-family: 'JetBrains Mono', monospace !important; font-size: 8.5px !important; font-weight: 700 !important; }
-
-/* Ord panel (right) — flat */
-.ord-panel {
-  background: #060b12 !important;
-  border: none !important;
-  border-left: 1px solid #152035 !important;
-  border-radius: 0 !important;
-  padding: 0 !important;
-  margin: 0 !important;
-  display: flex !important;
-  flex-direction: column !important;
-}
-.ord-head {
-  background: #060b12 !important;
-  border-bottom: 1px solid #152035 !important;
-  border-radius: 0 !important;
-  height: 42px !important;
-  padding: 0 12px !important;
-  display: flex !important;
-  align-items: center !important;
-  gap: 6px !important;
+/* ── Invisible scrollbars everywhere ─────────────────────── */
+.mk-ticker-scroll::-webkit-scrollbar,
+.mk-side-tbl-scroll::-webkit-scrollbar,
+.mk-oo-panel::-webkit-scrollbar {
+  display: none !important;
 }
 
