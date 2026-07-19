@@ -1333,22 +1333,28 @@
                 // STOP / STOP_MARKET               → red
                 // LIMIT BUY                         → teal
                 // LIMIT SELL                        → orange
-                const type = (order.type || '').toUpperCase();
+                // Normalize type — C# gives PascalCase ("TakeProfitMarket"),
+                // Binance API sometimes gives SCREAMING_CASE ("TAKE_PROFIT_MARKET").
+                // Remove underscores and uppercase for uniform matching.
+                const rawType = (order.type || '').toUpperCase().replace(/_/g, '');
                 const side = (order.side || '').toUpperCase();
 
                 let color, lineStyle, labelPrefix;
 
-                if (type.includes('TAKE_PROFIT')) {
+                if (rawType.includes('TAKEPROFIT')) {
                     color = '#22c55e';
                     lineStyle = LightweightCharts.LineStyle.Dashed;
                     labelPrefix = 'TP';
-                } else if (type.includes('STOP')) {
+                } else if (rawType.includes('STOP') || rawType.includes('STOPMARKET')) {
                     color = '#ef4444';
                     lineStyle = LightweightCharts.LineStyle.Dashed;
                     labelPrefix = 'SL';
-                } else {
-                    // LIMIT or other
+                } else if (rawType.includes('LIMIT')) {
                     color = side === 'BUY' ? '#22d3ee' : '#f97316';
+                    lineStyle = LightweightCharts.LineStyle.Dotted;
+                    labelPrefix = side === 'BUY' ? 'LMT ↑' : 'LMT ↓';
+                } else {
+                    color = '#94a3b8';
                     lineStyle = LightweightCharts.LineStyle.Dotted;
                     labelPrefix = side === 'BUY' ? 'BUY' : 'SELL';
                 }
@@ -1808,6 +1814,7 @@
     window._vertexChartSessions = sessions;
 
 })();
+
 
 
 
