@@ -4660,30 +4660,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     public async Task OnSlDragged(decimal price, decimal originalPrice = 0)
     {
         _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
-        // Guard: JS coordinateToPrice() can return negative/zero when mouse
-        // goes above the chart's visible price area — reject before API call.
-        if (_selectedPosition == null || price <= 0 || _slTpDragBusy)
-        {
-            if (price <= 0)
-                _orderError = "SL price invalid — drag within the chart area";
-            return;
-        }
-        // Additional sanity: SL for LONG must be below entry, for SHORT above
-        var pos = _selectedPosition;
-        bool isLong = pos.Side == "LONG";
-        if (isLong && price >= pos.EntryPrice)
-        {
-            _orderError = $"SL must be below entry ({FmtP(pos.EntryPrice)}) for LONG";
-            StateHasChanged();
-            return;
-        }
-        if (!isLong && price <= pos.EntryPrice)
-        {
-            _orderError = $"SL must be above entry ({FmtP(pos.EntryPrice)}) for SHORT";
-            StateHasChanged();
-            return;
-        }
-        await ReplaceProtectiveOrderAsync(pos, isStopLoss: true,
+        if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
+        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: true,
             newPrice: price, originalPrice: originalPrice > 0 ? originalPrice : price);
     }
 
@@ -4691,12 +4669,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     public async Task OnTpDragged(decimal price, decimal originalPrice = 0)
     {
         _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
-        if (_selectedPosition == null || price <= 0 || _slTpDragBusy)
-        {
-            if (price <= 0)
-                _orderError = "TP price invalid — drag within the chart area";
-            return;
-        }
+        if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
         await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false,
             newPrice: price, originalPrice: originalPrice > 0 ? originalPrice : price);
     }
@@ -4710,12 +4683,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     public async Task OnTpDraggedAt(int tpIndex, decimal price, decimal originalPrice = 0)
     {
         _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
-        if (_selectedPosition == null || price <= 0 || _slTpDragBusy)
-        {
-            if (price <= 0)
-                _orderError = "TP price invalid — drag within the chart area";
-            return;
-        }
+        if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
         await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false,
             newPrice: price, tpIndex: tpIndex,
             originalPrice: originalPrice > 0 ? originalPrice : price);
@@ -4835,21 +4803,6 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             if (_symStep > 0 && orderQty > 0)
                 orderQty = Math.Floor(orderQty / _symStep) * _symStep;
             if (orderQty <= 0) orderQty = pos.Qty; // safety fallback
-
-            // FINAL GUARD: reject zero/negative price before Binance call.
-            // coordinateToPrice() in JS can return negative when mouse
-            // moves above the chart area — this stops the "Stop price
-            // less than zero" Binance error from reaching the user.
-            if (price <= 0)
-            {
-                _orderError = $"{(isStopLoss ? "SL" : "TP")} price must be > 0 (got {price})";
-                return;
-            }
-
-            // Also snap to tick size one more time after rounding,
-            // to be absolutely sure we're on a valid Binance price level.
-            if (_symTickSize > 0)
-                price = Math.Max(price, _symTickSize);
 
             var r = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
                 symbol: pos.Symbol,
@@ -5072,6 +5025,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         }
 
         await LoadOpenOrdersAsync();
+        _ = RefreshOrderLinesAsync();
         await RefreshPositionLines();
         await InvokeAsync(StateHasChanged);
     }
@@ -5261,6 +5215,45 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             try { await JS.InvokeVoidAsync("marketChart.hideTpSlLines", $"chartContainer-{_chartInstanceId}"); } catch { }
         }
         _ = SaveSelectionState();
+    }
+
+    // Refreshes open order lines on chart for the current active symbol.
+    // Shows ALL pending orders (Limit, Stop, TP) as horizontal price lines.
+    // Only called when a symbol is displayed on chart — filters by _activeSym.
+    async Task RefreshOrderLinesAsync()
+    {
+        try
+        {
+            var sym = _activeSym;
+            if (string.IsNullOrEmpty(sym))
+            {
+                await JS.InvokeVoidAsync("marketChart.hideOpenOrderLines",
+                    $"chartContainer-{_chartInstanceId}");
+                return;
+            }
+
+            // Build order list for current symbol — include ALL open orders,
+            // not just SL/TP — so Limit buy/sell orders also appear on chart.
+            var orders = _openOrders
+                .Where(o => o.Symbol == sym && o.Price > 0)
+                .Select(o => new
+                {
+                    orderId    = o.OrderId,
+                    symbol     = o.Symbol,
+                    side       = o.Side,
+                    positionSide = o.PositionSide,
+                    type       = o.Type,
+                    price      = o.Price,
+                    qty        = o.Qty,
+                    filled     = o.Filled,
+                    reduceOnly = o.ReduceOnly,
+                })
+                .ToArray();
+
+            await JS.InvokeVoidAsync("marketChart.showOpenOrderLines",
+                $"chartContainer-{_chartInstanceId}", orders);
+        }
+        catch { }
     }
 
     async Task ShowTpSlLinesAsync()
@@ -5809,6 +5802,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // own piece of the UI once ready - the position panel itself
         // is already visible and correct at this point.
         await LoadOpenOrdersAsync();
+        _ = RefreshOrderLinesAsync();   // show open orders as lines on chart
         // Load tickSize+stepSize so drag TP/SL works without precision errors
         _ = LoadSymbolPrecisionAsync(pos.Symbol);
 
