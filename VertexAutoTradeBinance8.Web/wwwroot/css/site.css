@@ -3171,3 +3171,419 @@ compact-card {
 .mk-tf-bar.mk-tf-bar-inline {
   display: none !important;
 }
+
+
+
+/* ═══════════════════════════════════════════════════════════════
+   TOP BAR REDESIGN — аккуратный верх как на профессиональных биржах
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 1. HEADER (логотип + статус чипы) ─────────────────────── */
+.vertex-header {
+  height: 38px !important;
+  background: #050a10 !important;
+  border-bottom: 1px solid #111d2e !important;
+  padding: 0 14px !important;
+  box-shadow: none !important;
+  gap: 12px !important;
+}
+.vertex-left { gap: 10px !important; }
+.vertex-right { gap: 6px !important; }
+
+/* Logo text */
+.vertex-title {
+  font-size: 11px !important;
+  font-weight: 900 !important;
+  letter-spacing: 2.5px !important;
+  color: #e8f4ff !important;
+  text-transform: uppercase !important;
+}
+.vertex-subtitle {
+  font-size: 8px !important;
+  letter-spacing: 1.5px !important;
+  color: #243550 !important;
+  text-transform: uppercase !important;
+  opacity: 1 !important;
+}
+
+/* Status chips — компактные, одинаковые высоты */
+.vx-chip {
+  height: 24px !important;
+  padding: 0 10px !important;
+  font-size: 10.5px !important;
+  font-weight: 700 !important;
+  border-radius: 5px !important;
+  letter-spacing: .3px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  border: 1px solid !important;
+  white-space: nowrap !important;
+  cursor: pointer !important;
+}
+.vx-chip-client  { background: #080f1a !important; border-color: #1a2d45 !important; color: #4a7090 !important; cursor: default !important; }
+.vx-chip-live    { background: rgba(16,185,129,.07) !important; border-color: rgba(16,185,129,.25) !important; color: #34d399 !important; }
+.vx-chip-autoon  { background: rgba(16,185,129,.07) !important; border-color: rgba(16,185,129,.25) !important; color: #34d399 !important; }
+.vx-chip-autooff { background: rgba(239,68,68,.07)  !important; border-color: rgba(239,68,68,.22)  !important; color: #f87171 !important; }
+.vx-chip-mode    { background: rgba(6,182,212,.06)  !important; border-color: rgba(6,182,212,.2)   !important; color: #22d3ee !important; gap: 4px !important; }
+
+.vx-dot { width: 5px !important; height: 5px !important; border-radius: 50% !important; flex-shrink: 0 !important; }
+.vx-dot-grn { background: #10b981 !important; box-shadow: 0 0 5px rgba(16,185,129,.7) !important; }
+.vx-dot-red { background: #ef4444 !important; box-shadow: 0 0 5px rgba(239,68,68,.7)  !important; }
+
+/* Wallet display top-right */
+.mk-hbal-strip {
+  background: #0a1422 !important;
+  border: 1px solid #131f32 !important;
+  border-radius: 6px !important;
+  height: 28px !important;
+}
+.mk-hbal-item { padding: 0 10px !important; gap: 2px !important; }
+.mk-hbal-l    { font-size: 8px !important; color: #243550 !important; }
+.mk-hbal-v    { font-size: 11px !important; font-weight: 700 !important; }
+.mk-hbal-v-main { font-size: 15px !important; font-weight: 800 !important; color: #22d3ee !important; }
+.mk-hbal-sep  { width: 1px !important; height: 18px !important; background: #131f32 !important; }
+
+/* ── 2. NAV ─────────────────────────────────────────────────── */
+.vertex-topnav {
+  height: 30px !important;
+  top: 38px !important;
+  background: #050a10 !important;
+  border-bottom: 1px solid #111d2e !important;
+  padding: 0 8px !important;
+  gap: 0 !important;
+}
+:root { --vertex-header-h: 38px !important; }
+
+.vt-link {
+  height: 30px !important;
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+  padding: 0 10px !important;
+  border-radius: 0 !important;
+  color: #2e4560 !important;
+  gap: 5px !important;
+  border-bottom: 2px solid transparent !important;
+  transition: color .1s, border-color .1s !important;
+  white-space: nowrap !important;
+}
+.vt-link svg { width: 11px !important; height: 11px !important; opacity: .5 !important; }
+.vt-link:hover { background: transparent !important; color: #5a7898 !important; }
+.vt-link.active {
+  background: transparent !important;
+  color: #e8f4ff !important;
+  font-weight: 700 !important;
+  border-bottom-color: #06b6d4 !important;
+}
+.vt-link-feature.active { color: #e8f4ff !important; border-bottom-color: #06b6d4 !important; background: transparent !important; }
+.vt-sep { background: #111d2e !important; height: 12px !important; margin: 0 3px !important; }
+
+/* ── 3. CHART HEAD — одна строка: sym | price | Live | [TF] | EMA21 EMA55 RSI | ⛶ */
+.mk-chart-head {
+  display: flex !important;
+  align-items: center !important;
+  height: 38px !important;
+  padding: 0 10px !important;
+  background: #060c18 !important;
+  border-bottom: 1px solid #111d2e !important;
+  margin-bottom: 0 !important;
+  gap: 0 !important;
+  overflow: hidden !important;
+  flex-wrap: nowrap !important;
+}
+
+/* Left group: symbol + price + Live */
+.mk-chart-head-left {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  flex-shrink: 0 !important;
+  padding-right: 12px !important;
+  border-right: 1px solid #111d2e !important;
+  margin-right: 0 !important;
+  height: 100% !important;
+}
+
+.mk-max-sym {
+  font-size: 14px !important;
+  font-weight: 900 !important;
+  color: #e8f4ff !important;
+  letter-spacing: -.3px !important;
+  background: transparent !important;
+  border: none !important;
+  cursor: pointer !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  padding: 0 !important;
+}
+.mk-max-tf {
+  font-size: 9.5px !important;
+  font-weight: 700 !important;
+  color: #2e4560 !important;
+  background: #0a1422 !important;
+  border: 1px solid #131f32 !important;
+  border-radius: 3px !important;
+  padding: 1px 5px !important;
+}
+
+.mk-max-price {
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 18px !important;
+  font-weight: 700 !important;
+  letter-spacing: -.4px !important;
+  flex-shrink: 0 !important;
+}
+
+.mk-btn-inline {
+  flex-shrink: 0 !important;
+  height: 22px !important;
+  padding: 0 9px !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  border-radius: 4px !important;
+  background: rgba(16,185,129,.07) !important;
+  border: 1px solid rgba(16,185,129,.2) !important;
+  color: #34d399 !important;
+  transition: all .1s !important;
+}
+.mk-btn-on {
+  background: rgba(239,68,68,.1) !important;
+  border-color: rgba(239,68,68,.25) !important;
+  color: #f87171 !important;
+}
+
+/* TF buttons — middle */
+.mk-chart-tf-bar {
+  display: flex !important;
+  align-items: center !important;
+  gap: 1px !important;
+  padding: 0 10px !important;
+  border-right: 1px solid #111d2e !important;
+  flex-shrink: 0 !important;
+  height: 100% !important;
+  margin-left: 0 !important;
+}
+.mk-tf-btn {
+  padding: 2px 7px !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  border-radius: 3px !important;
+  color: #2e4560 !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  cursor: pointer !important;
+  transition: all .1s !important;
+  flex-shrink: 0 !important;
+}
+.mk-tf-btn:hover { color: #8ab0d0 !important; background: #0a1422 !important; }
+.mk-tf-on {
+  background: rgba(6,182,212,.1) !important;
+  color: #22d3ee !important;
+  border-color: rgba(6,182,212,.25) !important;
+}
+.mk-tf-dim { opacity: .28 !important; }
+
+/* Legend: EMA21 EMA55 RSI OB/OS — компактно в одну строку */
+.mk-legend {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 0 12px !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  color: #2e4560 !important;
+  flex: 1 !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+  flex-shrink: 1 !important;
+}
+.mk-legend span { display: inline-flex !important; align-items: center !important; gap: 4px !important; white-space: nowrap !important; }
+
+/* Maximize button */
+.mk-chart-maximize {
+  flex-shrink: 0 !important;
+  width: 26px !important;
+  height: 26px !important;
+  background: #0a1422 !important;
+  border: 1px solid #131f32 !important;
+  border-radius: 4px !important;
+  color: #2e4560 !important;
+  cursor: pointer !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: all .1s !important;
+  margin-left: 4px !important;
+}
+.mk-chart-maximize:hover { color: #e8f4ff !important; border-color: #06b6d4 !important; }
+.mk-chart-maximize svg { width: 14px !important; height: 14px !important; }
+
+/* ── 4. STATS BAR (PRICE | OPEN | HIGH | ...) ───────────────── */
+.mk-stats {
+  display: flex !important;
+  align-items: stretch !important;
+  height: 40px !important;
+  background: #050a10 !important;
+  border-bottom: 1px solid #111d2e !important;
+  overflow-x: auto !important;
+  scrollbar-width: none !important;
+  flex-wrap: nowrap !important;
+  gap: 0 !important;
+}
+.mk-stats::-webkit-scrollbar { display: none !important; }
+.mk-s {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  padding: 0 12px !important;
+  border-right: 1px solid #0e1a28 !important;
+  flex-shrink: 0 !important;
+  background: #050a10 !important;
+  gap: 1px !important;
+}
+.mk-sl {
+  font-size: 8px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: .7px !important;
+  color: #1e3048 !important;
+  line-height: 1 !important;
+}
+.mk-sv {
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 12.5px !important;
+  font-weight: 700 !important;
+  color: #b0c8e0 !important;
+  letter-spacing: -.2px !important;
+  line-height: 1.2 !important;
+}
+
+/* ── 5. TICKER BAR ───────────────────────────────────────────── */
+.mk-ticker-bar {
+  background: #060c18 !important;
+  border-bottom: 1px solid #111d2e !important;
+  height: 26px !important;
+  padding: 0 6px !important;
+  display: flex !important;
+  align-items: center !important;
+}
+.mk-ticker-scroll {
+  display: flex !important;
+  align-items: center !important;
+  gap: 1px !important;
+  overflow-x: auto !important;
+  scrollbar-width: none !important;
+}
+.mk-ticker-scroll::-webkit-scrollbar { display: none !important; }
+.mk-tk {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  padding: 2px 8px !important;
+  border-radius: 3px !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  cursor: pointer !important;
+  height: 20px !important;
+  transition: background .08s !important;
+  flex-shrink: 0 !important;
+}
+.mk-tk:hover { background: #0a1422 !important; }
+.mk-tk-on, .mk-tk.mk-tk-on { background: #0a1422 !important; border-color: #1a2d45 !important; }
+.mk-tk-sym   { font-size: 9.5px !important; font-weight: 700 !important; color: #4a6880 !important; }
+.mk-tk-price { font-family: 'JetBrains Mono', monospace !important; font-size: 9px !important; color: #4a6880 !important; }
+.mk-tk-chg   { font-family: 'JetBrains Mono', monospace !important; font-size: 9px !important; font-weight: 700 !important; }
+
+/* ── 6. SIGNALS STRIP ────────────────────────────────────────── */
+.sig-panel {
+  height: 32px !important;
+  background: #050a10 !important;
+  border-bottom: 1px solid #111d2e !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 0 10px !important;
+  overflow: hidden !important;
+}
+.sig-panel-title {
+  font-size: 8.5px !important;
+  font-weight: 800 !important;
+  text-transform: uppercase !important;
+  letter-spacing: .7px !important;
+  color: #34d399 !important;
+  white-space: nowrap !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  flex-shrink: 0 !important;
+}
+.sig-dot { width: 5px !important; height: 5px !important; border-radius: 50% !important; background: #10b981 !important; box-shadow: 0 0 5px rgba(16,185,129,.8) !important; flex-shrink: 0 !important; }
+.sig-count { font-size: 9px !important; font-weight: 900 !important; padding: 0 5px !important; border-radius: 8px !important; background: #06b6d4 !important; color: #000 !important; }
+.mk-header-scan { font-size: 9px !important; color: #1e3048 !important; display: flex !important; align-items: center !important; gap: 4px !important; flex-shrink: 0 !important; }
+.mk-header-scan-sym { color: #38bdf8 !important; font-family: 'JetBrains Mono', monospace !important; font-size: 9px !important; }
+
+/* Signal cards (pills) */
+.sig-cards {
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  flex: 1 !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scrollbar-width: none !important;
+}
+.sig-cards::-webkit-scrollbar { display: none !important; }
+.sig-card {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  height: 22px !important;
+  padding: 0 8px !important;
+  border-radius: 4px !important;
+  border: 1px solid #131f32 !important;
+  background: #080f1a !important;
+  cursor: pointer !important;
+  flex-shrink: 0 !important;
+  transition: border-color .1s !important;
+}
+.sc-buy  { border-left: 2px solid #10b981 !important; }
+.sc-sell { border-left: 2px solid #ef4444 !important; }
+.sc-active { background: #0e1d32 !important; border-color: #06b6d4 !important; }
+.sc-top { display: flex !important; align-items: center !important; gap: 5px !important; }
+.sc-sym  { font-size: 11px !important; font-weight: 800 !important; color: #e8f4ff !important; }
+.sc-side { font-size: 9px !important; font-weight: 800 !important; }
+.sc-side-b { color: #34d399 !important; }
+.sc-side-s { color: #f87171 !important; }
+.sc-ago  { font-size: 8px !important; color: #1e3048 !important; }
+.sc-conf-wrap { display: none !important; }
+.sc-expand:not(.sc-expand-pinned) { display: none !important; }
+.sc-warn-strip { display: none !important; }
+.sc-pin-btn { display: none !important; }
+.sc-new-dot { display: none !important; }
+
+/* Panel right */
+.sig-panel-right {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  flex-shrink: 0 !important;
+  margin-left: auto !important;
+}
+.sig-panel-sub { font-size: 9px !important; color: #1e3048 !important; white-space: nowrap !important; }
+.sig-hidden-toggle {
+  height: 20px !important;
+  padding: 0 8px !important;
+  font-size: 9px !important;
+  font-weight: 700 !important;
+  border-radius: 4px !important;
+  background: #080f1a !important;
+  border: 1px solid #131f32 !important;
+  color: #4a6880 !important;
+  cursor: pointer !important;
+  white-space: nowrap !important;
+}
+.sig-hidden-toggle-on { color: #22d3ee !important; border-color: rgba(6,182,212,.25) !important; background: rgba(6,182,212,.07) !important; }
+
