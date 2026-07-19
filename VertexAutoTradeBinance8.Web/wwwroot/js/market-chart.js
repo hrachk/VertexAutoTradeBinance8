@@ -1372,8 +1372,8 @@
                         color: color,
                         lineWidth: 1,
                         lineStyle: lineStyle,
-                        axisLabelVisible: true,
-                        title: lineTitle,
+                        axisLabelVisible: false,  // pill shows price instead
+                        title: '',                 // no inline title — pill is cleaner
                     });
                 } catch (e) { continue; }
 
@@ -1384,13 +1384,14 @@
                     pill.style.cssText = `
                         position:absolute; right:0; z-index:7;
                         display:flex; align-items:center; gap:4px;
-                        height:18px; padding:0 8px; border-radius:3px 0 0 3px;
-                        background:${color}22; border:1px solid ${color}55;
+                        height:18px; padding:0 7px; border-radius:3px 0 0 3px;
+                        background:${color}18; border:1px solid ${color}44;
                         border-right:none; pointer-events:none;
-                        font-size:10px; font-weight:700; color:${color};
+                        font-size:9.5px; font-weight:700; color:${color};
                         font-family:'JetBrains Mono',monospace;
                         white-space:nowrap; line-height:1;
-                        transition: top 50ms linear;
+                        transition: top 80ms linear;
+                        opacity:0.9;
                     `;
                     // Dot indicator
                     const dot = document.createElement('span');
@@ -1814,6 +1815,7 @@
     window._vertexChartSessions = sessions;
 
 })();
+
 
 
 
