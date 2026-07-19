@@ -681,27 +681,27 @@ namespace VertexAutoTradeBinance8.Services
                     o.Type == FuturesOrderType.Stop ||
                     o.Type == FuturesOrderType.StopMarket));
 
-            // ── MANUAL POSITION GUARD (v2) ────────────────────────────────────
+            // ── MANUAL POSITION GUARD v3 ──────────────────────────────────
             // KEY RULE: if we have NO bot signal for this position → hands-off.
             //
-            // Old logic: isManual = (IsManual==true) || (signal==null && hasAlgoOrders)
-            // BUG: if user opened position WITHOUT placing SL/TP orders,
-            //      hasAlgoOrders=false AND signal=null → isManualPosition=false
-            //      → HandleSideAsync runs → CreateEmergencySLAsync places SL
-            //      → that SL fires → position closed by supervisor unexpectedly.
+            // FIX for: user opens position manually WITHOUT SL/TP orders:
+            //   lastSignal == null (no bot memory)
+            //   hasUserAlgoOrders == false (no SL/TP on exchange)
+            //   OLD: isManualPosition = false → HandleSideAsync runs
+            //        → noSlAnywhere=true → Emergency SL placed at ATR×2
+            //        → price spikes, SL fires → position closed with loss!
             //
-            // New logic: ANY position without a bot signal = manual = complete hands-off.
-            // Bot-opened positions ALWAYS have a signal saved in TradeSignalMemoryService
-            // by OrderExecutor at trade time. If signal is null here, we have no context
-            // for this position and must not touch it regardless of algo orders.
-            // ──────────────────────────────────────────────────────────────────────
+            // NEW: signal==null = no context at all = COMPLETE hands-off.
+            // Bot-opened positions ALWAYS have a signal saved in memory
+            // by OrderExecutor at trade time. Null = manual, always.
+            // ──────────────────────────────────────────────────────────────
             bool isManualPosition =
                 lastSignal?.IsManual == true ||
-                lastSignal == null;              // no signal = no context = hands-off
+                lastSignal == null;   // ← no signal = no context = hands-off
 
             if (isManualPosition)
                 _logger.LogDebug(
-                    "[SUPERVISOR][{sym}] Hands-off — IsManual={m}, signalNull={sn}, hasAlgoOrders={a}",
+                    "[SUPERVISOR][{sym}] Hands-off — IsManual={m} signalNull={sn} hasAlgoOrders={a}",
                     symbol, lastSignal?.IsManual, lastSignal == null, hasUserAlgoOrders);
 
             if (hasLong && !isManualPosition)
@@ -1065,10 +1065,11 @@ namespace VertexAutoTradeBinance8.Services
                 // This emergency SL logic is therefore always for bot-opened positions.
                 bool noSlAnywhere = sl == null && !algoSlExists;
 
-                // SAFETY: only place emergency SL if we have a bot signal with a known SL.
-                // This prevents supervisor from placing arbitrary ATR-based SLs on positions
-                // it has no context about. If signal.StopLoss > 0, we know the intended risk.
-                // If signal.StopLoss == 0 (user signal or bot signal without SL), skip.
+                // SAFETY: Emergency SL only placed when we have a bot signal
+                // with a specific StopLoss value. This prevents Supervisor from
+                // placing an arbitrary ATR-based SL on manual positions.
+                // If signal is null or StopLoss==0, we have no intended risk
+                // level and must not interfere.
                 bool hasBotSlContext = signal != null && !signal.IsManual && signal.StopLoss > 0;
 
                 if (noSlAnywhere && hasBotSlContext)
@@ -1089,17 +1090,18 @@ namespace VertexAutoTradeBinance8.Services
                         _slPlacedAt[slCooldownKey] = DateTime.UtcNow;
                         await CreateEmergencySLAsync(client, symbol, side, qtyAbs, entry, signal, ct);
                         _logger.LogWarning(
-                            "[SUPERVISOR][{symbol}][{side}] Emergency SL created (no SL found, bot signal SL={sl})",
+                            "[SUPERVISOR][{symbol}][{side}] Emergency SL created (no SL found, signalSL={sl})",
                             symbol, side, signal.StopLoss);
                     }
                 }
                 else if (noSlAnywhere && !hasBotSlContext)
                 {
                     _logger.LogDebug(
-                        "[SUPERVISOR][{sym}][{side}] No SL found but no bot context — skip emergency SL (signal={sig}, isManual={m}, signalSl={ssl})",
+                        "[SUPERVISOR][{sym}][{side}] No SL but no bot context — skip emergency SL " +
+                        "(signal={sig}, signalNull={sn}, signalSL={ssl})",
                         symbol, side,
                         signal?.Reason ?? "null",
-                        signal?.IsManual,
+                        signal == null,
                         signal?.StopLoss ?? 0m);
                 }
 
