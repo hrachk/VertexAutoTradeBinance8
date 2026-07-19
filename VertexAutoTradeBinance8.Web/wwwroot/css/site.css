@@ -1260,11 +1260,12 @@ compact-card {
 }
 
 .vertex-subtitle {
-    font-size: 13px;
-    opacity: 0.5;
-    margin-left: 2px;
-    margin-top: 2px;
-    color: #b57aff;
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: #2e4460;
+    opacity: 1;
 }
 
 /* STATUS */
@@ -1409,7 +1410,7 @@ compact-card {
 
 :root {
     --brain-beat: 2.8s; /* общий ритм мозга */
-    --vertex-header-h: 44px;
+    --vertex-header-h: 40px;
 }
 
 @keyframes brainBeat {
@@ -2096,18 +2097,16 @@ compact-card {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 14px;
-    background: rgba(4, 6, 14, 0.96);
-    -webkit-backdrop-filter: blur(12px);
-    backdrop-filter: blur(12px);
-    border-bottom: 1px solid rgba(30,45,71,0.9);
-    box-shadow: 0 1px 0 rgba(34,211,238,.05);
+    padding: 0 12px;
+    background: #060b12;
+    border-bottom: 1px solid #152035;
+    box-shadow: none;
 }
 
 .vertex-left {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
     min-width: 0;
 }
 
@@ -2119,11 +2118,12 @@ compact-card {
 }
 
 .vertex-title {
-    font-weight: 800;
-    letter-spacing: 0.4px;
-    font-size: 13px;
+    font-weight: 900;
+    letter-spacing: 2px;
+    font-size: 11px;
     white-space: nowrap;
-    color: #e8eef6;
+    color: #f0f6ff;
+    text-transform: uppercase;
 }
 
 .vertex-subtitle {
@@ -2199,7 +2199,7 @@ compact-card {
 .vertex-right {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 6px;
     white-space: nowrap;
     flex-wrap: nowrap;
     flex-shrink: 0;
@@ -2910,11 +2910,11 @@ compact-card {
     z-index: 2100;
     display: flex;
     align-items: center;
-    gap: 2px;
-    padding: 0 16px;
-    height: 40px;
-    background: #080d1a;
-    border-bottom: 1px solid #1e2d47;
+    gap: 0;
+    padding: 0 10px;
+    height: 32px;
+    background: #060b12;
+    border-bottom: 1px solid #152035;
     overflow-x: auto;
 }
 .vertex-topnav::-webkit-scrollbar { display: none; }
@@ -2923,14 +2923,16 @@ compact-card {
     display: flex;
     align-items: center;
     gap: 5px;
-    padding: 5px 10px;
-    border-radius: 6px;
-    color: #4a6080;
-    font-size: 14px;
+    padding: 0 11px;
+    height: 32px;
+    border-radius: 0;
+    color: #3d5878;
+    font-size: 12px;
     font-weight: 600;
     text-decoration: none;
     white-space: nowrap;
-    transition: background 0.15s, color 0.15s;
+    transition: color 0.12s;
+    border-bottom: 2px solid transparent;
 }
 .vt-link svg {
     width: 14px;
@@ -2939,18 +2941,20 @@ compact-card {
     opacity: 0.7;
 }
 .vt-link:hover {
-    background: rgba(255, 255, 255, 0.04);
-    color: #b0bfcf;
+    background: transparent;
+    color: #7a9cc0;
 }
 .vt-link.active {
-    background: rgba(34, 211, 238, 0.1);
-    color: #22d3ee;
-    font-weight: 600;
+    background: transparent;
+    color: #f0f6ff;
+    font-weight: 700;
+    border-bottom-color: #06b6d4;
 }
 .vt-link-feature.active,
 .vt-link-feature:hover {
-    background: rgba(16, 185, 129, 0.1);
-    color: #10b981;
+    background: transparent;
+    color: #f0f6ff;
+    border-bottom-color: #06b6d4;
 }
 .vt-sep {
     width: 1px;
@@ -3095,6 +3099,4 @@ compact-card {
 .mk-risk-bar-fill { border-radius: 1px !important; }
 
 /* ── NAV active teal underline (visual only, no layout change) */
-.vt-link.active {
-    color: #22d3ee !important;
-}
+/* vt-link.active handled above */
