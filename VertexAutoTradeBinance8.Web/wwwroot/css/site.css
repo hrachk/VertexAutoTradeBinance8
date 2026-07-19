@@ -1975,12 +1975,21 @@ compact-card {
 }
 
 .vx-chip {
-    font-size: 12px;
-    padding: 4px 8px;
-    border-radius: 999px;
-    background: rgba(140,110,255,.10);
-    border: 1px solid rgba(140,110,255,.18);
-    color: rgba(235,230,255,.92);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 9px;
+    font-size: 10px;
+    font-weight: 700;
+    border-radius: 4px;
+    border: 1px solid;
+    white-space: nowrap;
+    cursor: pointer;
+    letter-spacing: .2px;
+    background: transparent;
+    color: #5a7898;
+    border-color: #1a2d45;
 }
 
 .vx-levels {
@@ -2098,8 +2107,8 @@ compact-card {
     align-items: center;
     justify-content: space-between;
     padding: 0 12px;
-    background: #060b12;
-    border-bottom: 1px solid #152035;
+    background: #050a10;
+    border-bottom: 1px solid #0e1a28;
     box-shadow: none;
 }
 
@@ -3616,3 +3625,4 @@ compact-card {
 }
 .mk-legend-ob { color: #ef4444 !important; font-size: 9.5px !important; }
 .mk-legend-os { color: #10b981 !important; font-size: 9.5px !important; }
+
