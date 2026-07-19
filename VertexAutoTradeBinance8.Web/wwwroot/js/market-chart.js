@@ -1328,38 +1328,20 @@
             for (const order of orders) {
                 if (!order.price || order.price <= 0) continue;
 
-                // Color logic:
-                // TAKE_PROFIT / TAKE_PROFIT_MARKET → green
-                // STOP / STOP_MARKET               → red
-                // LIMIT BUY                         → teal
-                // LIMIT SELL                        → orange
-                // Normalize type — C# gives PascalCase ("TakeProfitMarket"),
-                // Binance API sometimes gives SCREAMING_CASE ("TAKE_PROFIT_MARKET").
-                // Remove underscores and uppercase for uniform matching.
+                // Normalize type for matching
                 const rawType = (order.type || '').toUpperCase().replace(/_/g, '');
                 const side = (order.side || '').toUpperCase();
 
-                let color, lineStyle, labelPrefix;
+                // SKIP STOP/TP orders — already drawn by showTpSlLines.
+                // Only show LIMIT (pending entry) orders to avoid duplicate lines.
+                if (rawType.includes('TAKEPROFIT') || rawType.includes('STOP')) continue;
 
-                if (rawType.includes('TAKEPROFIT')) {
-                    color = '#22c55e';
-                    lineStyle = LightweightCharts.LineStyle.Dashed;
-                    labelPrefix = 'TP';
-                } else if (rawType.includes('STOP') || rawType.includes('STOPMARKET')) {
-                    color = '#ef4444';
-                    lineStyle = LightweightCharts.LineStyle.Dashed;
-                    labelPrefix = 'SL';
-                } else if (rawType.includes('LIMIT')) {
-                    color = side === 'BUY' ? '#22d3ee' : '#f97316';
-                    lineStyle = LightweightCharts.LineStyle.Dotted;
-                    labelPrefix = side === 'BUY' ? 'LMT ↑' : 'LMT ↓';
-                } else {
-                    color = '#94a3b8';
-                    lineStyle = LightweightCharts.LineStyle.Dotted;
-                    labelPrefix = side === 'BUY' ? 'BUY' : 'SELL';
-                }
+                // Only LIMIT orders reach here
+                const color = side === 'BUY' ? '#22d3ee' : '#f97316';
+                const lineStyle = LightweightCharts.LineStyle.Dotted;
+                const labelPrefix = side === 'BUY' ? 'LMT BUY' : 'LMT SELL';
 
-                const fmtQty = order.qty > 0
+                                const fmtQty = order.qty > 0
                     ? (order.qty < 1 ? order.qty.toFixed(4) : order.qty.toFixed(2))
                     : '';
                 const lineTitle = `${labelPrefix} ${fmtQty}`.trim();
