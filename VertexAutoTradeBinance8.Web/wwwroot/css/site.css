@@ -1977,34 +1977,60 @@ compact-card {
 .vx-chip {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    height: 22px;
-    padding: 0 9px;
-    font-size: 10px;
+    gap: 6px;
+    height: 26px;
+    padding: 0 12px;
+    font-size: 11px;
     font-weight: 700;
-    border-radius: 4px;
+    border-radius: 5px;
     border: 1px solid;
     white-space: nowrap;
     cursor: pointer;
-    letter-spacing: .2px;
+    letter-spacing: .3px;
     background: transparent;
     color: #5a7898;
     border-color: #1a2d45;
+    transition: opacity .12s;
 }
+.vx-chip:hover { opacity: .82; }
 
-.vx-levels {
-    font-size: 12px;
-    color: rgba(255,255,255,.72);
-}
+/* Chip color variants */
+.vx-chip-client  { background: #070e1a; border-color: #162234; color: #3d5e7a; cursor: default; }
+.vx-chip-live    { background: rgba(16,185,129,.07); border-color: rgba(16,185,129,.28); color: #34d399; }
+.vx-chip-demo    { background: rgba(245,158,11,.07);  border-color: rgba(245,158,11,.28);  color: #fcd34d; }
+.vx-chip-autoon  { background: rgba(16,185,129,.07); border-color: rgba(16,185,129,.28); color: #34d399; }
+.vx-chip-autooff { background: rgba(239,68,68,.07);  border-color: rgba(239,68,68,.26);  color: #f87171; }
+.vx-chip-mode    { background: rgba(6,182,212,.07);  border-color: rgba(6,182,212,.25);  color: #22d3ee; gap: 5px; }
 
-.vx-lvl b {
-    color: rgba(255,255,255,.92);
-}
-
+/* Status dot */
 .vx-dot {
-    padding: 0 6px;
-    opacity: .6;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: inline-block;
 }
+.vx-dot-grn { background: #10b981; box-shadow: 0 0 5px rgba(16,185,129,.8); }
+.vx-dot-yel { background: #f59e0b; box-shadow: 0 0 5px rgba(245,158,11,.8); }
+.vx-dot-red { background: #ef4444; box-shadow: 0 0 5px rgba(239,68,68,.8); }
+.vx-dot-pulse { animation: vxPulse 1.6s ease-in-out infinite; }
+
+/* Mode select inside chip */
+.vx-mode-select {
+    background: transparent;
+    border: none;
+    color: #22d3ee;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    outline: none;
+    letter-spacing: .2px;
+    font-family: inherit;
+}
+.vx-mode-select option { background: #07111e; color: #e2e8f0; }
+
+.vx-levels { font-size: 12px; color: rgba(255,255,255,.72); }
+.vx-lvl b  { color: rgba(255,255,255,.92); }
 
 .bn-foot {
     margin-top: 10px;
@@ -3116,7 +3142,7 @@ compact-card {
 
 /* Symbol */
 .mk-max-sym {
-  font-size: 14px !important;
+  font-size: 15px !important;
   font-weight: 900 !important;
   letter-spacing: -.2px !important;
 }
@@ -3189,28 +3215,28 @@ compact-card {
 
 /* ── 1. HEADER (логотип + статус чипы) ─────────────────────── */
 .vertex-header {
-  height: 38px !important;
+  height: 46px !important;
   background: #050a10 !important;
   border-bottom: 1px solid #111d2e !important;
-  padding: 0 14px !important;
+  padding: 0 18px !important;
   box-shadow: none !important;
-  gap: 12px !important;
+  gap: 14px !important;
 }
 .vertex-left { gap: 10px !important; }
 .vertex-right { gap: 6px !important; }
 
 /* Logo text */
 .vertex-title {
-  font-size: 11px !important;
+  font-size: 12px !important;
   font-weight: 900 !important;
   letter-spacing: 2.5px !important;
   color: #e8f4ff !important;
   text-transform: uppercase !important;
 }
 .vertex-subtitle {
-  font-size: 8px !important;
+  font-size: 9px !important;
   letter-spacing: 1.5px !important;
-  color: #243550 !important;
+  color: #2a4060 !important;
   text-transform: uppercase !important;
   opacity: 1 !important;
 }
@@ -3232,18 +3258,18 @@ compact-card {
 
 /* ── 2. NAV ─────────────────────────────────────────────────── */
 .vertex-topnav {
-  height: 30px !important;
-  top: 38px !important;
+  height: 34px !important;
+  top: 46px !important;
   background: #050a10 !important;
   border-bottom: 1px solid #111d2e !important;
-  padding: 0 8px !important;
+  padding: 0 10px !important;
   gap: 0 !important;
 }
-:root { --vertex-header-h: 38px !important; }
+:root { --vertex-header-h: 46px !important; }
 
 .vt-link {
-  height: 30px !important;
-  font-size: 11.5px !important;
+  height: 34px !important;
+  font-size: 12px !important;
   font-weight: 600 !important;
   padding: 0 10px !important;
   border-radius: 0 !important;
@@ -3268,8 +3294,8 @@ compact-card {
 .mk-chart-head {
   display: flex !important;
   align-items: center !important;
-  height: 38px !important;
-  padding: 0 10px !important;
+  height: 44px !important;
+  padding: 0 14px !important;
   background: #060c18 !important;
   border-bottom: 1px solid #111d2e !important;
   margin-bottom: 0 !important;
@@ -3315,7 +3341,7 @@ compact-card {
 
 .mk-max-price {
   font-family: 'JetBrains Mono', monospace !important;
-  font-size: 18px !important;
+  font-size: 20px !important;
   font-weight: 700 !important;
   letter-spacing: -.4px !important;
   flex-shrink: 0 !important;
@@ -3411,7 +3437,7 @@ compact-card {
 .mk-stats {
   display: flex !important;
   align-items: stretch !important;
-  height: 40px !important;
+  height: 44px !important;
   background: #050a10 !important;
   border-bottom: 1px solid #111d2e !important;
   overflow-x: auto !important;
@@ -3431,16 +3457,16 @@ compact-card {
   gap: 1px !important;
 }
 .mk-sl {
-  font-size: 8px !important;
+  font-size: 9px !important;
   font-weight: 700 !important;
   text-transform: uppercase !important;
-  letter-spacing: .7px !important;
-  color: #1e3048 !important;
+  letter-spacing: .6px !important;
+  color: #243550 !important;
   line-height: 1 !important;
 }
 .mk-sv {
   font-family: 'JetBrains Mono', monospace !important;
-  font-size: 12.5px !important;
+  font-size: 13.5px !important;
   font-weight: 700 !important;
   color: #b0c8e0 !important;
   letter-spacing: -.2px !important;
@@ -3451,8 +3477,8 @@ compact-card {
 .mk-ticker-bar {
   background: #060c18 !important;
   border-bottom: 1px solid #111d2e !important;
-  height: 26px !important;
-  padding: 0 6px !important;
+  height: 28px !important;
+  padding: 0 8px !important;
   display: flex !important;
   align-items: center !important;
 }
@@ -3479,9 +3505,9 @@ compact-card {
 }
 .mk-tk:hover { background: #0a1422 !important; }
 .mk-tk-on, .mk-tk.mk-tk-on { background: #0a1422 !important; border-color: #1a2d45 !important; }
-.mk-tk-sym   { font-size: 9.5px !important; font-weight: 700 !important; color: #4a6880 !important; }
-.mk-tk-price { font-family: 'JetBrains Mono', monospace !important; font-size: 9px !important; color: #4a6880 !important; }
-.mk-tk-chg   { font-family: 'JetBrains Mono', monospace !important; font-size: 9px !important; font-weight: 700 !important; }
+.mk-tk-sym   { font-size: 11px !important; font-weight: 700 !important; color: #4a6880 !important; }
+.mk-tk-price { font-family: 'JetBrains Mono', monospace !important; font-size: 10px !important; color: #4a6880 !important; }
+.mk-tk-chg   { font-family: 'JetBrains Mono', monospace !important; font-size: 10.5px !important; font-weight: 700 !important; }
 
 /* ── 6. SIGNALS STRIP ────────────────────────────────────────── */
 .sig-panel {
@@ -3603,3 +3629,6 @@ compact-card {
 .mk-legend-ob { color: #ef4444 !important; font-size: 9.5px !important; }
 .mk-legend-os { color: #10b981 !important; font-size: 9.5px !important; }
 
+
+/* Hide Market Intelligence header — не нужен */
+.mk-header { display: none !important; }
