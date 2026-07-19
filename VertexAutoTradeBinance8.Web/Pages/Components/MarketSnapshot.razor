@@ -3240,6 +3240,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     : Task.CompletedTask;
                 await Task.WhenAll(loadDataTask, loadOrdersTask, loadPositionsTask, loadCurrentPosTask);
 
+                // Refresh open order lines on chart every tick
+                _ = RefreshOrderLinesAsync();
+
                 SweepExpiredSignals();
                 // CleanupOrphanedProtectiveOrders only makes sense in LIVE mode:
                 // in DEMO, _openOrders and _allPositions are always empty (demo
@@ -5802,7 +5805,6 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // own piece of the UI once ready - the position panel itself
         // is already visible and correct at this point.
         await LoadOpenOrdersAsync();
-        _ = RefreshOrderLinesAsync();   // show open orders as lines on chart
         // Load tickSize+stepSize so drag TP/SL works without precision errors
         _ = LoadSymbolPrecisionAsync(pos.Symbol);
 
@@ -5811,6 +5813,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
         try { await RenderCharts(); } catch { }
         await RefreshPositionLines();
+        await RefreshOrderLinesAsync();  // AFTER chart ready — draw open order lines
 
         _ = JS.InvokeVoidAsync("tickerDragScroll.scrollSymbolIntoView", pos.Symbol);
 
@@ -7182,6 +7185,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
