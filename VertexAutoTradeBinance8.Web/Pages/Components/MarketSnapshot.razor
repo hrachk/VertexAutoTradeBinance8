@@ -4660,8 +4660,30 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     public async Task OnSlDragged(decimal price, decimal originalPrice = 0)
     {
         _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
-        if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
-        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: true,
+        // Guard: JS coordinateToPrice() can return negative/zero when mouse
+        // goes above the chart's visible price area — reject before API call.
+        if (_selectedPosition == null || price <= 0 || _slTpDragBusy)
+        {
+            if (price <= 0)
+                _orderError = "SL price invalid — drag within the chart area";
+            return;
+        }
+        // Additional sanity: SL for LONG must be below entry, for SHORT above
+        var pos = _selectedPosition;
+        bool isLong = pos.Side == "LONG";
+        if (isLong && price >= pos.EntryPrice)
+        {
+            _orderError = $"SL must be below entry ({FmtP(pos.EntryPrice)}) for LONG";
+            StateHasChanged();
+            return;
+        }
+        if (!isLong && price <= pos.EntryPrice)
+        {
+            _orderError = $"SL must be above entry ({FmtP(pos.EntryPrice)}) for SHORT";
+            StateHasChanged();
+            return;
+        }
+        await ReplaceProtectiveOrderAsync(pos, isStopLoss: true,
             newPrice: price, originalPrice: originalPrice > 0 ? originalPrice : price);
     }
 
@@ -4669,7 +4691,12 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     public async Task OnTpDragged(decimal price, decimal originalPrice = 0)
     {
         _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
-        if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
+        if (_selectedPosition == null || price <= 0 || _slTpDragBusy)
+        {
+            if (price <= 0)
+                _orderError = "TP price invalid — drag within the chart area";
+            return;
+        }
         await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false,
             newPrice: price, originalPrice: originalPrice > 0 ? originalPrice : price);
     }
@@ -4683,7 +4710,12 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     public async Task OnTpDraggedAt(int tpIndex, decimal price, decimal originalPrice = 0)
     {
         _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
-        if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
+        if (_selectedPosition == null || price <= 0 || _slTpDragBusy)
+        {
+            if (price <= 0)
+                _orderError = "TP price invalid — drag within the chart area";
+            return;
+        }
         await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false,
             newPrice: price, tpIndex: tpIndex,
             originalPrice: originalPrice > 0 ? originalPrice : price);
@@ -4803,6 +4835,21 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             if (_symStep > 0 && orderQty > 0)
                 orderQty = Math.Floor(orderQty / _symStep) * _symStep;
             if (orderQty <= 0) orderQty = pos.Qty; // safety fallback
+
+            // FINAL GUARD: reject zero/negative price before Binance call.
+            // coordinateToPrice() in JS can return negative when mouse
+            // moves above the chart area — this stops the "Stop price
+            // less than zero" Binance error from reaching the user.
+            if (price <= 0)
+            {
+                _orderError = $"{(isStopLoss ? "SL" : "TP")} price must be > 0 (got {price})";
+                return;
+            }
+
+            // Also snap to tick size one more time after rounding,
+            // to be absolutely sure we're on a valid Binance price level.
+            if (_symTickSize > 0)
+                price = Math.Max(price, _symTickSize);
 
             var r = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
                 symbol: pos.Symbol,
