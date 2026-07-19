@@ -3232,6 +3232,7 @@ compact-card {
 }
 .vx-chip-client  { background: #080f1a !important; border-color: #1a2d45 !important; color: #4a7090 !important; cursor: default !important; }
 .vx-chip-live    { background: rgba(16,185,129,.07) !important; border-color: rgba(16,185,129,.25) !important; color: #34d399 !important; }
+.vx-chip-demo    { background: rgba(245,158,11,.07)  !important; border-color: rgba(245,158,11,.22)  !important; color: #fcd34d !important; }
 .vx-chip-autoon  { background: rgba(16,185,129,.07) !important; border-color: rgba(16,185,129,.25) !important; color: #34d399 !important; }
 .vx-chip-autooff { background: rgba(239,68,68,.07)  !important; border-color: rgba(239,68,68,.22)  !important; color: #f87171 !important; }
 .vx-chip-mode    { background: rgba(6,182,212,.06)  !important; border-color: rgba(6,182,212,.2)   !important; color: #22d3ee !important; gap: 4px !important; }
