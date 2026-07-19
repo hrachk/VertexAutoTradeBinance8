@@ -541,7 +541,7 @@
                 const y = e.clientY - rect.top;
                 const x = e.clientX - rect.left;
                 const price = candleSeries.coordinateToPrice(y);
-                if (price == null || !session.entryPrice) return;
+                if (price == null || price <= 0 || !session.entryPrice) return;
 
                 const isLong = session.side === 'LONG';
                 // Which side of entry decides TP vs SL, same as a
@@ -654,7 +654,10 @@
                 const y = e.clientY - rect.top;
                 const price = candleSeries.coordinateToPrice(y);
                 removePreview();
-                if (price == null || !session.entryPrice) return;
+                // Guard: coordinateToPrice returns null OR a negative number
+                // when the mouse is above/below the chart's visible price axis.
+                // Never send price <= 0 to the server (Binance rejects it).
+                if (price == null || price <= 0 || !session.entryPrice) return;
 
                 const isLong = session.side === 'LONG';
                 const isProfitSide = isLong ? price > session.entryPrice : price < session.entryPrice;
@@ -1626,5 +1629,6 @@
     window._vertexChartSessions = sessions;
 
 })();
+
 
 
