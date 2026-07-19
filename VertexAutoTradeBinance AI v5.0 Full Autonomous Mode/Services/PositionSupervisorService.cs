@@ -681,14 +681,28 @@ namespace VertexAutoTradeBinance8.Services
                     o.Type == FuturesOrderType.Stop ||
                     o.Type == FuturesOrderType.StopMarket));
 
+            // ── MANUAL POSITION GUARD (v2) ────────────────────────────────────
+            // KEY RULE: if we have NO bot signal for this position → hands-off.
+            //
+            // Old logic: isManual = (IsManual==true) || (signal==null && hasAlgoOrders)
+            // BUG: if user opened position WITHOUT placing SL/TP orders,
+            //      hasAlgoOrders=false AND signal=null → isManualPosition=false
+            //      → HandleSideAsync runs → CreateEmergencySLAsync places SL
+            //      → that SL fires → position closed by supervisor unexpectedly.
+            //
+            // New logic: ANY position without a bot signal = manual = complete hands-off.
+            // Bot-opened positions ALWAYS have a signal saved in TradeSignalMemoryService
+            // by OrderExecutor at trade time. If signal is null here, we have no context
+            // for this position and must not touch it regardless of algo orders.
+            // ──────────────────────────────────────────────────────────────────────
             bool isManualPosition =
                 lastSignal?.IsManual == true ||
-                (lastSignal == null && hasUserAlgoOrders);
+                lastSignal == null;              // no signal = no context = hands-off
 
             if (isManualPosition)
                 _logger.LogDebug(
-                    "[SUPERVISOR][{sym}] Manual — hands-off (IsManual={m} hasAlgoOrders={a})",
-                    symbol, lastSignal?.IsManual, hasUserAlgoOrders);
+                    "[SUPERVISOR][{sym}] Hands-off — IsManual={m}, signalNull={sn}, hasAlgoOrders={a}",
+                    symbol, lastSignal?.IsManual, lastSignal == null, hasUserAlgoOrders);
 
             if (hasLong && !isManualPosition)
                 await HandleSideAsync(client, symbol, PositionSide.Long, longPos!, sharedOrders, lastSignal, klines1m, ct);
@@ -1050,7 +1064,14 @@ namespace VertexAutoTradeBinance8.Services
                 // (manual positions are guarded at the call site in SuperviseAsync).
                 // This emergency SL logic is therefore always for bot-opened positions.
                 bool noSlAnywhere = sl == null && !algoSlExists;
-                if (noSlAnywhere)
+
+                // SAFETY: only place emergency SL if we have a bot signal with a known SL.
+                // This prevents supervisor from placing arbitrary ATR-based SLs on positions
+                // it has no context about. If signal.StopLoss > 0, we know the intended risk.
+                // If signal.StopLoss == 0 (user signal or bot signal without SL), skip.
+                bool hasBotSlContext = signal != null && !signal.IsManual && signal.StopLoss > 0;
+
+                if (noSlAnywhere && hasBotSlContext)
                 {
                     // Cooldown guard: don't spam SL orders every tick.
                     // If GetOpenAlgoOrdersAsync returned stale data, the order
@@ -1068,9 +1089,18 @@ namespace VertexAutoTradeBinance8.Services
                         _slPlacedAt[slCooldownKey] = DateTime.UtcNow;
                         await CreateEmergencySLAsync(client, symbol, side, qtyAbs, entry, signal, ct);
                         _logger.LogWarning(
-                            "[SUPERVISOR][{symbol}][{side}] Emergency SL created (no SL found)",
-                            symbol, side);
+                            "[SUPERVISOR][{symbol}][{side}] Emergency SL created (no SL found, bot signal SL={sl})",
+                            symbol, side, signal.StopLoss);
                     }
+                }
+                else if (noSlAnywhere && !hasBotSlContext)
+                {
+                    _logger.LogDebug(
+                        "[SUPERVISOR][{sym}][{side}] No SL found but no bot context — skip emergency SL (signal={sig}, isManual={m}, signalSl={ssl})",
+                        symbol, side,
+                        signal?.Reason ?? "null",
+                        signal?.IsManual,
+                        signal?.StopLoss ?? 0m);
                 }
 
                 // ❗ TP отсутствует → ставим аварийный
@@ -3807,6 +3837,7 @@ namespace VertexAutoTradeBinance8.Services
     }
 
 }
+
 
 
 
