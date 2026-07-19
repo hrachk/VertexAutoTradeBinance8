@@ -940,7 +940,7 @@
                             <thead>
                                 <tr>
                                     <th>Symbol</th><th>Side</th><th>Lev</th>
-                                    <th>Entry</th><th>Mark</th><th>Liq</th><th>Size</th><th>Margin</th><th>PnL</th><th>ROI</th><th></th>
+                                    <th>Entry</th><th>Mark</th><th>Liq</th><th>Risk</th><th>Size</th><th>Margin</th><th>PnL</th><th>ROI</th><th></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -1003,6 +1003,20 @@
                                         <td class="mk-mono">@FmtP(pos.EntryPrice)</td>
                                         <td class="mk-mono">@FmtP(pos.MarkPrice)</td>
                                         <td class="mk-mono mk-liq">@(pos.LiqPrice > 0 ? FmtP(pos.LiqPrice) : "—")</td>
+                                        <td style="padding:6px 10px;">
+                                            @{
+                                                decimal liqDist = Math.Abs(pos.LiqPrice - pos.EntryPrice);
+                                                decimal moveDist = Math.Abs(pos.MarkPrice - pos.EntryPrice);
+                                                decimal riskPct = (liqDist > 0) ? Math.Clamp(moveDist / liqDist * 100m, 0m, 100m) : 0m;
+                                                string riskColor = riskPct >= 80 ? "#ef4444" : riskPct >= 50 ? "#f59e0b" : "#10b981";
+                                            }
+                                            <div class="mk-risk-bar-wrap">
+                                                <div class="mk-risk-bar">
+                                                    <div class="mk-risk-bar-fill" style="width:@((int)riskPct)%;background:@riskColor"></div>
+                                                </div>
+                                                <span class="mk-risk-pct" style="color:@riskColor">@((int)riskPct)%</span>
+                                            </div>
+                                        </td>
                                         <td class="mk-mono">@pos.Size.ToString("F2")</td>
                                         <td class="mk-mono mk-dim">@pos.Margin.ToString("F2")</td>
                                         <td class="mk-mono @(pos.Pnl >= 0 ? "up" : "dn")">@(pos.Pnl >= 0 ? "+" : "")@pos.Pnl.ToString("F2")</td>
@@ -2330,19 +2344,19 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .mk-oo-scroll{overflow-y:visible;scrollbar-width:none;}
 .mk-oo-scroll::-webkit-scrollbar{display:none;}
 .mk-oo-tbl{width:100%;border-collapse:collapse;}
-.mk-oo-tbl th{position:sticky;top:0;background:var(--bg2);text-align:left;padding:8px 14px;font-size:11px;letter-spacing:.5px;color:var(--dim);border-bottom:1px solid var(--bdr);white-space:nowrap;font-weight:600;}
-.mk-oo-tbl td{padding:9px 14px;font-size:13px;border-bottom:1px solid var(--bdr);white-space:nowrap;}
+.mk-oo-tbl th{position:sticky;top:0;background:var(--bg2);text-align:left;padding:6px 10px;font-size:10px;letter-spacing:.6px;color:var(--dim);border-bottom:1px solid var(--bdr);white-space:nowrap;font-weight:700;text-transform:uppercase;}
+.mk-oo-tbl td{padding:7px 10px;font-size:12px;border-bottom:1px solid var(--bdr);white-space:nowrap;}
 .mk-pos-row{cursor:pointer;transition:background .12s;}
 .mk-oo-row-clickable{cursor:pointer;transition:background .12s;}
 .mk-oo-row-clickable:hover{background:rgba(255,255,255,.03);}
 .mk-pos-row:hover{background:rgba(255,255,255,0.04);}
-.mk-pos-row-sel{background:rgba(59,130,246,0.1);box-shadow:inset 2px 0 0 var(--acc);}
+.mk-pos-row-sel{background:rgba(6,182,212,0.06);box-shadow:inset 2px 0 0 #06b6d4;}
 .mk-pos-row-loading{opacity:.7;cursor:wait;}
 .mk-pos-spin{display:inline-block;margin-left:6px;color:var(--acc);animation:mkPosSpin .8s linear infinite;font-size:11px;}
-.mk-dca-badge{margin-left:6px;font-size:9px;font-weight:800;letter-spacing:.8px;padding:1px 5px;border-radius:4px;background:rgba(99,102,241,.18);color:#818cf8;border:1px solid rgba(99,102,241,.3);vertical-align:middle;}
+.mk-dca-badge{margin-left:5px;font-size:9px;font-weight:800;letter-spacing:.5px;padding:1px 5px;border-radius:3px;background:rgba(139,92,246,.12);color:#c4b5fd;border:1px solid rgba(139,92,246,.25);vertical-align:middle;}
 @@keyframes mkPosSpin{to{transform:rotate(360deg);}}
-.mk-oo-sym{font-family:var(--mono);font-weight:700;color:var(--acc);font-size:13.5px;}
-.mk-liq{color:#f59e0b;}
+.mk-oo-sym{font-family:var(--mono);font-weight:800;color:#e2eaf6;font-size:13px;}
+.mk-liq{color:#ef4444;}
 .mk-oo-cancel{background:none;border:1px solid var(--bdr);color:var(--dim);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;line-height:1;white-space:nowrap;flex-shrink:0;}
 .mk-pos-actions{display:flex;flex-direction:row;align-items:center;gap:6px;position:relative;justify-content:flex-end;flex-wrap:wrap;}
 .mk-pos-close-btn{padding:5px 14px;border-radius:7px;border:1px solid var(--red);background:rgba(239,68,68,.1);color:var(--red);cursor:pointer;font-size:12px;font-weight:700;white-space:nowrap;transition:all .15s;}
@@ -2363,7 +2377,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .mk-oo-cancel:hover:not(:disabled){border-color:var(--red);color:var(--red);}
 .mk-oo-cancel:disabled{opacity:.5;cursor:not-allowed;}
 
-.mk-lev-chip{background:none;border:1px solid var(--bdr2);border-radius:5px;color:var(--dim);padding:3px 7px;cursor:pointer;font-size:12px;font-weight:700;transition:all .15s;white-space:nowrap;}
+.mk-lev-chip{background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.22);border-radius:4px;color:#c4b5fd;padding:2px 6px;cursor:pointer;font-size:11px;font-weight:800;transition:all .15s;white-space:nowrap;}
 .mk-lev-chip:hover{border-color:var(--acc);color:var(--acc);}
 .mk-lev-modal{background:var(--bg3);border:1px solid var(--bdr2);border-radius:14px;width:420px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,.7);}
 .mk-lev-mhead{display:flex;justify-content:space-between;align-items:flex-start;padding:18px 20px 14px;border-bottom:1px solid var(--bdr);}
@@ -2524,24 +2538,24 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
 /* 4. Partial / Close buttons — distinct colors */
 .mk-pos-partial-btn2{
-  padding:3px 10px!important;
+  padding:4px 12px!important;
   border-radius:5px!important;
-  font-size:10px!important;
+  font-size:11px!important;
   font-weight:700!important;
-  background:rgba(59,130,246,.1)!important;
-  border:1px solid rgba(59,130,246,.3)!important;
-  color:#60a5fa!important;
+  background:rgba(6,182,212,.08)!important;
+  border:1px solid rgba(6,182,212,.25)!important;
+  color:#22d3ee!important;
   transition:all .12s;
 }
 .mk-pos-partial-btn2:hover{background:rgba(59,130,246,.2)!important;}
 .mk-pos-close-btn{
-  padding:3px 10px!important;
+  padding:4px 12px!important;
   border-radius:5px!important;
-  font-size:10px!important;
+  font-size:11px!important;
   font-weight:700!important;
-  background:rgba(239,68,68,.08)!important;
-  border:1px solid rgba(239,68,68,.3)!important;
-  color:#ef4444!important;
+  background:rgba(239,68,68,.1)!important;
+  border:1px solid rgba(239,68,68,.35)!important;
+  color:#f87171!important;
   transition:all .12s;
 }
 .mk-pos-close-btn:hover{background:rgba(239,68,68,.18)!important;}
@@ -2588,17 +2602,17 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
   font-weight:600!important;
 }
 .mk-oo-tab-on{
-  background:rgba(59,130,246,.15)!important;
-  color:#60a5fa!important;
+  background:rgba(6,182,212,.1)!important;
+  color:#22d3ee!important;
   box-shadow:none!important;
-  border-radius:6px!important;
+  border-radius:5px!important;
 }
 
 /* 8. Risk bar (new column) */
 .mk-risk-bar-wrap{display:flex;flex-direction:column;gap:2px;min-width:64px;}
-.mk-risk-bar{height:3px;background:var(--bg4);border-radius:2px;overflow:hidden;}
+.mk-risk-bar{height:4px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden;}
 .mk-risk-bar-fill{height:100%;border-radius:2px;}
-.mk-risk-pct{font-size:9px;font-weight:700;}
+.mk-risk-pct{font-size:10px;font-weight:800;font-family:var(--mono);}
 
 /* 9. Hot badge */
 .mk-hot-badge{font-size:9px;margin-left:2px;}
@@ -7131,6 +7145,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
