@@ -479,30 +479,7 @@
         <div class="mk-main-col">
         <div class="mk-charts-col-main">
 
-        <!-- TIMEFRAME SELECTOR — moved here, directly above the chart -->
-        @if (!string.IsNullOrEmpty(_activeSym))
-        {
-            <div class="mk-tf-bar mk-tf-bar-inline">
-                @foreach (var tf in _allTfs)
-                {
-                    var hasSeries = Series.Any(s => s.Symbol == _activeSym && s.Timeframe == tf.Key)
-                            // Also check the full datadb archive directly, not just the
-                            // narrow klines_bootstrap.json snapshot Series is loaded from -
-                            // confirmed via the user's real server that pinned symbols have
-                            // archived data in datadb for timeframes (3m/2h/6h/12h/3D/1W)
-                            // that klines_bootstrap.json simply doesn't carry, which is the
-                            // actual reason these showed as permanently inactive.
-                            || HistoricalReader.Has(_activeSym, TfLabel(tf.Key).ToLowerInvariant());
-                    var isSelTf   = _activeTf == tf.Key;
-                    <button class="mk-tf-btn @(isSelTf?"mk-tf-on":"") @(hasSeries?"":"mk-tf-dim")"
-                            @onclick="()=>PickTf(tf.Key)">
-                        @tf.Label
-                    </button>
-                }
-            </div>
-        }
-
-        <!-- Price chart -->
+        <!-- Price chart — TF buttons integrated into header row -->
         <div class="mk-chart-head">
             <div class="mk-chart-head-left">
             <div class="mk-max-sym-wrap">
@@ -571,6 +548,22 @@
             <button class="mk-btn mk-btn-inline @(Frozen?"mk-btn-on":"")" @onclick="ToggleFreeze">
                 @(Frozen ? "⏸ Paused" : "▶ Live")
             </button>
+            </div>
+            <!-- TF buttons — right side of chart head -->
+            <div class="mk-tf-bar mk-chart-tf-bar">
+                @if (!string.IsNullOrEmpty(_activeSym))
+                {
+                    @foreach (var tf in _allTfs)
+                    {
+                        var hasSeries2 = Series.Any(s => s.Symbol == _activeSym && s.Timeframe == tf.Key)
+                            || HistoricalReader.Has(_activeSym, TfLabel(tf.Key).ToLowerInvariant());
+                        var isSelTf2 = _activeTf == tf.Key;
+                        <button class="mk-tf-btn @(isSelTf2?"mk-tf-on":"") @(hasSeries2?"":"mk-tf-dim")"
+                                @onclick="()=>PickTf(tf.Key)">
+                            @tf.Label
+                        </button>
+                    }
+                }
             </div>
         <div class="mk-legend">
                 <span style="color:#38bdf8">── EMA21</span>
@@ -7145,6 +7138,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
