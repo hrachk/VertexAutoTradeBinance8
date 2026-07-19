@@ -3709,6 +3709,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         StateHasChanged();
         _ = RenderCharts();
         _ = JS.InvokeVoidAsync("stickyStack.recalc");
+        _ = RefreshOrderLinesAsync();  // redraw order lines for new TF
         _ = SaveSelectionState();
     }
 
