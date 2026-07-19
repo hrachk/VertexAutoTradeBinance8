@@ -3587,3 +3587,32 @@ compact-card {
 }
 .sig-hidden-toggle-on { color: #22d3ee !important; border-color: rgba(6,182,212,.25) !important; background: rgba(6,182,212,.07) !important; }
 
+
+/* ── Legend items (inside chart-head) ───────────────────────── */
+.mk-legend-item {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  color: #3a5878 !important;
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
+}
+.mk-legend-line {
+  display: inline-block !important;
+  width: 20px !important;
+  height: 1.5px !important;
+  border-radius: 1px !important;
+  flex-shrink: 0 !important;
+}
+.mk-legend-sep {
+  display: inline-block !important;
+  width: 1px !important;
+  height: 12px !important;
+  background: #111d2e !important;
+  flex-shrink: 0 !important;
+  margin: 0 2px !important;
+}
+.mk-legend-ob { color: #ef4444 !important; font-size: 9.5px !important; }
+.mk-legend-os { color: #10b981 !important; font-size: 9.5px !important; }
