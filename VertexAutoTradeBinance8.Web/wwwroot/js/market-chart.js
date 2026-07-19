@@ -618,12 +618,28 @@
                     if (committedPrice != null && committedPrice > 0) {
                         if (kind === 'sl') {
                             const origPriceSl = session.draggingLineOriginalPrice || committedPrice;
+                            // Restore line to original price if committed price is
+                            // invalid — prevents ghost line at wrong position
+                            if (origPriceSl > 0 && session.slLine) {
+                                try { session.slLine.applyOptions({ price: committedPrice }); } catch(e) {}
+                            }
                             if (session.onSlChanged) session.onSlChanged(committedPrice, origPriceSl);
                         } else if (kind === 'tp') {
                             // Pass BOTH new price AND original price so C# can find
                             // the existing order (still at old price on exchange)
                             const origPrice = session.draggingLineOriginalPrice || committedPrice;
                             if (session.onTpChangedAt) session.onTpChangedAt(idx, committedPrice, origPrice);
+                        }
+                    } else {
+                        // Price is null or <=0 (mouse went outside chart area).
+                        // Snap the line back to its original price — don't fire the callback.
+                        const origPrice = session.draggingLineOriginalPrice;
+                        if (origPrice > 0) {
+                            const restoredLine = kind === 'sl' ? session.slLine
+                                : (session.tpLines || []).find(t => t.index === idx)?.line;
+                            if (restoredLine) {
+                                try { restoredLine.applyOptions({ price: origPrice }); } catch(e) {}
+                            }
                         }
                     }
                     session.draggingLineOriginalPrice = null;
@@ -1610,4 +1626,5 @@
     window._vertexChartSessions = sessions;
 
 })();
+
 
