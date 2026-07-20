@@ -541,7 +541,7 @@
                 const y = e.clientY - rect.top;
                 const x = e.clientX - rect.left;
                 const price = candleSeries.coordinateToPrice(y);
-                if (price == null || !session.entryPrice) return;
+                if (price == null || price <= 0 || !session.entryPrice) return;
 
                 const isLong = session.side === 'LONG';
                 // Which side of entry decides TP vs SL, same as a
@@ -588,61 +588,57 @@
                 // there are multiple).
                 if (session.draggingLine) {
                     // Use the line's own committed price (from applyOptions during
-                    // mousemove) rather than coordinateToPrice(mouseup Y) — avoids
-                    // a 1-pixel slip if mouse moved between last move and up event.
+                    // mousemove) — more accurate than coordinateToPrice(mouseup Y).
                     const committedPrice = session.draggingLine.options().price;
-                    const kind = session.draggingLineKind;
-                    const idx  = session.draggingLineIdx;
-                    session.draggingLine = null;
-                    session.draggingLineKind = null;
-                    session.draggingLineIdx = null;
+                    const kind  = session.draggingLineKind;
+                    const idx   = session.draggingLineIdx;
+                    const origPrice = session.draggingLineOriginalPrice;
+
+                    // Clear drag state first
+                    session.draggingLine          = null;
+                    session.draggingLineKind      = null;
+                    session.draggingLineIdx       = null;
+                    session.draggingLineOriginalPrice = null;
                     container.style.cursor = 'crosshair';
-                    // Freeze hideTpSlLines for 8s after drag completes.
-                    // C# will cancel old order, place new one, then call
-                    // showTpSlLines. Without this freeze, showTpSlLines calls
-                    // hideTpSlLines first (to reset), which DELETES the line
-                    // the user just moved — making it look like drag failed.
-                    session._tpSlHideFreezeUntil = Date.now() + 30000; // 30s — cleared by next showTpSlLines call
-                    // Apply any showTpSlLines call that was deferred during drag
+
+                    // Freeze hideTpSlLines so C# showTpSlLines call after
+                    // order replace doesn't immediately tear down the line
+                    // the user just moved. Cleared when showTpSlLines fires.
+                    session._tpSlHideFreezeUntil = Date.now() + 15000;
+
+                    // Apply any deferred showTpSlLines that arrived during drag
                     if (session._pendingTpSlArgs) {
                         const p = session._pendingTpSlArgs;
                         session._pendingTpSlArgs = null;
-                        // Small delay so the visual line stays at drag position
-                        // briefly while C# places the new order (avoid flicker)
-                        // Lift freeze so the deferred showTpSlLines can redraw
+                        const self = marketChart; // explicit ref — not 'this'
                         setTimeout(() => {
-                            if (session._tpSlHideFreezeUntil) session._tpSlHideFreezeUntil = 0;
-                            this.showTpSlLines(containerId, p.entry, p.sl, p.tps, p.side);
-                        }, 800);
+                            session._tpSlHideFreezeUntil = 0;
+                            self.showTpSlLines(containerId, p.entry, p.sl, p.tps, p.side);
+                        }, 600);
                     }
-                    if (committedPrice != null && committedPrice > 0) {
-                        if (kind === 'sl') {
-                            const origPriceSl = session.draggingLineOriginalPrice || committedPrice;
-                            // Restore line to original price if committed price is
-                            // invalid — prevents ghost line at wrong position
-                            if (origPriceSl > 0 && session.slLine) {
-                                try { session.slLine.applyOptions({ price: committedPrice }); } catch(e) {}
-                            }
-                            if (session.onSlChanged) session.onSlChanged(committedPrice, origPriceSl);
-                        } else if (kind === 'tp') {
-                            // Pass BOTH new price AND original price so C# can find
-                            // the existing order (still at old price on exchange)
-                            const origPrice = session.draggingLineOriginalPrice || committedPrice;
-                            if (session.onTpChangedAt) session.onTpChangedAt(idx, committedPrice, origPrice);
-                        }
-                    } else {
-                        // Price is null or <=0 (mouse went outside chart area).
-                        // Snap the line back to its original price — don't fire the callback.
-                        const origPrice = session.draggingLineOriginalPrice;
+
+                    // Validate price before calling C#
+                    if (committedPrice == null || committedPrice <= 0) {
+                        // Snap back to original price visually
                         if (origPrice > 0) {
-                            const restoredLine = kind === 'sl' ? session.slLine
+                            const snapLine = kind === 'sl'
+                                ? session.slLine
                                 : (session.tpLines || []).find(t => t.index === idx)?.line;
-                            if (restoredLine) {
-                                try { restoredLine.applyOptions({ price: origPrice }); } catch(e) {}
+                            if (snapLine) {
+                                try { snapLine.applyOptions({ price: origPrice }); } catch(e) {}
                             }
                         }
+                        return;
                     }
-                    session.draggingLineOriginalPrice = null;
+
+                    // Fire callback — C# cancels old order and places new one
+                    if (kind === 'sl') {
+                        if (session.onSlChanged)
+                            session.onSlChanged(committedPrice, origPrice || committedPrice);
+                    } else if (kind === 'tp') {
+                        if (session.onTpChangedAt)
+                            session.onTpChangedAt(idx, committedPrice, origPrice || committedPrice);
+                    }
                     return;
                 }
 
@@ -654,7 +650,9 @@
                 const y = e.clientY - rect.top;
                 const price = candleSeries.coordinateToPrice(y);
                 removePreview();
-                if (price == null || !session.entryPrice) return;
+                // Guard: coordinateToPrice returns null OR negative when mouse
+                // goes above/below chart's visible price range
+                if (price == null || price <= 0 || !session.entryPrice) return;
 
                 const isLong = session.side === 'LONG';
                 const isProfitSide = isLong ? price > session.entryPrice : price < session.entryPrice;
@@ -673,18 +671,24 @@
                     // price instead of silently discarding. Previously this caused
                     // the visual line to snap back but the order to stay unchanged,
                     // making the user think the drag "failed" for no reason.
-                    const committedPrice = session.draggingLine.options().price;
-                    const kind = session.draggingLineKind;
-                    const idx  = session.draggingLineIdx;
-                    session.draggingLine = null;
-                    session.draggingLineKind = null;
-                    session.draggingLineIdx = null;
+                    const committedPrice  = session.draggingLine.options().price;
+                    const kind            = session.draggingLineKind;
+                    const idx             = session.draggingLineIdx;
+                    const origPriceLeave  = session.draggingLineOriginalPrice;
+                    session.draggingLine              = null;
+                    session.draggingLineKind          = null;
+                    session.draggingLineIdx           = null;
+                    session.draggingLineOriginalPrice = null;
                     container.style.cursor = 'crosshair';
                     if (committedPrice != null && committedPrice > 0) {
+                        // Freeze hideTpSlLines while C# processes the order
+                        session._tpSlHideFreezeUntil = Date.now() + 15000;
                         if (kind === 'sl') {
-                            if (session.onSlChanged) session.onSlChanged(committedPrice);
+                            if (session.onSlChanged)
+                                session.onSlChanged(committedPrice, origPriceLeave || committedPrice);
                         } else if (kind === 'tp') {
-                            if (session.onTpChangedAt) session.onTpChangedAt(idx, committedPrice);
+                            if (session.onTpChangedAt)
+                                session.onTpChangedAt(idx, committedPrice, origPriceLeave || committedPrice);
                         }
                     }
                 }
@@ -1797,6 +1801,7 @@
     window._vertexChartSessions = sessions;
 
 })();
+
 
 
 
