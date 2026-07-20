@@ -4808,6 +4808,14 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 orderQty = Math.Floor(orderQty / _symStep) * _symStep;
             if (orderQty <= 0) orderQty = pos.Qty; // safety fallback
 
+            // Final guard — should never fire if JS validated correctly,
+            // but protects against any edge case reaching Binance API.
+            if (price <= 0)
+            {
+                _orderError = $"{(isStopLoss ? "SL" : "TP")} price invalid: {price}";
+                return;
+            }
+
             var r = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
                 symbol: pos.Symbol,
                 side: closeSide,
@@ -7186,6 +7194,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
