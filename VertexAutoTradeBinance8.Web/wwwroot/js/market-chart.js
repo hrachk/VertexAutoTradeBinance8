@@ -541,7 +541,7 @@
                 const y = e.clientY - rect.top;
                 const x = e.clientX - rect.left;
                 const price = candleSeries.coordinateToPrice(y);
-                if (price == null || price <= 0 || !session.entryPrice) return;
+                if (price == null || !session.entryPrice) return;
 
                 const isLong = session.side === 'LONG';
                 // Which side of entry decides TP vs SL, same as a
@@ -588,57 +588,61 @@
                 // there are multiple).
                 if (session.draggingLine) {
                     // Use the line's own committed price (from applyOptions during
-                    // mousemove) — more accurate than coordinateToPrice(mouseup Y).
+                    // mousemove) rather than coordinateToPrice(mouseup Y) — avoids
+                    // a 1-pixel slip if mouse moved between last move and up event.
                     const committedPrice = session.draggingLine.options().price;
-                    const kind  = session.draggingLineKind;
-                    const idx   = session.draggingLineIdx;
-                    const origPrice = session.draggingLineOriginalPrice;
-
-                    // Clear drag state first
-                    session.draggingLine          = null;
-                    session.draggingLineKind      = null;
-                    session.draggingLineIdx       = null;
-                    session.draggingLineOriginalPrice = null;
+                    const kind = session.draggingLineKind;
+                    const idx  = session.draggingLineIdx;
+                    session.draggingLine = null;
+                    session.draggingLineKind = null;
+                    session.draggingLineIdx = null;
                     container.style.cursor = 'crosshair';
-
-                    // Freeze hideTpSlLines so C# showTpSlLines call after
-                    // order replace doesn't immediately tear down the line
-                    // the user just moved. Cleared when showTpSlLines fires.
-                    session._tpSlHideFreezeUntil = Date.now() + 15000;
-
-                    // Apply any deferred showTpSlLines that arrived during drag
+                    // Freeze hideTpSlLines for 8s after drag completes.
+                    // C# will cancel old order, place new one, then call
+                    // showTpSlLines. Without this freeze, showTpSlLines calls
+                    // hideTpSlLines first (to reset), which DELETES the line
+                    // the user just moved — making it look like drag failed.
+                    session._tpSlHideFreezeUntil = Date.now() + 30000; // 30s — cleared by next showTpSlLines call
+                    // Apply any showTpSlLines call that was deferred during drag
                     if (session._pendingTpSlArgs) {
                         const p = session._pendingTpSlArgs;
                         session._pendingTpSlArgs = null;
-                        const self = marketChart; // explicit ref — not 'this'
+                        // Small delay so the visual line stays at drag position
+                        // briefly while C# places the new order (avoid flicker)
+                        // Lift freeze so the deferred showTpSlLines can redraw
                         setTimeout(() => {
-                            session._tpSlHideFreezeUntil = 0;
-                            self.showTpSlLines(containerId, p.entry, p.sl, p.tps, p.side);
-                        }, 600);
+                            if (session._tpSlHideFreezeUntil) session._tpSlHideFreezeUntil = 0;
+                            this.showTpSlLines(containerId, p.entry, p.sl, p.tps, p.side);
+                        }, 800);
                     }
-
-                    // Validate price before calling C#
-                    if (committedPrice == null || committedPrice <= 0) {
-                        // Snap back to original price visually
+                    if (committedPrice != null && committedPrice > 0) {
+                        if (kind === 'sl') {
+                            const origPriceSl = session.draggingLineOriginalPrice || committedPrice;
+                            // Restore line to original price if committed price is
+                            // invalid — prevents ghost line at wrong position
+                            if (origPriceSl > 0 && session.slLine) {
+                                try { session.slLine.applyOptions({ price: committedPrice }); } catch(e) {}
+                            }
+                            if (session.onSlChanged) session.onSlChanged(committedPrice, origPriceSl);
+                        } else if (kind === 'tp') {
+                            // Pass BOTH new price AND original price so C# can find
+                            // the existing order (still at old price on exchange)
+                            const origPrice = session.draggingLineOriginalPrice || committedPrice;
+                            if (session.onTpChangedAt) session.onTpChangedAt(idx, committedPrice, origPrice);
+                        }
+                    } else {
+                        // Price is null or <=0 (mouse went outside chart area).
+                        // Snap the line back to its original price — don't fire the callback.
+                        const origPrice = session.draggingLineOriginalPrice;
                         if (origPrice > 0) {
-                            const snapLine = kind === 'sl'
-                                ? session.slLine
+                            const restoredLine = kind === 'sl' ? session.slLine
                                 : (session.tpLines || []).find(t => t.index === idx)?.line;
-                            if (snapLine) {
-                                try { snapLine.applyOptions({ price: origPrice }); } catch(e) {}
+                            if (restoredLine) {
+                                try { restoredLine.applyOptions({ price: origPrice }); } catch(e) {}
                             }
                         }
-                        return;
                     }
-
-                    // Fire callback — C# cancels old order and places new one
-                    if (kind === 'sl') {
-                        if (session.onSlChanged)
-                            session.onSlChanged(committedPrice, origPrice || committedPrice);
-                    } else if (kind === 'tp') {
-                        if (session.onTpChangedAt)
-                            session.onTpChangedAt(idx, committedPrice, origPrice || committedPrice);
-                    }
+                    session.draggingLineOriginalPrice = null;
                     return;
                 }
 
@@ -650,9 +654,7 @@
                 const y = e.clientY - rect.top;
                 const price = candleSeries.coordinateToPrice(y);
                 removePreview();
-                // Guard: coordinateToPrice returns null OR negative when mouse
-                // goes above/below chart's visible price range
-                if (price == null || price <= 0 || !session.entryPrice) return;
+                if (price == null || !session.entryPrice) return;
 
                 const isLong = session.side === 'LONG';
                 const isProfitSide = isLong ? price > session.entryPrice : price < session.entryPrice;
@@ -671,24 +673,18 @@
                     // price instead of silently discarding. Previously this caused
                     // the visual line to snap back but the order to stay unchanged,
                     // making the user think the drag "failed" for no reason.
-                    const committedPrice  = session.draggingLine.options().price;
-                    const kind            = session.draggingLineKind;
-                    const idx             = session.draggingLineIdx;
-                    const origPriceLeave  = session.draggingLineOriginalPrice;
-                    session.draggingLine              = null;
-                    session.draggingLineKind          = null;
-                    session.draggingLineIdx           = null;
-                    session.draggingLineOriginalPrice = null;
+                    const committedPrice = session.draggingLine.options().price;
+                    const kind = session.draggingLineKind;
+                    const idx  = session.draggingLineIdx;
+                    session.draggingLine = null;
+                    session.draggingLineKind = null;
+                    session.draggingLineIdx = null;
                     container.style.cursor = 'crosshair';
                     if (committedPrice != null && committedPrice > 0) {
-                        // Freeze hideTpSlLines while C# processes the order
-                        session._tpSlHideFreezeUntil = Date.now() + 15000;
                         if (kind === 'sl') {
-                            if (session.onSlChanged)
-                                session.onSlChanged(committedPrice, origPriceLeave || committedPrice);
+                            if (session.onSlChanged) session.onSlChanged(committedPrice);
                         } else if (kind === 'tp') {
-                            if (session.onTpChangedAt)
-                                session.onTpChangedAt(idx, committedPrice, origPriceLeave || committedPrice);
+                            if (session.onTpChangedAt) session.onTpChangedAt(idx, committedPrice);
                         }
                     }
                 }
@@ -741,14 +737,22 @@
                 const rect = container.getBoundingClientRect();
                 const y = e.clientY - rect.top;
                 const price = candleSeries.coordinateToPrice(y);
-                if (price == null) return;
-                if (session.priceLine) { try { candleSeries.removePriceLine(session.priceLine); } catch (err) {} }
-                session.priceLine = candleSeries.createPriceLine({
-                    price, color: '#22c55e', lineWidth: 1,
-                    lineStyle: LightweightCharts.LineStyle.Dashed,
-                    axisLabelVisible: true, title: 'pick',
-                });
-                if (session.onPricePicked) session.onPricePicked(price);
+                if (price == null || price <= 0) return;
+
+                // If no position selected — fall back to legacy price-pick
+                if (!session.entryPrice) {
+                    if (session.onPricePicked) session.onPricePicked(price);
+                    return;
+                }
+
+                // Determine TP vs SL by position side + click location
+                // LONG:  click ABOVE entry = TP,  BELOW entry = SL
+                // SHORT: click BELOW entry = TP,  ABOVE entry = SL
+                const isLong = session.side === 'LONG';
+                const isTpSide = isLong ? price > session.entryPrice : price < session.entryPrice;
+
+                // Show context menu popup at click position
+                marketChart._showRightClickMenu(containerId, e.clientX, e.clientY, price, isTpSide);
             }, listenerOpts);
 
             return true;
@@ -1009,6 +1013,268 @@
         // separate prompts back to back. Calls a dedicated
         // onNewTpRequestedWithPercent callback so the percent doesn't
         // need a second round-trip prompt on the C# side.
+        // ─── RIGHT-CLICK CONTEXT MENU ────────────────────────────────
+        // Shows a dark, styled popup at cursor with two actions:
+        //   TP side → "Set Take Profit at X.XXXX (N%)" + pct input
+        //   SL side → "Set Stop Loss at X.XXXX" + confirm button
+        // Clicking outside or pressing Escape dismisses it.
+        _showRightClickMenu(containerId, clientX, clientY, price, isTpSide) {
+            const s = sessions.get(containerId);
+            if (!s) return;
+
+            // Remove any existing menu
+            this._removeRightClickMenu();
+
+            const fmt = (p) => p < 0.0001 ? p.toFixed(7)
+                              : p < 0.01   ? p.toFixed(6)
+                              : p < 1      ? p.toFixed(5)
+                              : p < 100    ? p.toFixed(4)
+                              :              p.toFixed(2);
+
+            const entryPrice = s.entryPrice || 0;
+            const isLong = s.side === 'LONG';
+            const dir = isLong ? 1 : -1;
+            const qty = s.qty || 0;
+            const pnl = (price - entryPrice) * dir * qty;
+            const pnlPct = entryPrice > 0 ? ((price - entryPrice) / entryPrice * dir * 100) : 0;
+            const pnlStr = `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USDT (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`;
+
+            const color = isTpSide ? '#22c55e' : '#ef4444';
+            const colorDim = isTpSide ? 'rgba(34,197,94,.12)' : 'rgba(239,68,68,.12)';
+            const label = isTpSide ? 'Take Profit' : 'Stop Loss';
+            const icon = isTpSide ? '🎯' : '🛡️';
+
+            const menu = document.createElement('div');
+            menu.id = '__vx_rclick_menu';
+            menu.style.cssText = `
+                position:fixed; z-index:99999;
+                left:${clientX}px; top:${clientY}px;
+                background:#0a1422; border:1px solid #1e3050;
+                border-radius:8px; box-shadow:0 8px 32px rgba(0,0,0,.7);
+                min-width:240px; overflow:hidden;
+                font-family:'Inter',system-ui,sans-serif;
+                animation:vxMenuIn .1s ease;
+            `;
+
+            // Adjust position to stay inside viewport
+            const vw = window.innerWidth, vh = window.innerHeight;
+            if (clientX + 260 > vw) menu.style.left = (clientX - 260) + 'px';
+            if (clientY + 180 > vh) menu.style.top  = (clientY - 180) + 'px';
+
+            menu.innerHTML = `
+                <style>
+                @keyframes vxMenuIn { from { opacity:0; transform:scale(.95) translateY(-4px); } to { opacity:1; transform:none; } }
+                #__vx_rclick_menu * { box-sizing:border-box; }
+                #__vx_rclick_menu input::-webkit-inner-spin-button { display:none; }
+                </style>
+
+                <!-- Header -->
+                <div style="
+                    padding:10px 14px 8px;
+                    border-bottom:1px solid #131f32;
+                    display:flex; align-items:center; gap:8px;
+                ">
+                    <span style="font-size:15px;">${icon}</span>
+                    <div>
+                        <div style="font-size:12px; font-weight:800; color:#e8f4ff;">
+                            ${label}
+                        </div>
+                        <div style="font-size:10px; color:#3d5878; margin-top:1px;">
+                            ${s.side} position · ${isLong ? 'LONG' : 'SHORT'}
+                        </div>
+                    </div>
+                    <button id="__vx_rclick_close" style="
+                        margin-left:auto; background:transparent; border:none;
+                        color:#3d5878; font-size:16px; cursor:pointer; line-height:1;
+                        padding:0 2px;
+                    ">×</button>
+                </div>
+
+                <!-- Price display -->
+                <div style="padding:10px 14px 8px; border-bottom:1px solid #131f32;">
+                    <div style="
+                        display:flex; align-items:center; justify-content:space-between;
+                        background:${colorDim}; border:1px solid ${color}33;
+                        border-radius:6px; padding:8px 12px;
+                    ">
+                        <div>
+                            <div style="font-size:9px; font-weight:700; text-transform:uppercase;
+                                        letter-spacing:.6px; color:#3d5878; margin-bottom:2px;">
+                                Price
+                            </div>
+                            <div style="font-family:'JetBrains Mono',monospace; font-size:16px;
+                                        font-weight:700; color:${color};">
+                                ${fmt(price)}
+                            </div>
+                        </div>
+                        <div style="text-align:right;">
+                            <div style="font-size:9px; font-weight:700; text-transform:uppercase;
+                                        letter-spacing:.6px; color:#3d5878; margin-bottom:2px;">
+                                Expected ${isTpSide ? 'Profit' : 'Loss'}
+                            </div>
+                            <div style="font-family:'JetBrains Mono',monospace; font-size:11px;
+                                        font-weight:700; color:${color}; white-space:nowrap;">
+                                ${pnlStr}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                ${isTpSide ? `
+                <!-- TP: show pct input -->
+                <div style="padding:10px 14px 12px;">
+                    <div style="font-size:9px; font-weight:700; text-transform:uppercase;
+                                letter-spacing:.6px; color:#3d5878; margin-bottom:6px;">
+                        Allocation (% of position)
+                    </div>
+                    <div style="display:flex; gap:6px; margin-bottom:8px;">
+                        ${[25,33,50,100].map(p => `
+                            <button class="__vx_pct_btn" data-pct="${p}" style="
+                                flex:1; height:28px; background:#0f1b30;
+                                border:1px solid #1e3050; border-radius:5px;
+                                color:#6e90b2; font-size:11px; font-weight:700;
+                                cursor:pointer; transition:all .1s;
+                            ">${p}%</button>
+                        `).join('')}
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <div style="position:relative; flex:1;">
+                            <input id="__vx_pct_input" type="number" min="1" max="100"
+                                value="25" style="
+                                width:100%; height:34px; background:#0f1b30;
+                                border:1px solid #1e3050; border-radius:6px;
+                                color:#e8f4ff; font-size:13px; font-weight:700;
+                                padding:0 28px 0 10px; outline:none;
+                                font-family:'JetBrains Mono',monospace;
+                            "/>
+                            <span style="
+                                position:absolute; right:10px; top:50%;
+                                transform:translateY(-50%);
+                                color:#3d5878; font-size:12px; font-weight:700;
+                            ">%</span>
+                        </div>
+                        <button id="__vx_rclick_confirm" style="
+                            height:34px; padding:0 18px; border-radius:6px;
+                            background:rgba(34,197,94,.1); border:1.5px solid rgba(34,197,94,.35);
+                            color:#22c55e; font-size:12px; font-weight:800;
+                            cursor:pointer; white-space:nowrap; flex-shrink:0;
+                        ">Set TP →</button>
+                    </div>
+                </div>
+                ` : `
+                <!-- SL: just confirm -->
+                <div style="padding:10px 14px 12px;">
+                    <div style="font-size:11px; color:#6e90b2; margin-bottom:10px; line-height:1.5;">
+                        Place Stop Loss at <span style="color:#ef4444; font-weight:700; font-family:'JetBrains Mono',monospace;">${fmt(price)}</span>
+                        <br>This will close the full position when triggered.
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        <button id="__vx_rclick_cancel_sl" style="
+                            flex:1; height:34px; border-radius:6px;
+                            background:#0f1b30; border:1px solid #1e3050;
+                            color:#6e90b2; font-size:12px; font-weight:700; cursor:pointer;
+                        ">Cancel</button>
+                        <button id="__vx_rclick_confirm" style="
+                            flex:2; height:34px; border-radius:6px;
+                            background:rgba(239,68,68,.1); border:1.5px solid rgba(239,68,68,.35);
+                            color:#ef4444; font-size:12px; font-weight:800;
+                            cursor:pointer;
+                        ">🛡️ Set Stop Loss →</button>
+                    </div>
+                </div>
+                `}
+            `;
+
+            document.body.appendChild(menu);
+            this.__rclickState = { containerId, price, isTpSide, s };
+
+            // Focus pct input for TP
+            if (isTpSide) {
+                setTimeout(() => {
+                    const inp = document.getElementById('__vx_pct_input');
+                    if (inp) { inp.focus(); inp.select(); }
+                }, 50);
+            }
+
+            // Pct preset buttons
+            menu.querySelectorAll('.__vx_pct_btn').forEach(btn => {
+                btn.addEventListener('mouseenter', () => {
+                    btn.style.background = 'rgba(34,197,94,.1)';
+                    btn.style.color = '#22c55e';
+                    btn.style.borderColor = 'rgba(34,197,94,.3)';
+                });
+                btn.addEventListener('mouseleave', () => {
+                    const inp2 = document.getElementById('__vx_pct_input');
+                    const val = inp2 ? parseInt(inp2.value) : 0;
+                    const isActive = String(val) === btn.dataset.pct;
+                    btn.style.background = isActive ? 'rgba(34,197,94,.1)' : '#0f1b30';
+                    btn.style.color = isActive ? '#22c55e' : '#6e90b2';
+                    btn.style.borderColor = isActive ? 'rgba(34,197,94,.3)' : '#1e3050';
+                });
+                btn.addEventListener('click', () => {
+                    const inp2 = document.getElementById('__vx_pct_input');
+                    if (inp2) { inp2.value = btn.dataset.pct; inp2.focus(); }
+                    menu.querySelectorAll('.__vx_pct_btn').forEach(b => {
+                        const isThis = b === btn;
+                        b.style.background = isThis ? 'rgba(34,197,94,.1)' : '#0f1b30';
+                        b.style.color = isThis ? '#22c55e' : '#6e90b2';
+                        b.style.borderColor = isThis ? 'rgba(34,197,94,.3)' : '#1e3050';
+                    });
+                });
+            });
+
+            // Confirm handler
+            const self = this;
+            const doConfirm = () => {
+                const st = self.__rclickState;
+                if (!st) return;
+                self._removeRightClickMenu();
+
+                if (st.isTpSide) {
+                    const inp = document.getElementById('__vx_pct_input');
+                    const pct = inp ? parseFloat(inp.value) : 25;
+                    if (!pct || pct <= 0 || pct > 100) return;
+                    if (st.s.onNewTpRequestedWithPercent)
+                        st.s.onNewTpRequestedWithPercent(st.price, pct);
+                } else {
+                    if (st.s.onSlChanged)
+                        st.s.onSlChanged(st.price, 0);
+                }
+            };
+
+            const confirmBtn = menu.querySelector('#__vx_rclick_confirm');
+            if (confirmBtn) confirmBtn.addEventListener('click', doConfirm);
+
+            const closeBtn = menu.querySelector('#__vx_rclick_close');
+            if (closeBtn) closeBtn.addEventListener('click', () => this._removeRightClickMenu());
+
+            const cancelSlBtn = menu.querySelector('#__vx_rclick_cancel_sl');
+            if (cancelSlBtn) cancelSlBtn.addEventListener('click', () => this._removeRightClickMenu());
+
+            // Enter key confirms
+            menu.addEventListener('keydown', (ev) => {
+                if (ev.key === 'Enter') { ev.preventDefault(); doConfirm(); }
+                if (ev.key === 'Escape') this._removeRightClickMenu();
+            });
+
+            // Click outside dismisses
+            setTimeout(() => {
+                document.addEventListener('mousedown', this._rclickOutside = (ev) => {
+                    if (!menu.contains(ev.target)) this._removeRightClickMenu();
+                }, { once: false, capture: true });
+            }, 100);
+        },
+
+        _removeRightClickMenu() {
+            const el = document.getElementById('__vx_rclick_menu');
+            if (el) el.remove();
+            this.__rclickState = null;
+            if (this._rclickOutside) {
+                document.removeEventListener('mousedown', this._rclickOutside, { capture: true });
+                this._rclickOutside = null;
+            }
+        },
+
         promptAddTp(containerId) {
             const s = sessions.get(containerId);
             if (!s || !s.onNewTpRequestedWithPercent) return;
