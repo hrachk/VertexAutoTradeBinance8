@@ -472,6 +472,7 @@
             }
 
             container.addEventListener('mousedown', (e) => {
+                const session = sessions.get(containerId) || {};
                 if (!session.entryPrice) return;
                 const rect = container.getBoundingClientRect();
                 const y = e.clientY - rect.top;
@@ -500,6 +501,7 @@
             }, listenerOpts);
 
             container.addEventListener('mousemove', (e) => {
+                const session = sessions.get(containerId) || {};
                 if (!session.entryPrice) return;
 
                 // Actively dragging an existing SL/TP line — just move
@@ -581,6 +583,7 @@
             }, listenerOpts);
 
             container.addEventListener('mouseup', (e) => {
+                const session = sessions.get(containerId) || {};
                 // Finished dragging an EXISTING SL/TP line to a new
                 // price — commit it via a dedicated callback (distinct
                 // from the entry-armed gesture's onNewTpRequested,
@@ -667,6 +670,7 @@
             }, listenerOpts);
 
             container.addEventListener('mouseleave', () => {
+                const session = sessions.get(containerId) || {};
                 if (session.dragging) { session.dragging = false; removePreview(); }
                 if (session.draggingLine) {
                     // Cursor left chart while dragging — commit the last known
@@ -739,19 +743,28 @@
                 const price = candleSeries.coordinateToPrice(y);
                 if (price == null || price <= 0) return;
 
+                // ALWAYS read fresh session — the session object captured in
+                // the closure at init() time gets replaced by every new init()
+                // call (RenderCharts), while showPositionLines writes to the
+                // NEW session via sessions.get(). Reading fresh guarantees
+                // we see the entryPrice/side set by showPositionLines.
+                const liveSession = sessions.get(containerId);
+                if (!liveSession) return;
+
                 // If no position selected — fall back to legacy price-pick
-                if (!session.entryPrice) {
-                    if (session.onPricePicked) session.onPricePicked(price);
+                if (!liveSession.entryPrice) {
+                    if (liveSession.onPricePicked) liveSession.onPricePicked(price);
                     return;
                 }
 
-                // Determine TP vs SL by position side + click location
-                // LONG:  click ABOVE entry = TP,  BELOW entry = SL
-                // SHORT: click BELOW entry = TP,  ABOVE entry = SL
-                const isLong = session.side === 'LONG';
-                const isTpSide = isLong ? price > session.entryPrice : price < session.entryPrice;
+                // Determine TP vs SL by position side + click location:
+                // LONG:  click ABOVE entry = TP,  BELOW = SL
+                // SHORT: click BELOW entry = TP,  ABOVE = SL
+                const isLong = liveSession.side === 'LONG';
+                const isTpSide = isLong
+                    ? price > liveSession.entryPrice
+                    : price < liveSession.entryPrice;
 
-                // Show context menu popup at click position
                 marketChart._showRightClickMenu(containerId, e.clientX, e.clientY, price, isTpSide);
             }, listenerOpts);
 
@@ -2067,6 +2080,7 @@
     window._vertexChartSessions = sessions;
 
 })();
+
 
 
 
