@@ -4665,6 +4665,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     {
         _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
         if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
+        _orderError = string.Empty;  // clear previous error before each drag
         await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: true,
             newPrice: price, originalPrice: originalPrice > 0 ? originalPrice : price);
     }
@@ -4674,6 +4675,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     {
         _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
         if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
+        _orderError = string.Empty;  // clear previous error before each drag
         await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false,
             newPrice: price, originalPrice: originalPrice > 0 ? originalPrice : price);
     }
@@ -4688,6 +4690,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     {
         _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
         if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
+        _orderError = string.Empty;  // clear previous error before each drag
         await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: false,
             newPrice: price, tpIndex: tpIndex,
             originalPrice: originalPrice > 0 ? originalPrice : price);
@@ -4813,6 +4816,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             if (price <= 0)
             {
                 _orderError = $"{(isStopLoss ? "SL" : "TP")} price invalid: {price}";
+                StateHasChanged();  // show error to user
                 return;
             }
 
@@ -4848,6 +4852,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
             await LoadOpenOrdersAsync();
             await RefreshPositionLines();
+            _ = RefreshOrderLinesAsync();  // refresh limit-order lines on chart
         }
         catch (Exception ex)
         {
@@ -5795,10 +5800,6 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         _selectedPosition = pos;
         _activeSignal = null;
         _orderPanelDismissed = false;
-        // Auto-expand the Add to Position form immediately — previously the
-        // user had to click "+" separately after the panel opened, which felt
-        // like the panel was missing trade controls. The form is already
-        // context-scoped to this position's side so it can only add, never flip.
         _addToPositionOpen = true;
 
         var sym = pos.Symbol;
@@ -5808,11 +5809,17 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         if (available != null) _activeTf = available.Timeframe;
         ResolveSelected();
         CalcStats();
-        StateHasChanged();
 
-        // Everything below is network/chart work that updates its
-        // own piece of the UI once ready - the position panel itself
-        // is already visible and correct at this point.
+        // IMMEDIATE RENDER: Blazor does not guarantee a re-render between
+        // the onclick lambda and the first await in an async Task. Without
+        // InvokeAsync, the browser sees nothing until LoadOpenOrdersAsync
+        // finishes — making the panel appear to "pop in" after a delay.
+        // InvokeAsync schedules a render on the synchronisation context,
+        // ensuring the panel is visible BEFORE any network calls run.
+        await InvokeAsync(StateHasChanged);
+
+        // Network + chart work — these update their own parts of the UI
+        // incrementally once ready; panel header/PnL already visible above.
         await LoadOpenOrdersAsync();
         // Load tickSize+stepSize so drag TP/SL works without precision errors
         _ = LoadSymbolPrecisionAsync(pos.Symbol);
@@ -7194,6 +7201,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
