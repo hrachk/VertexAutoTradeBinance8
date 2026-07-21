@@ -662,8 +662,11 @@ namespace VertexAutoTradeBinance8.Strategy
 
             // --- decision (строгий приоритет) ---
 
-            // 1. Distribution
-            if ((compression || climax) && distEmaAtr >= 0.75m)
+            // 1. Distribution — require REAL overextension from EMA
+            // OLD threshold 0.75 fired on any normal trending bar (price
+            // is always >0.75 ATR from EMA in a trend). Raised to 1.8 to
+            // catch genuine distribution zones, not just normal pullback areas.
+            if ((compression || climax) && distEmaAtr >= 1.8m)
             {
                 if (slopeNorm > 0 && noContinuationUp)
                     return TrendPhase.Distribution;
@@ -672,8 +675,9 @@ namespace VertexAutoTradeBinance8.Strategy
                     return TrendPhase.Distribution;
             }
 
-            // 2. Exhaustion
-            if (Math.Abs(slopeNorm) < 0.002m && distEmaAtr >= 1.1m)
+            // 2. Exhaustion — stricter slope + bigger distance required
+            // OLD: slopeNorm < 0.002 fired on almost any slowing move
+            if (Math.Abs(slopeNorm) < 0.001m && distEmaAtr >= 1.5m)
                 return TrendPhase.Exhaustion;
 
             // 3. Continuation
@@ -4061,16 +4065,33 @@ namespace VertexAutoTradeBinance8.Strategy
         IReadOnlyList<BinanceFuturesUsdtKline> klines,
         SignalSide side)
         {
+            // FIX: old logic checked ONLY the last candle vs prev.
+            // For pullback strategies, the entry candle is ALWAYS "against"
+            // micro-momentum by design (price pulls back before reversing).
+            // One candle comparison = 100% false positives on pullback entries.
+            //
+            // NEW: look at 4 candles (excluding entry candle itself).
+            // Only block if 3 of 4 are strongly against the signal direction
+            // (sustained momentum, not a 1-bar pullback).
             int n = klines.Count;
+            if (n < 6) return false;
 
-            var last = klines[n - 1];
-            var prev = klines[n - 2];
+            int upCount = 0, downCount = 0;
+            // Check candles [n-5 .. n-2] — 4 candles BEFORE the entry candle
+            for (int i = n - 5; i <= n - 2; i++)
+            {
+                if (klines[i].ClosePrice > klines[i].OpenPrice) upCount++;
+                else downCount++;
+            }
 
+            // BUY: block only if 3+ of 4 prior candles are bearish (real downtrend)
+            // A 1-2 candle pullback is NOT against momentum — it's the entry setup
             if (side == SignalSide.Buy)
-                return last.ClosePrice < prev.ClosePrice;
+                return downCount >= 3;
 
+            // SELL: block only if 3+ of 4 prior candles are bullish
             if (side == SignalSide.Sell)
-                return last.ClosePrice > prev.ClosePrice;
+                return upCount >= 3;
 
             return false;
         }
@@ -4341,19 +4362,32 @@ namespace VertexAutoTradeBinance8.Strategy
                 var ema21 = Ema(klines, 21, lastIndex);
                 var atr = Atr(klines, 14, lastIndex);
 
-                if (Math.Abs(c.ClosePrice - ema21) > atr * 1.2m)
+                // FIX: skip NO_PULLBACK penalty for strategies that already
+                // require EMA touch as a condition (PULLBACK_EMA21, LIQ_GRAB,
+                // PA_STRUCTURE). These already validated the pullback internally.
+                // Applying this check AGAIN creates double-penalty and kills
+                // valid signals that just entered slightly late.
+                var signalReason = baseSignal?.Reason ?? "";
+                bool alreadyRequiresPullback =
+                    signalReason.Contains("PULLBACK") ||
+                    signalReason.Contains("LIQ_GRAB") ||
+                    signalReason.Contains("PA_STRUCTURE") ||
+                    signalReason.Contains("PA_SR_BOUNCE");
+
+                if (!alreadyRequiresPullback && Math.Abs(c.ClosePrice - ema21) > atr * 1.2m)
                 {
                     totalPenalty *= 0.82m;
                     Mark("NO_PULLBACK");
                 }
 
-                // =====================================================
-                // PENALTY FLOOR: было 0.65 — слишком высокий минимум.
-                // При накоплении PARABOLIC + ABSORPTION + FAKE + BAD_LOCATION
-                // confidence всё равно проходила MinEntry порог.
-                // 0.50 позволяет плохим сигналам реально блокироваться.
-                // =====================================================
-                totalPenalty = Math.Max(totalPenalty, 0.50m);
+                // PENALTY FLOOR: dynamic per signal quality.
+                // PA_STRUCTURE and PA_SR_BOUNCE signals have already passed
+                // strict market structure + MOMO + Volume + VWAP checks —
+                // don't let accumulated micro-penalties completely destroy them.
+                // Lower floor for generic signals that haven't had structural check.
+                bool isPaSignal = (baseSignal?.Reason ?? "").StartsWith("PA_");
+                decimal penaltyFloor = isPaSignal ? 0.72m : 0.55m;
+                totalPenalty = Math.Max(totalPenalty, penaltyFloor);
 
                 finalConfidence *= totalPenalty;
                 baseSignal.Confidence = finalConfidence;
@@ -4820,6 +4854,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
     }
 }
+
 
 
 
