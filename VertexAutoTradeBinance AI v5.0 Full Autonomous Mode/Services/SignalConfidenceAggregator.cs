@@ -70,7 +70,15 @@ namespace VertexAutoTradeBinance8.Strategy.Confidence
 
             string reason = s.Reason.ToUpperInvariant();
 
-            if (reason.Contains("PULLBACK"))
+            // PA signals: highest quality — they passed Market Structure + MOMO + Volume + VWAP + S/R checks
+            if (reason.Contains("PA_STRUCTURE"))
+                conf = 0.82m;  // structure trade (HH/HL, LH/LL + S/R confluence)
+            else if (reason.Contains("PA_BREAKOUT"))
+                conf = 0.78m;  // pattern breakout (triangle, parallel range)
+            else if (reason.Contains("PA_SR_BOUNCE"))
+                conf = 0.72m;  // S/R bounce (well-tested level)
+            // Traditional signals
+            else if (reason.Contains("PULLBACK"))
                 conf = 0.80m;
             else if (reason.Contains("EARLY_TREND"))
                 conf = 0.65m;
@@ -78,6 +86,9 @@ namespace VertexAutoTradeBinance8.Strategy.Confidence
                 conf = 0.60m;
             else if (reason.Contains("VOLATILITY"))
                 conf = 0.55m;
+            // PA signals without the above keywords — still better than default
+            else if (reason.StartsWith("PA_"))
+                conf = 0.70m;
 
             return Clamp01(conf);
         }
@@ -118,9 +129,19 @@ namespace VertexAutoTradeBinance8.Strategy.Confidence
 
             if (signal != null)
             {
+                // Range and SR-bounce signals are DESIGNED to go against the micro-trend
+                // (buy at bottom of range, sell at top — even if slope is slightly positive).
+                // Applying against-trend penalty kills these signals wrongly.
+                bool isRangeOrBounce =
+                    signal.Reason?.Contains("RANGE") == true ||
+                    signal.Reason?.Contains("PA_SR_BOUNCE") == true;
+
+                // Only penalise when: not a range/bounce AND slope is meaningful (>0.3%)
                 bool againstTrend =
-                    (smart.TrendSlopePercent > 0 && signal.Side == SignalSide.Sell) ||
-                    (smart.TrendSlopePercent < 0 && signal.Side == SignalSide.Buy);
+                    !isRangeOrBounce &&
+                    Math.Abs(smart.TrendSlopePercent) > 0.3m &&
+                    ((smart.TrendSlopePercent > 0 && signal.Side == SignalSide.Sell) ||
+                     (smart.TrendSlopePercent < 0 && signal.Side == SignalSide.Buy));
 
                 if (againstTrend)
                     clamp *= 0.70m;
