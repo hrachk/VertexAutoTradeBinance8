@@ -51,14 +51,32 @@
             else
             {
                 <div class="mk-hbal-strip">
+                    @* Wallet Balance *@
                     <div class="mk-hbal-item">
                         <span class="mk-hbal-l">Wallet</span>
-                        <span class="mk-hbal-v mono">$@_acctWalletBalance.ToString("F2")</span>
+                        <span class="mk-hbal-v mono">@(_acctWalletBalance > 0 ? "$" + _acctWalletBalance.ToString("F2") : "—")</span>
                     </div>
                     <div class="mk-hbal-sep"></div>
+                    @* Unrealized PnL — colour-coded *@
+                    <div class="mk-hbal-item">
+                        <span class="mk-hbal-l">Unrealized</span>
+                        <span class="mk-hbal-v mono @(_acctUnrealizedPnl >= 0 ? "up" : "dn")">
+                            @(_acctUnrealizedPnl >= 0 ? "+" : "")@_acctUnrealizedPnl.ToString("F2")
+                        </span>
+                    </div>
+                    <div class="mk-hbal-sep"></div>
+                    @* Available — primary, always highlighted *@
                     <div class="mk-hbal-item mk-hbal-item-avail">
                         <span class="mk-hbal-l mk-hbal-l-avail">Available</span>
-                        <span class="mk-hbal-v-main mono">$@_acctAvailableBalance.ToString("F2")</span>
+                        @if (_acctAvailableBalance > 0)
+                        {
+                            <span class="mk-hbal-v-main mono">$@_acctAvailableBalance.ToString("F2")</span>
+                        }
+                        else
+                        {
+                            @* Skeleton while loading *@
+                            <span class="mk-hbal-v-main mono mk-hbal-loading">$—</span>
+                        }
                     </div>
                 </div>
             }
@@ -159,6 +177,8 @@
                             <span class="sc-side @(sigIsBuy ? "sc-side-b" : "sc-side-s")">
                                 @(sigIsBuy ? "▲ LONG" : "▼ SHORT")
                             </span>
+                            @* CONFIRMED badge — every signal in this strip passed the full pipeline *@
+                            <span class="sc-confirmed-badge" title="Passed full pipeline: Confidence ✓  R:R ✓  AI Score ✓">✓</span>
                             <button class="sc-pin-btn @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-pin-btn-on" : "")"
                                     title="@(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "Unpin (allow auto-collapse)" : "Pin (keep expanded)")"
                                     @onclick="() => TogglePinSignal(sig)" @onclick:stopPropagation="true">
@@ -1259,20 +1279,43 @@
                 @if (!_manualTradeCollapsed)
                 {
 
-                <!-- Available balance — DEMO uses demo balance, LIVE uses acct available -->
-                <div class="ord-balance-row">
-                    <span class="ord-balance-l">Available</span>
+                <!-- ── Balance block (always visible) ───────────────────── -->
+                <div class="ord-balance-block">
                     @if (_demoMode)
                     {
-                        <span class="ord-balance-v mono">$@_demoSnapshot.Balance.ToString("F2")</span>
-                        <span class="ord-balance-sub mk-dim">Demo account</span>
+                        <div class="ord-bal-row">
+                            <span class="ord-bal-label">AVAILABLE</span>
+                            <span class="ord-bal-main mono">$@_demoSnapshot.Balance.ToString("F2")</span>
+                        </div>
+                        <div class="ord-bal-sub-row">
+                            <span class="ord-bal-sub">Demo account</span>
+                            <span class="ord-bal-sub">Equity: $@((_demoSnapshot.Balance + _demoUnrealizedTotal).ToString("F2"))</span>
+                        </div>
                     }
                     else
                     {
-                        <span class="ord-balance-v mono">$@_acctAvailableBalance.ToString("F2")</span>
-                        @if (_acctMarginBalance != _acctWalletBalance)
+                        <div class="ord-bal-row">
+                            <span class="ord-bal-label">AVAILABLE</span>
+                            @if (_acctAvailableBalance > 0)
+                            {
+                                <span class="ord-bal-main mono">$@_acctAvailableBalance.ToString("F2")</span>
+                            }
+                            else
+                            {
+                                <span class="ord-bal-main mono ord-bal-loading">—</span>
+                            }
+                        </div>
+                        <div class="ord-bal-sub-row">
+                            <span class="ord-bal-sub">Wallet: $@_acctWalletBalance.ToString("F2")</span>
+                            <span class="ord-bal-sub @(_acctUnrealizedPnl >= 0 ? "up" : "dn")">
+                                PnL: @(_acctUnrealizedPnl >= 0 ? "+" : "")@_acctUnrealizedPnl.ToString("F2")
+                            </span>
+                        </div>
+                        @if (_acctMarginBalance > 0 && _acctMarginBalance != _acctWalletBalance)
                         {
-                            <span class="ord-balance-sub mk-dim">Margin: $@_acctMarginBalance.ToString("F2")</span>
+                            <div class="ord-bal-sub-row">
+                                <span class="ord-bal-sub">Margin: $@_acctMarginBalance.ToString("F2")</span>
+                            </div>
                         }
                     }
                 </div>
@@ -1859,6 +1902,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .mk-hbal-l-avail{color:var(--cyan);opacity:.8;}
 .mk-hbal-v{font-size:12px;font-weight:600;color:var(--txt2);font-family:var(--mono);}
 .mk-hbal-v-main{font-size:20px;font-weight:900;color:var(--cyan);font-family:var(--mono);letter-spacing:-.3px;}
+.mk-hbal-loading{opacity:.35;animation:hbalPulse 1.2s ease-in-out infinite;}
+@keyframes hbalPulse{0%,100%{opacity:.25}50%{opacity:.5}}
 .mk-title-block{display:flex;align-items:center;gap:10px;}
 .mk-icon{font-size:18px;}
 .mk-title{font-family:var(--mono);font-size:11px;font-weight:800;letter-spacing:2px;color:var(--cyan);}
@@ -3371,12 +3416,33 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             try
             {
                 var allSigs = await SignalSvc.LoadAsync();
+
+                // ── ALL signals for Signals page (unchanged scope) ────────────
+                // Signals page / history uses the full non-blocked list.
+                // _signalArchive1h is already populated separately below.
+
+                // ── LIVE SIGNALS strip: CONFIRMED only ───────────────────────
+                // Only signals that passed the FULL pipeline are shown here:
+                //   1. Confidence >= symbol MinEntry (Gate2 passed)
+                //   2. Adequate R:R (Gate4 passed)
+                //   3. AI Score > 0 (PE4 passed, not a dry-run stub)
+                //   4. Stage is SIGNAL or empty (not BLOCKED / MISSED / PENDING)
+                //   5. Not expired, not in removal queue
+                // The goal: every card in the live strip = bot WOULD have opened
+                // this position (or did open it). Not just "saw a pattern".
                 _signals = allSigs
                     .Where(s => s.Entry > 0 && s.StopLoss > 0
                                 && s.Time >= DateTime.UtcNow.AddHours(-SignalLookbackHours)
                                 && s.Stage != "BLOCKED"
                                 && !_expiredSignals.ContainsKey(SignalKey(s))
-                                && !GetSignalTtl(s).IsExpired)
+                                && !GetSignalTtl(s).IsExpired
+                                // ── CONFIRMED FILTER ──────────────────────────
+                                // Confidence must clear the entry threshold
+                                && (s.Confidence / 100m) >= ConfidenceResolver.Resolve(s.Symbol).MinEntry
+                                // R:R must be adequate
+                                && IsAdequateRR(s)
+                                // AI must have scored it (Score=0 = dry-run / no PE4 eval)
+                                && s.Score > 0)
                     .GroupBy(s => s.Symbol)
                     .Select(g => g.OrderByDescending(s => s.Time).First())
                     .OrderByDescending(s => s.Time)
@@ -4448,6 +4514,18 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         bool lowRr = rr > 0 && rr < minRr;
 
         return (belowThreshold, lowRr, minRr);
+    }
+
+    // Returns true if this signal has adequate R:R to pass the entry bar.
+    // Used both for the live-strip confirmed filter and for display warnings.
+    bool IsAdequateRR(MissedTradeRecord sig)
+    {
+        if (sig.Entry <= 0 || sig.StopLoss <= 0) return false;
+        var tp1 = sig.TakeProfits?.FirstOrDefault() ?? 0m;
+        if (tp1 <= 0) return true; // no TP data — don't block on it
+        decimal rr = Math.Abs(tp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry);
+        decimal minRr = GetDynamicMinRrForDisplay(sig);
+        return rr >= minRr;
     }
 
     SignalTtlInfo GetSignalTtl(MissedTradeRecord sig)
@@ -7201,6 +7279,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
