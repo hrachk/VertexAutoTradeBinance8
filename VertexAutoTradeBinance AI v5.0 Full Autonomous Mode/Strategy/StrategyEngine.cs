@@ -4058,8 +4058,10 @@ namespace VertexAutoTradeBinance8.Strategy
             var c2 = klines[n - 2].ClosePrice;
             var c3 = klines[n - 3].ClosePrice;
 
+            // Raised threshold: 0.6% was triggering on normal altcoin moves (HYPE, PLAY etc).
+            // Real parabolic = 3 candles moving 1.8%+ in one direction without pullback.
             return (c1 > c2 && c2 > c3) &&
-                   (c1 - c3) / c3 > 0.006m;
+                   (c1 - c3) / c3 > 0.018m;
         }
         private bool IsAgainstMicroMomentum(
         IReadOnlyList<BinanceFuturesUsdtKline> klines,
@@ -4274,9 +4276,11 @@ namespace VertexAutoTradeBinance8.Strategy
                     smart.Confidence < 0.45m &&
                     Math.Abs(smart.TrendSlopePercent) < 0.8m;
 
-                bool exhaustion =
-                    IsParabolicMove(klines) ||
-                    IsAgainstMicroMomentum(klines, baseSignal.Side);
+                // Cache result — IsParabolicMove is called twice (here + penalty section)
+                // which caused double penalty ×0.75 then ×0.82 = ×0.615 total
+                bool isParabolicCache = IsParabolicMove(klines);
+                bool isMicroAgainstCache = IsAgainstMicroMomentum(klines, baseSignal.Side);
+                bool exhaustion = isParabolicCache || isMicroAgainstCache;
 
                 // =====================================================
                 // REVERSAL: разрешаем только для BTC/ETH (BtcMacro).
@@ -4318,13 +4322,13 @@ namespace VertexAutoTradeBinance8.Strategy
                     _engineState.LastEntryDecision += $"|{msg}";
                 }
 
-                if (IsParabolicMove(klines))
+                if (isParabolicCache)    // use cached result — avoids double-call double-penalty
                 {
                     totalPenalty *= 0.82m;
                     Mark("PARABOLIC");
                 }
 
-                if (IsAgainstMicroMomentum(klines, baseSignal.Side))
+                if (isMicroAgainstCache)  // use cached result
                 {
                     totalPenalty *= 0.9m;
                     Mark("MICRO");
@@ -4395,15 +4399,14 @@ namespace VertexAutoTradeBinance8.Strategy
                 // =========================
                 // EXHAUSTION BLOCK
                 // =========================
+                // Simplified: Math.Abs(slope) > 1.5 is redundant when slope < -1.5 already implies it
                 bool exhaustionShort =
-     smart.TrendSlopePercent < -1.5m &&
-     smart.Confidence < 0.5m &&
-     Math.Abs(smart.TrendSlopePercent) > 1.5m;
+                    smart.TrendSlopePercent < -1.5m &&
+                    smart.Confidence < 0.5m;
 
                 bool exhaustionLong =
                     smart.TrendSlopePercent > 1.5m &&
-                    smart.Confidence < 0.5m &&
-                    Math.Abs(smart.TrendSlopePercent) > 1.5m;
+                    smart.Confidence < 0.5m;
 
                 // 🔻 блокируем шорт в выдохе тренда
                 if (exhaustionShort && baseSignal.Side == SignalSide.Sell)
