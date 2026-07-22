@@ -51,32 +51,14 @@
             else
             {
                 <div class="mk-hbal-strip">
-                    @* Wallet Balance *@
                     <div class="mk-hbal-item">
                         <span class="mk-hbal-l">Wallet</span>
-                        <span class="mk-hbal-v mono">@(_acctWalletBalance > 0 ? "$" + _acctWalletBalance.ToString("F2") : "—")</span>
+                        <span class="mk-hbal-v mono">$@_acctWalletBalance.ToString("F2")</span>
                     </div>
                     <div class="mk-hbal-sep"></div>
-                    @* Unrealized PnL — colour-coded *@
-                    <div class="mk-hbal-item">
-                        <span class="mk-hbal-l">Unrealized</span>
-                        <span class="mk-hbal-v mono @(_acctUnrealizedPnl >= 0 ? "up" : "dn")">
-                            @(_acctUnrealizedPnl >= 0 ? "+" : "")@_acctUnrealizedPnl.ToString("F2")
-                        </span>
-                    </div>
-                    <div class="mk-hbal-sep"></div>
-                    @* Available — primary, always highlighted *@
                     <div class="mk-hbal-item mk-hbal-item-avail">
                         <span class="mk-hbal-l mk-hbal-l-avail">Available</span>
-                        @if (_acctAvailableBalance > 0)
-                        {
-                            <span class="mk-hbal-v-main mono">$@_acctAvailableBalance.ToString("F2")</span>
-                        }
-                        else
-                        {
-                            @* Skeleton while loading *@
-                            <span class="mk-hbal-v-main mono mk-hbal-loading">$—</span>
-                        }
+                        <span class="mk-hbal-v-main mono">$@_acctAvailableBalance.ToString("F2")</span>
                     </div>
                 </div>
             }
@@ -177,8 +159,6 @@
                             <span class="sc-side @(sigIsBuy ? "sc-side-b" : "sc-side-s")">
                                 @(sigIsBuy ? "▲ LONG" : "▼ SHORT")
                             </span>
-                            @* CONFIRMED badge — every signal in this strip passed the full pipeline *@
-                            <span class="sc-confirmed-badge" title="Passed full pipeline: Confidence ✓  R:R ✓  AI Score ✓">✓</span>
                             <button class="sc-pin-btn @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-pin-btn-on" : "")"
                                     title="@(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "Unpin (allow auto-collapse)" : "Pin (keep expanded)")"
                                     @onclick="() => TogglePinSignal(sig)" @onclick:stopPropagation="true">
@@ -1279,43 +1259,20 @@
                 @if (!_manualTradeCollapsed)
                 {
 
-                <!-- ── Balance block (always visible) ───────────────────── -->
-                <div class="ord-balance-block">
+                <!-- Available balance — DEMO uses demo balance, LIVE uses acct available -->
+                <div class="ord-balance-row">
+                    <span class="ord-balance-l">Available</span>
                     @if (_demoMode)
                     {
-                        <div class="ord-bal-row">
-                            <span class="ord-bal-label">AVAILABLE</span>
-                            <span class="ord-bal-main mono">$@_demoSnapshot.Balance.ToString("F2")</span>
-                        </div>
-                        <div class="ord-bal-sub-row">
-                            <span class="ord-bal-sub">Demo account</span>
-                            <span class="ord-bal-sub">Equity: $@((_demoSnapshot.Balance + _demoUnrealizedTotal).ToString("F2"))</span>
-                        </div>
+                        <span class="ord-balance-v mono">$@_demoSnapshot.Balance.ToString("F2")</span>
+                        <span class="ord-balance-sub mk-dim">Demo account</span>
                     }
                     else
                     {
-                        <div class="ord-bal-row">
-                            <span class="ord-bal-label">AVAILABLE</span>
-                            @if (_acctAvailableBalance > 0)
-                            {
-                                <span class="ord-bal-main mono">$@_acctAvailableBalance.ToString("F2")</span>
-                            }
-                            else
-                            {
-                                <span class="ord-bal-main mono ord-bal-loading">—</span>
-                            }
-                        </div>
-                        <div class="ord-bal-sub-row">
-                            <span class="ord-bal-sub">Wallet: $@_acctWalletBalance.ToString("F2")</span>
-                            <span class="ord-bal-sub @(_acctUnrealizedPnl >= 0 ? "up" : "dn")">
-                                PnL: @(_acctUnrealizedPnl >= 0 ? "+" : "")@_acctUnrealizedPnl.ToString("F2")
-                            </span>
-                        </div>
-                        @if (_acctMarginBalance > 0 && _acctMarginBalance != _acctWalletBalance)
+                        <span class="ord-balance-v mono">$@_acctAvailableBalance.ToString("F2")</span>
+                        @if (_acctMarginBalance != _acctWalletBalance)
                         {
-                            <div class="ord-bal-sub-row">
-                                <span class="ord-bal-sub">Margin: $@_acctMarginBalance.ToString("F2")</span>
-                            </div>
+                            <span class="ord-balance-sub mk-dim">Margin: $@_acctMarginBalance.ToString("F2")</span>
                         }
                     }
                 </div>
@@ -1902,8 +1859,6 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .mk-hbal-l-avail{color:var(--cyan);opacity:.8;}
 .mk-hbal-v{font-size:12px;font-weight:600;color:var(--txt2);font-family:var(--mono);}
 .mk-hbal-v-main{font-size:20px;font-weight:900;color:var(--cyan);font-family:var(--mono);letter-spacing:-.3px;}
-.mk-hbal-loading{opacity:.35;animation:hbalPulse 1.2s ease-in-out infinite;}
-@keyframes hbalPulse{0%,100%{opacity:.25}50%{opacity:.5}}
 .mk-title-block{display:flex;align-items:center;gap:10px;}
 .mk-icon{font-size:18px;}
 .mk-title{font-family:var(--mono);font-size:11px;font-weight:800;letter-spacing:2px;color:var(--cyan);}
@@ -2107,7 +2062,6 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 /* Compact-state warning strip (shown collapsed; the full badges with
    tooltips live in sc-expand for hover) */
 .sc-warn-strip{display:flex;gap:6px;margin-top:6px;font-size:9.5px;font-weight:700;color:#eab308;}
-.sc-confirmed-badge{font-size:9px;font-weight:900;padding:1px 5px;border-radius:3px;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);color:var(--grn);letter-spacing:.2px;flex-shrink:0;}
 
 /* New-signal blink indicator — small dot, top-right corner, pulses
    until the card is clicked (SelectSignal marks it seen). */
@@ -2225,13 +2179,6 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .ord-lev-v{font-size:13px;cursor:pointer;transition:opacity .15s;}
 .ord-lev-v:hover{opacity:.7;}
 .ord-lev-use{font-size:10px;opacity:.5;}
-.ord-balance-block{padding:10px 14px 8px;border-bottom:1px solid var(--bdr);display:flex;flex-direction:column;gap:4px;}
-.ord-bal-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;}
-.ord-bal-label{font-size:8.5px;font-weight:800;text-transform:uppercase;letter-spacing:.7px;color:rgba(34,211,238,.6);}
-.ord-bal-main{font-size:18px;font-weight:900;color:var(--cyan);letter-spacing:-.3px;font-family:var(--mono);}
-.ord-bal-loading{opacity:.35;}
-.ord-bal-sub-row{display:flex;align-items:center;justify-content:space-between;gap:8px;}
-.ord-bal-sub{font-size:10px;color:var(--dim);font-family:var(--mono);}
 .ord-balance-row{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--bdr);background:rgba(34,211,238,.04);border-left:3px solid var(--cyan);}
 .ord-balance-l{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;}
 .ord-balance-v{font-size:14px;font-weight:700;color:var(--cyan);font-family:var(--mono);}
@@ -3424,33 +3371,12 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             try
             {
                 var allSigs = await SignalSvc.LoadAsync();
-
-                // ── ALL signals for Signals page (unchanged scope) ────────────
-                // Signals page / history uses the full non-blocked list.
-                // _signalArchive1h is already populated separately below.
-
-                // ── LIVE SIGNALS strip: CONFIRMED only ───────────────────────
-                // Only signals that passed the FULL pipeline are shown here:
-                //   1. Confidence >= symbol MinEntry (Gate2 passed)
-                //   2. Adequate R:R (Gate4 passed)
-                //   3. AI Score > 0 (PE4 passed, not a dry-run stub)
-                //   4. Stage is SIGNAL or empty (not BLOCKED / MISSED / PENDING)
-                //   5. Not expired, not in removal queue
-                // The goal: every card in the live strip = bot WOULD have opened
-                // this position (or did open it). Not just "saw a pattern".
                 _signals = allSigs
                     .Where(s => s.Entry > 0 && s.StopLoss > 0
                                 && s.Time >= DateTime.UtcNow.AddHours(-SignalLookbackHours)
                                 && s.Stage != "BLOCKED"
                                 && !_expiredSignals.ContainsKey(SignalKey(s))
-                                && !GetSignalTtl(s).IsExpired
-                                // ── CONFIRMED FILTER ──────────────────────────
-                                // Confidence must clear the entry threshold
-                                && (s.Confidence / 100m) >= ConfidenceResolver.Resolve(s.Symbol).MinEntry
-                                // R:R must be adequate
-                                && IsAdequateRR(s)
-                                // AI must have scored it (Score=0 = dry-run / no PE4 eval)
-                                && s.Score > 0)
+                                && !GetSignalTtl(s).IsExpired)
                     .GroupBy(s => s.Symbol)
                     .Select(g => g.OrderByDescending(s => s.Time).First())
                     .OrderByDescending(s => s.Time)
@@ -3855,17 +3781,15 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
 
-            // tfName = the string key used in _activeTf and Series.Timeframe
-            // (e.g. "OneMinute", "FiveMinutes" — matches KlineInterval.ToString())
             var tfs = new[]
             {
-                (KlineInterval.OneMinute,      "OneMinute",      300),
-                (KlineInterval.FiveMinutes,    "FiveMinutes",    300),
-                (KlineInterval.FifteenMinutes, "FifteenMinutes", 200),
-                (KlineInterval.OneHour,        "OneHour",        200),
+                (KlineInterval.OneMinute,      "OneMinute",   "1m",  300),
+                (KlineInterval.FiveMinutes,    "FiveMinutes", "5m",  300),
+                (KlineInterval.FifteenMinutes, "FifteenMinutes","15m",200),
+                (KlineInterval.OneHour,        "OneHour",     "1h",  200),
             };
 
-            foreach (var (tf, tfName, limit) in tfs)
+            foreach (var (tf, tfName, tfLabel, limit) in tfs)
             {
                 if (symbol != _activeSym) break; // user switched symbol
                 try
@@ -3874,8 +3798,6 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                         .GetKlinesAsync(symbol, tf, limit: limit, ct: cts.Token);
                     if (!res.Success || res.Data == null) continue;
 
-                    // KlineDto: (long OpenTime, decimal Open, High, Low, Close, Volume)
-                    // OpenTime is DateTimeOffset on Binance response → ToUnixTimeMilliseconds()
                     var klines = res.Data.Select(k => new KlineDto(
                         OpenTime: new DateTimeOffset(k.OpenTime, TimeSpan.Zero).ToUnixTimeMilliseconds(),
                         Open:     k.OpenPrice,
@@ -3887,20 +3809,25 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
                     if (klines.Count == 0) continue;
 
-                    // Inject into Series (type: List<MarketSeries>)
-                    // MarketSeries(string Symbol, string Timeframe, IReadOnlyList<KlineDto> Klines)
+                    // ── 1. Inject into Series (in-memory for chart) ───────────
                     var existingIdx = Series.FindIndex(s =>
                         s.Symbol == symbol && s.Timeframe == tfName);
                     if (existingIdx >= 0)
-                    {
                         Series[existingIdx] = Series[existingIdx] with { Klines = klines };
-                    }
                     else
-                    {
                         Series.Add(new MarketSeries(symbol, tfName, klines));
-                    }
 
-                    // Re-render chart if this is the currently viewed TF
+                    // ── 2. Persist to datadb so data survives restarts ────────
+                    // This is the fix for "position symbols show empty chart after
+                    // restart" — symbols outside the Engine universe (manually
+                    // opened positions on ARIA, GRAM etc) were never added to the
+                    // datadb because HistoricalDataLoader only processes universe
+                    // symbols. EmergencyFetch now ALSO writes to datadb using the
+                    // same atomic rename pattern as HistoricalDataStore, so the
+                    // next startup can load from disk instead of showing a blank.
+                    _ = Task.Run(() => PersistEmergencyKlinesToDataDbAsync(symbol, tfLabel, klines));
+
+                    // ── 3. Re-render chart if currently viewing this TF ───────
                     if (symbol == _activeSym && tfName == _activeTf)
                     {
                         ResolveSelected();
@@ -3913,7 +3840,6 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 }
                 catch (Exception ex)
                 {
-                    // No _logger in Blazor component — write to console
                     Console.WriteLine($"[EMERGENCY] {symbol}/{tfName} failed: {ex.Message}");
                 }
             }
@@ -3921,6 +3847,56 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         finally
         {
             _emergencyFetchInProgress = false;
+        }
+    }
+
+    // Writes fetched klines to datadb/SYMBOL/TF.json — same location and
+    // format as HistoricalDataStore (Engine-side), using the same atomic
+    // write (tmp → rename) so a crash mid-write never corrupts a file.
+    // Called fire-and-forget from EmergencyFetchKlinesAsync so it never
+    // delays the chart render while disk I/O runs in the background.
+    async Task PersistEmergencyKlinesToDataDbAsync(string symbol, string tfLabel, List<KlineDto> klines)
+    {
+        try
+        {
+            // Resolve the same root path HistoricalDataReaderService uses
+            var sharedRoot = Configuration["SharedData:Root"];
+            if (string.IsNullOrWhiteSpace(sharedRoot)) return;
+
+            var safeSym = string.Concat(symbol.ToUpperInvariant().Where(c => char.IsLetterOrDigit(c) || c == '_' || c == '-'));
+            var safeTf  = string.Concat(tfLabel.Where(c => char.IsLetterOrDigit(c) || c == '_' || c == '-'));
+            var dir  = Path.Combine(sharedRoot, "datadb", safeSym);
+            var path = Path.Combine(dir, $"{safeTf}.json");
+            var tmp  = path + ".tmp";
+
+            Directory.CreateDirectory(dir);
+
+            // Merge with whatever is already on disk (dedup by OpenTime, new wins)
+            var existing = new System.Collections.Generic.Dictionary<long, KlineDto>();
+            if (File.Exists(path))
+            {
+                try
+                {
+                    var existingJson = await File.ReadAllTextAsync(path);
+                    var existingList = System.Text.Json.JsonSerializer.Deserialize<List<KlineDto>>(existingJson);
+                    if (existingList != null)
+                        foreach (var k in existingList) existing[k.OpenTime] = k;
+                }
+                catch { /* corrupt file — start fresh */ }
+            }
+
+            // New bars win (more recent fetch = more accurate close price)
+            foreach (var k in klines) existing[k.OpenTime] = k;
+
+            var merged = existing.Values.OrderBy(k => k.OpenTime).ToList();
+
+            var json = System.Text.Json.JsonSerializer.Serialize(merged);
+            await File.WriteAllTextAsync(tmp, json);
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[EMERGENCY-PERSIST] {symbol}/{tfLabel} write failed: {ex.Message}");
         }
     }
 
@@ -4522,18 +4498,6 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         bool lowRr = rr > 0 && rr < minRr;
 
         return (belowThreshold, lowRr, minRr);
-    }
-
-    // Returns true if this signal has adequate R:R to pass the entry bar.
-    // Used both for the live-strip confirmed filter and for display warnings.
-    bool IsAdequateRR(MissedTradeRecord sig)
-    {
-        if (sig.Entry <= 0 || sig.StopLoss <= 0) return false;
-        var tp1 = sig.TakeProfits?.FirstOrDefault() ?? 0m;
-        if (tp1 <= 0) return true; // no TP data — don't block on it
-        decimal rr = Math.Abs(tp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry);
-        decimal minRr = GetDynamicMinRrForDisplay(sig);
-        return rr >= minRr;
     }
 
     SignalTtlInfo GetSignalTtl(MissedTradeRecord sig)
