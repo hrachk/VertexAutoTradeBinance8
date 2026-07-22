@@ -2107,6 +2107,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 /* Compact-state warning strip (shown collapsed; the full badges with
    tooltips live in sc-expand for hover) */
 .sc-warn-strip{display:flex;gap:6px;margin-top:6px;font-size:9.5px;font-weight:700;color:#eab308;}
+.sc-confirmed-badge{font-size:9px;font-weight:900;padding:1px 5px;border-radius:3px;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);color:var(--grn);letter-spacing:.2px;flex-shrink:0;}
 
 /* New-signal blink indicator — small dot, top-right corner, pulses
    until the card is clicked (SelectSignal marks it seen). */
@@ -2224,6 +2225,13 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .ord-lev-v{font-size:13px;cursor:pointer;transition:opacity .15s;}
 .ord-lev-v:hover{opacity:.7;}
 .ord-lev-use{font-size:10px;opacity:.5;}
+.ord-balance-block{padding:10px 14px 8px;border-bottom:1px solid var(--bdr);display:flex;flex-direction:column;gap:4px;}
+.ord-bal-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;}
+.ord-bal-label{font-size:8.5px;font-weight:800;text-transform:uppercase;letter-spacing:.7px;color:rgba(34,211,238,.6);}
+.ord-bal-main{font-size:18px;font-weight:900;color:var(--cyan);letter-spacing:-.3px;font-family:var(--mono);}
+.ord-bal-loading{opacity:.35;}
+.ord-bal-sub-row{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.ord-bal-sub{font-size:10px;color:var(--dim);font-family:var(--mono);}
 .ord-balance-row{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--bdr);background:rgba(34,211,238,.04);border-left:3px solid var(--cyan);}
 .ord-balance-l{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;}
 .ord-balance-v{font-size:14px;font-weight:700;color:var(--cyan);font-family:var(--mono);}
