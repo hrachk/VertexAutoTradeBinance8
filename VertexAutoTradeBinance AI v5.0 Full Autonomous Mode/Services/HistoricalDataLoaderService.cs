@@ -77,7 +77,11 @@ namespace VertexAutoTradeBinance8.Services
 
         private async Task RunOneCycleAsync(CancellationToken ct)
         {
-            var enabled = _cfg.GetValue("HistoricalData:Enabled", false);
+            // Default TRUE — datadb should always be active.
+            // An explicit "HistoricalData:Enabled": false in appsettings can
+            // disable it, but it must never silently do nothing just because
+            // the key is missing from config (old behaviour was default=false).
+            var enabled = _cfg.GetValue("HistoricalData:Enabled", true);
             if (!enabled)
             {
                 _logger.LogDebug("[DATADB-LOADER] HistoricalData:Enabled is false — skipping cycle");
