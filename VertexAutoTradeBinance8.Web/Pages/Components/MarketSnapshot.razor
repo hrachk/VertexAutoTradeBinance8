@@ -3375,9 +3375,23 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 _signals = allSigs
                     .Where(s => s.Entry > 0 && s.StopLoss > 0
                                 && s.Time >= DateTime.UtcNow.AddHours(-SignalLookbackHours)
-                                && s.Stage != "BLOCKED"
                                 && !_expiredSignals.ContainsKey(SignalKey(s))
-                                && !GetSignalTtl(s).IsExpired)
+                                && !GetSignalTtl(s).IsExpired
+                                // ── CONFIRMED FILTER ────────────────────────────────────
+                                // NOTE: Engine writes field "Event" (e.g. "REJECT_AI_BLOCK")
+                                // but Web MissedTradeRecord has field "Stage" — these names
+                                // DON'T MATCH so Stage is always "" and Stage != "BLOCKED"
+                                // was dead code (always true). Real filtering uses:
+                                //   Confidence: (signal.Confidence??0)*100 — correctly mapped
+                                //   Score:      (signal.AiQuality??0)*100  — correctly mapped
+                                //   Reason:     the block reason string     — correctly mapped
+                                && (s.Confidence / 100m) >= ConfidenceResolver.Resolve(s.Symbol).MinEntry
+                                && s.Score > 0
+                                && s.TakeProfits != null && s.TakeProfits.Count > 0
+                                && !s.Reason.Contains("BLOCK")
+                                && !s.Reason.Contains("COOLDOWN")
+                                && !s.Reason.Contains("ZERO")
+                                && !s.Reason.Contains("FAILED"))
                     .GroupBy(s => s.Symbol)
                     .Select(g => g.OrderByDescending(s => s.Time).First())
                     .OrderByDescending(s => s.Time)
