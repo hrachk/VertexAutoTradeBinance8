@@ -6,6 +6,7 @@
 @using VertexAutoTradeBinance8.Services
 @inject MarketSnapshotFileService Service
 @inject HistoricalDataReaderService HistoricalReader
+@inject Microsoft.Extensions.Configuration.IConfiguration AppConfig
 @inject VertexAutoTradeBinance8.Configuration.ConfidenceResolver ConfidenceResolver
 @inject IHttpClientFactory HttpClientFactory
 @inject Microsoft.Extensions.Options.IOptionsMonitor<VertexAutoTradeBinance8.Configuration.BinanceOptions> BinanceOpts
@@ -3860,7 +3861,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         try
         {
             // Resolve the same root path HistoricalDataReaderService uses
-            var sharedRoot = Configuration["SharedData:Root"];
+            var sharedRoot = AppConfig["SharedData:Root"];
             if (string.IsNullOrWhiteSpace(sharedRoot)) return;
 
             var safeSym = string.Concat(symbol.ToUpperInvariant().Where(c => char.IsLetterOrDigit(c) || c == '_' || c == '-'));
@@ -7251,6 +7252,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
