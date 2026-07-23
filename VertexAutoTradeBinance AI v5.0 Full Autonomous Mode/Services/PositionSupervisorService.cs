@@ -88,6 +88,26 @@ namespace VertexAutoTradeBinance8.Services
         private const string SL_PREFIX = "SL_";
         private const string TR_PREFIX = "TR_";
         private const string TP_PREFIX = "TP_";
+
+        // ── HANDS-OFF SET ─────────────────────────────────────────────
+        // When a key "SYMBOL_LONG" or "SYMBOL_SHORT" is present, Supervisor
+        // will NOT touch that position at all — no SL, no BE move, no partial
+        // close, no order cancellation. Toggled from the Positions page UI.
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte>
+            _handsOff = new();
+
+        public void SetHandsOff(string symbol, string side, bool handsOff)
+        {
+            var key = $"{symbol}_{side.ToUpperInvariant()}";
+            if (handsOff) _handsOff.TryAdd(key, 0);
+            else          _handsOff.TryRemove(key, out _);
+            _logger.LogInformation("[SUPERVISOR][{sym}][{side}] Hands-off={v}", symbol, side, handsOff);
+        }
+
+        public bool IsHandsOff(string symbol, string side)
+            => _handsOff.ContainsKey($"{symbol}_{side.ToUpperInvariant()}");
+
+        public IEnumerable<string> GetHandsOffKeys() => _handsOff.Keys;
         // ConcurrentDictionary used as a thread-safe set — value is always
         // true, key presence is the signal. HashSet<string> is NOT safe for
         // concurrent read+write from the parallel Task.WhenAll(ProbeSide Long,
@@ -233,16 +253,25 @@ namespace VertexAutoTradeBinance8.Services
                     symbol, side);
 
                 // 1️⃣ Отменяем все ордера по символу
-                var cancel = await client
-                    .UsdFuturesApi
-                    .Trading
-                    .CancelAllOrdersAsync(symbol, ct: ct);
-
-                if (!cancel.Success)
-                {
-                    _logger.LogWarning(
-                        "[FINAL CLEANUP][{symbol}] CancelAllOrders failed: {err}",
-                        symbol, cancel.Error?.Message);
+                // Cancel ONLY bot-placed orders (BE_/SL_/TR_/TP_ prefix).
+                // CancelAllOrdersAsync intentionally removed — it killed
+                // user manual limit orders and manual SL/TP orders too.
+                var _botPfx3 = new[] { BE_PREFIX, SL_PREFIX, TR_PREFIX, TP_PREFIX };
+                var _ordOpen3 = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
+                if (_ordOpen3.Success)
+                    foreach (var _o3 in _ordOpen3.Data)
+                        if (_o3.ClientOrderId != null && _botPfx3.Any(p => _o3.ClientOrderId.StartsWith(p)))
+                        {
+                            await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, _o3.Id, ct: ct);
+                            _logger.LogInformation("[FINAL CLEANUP][{sym}] bot order {id} ({cid})", symbol, _o3.Id, _o3.ClientOrderId);
+                        }
+                var _algoOpen3 = await _algoRaw.GetOpenAlgoOrdersAsync(symbol, ct);
+                foreach (var _a3 in _algoOpen3)
+                    if (_a3.ClientAlgoId != null && _botPfx3.Any(p => _a3.ClientAlgoId.StartsWith(p)))
+                    {
+                        await _algoRaw.CancelAlgoOrderAsync(_a3.AlgoId, ct);
+                        _logger.LogInformation("[FINAL CLEANUP][{sym}] bot algo {id} ({cid})", symbol, _a3.AlgoId, _a3.ClientAlgoId);
+                    }
                 }
 
                 // 2️⃣ Сбрасываем BE состояние
@@ -699,14 +728,21 @@ namespace VertexAutoTradeBinance8.Services
                 lastSignal?.IsManual == true ||
                 lastSignal == null;   // ← no signal = no context = hands-off
 
-            if (isManualPosition)
-                _logger.LogDebug(
-                    "[SUPERVISOR][{sym}] Hands-off — IsManual={m} signalNull={sn} hasAlgoOrders={a}",
-                    symbol, lastSignal?.IsManual, lastSignal == null, hasUserAlgoOrders);
+            // User can explicitly mark positions as hands-off from the Positions page.
+            // That overrides the automatic isManualPosition detection too.
+            bool longHandsOff  = isManualPosition || IsHandsOff(symbol, "LONG");
+            bool shortHandsOff = isManualPosition || IsHandsOff(symbol, "SHORT");
 
-            if (hasLong && !isManualPosition)
-                await HandleSideAsync(client, symbol, PositionSide.Long, longPos!, sharedOrders, lastSignal, klines1m, ct);
-            if (hasShort && !isManualPosition)
+            if (longHandsOff)
+                _logger.LogDebug("[SUPERVISOR][{sym}] LONG hands-off (manual={m} userSet={u})",
+                    symbol, lastSignal?.IsManual == true, IsHandsOff(symbol, "LONG"));
+            if (shortHandsOff)
+                _logger.LogDebug("[SUPERVISOR][{sym}] SHORT hands-off (manual={m} userSet={u})",
+                    symbol, lastSignal?.IsManual == true, IsHandsOff(symbol, "SHORT"));
+
+            if (hasLong  && !longHandsOff)
+                await HandleSideAsync(client, symbol, PositionSide.Long,  longPos!,  sharedOrders, lastSignal, klines1m, ct);
+            if (hasShort && !shortHandsOff)
                 await HandleSideAsync(client, symbol, PositionSide.Short, shortPos!, sharedOrders, lastSignal, klines1m, ct);
         }
 
@@ -909,15 +945,21 @@ namespace VertexAutoTradeBinance8.Services
                 var openOrders = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
                 if (openOrders.Success)
                 {
+                    // Only cancel orders the BOT placed (prefix-matched ClientOrderId).
+                    // User's manual SL/TP placed from Binance app or our Limit Order UI have
+                    // no bot prefix and are left alone.
+                    var _pfx4 = new[] { BE_PREFIX, SL_PREFIX, TR_PREFIX, TP_PREFIX };
                     var ordersToCancel = openOrders.Data
                         .Where(o => o.PositionSide == side &&
-                                    (o.Type == FuturesOrderType.StopMarket || o.Type == FuturesOrderType.TakeProfitMarket))
+                                    (o.Type == FuturesOrderType.StopMarket || o.Type == FuturesOrderType.TakeProfitMarket) &&
+                                    o.ClientOrderId != null &&
+                                    _pfx4.Any(p => o.ClientOrderId!.StartsWith(p)))
                         .ToList();
 
                     foreach (var o in ordersToCancel)
                     {
                         await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, o.Id, ct: ct);
-                        _logger.LogInformation("[SUPERVISOR] {symbol} {side}: canceled leftover order {id}", symbol, side, o.Id);
+                        _logger.LogInformation("[SUPERVISOR] {symbol} {side}: canceled bot leftover {id} ({cid})", symbol, side, o.Id, o.ClientOrderId);
                     }
                 }
 
@@ -936,13 +978,21 @@ namespace VertexAutoTradeBinance8.Services
                 var algoCleanPredicate = _tradingOptions.CurrentValue.SupervisorManageTP
                     ? (Func<BinanceAlgoOrderInfo, bool>)(o => o.PositionSide == side && (o.IsStop || o.IsTakeProfit))
                     : (Func<BinanceAlgoOrderInfo, bool>)(o => o.PositionSide == side && o.IsStop);
+                var _pfx5 = new[] { BE_PREFIX, SL_PREFIX, TR_PREFIX, TP_PREFIX };
                 foreach (var algo in algoOrdersToClean.Where(algoCleanPredicate))
                 {
+                    // Skip orders the user placed manually — no bot prefix
+                    if (algo.ClientAlgoId == null || !_pfx5.Any(p => algo.ClientAlgoId.StartsWith(p)))
+                    {
+                        _logger.LogDebug("[SUPERVISOR] {symbol} {side}: skipping user algo {id} ({cid})",
+                            symbol, side, algo.AlgoId, algo.ClientAlgoId ?? "null");
+                        continue;
+                    }
                     var cancelled = await _algoRaw.CancelAlgoOrderAsync(algo.AlgoId, ct);
                     if (cancelled)
-                        _logger.LogInformation("[SUPERVISOR] {symbol} {side}: canceled leftover algo order {id}", symbol, side, algo.AlgoId);
+                        _logger.LogInformation("[SUPERVISOR] {symbol} {side}: canceled bot algo {id} ({cid})", symbol, side, algo.AlgoId, algo.ClientAlgoId);
                     else
-                        _logger.LogWarning("[SUPERVISOR] {symbol} {side}: failed to cancel leftover algo order {id}", symbol, side, algo.AlgoId);
+                        _logger.LogWarning("[SUPERVISOR] {symbol} {side}: failed to cancel bot algo {id}", symbol, side, algo.AlgoId);
                 }
 
                 // =====================================================
@@ -3839,6 +3889,7 @@ namespace VertexAutoTradeBinance8.Services
     }
 
 }
+
 
 
 
