@@ -7,7 +7,13 @@ namespace VertexAutoTradeBinance8.Web.Models
         public string Symbol { get; set; } = "";
         public DateTime Time { get; set; }
 
-        public string Stage { get; set; } = "";   // 🔥 SIGNAL / ORDER / POSITION
+        public string Stage { get; set; } = "";   // legacy field (was never populated)
+        /// <summary>
+        /// Maps from Engine's "event" JSON field (e.g. "REJECT_AI_BLOCK", "REJECT_COOLDOWN").
+        /// Engine writes "Event" → JSON key "event" → this field.
+        /// Stage was previously used for filtering but Stage ≠ Event → Stage was always "".
+        /// </summary>
+        public string Event { get; set; } = "";
         public string Side { get; set; } = "";
 
         public decimal Entry { get; set; }
