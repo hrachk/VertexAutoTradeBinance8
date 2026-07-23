@@ -13,281 +13,351 @@
 <PageTitle>Positions — Vertex</PageTitle>
 
 <div class="p-root">
-    @{
-        // ONE snapshot per render cycle — all template code reads only
-        // these local variables, never the mutable backing fields directly.
-        // This eliminates "Collection was modified" crashes caused by the
-        // background timer replacing list references mid-render.
-        var snapPositions  = _positions;
-        var snapOrders     = _openOrders;
-        var snapHistOrders = _histOrders;
-        var snapPnlRows    = _pnlRows;
-        var snapPosCount   = snapPositions.Count;
-        var snapOrderCount = snapOrders.Count;
-        // Pre-compute order splits so they're available across all tabs
-        var basicOrders  = snapOrders.Where(o => !o.IsAlgo).ToList();
-        var algoOrders   = snapOrders.Where(o =>  o.IsAlgo).ToList();
-    }
+@{
+    var snapPositions  = _positions;
+    var snapOrders     = _openOrders;
+    var snapHistOrders = _histOrders;
+    var snapPnlRows    = _pnlRows;
+    var snapPosCount   = snapPositions.Count;
+    var snapOrderCount = snapOrders.Count;
+    var basicOrders    = snapOrders.Where(o => !o.IsAlgo).ToList();
+    var algoOrders     = snapOrders.Where(o =>  o.IsAlgo).ToList();
+}
 
-    <!-- ══════════ HERO HEADER ══════════════════════════════════════ -->
-    <div class="p-hero">
-        <div class="p-hero-left">
-            <div class="p-logo-mark"></div>
-            <div>
-                <div class="p-hero-title">USDⓈ-M Futures</div>
-                <div class="p-hero-sub">Perpetual · Cross Margin</div>
-            </div>
+<!-- ═══════ HEADER ══════════════════════════════════════════════ -->
+<div class="ph-bar">
+    <div>
+        <div class="ph-title">Positions</div>
+        <div class="ph-sub">USDⓈ-M Perpetual · Cross Margin
+            @if (_demoMode) { <span class="ph-demo-badge">DEMO</span> }
         </div>
-        <div class="p-hero-stats">
-            <div class="p-demo-toggle">
-                @{ var liveCls = !_demoMode ? "p-mode-btn p-mode-on" : "p-mode-btn"; }
-                @{ var demoCls = _demoMode  ? "p-mode-btn p-mode-demo-on" : "p-mode-btn"; }
-                <button class="@liveCls" @onclick="() => SetDemoMode(false)">&#9679; Live</button>
-                <button class="@demoCls" @onclick="() => SetDemoMode(true)">&#9681; Demo</button>
-            </div>
-            <div class="p-hdiv"></div>
-            <div class="p-hstat @(_totalPnl >= 0 ? "h-pos" : "h-neg")">
-                <div class="p-hstat-val">
-                    @(_totalPnl >= 0 ? "+" : "")@_totalPnl.ToString("F4")
-                    <span class="p-hstat-cur">USDT</span>
-                </div>
-                <div class="p-hstat-lab">Unrealized PnL</div>
-            </div>
-            <div class="p-hdiv"></div>
-            <div class="p-hstat @(_realizedPnlToday >= 0 ? "h-pos" : "h-neg")">
-                <div class="p-hstat-val">
-                    @(_realizedPnlToday >= 0 ? "+" : "")@_realizedPnlToday.ToString("F2")
-                    <span class="p-hstat-cur">USDT</span>
-                </div>
-                <div class="p-hstat-lab">
-                    Realized Today
-                    <a href="/statistics" class="p-stat-link" title="Open Statistics">↗</a>
-                </div>
-            </div>
-            <div class="p-hdiv"></div>
-            <div class="p-hstat">
-                <div class="p-hstat-val @(snapPosCount > 0 ? "h-active" : "")">
-                    @snapPosCount
-                </div>
-                <div class="p-hstat-lab">Open Positions</div>
-            </div>
-            <div class="p-hdiv"></div>
-            <div class="p-hstat">
-                <div class="p-hstat-val @(snapOrderCount > 0 ? "h-active" : "")">@snapOrderCount</div>
-                <div class="p-hstat-lab">Open Orders</div>
-            </div>
+    </div>
+    <div class="ph-kpis">
+        <div class="ph-kpi">
+            <div class="ph-kpi-l">Open</div>
+            <div class="ph-kpi-v">@snapPosCount</div>
         </div>
-        <div class="p-hero-actions">
-            <div class="p-ts">@_lastRefresh.ToLocalTime().ToString("HH:mm:ss")</div>
-            <button class="p-btn-refresh @(_loading ? "p-spin" : "")" @onclick="RefreshAll" disabled="@_loading" title="Refresh">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
-                    <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
-                </svg>
+        <div class="ph-kpi @(_totalPnl >= 0 ? "ph-kpi-pos" : "ph-kpi-neg")">
+            <div class="ph-kpi-l">Unrealized P&amp;L</div>
+            <div class="ph-kpi-v">@(_totalPnl >= 0 ? "+" : "")@_totalPnl.ToString("F2")</div>
+        </div>
+        <div class="ph-kpi @(_realizedPnlToday >= 0 ? "ph-kpi-pos" : "ph-kpi-neg")">
+            <div class="ph-kpi-l">Today Realized</div>
+            <div class="ph-kpi-v">@(_realizedPnlToday >= 0 ? "+" : "")@_realizedPnlToday.ToString("F2")</div>
+        </div>
+        <div class="ph-kpi">
+            <div class="ph-kpi-l">Orders</div>
+            <div class="ph-kpi-v">@snapOrderCount</div>
+        </div>
+    </div>
+    <div class="ph-actions">
+        <button class="ph-mode-btn @(!_demoMode?"ph-mode-on":"")" @onclick="()=>SetMode(false)">Live</button>
+        <button class="ph-mode-btn @(_demoMode?"ph-mode-on":"")"  @onclick="()=>SetMode(true)">Demo</button>
+        <button class="ph-refresh @(_loading?"ph-spin":"")" @onclick="RefreshAll" disabled="@_loading" title="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+            </svg>
+        </button>
+        <span class="ph-ts">@_lastRefresh.ToLocalTime().ToString("HH:mm:ss")</span>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="p-alert"><span class="p-alert-icon">⚠</span> @_error</div>
+}
+
+<!-- ═══════ TABS ════════════════════════════════════════════════ -->
+<div class="p-tabs">
+    <button class="p-tab @(_tab==0?"p-tab-on":"")" @onclick="()=>SetTab(0)">
+        <span class="p-tab-label">Positions</span>
+        @if (snapPosCount > 0) { <span class="p-tab-chip">@snapPosCount</span> }
+    </button>
+    <button class="p-tab @(_tab==1?"p-tab-on":"")" @onclick="()=>SetTab(1)">
+        <span class="p-tab-label">Open Orders</span>
+        @if (snapOrderCount > 0) { <span class="p-tab-chip">@snapOrderCount</span> }
+    </button>
+    <button class="p-tab @(_tab==2?"p-tab-on":"")" @onclick="()=>SetTab(2)"><span class="p-tab-label">Order History</span></button>
+    <button class="p-tab @(_tab==3?"p-tab-on":"")" @onclick="()=>SetTab(3)"><span class="p-tab-label">P&amp;L History</span></button>
+    <div class="p-tabs-spacer"></div>
+    @if (_tab == 0 && snapPosCount > 0)
+    {
+        <div class="pv-toggle">
+            <button class="pv-btn @(_viewMode==0?"pv-btn-on":"")" title="List" @onclick="()=>_viewMode=0">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="2" y1="4" x2="14" y2="4"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="12" x2="14" y2="12"/></svg>
+            </button>
+            <button class="pv-btn @(_viewMode==1?"pv-btn-on":"")" title="Mini cards" @onclick="()=>_viewMode=1">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>
+            </button>
+            <button class="pv-btn @(_viewMode==2?"pv-btn-on":"")" title="Cards" @onclick="()=>_viewMode=2">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="2" width="6" height="12" rx="1.5"/><rect x="9" y="2" width="6" height="12" rx="1.5"/></svg>
+            </button>
+            <button class="pv-btn @(_viewMode==3?"pv-btn-on":"")" title="Detail" @onclick="()=>_viewMode=3">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="2" width="14" height="3" rx="1"/><rect x="1" y="7" width="9" height="7" rx="1"/><rect x="11.5" y="7" width="3.5" height="3" rx=".8"/><rect x="11.5" y="11.5" width="3.5" height="2.5" rx=".8"/></svg>
             </button>
         </div>
-    </div>
+    }
+    <div class="p-tabs-line"></div>
+</div>
 
-    <!-- error -->
-    @if (!string.IsNullOrEmpty(_error))
+<!-- ═══════════ TAB 0: POSITIONS ═══════════════════════════════ -->
+@if (_tab == 0)
+{
+    @if (_loading && snapPosCount == 0)
     {
-        <div class="p-alert">
-            <span class="p-alert-icon">⚠</span> @_error
+        <div class="p-loader"><div class="p-spin-ring"></div><span>Loading positions…</span></div>
+    }
+    else if (!snapPositions.Any())
+    {
+        <div class="p-empty">
+            <div class="p-empty-icon"><svg viewBox="0 0 64 64" fill="none"><circle cx="32" cy="32" r="28" stroke="#1e2535" stroke-width="2"/><path d="M20 32h24M32 20v24" stroke="#30363d" stroke-width="2" stroke-linecap="round"/></svg></div>
+            <div class="p-empty-title">No open positions</div>
+            <div class="p-empty-sub">Your USDⓈ-M positions will appear here in real time</div>
         </div>
     }
-
-    <!-- ══════════ TABS ══════════════════════════════════════════════ -->
-    <div class="p-tabs">
-        <button class="p-tab @(_tab==0?"p-tab-on":"")" @onclick="()=>SetTab(0)">
-            <span class="p-tab-label">Positions</span>
-            @if (snapPosCount > 0) { <span class="p-tab-chip">@snapPosCount</span> }
-        </button>
-        <button class="p-tab @(_tab==1?"p-tab-on":"")" @onclick="()=>SetTab(1)">
-            <span class="p-tab-label">Open Orders</span>
-            @if (snapOrderCount > 0) { <span class="p-tab-chip">@snapOrderCount</span> }
-        </button>
-        <button class="p-tab @(_tab==2?"p-tab-on":"")" @onclick="()=>SetTab(2)">
-            <span class="p-tab-label">Order History</span>
-        </button>
-        <button class="p-tab @(_tab==3?"p-tab-on":"")" @onclick="()=>SetTab(3)">
-            <span class="p-tab-label">P&amp;L History</span>
-        </button>
-        <div class="p-tabs-line"></div>
-    </div>
-
-    <!-- ══════════ TAB 0: POSITIONS ═════════════════════════════════ -->
-    @if (_tab == 0)
+    else
     {
-        @if (_loading && snapPosCount == 0)
+        @if (_viewMode == 0)
         {
-            <div class="p-loader"><div class="p-spin-ring"></div><span>Loading positions…</span></div>
-        }
-        else if (!snapPositions.Any())
-        {
-            <div class="p-empty">
-                <div class="p-empty-icon">
-                    <svg viewBox="0 0 64 64" fill="none"><circle cx="32" cy="32" r="28" stroke="#1e2535" stroke-width="2"/><path d="M20 32h24M32 20v24" stroke="#30363d" stroke-width="2" stroke-linecap="round"/></svg>
+            <div class="pv-list">
+                <div class="pvl-header">
+                    <span>Symbol</span><span>Side</span><span>Lev</span>
+                    <span class="r">Entry</span><span class="r">Mark</span><span class="r">Liq</span>
+                    <span class="c">Risk</span><span class="r">Size</span><span class="r">P&L</span>
+                    <span class="r">ROI</span><span class="c">Manage</span><span></span>
                 </div>
-                <div class="p-empty-title">No open positions</div>
-                <div class="p-empty-sub">Your USDⓈ-M positions will appear here in real time</div>
-            </div>
-        }
-        else
-        {
-            <!-- Total PnL banner -->
-            <div class="p-pnl-banner @(_totalPnl >= 0 ? "ban-pos" : "ban-neg")">
-                <div class="p-pnl-banner-left">
-                    <span class="p-pnl-label">Total Unrealized P&L</span>
-                    <span class="p-pnl-value @(_totalPnl >= 0 ? "v-pos" : "v-neg")">
-                        @(_totalPnl >= 0 ? "+" : "")@_totalPnl.ToString("F4") USDT
-                    </span>
-                </div>
-                <div class="p-pnl-banner-right">
-                    <span class="p-pnl-count">@snapPosCount position@(snapPosCount != 1 ? "s" : "")</span>
-                </div>
-            </div>
-
-            <!-- Position cards -->
-            <div class="p-cards">
                 @foreach (var p in snapPositions)
                 {
-                    bool isL = p.Side == "LONG";
-                    bool pUp = p.Pnl >= 0;
+                    bool iL = p.Side == "LONG"; bool pUp = p.Pnl >= 0;
                     decimal roe = p.Roi * 100m;
-                    decimal liqDist = p.LiqPrice > 0 && p.Mark > 0
-                        ? Math.Abs(p.Mark - p.LiqPrice) / p.Mark * 100m : 0m;
+                    decimal liqDist = p.LiqPrice > 0 && p.Mark > 0 ? Math.Abs(p.Mark - p.LiqPrice) / p.Mark * 100m : 0m;
                     bool danger = liqDist > 0 && liqDist < 5m;
-                    bool warn   = liqDist >= 5m && liqDist < 12m;
-                    decimal move = p.Entry > 0 ? (p.Mark - p.Entry) / p.Entry * 100m * (isL ? 1 : -1) : 0m;
-
-                     var cardCls = "p-card " + (isL ? "card-long" : "card-short") + (danger ? " card-danger" : "");  
-                    <div class="@cardCls"
-                         @onclick="() => OpenMiniStats(p)">
-
-                        <!-- Card Header -->
-                        <div class="p-card-head">
-                            <div class="p-card-sym-wrap">
-                                <div class="p-card-icon @(isL ? "icon-l" : "icon-s")">
-                                    @p.Symbol[0]
-                                </div>
-                                <div>
-                                    <a href="/market?sym=@p.Symbol" class="p-card-sym-link">
-                                        <div class="p-card-sym">
-                                            @p.Symbol.Replace("USDT", "")
-                                            <span class="p-card-usdt">USDT</span>
-                                        </div>
-                                    </a>
-                                    <div class="p-card-meta">
-                                        <span class="p-side-badge @(isL ? "sb-l" : "sb-s")">
-                                            @(isL ? "▲ LONG" : "▼ SHORT")
-                                        </span>
-                                        <button class="p-lev p-lev-btn"
-                                                @onclick:stopPropagation="true"
-                                                @onclick="() => OpenLevEditorPos(p)">@p.Leverage× ✎</button>
-                                        <span class="p-perp">Perpetual</span>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="p-card-pnl-wrap">
-                                <div class="p-card-pnl @(pUp ? "pnl-pos" : "pnl-neg")">
-                                    @(pUp ? "+" : "")@p.Pnl.ToString("F4")
-                                    <span style="font-size:12px;opacity:.7"> USDT</span>
-                                </div>
-                                <div class="p-card-roe @(pUp ? "pnl-pos" : "pnl-neg")">
-                                    @(pUp ? "+" : "")@roe.ToString("F2")% ROE
-                                </div>
-                            </div>
+                    decimal riskPct = liqDist > 0 ? Math.Clamp(100m - liqDist, 0m, 100m) : 0m;
+                    string riskClr = danger ? "#ef4444" : riskPct > 60 ? "#f59e0b" : "#10b981";
+                    bool ho = IsHandsOffPos(p.Symbol, p.Side);
+                    <div class="pvl-row @(iL?"pvl-l":"pvl-s")">
+                        <div class="pvl-sym">
+                            <div class="pvl-icon @(iL?"pvl-il":"pvl-is")">@(p.Symbol.Length>0?p.Symbol[0]:'?')</div>
+                            <div><a href="/market?sym=@p.Symbol" class="pvl-symlink">@p.Symbol.Replace("USDT","")</a><div class="pvl-symsub">USDT Perp</div></div>
                         </div>
-
-                        <!-- Live sparkline -->
-                        @if (HasSparkline(p.Symbol))
-                        {
-                            <div class="p-spark-wrap">
-                                <svg class="p-spark-svg" viewBox="0 0 200 36" preserveAspectRatio="none">
-                                    <path d="@BuildSparkFill(p.Symbol)" fill="@SparkFill(p.Symbol)"/>
-                                    <polyline points="@BuildSparkPoints(p.Symbol)" fill="none"
-                                              stroke="@SparkColor(p.Symbol)" stroke-width="1.5" stroke-linejoin="round"/>
-                                    <circle cx="@SparkLastX(p.Symbol)" cy="@SparkLastY(p.Symbol)"
-                                            r="2.5" fill="@SparkColor(p.Symbol)"/>
-                                </svg>
-                            </div>
-                        }
-
-                        <!-- Progress bar - price move -->
-                        <div class="p-move-bar-wrap">
-                            <div class="p-move-bar @(move >= 0 ? "mb-pos" : "mb-neg")"
-                                 style="width:@(Math.Min(Math.Abs(move)*5,100))%"></div>
+                        <div><span class="@(iL?"pvl-sl":"pvl-ss")">@(iL?"▲ LONG":"▼ SHORT")</span></div>
+                        <div><button class="pvl-lev" @onclick:stopPropagation="true" @onclick="()=>OpenLevEditorPos(p)">@p.Leverage×</button></div>
+                        <div class="r mono">@FP(p.Entry)</div>
+                        <div class="r mono @(iL?(p.Mark>p.Entry?"up":""):(p.Mark<p.Entry?"up":""))">@(GetLivePrice(p.Symbol)>0?FP(GetLivePrice(p.Symbol)):FP(p.Mark))</div>
+                        <div class="r mono @(danger?"dn":"dim")">@(p.LiqPrice>0?FP(p.LiqPrice):"—")</div>
+                        <div class="c"><div class="pvl-risk"><div class="pvl-risk-fill" style="width:@((int)riskPct)%;background:@riskClr"></div></div></div>
+                        <div class="r mono">@p.SizeUsdt.ToString("F2")</div>
+                        <div class="r mono @(pUp?"up":"dn")">@(pUp?"+":"")@p.Pnl.ToString("F2")</div>
+                        <div class="r mono @(pUp?"up":"dn")">@(pUp?"+":"")@roe.ToString("F1")%</div>
+                        <div class="c" @onclick:stopPropagation="true">
+                            <label class="pv-manage-toggle" title="@(ho?"Supervisor disabled — click to enable":"Supervisor managing — click to disable")">
+                                <input type="checkbox" checked="@(!ho)" @onchange="()=>ToggleHandsOff(p.Symbol,p.Side)"/>
+                                <span class="pv-mt-track"><span class="pv-mt-thumb"></span></span>
+                            </label>
                         </div>
-
-                        <!-- Key metrics grid -->
-                        <div class="p-card-grid">
-                            <div class="p-cg">
-                                <div class="p-cg-lab">Entry Price</div>
-                                <div class="p-cg-val mono">@FP(p.Entry)</div>
-                            </div>
-                            <div class="p-cg">
-                                <div class="p-cg-lab">Mark Price
-                                    @if (GetLivePrice(p.Symbol) > 0) { <span class="p-live-dot">●</span> }
-                                </div>
-                                <div class="p-cg-val mono @(isL?(p.Mark>p.Entry?"v-pos":""):(p.Mark<p.Entry?"v-pos":""))">
-                                    @(GetLivePrice(p.Symbol) > 0 ? FP(GetLivePrice(p.Symbol)) : FP(p.Mark))
-                                </div>
-                            </div>
-                            <div class="p-cg">
-                                <div class="p-cg-lab">Size</div>
-                                <div class="p-cg-val mono">@p.SizeUsdt.ToString("F2")<span class="p-cg-cur"> USDT</span></div>
-                            </div>
-                            <div class="p-cg">
-                                <div class="p-cg-lab">Margin</div>
-                                <div class="p-cg-val mono">@p.Margin.ToString("F2")<span class="p-cg-cur"> USDT</span></div>
-                            </div>
-                            <div class="p-cg">
-                                <div class="p-cg-lab">Liq. Price</div>
-                                <div class="p-cg-val mono @(danger ? "v-danger" : warn ? "v-warn" : "v-dim")">
-                                    @FP(p.LiqPrice)
-                                    @if (liqDist > 0)
-                                    {
-                                        <span class="p-liq-dist">(@liqDist.ToString("F1")%)</span>
-                                    }
-                                </div>
-                            </div>
-                            <div class="p-cg">
-                                <div class="p-cg-lab">Move</div>
-                                <div class="p-cg-val mono @(move >= 0 ? "v-pos" : "v-neg")">
-                                    @(move >= 0 ? "+" : "")@move.ToString("F2")%
-                                </div>
-                            </div>
+                        <div class="pvl-acts" @onclick:stopPropagation="true">
+                            <button class="pvl-btn" @onclick="()=>OpenPartialClose(p)">½</button>
+                            <button class="pvl-btn pvl-close" @onclick="()=>_confirmPos=p">✕</button>
                         </div>
-
-                        <!-- Liq danger bar -->
-                        @if (danger || warn)
-                        {
-                            <div class="p-liq-alert @(danger ? "la-danger" : "la-warn")">
-                                <span>@(danger ? "🚨" : "⚠")</span>
-                                Liquidation @FP(p.LiqPrice) — @liqDist.ToString("F1")% from mark price
-                            </div>
-                        }
-
-                        <!-- Card footer -->
-                        <div class="p-card-foot">
-                            <div class="p-card-foot-info">
-                                <span class="v-dim" style="font-size:11px">Position value: @p.SizeUsdt.ToString("F2") USDT</span>
-                            </div>
-                            <div class="p-card-foot-btns">
-                                <button class="p-partial-btn" @onclick:stopPropagation="true"
-                                        @onclick="() => OpenPartialClose(p)">½ Partial</button>
-                                <button class="p-close-btn" @onclick:stopPropagation="true"
-                                        @onclick="() => _confirmPos = p">Close</button>
-                            </div>
-                        </div>
-
                     </div>
                 }
             </div>
         }
+        @if (_viewMode == 1)
+        {
+            <div class="pv-mini-grid">
+            @foreach (var p in snapPositions)
+            {
+                bool iL = p.Side == "LONG"; bool pUp = p.Pnl >= 0;
+                decimal roe = p.Roi * 100m;
+                decimal liqDist = p.LiqPrice > 0 && p.Mark > 0 ? Math.Abs(p.Mark - p.LiqPrice) / p.Mark * 100m : 0m;
+                bool danger = liqDist > 0 && liqDist < 5m;
+                decimal riskPct = liqDist > 0 ? Math.Clamp(100m - liqDist, 0m, 100m) : 0m;
+                string riskClr = danger ? "#ef4444" : riskPct > 60 ? "#f59e0b" : "#10b981";
+                bool ho = IsHandsOffPos(p.Symbol, p.Side);
+                <div class="pvm-card @(iL?"pvm-l":"pvm-s") @(danger?"pvm-danger":"")">
+                    <div class="pvm-head">
+                        <div>
+                            <div class="pvm-sym">@p.Symbol.Replace("USDT","")</div>
+                            <div class="pvm-sub">
+                                <span class="@(iL?"pvl-sl":"pvl-ss")" style="font-size:9px;font-weight:800;padding:1px 5px;border-radius:3px;">@(iL?"▲":"▼") @p.Side</span>
+                                <span class="pvm-lev">@p.Leverage×</span>
+                                @if (ho) { <span class="pv-ho-dot" title="Supervisor disabled">●</span> }
+                            </div>
+                        </div>
+                        <div class="pvm-pnl">
+                            <div class="@(pUp?"up":"dn")" style="font-family:monospace;font-size:13px;font-weight:700;">@(pUp?"+":"")@p.Pnl.ToString("F2")</div>
+                            <div class="@(pUp?"up":"dn")" style="font-size:9px;opacity:.7;font-family:monospace;">@(pUp?"+":"")@roe.ToString("F1")% ROE</div>
+                        </div>
+                    </div>
+                    @if (HasSparkline(p.Symbol))
+                    {
+                        <svg class="pvm-spark" viewBox="0 0 200 28" preserveAspectRatio="none">
+                            <polyline points="@BuildSparkPoints(p.Symbol)" fill="none" stroke="@SparkColor(p.Symbol)" stroke-width="1.5" stroke-linejoin="round"/>
+                        </svg>
+                    }
+                    <div class="pvm-row"><span class="pvm-lbl">Entry</span><span class="mono">@FP(p.Entry)</span></div>
+                    <div class="pvm-row"><span class="pvm-lbl">Mark</span><span class="mono @(iL?(p.Mark>p.Entry?"up":""):(p.Mark<p.Entry?"up":""))">@(GetLivePrice(p.Symbol)>0?FP(GetLivePrice(p.Symbol)):FP(p.Mark))</span></div>
+                    <div class="pvm-row"><span class="pvm-lbl">Liq</span><span class="mono @(danger?"dn":"dim")">@(p.LiqPrice>0?FP(p.LiqPrice):"—")</span></div>
+                    <div class="pvm-risk-bar"><div class="pvm-risk-fill" style="width:@((int)riskPct)%;background:@riskClr"></div></div>
+                    <div class="pvm-foot" @onclick:stopPropagation="true">
+                        <label class="pv-manage-toggle" title="@(ho?"Supervisor OFF":"Supervisor ON")">
+                            <input type="checkbox" checked="@(!ho)" @onchange="()=>ToggleHandsOff(p.Symbol,p.Side)"/>
+                            <span class="pv-mt-track"><span class="pv-mt-thumb"></span></span>
+                        </label>
+                        <button class="pvm-btn" @onclick="()=>OpenPartialClose(p)">½</button>
+                        <button class="pvm-btn pvm-close" @onclick="()=>_confirmPos=p">✕</button>
+                    </div>
+                </div>
+            }
+            </div>
+        }
+        @if (_viewMode == 2)
+        {
+            <!-- ── EXISTING CARD VIEW (unchanged) ───────────────── -->
+            <div class="p-cards">
+            @foreach (var p in snapPositions)
+            {
+                bool isL = p.Side == "LONG"; bool pUp = p.Pnl >= 0;
+                decimal roe = p.Roi * 100m;
+                decimal liqDist = p.LiqPrice > 0 && p.Mark > 0 ? Math.Abs(p.Mark - p.LiqPrice) / p.Mark * 100m : 0m;
+                bool danger = liqDist > 0 && liqDist < 5m;
+                bool warn   = liqDist >= 5m && liqDist < 12m;
+                decimal move = p.Entry > 0 ? (p.Mark - p.Entry) / p.Entry * 100m * (isL ? 1 : -1) : 0m;
+                bool ho = IsHandsOffPos(p.Symbol, p.Side);
+                var cardCls = "p-card " + (isL ? "card-long" : "card-short") + (danger ? " card-danger" : "");
+                <div class="@cardCls" @onclick="()=>OpenMiniStats(p)">
+                    <div class="p-card-head">
+                        <div class="p-card-sym-wrap">
+                            <div class="p-card-icon @(isL?"icon-l":"icon-s")">@p.Symbol[0]</div>
+                            <div>
+                                <a href="/market?sym=@p.Symbol" class="p-card-sym-link">
+                                    <div class="p-card-sym">@p.Symbol.Replace("USDT","") <span class="p-card-usdt">USDT</span></div>
+                                </a>
+                                <div class="p-card-meta">
+                                    <span class="p-side-badge @(isL?"sb-l":"sb-s")">@(isL?"▲ LONG":"▼ SHORT")</span>
+                                    <button class="p-lev p-lev-btn" @onclick:stopPropagation="true" @onclick="()=>OpenLevEditorPos(p)">@p.Leverage× ✎</button>
+                                    @if (ho) { <span class="pv-ho-badge">MANUAL</span> }
+                                </div>
+                            </div>
+                        </div>
+                        <div class="p-card-pnl-wrap">
+                            <div class="p-card-pnl @(pUp?"pnl-pos":"pnl-neg")">@(pUp?"+":"")@p.Pnl.ToString("F4") <span style="font-size:11px;opacity:.6">USDT</span></div>
+                            <div class="p-card-roe @(pUp?"pnl-pos":"pnl-neg")">@(pUp?"+":"")@roe.ToString("F2")% ROE</div>
+                        </div>
+                    </div>
+                    @if (HasSparkline(p.Symbol))
+                    {
+                        <div class="p-spark-wrap">
+                            <svg class="p-spark-svg" viewBox="0 0 200 36" preserveAspectRatio="none">
+                                <path d="@BuildSparkFill(p.Symbol)" fill="@SparkFill(p.Symbol)"/>
+                                <polyline points="@BuildSparkPoints(p.Symbol)" fill="none" stroke="@SparkColor(p.Symbol)" stroke-width="1.5" stroke-linejoin="round"/>
+                                <circle cx="@SparkLastX(p.Symbol)" cy="@SparkLastY(p.Symbol)" r="2.5" fill="@SparkColor(p.Symbol)"/>
+                            </svg>
+                        </div>
+                    }
+                    <div class="p-move-bar-wrap">
+                        <div class="p-move-bar @(move>=0?"mb-pos":"mb-neg")" style="width:@(Math.Min(Math.Abs(move)*5,100))%"></div>
+                    </div>
+                    <div class="p-card-grid">
+                        <div class="p-cg"><div class="p-cg-lab">Entry Price</div><div class="p-cg-val mono">@FP(p.Entry)</div></div>
+                        <div class="p-cg"><div class="p-cg-lab">Mark Price @if (GetLivePrice(p.Symbol)>0){<span class="p-live-dot">●</span>}</div><div class="p-cg-val mono @(isL?(p.Mark>p.Entry?"v-pos":""):(p.Mark<p.Entry?"v-pos":""))">@(GetLivePrice(p.Symbol)>0?FP(GetLivePrice(p.Symbol)):FP(p.Mark))</div></div>
+                        <div class="p-cg"><div class="p-cg-lab">Size</div><div class="p-cg-val mono">@p.SizeUsdt.ToString("F2")<span class="p-cg-cur"> USDT</span></div></div>
+                        <div class="p-cg"><div class="p-cg-lab">Margin</div><div class="p-cg-val mono">@p.Margin.ToString("F2")<span class="p-cg-cur"> USDT</span></div></div>
+                        <div class="p-cg"><div class="p-cg-lab">Liq. Price</div><div class="p-cg-val mono @(danger?"v-danger":warn?"v-warn":"v-dim")">@FP(p.LiqPrice) @if(liqDist>0){<span class="p-liq-dist">(@liqDist.ToString("F1")%)</span>}</div></div>
+                        <div class="p-cg"><div class="p-cg-lab">Move</div><div class="p-cg-val mono @(move>=0?"v-pos":"v-neg")">@(move>=0?"+":"")@move.ToString("F2")%</div></div>
+                    </div>
+                    @if (danger || warn)
+                    {
+                        <div class="p-liq-alert @(danger?"la-danger":"la-warn")"><span>@(danger?"🚨":"⚠")</span> Liquidation @FP(p.LiqPrice) — @liqDist.ToString("F1")% from mark</div>
+                    }
+                    <div class="p-card-foot">
+                        <div class="pv-card-manage" @onclick:stopPropagation="true">
+                            <label class="pv-manage-toggle" title="@(ho?"Supervisor disabled. Click to re-enable.":"Supervisor active. Click to disable for this position.")">
+                                <input type="checkbox" checked="@(!ho)" @onchange="()=>ToggleHandsOff(p.Symbol,p.Side)"/>
+                                <span class="pv-mt-track"><span class="pv-mt-thumb"></span></span>
+                            </label>
+                            <span class="pv-manage-label">@(ho?"Manual":"Managed")</span>
+                        </div>
+                        <div class="p-card-foot-btns" @onclick:stopPropagation="true">
+                            <button class="p-partial-btn" @onclick="()=>OpenPartialClose(p)">½ Partial</button>
+                            <button class="p-close-btn" @onclick="()=>_confirmPos=p">Close</button>
+                        </div>
+                    </div>
+                </div>
+            }
+            </div>
+        }
+        @if (_viewMode == 3)
+        {
+            <div class="pvd-root">
+            @foreach (var p in snapPositions)
+            {
+                bool isL = p.Side == "LONG"; bool pUp = p.Pnl >= 0;
+                decimal roe = p.Roi * 100m;
+                decimal liqDist = p.LiqPrice > 0 && p.Mark > 0 ? Math.Abs(p.Mark - p.LiqPrice) / p.Mark * 100m : 0m;
+                bool danger = liqDist > 0 && liqDist < 5m;
+                bool warn   = liqDist >= 5m && liqDist < 12m;
+                decimal move = p.Entry > 0 ? (p.Mark - p.Entry) / p.Entry * 100m * (isL ? 1 : -1) : 0m;
+                decimal liveP = GetLivePrice(p.Symbol);
+                bool ho = IsHandsOffPos(p.Symbol, p.Side);
+                <div class="pvd-card @(isL?"pvd-l":"pvd-s") @(danger?"pvd-danger":"")">
+                    <div class="pvd-hero">
+                        <div class="pvd-icon @(isL?"pvd-il":"pvd-is")">@p.Symbol[0]</div>
+                        <div class="pvd-name-block">
+                            <a href="/market?sym=@p.Symbol" class="pvd-symlink">@p.Symbol.Replace("USDT","") <span class="pvd-usdt">USDT</span></a>
+                            <div class="pvd-meta">
+                                <span class="p-side-badge @(isL?"sb-l":"sb-s")">@(isL?"▲ LONG":"▼ SHORT")</span>
+                                <button class="pvl-lev" @onclick:stopPropagation="true" @onclick="()=>OpenLevEditorPos(p)">@p.Leverage×</button>
+                                @if (liveP>0) { <span class="p-live-dot" style="font-size:8px;">● LIVE</span> }
+                            </div>
+                        </div>
+                        <div class="pvd-pnl-block">
+                            <div class="pvd-pnl @(pUp?"up":"dn")">@(pUp?"+":"")@p.Pnl.ToString("F4")</div>
+                            <div class="pvd-roe @(pUp?"up":"dn")">@(pUp?"+":"")@roe.ToString("F2")% ROE</div>
+                        </div>
+                        <div class="pvd-manage" @onclick:stopPropagation="true">
+                            <label class="pv-manage-toggle">
+                                <input type="checkbox" checked="@(!ho)" @onchange="()=>ToggleHandsOff(p.Symbol,p.Side)"/>
+                                <span class="pv-mt-track"><span class="pv-mt-thumb"></span></span>
+                            </label>
+                            <span class="pv-manage-label">@(ho?"Manual":"Managed")</span>
+                        </div>
+                    </div>
+                    @if (HasSparkline(p.Symbol))
+                    {
+                        <div class="pvd-spark">
+                            <svg viewBox="0 0 400 40" preserveAspectRatio="none" style="width:100%;height:40px;display:block;">
+                                <path d="@BuildSparkFill(p.Symbol)" fill="@SparkFill(p.Symbol)"/>
+                                <polyline points="@BuildSparkPoints(p.Symbol)" fill="none" stroke="@SparkColor(p.Symbol)" stroke-width="1.5"/>
+                            </svg>
+                        </div>
+                    }
+                    <div class="pvd-metrics">
+                        <div class="pvd-m"><div class="pvd-ml">Entry</div><div class="pvd-mv mono">@FP(p.Entry)</div></div>
+                        <div class="pvd-m"><div class="pvd-ml">Mark @if(liveP>0){<span style="color:#10b981;font-size:8px;">●</span>}</div><div class="pvd-mv mono @(isL?(p.Mark>p.Entry?"up":""):(p.Mark<p.Entry?"up":""))">@(liveP>0?FP(liveP):FP(p.Mark))</div></div>
+                        <div class="pvd-m"><div class="pvd-ml">Liq Price</div><div class="pvd-mv mono @(danger?"dn":warn?"pv-warn":"dim")">@(p.LiqPrice>0?FP(p.LiqPrice):"—") @if(liqDist>0){<span style="font-size:10px;">(@liqDist.ToString("F1")%)</span>}</div></div>
+                        <div class="pvd-m"><div class="pvd-ml">Size</div><div class="pvd-mv mono">@p.SizeUsdt.ToString("F2") <span class="dim" style="font-size:10px">USDT</span></div></div>
+                        <div class="pvd-m"><div class="pvd-ml">Margin</div><div class="pvd-mv mono">@p.Margin.ToString("F2")</div></div>
+                        <div class="pvd-m"><div class="pvd-ml">Move</div><div class="pvd-mv mono @(move>=0?"up":"dn")">@(move>=0?"+":"")@move.ToString("F2")%</div></div>
+                    </div>
+                    @if (danger || warn)
+                    {
+                        <div class="p-liq-alert @(danger?"la-danger":"la-warn")"><span>@(danger?"🚨":"⚠")</span> Liquidation @FP(p.LiqPrice) — @liqDist.ToString("F1")% from mark</div>
+                    }
+                    <div class="pvd-foot" @onclick:stopPropagation="true">
+                        <button class="p-partial-btn" @onclick="()=>OpenPartialClose(p)">½ Partial</button>
+                        <button class="p-close-btn" @onclick="()=>_confirmPos=p">Close Position</button>
+                    </div>
+                </div>
+            }
+            </div>
+        }
     }
+}
 
-    <!-- ══════════ TAB 1: OPEN ORDERS ══════════════════════════════ -->
+<!-- ══════════ TAB 1: OPEN ORDERS ══════════════════════════════ -->
     @if (_tab == 1)
     {
         @if (_ordLoading) { <div class="p-loader"><div class="p-spin-ring"></div><span>Loading orders…</span></div> }
@@ -713,6 +783,7 @@
 
 </div>
 
+
 <style>
 /* ── RESET / BASE ──────────────────────────────────────── */
 :root{
@@ -969,6 +1040,99 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
 @@media(max-width:1100px){.p-card-grid{grid-template-columns:repeat(3,1fr);}
 .p-hero-stats{display:none;}}
 @@media(max-width:700px){.p-hero{flex-wrap:wrap;gap:12px;}.p-card-grid{grid-template-columns:repeat(2,1fr);}.p-pnl-summ{grid-template-columns:repeat(2,1fr);}}
+
+/* ── HEADER BAR ──────────────────────────────────────────────── */
+.ph-bar{display:flex;align-items:center;gap:16px;padding:16px 0 14px;flex-wrap:wrap;border-bottom:1px solid #152035;margin-bottom:14px;}
+.ph-title{font-size:20px;font-weight:900;letter-spacing:-.3px;color:#f0f6ff;}
+.ph-sub{font-size:11px;color:#334e68;margin-top:2px;display:flex;align-items:center;gap:6px;}
+.ph-demo-badge{font-size:9px;font-weight:700;padding:1px 6px;border-radius:3px;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.2);color:#fcd34d;}
+.ph-kpis{display:flex;gap:2px;flex-wrap:wrap;}
+.ph-kpi{background:#060c15;border:1px solid #152035;padding:6px 12px;border-radius:5px;min-width:100px;}
+.ph-kpi-l{font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#1a2e44;margin-bottom:2px;}
+.ph-kpi-v{font-family:monospace;font-size:15px;font-weight:700;color:#f0f6ff;}
+.ph-kpi-pos .ph-kpi-v{color:#34d399;}.ph-kpi-neg .ph-kpi-v{color:#f87171;}
+.ph-actions{margin-left:auto;display:flex;align-items:center;gap:6px;}
+.ph-mode-btn{height:26px;padding:0 10px;border-radius:4px;font-size:11px;font-weight:700;background:#0f1b30;border:1px solid #152035;color:#334e68;cursor:pointer;}
+.ph-mode-on{background:rgba(6,182,212,.08)!important;border-color:rgba(6,182,212,.3)!important;color:#22d3ee!important;}
+.ph-refresh{width:28px;height:28px;border-radius:5px;background:#0f1b30;border:1px solid #152035;color:#334e68;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+.ph-refresh svg{width:14px;height:14px;}.ph-refresh:hover{color:#6e90b2;border-color:#253a56;}
+.ph-spin svg{animation:phspin .6s linear infinite;}
+@@keyframes phspin{to{transform:rotate(360deg)}}
+.ph-ts{font-size:10px;color:#1a2e44;font-family:monospace;}
+.p-tabs-spacer{flex:1;}
+/* ── VIEW TOGGLE ───────────────────────────────────────────────── */
+.pv-toggle{display:flex;align-items:center;background:#111827;border:1px solid #152035;border-radius:6px;padding:3px;gap:2px;}
+.pv-btn{width:28px;height:24px;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#334e68;background:none;border:none;cursor:pointer;transition:all .12s;}
+.pv-btn:hover{color:#6e90b2;background:rgba(255,255,255,.04);}.pv-btn-on{background:#0f1b30!important;color:#22d3ee!important;}.pv-btn svg{width:14px;height:14px;}
+/* ── MANAGE TOGGLE ─────────────────────────────────────────────── */
+.pv-manage-toggle{display:inline-flex;align-items:center;cursor:pointer;gap:5px;}.pv-manage-toggle input{display:none;}
+.pv-mt-track{width:30px;height:16px;border-radius:8px;background:#1a2e44;border:1px solid #152035;position:relative;transition:background .2s;flex-shrink:0;}
+.pv-manage-toggle input:checked + .pv-mt-track{background:rgba(16,185,129,.2);border-color:rgba(16,185,129,.35);}
+.pv-mt-thumb{position:absolute;width:12px;height:12px;border-radius:50%;background:#334e68;top:1px;left:1px;transition:all .2s;}
+.pv-manage-toggle input:checked + .pv-mt-track .pv-mt-thumb{left:15px;background:#10b981;}
+.pv-manage-label{font-size:10px;font-weight:700;color:#334e68;white-space:nowrap;}
+.pv-manage-toggle input:checked ~ .pv-manage-label{color:#34d399;}
+.pv-card-manage{display:flex;align-items:center;gap:6px;padding-right:8px;}
+.pv-ho-badge{font-size:8px;font-weight:800;padding:1px 5px;border-radius:3px;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.2);color:#fcd34d;letter-spacing:.3px;}
+.pv-ho-dot{color:#f59e0b;font-size:8px;}
+/* ── LIST VIEW ─────────────────────────────────────────────────── */
+.pv-list{display:flex;flex-direction:column;gap:2px;margin-top:14px;}
+.pvl-header{display:grid;grid-template-columns:200px 90px 55px 90px 90px 85px 60px 80px 90px 80px 70px 90px;gap:0;padding:0 12px 6px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#1a2e44;}
+.pvl-row{display:grid;grid-template-columns:200px 90px 55px 90px 90px 85px 60px 80px 90px 80px 70px 90px;gap:0;align-items:center;padding:7px 12px;background:#060c15;border:1px solid #152035;border-radius:6px;font-size:12px;color:#6e90b2;transition:border-color .1s;}
+.pvl-row:hover{border-color:#253a56;}
+.pvl-l{border-left:3px solid #10b981!important;}.pvl-s{border-left:3px solid #ef4444!important;}
+.pvl-sym{display:flex;align-items:center;gap:8px;}
+.pvl-icon{width:26px;height:26px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:900;flex-shrink:0;}
+.pvl-il{background:rgba(16,185,129,.08);color:#34d399;}.pvl-is{background:rgba(239,68,68,.08);color:#f87171;}
+.pvl-symlink{font-size:13px;font-weight:700;color:#f0f6ff;text-decoration:none;}.pvl-symlink:hover{color:#22d3ee;}
+.pvl-symsub{font-size:9px;color:#1a2e44;}
+.pvl-sl{font-size:9px;font-weight:800;padding:2px 6px;border-radius:3px;background:rgba(16,185,129,.08);color:#34d399;border:1px solid rgba(16,185,129,.15);}
+.pvl-ss{font-size:9px;font-weight:800;padding:2px 6px;border-radius:3px;background:rgba(239,68,68,.08);color:#f87171;border:1px solid rgba(239,68,68,.15);}
+.pvl-lev{font-size:10px;font-weight:700;font-family:monospace;color:#6e90b2;background:#0f1b30;border:1px solid #152035;padding:2px 6px;border-radius:3px;cursor:pointer;}
+.pvl-risk{height:4px;background:#0f1b30;border-radius:2px;overflow:hidden;width:48px;}
+.pvl-risk-fill{height:100%;border-radius:2px;}
+.pvl-acts{display:flex;gap:4px;justify-content:flex-end;}
+.pvl-btn{height:22px;padding:0 7px;border-radius:3px;font-size:10px;font-weight:700;background:#0f1b30;border:1px solid #152035;color:#6e90b2;cursor:pointer;}
+.pvl-btn:hover{border-color:#253a56;color:#c4d4ec;}
+.pvl-close{background:rgba(239,68,68,.06);border-color:rgba(239,68,68,.15);color:#f87171;}.pvl-close:hover{border-color:#ef4444;}
+.r{text-align:right;}.c{text-align:center;}.mono{font-family:monospace;font-size:11px;}.up{color:#34d399;}.dn{color:#f87171;}.dim{color:#334e68;}
+/* ── MINI CARDS ────────────────────────────────────────────────── */
+.pv-mini-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px;margin-top:14px;}
+.pvm-card{background:#060c15;border:1px solid #152035;border-radius:8px;padding:12px;cursor:pointer;transition:border-color .1s;}.pvm-card:hover{border-color:#253a56;}
+.pvm-l{border-top:2px solid #10b981;}.pvm-s{border-top:2px solid #ef4444;}.pvm-danger{border-color:rgba(239,68,68,.4)!important;}
+.pvm-head{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;}
+.pvm-sym{font-size:14px;font-weight:800;color:#f0f6ff;letter-spacing:-.2px;}.pvm-sub{display:flex;align-items:center;gap:4px;margin-top:2px;}
+.pvm-lev{font-size:9px;font-weight:700;font-family:monospace;color:#334e68;}.pvm-pnl{text-align:right;}
+.pvm-spark{width:100%;height:28px;display:block;margin:-4px 0 8px;overflow:hidden;}
+.pvm-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;font-size:11px;}
+.pvm-lbl{font-size:9px;color:#1a2e44;font-weight:600;text-transform:uppercase;letter-spacing:.3px;}
+.pvm-risk-bar{height:3px;background:#0f1b30;border-radius:2px;overflow:hidden;margin:8px 0;}
+.pvm-risk-fill{height:100%;border-radius:2px;}
+.pvm-foot{display:flex;align-items:center;gap:4px;margin-top:8px;}
+.pvm-btn{flex:1;height:24px;border-radius:4px;font-size:10px;font-weight:700;background:#0f1b30;border:1px solid #152035;color:#6e90b2;cursor:pointer;}
+.pvm-btn:hover{border-color:#253a56;}.pvm-close{background:rgba(239,68,68,.06);border-color:rgba(239,68,68,.15);color:#f87171;}
+/* ── DETAIL VIEW ────────────────────────────────────────────────── */
+.pvd-root{display:flex;flex-direction:column;gap:8px;margin-top:14px;}
+.pvd-card{background:#060c15;border:1px solid #152035;border-radius:10px;overflow:hidden;}
+.pvd-l{border-left:3px solid #10b981;}.pvd-s{border-left:3px solid #ef4444;}.pvd-danger{border-color:rgba(239,68,68,.4)!important;}
+.pvd-hero{display:flex;align-items:center;gap:12px;padding:14px 18px;flex-wrap:wrap;border-bottom:1px solid #152035;}
+.pvd-icon{width:38px;height:38px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;flex-shrink:0;}
+.pvd-il{background:rgba(16,185,129,.1);color:#34d399;}.pvd-is{background:rgba(239,68,68,.08);color:#f87171;}
+.pvd-name-block{flex:1;min-width:140px;}
+.pvd-symlink{font-size:18px;font-weight:900;letter-spacing:-.3px;color:#f0f6ff;text-decoration:none;}.pvd-symlink:hover{color:#22d3ee;}
+.pvd-usdt{font-size:11px;color:#334e68;font-weight:400;}.pvd-meta{display:flex;align-items:center;gap:6px;margin-top:4px;flex-wrap:wrap;}
+.pvd-pnl-block{text-align:right;flex-shrink:0;}
+.pvd-pnl{font-family:monospace;font-size:22px;font-weight:800;letter-spacing:-.5px;line-height:1;}
+.pvd-roe{font-family:monospace;font-size:12px;margin-top:3px;opacity:.7;}
+.pvd-manage{display:flex;flex-direction:column;align-items:center;gap:3px;padding-left:12px;border-left:1px solid #152035;flex-shrink:0;}
+.pvd-spark{overflow:hidden;background:rgba(0,0,0,.2);}
+.pvd-metrics{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:1px;background:#152035;}
+.pvd-m{padding:10px 14px;background:#060c15;}
+.pvd-ml{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#1a2e44;margin-bottom:3px;}
+.pvd-mv{font-size:13px;font-weight:700;color:#c4d4ec;}
+.pvd-foot{display:flex;gap:8px;padding:10px 16px;border-top:1px solid #152035;}
+.pv-warn{color:#fcd34d;}
+
 </style>
 
 @code {
@@ -1273,6 +1437,15 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
 
     int _tab;
     int _ordSubTab; // 0=Basic 1=Conditional
+    int _viewMode = 2;
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _posHandsOff = new();
+    bool IsHandsOffPos(string sym, string side) => _posHandsOff.ContainsKey($"{sym}_{side.ToUpperInvariant()}");
+    void ToggleHandsOff(string sym, string side)
+    {
+        var key = $"{sym}_{side.ToUpperInvariant()}";
+        if (_posHandsOff.ContainsKey(key)) _posHandsOff.TryRemove(key, out _);
+        else _posHandsOff.TryAdd(key, 0);
+    }
     bool _loading, _ordLoading, _histLoading, _actionLoading, _pnlLoading;
     DateTime _lastRefresh;
     string _error = string.Empty;
@@ -1687,6 +1860,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
         _timer?.Dispose();
     }
 }
+
 
 
 
