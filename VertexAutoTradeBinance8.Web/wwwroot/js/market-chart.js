@@ -751,24 +751,161 @@
                 const liveSession = sessions.get(containerId);
                 if (!liveSession) return;
 
-                // If no position selected — fall back to legacy price-pick
+                // Right-click menu:
+                // - With position: TP/SL menu (side depends on price vs entry)
+                // - Without position: Limit Order menu (place buy/sell limit at clicked price)
+                // Always also offer Limit Order option even with a position
                 if (!liveSession.entryPrice) {
-                    if (liveSession.onPricePicked) liveSession.onPricePicked(price);
+                    // No position — show limit order menu only
+                    marketChart._showLimitOrderMenu(containerId, e.clientX, e.clientY, price, liveSession);
                     return;
                 }
 
-                // Determine TP vs SL by position side + click location:
-                // LONG:  click ABOVE entry = TP,  BELOW = SL
-                // SHORT: click BELOW entry = TP,  ABOVE = SL
+                // Has position — determine TP vs SL
                 const isLong = liveSession.side === 'LONG';
                 const isTpSide = isLong
                     ? price > liveSession.entryPrice
                     : price < liveSession.entryPrice;
 
+                // Show TP/SL menu with additional "Place Limit Order" option
                 marketChart._showRightClickMenu(containerId, e.clientX, e.clientY, price, isTpSide);
             }, listenerOpts);
 
             return true;
+        },
+
+        // ─── LIMIT ORDER MENU ────────────────────────────────────────
+        // Right-click when no position is selected → shows limit order menu.
+        // User picks: BUY LIMIT or SELL LIMIT at the clicked price.
+        // Optionally set a quantity. Calls onLimitOrderRequested(side, price, qty).
+        _showLimitOrderMenu(containerId, clientX, clientY, price, liveSession) {
+            this._removeRightClickMenu();
+            this._removeLimitOrderMenu();
+
+            const fmt = (p) => p < 0.0001 ? p.toFixed(7)
+                              : p < 0.01   ? p.toFixed(6)
+                              : p < 1      ? p.toFixed(5)
+                              : p < 100    ? p.toFixed(4)
+                              :              p.toFixed(2);
+
+            const menu = document.createElement('div');
+            menu.id = '__vx_limit_menu';
+            menu.style.cssText = `
+                position:fixed; z-index:99999;
+                left:${clientX}px; top:${clientY}px;
+                background:#0a1422; border:1px solid #1e3050;
+                border-radius:8px; box-shadow:0 8px 32px rgba(0,0,0,.7);
+                min-width:230px; overflow:hidden;
+                font-family:'Inter',system-ui,sans-serif;
+                animation:vxMenuIn .1s ease;
+            `;
+
+            const vw = window.innerWidth, vh = window.innerHeight;
+            if (clientX + 250 > vw) menu.style.left = (clientX - 250) + 'px';
+            if (clientY + 200 > vh) menu.style.top  = (clientY - 200) + 'px';
+
+            menu.innerHTML = `
+                <style>
+                #__vx_limit_menu * { box-sizing:border-box; }
+                #__vx_limit_menu input::-webkit-inner-spin-button { display:none; }
+                @keyframes vxMenuIn { from { opacity:0; transform:scale(.95) translateY(-4px); } to { opacity:1; transform:none; } }
+                </style>
+                <div style="padding:10px 14px 8px; border-bottom:1px solid #131f32; display:flex; align-items:center; gap:8px;">
+                    <span style="font-size:15px;">📋</span>
+                    <div>
+                        <div style="font-size:12px; font-weight:800; color:#e8f4ff;">Place Limit Order</div>
+                        <div style="font-size:10px; color:#3d5878; margin-top:1px;">Order executes when price reaches this level</div>
+                    </div>
+                    <button id="__vx_limit_close" style="margin-left:auto;background:transparent;border:none;color:#3d5878;font-size:16px;cursor:pointer;padding:0 2px;">×</button>
+                </div>
+
+                <!-- Price display -->
+                <div style="padding:10px 14px 8px; border-bottom:1px solid #131f32;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; background:#0f1b30; border:1px solid #1e3050; border-radius:6px; padding:8px 12px;">
+                        <div>
+                            <div style="font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:#3d5878; margin-bottom:2px;">Limit Price</div>
+                            <div style="font-family:'JetBrains Mono',monospace; font-size:16px; font-weight:700; color:#e8f4ff;" id="__vx_limit_price_display">${fmt(price)}</div>
+                        </div>
+                        <div style="font-size:11px; color:#3d5878; text-align:right;">
+                            <div>Right-click</div>
+                            <div>to change</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Qty -->
+                <div style="padding:10px 14px 12px;">
+                    <div style="font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:#3d5878; margin-bottom:6px;">Quantity (optional)</div>
+                    <div style="display:flex; gap:6px; margin-bottom:10px;">
+                        <div style="position:relative; flex:1;">
+                            <input id="__vx_limit_qty" type="number" min="0" step="any" placeholder="auto"
+                                style="width:100%; height:32px; background:#0f1b30; border:1px solid #1e3050; border-radius:6px;
+                                       color:#e8f4ff; font-size:12px; font-weight:700; padding:0 10px; outline:none;
+                                       font-family:'JetBrains Mono',monospace;"/>
+                        </div>
+                    </div>
+
+                    <!-- Buy / Sell buttons -->
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                        <button id="__vx_limit_buy" style="height:36px; border-radius:6px;
+                            background:rgba(34,197,94,.1); border:1.5px solid rgba(34,197,94,.35);
+                            color:#22c55e; font-size:12px; font-weight:800; cursor:pointer;">
+                            ↑ BUY LIMIT
+                        </button>
+                        <button id="__vx_limit_sell" style="height:36px; border-radius:6px;
+                            background:rgba(239,68,68,.1); border:1.5px solid rgba(239,68,68,.35);
+                            color:#ef4444; font-size:12px; font-weight:800; cursor:pointer;">
+                            ↓ SELL LIMIT
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(menu);
+            this.__limitMenuState = { containerId, price, liveSession };
+
+            const self = this;
+
+            const fireOrder = (side) => {
+                const st = self.__limitMenuState;
+                if (!st) return;
+                self._removeLimitOrderMenu();
+                const qtyInput = document.getElementById('__vx_limit_qty');
+                const qty = qtyInput ? parseFloat(qtyInput.value) || 0 : 0;
+                if (st.liveSession.onLimitOrderRequested)
+                    st.liveSession.onLimitOrderRequested(side, st.price, qty);
+            };
+
+            menu.querySelector('#__vx_limit_buy').addEventListener('click', () => fireOrder('BUY'));
+            menu.querySelector('#__vx_limit_sell').addEventListener('click', () => fireOrder('SELL'));
+            menu.querySelector('#__vx_limit_close').addEventListener('click', () => self._removeLimitOrderMenu());
+
+            menu.addEventListener('keydown', (ev) => {
+                if (ev.key === 'Escape') self._removeLimitOrderMenu();
+            });
+
+            // Auto-focus qty input
+            setTimeout(() => {
+                const inp = document.getElementById('__vx_limit_qty');
+                if (inp) inp.focus();
+            }, 50);
+
+            // Click outside
+            setTimeout(() => {
+                document.addEventListener('mousedown', self._limitOutside = (ev) => {
+                    if (!menu.contains(ev.target)) self._removeLimitOrderMenu();
+                }, { capture: true });
+            }, 100);
+        },
+
+        _removeLimitOrderMenu() {
+            const el = document.getElementById('__vx_limit_menu');
+            if (el) el.remove();
+            this.__limitMenuState = null;
+            if (this._limitOutside) {
+                document.removeEventListener('mousedown', this._limitOutside, { capture: true });
+                this._limitOutside = null;
+            }
         },
 
         setData(containerId, klines) {
@@ -1929,6 +2066,7 @@
             s.onNewTpRequested = (price) => dotNetRef.invokeMethodAsync('OnNewTpRequested', price);
             s.onNewTpRequestedWithPercent = (price, pct) => dotNetRef.invokeMethodAsync('OnNewTpRequestedWithPercent', price, pct);
             s.onCancelProtectiveLevel = (kind, index) => dotNetRef.invokeMethodAsync('OnCancelProtectiveLevel', kind, index);
+            s.onLimitOrderRequested = (side, price, qty) => dotNetRef.invokeMethodAsync('OnLimitOrderRequested', side, price, qty);
         },
 
         bindInfiniteHistory(containerId, dotNetRef) {
@@ -2080,6 +2218,7 @@
     window._vertexChartSessions = sessions;
 
 })();
+
 
 
 
