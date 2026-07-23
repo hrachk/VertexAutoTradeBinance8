@@ -151,7 +151,7 @@
                             <span class="sc-new-dot" title="New signal — not yet viewed"></span>
                         }
 
-                        <!-- COMPACT (always visible): symbol, side, time, confidence bar -->
+                        <!-- COMPACT (always visible): symbol, side, time, pin button -->
                         <div class="sc-top">
                             <div class="sc-sym-wrap">
                                 <span class="sc-sym">@sig.Symbol.Replace("USDT","")</span>
@@ -160,12 +160,13 @@
                             <span class="sc-side @(sigIsBuy ? "sc-side-b" : "sc-side-s")">
                                 @(sigIsBuy ? "▲ LONG" : "▼ SHORT")
                             </span>
+                            <span class="sc-ago">@FmtAgo(sig.Time)</span>
+                            @* Pin button — right-aligned, always visible *@
                             <button class="sc-pin-btn @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-pin-btn-on" : "")"
-                                    title="@(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "Unpin (allow auto-collapse)" : "Pin (keep expanded)")"
+                                    title="@(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "Unpin" : "Pin (keep expanded)")"
                                     @onclick="() => TogglePinSignal(sig)" @onclick:stopPropagation="true">
                                 📌
                             </button>
-                            <span class="sc-ago">@FmtAgo(sig.Time)</span>
                         </div>
                         <div class="sc-conf-wrap">
                             <div class="sc-conf-bar" style="width:@conf%"
@@ -205,32 +206,30 @@
                                 </div>
                             }
 
-                            <!-- Prices, all inline -->
-                            <div class="sc-prices-row">
-                                <div class="sc-p">
-                                    <span class="sc-pl">Entry</span>
-                                    <span class="sc-pv mono">@FmtP(sig.Entry)</span>
+                            <!-- Prices grid: Entry + SL on first row, TPs below -->
+                            <div class="sc-prices-grid">
+                                <div class="sc-price-cell">
+                                    <span class="sc-pl2">Entry</span>
+                                    <span class="sc-pv2 mono">@FmtP(sig.Entry)</span>
                                     @if (sig.EntryRangeLow.HasValue && sig.EntryRangeHigh.HasValue)
                                     {
-                                        <span class="sc-entry-range mono" title="Acceptable entry zone — scale in anywhere within this range">(@FmtP(sig.EntryRangeLow.Value)–@FmtP(sig.EntryRangeHigh.Value))</span>
+                                        <span class="sc-entry-range mono" title="Entry zone">@FmtP(sig.EntryRangeLow.Value)–@FmtP(sig.EntryRangeHigh.Value)</span>
                                     }
                                 </div>
-                                <div class="sc-p"><span class="sc-pl">SL</span><span class="sc-pv mono dn">@FmtP(sig.StopLoss)</span></div>
+                                <div class="sc-price-cell">
+                                    <span class="sc-pl2 dn">SL</span>
+                                    <span class="sc-pv2 mono dn">@FmtP(sig.StopLoss)</span>
+                                </div>
                             </div>
                             @if (sig.TakeProfits != null && sig.TakeProfits.Count > 0)
                             {
-                                <!-- ALL TP levels, not just the first — a
-                                     signal carrying 2-4 TPs (common for
-                                     this strategy) needs all of them
-                                     visible to judge the full trade plan,
-                                     not just where it first takes profit. -->
-                                <div class="sc-prices-row sc-tp-row-all">
+                                <div class="sc-tp-grid">
                                     @for (int tpI = 0; tpI < sig.TakeProfits.Count; tpI++)
                                     {
                                         var tpVal = sig.TakeProfits[tpI];
-                                        <div class="sc-p">
-                                            <span class="sc-pl">TP@(sig.TakeProfits.Count > 1 ? (tpI + 1).ToString() : "")</span>
-                                            <span class="sc-pv mono up">@FmtP(tpVal)</span>
+                                        <div class="sc-price-cell">
+                                            <span class="sc-pl2 up">TP@(sig.TakeProfits.Count > 1 ? (tpI + 1).ToString() : "")</span>
+                                            <span class="sc-pv2 mono up">@FmtP(tpVal)</span>
                                         </div>
                                     }
                                 </div>
@@ -2049,14 +2048,14 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sc-active{border-color:var(--acc)!important;background:rgba(59,130,246,.08)!important;}
 .sc-below-threshold{opacity:.7;}
 .sc-threshold-badge{font-size:9.5px;font-weight:700;color:#eab308;background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.3);border-radius:5px;padding:2px 7px;margin-bottom:6px;display:inline-block;cursor:help;}
-.sc-top{display:flex;align-items:center;gap:6px;margin-bottom:0;}
+.sc-top{display:flex;align-items:center;gap:6px;margin-bottom:0;flex-wrap:nowrap;overflow:hidden;}
 .sc-sym-wrap{display:flex;align-items:baseline;gap:3px;}
 .sc-sym{font-family:var(--mono);font-size:13px;font-weight:800;color:var(--txt);}
 .sc-usdt{font-size:8px;color:var(--dim2);}
 .sc-side{font-size:9px;font-weight:800;padding:1px 5px;border-radius:3px;white-space:nowrap;letter-spacing:.3px;}
 .sc-side-b{background:var(--grn-d);color:var(--grn);border:1px solid rgba(16,185,129,.2);}
 .sc-side-s{background:var(--red-d);color:var(--red);border:1px solid rgba(239,68,68,.2);}
-.sc-ago{margin-left:auto;color:#94a3b8;font-weight:500;font-size:10px;}
+.sc-ago{color:#94a3b8;font-weight:500;font-size:10px;white-space:nowrap;flex-shrink:0;}
 .sc-conf-wrap{height:2px;background:var(--bdr);border-radius:2px;overflow:hidden;margin-top:3px;}
 .sc-conf-bar{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--acc),var(--grn));}
 
@@ -2074,7 +2073,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
    display:none) so hover doesn't have to wait on a layout reflow. */
 .sig-card{flex-shrink:0;width:auto;max-width:280px;min-height:0;background:var(--bg3);border:1px solid var(--bdr2);border-radius:6px;padding:5px 10px;cursor:pointer;transition:border-color .15s,box-shadow .15s;position:relative;overflow:hidden;}
 .sig-card.sc-pinned{overflow:visible;border-color:var(--acc);box-shadow:0 0 0 1px rgba(59,130,246,.2);}
-.sc-pin-btn{background:none;border:none;font-size:11px;opacity:.35;cursor:pointer;padding:0 2px;line-height:1;flex-shrink:0;}
+.sc-pin-btn{background:none;border:none;font-size:11px;opacity:.6;cursor:pointer;padding:0 2px;line-height:1;margin-left:auto;flex-shrink:0;}
 .sc-pin-btn:hover{opacity:.8;}
 .sc-pin-btn.sc-pin-btn-on{opacity:1;}
 .sc-expand{display:none;}
@@ -2092,6 +2091,11 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sc-float-overlay.sc-show{display:block;}
 
 .sc-prices-row{display:flex;align-items:center;gap:14px;margin-bottom:6px;}
+.sc-prices-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;margin-bottom:6px;padding:6px 8px;background:rgba(255,255,255,.02);border-radius:5px;border:1px solid var(--bdr);}
+.sc-tp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:4px 8px;margin-bottom:6px;padding:4px 8px;background:rgba(16,185,129,.03);border-radius:5px;border:1px solid rgba(16,185,129,.1);}
+.sc-price-cell{display:flex;flex-direction:column;gap:1px;min-width:0;}
+.sc-pl2{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--dim);line-height:1;}
+.sc-pv2{font-size:13px;font-weight:700;letter-spacing:-.2px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .sc-tp-row-all{flex-wrap:wrap;gap:10px;}
 .sc-regime-row{font-size:11px;margin-bottom:4px;display:flex;gap:4px;}
 .sc-p{display:flex;align-items:center;gap:5px;}
@@ -4745,6 +4749,91 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             newPrice: price, originalPrice: originalPrice > 0 ? originalPrice : price);
     }
 
+    /// <summary>
+    /// Called when user right-clicks on chart (without a position selected)
+    /// and chooses BUY LIMIT or SELL LIMIT at a specific price.
+    /// Places a Futures limit order at that price.
+    /// qty = 0 means "use default size from risk manager".
+    /// </summary>
+    [JSInvokable]
+    public async Task OnLimitOrderRequested(string side, decimal price, decimal qty)
+    {
+        if (price <= 0) return;
+        _orderError = string.Empty;
+        StateHasChanged();
+
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null)
+            {
+                _orderError = "Binance client not available";
+                StateHasChanged();
+                return;
+            }
+
+            var sym = _activeSym;
+            if (string.IsNullOrEmpty(sym)) return;
+
+            // Determine side
+            var orderSide = side.ToUpperInvariant() == "BUY"
+                ? Binance.Net.Enums.OrderSide.Buy
+                : Binance.Net.Enums.OrderSide.Sell;
+
+            // If qty not specified, use a sensible default based on balance
+            if (qty <= 0)
+            {
+                var balance = _acctAvailableBalance > 0
+                    ? _acctAvailableBalance
+                    : _acctWalletBalance;
+                // 2% of available balance at this price
+                qty = balance > 0 ? Math.Round(balance * 0.02m / price, 2) : 0;
+            }
+
+            if (qty <= 0)
+            {
+                _orderError = "Could not calculate order quantity — enter manually";
+                StateHasChanged();
+                return;
+            }
+
+            // Round qty to exchange step size
+            if (_symStepSize > 0)
+                qty = Math.Floor(qty / _symStepSize) * _symStepSize;
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var result = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: sym,
+                side: orderSide,
+                type: Binance.Net.Enums.FuturesOrderType.Limit,
+                quantity: qty,
+                price: price,
+                timeInForce: Binance.Net.Enums.TimeInForce.GoodTillCanceled,
+                positionSide: Binance.Net.Enums.PositionSide.Both,
+                ct: cts.Token);
+
+            if (result.Success)
+            {
+                _orderError = string.Empty;
+                // Refresh orders so the new limit line appears on chart
+                await LoadOpenOrdersAsync();
+                _ = RefreshOrderLinesAsync();
+            }
+            else
+            {
+                _orderError = $"Limit order failed: {result.Error?.Message}";
+            }
+        }
+        catch (Exception ex)
+        {
+            _orderError = $"Limit order error: {ex.Message}";
+        }
+        finally
+        {
+            StateHasChanged();
+        }
+    }
+
     // Fired when dragging a SPECIFIC TP line (one of possibly several)
     // — tpIndex matches the same sorted-by-price order the TP lines
     // were drawn in (see ShowTpSlLinesAsync), so dragging "the 2nd TP
@@ -7266,6 +7355,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
