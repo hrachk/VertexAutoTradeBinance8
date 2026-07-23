@@ -4798,8 +4798,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             }
 
             // Round qty to exchange step size
-            if (_symStepSize > 0)
-                qty = Math.Floor(qty / _symStepSize) * _symStepSize;
+            // Ensure precision loaded for this symbol before rounding
+            if (_symStep <= 0) await LoadSymbolPrecisionAsync(sym);
+            if (_symStep > 0)
+                qty = Math.Floor(qty / _symStep) * _symStep;
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var result = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
