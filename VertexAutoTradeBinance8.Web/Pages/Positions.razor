@@ -325,15 +325,152 @@
                             <span class="pv-manage-label">@(ho?"Manual":"Managed")</span>
                         </div>
                     </div>
-                    @if (HasSparkline(p.Symbol))
-                    {
-                        <div class="pvd-spark">
-                            <svg viewBox="0 0 400 40" preserveAspectRatio="none" style="width:100%;height:40px;display:block;">
-                                <path d="@BuildSparkFill(p.Symbol)" fill="@SparkFill(p.Symbol)"/>
-                                <polyline points="@BuildSparkPoints(p.Symbol)" fill="none" stroke="@SparkColor(p.Symbol)" stroke-width="1.5"/>
-                            </svg>
-                        </div>
+                    @{
+                        // ── MINI CHART: sparkline + price level lines ──────────
+                        var sparkPts = BuildSparkPoints(p.Symbol);
+                        var hasSpark = HasSparkline(p.Symbol);
+                        var spColor  = SparkColor(p.Symbol);
+                        var spFill   = SparkFill(p.Symbol);
+                        // Build price-level SVG lines for Entry, Liq, Mark on same chart
+                        // Map a price to SVG Y coordinate (0-96) in the chart space
+                        Func<decimal, decimal, decimal, double> priceToY = (price, minP, rangeP) =>
+                            rangeP == 0 ? 48.0
+                            : (double)(96m - (price - minP) / rangeP * 96m);
+
+                        // Determine price range from sparkline history + key levels
+                        var sparkList = GetSparkline(p.Symbol);
+                        var allPrices = new System.Collections.Generic.List<decimal>(sparkList);
+                        if (p.Entry > 0)   allPrices.Add(p.Entry);
+                        if (p.LiqPrice > 0) allPrices.Add(p.LiqPrice);
+                        decimal liveNow = GetLivePrice(p.Symbol);
+                        decimal markNow = liveNow > 0 ? liveNow : p.Mark;
+                        if (markNow > 0)   allPrices.Add(markNow);
+                        decimal chartMin = allPrices.Count > 0 ? allPrices.Min() : 0m;
+                        decimal chartMax = allPrices.Count > 0 ? allPrices.Max() : 1m;
+                        // Add 5% padding to prevent levels from hitting edges
+                        decimal pad = (chartMax - chartMin) * 0.08m;
+                        if (pad == 0) pad = chartMax * 0.02m;
+                        chartMin -= pad; chartMax += pad;
+                        decimal chartRange = chartMax - chartMin;
+
+                        double entryY  = p.Entry > 0 ? priceToY(p.Entry, chartMin, chartRange) : -1;
+                        double liqY    = p.LiqPrice > 0 ? priceToY(p.LiqPrice, chartMin, chartRange) : -1;
+                        double markY   = markNow > 0 ? priceToY(markNow, chartMin, chartRange) : -1;
+
+                        // Rebuild sparkline Y-coords scaled to our chart range (not auto)
+                        string BuildScaledSpark(System.Collections.Generic.List<decimal> pts)
+                        {
+                            if (pts.Count < 2) return "";
+                            var sb2 = new System.Text.StringBuilder();
+                            double sw2 = 380.0 / Math.Max(pts.Count - 1, 1);
+                            for (int ii = 0; ii < pts.Count; ii++)
+                            {
+                                if (ii > 0) sb2.Append(' ');
+                                sb2.Append((ii * sw2).ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
+                                sb2.Append(',');
+                                sb2.Append(priceToY(pts[ii], chartMin, chartRange).ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
+                            }
+                            return sb2.ToString();
+                        }
+                        string BuildScaledFill(System.Collections.Generic.List<decimal> pts)
+                        {
+                            if (pts.Count < 2) return "";
+                            var sb3 = new System.Text.StringBuilder();
+                            double sw3 = 380.0 / Math.Max(pts.Count - 1, 1);
+                            sb3.Append("M0,96 ");
+                            for (int ii = 0; ii < pts.Count; ii++)
+                            {
+                                sb3.Append($"L{(ii*sw3).ToString("F1", System.Globalization.CultureInfo.InvariantCulture)},{priceToY(pts[ii],chartMin,chartRange).ToString("F1",System.Globalization.CultureInfo.InvariantCulture)} ");
+                            }
+                            sb3.Append($"L380,96 Z");
+                            return sb3.ToString();
+                        }
+                        var scaledPts  = sparkList.Count >= 2 ? BuildScaledSpark(sparkList) : "";
+                        var scaledFill = sparkList.Count >= 2 ? BuildScaledFill(sparkList) : "";
+
+                        // Pnl since open: LONG = mark > entry = profit, SHORT = mark < entry = profit
+                        decimal pnlPct = p.Entry > 0 ? (markNow - p.Entry) / p.Entry * 100m * (isL ? 1m : -1m) : 0m;
                     }
+                    <div class="pvd-minichart">
+                        <!-- Header row: symbol name + P&L percent -->
+                        <div class="pvd-mc-head">
+                            <span class="pvd-mc-sym">@p.Symbol.Replace("USDT","")/USDT · 5m</span>
+                            <span class="pvd-mc-move @(pnlPct>=0?"up":"dn")">@(pnlPct>=0?"+":"")@pnlPct.ToString("F2")% from entry</span>
+                            @if (liveNow > 0) { <span class="pvd-mc-live">● LIVE</span> }
+                        </div>
+                        <!-- Chart body: SVG -->
+                        <div class="pvd-mc-body">
+                            <svg viewBox="0 0 400 100" preserveAspectRatio="none" class="pvd-mc-svg">
+                                <!-- Background grid -->
+                                <line x1="0" y1="25" x2="400" y2="25" stroke="#0f1b30" stroke-width="1"/>
+                                <line x1="0" y1="50" x2="400" y2="50" stroke="#0f1b30" stroke-width="1"/>
+                                <line x1="0" y1="75" x2="400" y2="75" stroke="#0f1b30" stroke-width="1"/>
+
+                                @if (sparkList.Count >= 2 && scaledFill.Length > 0)
+                                {
+                                    <!-- Area fill -->
+                                    <path d="@scaledFill" fill="@spFill"/>
+                                    <!-- Line -->
+                                    <polyline points="@scaledPts" fill="none" stroke="@spColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+                                    <!-- Live dot at end -->
+                                    @if (scaledPts.Length > 0)
+                                    {
+                                        double lastX = 380.0;
+                                        <circle cx="@lastX.ToString("F0")" cy="@markY.ToString("F0")" r="3" fill="@spColor"/>
+                                    }
+                                }
+                                else
+                                {
+                                    <!-- No sparkline — show just a flat line at mark -->
+                                    @if (markY >= 0) {
+                                        <line x1="0" y1="@markY.ToString("F0")" x2="380" y2="@markY.ToString("F0")" stroke="#334e68" stroke-width="1" stroke-dasharray="4,4"/>
+                                    }
+                                }
+
+                                @* Entry price line *@
+                                @if (entryY >= 0 && entryY <= 100)
+                                {
+                                    <line x1="0" y1="@entryY.ToString("F0")" x2="395" y2="@entryY.ToString("F0")"
+                                          stroke="@(isL?"#10b981":"#ef4444")" stroke-width="1.5" stroke-dasharray="6,3" opacity=".8"/>
+                                }
+
+                                @* Liquidation price line *@
+                                @if (liqY >= 0 && liqY <= 100)
+                                {
+                                    <line x1="0" y1="@liqY.ToString("F0")" x2="395" y2="@liqY.ToString("F0")"
+                                          stroke="#ef4444" stroke-width="1" stroke-dasharray="3,3" opacity=".7"/>
+                                }
+
+                                @* Mark price line *@
+                                @if (markY >= 0 && markY <= 100)
+                                {
+                                    <line x1="0" y1="@markY.ToString("F0")" x2="395" y2="@markY.ToString("F0")"
+                                          stroke="#94a3b8" stroke-width="1" opacity=".4"/>
+                                }
+                            </svg>
+                            <!-- Price labels (right side of chart) -->
+                            <div class="pvd-mc-labels">
+                                @if (entryY >= 0 && entryY <= 98)
+                                {
+                                    <div class="pvd-mc-label @(isL?"pvd-ml-g":"pvd-ml-r")" style="top:calc(@((int)entryY)% - 8px)">
+                                        E @FP(p.Entry)
+                                    </div>
+                                }
+                                @if (liqY >= 0 && liqY <= 98 && Math.Abs(liqY - entryY) > 12)
+                                {
+                                    <div class="pvd-mc-label pvd-ml-r" style="top:calc(@((int)liqY)% - 8px)">
+                                        L @FP(p.LiqPrice)
+                                    </div>
+                                }
+                                @if (markY >= 0 && markY <= 98)
+                                {
+                                    <div class="pvd-mc-label pvd-ml-w" style="top:calc(@((int)markY)% - 8px)">
+                                        @FP(markNow)
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    </div>
                     <div class="pvd-metrics">
                         <div class="pvd-m"><div class="pvd-ml">Entry</div><div class="pvd-mv mono">@FP(p.Entry)</div></div>
                         <div class="pvd-m"><div class="pvd-ml">Mark @if(liveP>0){<span style="color:#10b981;font-size:8px;">●</span>}</div><div class="pvd-mv mono @(isL?(p.Mark>p.Entry?"up":""):(p.Mark<p.Entry?"up":""))">@(liveP>0?FP(liveP):FP(p.Mark))</div></div>
@@ -1126,6 +1263,18 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
 .pvd-roe{font-family:monospace;font-size:12px;margin-top:3px;opacity:.7;}
 .pvd-manage{display:flex;flex-direction:column;align-items:center;gap:3px;padding-left:12px;border-left:1px solid #152035;flex-shrink:0;}
 .pvd-spark{overflow:hidden;background:rgba(0,0,0,.2);}
+.pvd-minichart{background:#020508;border-bottom:1px solid #152035;}
+.pvd-mc-head{display:flex;align-items:center;gap:10px;padding:8px 14px 6px;background:#060c15;border-bottom:1px solid #0a1422;}
+.pvd-mc-sym{font-size:11px;font-weight:700;color:#334e68;font-family:monospace;}
+.pvd-mc-move{font-size:11px;font-weight:700;font-family:monospace;}
+.pvd-mc-live{font-size:9px;color:#10b981;margin-left:auto;}
+.pvd-mc-body{position:relative;height:100px;overflow:hidden;}
+.pvd-mc-svg{position:absolute;left:0;top:0;width:calc(100% - 72px);height:100%;display:block;}
+.pvd-mc-labels{position:absolute;right:0;top:0;width:70px;height:100%;display:flex;flex-direction:column;pointer-events:none;}
+.pvd-mc-label{position:absolute;right:0;font-size:8.5px;font-family:monospace;font-weight:700;padding:1px 4px;border-radius:2px;white-space:nowrap;line-height:1.3;}
+.pvd-ml-g{background:rgba(16,185,129,.15);color:#34d399;}
+.pvd-ml-r{background:rgba(239,68,68,.12);color:#f87171;}
+.pvd-ml-w{background:rgba(255,255,255,.06);color:#94a3b8;}
 .pvd-metrics{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:1px;background:#152035;}
 .pvd-m{padding:10px 14px;background:#060c15;}
 .pvd-ml{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#1a2e44;margin-bottom:3px;}
@@ -1860,6 +2009,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
         _timer?.Dispose();
     }
 }
+
 
 
 
