@@ -756,8 +756,12 @@
                 // - Without position: Limit Order menu (place buy/sell limit at clicked price)
                 // Always also offer Limit Order option even with a position
                 if (!liveSession.entryPrice) {
-                    // No position — show limit order menu only
-                    marketChart._showLimitOrderMenu(containerId, e.clientX, e.clientY, price, liveSession);
+                    // No position — show limit order menu.
+                    // Always re-fetch session fresh so we get the most recent
+                    // onLimitOrderRequested binding (bindSlTpCallbacks may have
+                    // run after the contextmenu listener was registered).
+                    const freshSession = sessions.get(containerId) || liveSession;
+                    marketChart._showLimitOrderMenu(containerId, e.clientX, e.clientY, price, freshSession);
                     return;
                 }
 
@@ -869,11 +873,22 @@
             const fireOrder = (side) => {
                 const st = self.__limitMenuState;
                 if (!st) return;
-                self._removeLimitOrderMenu();
+                // Read qty BEFORE removing menu (DOM is destroyed by _removeLimitOrderMenu)
                 const qtyInput = document.getElementById('__vx_limit_qty');
                 const qty = qtyInput ? parseFloat(qtyInput.value) || 0 : 0;
-                if (st.liveSession.onLimitOrderRequested)
-                    st.liveSession.onLimitOrderRequested(side, st.price, qty);
+                // Store values locally before clearing state
+                const callbackFn = st.liveSession && st.liveSession.onLimitOrderRequested;
+                const price      = st.price;
+                self._removeLimitOrderMenu();
+                if (callbackFn) {
+                    try {
+                        callbackFn(side, price, qty);
+                    } catch (e) {
+                        console.error('[VERTEX] Limit order callback failed:', e);
+                    }
+                } else {
+                    console.warn('[VERTEX] No onLimitOrderRequested on liveSession — bindSlTpCallbacks may not have run yet');
+                }
             };
 
             menu.querySelector('#__vx_limit_buy').addEventListener('click', () => fireOrder('BUY'));
@@ -2218,6 +2233,7 @@
     window._vertexChartSessions = sessions;
 
 })();
+
 
 
 
