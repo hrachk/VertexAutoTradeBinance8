@@ -3486,6 +3486,12 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     }
 
     bool _emergencyFetchInProgress;
+    // Per-symbol preload tracking — prevents re-fetching on every 5s tick
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte>
+        _preloadedSymbols = new();
+    // Per-symbol background fetch lock — lets multiple symbols fetch concurrently
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte>
+        _symbolFetchInProgress = new();
     // Inline order editing
     string? _editingOrderId;
     decimal _editPrice;
@@ -3504,9 +3510,14 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         ResolveSelected();
         CalcStats();
         // If this symbol has no klines (e.g. manually opened position
-        // on a coin not in the bot universe), trigger emergency fetch
+        // on a coin not in the bot universe), trigger fetch.
+        // Force re-fetch regardless of _preloadedSymbols — user explicitly
+        // selected this symbol so they expect the chart to populate NOW.
         if (Selected == null || Selected.Klines.Count < 5)
-            _ = EmergencyFetchKlinesAsync(sym);
+        {
+            _preloadedSymbols.TryRemove(sym, out _); // allow re-fetch
+            _ = PreloadPositionSymbolKlinesAsync(sym);
+        }
 
         if (autoSelectExistingPosition)
         {
@@ -3789,29 +3800,36 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     /// outside the bot universe). Fetches 1m/5m/15m/1h directly from
     /// Binance REST, injects into Series, and re-renders the chart.
     /// </summary>
-    // Preloads klines from datadb for a position symbol that has no/few
-    // klines in Series. Called automatically after LoadAllOpenPositionsAsync
-    // finds a position whose symbol has < 10 bars — avoids blank charts
-    // for manually opened positions on symbols not in the Engine universe.
+    // Preloads klines for a position symbol that lacks chart data.
+    // Called from LoadAllOpenPositionsAsync for any position symbol
+    // with < 10 bars in Series. Per-symbol lock prevents duplicate
+    // concurrent fetches. Marks symbol as done so it doesn't re-fire
+    // on every 5-second tick. Falls back to live Binance fetch when
+    // datadb has no data for this symbol yet.
     async Task PreloadPositionSymbolKlinesAsync(string symbol)
     {
+        // Per-symbol lock — allows multiple symbols to fetch concurrently
+        // without conflicting with each other or with user-facing EmergencyFetch
+        if (!_symbolFetchInProgress.TryAdd(symbol, 0)) return; // already fetching
         try
         {
-            // Map our Timeframe names to datadb file labels
             var tfMap = new[]
             {
-                ("1m",  "OneMinute"),
-                ("5m",  "FiveMinutes"),
-                ("15m", "FifteenMinutes"),
-                ("1h",  "OneHour"),
+                ("1m",  "OneMinute",      KlineInterval.OneMinute,      300),
+                ("5m",  "FiveMinutes",    KlineInterval.FiveMinutes,    300),
+                ("15m", "FifteenMinutes", KlineInterval.FifteenMinutes, 200),
+                ("1h",  "OneHour",        KlineInterval.OneHour,        200),
             };
+
             bool anyLoaded = false;
-            foreach (var (label, tfName) in tfMap)
+
+            // ── Step 1: try datadb (fast local file read) ──────────────
+            foreach (var (label, tfName, _, _) in tfMap)
             {
                 try
                 {
                     var klines = await HistoricalReader.LoadAsync(symbol, label);
-                    if (klines == null || klines.Count == 0) continue;
+                    if (klines == null || klines.Count < 5) continue;
                     var existing = Series.FindIndex(s =>
                         s.Symbol == symbol && s.Timeframe == tfName);
                     if (existing >= 0)
@@ -3820,27 +3838,74 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                         Series.Add(new MarketSeries(symbol, tfName, klines));
                     anyLoaded = true;
                 }
-                catch { /* individual TF failure — skip, try next */ }
+                catch { }
             }
-            if (anyLoaded && symbol == _activeSym)
+
+            // ── Step 2: if datadb empty, fetch from Binance directly ───
+            // Does NOT use EmergencyFetchKlinesAsync to avoid the global
+            // _emergencyFetchInProgress flag blocking other symbols.
+            if (!anyLoaded)
             {
-                // Re-render chart if this is the currently viewed symbol
-                ResolveSelected();
-                await InvokeAsync(async () =>
+                var client = Factory.TryCreateRestClient();
+                if (client != null)
                 {
-                    StateHasChanged();
-                    try { await RenderCharts(); } catch { }
-                });
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+                    foreach (var (label, tfName, tfInterval, limit) in tfMap)
+                    {
+                        try
+                        {
+                            var res = await client.UsdFuturesApi.ExchangeData
+                                .GetKlinesAsync(symbol, tfInterval, limit: limit, ct: cts.Token);
+                            if (!res.Success || res.Data == null) continue;
+
+                            var klines = res.Data.Select(k => new KlineDto(
+                                OpenTime: new DateTimeOffset(k.OpenTime, TimeSpan.Zero).ToUnixTimeMilliseconds(),
+                                Open:  k.OpenPrice, High: k.HighPrice,
+                                Low:   k.LowPrice,  Close: k.ClosePrice,
+                                Volume: k.Volume
+                            )).ToList();
+
+                            if (klines.Count < 5) continue;
+
+                            // Inject into Series
+                            var existing = Series.FindIndex(s =>
+                                s.Symbol == symbol && s.Timeframe == tfName);
+                            if (existing >= 0)
+                                Series[existing] = Series[existing] with { Klines = klines };
+                            else
+                                Series.Add(new MarketSeries(symbol, tfName, klines));
+                            anyLoaded = true;
+
+                            // Persist to datadb for future restarts (fire-and-forget)
+                            _ = Task.Run(() => PersistEmergencyKlinesToDataDbAsync(symbol, label, klines));
+                        }
+                        catch { }
+                    }
+                }
             }
-            else if (!anyLoaded)
+
+            // ── Step 3: render if this is the active symbol ────────────
+            if (anyLoaded)
             {
-                // Nothing in datadb — fall back to live Binance fetch
-                _ = EmergencyFetchKlinesAsync(symbol);
+                _preloadedSymbols.TryAdd(symbol, 0); // mark done — skip next tick
+                if (symbol == _activeSym)
+                {
+                    ResolveSelected();
+                    await InvokeAsync(async () =>
+                    {
+                        StateHasChanged();
+                        try { await RenderCharts(); } catch { }
+                    });
+                }
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[PRELOAD] {symbol} failed: {ex.Message}");
+        }
+        finally
+        {
+            _symbolFetchInProgress.TryRemove(symbol, out _);
         }
     }
 
@@ -5892,13 +5957,15 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             var positionSymbols = _allPositions.Select(p => p.Symbol).Distinct().ToList();
             foreach (var posSym in positionSymbols)
             {
+                // Skip if already successfully preloaded this session
+                if (_preloadedSymbols.ContainsKey(posSym)) continue;
+                // Skip if a fetch is already running for this symbol
+                if (_symbolFetchInProgress.ContainsKey(posSym)) continue;
+                // Fire preload if Series has < 5 bars for this symbol
                 bool hasEnoughKlines = Series.Any(s =>
-                    s.Symbol == posSym && s.Klines.Count >= 10);
+                    s.Symbol == posSym && s.Klines.Count >= 5);
                 if (!hasEnoughKlines)
-                {
-                    // Fire and forget — don't block position panel render
                     _ = PreloadPositionSymbolKlinesAsync(posSym);
-                }
             }
 
             // CRITICAL FIX: ActivePositionInfo is a plain class with
@@ -7430,6 +7497,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
