@@ -272,7 +272,6 @@ namespace VertexAutoTradeBinance8.Services
                         await _algoRaw.CancelAlgoOrderAsync(_a3.AlgoId, ct);
                         _logger.LogInformation("[FINAL CLEANUP][{sym}] bot algo {id} ({cid})", symbol, _a3.AlgoId, _a3.ClientAlgoId);
                     }
-                }
 
                 // 2️⃣ Сбрасываем BE состояние
                 _beStage.TryRemove(key, out _);
@@ -3889,6 +3888,7 @@ namespace VertexAutoTradeBinance8.Services
     }
 
 }
+
 
 
 
