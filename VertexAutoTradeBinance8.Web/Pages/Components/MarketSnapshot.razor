@@ -3789,6 +3789,61 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     /// outside the bot universe). Fetches 1m/5m/15m/1h directly from
     /// Binance REST, injects into Series, and re-renders the chart.
     /// </summary>
+    // Preloads klines from datadb for a position symbol that has no/few
+    // klines in Series. Called automatically after LoadAllOpenPositionsAsync
+    // finds a position whose symbol has < 10 bars — avoids blank charts
+    // for manually opened positions on symbols not in the Engine universe.
+    async Task PreloadPositionSymbolKlinesAsync(string symbol)
+    {
+        try
+        {
+            // Map our Timeframe names to datadb file labels
+            var tfMap = new[]
+            {
+                ("1m",  "OneMinute"),
+                ("5m",  "FiveMinutes"),
+                ("15m", "FifteenMinutes"),
+                ("1h",  "OneHour"),
+            };
+            bool anyLoaded = false;
+            foreach (var (label, tfName) in tfMap)
+            {
+                try
+                {
+                    var klines = await HistoricalReader.LoadAsync(symbol, label);
+                    if (klines == null || klines.Count == 0) continue;
+                    var existing = Series.FindIndex(s =>
+                        s.Symbol == symbol && s.Timeframe == tfName);
+                    if (existing >= 0)
+                        Series[existing] = Series[existing] with { Klines = klines };
+                    else
+                        Series.Add(new MarketSeries(symbol, tfName, klines));
+                    anyLoaded = true;
+                }
+                catch { /* individual TF failure — skip, try next */ }
+            }
+            if (anyLoaded && symbol == _activeSym)
+            {
+                // Re-render chart if this is the currently viewed symbol
+                ResolveSelected();
+                await InvokeAsync(async () =>
+                {
+                    StateHasChanged();
+                    try { await RenderCharts(); } catch { }
+                });
+            }
+            else if (!anyLoaded)
+            {
+                // Nothing in datadb — fall back to live Binance fetch
+                _ = EmergencyFetchKlinesAsync(symbol);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[PRELOAD] {symbol} failed: {ex.Message}");
+        }
+    }
+
     async Task EmergencyFetchKlinesAsync(string symbol)
     {
         if (_emergencyFetchInProgress) return;
@@ -5828,6 +5883,24 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 .OrderByDescending(p => Math.Abs(p.Pnl))
                 .ToList();
 
+            // ── TASK 2 FIX: Preload klines for position symbols ───────────
+            // klines_bootstrap.json only contains symbols in the Engine's
+            // universe. Manually opened positions on symbols outside the
+            // universe have no klines in Series → chart shows blank/truncated.
+            // Fix: after loading positions, fire-and-forget preload from
+            // datadb for any position symbol with < 10 klines in Series.
+            var positionSymbols = _allPositions.Select(p => p.Symbol).Distinct().ToList();
+            foreach (var posSym in positionSymbols)
+            {
+                bool hasEnoughKlines = Series.Any(s =>
+                    s.Symbol == posSym && s.Klines.Count >= 10);
+                if (!hasEnoughKlines)
+                {
+                    // Fire and forget — don't block position panel render
+                    _ = PreloadPositionSymbolKlinesAsync(posSym);
+                }
+            }
+
             // CRITICAL FIX: ActivePositionInfo is a plain class with
             // reference equality, and the LINQ above creates entirely
             // NEW instances every single refresh — even for the exact
@@ -7357,6 +7430,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
