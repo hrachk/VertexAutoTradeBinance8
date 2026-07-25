@@ -110,6 +110,30 @@ else if (_activeTab == "trading")
             <div class="st-kpi-label">Avg Duration</div>
             <div class="st-kpi-value">@_stats.AvgDuration</div>
         </div>
+        <div class="st-kpi">
+            <div class="st-kpi-label">Expectancy</div>
+            @{
+                var exp = _stats.TotalTrades > 0
+                    ? (_stats.WinRate/100m * _stats.AvgWin) + ((1m-_stats.WinRate/100m) * _stats.AvgLoss)
+                    : 0m;
+            }
+            <div class="st-kpi-value @(exp >= 0 ? "st-up" : "st-dn")">@(exp >= 0?"+":"")@exp.ToString("F2")</div>
+        </div>
+        <div class="st-kpi">
+            <div class="st-kpi-label">Avg R:R</div>
+            @{
+                var rr = _stats.AvgLoss != 0 ? _stats.AvgWin / Math.Abs(_stats.AvgLoss) : 0m;
+            }
+            <div class="st-kpi-value @(rr >= 1 ? "st-up" : "st-dn")">@rr.ToString("F2")</div>
+        </div>
+        <div class="st-kpi">
+            <div class="st-kpi-label">Consec. Wins</div>
+            <div class="st-kpi-value st-up">@_stats.MaxConsecWins</div>
+        </div>
+        <div class="st-kpi">
+            <div class="st-kpi-label">Consec. Loss</div>
+            <div class="st-kpi-value st-dn">@_stats.MaxConsecLosses</div>
+        </div>
     </div>
 
     <!-- ══ BODY GRID ════════════════════════════════════════════════ -->
@@ -195,7 +219,7 @@ else if (_activeTab == "trading")
                                 @for (int d = 1; d <= daysInMonth; d++)
                                 {
                                     var day = new DateTime(month.Year, month.Month, d);
-                                    if (day > _dateTo) { <div class="st-cal-empty"></div> continue; }
+                                    @if (day > _dateTo || day < _dateFrom) { <div class="st-cal-empty"></div> continue; }
                                     var pnl = _dailyPnl.TryGetValue(day, out var v) ? v : 0m;
                                     var isToday = day.Date == DateTime.Today;
                                     var intensity = pnl != 0
@@ -267,7 +291,7 @@ else if (_activeTab == "trading")
                     <span class="st-card-title">By Symbol</span>
                 </div>
                 <div class="st-sym-list">
-                    @foreach (var row in _bySymbol.Take(10))
+                    @foreach (var row in _bySymbol)
                     {
                         var barW = _bySymbol.Count > 0 && _bySymbol[0].AbsPnl > 0
                             ? (int)(100 * row.AbsPnl / _bySymbol[0].AbsPnl) : 0;
@@ -311,12 +335,40 @@ else if (_activeTab == "trading")
 
             <!-- Trade Log -->
             <div class="st-card st-card-log" style="resize:vertical;overflow:hidden;min-height:260px;">
-                <div class="st-card-hd">
+                <div class="st-card-hd" style="flex-wrap:wrap;gap:10px;">
                     <span class="st-card-icon">📋</span>
                     <span class="st-card-title">
                         Trade Log
-                        <span class="st-badge">@_trades.Count</span>
+                        <span class="st-badge">@SortedTrades.Count()</span>
+                        @if (_trades.Count != SortedTrades.Count()) {
+                            <span class="st-badge" style="background:rgba(245,158,11,.15);color:#fbbf24;border-color:rgba(245,158,11,.3);">
+                                of @_trades.Count
+                            </span>
+                        }
                     </span>
+                    <div class="st-tlog-filters" style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                        @* Symbol search *@
+                        <input class="st-filter-input" type="text" placeholder="Symbol…"
+                               @bind="_filterSymbol" @bind:event="oninput" @bind:after="StateHasChanged"
+                               style="width:90px;" />
+                        @* Side filter *@
+                        <div class="st-filter-chips">
+                            <button class="st-fchip @(_filterSide==""?"st-fchip-on":"")"   @onclick='()=>{_filterSide="";}'>All</button>
+                            <button class="st-fchip st-fchip-l @(_filterSide=="LONG"?"st-fchip-on":"")"  @onclick='()=>{_filterSide="LONG";}'>▲ Long</button>
+                            <button class="st-fchip st-fchip-s @(_filterSide=="SHORT"?"st-fchip-on":"")" @onclick='()=>{_filterSide="SHORT";}'>▼ Short</button>
+                        </div>
+                        @* Result filter *@
+                        <div class="st-filter-chips">
+                            <button class="st-fchip @(_filterResult==""?"st-fchip-on":"")"    @onclick='()=>{_filterResult="";}'>All</button>
+                            <button class="st-fchip st-fchip-w @(_filterResult=="WIN"?"st-fchip-on":"")"  @onclick='()=>{_filterResult="WIN";}'>W</button>
+                            <button class="st-fchip st-fchip-l2 @(_filterResult=="LOSS"?"st-fchip-on":"")" @onclick='()=>{_filterResult="LOSS";}'>L</button>
+                        </div>
+                        @* Reset *@
+                        @if (!string.IsNullOrEmpty(_filterSide) || !string.IsNullOrEmpty(_filterResult) || !string.IsNullOrEmpty(_filterSymbol))
+                        {
+                            <button class="st-fchip" @onclick='()=>{_filterSide="";_filterResult="";_filterSymbol="";}' title="Clear filters">✕</button>
+                        }
+                    </div>
                 </div>
                 <div class="st-tbl-wrap">
                     <table class="st-tbl">
@@ -697,6 +749,47 @@ else if (_activeTab == "dca")
     color: var(--st-t2);
     font-size: 15px;
 }
+/* ── TRADE LOG FILTERS ────────────────────────────────────────────── */
+.st-filter-input {
+    height: 26px;
+    padding: 0 8px;
+    background: var(--st-bg3);
+    border: 1px solid var(--st-bdr);
+    border-radius: 5px;
+    color: var(--st-txt);
+    font-size: 11px;
+    outline: none;
+}
+.st-filter-input:focus { border-color: var(--st-bdr2); }
+.st-filter-chips { display: flex; gap: 2px; }
+.st-fchip {
+    padding: 3px 9px;
+    height: 26px;
+    border-radius: 5px;
+    border: 1px solid var(--st-bdr);
+    background: transparent;
+    color: var(--st-dim);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .12s;
+    white-space: nowrap;
+}
+.st-fchip:hover { color: var(--st-txt); border-color: var(--st-bdr2); }
+.st-fchip-on {
+    background: rgba(59,130,246,.12) !important;
+    border-color: rgba(59,130,246,.45) !important;
+    color: #60a5fa !important;
+}
+.st-fchip-l.st-fchip-on  { background: rgba(16,185,129,.1) !important; border-color: rgba(16,185,129,.4) !important; color: #34d399 !important; }
+.st-fchip-s.st-fchip-on  { background: rgba(239,68,68,.1) !important;  border-color: rgba(239,68,68,.4) !important;  color: #f87171 !important; }
+.st-fchip-w.st-fchip-on  { background: rgba(16,185,129,.1) !important; border-color: rgba(16,185,129,.4) !important; color: #34d399 !important; }
+.st-fchip-l2.st-fchip-on { background: rgba(239,68,68,.1) !important;  border-color: rgba(239,68,68,.4) !important;  color: #f87171 !important; }
+
+/* ── ADDITIONAL KPI ────────────────────────────────────────────────── */
+.st-kpi-row { flex-wrap: wrap; }
+.st-kpi { min-width: 80px; }
+
 .st-spinner {
     width: 22px; height: 22px;
     border: 2px solid var(--st-bdr);
@@ -1064,6 +1157,10 @@ else if (_activeTab == "dca")
     List<TradeRow> _trades = new();
     string _tradeSort = "time";
     bool _tradeSortAsc = false;
+    // Filters
+    string _filterSide   = "";   // "" = all, "LONG", "SHORT"
+    string _filterResult = "";   // "" = all, "WIN", "LOSS"
+    string _filterSymbol = "";   // "" = all, any symbol substring
 
     // DCA
     DcaConfigSnapshot _dcaConfig = new();
@@ -1175,26 +1272,83 @@ else if (_activeTab == "dca")
         {
             var from = new DateTime(_dateFrom.Year, _dateFrom.Month, _dateFrom.Day, 0, 0, 0, DateTimeKind.Utc);
             var to   = new DateTime(_dateTo.Year,   _dateTo.Month,   _dateTo.Day,   23, 59, 59, DateTimeKind.Utc);
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             var client = Factory.TryCreateRestClient();
             if (client == null) return rows;
-            var res = await client.UsdFuturesApi.Account.GetIncomeHistoryAsync(
+
+            // Step 1: get realized PnL events — these give us PnL per close
+            var incRes = await client.UsdFuturesApi.Account.GetIncomeHistoryAsync(
                 incomeType: "REALIZED_PNL", startTime: from, endTime: to, limit: 1000, ct: cts.Token);
-            if (res.Success && res.Data != null)
+            if (!incRes.Success || incRes.Data == null) return rows;
+
+            // Group by symbol to build per-symbol trade rows from income events.
+            // Consecutive income records on the same symbol within 2 minutes = one trade close.
+            var grouped = incRes.Data
+                .Where(inc => inc.Income != 0)
+                .GroupBy(inc => inc.Symbol ?? "—");
+
+            foreach (var g in grouped)
             {
-                foreach (var inc in res.Data)
+                // Also fetch user trades for this symbol to get entry/exit price and side
+                var tradeRes = await client.UsdFuturesApi.Trading.GetUserTradesAsync(
+                    g.Key, startTime: from, endTime: to, ct: cts.Token);
+                var userTrades = tradeRes.Success && tradeRes.Data != null
+                    ? tradeRes.Data.OrderBy(t => t.Timestamp).ToList()
+                    : new();
+
+                foreach (var inc in g)
+                {
+                    // Find the closest user trade to get actual entry/exit/side
+                    var closest = userTrades
+                        .Where(t => Math.Abs((t.Timestamp - inc.Timestamp).TotalSeconds) < 120)
+                        .OrderBy(t => Math.Abs((t.Timestamp - inc.Timestamp).TotalSeconds))
+                        .FirstOrDefault();
+
+                    // Find open trade for this symbol (buy side = LONG, sell side = SHORT)
+                    // closing trade = opposite of the close order side
+                    // Buy to close SHORT, Sell to close LONG
+                    string side = "LONG";
+                    decimal exitPrice = 0, entryPrice = 0;
+                    if (closest != null)
+                    {
+                        // If closing order is BUY → was SHORT. If SELL → was LONG.
+                        side = closest.Side == Binance.Net.Enums.OrderSide.Buy ? "SHORT" : "LONG";
+                        exitPrice  = closest.Price;
+                        // Try to find an earlier trade (the open) in the opposite direction
+                        var open = userTrades
+                            .Where(t => t.Timestamp < closest.Timestamp &&
+                                        t.Side != closest.Side)
+                            .OrderByDescending(t => t.Timestamp)
+                            .FirstOrDefault();
+                        if (open != null) entryPrice = open.Price;
+                    }
+
                     rows.Add(new TradeRow
                     {
-                        Symbol = inc.Symbol ?? "—",
-                        Side = inc.Income >= 0 ? "LONG" : "SHORT",
-                        Pnl = inc.Income,
-                        CloseReason = "Close",
-                        ClosedAt = inc.Timestamp,
-                        OpenedAt = inc.Timestamp
+                        Symbol     = g.Key,
+                        Side       = side,
+                        Pnl        = inc.Income,
+                        EntryPrice = entryPrice,
+                        ExitPrice  = exitPrice > 0 ? exitPrice : (closest?.Price ?? 0),
+                        Qty        = closest?.Quantity ?? 0,
+                        CloseReason = inc.Income >= 0 ? "TP" : "SL",
+                        ClosedAt   = inc.Timestamp,
+                        OpenedAt   = closest != null
+                            ? userTrades.Where(t => t.Side != closest.Side && t.Timestamp <= closest.Timestamp)
+                                        .OrderByDescending(t => t.Timestamp)
+                                        .Select(t => t.Timestamp)
+                                        .FirstOrDefault()
+                            : inc.Timestamp,
                     });
+                }
             }
         }
         catch { }
+        // Deduplicate by (Symbol, ClosedAt) — income API can return duplicates
+        rows = rows.GroupBy(r => (r.Symbol, r.ClosedAt))
+                   .Select(g => g.OrderByDescending(r => Math.Abs(r.Pnl)).First())
+                   .OrderByDescending(r => r.ClosedAt)
+                   .ToList();
         return rows;
     }
 
@@ -1211,7 +1365,11 @@ else if (_activeTab == "dca")
         decimal grossWin  = wins.Sum(t => t.Pnl);
         decimal grossLoss = Math.Abs(losses.Sum(t => t.Pnl));
 
-        _dailyPnl = _trades.GroupBy(t => t.ClosedAt.Date).OrderBy(g => g.Key)
+        // ClosedAt is UTC — convert to local time for calendar day grouping
+        // so calendar matches the user's actual trading day, not UTC midnight cutoff
+        _dailyPnl = _trades
+            .GroupBy(t => t.ClosedAt.ToLocalTime().Date)
+            .OrderBy(g => g.Key)
             .ToDictionary(g => g.Key, g => g.Sum(t => t.Pnl));
         decimal run = 0;
         _cumulativePnl = _dailyPnl.OrderBy(kv => kv.Key)
@@ -1253,6 +1411,16 @@ else if (_activeTab == "dca")
             ShortWins    = shorts.Count(t => t.Pnl > 0),
             ShortLosses  = shorts.Count(t => t.Pnl < 0),
         };
+        // Consecutive wins/losses
+        var ordered = _trades.OrderBy(t => t.ClosedAt).ToList();
+        int cw = 0, cl = 0, mcw = 0, mcl = 0;
+        foreach (var t in ordered)
+        {
+            if (t.Pnl > 0) { cw++; cl = 0; if (cw > mcw) mcw = cw; }
+            else             { cl++; cw = 0; if (cl > mcl) mcl = cl; }
+        }
+        _stats.MaxConsecWins   = mcw;
+        _stats.MaxConsecLosses = mcl;
     }
 
     void LoadDcaData()
@@ -1361,11 +1529,19 @@ else if (_activeTab == "dca")
         else { _tradeSort = f; _tradeSortAsc = false; }
     }
 
+    IEnumerable<TradeRow> FilteredTrades => _trades
+        .Where(t => string.IsNullOrEmpty(_filterSide)   || t.Side == _filterSide)
+        .Where(t => string.IsNullOrEmpty(_filterResult) ||
+                    (_filterResult == "WIN"  && t.Pnl > 0) ||
+                    (_filterResult == "LOSS" && t.Pnl < 0))
+        .Where(t => string.IsNullOrEmpty(_filterSymbol) ||
+                    t.Symbol.Contains(_filterSymbol.ToUpperInvariant()));
+
     IEnumerable<TradeRow> SortedTrades => _tradeSort switch
     {
-        "sym" => _tradeSortAsc ? _trades.OrderBy(t => t.Symbol) : (IEnumerable<TradeRow>)_trades.OrderByDescending(t => t.Symbol),
-        "pnl" => _tradeSortAsc ? _trades.OrderBy(t => t.Pnl)   : (IEnumerable<TradeRow>)_trades.OrderByDescending(t => t.Pnl),
-        _     => _tradeSortAsc ? _trades.OrderBy(t => t.ClosedAt) : (IEnumerable<TradeRow>)_trades.OrderByDescending(t => t.ClosedAt),
+        "sym" => _tradeSortAsc ? FilteredTrades.OrderBy(t => t.Symbol) : FilteredTrades.OrderByDescending(t => t.Symbol),
+        "pnl" => _tradeSortAsc ? FilteredTrades.OrderBy(t => t.Pnl)   : FilteredTrades.OrderByDescending(t => t.Pnl),
+        _     => _tradeSortAsc ? FilteredTrades.OrderBy(t => t.ClosedAt) : FilteredTrades.OrderByDescending(t => t.ClosedAt),
     };
 
     string SortArrow(string f) => _tradeSort == f ? (_tradeSortAsc ? "↑" : "↓") : "";
@@ -1414,6 +1590,7 @@ else if (_activeTab == "dca")
         public decimal NetPnl, AvgWin, AvgLoss, BestTrade, WorstTrade, ProfitFactor, MaxDrawdown, WinRate;
         public decimal LongPnl, ShortPnl;
         public int TotalTrades, LongTrades, LongWins, LongLosses, ShortTrades, ShortWins, ShortLosses;
+        public int MaxConsecWins, MaxConsecLosses;
         public string AvgDuration = "—";
     }
 
@@ -1471,4 +1648,5 @@ else if (_activeTab == "dca")
 
     public void Dispose() { }
 }
+
 
