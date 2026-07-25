@@ -349,13 +349,13 @@ else if (_activeTab == "trading")
                     <div class="st-tlog-filters" style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
                         @* Symbol search *@
                         <input class="st-filter-input" type="text" placeholder="Symbol…"
-                               @bind="_filterSymbol" @bind:event="oninput" @bind:after="StateHasChanged"
+                               @bind="_filterSymbol" @bind:event="oninput" @bind:after="ApplyFilter"
                                style="width:90px;" />
                         @* Side filter *@
                         <div class="st-filter-chips">
-                            <button class="st-fchip @(_filterSide==""?"st-fchip-on":"")"   @onclick='()=>{_filterSide="";}'>All</button>
-                            <button class="st-fchip st-fchip-l @(_filterSide=="LONG"?"st-fchip-on":"")"  @onclick='()=>{_filterSide="LONG";}'>▲ Long</button>
-                            <button class="st-fchip st-fchip-s @(_filterSide=="SHORT"?"st-fchip-on":"")" @onclick='()=>{_filterSide="SHORT";}'>▼ Short</button>
+                            <button class="st-fchip @(_filterSide==""?"st-fchip-on":"")"   @onclick='()=>{_filterSide="";ApplyFilter();}'>All</button>
+                            <button class="st-fchip st-fchip-l @(_filterSide=="LONG"?"st-fchip-on":"")"  @onclick='()=>{_filterSide="LONG";ApplyFilter();}'>▲ Long</button>
+                            <button class="st-fchip st-fchip-s @(_filterSide=="SHORT"?"st-fchip-on":"")" @onclick='()=>{_filterSide="SHORT";ApplyFilter();}'>▼ Short</button>
                         </div>
                         @* Result filter *@
                         <div class="st-filter-chips">
@@ -366,7 +366,7 @@ else if (_activeTab == "trading")
                         @* Reset *@
                         @if (!string.IsNullOrEmpty(_filterSide) || !string.IsNullOrEmpty(_filterResult) || !string.IsNullOrEmpty(_filterSymbol))
                         {
-                            <button class="st-fchip" @onclick='()=>{_filterSide="";_filterResult="";_filterSymbol="";}' title="Clear filters">✕</button>
+                            <button class="st-fchip" @onclick='()=>{_filterSide="";_filterResult="";_filterSymbol="";ApplyFilter();}' title="Clear filters">✕</button>
                         }
                     </div>
                 </div>
@@ -1162,6 +1162,16 @@ else if (_activeTab == "dca")
     string _filterResult = "";   // "" = all, "WIN", "LOSS"
     string _filterSymbol = "";   // "" = all, any symbol substring
 
+    // Called whenever a filter changes — recomputes stats with active filter applied
+    // so Calendar and By Symbol are consistent with the Trade Log.
+    void ApplyFilter()
+    {
+        var hasFilter = !string.IsNullOrEmpty(_filterSide) ||
+                        !string.IsNullOrEmpty(_filterResult) ||
+                        !string.IsNullOrEmpty(_filterSymbol);
+        ComputeTrading(hasFilter ? FilteredTrades.ToList() : null);
+    }
+
     // DCA
     DcaConfigSnapshot _dcaConfig = new();
     List<DcaPurchaseRow> _dcaPurchases = new();
@@ -1240,7 +1250,11 @@ else if (_activeTab == "dca")
             if (_activeTab == "trading")
             {
                 _trades = _demoMode ? await LoadDemoTrades() : await LoadLiveTrades();
-                ComputeTrading();
+                // Pass FilteredTrades so Calendar and By Symbol respect active filters
+        var hasFilter = !string.IsNullOrEmpty(_filterSide) ||
+                        !string.IsNullOrEmpty(_filterResult) ||
+                        !string.IsNullOrEmpty(_filterSymbol);
+        ComputeTrading(hasFilter ? FilteredTrades.ToList() : null);
             }
             else
             {
@@ -1298,7 +1312,7 @@ else if (_activeTab == "dca")
                 decimal pnl = e.Income;
                 while (i + 1 < events.Count &&
                        events[i + 1].Symbol == e.Symbol &&
-                       (events[i + 1].Timestamp - e.Timestamp).TotalSeconds < 5)
+                       (events[i + 1].Timestamp - e.Timestamp).TotalSeconds < 30)
                 {
                     i++;
                     pnl += events[i].Income;
@@ -1328,16 +1342,20 @@ else if (_activeTab == "dca")
     }
 
 
-    void ComputeTrading()
+    void ComputeTrading(List<TradeRow>? source = null)
     {
-        if (_trades.Count == 0)
+        // When filters are active the caller passes FilteredTrades so that
+        // Calendar, By Symbol and all KPIs reflect the filtered subset —
+        // not the full trade list. If no filter active, source == _trades.
+        var trades = source ?? _trades;
+        if (trades.Count == 0)
         {
             _stats = new(); _dailyPnl = new(); _cumulativePnl = new();
             _bySymbol = new(); _byReason = new(); _maxDayAbsPnl = 1m;
             return;
         }
-        var wins   = _trades.Where(t => t.Pnl > 0).ToList();
-        var losses = _trades.Where(t => t.Pnl < 0).ToList();
+        var wins   = trades.Where(t => t.Pnl > 0).ToList();
+        var losses = trades.Where(t => t.Pnl < 0).ToList();
         decimal grossWin  = wins.Sum(t => t.Pnl);
         decimal grossLoss = Math.Abs(losses.Sum(t => t.Pnl));
 
@@ -1355,7 +1373,7 @@ else if (_activeTab == "dca")
         decimal peak = 0, dd = 0; run = 0;
         foreach (var v in _cumulativePnl) { if (v > peak) peak = v; var cur = peak - v; if (cur > dd) dd = cur; }
 
-        _bySymbol = _trades.GroupBy(t => t.Symbol)
+        _bySymbol = trades.GroupBy(t => t.Symbol)
             .Select(g => new SymRow { Symbol = g.Key, Pnl = g.Sum(t => t.Pnl), Count = g.Count() })
             .OrderByDescending(r => Math.Abs(r.Pnl)).ToList();
         _byReason = _trades
@@ -1363,14 +1381,14 @@ else if (_activeTab == "dca")
             .OrderByDescending(g => g.Count())
             .ToDictionary(g => g.Key, g => g.Count());
 
-        var longs  = _trades.Where(t => t.Side == "LONG").ToList();
-        var shorts = _trades.Where(t => t.Side == "SHORT").ToList();
+        var longs  = trades.Where(t => t.Side == "LONG").ToList();
+        var shorts = trades.Where(t => t.Side == "SHORT").ToList();
 
         _stats = new PerfStats
         {
-            NetPnl       = _trades.Sum(t => t.Pnl),
-            TotalTrades  = _trades.Count,
-            WinRate      = 100m * wins.Count / _trades.Count,
+            NetPnl       = trades.Sum(t => t.Pnl),
+            TotalTrades  = trades.Count,
+            WinRate      = 100m * wins.Count / trades.Count,
             AvgWin       = wins.Count   > 0 ? wins.Average(t => t.Pnl)   : 0,
             AvgLoss      = losses.Count > 0 ? losses.Average(t => t.Pnl) : 0,
             ProfitFactor = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? 99.9m : 0,
@@ -1388,7 +1406,7 @@ else if (_activeTab == "dca")
             ShortLosses  = shorts.Count(t => t.Pnl < 0),
         };
         // Consecutive wins/losses
-        var ordered = _trades.OrderBy(t => t.ClosedAt).ToList();
+        var ordered = trades.OrderBy(t => t.ClosedAt).ToList();
         int cw = 0, cl = 0, mcw = 0, mcl = 0;
         foreach (var t in ordered)
         {
@@ -1636,6 +1654,7 @@ else if (_activeTab == "dca")
 
     public void Dispose() { }
 }
+
 
 
 
