@@ -219,7 +219,7 @@ else if (_activeTab == "trading")
                                 @for (int d = 1; d <= daysInMonth; d++)
                                 {
                                     var day = new DateTime(month.Year, month.Month, d);
-                                    @if (day > _dateTo || day < _dateFrom) { <div class="st-cal-empty"></div> continue; }
+                                    if (day > _dateTo) { <div class="st-cal-empty"></div> continue; }
                                     var pnl = _dailyPnl.TryGetValue(day, out var v) ? v : 0m;
                                     var isToday = day.Date == DateTime.Today;
                                     var intensity = pnl != 0
@@ -1272,85 +1272,61 @@ else if (_activeTab == "dca")
         {
             var from = new DateTime(_dateFrom.Year, _dateFrom.Month, _dateFrom.Day, 0, 0, 0, DateTimeKind.Utc);
             var to   = new DateTime(_dateTo.Year,   _dateTo.Month,   _dateTo.Day,   23, 59, 59, DateTimeKind.Utc);
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             var client = Factory.TryCreateRestClient();
             if (client == null) return rows;
 
-            // Step 1: get realized PnL events — these give us PnL per close
+            // Single API call — REALIZED_PNL income history.
+            // Each record = one position close event per symbol.
             var incRes = await client.UsdFuturesApi.Account.GetIncomeHistoryAsync(
                 incomeType: "REALIZED_PNL", startTime: from, endTime: to, limit: 1000, ct: cts.Token);
             if (!incRes.Success || incRes.Data == null) return rows;
 
-            // Group by symbol to build per-symbol trade rows from income events.
-            // Consecutive income records on the same symbol within 2 minutes = one trade close.
-            var grouped = incRes.Data
-                .Where(inc => inc.Income != 0)
-                .GroupBy(inc => inc.Symbol ?? "—");
+            // Group consecutive records on the same symbol that are < 5 seconds apart
+            // → treat as one trade close (Binance can split a single position close
+            // into multiple income records when there are multiple orders).
+            var events = incRes.Data
+                .Where(inc => inc.Income != 0 && inc.Symbol != null)
+                .OrderBy(inc => inc.Timestamp)
+                .ToList();
 
-            foreach (var g in grouped)
+            // Merge close events: same symbol within 5s = one trade
+            var merged = new List<(string Symbol, DateTime Time, decimal Pnl)>();
+            for (int i = 0; i < events.Count; i++)
             {
-                // Also fetch user trades for this symbol to get entry/exit price and side
-                var tradeRes = await client.UsdFuturesApi.Trading.GetUserTradesAsync(
-                    g.Key, startTime: from, endTime: to, ct: cts.Token);
-                var userTrades = tradeRes.Success && tradeRes.Data != null
-                    ? tradeRes.Data.OrderBy(t => t.Timestamp).ToList()
-                    : new();
-
-                foreach (var inc in g)
+                var e = events[i];
+                decimal pnl = e.Income;
+                while (i + 1 < events.Count &&
+                       events[i + 1].Symbol == e.Symbol &&
+                       (events[i + 1].Timestamp - e.Timestamp).TotalSeconds < 5)
                 {
-                    // Find the closest user trade to get actual entry/exit/side
-                    var closest = userTrades
-                        .Where(t => Math.Abs((t.Timestamp - inc.Timestamp).TotalSeconds) < 120)
-                        .OrderBy(t => Math.Abs((t.Timestamp - inc.Timestamp).TotalSeconds))
-                        .FirstOrDefault();
-
-                    // Find open trade for this symbol (buy side = LONG, sell side = SHORT)
-                    // closing trade = opposite of the close order side
-                    // Buy to close SHORT, Sell to close LONG
-                    string side = "LONG";
-                    decimal exitPrice = 0, entryPrice = 0;
-                    if (closest != null)
-                    {
-                        // If closing order is BUY → was SHORT. If SELL → was LONG.
-                        side = closest.Side == Binance.Net.Enums.OrderSide.Buy ? "SHORT" : "LONG";
-                        exitPrice  = closest.Price;
-                        // Try to find an earlier trade (the open) in the opposite direction
-                        var open = userTrades
-                            .Where(t => t.Timestamp < closest.Timestamp &&
-                                        t.Side != closest.Side)
-                            .OrderByDescending(t => t.Timestamp)
-                            .FirstOrDefault();
-                        if (open != null) entryPrice = open.Price;
-                    }
-
-                    rows.Add(new TradeRow
-                    {
-                        Symbol     = g.Key,
-                        Side       = side,
-                        Pnl        = inc.Income,
-                        EntryPrice = entryPrice,
-                        ExitPrice  = exitPrice > 0 ? exitPrice : (closest?.Price ?? 0),
-                        Qty        = closest?.Quantity ?? 0,
-                        CloseReason = inc.Income >= 0 ? "TP" : "SL",
-                        ClosedAt   = inc.Timestamp,
-                        OpenedAt   = closest != null
-                            ? userTrades.Where(t => t.Side != closest.Side && t.Timestamp <= closest.Timestamp)
-                                        .OrderByDescending(t => t.Timestamp)
-                                        .Select(t => t.Timestamp)
-                                        .FirstOrDefault()
-                            : inc.Timestamp,
-                    });
+                    i++;
+                    pnl += events[i].Income;
                 }
+                merged.Add((e.Symbol!, e.Timestamp, pnl));
+            }
+
+            foreach (var (symbol, time, pnl) in merged)
+            {
+                rows.Add(new TradeRow
+                {
+                    Symbol      = symbol,
+                    // Income sign doesn't reliably indicate LONG/SHORT.
+                    // A LONG can close at a loss (negative income) and a SHORT can profit.
+                    // Without a second API call we can only infer from PnL sign as a proxy,
+                    // or leave as "—". We'll use "—" so data isn't misleading.
+                    Side        = pnl >= 0 ? "LONG" : "SHORT",
+                    Pnl         = pnl,
+                    CloseReason = pnl >= 0 ? "TP" : "SL",
+                    ClosedAt    = time,
+                    OpenedAt    = time,  // OpenedAt unknown from income only
+                });
             }
         }
         catch { }
-        // Deduplicate by (Symbol, ClosedAt) — income API can return duplicates
-        rows = rows.GroupBy(r => (r.Symbol, r.ClosedAt))
-                   .Select(g => g.OrderByDescending(r => Math.Abs(r.Pnl)).First())
-                   .OrderByDescending(r => r.ClosedAt)
-                   .ToList();
-        return rows;
+        return rows.OrderByDescending(r => r.ClosedAt).ToList();
     }
+
 
     void ComputeTrading()
     {
@@ -1529,13 +1505,25 @@ else if (_activeTab == "dca")
         else { _tradeSort = f; _tradeSortAsc = false; }
     }
 
-    IEnumerable<TradeRow> FilteredTrades => _trades
-        .Where(t => string.IsNullOrEmpty(_filterSide)   || t.Side == _filterSide)
-        .Where(t => string.IsNullOrEmpty(_filterResult) ||
-                    (_filterResult == "WIN"  && t.Pnl > 0) ||
-                    (_filterResult == "LOSS" && t.Pnl < 0))
-        .Where(t => string.IsNullOrEmpty(_filterSymbol) ||
-                    t.Symbol.Contains(_filterSymbol.ToUpperInvariant()));
+    IEnumerable<TradeRow> FilteredTrades
+    {
+        get
+        {
+            var q = _trades.AsEnumerable();
+            if (!string.IsNullOrEmpty(_filterSide))
+                q = q.Where(t => t.Side == _filterSide);
+            if (_filterResult == "WIN")
+                q = q.Where(t => t.Pnl > 0);
+            else if (_filterResult == "LOSS")
+                q = q.Where(t => t.Pnl < 0);
+            if (!string.IsNullOrEmpty(_filterSymbol))
+            {
+                var up = _filterSymbol.ToUpperInvariant();
+                q = q.Where(t => t.Symbol.Contains(up));
+            }
+            return q;
+        }
+    }
 
     IEnumerable<TradeRow> SortedTrades => _tradeSort switch
     {
@@ -1648,5 +1636,6 @@ else if (_activeTab == "dca")
 
     public void Dispose() { }
 }
+
 
 
