@@ -6,6 +6,7 @@
 @inject VertexAutoTradeBinance8.Web.Services.MarketSnapshotFileService SnapSvc
 @inject IHttpClientFactory HttpClientFactory
 @inject Microsoft.Extensions.Options.IOptionsMonitor<VertexAutoTradeBinance8.Configuration.BinanceOptions> BinanceOpts
+@inject IConfiguration _cfg
 @inject VertexAutoTradeBinance8.Web.Services.BinanceTimeService BinanceTime
 @inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoSvc
 @implements IDisposable
@@ -1588,12 +1589,58 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
     int _ordSubTab; // 0=Basic 1=Conditional
     int _viewMode = 2;
     readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _posHandsOff = new();
+
+    // Path for persisting hands-off state across page refreshes and Web restarts.
+    // Same directory as engine_state.json so Engine can optionally read it too.
+    string HandsOffFilePath => Path.Combine(
+        _cfg["EngineState:SnapshotPath"] is { Length: > 0 } p
+            ? Path.GetDirectoryName(p) ?? @"C:\VertexShared"
+            : @"C:\VertexShared",
+        "hands_off.json");
+
     bool IsHandsOffPos(string sym, string side) => _posHandsOff.ContainsKey($"{sym}_{side.ToUpperInvariant()}");
+
     void ToggleHandsOff(string sym, string side)
     {
         var key = $"{sym}_{side.ToUpperInvariant()}";
         if (_posHandsOff.ContainsKey(key)) _posHandsOff.TryRemove(key, out _);
         else _posHandsOff.TryAdd(key, 0);
+        _ = PersistHandsOffAsync();
+    }
+
+    async Task PersistHandsOffAsync()
+    {
+        try
+        {
+            var keys = _posHandsOff.Keys.ToList();
+            var json = System.Text.Json.JsonSerializer.Serialize(keys);
+            var path = HandsOffFilePath;
+            var dir  = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(path, json);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[HandsOff] persist failed: {ex.Message}");
+        }
+    }
+
+    async Task LoadHandsOffAsync()
+    {
+        try
+        {
+            var path = HandsOffFilePath;
+            if (!File.Exists(path)) return;
+            var json = await File.ReadAllTextAsync(path);
+            var keys = System.Text.Json.JsonSerializer.Deserialize<List<string>>(json);
+            if (keys == null) return;
+            _posHandsOff.Clear();
+            foreach (var k in keys) _posHandsOff.TryAdd(k, 0);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[HandsOff] load failed: {ex.Message}");
+        }
     }
     bool _loading, _ordLoading, _histLoading, _actionLoading, _pnlLoading;
     DateTime _lastRefresh;
@@ -1618,6 +1665,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
 
     protected override async Task OnInitializedAsync()
     {
+        await LoadHandsOffAsync(); // restore hands-off state from previous session
         LiveState.PriceTicked += OnLivePriceTick;
         await RefreshAll();
         // Pre-seed sparklines from klines snapshot so cards show a real
@@ -2009,6 +2057,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:13px;font-fa
         _timer?.Dispose();
     }
 }
+
 
 
 
