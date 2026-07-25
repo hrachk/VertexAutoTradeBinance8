@@ -43,6 +43,20 @@
         if (s.liqPill && s.liqPill.parentNode) s.liqPill.remove();
         if (s.bePill && s.bePill.parentNode) s.bePill.remove();
         for (const pill of (s.tpPills || [])) { if (pill && pill.parentNode) pill.remove(); }
+        // Clean up ResizeObserver created in showTpSlLines —
+        // must disconnect even if disposeSession runs before hidePositionLines
+        if (s._pillResizeObs) { try { s._pillResizeObs.disconnect(); } catch(e) {} s._pillResizeObs = null; }
+        // Clean up order pill range subscription
+        if (s._orderPillRangeSub) {
+            try { s.chart.timeScale().unsubscribeVisibleLogicalRangeChange(s._orderPillRangeSub); } catch(e) {}
+            try { s.chart.priceScale('right').unsubscribePriceRangeChange(s._orderPillRangeSub); } catch(e) {}
+            s._orderPillRangeSub = null;
+        }
+        // Clean up tpSlPriceScaleSub if not already cleaned by hideTpSlLines
+        if (s.tpSlPriceScaleSub) {
+            try { s.chart.priceScale('right').unsubscribePriceRangeChange(s.tpSlPriceScaleSub); } catch(e) {}
+            s.tpSlPriceScaleSub = null;
+        }
         try { s.chart.remove(); } catch (e) { /* already gone */ }
         sessions.delete(containerId);
     }
@@ -2233,6 +2247,7 @@
     window._vertexChartSessions = sessions;
 
 })();
+
 
 
 
