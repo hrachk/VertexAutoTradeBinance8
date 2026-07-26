@@ -1721,17 +1721,53 @@
                          never accidentally flip direction. -->
                     @if (!_addToPositionOpen)
                     {
-                        <button class="ord-add-to-pos-btn" @onclick="() => OpenAddToPosition(pos)">
-                            + Add to Position
-                        </button>
+                        <!-- Action buttons row: Add (same side) + Hedge (opposite) -->
+                        <div class="ord-pos-action-row">
+                            <button class="ord-pos-action-btn @(posIsLong ? "opab-buy" : "opab-sell")"
+                                    @onclick="() => { _addToPositionHedge = false; OpenAddToPosition(pos); }">
+                                <span class="opab-icon">@(posIsLong ? "▲" : "▼")</span>
+                                <span class="opab-text">Add @(posIsLong ? "Long" : "Short")</span>
+                            </button>
+                            <button class="ord-pos-action-btn @(posIsLong ? "opab-sell" : "opab-buy") opab-hedge"
+                                    @onclick="() => { _addToPositionHedge = true; OpenAddToPosition(pos); }"
+                                    title="Open opposite position (hedge)">
+                                <span class="opab-icon">@(posIsLong ? "▼" : "▲")</span>
+                                <span class="opab-text">Hedge @(posIsLong ? "Short" : "Long")</span>
+                                <span class="opab-badge">⇄</span>
+                            </button>
+                        </div>
                     }
                     else
                     {
-                        <div class="ord-add-to-pos-box">
+                        @{
+                            bool hedgeSide = _addToPositionHedge;
+                            // effective side for this sub-panel
+                            bool effectiveLong = hedgeSide ? !posIsLong : posIsLong;
+                        }
+                        <div class="ord-add-to-pos-box @(hedgeSide ? "atpb-hedge" : "")">
                             <div class="ord-add-to-pos-head">
-                                <span>Add to @(posIsLong ? "Long" : "Short") @pos.Symbol</span>
+                                @if (hedgeSide)
+                                {
+                                    <span class="atph-hedge-badge @(effectiveLong ? "atph-long" : "atph-short")">
+                                        ⇄ Hedge @(effectiveLong ? "Long" : "Short")
+                                    </span>
+                                }
+                                else
+                                {
+                                    <span>Add to @(posIsLong ? "Long" : "Short") @pos.Symbol</span>
+                                }
                                 <button class="ord-close-x" @onclick="() => _addToPositionOpen = false">✕</button>
                             </div>
+
+                            @if (hedgeSide)
+                            {
+                                <div class="atph-info">
+                                    <span class="atph-info-icon">ℹ</span>
+                                    Opens a <strong>@(effectiveLong ? "Long" : "Short")</strong> position
+                                    while keeping your existing @(posIsLong ? "Long" : "Short") open.
+                                    Requires <strong>Hedge Mode</strong> on Binance.
+                                </div>
+                            }
 
                             <div class="ord-row">
                                 <div class="ord-type-tabs">
@@ -1778,11 +1814,25 @@
                                 <div class="ord-success">@_orderSuccess</div>
                             }
 
-                            <button class="ord-submit-btn @(posIsLong ? "osb-buy" : "osb-sell")" disabled="@_orderLoading"
-                                    @onclick="() => AddToPosition(pos)">
-                                @if (_orderLoading) { <span class="ord-spin"></span> }
-                                else { @($"{(posIsLong ? "Buy" : "Sell")} {_addToPosType}{(_demoMode ? " (DEMO)" : "")}") }
-                            </button>
+                            @if (hedgeSide)
+                            {
+                                <!-- Hedge: open opposite side via PlaceManualOrder with flipped side -->
+                                <button class="ord-submit-btn @(effectiveLong ? "osb-buy" : "osb-sell")"
+                                        disabled="@_orderLoading"
+                                        @onclick="() => PlaceHedgeOrder(pos)">
+                                    @if (_orderLoading) { <span class="ord-spin"></span> }
+                                    else { @($"Open {(effectiveLong ? "Long" : "Short")} Hedge{(_demoMode ? " (DEMO)" : "")}") }
+                                </button>
+                            }
+                            else
+                            {
+                                <button class="ord-submit-btn @(posIsLong ? "osb-buy" : "osb-sell")"
+                                        disabled="@_orderLoading"
+                                        @onclick="() => AddToPosition(pos)">
+                                    @if (_orderLoading) { <span class="ord-spin"></span> }
+                                    else { @($"{(posIsLong ? "Buy" : "Sell")} {_addToPosType}{(_demoMode ? " (DEMO)" : "")}") }
+                                </button>
+                            }
                         </div>
                     }
                 </div>
@@ -2251,6 +2301,23 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .ord-tp-price{font-size:12px;font-weight:600;width:66px;text-align:right;}
 .ord-tp-pct{font-size:11px;font-family:var(--mono);width:42px;text-align:right;}
 .ord-sl-sep{height:1px;background:var(--bdr);margin:5px 0;}
+.ord-pos-action-row{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px;}
+.ord-pos-action-btn{display:flex;align-items:center;justify-content:center;gap:5px;height:36px;border-radius:7px;border:1.5px solid;font-size:11px;font-weight:800;cursor:pointer;transition:all .15s;position:relative;letter-spacing:.3px;}
+.opab-buy{background:rgba(34,197,94,.08);border-color:rgba(34,197,94,.3);color:#22c55e;}
+.opab-buy:hover{background:rgba(34,197,94,.15);border-color:rgba(34,197,94,.5);}
+.opab-sell{background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.3);color:#ef4444;}
+.opab-sell:hover{background:rgba(239,68,68,.15);border-color:rgba(239,68,68,.5);}
+.opab-hedge{border-style:dashed;opacity:.85;}
+.opab-hedge:hover{opacity:1;}
+.opab-icon{font-size:13px;}
+.opab-badge{position:absolute;top:-6px;right:-4px;background:#334e68;color:#7eb8d6;font-size:9px;font-weight:900;padding:1px 4px;border-radius:3px;border:1px solid #1e3050;line-height:1.2;}
+.atpb-hedge{border-color:rgba(245,158,11,.2)!important;}
+.atph-hedge-badge{font-size:11px;font-weight:800;padding:2px 8px;border-radius:4px;}
+.atph-long{background:rgba(34,197,94,.1);color:#22c55e;border:1px solid rgba(34,197,94,.2);}
+.atph-short{background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.2);}
+.atph-info{background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.15);border-radius:5px;padding:7px 10px;font-size:11px;color:#b8850a;margin:6px 0 4px;display:flex;gap:6px;align-items:flex-start;line-height:1.5;}
+.atph-info-icon{font-size:12px;margin-top:1px;flex-shrink:0;}
+.atph-info strong{color:#fcd34d;}
 .ord-add-to-pos-btn{width:100%;margin-top:10px;padding:9px;background:rgba(59,130,246,.08);border:1px dashed var(--acc);border-radius:6px;color:var(--acc);font-size:12px;font-weight:600;cursor:pointer;}
 .ord-add-to-pos-btn:hover{background:rgba(59,130,246,.15);}
 .ord-add-to-pos-box{margin-top:10px;padding:12px;background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;display:flex;flex-direction:column;gap:10px;}
@@ -4559,6 +4626,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     string _partialCloseOpenKey = "";
     int _partialClosePct = 50;
     string _addToPosType = "Market";
+    bool _addToPositionHedge = false; // true = hedge (opposite side) mode
     decimal _addToPosPrice;
 
     void SetAddToPosTypeMarket() => _addToPosType = "Market";
@@ -7106,6 +7174,75 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         StateHasChanged();
     }
 
+    // Opens a hedge (opposite-side) position for the same symbol.
+    // Uses the same order fields as AddToPosition but flips the side.
+    // Requires Binance Futures Hedge Mode (position mode = dual-side).
+    async Task PlaceHedgeOrder(ActivePositionInfo pos)
+    {
+        _orderLoading = true;
+        _orderError = _orderSuccess = string.Empty;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) { _orderError = "Client unavailable"; return; }
+
+            // Flip the side: LONG pos → open SHORT hedge, SHORT pos → open LONG hedge
+            bool posIsLong = pos.Side?.ToUpperInvariant() == "LONG";
+            var hedgeSide  = posIsLong
+                ? Binance.Net.Enums.OrderSide.Sell
+                : Binance.Net.Enums.OrderSide.Buy;
+            var hedgePosSide = posIsLong
+                ? Binance.Net.Enums.PositionSide.Short
+                : Binance.Net.Enums.PositionSide.Long;
+
+            decimal qty = _orderQty > 0 ? _orderQty : 0;
+            if (qty <= 0)
+            {
+                _orderError = "Enter quantity"; return;
+            }
+
+            if (_addToPosType == "Market")
+            {
+                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    pos.Symbol,
+                    hedgeSide,
+                    Binance.Net.Enums.FuturesOrderType.Market,
+                    quantity:     qty,
+                    positionSide: hedgePosSide);
+                if (res.Success) _orderSuccess = $"Hedge {(posIsLong ? "Short" : "Long")} opened";
+                else _orderError = res.Error?.Message ?? "Error";
+            }
+            else
+            {
+                if (_addToPosPrice <= 0) { _orderError = "Enter limit price"; return; }
+                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    pos.Symbol,
+                    hedgeSide,
+                    Binance.Net.Enums.FuturesOrderType.Limit,
+                    quantity:     qty,
+                    price:        _addToPosPrice,
+                    positionSide: hedgePosSide,
+                    timeInForce:  Binance.Net.Enums.TimeInForce.GoodTillCanceled);
+                if (res.Success) _orderSuccess = $"Hedge Limit placed @ {_addToPosPrice}";
+                else _orderError = res.Error?.Message ?? "Error";
+            }
+        }
+        catch (Exception ex) { _orderError = ex.Message; }
+        finally
+        {
+            _orderLoading = false;
+            await InvokeAsync(StateHasChanged);
+            if (string.IsNullOrEmpty(_orderError))
+            {
+                await Task.Delay(1500);
+                _addToPositionOpen = false;
+                await LoadAllOpenPositionsAsync();
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
     async Task AddToPosition(ActivePositionInfo pos)
     {
         if (_orderQty <= 0) { _orderError = "Enter quantity"; return; }
@@ -7502,6 +7639,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
