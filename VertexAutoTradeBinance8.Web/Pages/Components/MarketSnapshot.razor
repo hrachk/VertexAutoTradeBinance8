@@ -1739,11 +1739,8 @@
                     }
                     else
                     {
-                        @{
-                            bool hedgeSide = _addToPositionHedge;
-                            // effective side for this sub-panel
-                            bool effectiveLong = hedgeSide ? !posIsLong : posIsLong;
-                        }
+                        bool hedgeSide = _addToPositionHedge;
+                        bool effectiveLong = hedgeSide ? !posIsLong : posIsLong;
                         <div class="ord-add-to-pos-box @(hedgeSide ? "atpb-hedge" : "")">
                             <div class="ord-add-to-pos-head">
                                 @if (hedgeSide)
@@ -7639,6 +7636,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
