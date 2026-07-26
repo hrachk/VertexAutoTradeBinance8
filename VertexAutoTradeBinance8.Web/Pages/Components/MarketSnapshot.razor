@@ -6166,7 +6166,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         _selectedPosition = pos;
         _activeSignal = null;
         _orderPanelDismissed = false;
-        _addToPositionOpen = true;
+        // Show the Add / Hedge buttons first (not the expanded sub-panel).
+        // User clicks "Add Long/Short" or "Hedge" to expand further.
+        _addToPositionOpen = false;
+        _addToPositionHedge = false;
 
         var sym = pos.Symbol;
         var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == _activeTf)
@@ -7636,6 +7639,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
