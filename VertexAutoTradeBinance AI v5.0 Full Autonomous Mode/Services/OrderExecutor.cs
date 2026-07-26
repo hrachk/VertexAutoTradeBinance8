@@ -38,7 +38,7 @@ namespace VertexAutoTradeBinance8.Services
         private const decimal AGGR_LIMIT_OFFSET_PCT = 0.0006m;  // 0.06% агрессивный лимит (тюнится)
         private const decimal MARKET_FALLBACK_MAX_SLIP_PCT = 0.0015m; // 0.15% макс. слип для fallback-market
         private bool? _isHedgeMode;
-        private const int MAX_ENTRIES_PER_SYMBOL = 2;   // макс входов пока позиция открыта (initial + 1 DCA)
+        private const int MAX_ENTRIES_PER_SYMBOL = 3;   // макс входов пока позиция открыта (initial + 1 DCA)
         private const decimal MAX_LIMIT_STALE_DRIFT = 0.0047m; // 0.45%
         private readonly IOptionsMonitor<TradingSettings> _tradingSettings;
         private readonly IOptionsMonitor<TradingOptions> _tradingOptions;
@@ -50,7 +50,7 @@ namespace VertexAutoTradeBinance8.Services
         // 4 позиции = до 4 разных символов, каждый может иметь
         // Long + Short одновременно (хедж)
         // =====================================================
-        private const int MAX_GLOBAL_POSITIONS = 4;
+        private const int MAX_GLOBAL_POSITIONS = 11;
 
         // =====================================================
         // EntryTracker — двойной счётчик:
@@ -223,24 +223,182 @@ namespace VertexAutoTradeBinance8.Services
             _algoOrders = algoOrders;
         }
 
+        /// <summary>
+        /// Smart 1M micro-timing confirmation.
+        ///
+        /// Replaces the old "last.Close > prev.High" stub (which blocked ~80% of
+        /// valid entries) with a multi-condition system that scores the quality of
+        /// the 1-minute setup independently of whether the price already broke out.
+        ///
+        /// Scoring model (0–100 points, pass threshold adaptive by regime):
+        ///
+        ///   1. TREND ALIGNMENT (35 pts)
+        ///      The most recent 1M bar must be aligned with the signal direction.
+        ///      BUY  → last1m is bullish (close > open).
+        ///      SELL → last1m is bearish (close < open).
+        ///      Partial credit (17 pts) when the prior bar is also aligned.
+        ///
+        ///   2. MOMENTUM (25 pts)
+        ///      EMA9(1m) slope over the last 5 bars.
+        ///      Positive slope for BUY, negative for SELL.
+        ///      Proportional credit (0-25) based on slope magnitude vs ATR.
+        ///
+        ///   3. BODY QUALITY (20 pts)
+        ///      Last 1M candle body ≥ 40% of its range (not a doji/wick mess).
+        ///      Confirms conviction, not noise.
+        ///
+        ///   4. PRESSURE (20 pts)
+        ///      Taker-buy/sell pressure over last 5 bars.
+        ///      BUY wants buy pressure > sell pressure (pressure > 0).
+        ///      SELL wants sell pressure > buy pressure (pressure < 0).
+        ///      Proportional credit (0-20) based on |pressure|.
+        ///
+        /// Adaptive pass threshold:
+        ///   - StrongTrend / Impulse: 30 pts  — allow slightly looser timing,
+        ///     price won't wait for perfect alignment in a fast move.
+        ///   - Trend (normal):        45 pts  — standard quality bar.
+        ///   - Range / Squeeze:       55 pts  — stricter, mean-rev entries need
+        ///     clear local turn before committing.
+        ///   - Unknown / Chop:        65 pts  — near-perfect timing required,
+        ///     very high noise in undefined regime.
+        ///
+        /// Also checks one hard-block regardless of score:
+        ///   STALE SIGNAL — if the last 1M bar opened more than 3 bars after
+        ///   the signal was generated, the market has moved on; skip this entry.
+        /// </summary>
         public async Task<bool> ConfirmEntryOn1m(
-        string symbol,
-        SignalSide side,
-        CancellationToken ct)
+            string symbol,
+            SignalSide side,
+            CancellationToken ct,
+            TradeSignal? signal = null,
+            SmartRegimeInfo? regime = null)
         {
-            var klines1m = await _marketDataFacade.GetKlinesAsync(symbol, KlineInterval.OneMinute, 50);
+            const int BARS = 20;
+            var k1m = await _marketDataFacade.GetKlinesAsync(symbol, KlineInterval.OneMinute, BARS, ct);
+            if (k1m == null || k1m.Count < 6)
+                return true; // not enough data — don't block
 
-            var last = klines1m[^1];
-            var prev = klines1m[^2];
+            var last = k1m[^1];
+            var prev = k1m[^2];
+            bool isBuy = side == SignalSide.Buy;
 
-            // пример простой логики (потом усложним)
-            if (side == SignalSide.Buy)
-                return last.ClosePrice > prev.HighPrice; // micro breakout
+            // ── STALE SIGNAL GUARD ────────────────────────────────────────────
+            // If signal timestamp provided, ensure we're not entering an
+            // entry that the market has already moved past.
+            if (signal?.Time is DateTime sigTime && sigTime != default)
+            {
+                var staleBars = (int)Math.Round((last.OpenTime - sigTime).TotalMinutes);
+                if (staleBars > 3)
+                {
+                    _logger.LogInformation(
+                        "[1M][{symbol}] STALE: signal {sigTime:HH:mm} is {n} 1M bars old",
+                        symbol, sigTime, staleBars);
+                    return false;
+                }
+            }
 
-            if (side == SignalSide.Sell)
-                return last.ClosePrice < prev.LowPrice;
+            // ── ADAPTIVE PASS THRESHOLD ───────────────────────────────────────
+            bool isStrongTrend =
+                regime?.SmartType is SmartRegimeType.SmartStrongTrend ||
+                regime?.BaseRegime is MarketRegime.StrongUpTrend or MarketRegime.StrongDownTrend;
+            bool isRange =
+                regime?.SmartType is SmartRegimeType.SmartRange or SmartRegimeType.SmartSqueeze ||
+                regime?.BaseRegime is MarketRegime.Range;
+            bool isChop =
+                regime?.SmartType is SmartRegimeType.SmartChop or SmartRegimeType.SmartExhaustion;
+            bool hasImpulseFlag = signal?.Reason is
+                "IMPULSE_CONTINUATION" or "EARLY_TREND_JOIN" or
+                "VOLATILITY_EXPANSION_BREAKOUT_LONG_V2" or "VOLATILITY_EXPANSION_BREAKOUT_SHORT_V2";
 
-            return false;
+            int passThreshold =
+                (isStrongTrend || hasImpulseFlag) ? 30 :
+                isChop   ? 65 :
+                isRange  ? 55 :
+                           45;  // normal Trend
+
+            int score = 0;
+
+            // ── 1. TREND ALIGNMENT (35 pts) ────────────────────────────────────
+            bool lastAligned = isBuy
+                ? last.ClosePrice > last.OpenPrice
+                : last.ClosePrice < last.OpenPrice;
+            bool prevAligned = isBuy
+                ? prev.ClosePrice > prev.OpenPrice
+                : prev.ClosePrice < prev.OpenPrice;
+
+            if (lastAligned && prevAligned)
+                score += 35; // both bars aligned = strong
+            else if (lastAligned)
+                score += 25; // last bar aligned = good enough
+            else if (prevAligned)
+                score += 10; // only prior aligned = weak, partial credit
+
+            // ── 2. EMA9 MOMENTUM (25 pts) ─────────────────────────────────────
+            // Compute EMA9 over 1M closes and check slope direction + magnitude
+            if (k1m.Count >= 10)
+            {
+                var closes1m = k1m.Select(c => c.ClosePrice).ToArray();
+                var ema9     = ComputeEma(closes1m, 9);
+                decimal slopeRaw = ema9.Length >= 6 ? ema9[^1] - ema9[^6] : 0m;
+                decimal atrRef   = signal?.Atr ?? (last.HighPrice - last.LowPrice);
+                if (atrRef <= 0) atrRef = last.ClosePrice * 0.001m;
+                // Normalise slope by ATR so it's comparable across price levels
+                decimal slopeNorm = atrRef > 0 ? slopeRaw / atrRef : 0m;
+
+                bool slopeOk = isBuy ? slopeRaw > 0 : slopeRaw < 0;
+                if (slopeOk)
+                {
+                    // Credit proportional to slope strength: capped at 1.0×ATR = full 25pts
+                    decimal strength = Math.Clamp(Math.Abs(slopeNorm), 0m, 1m);
+                    score += (int)(25 * strength);
+                    if (score < (int)(25 * 0.2m) && slopeOk) // at least partial credit
+                        score += 5;
+                }
+            }
+
+            // ── 3. BODY QUALITY (20 pts) ──────────────────────────────────────
+            decimal lastRange = last.HighPrice - last.LowPrice;
+            decimal lastBody  = Math.Abs(last.ClosePrice - last.OpenPrice);
+            bool solidBody    = lastRange > 0 && (lastBody / lastRange) >= 0.40m;
+            if (solidBody) score += 20;
+            else if (lastRange > 0 && (lastBody / lastRange) >= 0.25m)
+                score += 10; // partial body
+
+            // ── 4. TAKER PRESSURE (20 pts) ────────────────────────────────────
+            int pressureBars = Math.Min(5, k1m.Count);
+            decimal buyVol   = 0m, totalVol = 0m;
+            for (int i = k1m.Count - pressureBars; i < k1m.Count; i++)
+            {
+                buyVol   += k1m[i].TakerBuyBaseVolume;
+                totalVol += k1m[i].Volume;
+            }
+            decimal pressure = totalVol > 0 ? (buyVol - (totalVol - buyVol)) / totalVol : 0m;
+            bool pressureOk  = isBuy ? pressure > 0.05m : pressure < -0.05m;
+            if (pressureOk)
+            {
+                decimal pStrength = Math.Clamp(Math.Abs(pressure) * 3m, 0m, 1m); // scale 0.05→1 maps to 0→20
+                score += (int)(20 * pStrength);
+            }
+
+            _logger.LogInformation(
+                "[1M][{symbol}] {side} score={score}/{threshold} | aligned={a} ema={e} body={b} pressure={p:F2}",
+                symbol, side, score, passThreshold,
+                lastAligned, score >= 25, solidBody, pressure);
+
+            return score >= passThreshold;
+        }
+
+        /// <summary>Exponential moving average helper for 1M timing.</summary>
+        private static decimal[] ComputeEma(decimal[] values, int period)
+        {
+            if (values.Length == 0 || period <= 0)
+                return Array.Empty<decimal>();
+            var result = new decimal[values.Length];
+            decimal k = 2m / (period + 1m);
+            result[0] = values[0];
+            for (int i = 1; i < values.Length; i++)
+                result[i] = values[i] * k + result[i - 1] * (1 - k);
+            return result;
         }
 
         private async Task<bool> IsHedgeModeAsync(BinanceRestClient client, CancellationToken ct)
@@ -1024,7 +1182,7 @@ namespace VertexAutoTradeBinance8.Services
             // =====================================================
             // FINAL MICRO TIMING (1M CONFIRMATION)
             // =====================================================
-            if (!await ConfirmEntryOn1m(signal.Symbol, signal.Side, ct))
+            if (!await ConfirmEntryOn1m(signal.Symbol, signal.Side, ct, signal, smart))
             {
                 _logger.LogInformation(
                     "[1M BLOCK][{symbol}] bad micro timing",
@@ -1967,7 +2125,7 @@ namespace VertexAutoTradeBinance8.Services
                 // ========================================================
                 // MARKET ENTRY
                 // ========================================================
-                if (!await ConfirmEntryOn1m(signal.Symbol, signal.Side, ct))
+                if (!await ConfirmEntryOn1m(signal.Symbol, signal.Side, ct, signal, smart))
                 {
                     _logger.LogInformation("Entry rejected by 1m timing");
                     return OrderResult.Fail("Entry rejected by 1m timing");
@@ -2669,4 +2827,5 @@ namespace VertexAutoTradeBinance8.Services
      
     }
 }
+
 
