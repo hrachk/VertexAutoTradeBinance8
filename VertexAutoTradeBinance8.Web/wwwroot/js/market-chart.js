@@ -757,35 +757,32 @@
                 const price = candleSeries.coordinateToPrice(y);
                 if (price == null || price <= 0) return;
 
-                // ALWAYS read fresh session — the session object captured in
-                // the closure at init() time gets replaced by every new init()
-                // call (RenderCharts), while showPositionLines writes to the
-                // NEW session via sessions.get(). Reading fresh guarantees
-                // we see the entryPrice/side set by showPositionLines.
                 const liveSession = sessions.get(containerId);
                 if (!liveSession) return;
 
-                // Right-click menu:
-                // - With position: TP/SL menu (side depends on price vs entry)
-                // - Without position: Limit Order menu (place buy/sell limit at clicked price)
-                // Always also offer Limit Order option even with a position
+                // ── FIX 1 & 2: Always call OnPricePicked first ─────────────
+                // This fills the Limit Price field in the right panel regardless
+                // of whether a position is open. The panel switches to Limit mode
+                // automatically. This is the primary, reliable path.
+                if (liveSession.onPricePicked) {
+                    try { liveSession.onPricePicked(price); } catch(ex) {
+                        console.warn('[VERTEX] onPricePicked failed:', ex);
+                    }
+                }
+
+                // ── Show context menu ────────────────────────────────────────
                 if (!liveSession.entryPrice) {
-                    // No position — show limit order menu.
-                    // Always re-fetch session fresh so we get the most recent
-                    // onLimitOrderRequested binding (bindSlTpCallbacks may have
-                    // run after the contextmenu listener was registered).
+                    // No position — show quick Limit Order popup
                     const freshSession = sessions.get(containerId) || liveSession;
                     marketChart._showLimitOrderMenu(containerId, e.clientX, e.clientY, price, freshSession);
                     return;
                 }
 
-                // Has position — determine TP vs SL
+                // Has position — show TP/SL menu (price vs entry determines side)
                 const isLong = liveSession.side === 'LONG';
                 const isTpSide = isLong
                     ? price > liveSession.entryPrice
                     : price < liveSession.entryPrice;
-
-                // Show TP/SL menu with additional "Place Limit Order" option
                 marketChart._showRightClickMenu(containerId, e.clientX, e.clientY, price, isTpSide);
             }, listenerOpts);
 
@@ -2096,6 +2093,8 @@
             s.onNewTpRequestedWithPercent = (price, pct) => dotNetRef.invokeMethodAsync('OnNewTpRequestedWithPercent', price, pct);
             s.onCancelProtectiveLevel = (kind, index) => dotNetRef.invokeMethodAsync('OnCancelProtectiveLevel', kind, index);
             s.onLimitOrderRequested = (side, price, qty) => dotNetRef.invokeMethodAsync('OnLimitOrderRequested', side, price, qty);
+            // FIX 2: bind OnPricePicked so right-click fills the Limit Price field in the right panel
+            s.onPricePicked = (price) => dotNetRef.invokeMethodAsync('OnPricePicked', price);
         },
 
         bindInfiniteHistory(containerId, dotNetRef) {
@@ -2247,6 +2246,7 @@
     window._vertexChartSessions = sessions;
 
 })();
+
 
 
 
