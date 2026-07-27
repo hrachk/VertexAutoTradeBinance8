@@ -3480,9 +3480,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     .ToList();
 
                 // ── FALLBACK: missed_trades.json (legacy, if live_signals empty) ──
+                // Also always load for archive section below.
+                var allSigs = await SignalSvc.LoadAsync();
                 if (_signals.Count == 0)
                 {
-                    var allSigs = await SignalSvc.LoadAsync();
                     _signals = allSigs
                         .Where(s => s.Entry > 0 && s.StopLoss > 0
                                     && s.Time >= cutoffLive
@@ -3501,8 +3502,6 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                         .Take(12)
                         .ToList();
                 }
-
-                var allSigs = await SignalSvc.LoadAsync();
 
                 // 1-hour archive: all signals in last hour regardless of TTL or expiry.
                 // One entry per symbol (most recent), ordered newest first.
@@ -7669,6 +7668,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
