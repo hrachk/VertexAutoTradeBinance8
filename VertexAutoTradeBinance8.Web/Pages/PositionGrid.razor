@@ -1,0 +1,525 @@
+@page "/positions/grid"
+@using Binance.Net.Enums
+@inject LiveStateService LiveState
+@inject BinanceClientFactory Factory
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>Vertex · Position Grid</PageTitle>
+
+<style>
+:root{--g0:#020508;--g1:#060c15;--g2:#0a1422;--g3:#0f1b30;--bdr:#152035;--bdr2:#1e3050;
+  --grn:#10b981;--grnL:#34d399;--red:#ef4444;--redL:#f87171;--yel:#f59e0b;--yelL:#fcd34d;
+  --teal:#06b6d4;--tealL:#22d3ee;--t0:#f0f6ff;--t1:#c4d4ec;--t2:#6e90b2;--t3:#334e68;--t4:#1a2e44;}
+html,body{background:var(--g0)!important;margin:0;padding:0;}
+.pg{min-height:100vh;background:var(--g0);color:var(--t0);font-family:'Inter',system-ui,sans-serif;font-size:13px;}
+/* TOP BAR */
+.pgbar{position:sticky;top:0;z-index:50;background:rgba(6,12,21,.96);backdrop-filter:blur(14px);
+  border-bottom:1px solid var(--bdr);padding:0 18px;height:50px;
+  display:flex;align-items:center;gap:14px;}
+.pgbar-logo{font-size:15px;font-weight:900;color:var(--t0);letter-spacing:-.3px;}
+.pgbar-logo span{color:var(--teal);}
+.pgbar-sep{width:1px;height:20px;background:var(--bdr2);}
+.pgbar-stat{display:flex;flex-direction:column;}
+.pgbar-stat-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--t4);}
+.pgbar-stat-val{font-size:13px;font-weight:800;font-family:'JetBrains Mono',monospace;}
+.pgbar-stat-val.up{color:var(--grnL);}.pgbar-stat-val.dn{color:var(--redL);}
+.pgbar-stat-val.neu{color:var(--t1);}
+.pg-live{width:8px;height:8px;border-radius:50%;background:var(--grn);
+  box-shadow:0 0 6px var(--grn);animation:gp 2s infinite;}
+@@keyframes gp{0%,100%{opacity:1;box-shadow:0 0 6px var(--grn);}50%{opacity:.5;box-shadow:0 0 14px var(--grn);}}
+.pg-back{margin-left:auto;display:flex;align-items:center;gap:6px;height:28px;padding:0 11px;
+  background:transparent;border:1px solid var(--bdr2);border-radius:6px;
+  color:var(--t2);font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;text-decoration:none;}
+.pg-back:hover{color:var(--t0);border-color:var(--teal);}
+/* COLS SELECTOR */
+.pg-cols{display:flex;gap:2px;margin-left:10px;}
+.pg-col-btn{width:25px;height:25px;border-radius:5px;border:1px solid var(--bdr2);
+  background:transparent;color:var(--t3);font-size:10px;font-weight:800;cursor:pointer;transition:all .13s;}
+.pg-col-btn.on,.pg-col-btn:hover{background:rgba(6,182,212,.1);border-color:rgba(6,182,212,.35);color:var(--tealL);}
+/* GRID */
+.pg-grid{display:grid;gap:10px;padding:12px;}
+.pg-grid.c1{grid-template-columns:1fr;}
+.pg-grid.c2{grid-template-columns:1fr 1fr;}
+.pg-grid.c3{grid-template-columns:1fr 1fr 1fr;}
+.pg-grid.c4{grid-template-columns:1fr 1fr 1fr 1fr;}
+/* CARD */
+.pg-card{background:var(--g1);border:1px solid var(--bdr);border-radius:12px;overflow:hidden;
+  display:flex;flex-direction:column;min-height:270px;transition:border-color .2s,box-shadow .2s;}
+.pg-card:hover{border-color:var(--bdr2);box-shadow:0 4px 28px rgba(0,0,0,.45);}
+.pg-card.L{border-top:2px solid var(--grn);}.pg-card.S{border-top:2px solid var(--red);}
+/* CARD HEAD */
+.pg-head{padding:10px 14px 8px;display:flex;align-items:flex-start;justify-content:space-between;
+  border-bottom:1px solid var(--bdr);background:var(--g0);}
+.pg-head-l{display:flex;flex-direction:column;gap:3px;}
+.pg-sym-row{display:flex;align-items:center;gap:7px;}
+.pg-sym{font-size:15px;font-weight:900;color:var(--t0);letter-spacing:-.2px;}
+.pg-sym sub{font-size:10px;color:var(--t3);font-weight:400;}
+.pg-side{font-size:9px;font-weight:800;padding:2px 7px;border-radius:3px;letter-spacing:.4px;}
+.pg-side.L{background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.3);color:var(--grnL);}
+.pg-side.S{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);color:var(--redL);}
+.pg-hedge{font-size:9px;font-weight:800;padding:2px 6px;border-radius:3px;letter-spacing:.3px;
+  background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);color:var(--yelL);}
+.pg-meta{display:flex;gap:10px;font-size:10px;color:var(--t3);}
+.pg-meta b{color:var(--t2);}
+/* PNL */
+.pg-head-r{display:flex;flex-direction:column;align-items:flex-end;gap:1px;}
+.pg-pnl{font-size:17px;font-weight:900;font-family:'JetBrains Mono',monospace;}
+.pg-pnl.up{color:var(--grnL);}.pg-pnl.dn{color:var(--redL);}
+.pg-roi{font-size:10px;font-weight:700;font-family:monospace;}
+.pg-roi.up{color:var(--grnL);}.pg-roi.dn{color:var(--redL);}
+.pg-mark-p{font-size:11px;color:var(--t3);font-family:monospace;margin-top:1px;}
+/* CHART AREA */
+.pg-chart{flex:1;position:relative;background:#020810;min-height:148px;overflow:hidden;}
+.pg-chart svg{position:absolute;inset:0;width:100%;height:100%;display:block;}
+/* Price axis labels */
+.pg-ax{position:absolute;right:0;top:0;bottom:0;width:70px;pointer-events:none;}
+.pg-ax-lbl{position:absolute;right:2px;font-size:8.5px;font-family:'JetBrains Mono',monospace;
+  font-weight:700;padding:1px 4px;border-radius:2px;white-space:nowrap;line-height:1.3;
+  transform:translateY(-50%);}
+.lbl-e{background:rgba(6,182,212,.12);color:var(--tealL);}
+.lbl-sl{background:rgba(239,68,68,.14);color:#fca5a5;}
+.lbl-tp{background:rgba(16,185,129,.1);color:var(--grnL);}
+.lbl-liq{background:rgba(127,29,29,.4);color:#f87171;}
+.lbl-m{background:rgba(255,255,255,.06);color:var(--t1);}
+.pg-time{position:absolute;bottom:3px;left:6px;font-size:9px;color:var(--t4);font-family:monospace;}
+/* CARD FOOTER */
+.pg-foot{padding:7px 14px 8px;background:var(--g0);border-top:1px solid var(--bdr);
+  display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+.pg-fi{display:flex;flex-direction:column;gap:1px;}
+.pg-fi-lbl{font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t4);}
+.pg-fi-val{font-size:11px;font-family:monospace;font-weight:700;color:var(--t2);}
+.pg-tpsl{margin-left:auto;display:flex;gap:4px;align-items:center;flex-wrap:wrap;}
+.chip-tp{font-size:9.5px;font-family:monospace;font-weight:700;padding:2px 7px;border-radius:3px;
+  background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);color:var(--grnL);}
+.chip-sl{font-size:9.5px;font-family:monospace;font-weight:700;padding:2px 7px;border-radius:3px;
+  background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);color:var(--redL);}
+.chip-none{font-size:10px;color:var(--t4);}
+/* EMPTY */
+.pg-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:60vh;gap:14px;color:var(--t4);}
+.pg-empty-ico{font-size:52px;opacity:.25;}
+.pg-empty-ttl{font-size:18px;font-weight:800;color:var(--t3);}
+/* SKELETON */
+.skel{background:linear-gradient(90deg,var(--g1) 25%,var(--g2) 50%,var(--g1) 75%);
+  background-size:400px 100%;animation:shim 1.4s infinite;border-radius:6px;}
+@@keyframes shim{0%{background-position:-400px 0}100%{background-position:400px 0}}
+</style>
+
+<div class="pg">
+
+  <!-- ── TOP BAR ─────────────────────────────────────────── -->
+  <div class="pgbar">
+    <div class="pgbar-logo">VERTEX <span>AI</span></div>
+    <div class="pgbar-sep"></div>
+    <div class="pg-live" title="Live prices active"></div>
+
+    @if (!_loading)
+    {
+      <div class="pgbar-stat">
+        <span class="pgbar-stat-lbl">Positions</span>
+        <span class="pgbar-stat-val neu">@_cards.Count</span>
+      </div>
+      <div class="pgbar-sep"></div>
+      @{ decimal tot = _cards.Sum(c => CalcPnl(c)); }
+      <div class="pgbar-stat">
+        <span class="pgbar-stat-lbl">Unrealized PnL</span>
+        <span class="pgbar-stat-val @(tot>=0?"up":"dn")">
+          @(tot>=0?"+":"")@tot.ToString("F2") USDT
+        </span>
+      </div>
+      @{ int hedges = _cards.GroupBy(c=>c.Sym).Count(g=>g.Count()>1); }
+      @if (hedges > 0)
+      {
+        <div class="pgbar-sep"></div>
+        <div class="pgbar-stat">
+          <span class="pgbar-stat-lbl">Hedge Pairs</span>
+          <span class="pgbar-stat-val neu">@hedges</span>
+        </div>
+      }
+    }
+
+    <div class="pg-cols">
+      @foreach (var n in new[]{1,2,3,4})
+      {
+        <button class="pg-col-btn @(_cols==n?"on":"")" @onclick="()=>_cols=n">@n</button>
+      }
+    </div>
+    <a class="pg-back" href="/market">← Market</a>
+  </div>
+
+  <!-- ── GRID ────────────────────────────────────────────── -->
+  @if (_loading)
+  {
+    <div class="pg-grid c2" style="padding:12px;">
+      @for (int i=0;i<4;i++) {
+        <div class="pg-card" style="min-height:270px;padding:12px;gap:8px;display:flex;flex-direction:column;">
+          <div class="skel" style="height:20px;width:45%;"></div>
+          <div class="skel" style="flex:1;"></div>
+          <div class="skel" style="height:28px;"></div>
+        </div>
+      }
+    </div>
+  }
+  else if (!_cards.Any())
+  {
+    <div class="pg-empty">
+      <div class="pg-empty-ico">📭</div>
+      <div class="pg-empty-ttl">No open positions</div>
+      <span>Positions appear here automatically in real-time</span>
+    </div>
+  }
+  else
+  {
+    <div class="pg-grid c@_cols">
+      @foreach (var card in _cards.OrderBy(c=>c.Sym).ThenBy(c=>c.Side))
+      {
+        @{
+          bool isLong = card.Side == "LONG";
+          decimal live = _prices.TryGetValue(card.Sym, out var lp) ? lp : card.Mark;
+          decimal pnl  = CalcPnl(card, live);
+          decimal roi  = card.Margin > 0 ? pnl / card.Margin * 100m : card.Roi;
+          bool up      = pnl >= 0;
+          bool isHedge = _cards.Count(c => c.Sym == card.Sym) > 1;
+
+          // Orders for this position
+          var myOrders = _orders.Where(o =>
+            o.Sym == card.Sym && o.ReduceOnly &&
+            o.Side == (isLong ? "SELL" : "BUY") &&
+            (o.PosSide == "BOTH" || o.PosSide == card.Side)
+          ).ToList();
+          var tps = myOrders.Where(o=>o.Type.Contains("TAKE_PROFIT"))
+                            .OrderBy(o=>isLong ? o.Price : -o.Price).ToList();
+          var sl  = myOrders.FirstOrDefault(o=>o.Type.Contains("STOP"));
+
+          // Klines
+          var ks = _klines.TryGetValue(card.Sym, out var kk) ? kk : new();
+
+          // Price range
+          var allP = new System.Collections.Generic.List<decimal>(ks.Select(k=>k.C));
+          allP.Add(card.Entry); allP.Add(live);
+          if (card.Liq > 0) allP.Add(card.Liq);
+          if (sl != null) allP.Add(sl.Price);
+          foreach (var t in tps) allP.Add(t.Price);
+          decimal mn = allP.Count > 0 ? allP.Min() : 0m;
+          decimal mx = allP.Count > 0 ? allP.Max() : 1m;
+          decimal pd = (mx-mn)*0.07m; if(pd==0) pd=mx*0.02m;
+          mn -= pd; mx += pd;
+          decimal rng = mx > mn ? mx - mn : 1m;
+
+          const int W=560, H=148, AX=70;
+          int CW = W - AX;
+          double Y(decimal p) => (double)H - (double)((p-mn)/rng*(decimal)H);
+          double X(int i, int n) => n<=1 ? 0.0 : (double)i/(n-1)*CW;
+
+          // Build paths
+          var ptsB = new System.Text.StringBuilder();
+          var fillB= new System.Text.StringBuilder();
+          if (ks.Count >= 2) {
+            fillB.Append($"M0,{H} ");
+            for (int ki=0;ki<ks.Count;ki++) {
+              double x=X(ki,ks.Count), y=Y(ks[ki].C);
+              ptsB.Append($"{x:F1},{y:F1} ");
+              fillB.Append($"L{x:F1},{y:F1} ");
+            }
+            fillB.Append($"L{CW},{ H} Z");
+          }
+          string pts  = ptsB.ToString().Trim();
+          string fill = fillB.ToString();
+          string lc   = isLong ? "#10b981" : "#ef4444";
+          string fc   = isLong ? "rgba(16,185,129,.09)" : "rgba(239,68,68,.09)";
+          double eY   = Y(card.Entry);
+          double mkY  = live>0 ? Y(live) : eY;
+          double lqY  = card.Liq>0 ? Y(card.Liq) : -1;
+          double slY  = sl!=null ? Y(sl.Price) : -1;
+        }
+
+        <div class="pg-card @(isLong?"L":"S")">
+
+          <!-- HEAD -->
+          <div class="pg-head">
+            <div class="pg-head-l">
+              <div class="pg-sym-row">
+                <span class="pg-sym">@card.Sym.Replace("USDT","")<sub>/USDT</sub></span>
+                <span class="pg-side @(isLong?"L":"S")">@(isLong?"▲ LONG":"▼ SHORT")</span>
+                @if(isHedge){<span class="pg-hedge">⇄ HEDGE</span>}
+              </div>
+              <div class="pg-meta">
+                <span>@card.Lev<b>×</b></span>
+                <span>Size <b>@card.Size.ToString("F1") $</b></span>
+                <span>Qty <b>@card.Qty.ToString("G6")</b></span>
+              </div>
+            </div>
+            <div class="pg-head-r">
+              <span class="pg-pnl @(up?"up":"dn")">@(pnl>=0?"+":"")@pnl.ToString("F2")</span>
+              <span class="pg-roi @(up?"up":"dn")">@(roi>=0?"+":"")@roi.ToString("F2")%</span>
+              <span class="pg-mark-p">@FP(live)</span>
+            </div>
+          </div>
+
+          <!-- CHART -->
+          <div class="pg-chart">
+            <svg viewBox="0 0 @W @H" preserveAspectRatio="none">
+              <!-- grid lines -->
+              <line x1="0" y1="@(H/4)"   x2="@CW" y2="@(H/4)"   stroke="#09162a" stroke-width="1"/>
+              <line x1="0" y1="@(H/2)"   x2="@CW" y2="@(H/2)"   stroke="#09162a" stroke-width="1"/>
+              <line x1="0" y1="@(H*3/4)" x2="@CW" y2="@(H*3/4)" stroke="#09162a" stroke-width="1"/>
+
+              @if (ks.Count >= 2) {
+                <path d="@fill" fill="@fc"/>
+                <polyline points="@pts" fill="none" stroke="@lc" stroke-width="1.5"
+                          stroke-linejoin="round" stroke-linecap="round"/>
+                <!-- live dot -->
+                <circle cx="@((CW-1).ToString("F0"))" cy="@mkY.ToString("F1")"
+                        r="3.5" fill="@lc"/>
+              }
+
+              <!-- Entry line -->
+              @if(eY>=0&&eY<=H){
+                <line x1="0" y1="@eY.ToString("F1")" x2="@CW" y2="@eY.ToString("F1")"
+                      stroke="@(isLong?"#06b6d4":"#f59e0b")" stroke-width="1.2"
+                      stroke-dasharray="5,3" opacity=".7"/>
+              }
+              <!-- SL line + zone -->
+              @if(slY>=0&&slY<=H){
+                <line x1="0" y1="@slY.ToString("F1")" x2="@CW" y2="@slY.ToString("F1")"
+                      stroke="#ef4444" stroke-width="1" stroke-dasharray="3,3" opacity=".65"/>
+                @if(isLong&&slY>eY){
+                  <rect x="0" y="@eY.ToString("F1")" width="@CW"
+                        height="@((slY-eY).ToString("F1"))" fill="rgba(239,68,68,.04)"/>
+                }
+                @if(!isLong&&slY<eY){
+                  <rect x="0" y="@slY.ToString("F1")" width="@CW"
+                        height="@((eY-slY).ToString("F1"))" fill="rgba(239,68,68,.04)"/>
+                }
+              }
+              <!-- TP lines -->
+              @for(int ti=0;ti<tps.Count;ti++){
+                double ty = Y(tps[ti].Price);
+                @if(ty>=0&&ty<=H){
+                  <line x1="0" y1="@ty.ToString("F1")" x2="@CW" y2="@ty.ToString("F1")"
+                        stroke="#10b981" stroke-width="@(ti==0?"1.2":"1")"
+                        stroke-dasharray="@(ti==0?"6,3":"4,3")" opacity=".6"/>
+                }
+              }
+              <!-- Liq line -->
+              @if(lqY>=0&&lqY<=H){
+                <line x1="0" y1="@lqY.ToString("F1")" x2="@CW" y2="@lqY.ToString("F1")"
+                      stroke="#7f1d1d" stroke-width="1.5" stroke-dasharray="2,4" opacity=".5"/>
+              }
+              <!-- Mark line -->
+              @if(mkY>=0&&mkY<=H){
+                <line x1="0" y1="@mkY.ToString("F1")" x2="@CW" y2="@mkY.ToString("F1")"
+                      stroke="rgba(255,255,255,.1)" stroke-width="1"/>
+              }
+              <!-- Axis panel bg -->
+              <rect x="@CW" y="0" width="@AX" height="@H" fill="#020810"/>
+              <line x1="@CW" y1="0" x2="@CW" y2="@H" stroke="var(--bdr)" stroke-width="1"/>
+            </svg>
+
+            <!-- Price labels -->
+            <div class="pg-ax" style="width:@(AX)px;">
+              @if(eY>=0&&eY<=H){
+                <span class="pg-ax-lbl lbl-e" style="top:@eY.ToString("F0")px">E @FP(card.Entry)</span>
+              }
+              @if(sl!=null&&slY>=0&&slY<=H&&Math.Abs(slY-eY)>10){
+                <span class="pg-ax-lbl lbl-sl" style="top:@slY.ToString("F0")px">SL @FP(sl.Price)</span>
+              }
+              @for(int ti=0;ti<Math.Min(tps.Count,3);ti++){
+                double ty=Y(tps[ti].Price);
+                @if(ty>=0&&ty<=H&&Math.Abs(ty-eY)>8){
+                  <span class="pg-ax-lbl lbl-tp" style="top:@ty.ToString("F0")px">TP@(ti+1) @FP(tps[ti].Price)</span>
+                }
+              }
+              @if(card.Liq>0&&lqY>=0&&lqY<=H&&Math.Abs(lqY-eY)>12){
+                <span class="pg-ax-lbl lbl-liq" style="top:@lqY.ToString("F0")px">LIQ @FP(card.Liq)</span>
+              }
+              @if(mkY>=0&&mkY<=H){
+                <span class="pg-ax-lbl lbl-m" style="top:@mkY.ToString("F0")px">@FP(live)</span>
+              }
+            </div>
+            @if(ks.Count>=2){
+              <span class="pg-time">5m · @ks.Count bars</span>
+            }
+          </div>
+
+          <!-- FOOTER -->
+          <div class="pg-foot">
+            <div class="pg-fi">
+              <span class="pg-fi-lbl">Entry</span>
+              <span class="pg-fi-val">@FP(card.Entry)</span>
+            </div>
+            <div class="pg-fi">
+              <span class="pg-fi-lbl">Margin</span>
+              <span class="pg-fi-val">$@card.Margin.ToString("F2")</span>
+            </div>
+            <div class="pg-fi">
+              <span class="pg-fi-lbl">Liq</span>
+              <span class="pg-fi-val" style="color:var(--redL)">@FP(card.Liq)</span>
+            </div>
+            <div class="pg-tpsl">
+              @if(sl!=null){<span class="chip-sl">SL @FP(sl.Price)</span>}
+              @for(int ti=0;ti<tps.Count;ti++){
+                <span class="chip-tp">TP@(ti+1) @FP(tps[ti].Price)</span>
+              }
+              @if(sl==null&&!tps.Any()){<span class="chip-none">No SL/TP</span>}
+            </div>
+          </div>
+
+        </div>
+      }
+    </div>
+  }
+
+</div>
+
+@code {
+    bool _loading = true;
+    int _cols = 2;
+    List<CardData> _cards = new();
+    List<OrdData> _orders = new();
+    Dictionary<string, decimal> _prices = new();
+    Dictionary<string, List<Bar>> _klines = new();
+    System.Threading.PeriodicTimer? _timer;
+    CancellationTokenSource _cts = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        LiveState.PriceTicked += OnTick;
+        await RefreshAsync();
+        _ = InvokeAsync(RunTimerAsync);
+    }
+
+    async Task RunTimerAsync()
+    {
+        _timer = new System.Threading.PeriodicTimer(TimeSpan.FromSeconds(5));
+        try { while (await _timer.WaitForNextTickAsync(_cts.Token)) await RefreshAsync(); }
+        catch (OperationCanceledException) { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        LiveState.PriceTicked -= OnTick;
+        _cts.Cancel(); _timer?.Dispose();
+        await Task.CompletedTask;
+    }
+
+    void OnTick(string sym, decimal price)
+    {
+        if (!_cards.Any(c => c.Sym == sym)) return;
+        _prices[sym] = price;
+        if (_klines.TryGetValue(sym, out var ks) && ks.Count > 0)
+        {
+            var last = ks[^1];
+            ks[^1] = last with { H = Math.Max(last.H, price), L = Math.Min(last.L, price), C = price };
+        }
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    async Task RefreshAsync()
+    {
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) { _loading = false; return; }
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+            var posRes = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: cts.Token);
+            if (posRes.Success && posRes.Data != null)
+            {
+                _cards = posRes.Data
+                    .Where(p => Math.Abs(p.Quantity) > 0.000001m)
+                    .Select(p =>
+                    {
+                        string side = p.PositionSide == PositionSide.Both
+                            ? (p.Quantity > 0 ? "LONG" : "SHORT")
+                            : p.PositionSide.ToString().ToUpperInvariant();
+                        decimal qty = Math.Abs(p.Quantity);
+                        decimal margin = p.IsolatedMargin > 0
+                            ? p.IsolatedMargin
+                            : (p.EntryPrice > 0 ? qty * p.EntryPrice / p.Leverage : 0m);
+                        return new CardData
+                        {
+                            Sym = p.Symbol, Side = side, Lev = (int)p.Leverage,
+                            Qty = qty, Size = qty * p.MarkPrice, Entry = p.EntryPrice,
+                            Mark = p.MarkPrice, Liq = p.LiquidationPrice, Margin = margin,
+                            Pnl = p.UnrealizedPnl,
+                            Roi = margin > 0 ? p.UnrealizedPnl / margin * 100m : 0m,
+                        };
+                    })
+                    .OrderBy(c => c.Sym).ThenBy(c => c.Side)
+                    .ToList();
+            }
+
+            var ordRes = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(ct: cts.Token);
+            if (ordRes.Success && ordRes.Data != null)
+            {
+                _orders = ordRes.Data.Select(o => new OrdData
+                {
+                    Sym = o.Symbol,
+                    Side = o.Side.ToString().ToUpperInvariant(),
+                    PosSide = o.PositionSide.ToString().ToUpperInvariant(),
+                    Type = o.Type.ToString().ToUpperInvariant(),
+                    Price = o.StopPrice > 0 ? o.StopPrice : o.Price,
+                    Qty = o.Quantity, ReduceOnly = o.ReduceOnly,
+                }).ToList();
+            }
+
+            // Load klines for new symbols only
+            foreach (var sym in _cards.Select(c => c.Sym).Distinct())
+            {
+                if (_klines.ContainsKey(sym)) continue;
+                try
+                {
+                    var kr = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
+                        sym, KlineInterval.FiveMinutes, limit: 60, ct: cts.Token);
+                    if (kr.Success && kr.Data != null)
+                    {
+                        _klines[sym] = kr.Data.Select(k =>
+                            new Bar(k.OpenTime, k.OpenPrice, k.HighPrice, k.LowPrice, k.ClosePrice))
+                            .ToList();
+                        if (!_prices.ContainsKey(sym) && kr.Data.Any())
+                            _prices[sym] = kr.Data.Last().ClosePrice;
+                    }
+                }
+                catch { }
+            }
+            _loading = false;
+        }
+        catch { _loading = false; }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    decimal CalcPnl(CardData c, decimal? price = null)
+    {
+        var p = price ?? (_prices.TryGetValue(c.Sym, out var lp) ? lp : c.Mark);
+        if (p <= 0 || c.Entry <= 0) return c.Pnl;
+        return c.Side == "LONG"
+            ? (p - c.Entry) * c.Qty
+            : (c.Entry - p) * c.Qty;
+    }
+
+    string FP(decimal v)
+    {
+        if (v <= 0) return "—";
+        if (v >= 1000)    return v.ToString("F2");
+        if (v >= 1)       return v.ToString("F4");
+        if (v >= 0.01m)   return v.ToString("F5");
+        if (v >= 0.0001m) return v.ToString("F6");
+        return v.ToString("G6");
+    }
+
+    record Bar(DateTime T, decimal O, decimal H, decimal L, decimal C);
+    class CardData
+    {
+        public string Sym = "", Side = "";
+        public int Lev;
+        public decimal Qty, Size, Entry, Mark, Liq, Margin, Pnl, Roi;
+    }
+    class OrdData
+    {
+        public string Sym = "", Side = "", PosSide = "", Type = "";
+        public decimal Price, Qty;
+        public bool ReduceOnly;
+    }
+}
