@@ -8,7 +8,6 @@ using System.Threading.Channels;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
-using VertexAutoTradeBinance.Services; // LiveSignalService
 using VertexAutoTradeBinance8.Services.Bootstrap;
 using VertexAutoTradeBinance8.Services.Engine;
 using VertexAutoTradeBinance8.Services.Formatting;
