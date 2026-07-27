@@ -71,6 +71,7 @@ namespace VertexAutoTradeBinance8
         private readonly IStrategyPreFilter _pre;
         private readonly MarketContextService _marketContext;
         private readonly SimulatedTradeService _sim;
+        private readonly LiveSignalService _liveSig;
         private readonly SymbolInfoService _symbolInfo;
         private readonly FundingRateService _fundingRate;
         private readonly RealtimeMomentumDetector _momentum;
@@ -150,7 +151,8 @@ namespace VertexAutoTradeBinance8
             EngineStateSnapshotService engineStateSnapshot,
             IBootGate bootGate,
             TradingOptionsResolver resolver,
-            IStrategyPreFilter pre, MarketContextService marketContext, SimulatedTradeService sim, AiMarketRegimeService marketRegime, BinanceHistoryImporter importer
+            IStrategyPreFilter pre, MarketContextService marketContext, SimulatedTradeService sim,
+            LiveSignalService liveSig, AiMarketRegimeService marketRegime, BinanceHistoryImporter importer
             , RealtimePriceService price, SymbolInfoService symbolInfo,
             FundingRateService fundingRate,
             RealtimeMomentumDetector momentum,
@@ -187,6 +189,7 @@ namespace VertexAutoTradeBinance8
 
             learn.ForceSnapshot();
             _sim = sim;
+            _liveSig = liveSig;
             _marketRegime = marketRegime;
             _importer = importer;
             _price = price;
@@ -779,6 +782,16 @@ namespace VertexAutoTradeBinance8
                 return;
             }
             // =====================================================
+            // 3.1) WRITE TO LIVE SIGNALS (AI confirmed, before pipeline blocks)
+            // ─────────────────────────────────────────────────────────────────
+            // Signal has passed AI (PE4 score >= 0.20) and has Entry/SL/TP.
+            // Write it NOW so /market page shows it regardless of what
+            // happens in the rest of the pipeline (execution, cooldown etc.)
+            // =====================================================
+            try { await _liveSig.AppendAsync(signal, ct); }
+            catch { /* never block execution for UI write */ }
+
+            // =====================================================
             // 3.5) CONTEXT SIDE CHECK (NOW WITH CONFIDENCE)
             // =====================================================
             var ctx = await _marketContext.GetContextAsync(symbol, ct);
@@ -1325,4 +1338,5 @@ namespace VertexAutoTradeBinance8
         }
     }
 }
+
 
