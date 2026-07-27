@@ -2,7 +2,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
-namespace VertexAutoTradeBinance.Services
+namespace VertexAutoTradeBinance8.Services
 {
     /// <summary>
     /// Writes quality signals to live_signals.json so the Web /market page
