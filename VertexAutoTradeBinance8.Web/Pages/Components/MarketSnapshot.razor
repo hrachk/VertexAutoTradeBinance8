@@ -12,6 +12,7 @@
 @inject Microsoft.Extensions.Options.IOptionsMonitor<VertexAutoTradeBinance8.Configuration.BinanceOptions> BinanceOpts
 @inject MarketDataLiveState LiveState
 @inject MissedTradeFileService SignalSvc
+@inject LiveSignalFileService LiveSignalSvc
 @inject BinanceClientFactory Factory
 @inject VertexAutoTradeBinance8.Services.BinanceAlgoOrderService AlgoOrders
 @inject VertexAutoTradeBinance8.Web.Services.BinanceTimeService BinanceTime
@@ -3444,32 +3445,64 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             // Load recent signals (last 24h, not blocked by exchange)
             try
             {
-                var allSigs = await SignalSvc.LoadAsync();
-                _signals = allSigs
+                // ── PRIMARY: live_signals.json (written by Engine after AI confirmation) ──
+                // This file contains EVERY signal that passed PE4 (AI score >= 0.20)
+                // with Entry/SL/TP populated — regardless of whether AutoTrade opened it.
+                // This is the correct source for /market signal cards.
+                var liveSigs = await LiveSignalSvc.LoadAsync();
+                var cutoffLive = DateTime.UtcNow.AddHours(-SignalLookbackHours);
+                _signals = liveSigs
                     .Where(s => s.Entry > 0 && s.StopLoss > 0
-                                && s.Time >= DateTime.UtcNow.AddHours(-SignalLookbackHours)
-                                && !_expiredSignals.ContainsKey(SignalKey(s))
-                                && !GetSignalTtl(s).IsExpired
-                                // ── CONFIRMED FILTER ────────────────────────────────────
-                                // NOTE: Engine writes field "Event" (e.g. "REJECT_AI_BLOCK")
-                                // but Web MissedTradeRecord has field "Stage" — these names
-                                // DON'T MATCH so Stage is always "" and Stage != "BLOCKED"
-                                // was dead code (always true). Real filtering uses:
-                                //   Confidence: (signal.Confidence??0)*100 — correctly mapped
-                                //   Score:      (signal.AiQuality??0)*100  — correctly mapped
-                                //   Reason:     the block reason string     — correctly mapped
-                                && (s.Confidence / 100m) >= ConfidenceResolver.Resolve(s.Symbol).MinEntry
-                                && s.Score > 0
                                 && s.TakeProfits != null && s.TakeProfits.Count > 0
-                                && !s.Reason.Contains("BLOCK")
-                                && !s.Reason.Contains("COOLDOWN")
-                                && !s.Reason.Contains("ZERO")
-                                && !s.Reason.Contains("FAILED"))
+                                && s.Time >= cutoffLive
+                                && s.Confidence > 0
+                                && !_expiredSignals.ContainsKey($"{s.Symbol}:{s.Side}:{s.Entry}"))
                     .GroupBy(s => s.Symbol)
                     .Select(g => g.OrderByDescending(s => s.Time).First())
                     .OrderByDescending(s => s.Time)
-                    .Take(12)
+                    .Take(20)
+                    .Select(ls => new MissedTradeRecord
+                    {
+                        Symbol      = ls.Symbol,
+                        Side        = ls.Side,
+                        Time        = ls.Time,
+                        Entry       = ls.Entry,
+                        StopLoss    = ls.StopLoss,
+                        TakeProfits = ls.TakeProfits,
+                        EntryRangeLow  = ls.EntryRangeLow,
+                        EntryRangeHigh = ls.EntryRangeHigh,
+                        Confidence  = ls.Confidence,
+                        Score       = ls.Score,
+                        Reason      = ls.Reason,
+                        ATR         = ls.Atr,
+                        Event       = "LIVE_SIGNAL",
+                    })
                     .ToList();
+
+                // ── FALLBACK: missed_trades.json (legacy, if live_signals empty) ──
+                if (_signals.Count == 0)
+                {
+                    var allSigs = await SignalSvc.LoadAsync();
+                    _signals = allSigs
+                        .Where(s => s.Entry > 0 && s.StopLoss > 0
+                                    && s.Time >= cutoffLive
+                                    && !_expiredSignals.ContainsKey(SignalKey(s))
+                                    && !GetSignalTtl(s).IsExpired
+                                    && (s.Confidence / 100m) >= ConfidenceResolver.Resolve(s.Symbol).MinEntry
+                                    && s.Score > 0
+                                    && s.TakeProfits != null && s.TakeProfits.Count > 0
+                                    && !s.Reason.Contains("BLOCK")
+                                    && !s.Reason.Contains("COOLDOWN")
+                                    && !s.Reason.Contains("ZERO")
+                                    && !s.Reason.Contains("FAILED"))
+                        .GroupBy(s => s.Symbol)
+                        .Select(g => g.OrderByDescending(s => s.Time).First())
+                        .OrderByDescending(s => s.Time)
+                        .Take(12)
+                        .ToList();
+                }
+
+                var allSigs = await SignalSvc.LoadAsync();
 
                 // 1-hour archive: all signals in last hour regardless of TTL or expiry.
                 // One entry per symbol (most recent), ordered newest first.
@@ -6166,10 +6199,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         _selectedPosition = pos;
         _activeSignal = null;
         _orderPanelDismissed = false;
-        // Show the Add / Hedge buttons first (not the expanded sub-panel).
-        // User clicks "Add Long/Short" or "Hedge" to expand further.
-        _addToPositionOpen = false;
-        _addToPositionHedge = false;
+        _addToPositionOpen = true;
 
         var sym = pos.Symbol;
         var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == _activeTf)
