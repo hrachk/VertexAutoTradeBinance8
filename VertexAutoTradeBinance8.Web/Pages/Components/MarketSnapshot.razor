@@ -7554,20 +7554,22 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
             string entrySummary = $"Order #{orderId} placed · {_orderType} · {qty} {_activeSignal.Symbol.Replace("USDT","")}";
 
-            // SL/TP — placed via algo orders whenever the panel's SL/TP
-            // fields are populated (auto-filled from the signal's own
-            // levels when this came from a signal, or entered manually
-            // otherwise — either way, this is the user explicitly
-            // confirming these levels via the order panel before
-            // submitting). Reuses BinanceAlgoOrderService, the exact
-            // same production-proven, manually-signed Algo Order API
-            // client the bot's own TP/SL placement uses — Binance.Net's
-            // library calls don't properly support conditional orders
-            // since the Dec 2025 Algo Order API migration.
+            // ── SL / TP placement ────────────────────────────────────────────────
+            // Market: position is open immediately → place SL/TP with reduceOnly:true.
+            // Limit:  position is NOT open yet (order sitting in book) →
+            //         reduceOnly:true on a non-existent position is rejected by Binance.
+            //         Fix: use reduceOnly:false for Limit entries so Binance accepts
+            //         the conditional orders now and they will trigger correctly once
+            //         the limit order fills and the position opens.
+            //         The orders are correctly priced (SL on loss side, TP on profit
+            //         side) so there is no risk of unintended execution direction.
+            bool isLimitEntry = _orderType == "Limit";
+            bool useReduceOnly = !isLimitEntry; // false for Limit, true for Market/Stop
+
             if (_manualSlPrice > 0 || _manualTps.Any(t => t.Price > 0))
             {
                 var protectiveErrors = new List<string>();
-                var closeSide = isBuy ? OrderSide.Sell : OrderSide.Buy; // closing orders go the opposite direction
+                var closeSide = isBuy ? OrderSide.Sell : OrderSide.Buy;
 
                 if (_manualSlPrice > 0)
                 {
@@ -7577,7 +7579,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     bool ok = await AlgoOrders.PlaceConditionalAsync(
                         symbol: _activeSignal.Symbol, side: closeSide, positionSide: posSide,
                         type: "STOP_MARKET", quantity: qty, triggerPrice: slTrigger,
-                        workingType: "MARK_PRICE", reduceOnly: true, ct: cts.Token,
+                        workingType: "MARK_PRICE", reduceOnly: useReduceOnly, ct: cts.Token,
                         clientAlgoId: slAlgoId);
                     if (!ok) protectiveErrors.Add("SL");
                 }
@@ -7592,15 +7594,18 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     bool ok = await AlgoOrders.PlaceConditionalAsync(
                         symbol: _activeSignal.Symbol, side: closeSide, positionSide: posSide,
                         type: "TAKE_PROFIT_MARKET", quantity: tpQty, triggerPrice: tpTrigger,
-                        workingType: "MARK_PRICE", reduceOnly: true, ct: cts.Token,
+                        workingType: "MARK_PRICE", reduceOnly: useReduceOnly, ct: cts.Token,
                         clientAlgoId: tpAlgoId);
                     if (!ok) protectiveErrors.Add($"TP@{FmtP(tpRow.Price)}");
-                    await Task.Delay(150); // avoid hammering the API with back-to-back signed requests
+                    await Task.Delay(150);
                 }
 
+                string limitNote = isLimitEntry
+                    ? " (pending — will activate when limit fills)"
+                    : "";
                 entrySummary += protectiveErrors.Count == 0
-                    ? " · SL/TP placed"
-                    : $" · ⚠ some protective orders failed: {string.Join(", ", protectiveErrors)} (position is open, retry these manually)";
+                    ? $" · SL/TP placed{limitNote}"
+                    : $" · ⚠ some protective orders failed: {string.Join(", ", protectiveErrors)}";
             }
 
             _orderSuccess = entrySummary;
@@ -7668,6 +7673,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
