@@ -380,6 +380,7 @@ public class Program
 
 
                     services.AddSingleton<SimulatedTradeService>();
+                    services.AddSingleton<LiveSignalService>();
                     services.AddSingleton<AiModelSnapshotService>();
                     services.AddSingleton<TradeResultMonitorService>();
               
@@ -438,6 +439,7 @@ public class Program
         }
     }
 }
+
 
 
 
