@@ -1536,25 +1536,38 @@
 
             if (!s.tpSlPillRangeSub) {
                 const self = this;
-                // Subscribe ONCE to visible-range changes (X scroll / zoom).
-                s.tpSlPillRangeSub = () => self.repositionAllPills(containerId, pnlFor);
+
+                // PERF: dirty-flag + RAF loop.
+                // Previously: subscribeVisibleLogicalRangeChange and subscribeCrosshairMove
+                // called repositionAllPills() synchronously on every scroll pixel and every
+                // mouse movement (~60/s each). This caused layout thrashing.
+                // Now: events only set a dirty flag; actual repositioning happens in the
+                // next animation frame — at most once per frame, only when needed.
+                let pillDirty = true;
+                const pillLoop = () => {
+                    s._pillRafId = requestAnimationFrame(pillLoop);
+                    if (!sessions.has(containerId)) {
+                        cancelAnimationFrame(s._pillRafId); s._pillRafId = null; return;
+                    }
+                    if (pillDirty) {
+                        pillDirty = false;
+                        self.repositionAllPills(containerId, pnlFor);
+                    }
+                };
+                s._pillRafId = requestAnimationFrame(pillLoop);
+
+                // Scroll / zoom / crosshair → mark dirty (no work done here)
+                s.tpSlPillRangeSub = () => { pillDirty = true; };
                 s.chart.timeScale().subscribeVisibleLogicalRangeChange(s.tpSlPillRangeSub);
 
-                // Subscribe to price-scale changes (Y zoom/pan).
-                // LightweightCharts v5 fires subscribeVisiblePriceRangeChange on
-                // the right price scale for vertical drag/pinch events.
                 s.tpSlPriceScaleSub = s.tpSlPillRangeSub;
-                try {
-                    s.chart.priceScale('right')
-                        .subscribePriceRangeChange(s.tpSlPriceScaleSub);
-                } catch(e) { /* older build — no subscribepricerangechange */ }
+                try { s.chart.priceScale('right').subscribePriceRangeChange(s.tpSlPriceScaleSub); } catch(e) {}
 
-                // ResizeObserver: reposition when the chart container resizes
-                // (window resize, panel drag, etc.) — no events fire for this.
+                s.tpSlCrosshairSub = () => { pillDirty = true; };
+                s.chart.subscribeCrosshairMove(s.tpSlCrosshairSub);
+
                 if (!s._pillResizeObs) {
-                    s._pillResizeObs = new ResizeObserver(() =>
-                        self.repositionAllPills(containerId, pnlFor));
-                    const chartEl = s.chart.chartElement?.() || container.querySelector('td') || container;
+                    s._pillResizeObs = new ResizeObserver(() => { pillDirty = true; });
                     s._pillResizeObs.observe(container);
                 }
             }
@@ -2246,6 +2259,7 @@
     window._vertexChartSessions = sessions;
 
 })();
+
 
 
 
