@@ -1,0 +1,611 @@
+@page "/market/multi"
+@using VertexAutoTradeBinance8.Web.Models
+@using VertexAutoTradeBinance8.Web.Services
+@using VertexAutoTradeBinance8.Services
+@inject MarketDataLiveState LiveState
+@inject MarketSnapshotFileService Service
+@inject HistoricalDataReaderService HistoricalReader
+@inject BinanceClientFactory Factory
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>Vertex · Multi Chart</PageTitle>
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --bg:#0a0d12;--bg1:#0d1117;--bg2:#111827;
+  --bdr:#1a1f2e;--bdr2:#263148;
+  --acc:#3b82f6;--grn:#22c55e;--red:#ef4444;
+  --t0:#f1f5f9;--t1:#94a3b8;--t2:#475569;--t3:#1e2d47;
+}
+html,body{background:var(--bg);overflow:hidden;}
+
+/* ── TOPBAR ── */
+.mc-bar{
+  display:flex;align-items:center;gap:8px;
+  height:42px;padding:0 12px;
+  background:var(--bg1);border-bottom:1px solid var(--bdr);
+  flex-shrink:0;
+}
+.mc-logo{font-size:13px;font-weight:900;color:var(--t0);letter-spacing:-.3px;white-space:nowrap;}
+.mc-logo span{color:#38bdf8;}
+.mc-sep{width:1px;height:18px;background:var(--bdr2);}
+
+/* Layout selector buttons */
+.mc-layouts{display:flex;gap:3px;}
+.mc-lay-btn{
+  width:32px;height:26px;border-radius:5px;
+  border:1px solid var(--bdr2);background:transparent;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:all .13s;padding:4px;
+}
+.mc-lay-btn:hover{border-color:var(--acc);background:rgba(59,130,246,.08);}
+.mc-lay-btn.on{border-color:var(--acc);background:rgba(59,130,246,.15);}
+.mc-lay-btn svg rect{fill:none;stroke:var(--t1);stroke-width:1.5;}
+.mc-lay-btn.on svg rect{stroke:var(--acc);}
+
+/* Timeframe selector */
+.mc-tfs{display:flex;gap:2px;margin-left:4px;}
+.mc-tf{
+  height:24px;padding:0 8px;border-radius:4px;border:none;
+  background:transparent;color:var(--t2);
+  font-size:11px;font-weight:700;cursor:pointer;transition:all .13s;
+}
+.mc-tf:hover{color:var(--t0);background:var(--bg2);}
+.mc-tf.on{color:var(--acc);background:rgba(59,130,246,.1);}
+
+/* Symbol search */
+.mc-sym-search{
+  display:flex;align-items:center;gap:6px;
+  background:var(--bg2);border:1px solid var(--bdr2);
+  border-radius:6px;padding:0 8px;height:26px;
+  margin-left:4px;
+}
+.mc-sym-search input{
+  background:none;border:none;outline:none;color:var(--t0);
+  font-size:11px;width:90px;font-family:inherit;
+}
+.mc-sym-search svg{color:var(--t2);}
+
+.mc-back{
+  margin-left:auto;display:flex;align-items:center;gap:5px;
+  height:24px;padding:0 10px;background:transparent;
+  border:1px solid var(--bdr2);border-radius:5px;
+  color:var(--t2);font-size:11px;font-weight:700;cursor:pointer;
+  text-decoration:none;transition:all .13s;
+}
+.mc-back:hover{color:var(--t0);border-color:var(--acc);}
+.mc-live{width:7px;height:7px;border-radius:50%;background:var(--grn);
+  box-shadow:0 0 5px var(--grn);animation:mcpulse 2s infinite;}
+@@keyframes mcpulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+
+/* ── GRID ── */
+.mc-root{display:flex;flex-direction:column;height:100vh;overflow:hidden;}
+.mc-grid{
+  flex:1;display:grid;overflow:hidden;
+  gap:2px;background:var(--bdr);padding:2px;
+}
+/* Layout variants */
+.mc-grid.lay-1x1{grid-template-columns:1fr;grid-template-rows:1fr;}
+.mc-grid.lay-2x1{grid-template-columns:1fr 1fr;grid-template-rows:1fr;}
+.mc-grid.lay-1x2{grid-template-columns:1fr;grid-template-rows:1fr 1fr;}
+.mc-grid.lay-2x2{grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;}
+.mc-grid.lay-3x2{grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr;}
+.mc-grid.lay-4x2{grid-template-columns:1fr 1fr 1fr 1fr;grid-template-rows:1fr 1fr;}
+.mc-grid.lay-3x1{grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr;}
+
+/* ── CHART PANEL ── */
+.mc-panel{
+  background:var(--bg);position:relative;overflow:hidden;
+  display:flex;flex-direction:column;min-height:0;
+}
+.mc-panel.active{outline:1.5px solid var(--acc);outline-offset:-1px;z-index:2;}
+
+/* Panel header */
+.mc-ph{
+  display:flex;align-items:center;gap:6px;
+  height:30px;padding:0 8px;flex-shrink:0;
+  background:var(--bg1);border-bottom:1px solid var(--bdr);
+  cursor:pointer;user-select:none;
+}
+.mc-ph:hover{background:var(--bg2);}
+.mc-ph-sym{font-size:12px;font-weight:800;color:var(--t0);}
+.mc-ph-tf{font-size:10px;font-weight:700;color:var(--t2);
+  background:var(--bdr);padding:1px 5px;border-radius:3px;}
+.mc-ph-price{font-size:12px;font-weight:700;font-family:monospace;margin-left:auto;}
+.mc-ph-chg{font-size:10px;font-weight:700;font-family:monospace;}
+.mc-ph-chg.up{color:var(--grn);}.mc-ph-chg.dn{color:var(--red);}
+.mc-ph-price.up{color:var(--grn);}.mc-ph-price.dn{color:var(--red);}
+.mc-ph-close{
+  width:18px;height:18px;border-radius:3px;border:none;
+  background:transparent;color:var(--t2);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  font-size:12px;transition:all .13s;
+}
+.mc-ph-close:hover{background:rgba(239,68,68,.15);color:var(--red);}
+
+/* Chart canvas area */
+.mc-chart-area{flex:1;position:relative;min-height:0;}
+.mc-chart-area > div[id]{width:100%;height:100%;}
+
+/* Symbol dropdown search results */
+.mc-sym-dd{
+  position:absolute;top:30px;left:0;right:0;z-index:100;
+  background:var(--bg1);border:1px solid var(--bdr2);
+  border-top:none;max-height:180px;overflow-y:auto;
+}
+.mc-sym-dd-item{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:5px 10px;font-size:11px;cursor:pointer;color:var(--t1);
+  border-bottom:1px solid var(--bdr);
+}
+.mc-sym-dd-item:hover{background:var(--bg2);color:var(--t0);}
+.mc-sym-dd-item span{font-size:10px;color:var(--t2);}
+
+/* Add panel button */
+.mc-add-panel{
+  background:var(--bg);display:flex;align-items:center;justify-content:center;
+  cursor:pointer;border:1.5px dashed var(--bdr2);
+  flex-direction:column;gap:6px;transition:all .15s;
+}
+.mc-add-panel:hover{border-color:var(--acc);background:rgba(59,130,246,.04);}
+.mc-add-panel-icon{font-size:24px;color:var(--t3);}
+.mc-add-panel-txt{font-size:11px;color:var(--t2);}
+
+/* Symbol picker overlay (for add panel) */
+.mc-picker-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,.6);
+  display:flex;align-items:center;justify-content:center;z-index:200;
+}
+.mc-picker{
+  background:var(--bg1);border:1px solid var(--bdr2);
+  border-radius:10px;width:360px;max-height:480px;
+  display:flex;flex-direction:column;overflow:hidden;
+}
+.mc-picker-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 16px;border-bottom:1px solid var(--bdr);
+  font-size:13px;font-weight:700;color:var(--t0);
+}
+.mc-picker-head button{
+  background:none;border:none;color:var(--t2);cursor:pointer;
+  font-size:16px;line-height:1;
+}
+.mc-picker-search{
+  padding:10px 12px;border-bottom:1px solid var(--bdr);
+}
+.mc-picker-search input{
+  width:100%;background:var(--bg2);border:1px solid var(--bdr2);
+  border-radius:6px;padding:6px 10px;color:var(--t0);
+  font-size:12px;outline:none;font-family:inherit;
+}
+.mc-picker-list{flex:1;overflow-y:auto;}
+.mc-picker-item{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 16px;cursor:pointer;border-bottom:1px solid var(--bdr);
+  transition:background .1s;
+}
+.mc-picker-item:hover{background:var(--bg2);}
+.mc-picker-item-sym{font-size:12px;font-weight:700;color:var(--t0);}
+.mc-picker-item-price{font-size:11px;font-family:monospace;color:var(--t2);}
+
+/* Panel TF switcher (mini, on hover) */
+.mc-panel-tfs{
+  display:flex;gap:2px;padding:2px 6px;
+  background:rgba(10,13,18,.85);backdrop-filter:blur(4px);
+  border-bottom:1px solid var(--bdr);flex-shrink:0;
+}
+.mc-panel-tf{
+  height:18px;padding:0 5px;background:none;border:none;
+  color:var(--t2);font-size:9.5px;font-weight:700;cursor:pointer;
+  border-radius:3px;
+}
+.mc-panel-tf:hover{color:var(--t0);background:var(--bdr2);}
+.mc-panel-tf.on{color:var(--acc);}
+
+/* Empty state */
+.mc-empty{
+  flex:1;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:8px;color:var(--t2);
+}
+.mc-empty-icon{font-size:28px;opacity:.35;}
+.mc-empty-txt{font-size:11px;}
+</style>
+
+<div class="mc-root">
+
+  <!-- TOP BAR -->
+  <div class="mc-bar">
+    <div class="mc-logo">VERTEX <span>AI</span></div>
+    <div class="mc-sep"></div>
+    <div class="mc-live" title="Live"></div>
+
+    <!-- Layout presets -->
+    <div class="mc-layouts">
+      <!-- 1x1 -->
+      <button class="mc-lay-btn @(_layout=="1x1"?"on":"")" @onclick='()=>SetLayout("1x1")' title="1 chart">
+        <svg viewBox="0 0 16 16"><rect x="1" y="1" width="14" height="14" rx="1"/></svg>
+      </button>
+      <!-- 2x1 -->
+      <button class="mc-lay-btn @(_layout=="2x1"?"on":"")" @onclick='()=>SetLayout("2x1")' title="2 charts side by side">
+        <svg viewBox="0 0 16 16"><rect x="1" y="1" width="6" height="14" rx="1"/><rect x="9" y="1" width="6" height="14" rx="1"/></svg>
+      </button>
+      <!-- 2x2 -->
+      <button class="mc-lay-btn @(_layout=="2x2"?"on":"")" @onclick='()=>SetLayout("2x2")' title="4 charts 2x2">
+        <svg viewBox="0 0 16 16"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
+      </button>
+      <!-- 3x2 -->
+      <button class="mc-lay-btn @(_layout=="3x2"?"on":"")" @onclick='()=>SetLayout("3x2")' title="6 charts 3x2">
+        <svg viewBox="0 0 16 16"><rect x="1" y="1" width="4" height="6" rx="1"/><rect x="6" y="1" width="4" height="6" rx="1"/><rect x="11" y="1" width="4" height="6" rx="1"/><rect x="1" y="9" width="4" height="6" rx="1"/><rect x="6" y="9" width="4" height="6" rx="1"/><rect x="11" y="9" width="4" height="6" rx="1"/></svg>
+      </button>
+      <!-- 3x1 -->
+      <button class="mc-lay-btn @(_layout=="3x1"?"on":"")" @onclick='()=>SetLayout("3x1")' title="3 charts side by side">
+        <svg viewBox="0 0 16 16"><rect x="1" y="1" width="4" height="14" rx="1"/><rect x="6" y="1" width="4" height="14" rx="1"/><rect x="11" y="1" width="4" height="14" rx="1"/></svg>
+      </button>
+    </div>
+
+    <div class="mc-sep"></div>
+
+    <!-- Global TF selector -->
+    <div class="mc-tfs">
+      @foreach (var tf in _tfs)
+      {
+        <button class="mc-tf @(_globalTf==tf?"on":"")" @onclick="()=>SetGlobalTf(tf)">@tf</button>
+      }
+    </div>
+
+    <a class="mc-back" href="/market">← Market</a>
+  </div>
+
+  <!-- CHART GRID -->
+  <div class="mc-grid lay-@_layout">
+    @for (int slot = 0; slot < SlotCount(); slot++)
+    {
+      var s = slot; // capture for lambda
+      @if (s < _panels.Count)
+      {
+        var panel = _panels[s];
+        <div class="mc-panel @(_activeSlot==s?"active":"")" @onclick="()=>_activeSlot=s">
+
+          <!-- Panel header -->
+          <div class="mc-ph" @onclick:stopPropagation="true">
+            <span class="mc-ph-sym">@panel.Symbol.Replace("USDT","")<span style="font-size:9px;color:var(--t2)">/USDT</span></span>
+            <span class="mc-ph-tf">@panel.Tf</span>
+            @{
+              decimal lp = _prices.TryGetValue(panel.Symbol, out var plp) ? plp : 0m;
+              decimal prev = _prevPrices.TryGetValue(panel.Symbol, out var pp) ? pp : lp;
+              bool pUp = lp >= prev;
+            }
+            <span class="mc-ph-price @(pUp?"up":"dn")">@FP(lp)</span>
+            @if (prev > 0 && lp != prev)
+            {
+              decimal chgPct = (lp - prev) / prev * 100m;
+              <span class="mc-ph-chg @(chgPct>=0?"up":"dn")">@(chgPct>=0?"+":"")@chgPct.ToString("F2")%</span>
+            }
+            <button class="mc-ph-close" @onclick="()=>RemovePanel(s)" title="Close chart">✕</button>
+          </div>
+
+          <!-- Per-panel TF buttons -->
+          <div class="mc-panel-tfs">
+            @foreach (var tf in _tfs)
+            {
+              <button class="mc-panel-tf @(panel.Tf==tf?"on":"")"
+                      @onclick="()=>ChangePanelTf(s,tf)"
+                      @onclick:stopPropagation="true">@tf</button>
+            }
+          </div>
+
+          <!-- TradingView chart -->
+          <div class="mc-chart-area">
+            <div id="mc-chart-@(s)" style="width:100%;height:100%;"></div>
+          </div>
+        </div>
+      }
+      else
+      {
+        <!-- Empty slot — click to add -->
+        <div class="mc-add-panel" @onclick="()=>OpenPicker(s)">
+          <div class="mc-add-panel-icon">+</div>
+          <div class="mc-add-panel-txt">Add chart</div>
+        </div>
+      }
+    }
+  </div>
+
+  <!-- Symbol picker overlay -->
+  @if (_pickerOpen)
+  {
+    <div class="mc-picker-overlay" @onclick="ClosePicker">
+      <div class="mc-picker" @onclick:stopPropagation="true">
+        <div class="mc-picker-head">
+          <span>Choose Symbol</span>
+          <button @onclick="ClosePicker">✕</button>
+        </div>
+        <div class="mc-picker-search">
+          <input placeholder="Search BTCUSDT, ETH…"
+                 @bind="_pickerSearch" @bind:event="oninput"
+                 autofocus />
+        </div>
+        <div class="mc-picker-list">
+          @foreach (var sym in FilteredSymbols())
+          {
+            var sym2 = sym;
+            <div class="mc-picker-item" @onclick="()=>PickSymbol(sym2)">
+              <span class="mc-picker-item-sym">@sym2.Replace("USDT","") <span style="color:var(--t2);font-size:10px">/USDT</span></span>
+              <span class="mc-picker-item-price">@FP(_prices.TryGetValue(sym2, out var spx) ? spx : 0m)</span>
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+  }
+
+</div>
+
+@code {
+    // ── Layout ────────────────────────────────────────────────────
+    string _layout    = "2x2";
+    string _globalTf  = "5m";
+    int    _activeSlot = 0;
+    static readonly string[] _tfs = { "1m","3m","5m","15m","30m","1h","4h","1d" };
+
+    int SlotCount() => _layout switch {
+        "1x1" => 1, "2x1" => 2, "1x2" => 2, "3x1" => 3,
+        "2x2" => 4, "3x2" => 6, "4x2" => 8, _ => 4
+    };
+
+    // ── Panel model ───────────────────────────────────────────────
+    class Panel { public string Symbol = ""; public string Tf = "5m"; public bool Loaded; }
+    List<Panel> _panels = new();
+
+    // ── Data ──────────────────────────────────────────────────────
+    Dictionary<string, decimal>          _prices     = new();
+    Dictionary<string, decimal>          _prevPrices = new();
+    List<string>                         _allSymbols = new();
+
+    // ── Symbol picker ─────────────────────────────────────────────
+    bool   _pickerOpen   = false;
+    int    _pickerSlot   = 0;
+    string _pickerSearch = "";
+
+    // ── Lifecycle ─────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        LiveState.PriceTicked += OnTick;
+
+        // Load symbol list from Service
+        var sigs = await Service.LoadAsync();
+        _allSymbols = sigs.Select(s => s.Symbol).Distinct()
+                          .Where(s => !string.IsNullOrEmpty(s))
+                          .OrderBy(s => s).ToList();
+
+        // Default panels
+        var defaults = new[] { "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT" };
+        foreach (var sym in defaults)
+            _panels.Add(new Panel { Symbol = sym, Tf = _globalTf });
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        // Init all default panels after first render
+        for (int i = 0; i < _panels.Count; i++)
+            await InitPanel(i);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        LiveState.PriceTicked -= OnTick;
+        for (int i = 0; i < _panels.Count; i++)
+        {
+            try { await JS.InvokeVoidAsync("marketChart.dispose", $"mc-chart-{i}"); }
+            catch { }
+        }
+    }
+
+    // ── Live price ────────────────────────────────────────────────
+    void OnTick(string symbol, decimal price)
+    {
+        if (_prices.TryGetValue(symbol, out var old))
+            _prevPrices[symbol] = old;
+        _prices[symbol] = price;
+
+        // Update last candle in any panel showing this symbol
+        bool needRender = false;
+        for (int i = 0; i < _panels.Count; i++)
+        {
+            if (_panels[i].Symbol == symbol && _panels[i].Loaded)
+                needRender = true;
+        }
+        if (!needRender) return;
+        _ = InvokeAsync(async () =>
+        {
+            for (int i = 0; i < _panels.Count; i++)
+            {
+                if (_panels[i].Symbol == symbol && _panels[i].Loaded)
+                {
+                    try
+                    {
+                        await JS.InvokeVoidAsync("marketChart.updateLastBar",
+                            $"mc-chart-{i}",
+                            new { time = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), price });
+                    }
+                    catch { }
+                }
+            }
+            StateHasChanged();
+        });
+    }
+
+    // ── Chart init ────────────────────────────────────────────────
+    async Task InitPanel(int slot)
+    {
+        if (slot >= _panels.Count) return;
+        var panel = _panels[slot];
+        var containerId = $"mc-chart-{slot}";
+
+        try
+        {
+            await JS.InvokeVoidAsync("marketChart.init", containerId);
+
+            // Load klines
+            var tfLabel = panel.Tf;
+            var klines  = await HistoricalReader.LoadAsync(panel.Symbol, TfToLabel(tfLabel));
+            if (klines == null || klines.Count == 0)
+            {
+                // Try Binance directly
+                klines = await FetchKlinesFromBinanceAsync(panel.Symbol, tfLabel);
+            }
+
+            if (klines != null && klines.Count > 0)
+            {
+                var jsKlines = klines.Select(k => new {
+                    time   = new DateTimeOffset(k.OpenTime, TimeSpan.Zero).ToUnixTimeSeconds(),
+                    open   = k.Open, high = k.High, low = k.Low, close = k.Close,
+                    volume = k.Volume
+                }).ToArray();
+
+                await JS.InvokeVoidAsync("marketChart.setData", containerId, jsKlines);
+                panel.Loaded = true;
+            }
+
+            // Subscribe live price
+            if (!_prices.ContainsKey(panel.Symbol))
+                _prices[panel.Symbol] = 0m;
+        }
+        catch { }
+    }
+
+    async Task<List<KlineDto>?> FetchKlinesFromBinanceAsync(string symbol, string tf)
+    {
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return null;
+            var interval = tf switch {
+                "1m"  => Binance.Net.Enums.KlineInterval.OneMinute,
+                "3m"  => Binance.Net.Enums.KlineInterval.ThreeMinutes,
+                "5m"  => Binance.Net.Enums.KlineInterval.FiveMinutes,
+                "15m" => Binance.Net.Enums.KlineInterval.FifteenMinutes,
+                "30m" => Binance.Net.Enums.KlineInterval.ThirtyMinutes,
+                "1h"  => Binance.Net.Enums.KlineInterval.OneHour,
+                "4h"  => Binance.Net.Enums.KlineInterval.FourHour,
+                "1d"  => Binance.Net.Enums.KlineInterval.OneDay,
+                _     => Binance.Net.Enums.KlineInterval.FiveMinutes,
+            };
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var res = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
+                symbol, interval, limit: 300, ct: cts.Token);
+            if (!res.Success || res.Data == null) return null;
+            return res.Data.Select(k => new KlineDto {
+                OpenTime = k.OpenTime, Open = k.OpenPrice, High = k.HighPrice,
+                Low = k.LowPrice, Close = k.ClosePrice, Volume = k.Volume
+            }).ToList();
+        }
+        catch { return null; }
+    }
+
+    string TfToLabel(string tf) => tf switch {
+        "1m" => "1m", "3m" => "3m", "5m" => "5m", "15m" => "15m",
+        "30m" => "30m", "1h" => "1h", "4h" => "4h", "1d" => "1d", _ => "5m"
+    };
+
+    // ── Layout / TF actions ───────────────────────────────────────
+    async Task SetLayout(string layout)
+    {
+        _layout = layout;
+        StateHasChanged();
+        await Task.Delay(50); // let DOM settle
+        for (int i = 0; i < _panels.Count; i++)
+        {
+            _panels[i].Loaded = false;
+            await InitPanel(i);
+        }
+    }
+
+    async Task SetGlobalTf(string tf)
+    {
+        _globalTf = tf;
+        for (int i = 0; i < _panels.Count; i++)
+        {
+            _panels[i].Tf = tf;
+            _panels[i].Loaded = false;
+        }
+        StateHasChanged();
+        await Task.Delay(50);
+        for (int i = 0; i < _panels.Count; i++)
+            await InitPanel(i);
+    }
+
+    async Task ChangePanelTf(int slot, string tf)
+    {
+        if (slot >= _panels.Count) return;
+        _panels[slot].Tf = tf;
+        _panels[slot].Loaded = false;
+        StateHasChanged();
+        await Task.Delay(30);
+        await InitPanel(slot);
+    }
+
+    // ── Panel management ──────────────────────────────────────────
+    void OpenPicker(int slot)  { _pickerSlot = slot; _pickerSearch = ""; _pickerOpen = true; }
+    void ClosePicker()         { _pickerOpen = false; }
+
+    async Task PickSymbol(string symbol)
+    {
+        _pickerOpen = false;
+        if (_pickerSlot < _panels.Count)
+        {
+            _panels[_pickerSlot].Symbol = symbol;
+            _panels[_pickerSlot].Loaded = false;
+        }
+        else
+        {
+            while (_panels.Count <= _pickerSlot)
+                _panels.Add(new Panel { Symbol = symbol, Tf = _globalTf });
+        }
+        StateHasChanged();
+        await Task.Delay(50);
+        await InitPanel(_pickerSlot);
+    }
+
+    async Task RemovePanel(int slot)
+    {
+        if (slot >= _panels.Count) return;
+        try { await JS.InvokeVoidAsync("marketChart.dispose", $"mc-chart-{slot}"); } catch { }
+        _panels.RemoveAt(slot);
+        StateHasChanged();
+        // Re-init remaining panels (their DOM IDs shift)
+        await Task.Delay(50);
+        for (int i = slot; i < _panels.Count; i++)
+        {
+            _panels[i].Loaded = false;
+            await InitPanel(i);
+        }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────
+    IEnumerable<string> FilteredSymbols()
+    {
+        var q = _pickerSearch.Trim().ToUpperInvariant();
+        var src = _allSymbols.Any()
+            ? _allSymbols
+            : new List<string> { "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT",
+                                  "XRPUSDT","ADAUSDT","DOGEUSDT","AVAXUSDT",
+                                  "LINKUSDT","DOTUSDT","MATICUSDT","LTCUSDT" };
+        return string.IsNullOrEmpty(q)
+            ? src.Take(40)
+            : src.Where(s => s.Contains(q)).Take(40);
+    }
+
+    string FP(decimal v)
+    {
+        if (v <= 0) return "—";
+        if (v >= 10000) return v.ToString("F1");
+        if (v >= 1000)  return v.ToString("F2");
+        if (v >= 1)     return v.ToString("F4");
+        if (v >= 0.01m) return v.ToString("F5");
+        return v.ToString("G6");
+    }
+}
