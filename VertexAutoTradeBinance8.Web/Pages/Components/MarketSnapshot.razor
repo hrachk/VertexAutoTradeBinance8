@@ -2859,7 +2859,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         await LoadData();
         _ = LoadOpenOrdersAsync();
         _ = LoadAllOpenPositionsAsync();
-        _timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(15)); // 15s instead of 5s — reduces GetOpenOrders weight 40 from 480/min to 160/min
         // InvokeAsync ensures the entire async tick (and all StateHasChanged()
         // calls inside LoadData/LoadAllOpenPositions/etc.) runs on the Blazor
         // SynchronizationContext, not the ThreadPool. Without this, calling
@@ -7673,6 +7673,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
