@@ -2979,15 +2979,20 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 Close = price
             };
 
-            // PERF: avoid full list copy on every tick — only update last bar in place.
-            // Previous code did ToList() → allocating 300+ items per tick (5-10×/sec).
-            var klines = Series[idx].Klines;
-            if (klines.Count > 0)
+            // PERF: update the last kline bar in place without allocating a new list.
+            // Klines is IReadOnlyList<KlineDto> on the surface but the concrete type
+            // is always List<KlineDto>, so we cast and mutate the final element directly.
+            if (Series[idx].Klines is List<KlineDto> mutableKlines && mutableKlines.Count > 0)
             {
-                klines[^1] = updated; // MarketSeries.Klines is a mutable List<KlineDto>
+                mutableKlines[^1] = updated;
             }
-            // Series[idx] record stays the same reference — no copy needed
-            // because Klines is the same List object (records only copy top-level fields).
+            else if (Series[idx].Klines.Count > 0)
+            {
+                // Fallback: rebuild list copy (should never happen in practice)
+                var klinesCopy = Series[idx].Klines.ToList();
+                klinesCopy[^1] = updated;
+                Series[idx] = Series[idx] with { Klines = klinesCopy };
+            }
 
             if (symbol != _activeSym) return; // only re-render the chart actually on screen
 
@@ -7690,6 +7695,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Roi;
     }
 }
+
 
 
 
