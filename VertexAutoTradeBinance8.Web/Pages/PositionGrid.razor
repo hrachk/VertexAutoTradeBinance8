@@ -123,14 +123,14 @@ html,body{background:var(--g0)!important;margin:0;padding:0;}
         <span class="pgbar-stat-val neu">@_cards.Count</span>
       </div>
       <div class="pgbar-sep"></div>
-      decimal tot = _cards.Sum(c => CalcPnl(c));
+      @{ decimal tot = _cards.Sum(c => CalcPnl(c)); }
       <div class="pgbar-stat">
         <span class="pgbar-stat-lbl">Unrealized PnL</span>
         <span class="pgbar-stat-val @(tot>=0?"up":"dn")">
           @(tot>=0?"+":"")@tot.ToString("F2") USDT
         </span>
       </div>
-      int hedges = _cards.GroupBy(c=>c.Sym).Count(g=>g.Count()>1);
+      @{ int hedges = _cards.GroupBy(c=>c.Sym).Count(g=>g.Count()>1); }
       @if (hedges > 0)
       {
         <div class="pgbar-sep"></div>
@@ -176,7 +176,8 @@ html,body{background:var(--g0)!important;margin:0;padding:0;}
     <div class="pg-grid c@_cols">
       @foreach (var card in _cards.OrderBy(c=>c.Sym).ThenBy(c=>c.Side))
       {
-        bool isLong = card.Side == "LONG";
+        @{
+          bool isLong = card.Side == "LONG";
           decimal live = _prices.TryGetValue(card.Sym, out var lp) ? lp : card.Mark;
           decimal pnl  = CalcPnl(card, live);
           decimal roi  = card.Margin > 0 ? pnl / card.Margin * 100m : card.Roi;
@@ -393,7 +394,7 @@ html,body{background:var(--g0)!important;margin:0;padding:0;}
 
     async Task RunTimerAsync()
     {
-        _timer = new System.Threading.PeriodicTimer(TimeSpan.FromSeconds(30)) // 30s: grid shows overview, no need for 5s refresh;
+        _timer = new System.Threading.PeriodicTimer(TimeSpan.FromSeconds(30)); // 30s: grid shows overview, no need for 5s refresh
         try { while (await _timer.WaitForNextTickAsync(_cts.Token)) await RefreshAsync(); }
         catch (OperationCanceledException) { }
     }
@@ -461,7 +462,7 @@ html,body{background:var(--g0)!important;margin:0;padding:0;}
                     Side = o.Side.ToString().ToUpperInvariant(),
                     PosSide = o.PositionSide.ToString().ToUpperInvariant(),
                     Type = o.Type.ToString().ToUpperInvariant(),
-                    Price = o.StopPrice > 0 ? o.StopPrice : o.Price,
+                    Price = (o.StopPrice ?? 0m) > 0 ? (o.StopPrice ?? 0m) : o.Price,
                     Qty = o.Quantity, ReduceOnly = o.ReduceOnly,
                 }).ToList();
             }
@@ -524,5 +525,6 @@ html,body{background:var(--g0)!important;margin:0;padding:0;}
         public bool ReduceOnly;
     }
 }
+
 
 
