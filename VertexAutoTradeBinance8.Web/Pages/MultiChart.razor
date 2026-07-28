@@ -262,7 +262,7 @@ html,body{background:var(--bg);overflow:hidden;}
         {
           bool posUp = pos.Pnl >= 0;
           <div class="mc-pos-pill @(pos.Side=="LONG"?"mc-pos-long":"mc-pos-short")"
-               title="@pos.Symbol @pos.Side @(pos.Pnl>=0?"+":"")@pos.Pnl.ToString("F2") USDT">
+               title="@PosPillTitle(pos)">
             <span>@pos.Symbol.Replace("USDT","")</span>
             <span class="@(posUp?"up":"dn")">@(posUp?"+":"")@pos.Pnl.ToString("F1")</span>
           </div>
@@ -611,10 +611,10 @@ html,body{background:var(--bg);overflow:hidden;}
             var res = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
                 symbol, iv, limit: 300, ct: cts.Token);
             if (!res.Success || res.Data == null) return null;
-            return res.Data.Select(k => new KlineDto {
-                OpenTime = k.OpenTime, Open = k.OpenPrice, High = k.HighPrice,
-                Low = k.LowPrice, Close = k.ClosePrice, Volume = k.Volume
-            }).ToList();
+            return res.Data.Select(k => new KlineDto(
+                new DateTimeOffset(k.OpenTime, TimeSpan.Zero).ToUnixTimeMilliseconds(),
+                k.OpenPrice, k.HighPrice, k.LowPrice, k.ClosePrice, k.Volume
+            )).ToList();
         }
         catch { return null; }
     }
@@ -695,6 +695,9 @@ html,body{background:var(--bg);overflow:hidden;}
             : ordered.Where(s => s.Contains(q)).Take(40);
     }
 
+    string PosPillTitle(PositionInfo pos) =>
+        $"{pos.Symbol} {pos.Side} {(pos.Pnl>=0?"+":"")}{pos.Pnl:F2} USDT";
+
     string FP(decimal v)
     {
         if (v <= 0) return "—";
@@ -705,3 +708,4 @@ html,body{background:var(--bg);overflow:hidden;}
         return v.ToString("G6");
     }
 }
+
