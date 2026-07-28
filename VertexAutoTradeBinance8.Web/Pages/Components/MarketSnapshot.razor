@@ -3585,7 +3585,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             // fill this in for real on the next render, rather than
             // silently snapping back to a different timeframe the
             // user didn't ask for.
-            Selected = new MarketSeries(_activeSym, _activeTf, Array.Empty<KlineDto>());
+            Selected = new MarketSeries(_activeSym, _activeTf, new List<KlineDto>());
         }
         else if (!string.IsNullOrEmpty(_activeSym))
         {
