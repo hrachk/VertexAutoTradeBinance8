@@ -392,7 +392,7 @@ html,body{background:var(--g0)!important;margin:0;padding:0;}
 
     async Task RunTimerAsync()
     {
-        _timer = new System.Threading.PeriodicTimer(TimeSpan.FromSeconds(5));
+        _timer = new System.Threading.PeriodicTimer(TimeSpan.FromSeconds(30)) // 30s: grid shows overview, no need for 5s refresh;
         try { while (await _timer.WaitForNextTickAsync(_cts.Token)) await RefreshAsync(); }
         catch (OperationCanceledException) { }
     }
@@ -523,3 +523,4 @@ html,body{background:var(--g0)!important;margin:0;padding:0;}
         public bool ReduceOnly;
     }
 }
+
