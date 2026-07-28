@@ -2979,20 +2979,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 Close = price
             };
 
-            // PERF: update the last kline bar in place without allocating a new list.
-            // Klines is IReadOnlyList<KlineDto> on the surface but the concrete type
-            // is always List<KlineDto>, so we cast and mutate the final element directly.
-            if (Series[idx].Klines is List<KlineDto> mutableKlines && mutableKlines.Count > 0)
-            {
-                mutableKlines[^1] = updated;
-            }
-            else if (Series[idx].Klines.Count > 0)
-            {
-                // Fallback: rebuild list copy (should never happen in practice)
-                var klinesCopy = Series[idx].Klines.ToList();
-                klinesCopy[^1] = updated;
-                Series[idx] = Series[idx] with { Klines = klinesCopy };
-            }
+            // PERF: mutate last bar in place — no allocation per tick.
+            // MarketSeries.Klines is List<KlineDto>, so the indexer is writable.
+            if (Series[idx].Klines.Count > 0)
+                Series[idx].Klines[^1] = updated;
 
             if (symbol != _activeSym) return; // only re-render the chart actually on screen
 
