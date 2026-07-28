@@ -211,6 +211,16 @@ html,body{background:var(--bg);overflow:hidden;}
 }
 .mc-empty-icon{font-size:28px;opacity:.35;}
 .mc-empty-txt{font-size:11px;}
+
+.mc-pos-pill{display:flex;align-items:center;gap:5px;height:22px;padding:0 8px;
+  border-radius:4px;font-size:10px;font-weight:700;font-family:monospace;}
+.mc-pos-long{background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.25);color:#22c55e;}
+.mc-pos-short{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);color:#ef4444;}
+.mc-pos-tag{display:inline-flex;align-items:center;height:16px;padding:0 5px;
+  border-radius:3px;font-size:9.5px;font-weight:800;font-family:monospace;white-space:nowrap;}
+.mc-pt-long{background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2);color:#22c55e;}
+.mc-pt-short{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.2);color:#ef4444;}
+.up{color:#22c55e;}.dn{color:#ef4444;}
 </style>
 
 <div class="mc-root">
@@ -223,37 +233,43 @@ html,body{background:var(--bg);overflow:hidden;}
 
     <!-- Layout presets -->
     <div class="mc-layouts">
-      <!-- 1x1 -->
-      <button class="mc-lay-btn @(_layout=="1x1"?"on":"")" @onclick='()=>SetLayout("1x1")' title="1 chart">
-        <svg viewBox="0 0 16 16"><rect x="1" y="1" width="14" height="14" rx="1"/></svg>
-      </button>
-      <!-- 2x1 -->
-      <button class="mc-lay-btn @(_layout=="2x1"?"on":"")" @onclick='()=>SetLayout("2x1")' title="2 charts side by side">
-        <svg viewBox="0 0 16 16"><rect x="1" y="1" width="6" height="14" rx="1"/><rect x="9" y="1" width="6" height="14" rx="1"/></svg>
-      </button>
-      <!-- 2x2 -->
-      <button class="mc-lay-btn @(_layout=="2x2"?"on":"")" @onclick='()=>SetLayout("2x2")' title="4 charts 2x2">
-        <svg viewBox="0 0 16 16"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
-      </button>
-      <!-- 3x2 -->
-      <button class="mc-lay-btn @(_layout=="3x2"?"on":"")" @onclick='()=>SetLayout("3x2")' title="6 charts 3x2">
-        <svg viewBox="0 0 16 16"><rect x="1" y="1" width="4" height="6" rx="1"/><rect x="6" y="1" width="4" height="6" rx="1"/><rect x="11" y="1" width="4" height="6" rx="1"/><rect x="1" y="9" width="4" height="6" rx="1"/><rect x="6" y="9" width="4" height="6" rx="1"/><rect x="11" y="9" width="4" height="6" rx="1"/></svg>
-      </button>
-      <!-- 3x1 -->
-      <button class="mc-lay-btn @(_layout=="3x1"?"on":"")" @onclick='()=>SetLayout("3x1")' title="3 charts side by side">
-        <svg viewBox="0 0 16 16"><rect x="1" y="1" width="4" height="14" rx="1"/><rect x="6" y="1" width="4" height="14" rx="1"/><rect x="11" y="1" width="4" height="14" rx="1"/></svg>
-      </button>
+      @foreach (var lay in new[]{("1x1","1"),("2x1","||"),("3x1","|||"),("2x2","⊞"),("3x2","⊟")})
+      {
+        var l2 = lay;
+        <button class="mc-lay-btn @(_layout==l2.Item1?"on":"")"
+                @onclick="()=>SetLayout(l2.Item1)"
+                title="@l2.Item1">
+          @l2.Item2
+        </button>
+      }
     </div>
-
     <div class="mc-sep"></div>
 
-    <!-- Global TF selector -->
+    <!-- Global TF -->
     <div class="mc-tfs">
       @foreach (var tf in _tfs)
       {
         <button class="mc-tf @(_globalTf==tf?"on":"")" @onclick="()=>SetGlobalTf(tf)">@tf</button>
       }
     </div>
+    <div class="mc-sep"></div>
+
+    <!-- Position status -->
+    @if (_positions.Any())
+    {
+      <div style="display:flex;gap:4px;align-items:center;">
+        @foreach (var pos in _positions)
+        {
+          bool posUp = pos.Pnl >= 0;
+          <div class="mc-pos-pill @(pos.Side=="LONG"?"mc-pos-long":"mc-pos-short")"
+               title="@pos.Symbol @pos.Side @(pos.Pnl>=0?"+":"")@pos.Pnl.ToString("F2") USDT">
+            <span>@pos.Symbol.Replace("USDT","")</span>
+            <span class="@(posUp?"up":"dn")">@(posUp?"+":"")@pos.Pnl.ToString("F1")</span>
+          </div>
+        }
+      </div>
+      <div class="mc-sep"></div>
+    }
 
     <a class="mc-back" href="/market">← Market</a>
   </div>
@@ -262,28 +278,44 @@ html,body{background:var(--bg);overflow:hidden;}
   <div class="mc-grid lay-@_layout">
     @for (int slot = 0; slot < SlotCount(); slot++)
     {
-      var s = slot; // capture for lambda
+      var s = slot;
       @if (s < _panels.Count)
       {
         var panel = _panels[s];
+        decimal lp    = _prices.TryGetValue(panel.Symbol, out var plp) ? plp : 0m;
+        decimal prev  = _prevPrices.TryGetValue(panel.Symbol, out var pp) ? pp : lp;
+        bool    pUp   = lp >= prev;
+        decimal chgPct = prev > 0 && prev != lp ? (lp - prev) / prev * 100m : 0m;
+        var myPos = _positions.Where(p => p.Symbol == panel.Symbol).ToList();
+
         <div class="mc-panel @(_activeSlot==s?"active":"")" @onclick="()=>_activeSlot=s">
 
           <!-- Panel header -->
-          <div class="mc-ph" @onclick:stopPropagation="true">
-            <span class="mc-ph-sym">@panel.Symbol.Replace("USDT","")<span style="font-size:9px;color:var(--t2)">/USDT</span></span>
+          <div class="mc-ph">
+            <span class="mc-ph-sym">@panel.Symbol.Replace("USDT","")<sub>/USDT</sub></span>
             <span class="mc-ph-tf">@panel.Tf</span>
-            @{
-              decimal lp = _prices.TryGetValue(panel.Symbol, out var plp) ? plp : 0m;
-              decimal prev = _prevPrices.TryGetValue(panel.Symbol, out var pp) ? pp : lp;
-              bool pUp = lp >= prev;
-            }
-            <span class="mc-ph-price @(pUp?"up":"dn")">@FP(lp)</span>
-            @if (prev > 0 && lp != prev)
+            @if (myPos.Any())
             {
-              decimal chgPct = (lp - prev) / prev * 100m;
-              <span class="mc-ph-chg @(chgPct>=0?"up":"dn")">@(chgPct>=0?"+":"")@chgPct.ToString("F2")%</span>
+              @foreach (var pos in myPos)
+              {
+                <span class="mc-pos-tag @(pos.Side=="LONG"?"mc-pt-long":"mc-pt-short")">
+                  @(pos.Side=="LONG"?"▲":"▼") @(pos.Pnl>=0?"+":"")@pos.Pnl.ToString("F2")
+                </span>
+              }
             }
-            <button class="mc-ph-close" @onclick="()=>RemovePanel(s)" title="Close chart">✕</button>
+            @if (lp > 0)
+            {
+              <span class="mc-ph-price @(pUp?"up":"dn")" style="margin-left:auto">@FP(lp)</span>
+              @if (chgPct != 0)
+              {
+                <span class="mc-ph-chg @(chgPct>=0?"up":"dn")">@(chgPct>=0?"+":"")@chgPct.ToString("F2")%</span>
+              }
+            }
+            else
+            {
+              <span style="margin-left:auto"></span>
+            }
+            <button class="mc-ph-close" @onclick:stopPropagation="true" @onclick="()=>RemovePanel(s)">✕</button>
           </div>
 
           <!-- Per-panel TF buttons -->
@@ -291,12 +323,12 @@ html,body{background:var(--bg);overflow:hidden;}
             @foreach (var tf in _tfs)
             {
               <button class="mc-panel-tf @(panel.Tf==tf?"on":"")"
-                      @onclick="()=>ChangePanelTf(s,tf)"
-                      @onclick:stopPropagation="true">@tf</button>
+                      @onclick:stopPropagation="true"
+                      @onclick="()=>ChangePanelTf(s,tf)">@tf</button>
             }
           </div>
 
-          <!-- TradingView chart -->
+          <!-- Chart -->
           <div class="mc-chart-area">
             <div id="mc-chart-@(s)" style="width:100%;height:100%;"></div>
           </div>
@@ -304,7 +336,6 @@ html,body{background:var(--bg);overflow:hidden;}
       }
       else
       {
-        <!-- Empty slot — click to add -->
         <div class="mc-add-panel" @onclick="()=>OpenPicker(s)">
           <div class="mc-add-panel-icon">+</div>
           <div class="mc-add-panel-txt">Add chart</div>
@@ -324,15 +355,25 @@ html,body{background:var(--bg);overflow:hidden;}
         </div>
         <div class="mc-picker-search">
           <input placeholder="Search BTCUSDT, ETH…"
-                 @bind="_pickerSearch" @bind:event="oninput"
-                 autofocus />
+                 @bind="_pickerSearch" @bind:event="oninput" autofocus />
         </div>
         <div class="mc-picker-list">
           @foreach (var sym in FilteredSymbols())
           {
             var sym2 = sym;
+            var symPos = _positions.FirstOrDefault(p => p.Symbol == sym2);
             <div class="mc-picker-item" @onclick="()=>PickSymbol(sym2)">
-              <span class="mc-picker-item-sym">@sym2.Replace("USDT","") <span style="color:var(--t2);font-size:10px">/USDT</span></span>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span class="mc-picker-item-sym">@sym2.Replace("USDT","")
+                  <span style="color:var(--t2);font-size:10px">/USDT</span>
+                </span>
+                @if (symPos != null)
+                {
+                  <span class="mc-pos-tag @(symPos.Side=="LONG"?"mc-pt-long":"mc-pt-short")" style="font-size:9px">
+                    @(symPos.Side=="LONG"?"▲ L":"▼ S")
+                  </span>
+                }
+              </div>
               <span class="mc-picker-item-price">@FP(_prices.TryGetValue(sym2, out var spx) ? spx : 0m)</span>
             </div>
           }
@@ -355,41 +396,57 @@ html,body{background:var(--bg);overflow:hidden;}
         "2x2" => 4, "3x2" => 6, "4x2" => 8, _ => 4
     };
 
-    // ── Panel model ───────────────────────────────────────────────
+    // ── Panel ─────────────────────────────────────────────────────
     class Panel { public string Symbol = ""; public string Tf = "5m"; public bool Loaded; }
     List<Panel> _panels = new();
 
-    // ── Data ──────────────────────────────────────────────────────
-    Dictionary<string, decimal>          _prices     = new();
-    Dictionary<string, decimal>          _prevPrices = new();
-    List<string>                         _allSymbols = new();
+    // ── Positions ─────────────────────────────────────────────────
+    record PositionInfo(string Symbol, string Side, decimal EntryPrice,
+                        decimal Qty, decimal LiqPrice, decimal Pnl, decimal MarkPrice);
+    List<PositionInfo> _positions = new();
 
-    // ── Symbol picker ─────────────────────────────────────────────
+    // ── Data ──────────────────────────────────────────────────────
+    Dictionary<string, decimal> _prices     = new();
+    Dictionary<string, decimal> _prevPrices = new();
+    List<string>                _allSymbols = new();
+
+    // ── Picker ────────────────────────────────────────────────────
     bool   _pickerOpen   = false;
     int    _pickerSlot   = 0;
     string _pickerSearch = "";
+
+    // ── Timer ─────────────────────────────────────────────────────
+    System.Threading.PeriodicTimer? _timer;
+    CancellationTokenSource _cts = new();
 
     // ── Lifecycle ─────────────────────────────────────────────────
     protected override async Task OnInitializedAsync()
     {
         LiveState.PriceTicked += OnTick;
 
-        // Load symbol list from Service
+        // Load symbol list
         var sigs = await Service.LoadAsync();
         _allSymbols = sigs.Select(s => s.Symbol).Distinct()
                           .Where(s => !string.IsNullOrEmpty(s))
                           .OrderBy(s => s).ToList();
 
-        // Default panels
-        var defaults = new[] { "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT" };
-        foreach (var sym in defaults)
+        // Load positions immediately
+        await LoadPositionsAsync();
+
+        // Default panels: position symbols first, then BTC/ETH
+        var panelSyms = _positions.Select(p => p.Symbol).Distinct().ToList();
+        foreach (var sym in new[]{"BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT"})
+            if (!panelSyms.Contains(sym)) panelSyms.Add(sym);
+
+        foreach (var sym in panelSyms.Take(4))
             _panels.Add(new Panel { Symbol = sym, Tf = _globalTf });
+
+        _ = InvokeAsync(RunTimerAsync);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
-        // Init all default panels after first render
         for (int i = 0; i < _panels.Count; i++)
             await InitPanel(i);
     }
@@ -397,42 +454,104 @@ html,body{background:var(--bg);overflow:hidden;}
     public async ValueTask DisposeAsync()
     {
         LiveState.PriceTicked -= OnTick;
+        _cts.Cancel(); _timer?.Dispose();
         for (int i = 0; i < _panels.Count; i++)
-        {
-            try { await JS.InvokeVoidAsync("marketChart.dispose", $"mc-chart-{i}"); }
-            catch { }
-        }
+            try { await JS.InvokeVoidAsync("marketChart.dispose", $"mc-chart-{i}"); } catch { }
     }
 
-    // ── Live price ────────────────────────────────────────────────
+    async Task RunTimerAsync()
+    {
+        _timer = new System.Threading.PeriodicTimer(TimeSpan.FromSeconds(10));
+        try
+        {
+            while (await _timer.WaitForNextTickAsync(_cts.Token))
+            {
+                await LoadPositionsAsync();
+                await InvokeAsync(StateHasChanged);
+                // Refresh position lines on all panels
+                for (int i = 0; i < _panels.Count; i++)
+                    await RefreshPositionLinesAsync(i);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    // ── Load positions from Binance ────────────────────────────────
+    async Task LoadPositionsAsync()
+    {
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return;
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: cts.Token);
+            if (!res.Success || res.Data == null) return;
+
+            _positions = res.Data
+                .Where(p => Math.Abs(p.Quantity) > 0.000001m)
+                .Select(p => new PositionInfo(
+                    Symbol:     p.Symbol,
+                    Side:       p.Quantity > 0 ? "LONG" : "SHORT",
+                    EntryPrice: p.EntryPrice,
+                    Qty:        Math.Abs(p.Quantity),
+                    LiqPrice:   p.LiquidationPrice,
+                    Pnl:        p.UnrealizedPnl,
+                    MarkPrice:  p.MarkPrice))
+                .ToList();
+
+            // Add position symbols to symbol list if missing
+            foreach (var pos in _positions)
+                if (!_allSymbols.Contains(pos.Symbol))
+                    _allSymbols.Insert(0, pos.Symbol);
+        }
+        catch { }
+    }
+
+    // ── Show position line on a chart panel ───────────────────────
+    async Task RefreshPositionLinesAsync(int slot)
+    {
+        if (slot >= _panels.Count) return;
+        var panel = _panels[slot];
+        var containerId = $"mc-chart-{slot}";
+        var pos = _positions.FirstOrDefault(p => p.Symbol == panel.Symbol);
+
+        try
+        {
+            if (pos != null)
+            {
+                // Draw entry line on the chart — same call as /market page
+                await JS.InvokeVoidAsync("marketChart.showPositionLines",
+                    containerId, pos.EntryPrice, pos.Side, pos.Qty, pos.LiqPrice, 0m);
+            }
+            else
+            {
+                await JS.InvokeVoidAsync("marketChart.hidePositionLines", containerId);
+            }
+        }
+        catch { }
+    }
+
+    // ── Live price tick ───────────────────────────────────────────
     void OnTick(string symbol, decimal price)
     {
-        if (_prices.TryGetValue(symbol, out var old))
-            _prevPrices[symbol] = old;
+        if (_prices.TryGetValue(symbol, out var old)) _prevPrices[symbol] = old;
         _prices[symbol] = price;
 
-        // Update last candle in any panel showing this symbol
-        bool needRender = false;
-        for (int i = 0; i < _panels.Count; i++)
-        {
-            if (_panels[i].Symbol == symbol && _panels[i].Loaded)
-                needRender = true;
-        }
-        if (!needRender) return;
+        bool relevant = _panels.Any(p => p.Symbol == symbol && p.Loaded);
+        if (!relevant) return;
+
         _ = InvokeAsync(async () =>
         {
             for (int i = 0; i < _panels.Count; i++)
             {
-                if (_panels[i].Symbol == symbol && _panels[i].Loaded)
+                if (_panels[i].Symbol != symbol || !_panels[i].Loaded) continue;
+                try
                 {
-                    try
-                    {
-                        await JS.InvokeVoidAsync("marketChart.updateLastBar",
-                            $"mc-chart-{i}",
-                            new { time = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), price });
-                    }
-                    catch { }
+                    await JS.InvokeVoidAsync("marketChart.updateLastBar",
+                        $"mc-chart-{i}",
+                        new { time = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), price });
                 }
+                catch { }
             }
             StateHasChanged();
         });
@@ -444,46 +563,40 @@ html,body{background:var(--bg);overflow:hidden;}
         if (slot >= _panels.Count) return;
         var panel = _panels[slot];
         var containerId = $"mc-chart-{slot}";
-
         try
         {
             await JS.InvokeVoidAsync("marketChart.init", containerId);
 
-            // Load klines
-            var tfLabel = panel.Tf;
-            var klines  = await HistoricalReader.LoadAsync(panel.Symbol, TfToLabel(tfLabel));
+            var klines = await HistoricalReader.LoadAsync(panel.Symbol, TfToLabel(panel.Tf));
             if (klines == null || klines.Count == 0)
-            {
-                // Try Binance directly
-                klines = await FetchKlinesFromBinanceAsync(panel.Symbol, tfLabel);
-            }
+                klines = await FetchBinanceAsync(panel.Symbol, panel.Tf);
 
             if (klines != null && klines.Count > 0)
             {
-                var jsKlines = klines.Select(k => new {
+                var jsK = klines.Select(k => new {
                     time   = new DateTimeOffset(k.OpenTime, TimeSpan.Zero).ToUnixTimeSeconds(),
                     open   = k.Open, high = k.High, low = k.Low, close = k.Close,
                     volume = k.Volume
                 }).ToArray();
-
-                await JS.InvokeVoidAsync("marketChart.setData", containerId, jsKlines);
+                await JS.InvokeVoidAsync("marketChart.setData", containerId, jsK);
                 panel.Loaded = true;
             }
 
-            // Subscribe live price
-            if (!_prices.ContainsKey(panel.Symbol))
-                _prices[panel.Symbol] = 0m;
+            if (!_prices.ContainsKey(panel.Symbol)) _prices[panel.Symbol] = 0m;
+
+            // Show position line if exists
+            await RefreshPositionLinesAsync(slot);
         }
         catch { }
     }
 
-    async Task<List<KlineDto>?> FetchKlinesFromBinanceAsync(string symbol, string tf)
+    async Task<List<KlineDto>?> FetchBinanceAsync(string symbol, string tf)
     {
         try
         {
             var client = Factory.TryCreateRestClient();
             if (client == null) return null;
-            var interval = tf switch {
+            var iv = tf switch {
                 "1m"  => Binance.Net.Enums.KlineInterval.OneMinute,
                 "3m"  => Binance.Net.Enums.KlineInterval.ThreeMinutes,
                 "5m"  => Binance.Net.Enums.KlineInterval.FiveMinutes,
@@ -496,7 +609,7 @@ html,body{background:var(--bg);overflow:hidden;}
             };
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var res = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
-                symbol, interval, limit: 300, ct: cts.Token);
+                symbol, iv, limit: 300, ct: cts.Token);
             if (!res.Success || res.Data == null) return null;
             return res.Data.Select(k => new KlineDto {
                 OpenTime = k.OpenTime, Open = k.OpenPrice, High = k.HighPrice,
@@ -506,51 +619,38 @@ html,body{background:var(--bg);overflow:hidden;}
         catch { return null; }
     }
 
-    string TfToLabel(string tf) => tf switch {
-        "1m" => "1m", "3m" => "3m", "5m" => "5m", "15m" => "15m",
-        "30m" => "30m", "1h" => "1h", "4h" => "4h", "1d" => "1d", _ => "5m"
-    };
+    string TfToLabel(string tf) => tf;
 
-    // ── Layout / TF actions ───────────────────────────────────────
+    // ── Layout / TF ───────────────────────────────────────────────
     async Task SetLayout(string layout)
     {
         _layout = layout;
         StateHasChanged();
-        await Task.Delay(50); // let DOM settle
-        for (int i = 0; i < _panels.Count; i++)
-        {
-            _panels[i].Loaded = false;
-            await InitPanel(i);
-        }
+        await Task.Delay(60);
+        for (int i = 0; i < _panels.Count; i++) { _panels[i].Loaded = false; await InitPanel(i); }
     }
 
     async Task SetGlobalTf(string tf)
     {
         _globalTf = tf;
-        for (int i = 0; i < _panels.Count; i++)
-        {
-            _panels[i].Tf = tf;
-            _panels[i].Loaded = false;
-        }
+        for (int i = 0; i < _panels.Count; i++) { _panels[i].Tf = tf; _panels[i].Loaded = false; }
         StateHasChanged();
-        await Task.Delay(50);
-        for (int i = 0; i < _panels.Count; i++)
-            await InitPanel(i);
+        await Task.Delay(60);
+        for (int i = 0; i < _panels.Count; i++) await InitPanel(i);
     }
 
     async Task ChangePanelTf(int slot, string tf)
     {
         if (slot >= _panels.Count) return;
-        _panels[slot].Tf = tf;
-        _panels[slot].Loaded = false;
+        _panels[slot].Tf = tf; _panels[slot].Loaded = false;
         StateHasChanged();
         await Task.Delay(30);
         await InitPanel(slot);
     }
 
     // ── Panel management ──────────────────────────────────────────
-    void OpenPicker(int slot)  { _pickerSlot = slot; _pickerSearch = ""; _pickerOpen = true; }
-    void ClosePicker()         { _pickerOpen = false; }
+    void OpenPicker(int slot) { _pickerSlot = slot; _pickerSearch = ""; _pickerOpen = true; }
+    void ClosePicker()        { _pickerOpen = false; }
 
     async Task PickSymbol(string symbol)
     {
@@ -576,27 +676,23 @@ html,body{background:var(--bg);overflow:hidden;}
         try { await JS.InvokeVoidAsync("marketChart.dispose", $"mc-chart-{slot}"); } catch { }
         _panels.RemoveAt(slot);
         StateHasChanged();
-        // Re-init remaining panels (their DOM IDs shift)
         await Task.Delay(50);
-        for (int i = slot; i < _panels.Count; i++)
-        {
-            _panels[i].Loaded = false;
-            await InitPanel(i);
-        }
+        for (int i = slot; i < _panels.Count; i++) { _panels[i].Loaded = false; await InitPanel(i); }
     }
 
     // ── Helpers ───────────────────────────────────────────────────
     IEnumerable<string> FilteredSymbols()
     {
         var q = _pickerSearch.Trim().ToUpperInvariant();
-        var src = _allSymbols.Any()
-            ? _allSymbols
-            : new List<string> { "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT",
-                                  "XRPUSDT","ADAUSDT","DOGEUSDT","AVAXUSDT",
-                                  "LINKUSDT","DOTUSDT","MATICUSDT","LTCUSDT" };
+        // Show position symbols first
+        var posSyms = _positions.Select(p => p.Symbol).ToList();
+        var src = _allSymbols.Any() ? _allSymbols
+            : new List<string>{"BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT",
+                                "XRPUSDT","ADAUSDT","DOGEUSDT","AVAXUSDT"};
+        var ordered = posSyms.Concat(src.Where(s => !posSyms.Contains(s))).Distinct();
         return string.IsNullOrEmpty(q)
-            ? src.Take(40)
-            : src.Where(s => s.Contains(q)).Take(40);
+            ? ordered.Take(40)
+            : ordered.Where(s => s.Contains(q)).Take(40);
     }
 
     string FP(decimal v)
