@@ -3,5 +3,5 @@
 public sealed record MarketSeries(
     string Symbol,
     string Timeframe,
-    IReadOnlyList<KlineDto> Klines
+    List<KlineDto> Klines
 );
