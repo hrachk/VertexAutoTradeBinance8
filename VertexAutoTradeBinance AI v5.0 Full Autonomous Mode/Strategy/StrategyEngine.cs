@@ -839,16 +839,19 @@ namespace VertexAutoTradeBinance8.Strategy
             // ── Base multipliers per timeframe ───────────────────────────────
             var (sl, tp1base, tp2base, tp3base) = interval switch
             {
-                KlineInterval.OneMinute      => (0.8m,  1.3m,  2.2m,  3.3m), // raised: 15m-blended ATR makes these realistic
-                KlineInterval.ThreeMinutes   => (0.9m,  1.3m,  2.1m,  3.2m), // raised for stability
-                KlineInterval.FiveMinutes    => (0.9m,  1.4m,  2.2m,  3.4m),
-                KlineInterval.FifteenMinutes => (1.2m,  1.8m,  2.8m,  4.3m),
-                KlineInterval.ThirtyMinutes  => (1.5m,  2.1m,  3.3m,  5.0m),
-                KlineInterval.OneHour        => (1.8m,  2.5m,  3.9m,  6.0m),
-                KlineInterval.TwoHour        => (2.0m,  2.7m,  4.2m,  6.4m),
-                KlineInterval.FourHour       => (2.0m,  2.8m,  4.4m,  6.8m),
-                KlineInterval.OneDay         => (2.5m,  3.5m,  5.5m,  8.5m),
-                _ => (0.9m, 1.4m, 2.2m, 3.4m)
+                // SL widened: stops placed behind 15-bar structure + 0.5×ATR buffer.
+                // TP recalibrated: minimum R:R at TP1 = 2.0 (was 1.56).
+                // Breakeven win rate drops from 39% to 33% — more edge margin.
+                KlineInterval.OneMinute      => (1.1m,  2.2m,  3.5m,  5.2m),
+                KlineInterval.ThreeMinutes   => (1.2m,  2.4m,  3.8m,  5.6m),
+                KlineInterval.FiveMinutes    => (1.3m,  2.6m,  4.0m,  6.0m),
+                KlineInterval.FifteenMinutes => (1.6m,  3.2m,  5.0m,  7.5m),
+                KlineInterval.ThirtyMinutes  => (2.0m,  4.0m,  6.3m,  9.5m),
+                KlineInterval.OneHour        => (2.4m,  4.8m,  7.5m, 11.2m),
+                KlineInterval.TwoHour        => (2.7m,  5.4m,  8.4m, 12.6m),
+                KlineInterval.FourHour       => (3.0m,  6.0m,  9.3m, 14.0m),
+                KlineInterval.OneDay         => (3.5m,  7.0m, 11.0m, 16.5m),
+                _ => (1.3m, 2.6m, 4.0m, 6.0m)
             };
 
             // ── Regime multiplier for TP (SL unchanged) ─────────────────────
@@ -1442,22 +1445,30 @@ namespace VertexAutoTradeBinance8.Strategy
 
             if (longRejection)
             {
-                // SL: under the lowest low of the last 5 bars (structure-based)
-                // + buffer of 0.25×ATR to avoid stop-hunt at exact swing low
-                int lookbackSl = Math.Min(5, i);
+                              // ── SWEEP CHECK (LONG) ──────────────────────────────────────
+                // Enter long only after a liquidity sweep below EMA21.
+                bool recentSweep = false;
+                for (int si = Math.Max(0, i - 4); si <= i; si++)
+                {
+                    var ks = klines[si];
+                    decimal lowerWick = Math.Min(ks.OpenPrice, ks.ClosePrice) - ks.LowPrice;
+                    if (lowerWick > atr * 0.55m && ks.ClosePrice > ema21 * 0.998m)
+                        recentSweep = true;
+                }
+                if (!recentSweep) return null;
+
+                // ── SL: 15-bar structure low + 0.5×ATR buffer ───────────────
+                int lookbackSl = Math.Min(15, i);
                 decimal swingLow = klines.Skip(i - lookbackSl).Take(lookbackSl + 1)
                     .Min(k => k.LowPrice);
-                decimal slLevel = swingLow - atr * 0.25m;
+                decimal slLevel = swingLow - atr * 0.5m;
                 decimal entry   = c0.ClosePrice + atr * 0.03m;
-                // Fallback: if structure SL is too far, use candle-based
-                decimal candleSl = Math.Min(c0.LowPrice, c1.LowPrice) - atr * 0.3m;
-                if (entry - slLevel > atr * 2.5m) slLevel = candleSl; // don't risk >2.5ATR
+                decimal candleSl = Math.Min(c0.LowPrice, c1.LowPrice) - atr * 0.5m;
+                if (entry - slLevel > atr * 4.5m) slLevel = candleSl;
                 decimal risk    = entry - slLevel;
-                if (risk < atr * 0.3m || risk > atr * 3.0m) return null;
+                if (risk < atr * 0.35m || risk > atr * 4.5m) return null;
                 decimal tp1 = entry + atr * tp1Mult;
-                if ((tp1 - entry) / risk < 1.5m) return null; // минимум R:R 1.5
-
-                var s = new TradeSignal
+                if ((tp1 - entry) / risk < 2.0m) return null;  var s = new TradeSignal
                 {
                     Symbol = symbol, Side = SignalSide.Buy,
                     Reason = "PULLBACK_EMA21_LONG_V2" + confirmTags, Atr = atr,
@@ -1478,16 +1489,29 @@ namespace VertexAutoTradeBinance8.Strategy
 
             if (shortRejection)
             {
-                // SL: above the highest high of last 5 bars + 0.25×ATR buffer
-                decimal swingHigh = klines.Skip(i - Math.Min(5, i)).Take(Math.Min(5, i) + 1)
+                              // ── SWEEP CHECK (SHORT) ──────────────────────────────────────
+                bool recentSweepShort = false;
+                for (int si = Math.Max(0, i - 4); si <= i; si++)
+                {
+                    var ks = klines[si];
+                    decimal upperWick = ks.HighPrice - Math.Max(ks.OpenPrice, ks.ClosePrice);
+                    if (upperWick > atr * 0.55m && ks.ClosePrice < ema21 * 1.002m)
+                        recentSweepShort = true;
+                }
+                if (!recentSweepShort) return null;
+
+                // ── SL: 15-bar structure high + 0.5×ATR buffer ──────────────
+                int lookbackSlShort = Math.Min(15, i);
+                decimal swingHigh = klines.Skip(i - lookbackSlShort).Take(lookbackSlShort + 1)
                     .Max(k => k.HighPrice);
-                decimal slLevel = swingHigh + atr * 0.25m;
+                decimal slLevel = swingHigh + atr * 0.5m;
                 decimal entry   = c0.ClosePrice - atr * 0.03m;
-                decimal candleSlShort = Math.Max(c0.HighPrice, c1.HighPrice) + atr * 0.3m;
-                if (slLevel - entry > atr * 2.5m) slLevel = candleSlShort;
+                decimal candleSlShort = Math.Max(c0.HighPrice, c1.HighPrice) + atr * 0.5m;
+                if (slLevel - entry > atr * 4.5m) slLevel = candleSlShort;
                 decimal risk    = slLevel - entry;
-                if (risk < atr * 0.3m || risk > atr * 3.0m) return null;
+                if (risk < atr * 0.35m || risk > atr * 4.5m) return null;
                 decimal tp1 = entry - atr * tp1Mult;
+                if ((entry - tp1) / risk < 2.0m) return null;y - atr * tp1Mult;
                 if ((entry - tp1) / risk < 1.5m) return null;
 
                 var s = new TradeSignal
@@ -4857,6 +4881,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
     }
 }
+
 
 
 
