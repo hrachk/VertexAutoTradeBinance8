@@ -123,20 +123,18 @@ html,body{background:var(--g0)!important;margin:0;padding:0;}
         <span class="pgbar-stat-val neu">@_cards.Count</span>
       </div>
       <div class="pgbar-sep"></div>
-      @{ decimal tot = _cards.Sum(c => CalcPnl(c)); }
       <div class="pgbar-stat">
         <span class="pgbar-stat-lbl">Unrealized PnL</span>
-        <span class="pgbar-stat-val @(tot>=0?"up":"dn")">
-          @(tot>=0?"+":"")@tot.ToString("F2") USDT
+        <span class="pgbar-stat-val @(TotalPnl()>=0?"up":"dn")">
+          @(TotalPnl()>=0?"+":"")@TotalPnl().ToString("F2") USDT
         </span>
       </div>
-      @{ int hedges = _cards.GroupBy(c=>c.Sym).Count(g=>g.Count()>1); }
-      @if (hedges > 0)
+      @if (HedgeCount() > 0)
       {
         <div class="pgbar-sep"></div>
         <div class="pgbar-stat">
           <span class="pgbar-stat-lbl">Hedge Pairs</span>
-          <span class="pgbar-stat-val neu">@hedges</span>
+          <span class="pgbar-stat-val neu">@HedgeCount()</span>
         </div>
       }
     }
@@ -174,174 +172,117 @@ html,body{background:var(--g0)!important;margin:0;padding:0;}
   else
   {
     <div class="pg-grid c@_cols">
-      @foreach (var card in _cards.OrderBy(c=>c.Sym).ThenBy(c=>c.Side))
+      @foreach (var cv in BuildCardViews())
       {
-        @{
-          bool isLong = card.Side == "LONG";
-          decimal live = _prices.TryGetValue(card.Sym, out var lp) ? lp : card.Mark;
-          decimal pnl  = CalcPnl(card, live);
-          decimal roi  = card.Margin > 0 ? pnl / card.Margin * 100m : card.Roi;
-          bool up      = pnl >= 0;
-          bool isHedge = _cards.Count(c => c.Sym == card.Sym) > 1;
-
-          // Orders for this position
-          var myOrders = _orders.Where(o =>
-            o.Sym == card.Sym && o.ReduceOnly &&
-            o.Side == (isLong ? "SELL" : "BUY") &&
-            (o.PosSide == "BOTH" || o.PosSide == card.Side)
-          ).ToList();
-          var tps = myOrders.Where(o=>o.Type.Contains("TAKE_PROFIT"))
-                            .OrderBy(o=>isLong ? o.Price : -o.Price).ToList();
-          var sl  = myOrders.FirstOrDefault(o=>o.Type.Contains("STOP"));
-
-          // Klines
-          var ks = _klines.TryGetValue(card.Sym, out var kk) ? kk : new();
-
-          // Price range
-          var allP = new System.Collections.Generic.List<decimal>(ks.Select(k=>k.C));
-          allP.Add(card.Entry); allP.Add(live);
-          if (card.Liq > 0) allP.Add(card.Liq);
-          if (sl != null) allP.Add(sl.Price);
-          foreach (var t in tps) allP.Add(t.Price);
-          decimal mn = allP.Count > 0 ? allP.Min() : 0m;
-          decimal mx = allP.Count > 0 ? allP.Max() : 1m;
-          decimal pd = (mx-mn)*0.07m; if(pd==0) pd=mx*0.02m;
-          mn -= pd; mx += pd;
-          decimal rng = mx > mn ? mx - mn : 1m;
-
-          const int W=560, H=148, AX=70;
-          int CW = W - AX;
-          double Y(decimal p) => (double)H - (double)((p-mn)/rng*(decimal)H);
-          double X(int i, int n) => n<=1 ? 0.0 : (double)i/(n-1)*CW;
-
-          // Build paths
-          var ptsB = new System.Text.StringBuilder();
-          var fillB= new System.Text.StringBuilder();
-          if (ks.Count >= 2) {
-            fillB.Append($"M0,{H} ");
-            for (int ki=0;ki<ks.Count;ki++) {
-              double x=X(ki,ks.Count), y=Y(ks[ki].C);
-              ptsB.Append($"{x:F1},{y:F1} ");
-              fillB.Append($"L{x:F1},{y:F1} ");
-            }
-            fillB.Append($"L{CW},{ H} Z");
-          }
-          string pts  = ptsB.ToString().Trim();
-          string fill = fillB.ToString();
-          string lc   = isLong ? "#10b981" : "#ef4444";
-          string fc   = isLong ? "rgba(16,185,129,.09)" : "rgba(239,68,68,.09)";
-          double eY   = Y(card.Entry);
-          double mkY  = live>0 ? Y(live) : eY;
-          double lqY  = card.Liq>0 ? Y(card.Liq) : -1;
-          double slY  = sl!=null ? Y(sl.Price) : -1;
-        }
-
-        <div class="pg-card @(isLong?"L":"S")">
+        <div class="pg-card @(cv.IsLong?"L":"S")">
 
           <!-- HEAD -->
           <div class="pg-head">
             <div class="pg-head-l">
               <div class="pg-sym-row">
-                <span class="pg-sym">@card.Sym.Replace("USDT","")<sub>/USDT</sub></span>
-                <span class="pg-side @(isLong?"L":"S")">@(isLong?"▲ LONG":"▼ SHORT")</span>
-                @if(isHedge){<span class="pg-hedge">⇄ HEDGE</span>}
+                <span class="pg-sym">@cv.Sym<sub>/USDT</sub></span>
+                <span class="pg-side @(cv.IsLong?"L":"S")">@(cv.IsLong?"▲ LONG":"▼ SHORT")</span>
+                @if(cv.IsHedge){<span class="pg-hedge">⇄ HEDGE</span>}
               </div>
               <div class="pg-meta">
-                <span>@card.Lev<b>×</b></span>
-                <span>Size <b>@card.Size.ToString("F1") $</b></span>
-                <span>Qty <b>@card.Qty.ToString("G6")</b></span>
+                <span>@cv.Lev<b>×</b></span>
+                <span>Size <b>@cv.Size.ToString("F1") $</b></span>
+                <span>Qty <b>@cv.Qty.ToString("G6")</b></span>
               </div>
             </div>
             <div class="pg-head-r">
-              <span class="pg-pnl @(up?"up":"dn")">@(pnl>=0?"+":"")@pnl.ToString("F2")</span>
-              <span class="pg-roi @(up?"up":"dn")">@(roi>=0?"+":"")@roi.ToString("F2")%</span>
-              <span class="pg-mark-p">@FP(live)</span>
+              <span class="pg-pnl @(cv.Up?"up":"dn")">@(cv.Pnl>=0?"+":"")@cv.Pnl.ToString("F2")</span>
+              <span class="pg-roi @(cv.Up?"up":"dn")">@(cv.Roi>=0?"+":"")@cv.Roi.ToString("F2")%</span>
+              <span class="pg-mark-p">@FP(cv.Live)</span>
             </div>
           </div>
 
           <!-- CHART -->
           <div class="pg-chart">
-            <svg viewBox="0 0 @W @H" preserveAspectRatio="none">
-              <!-- grid lines -->
-              <line x1="0" y1="@(H/4)"   x2="@CW" y2="@(H/4)"   stroke="#09162a" stroke-width="1"/>
-              <line x1="0" y1="@(H/2)"   x2="@CW" y2="@(H/2)"   stroke="#09162a" stroke-width="1"/>
-              <line x1="0" y1="@(H*3/4)" x2="@CW" y2="@(H*3/4)" stroke="#09162a" stroke-width="1"/>
+            <svg viewBox="0 0 560 148" preserveAspectRatio="none">
+              <line x1="0" y1="37"  x2="490" y2="37"  stroke="#09162a" stroke-width="1"/>
+              <line x1="0" y1="74"  x2="490" y2="74"  stroke="#09162a" stroke-width="1"/>
+              <line x1="0" y1="111" x2="490" y2="111" stroke="#09162a" stroke-width="1"/>
 
-              @if (ks.Count >= 2) {
-                <path d="@fill" fill="@fc"/>
-                <polyline points="@pts" fill="none" stroke="@lc" stroke-width="1.5"
-                          stroke-linejoin="round" stroke-linecap="round"/>
-                <!-- live dot -->
-                <circle cx="@((CW-1).ToString("F0"))" cy="@mkY.ToString("F1")"
-                        r="3.5" fill="@lc"/>
+              @if (cv.HasKlines)
+              {
+                <path d="@cv.FillPath" fill="@cv.FillColor"/>
+                <polyline points="@cv.SparkPoints" fill="none" stroke="@cv.LineColor"
+                          stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+                <circle cx="489" cy="@cv.MkY.ToString("F1")" r="3.5" fill="@cv.LineColor"/>
               }
-
-              <!-- Entry line -->
-              @if(eY>=0&&eY<=H){
-                <line x1="0" y1="@eY.ToString("F1")" x2="@CW" y2="@eY.ToString("F1")"
-                      stroke="@(isLong?"#06b6d4":"#f59e0b")" stroke-width="1.2"
+              @if(cv.EY>=0&&cv.EY<=148)
+              {
+                <line x1="0" y1="@cv.EY.ToString("F1")" x2="490" y2="@cv.EY.ToString("F1")"
+                      stroke="@(cv.IsLong?"#06b6d4":"#f59e0b")" stroke-width="1.2"
                       stroke-dasharray="5,3" opacity=".7"/>
               }
-              <!-- SL line + zone -->
-              @if(slY>=0&&slY<=H){
-                <line x1="0" y1="@slY.ToString("F1")" x2="@CW" y2="@slY.ToString("F1")"
+              @if(cv.SlY>=0&&cv.SlY<=148)
+              {
+                <line x1="0" y1="@cv.SlY.ToString("F1")" x2="490" y2="@cv.SlY.ToString("F1")"
                       stroke="#ef4444" stroke-width="1" stroke-dasharray="3,3" opacity=".65"/>
-                @if(isLong&&slY>eY){
-                  <rect x="0" y="@eY.ToString("F1")" width="@CW"
-                        height="@((slY-eY).ToString("F1"))" fill="rgba(239,68,68,.04)"/>
+                @if(cv.IsLong&&cv.SlY>cv.EY)
+                {
+                  <rect x="0" y="@cv.EY.ToString("F1")" width="490"
+                        height="@((cv.SlY-cv.EY).ToString("F1"))" fill="rgba(239,68,68,.04)"/>
                 }
-                @if(!isLong&&slY<eY){
-                  <rect x="0" y="@slY.ToString("F1")" width="@CW"
-                        height="@((eY-slY).ToString("F1"))" fill="rgba(239,68,68,.04)"/>
+                @if(!cv.IsLong&&cv.SlY<cv.EY)
+                {
+                  <rect x="0" y="@cv.SlY.ToString("F1")" width="490"
+                        height="@((cv.EY-cv.SlY).ToString("F1"))" fill="rgba(239,68,68,.04)"/>
                 }
               }
-              <!-- TP lines -->
-              @for(int ti=0;ti<tps.Count;ti++){
-                double ty = Y(tps[ti].Price);
-                @if(ty>=0&&ty<=H){
-                  <line x1="0" y1="@ty.ToString("F1")" x2="@CW" y2="@ty.ToString("F1")"
+              @for(int ti=0;ti<cv.TpYs.Count;ti++)
+              {
+                @if(cv.TpYs[ti]>=0&&cv.TpYs[ti]<=148)
+                {
+                  <line x1="0" y1="@cv.TpYs[ti].ToString("F1")" x2="490" y2="@cv.TpYs[ti].ToString("F1")"
                         stroke="#10b981" stroke-width="@(ti==0?"1.2":"1")"
                         stroke-dasharray="@(ti==0?"6,3":"4,3")" opacity=".6"/>
                 }
               }
-              <!-- Liq line -->
-              @if(lqY>=0&&lqY<=H){
-                <line x1="0" y1="@lqY.ToString("F1")" x2="@CW" y2="@lqY.ToString("F1")"
+              @if(cv.LqY>=0&&cv.LqY<=148)
+              {
+                <line x1="0" y1="@cv.LqY.ToString("F1")" x2="490" y2="@cv.LqY.ToString("F1")"
                       stroke="#7f1d1d" stroke-width="1.5" stroke-dasharray="2,4" opacity=".5"/>
               }
-              <!-- Mark line -->
-              @if(mkY>=0&&mkY<=H){
-                <line x1="0" y1="@mkY.ToString("F1")" x2="@CW" y2="@mkY.ToString("F1")"
+              @if(cv.MkY>=0&&cv.MkY<=148)
+              {
+                <line x1="0" y1="@cv.MkY.ToString("F1")" x2="490" y2="@cv.MkY.ToString("F1")"
                       stroke="rgba(255,255,255,.1)" stroke-width="1"/>
               }
-              <!-- Axis panel bg -->
-              <rect x="@CW" y="0" width="@AX" height="@H" fill="#020810"/>
-              <line x1="@CW" y1="0" x2="@CW" y2="@H" stroke="var(--bdr)" stroke-width="1"/>
+              <rect x="490" y="0" width="70" height="148" fill="#020810"/>
+              <line x1="490" y1="0" x2="490" y2="148" stroke="var(--bdr)" stroke-width="1"/>
             </svg>
 
-            <!-- Price labels -->
-            <div class="pg-ax" style="width:@(AX)px;">
-              @if(eY>=0&&eY<=H){
-                <span class="pg-ax-lbl lbl-e" style="top:@eY.ToString("F0")px">E @FP(card.Entry)</span>
+            <div class="pg-ax" style="width:70px;">
+              @if(cv.EY>=0&&cv.EY<=148)
+              {
+                <span class="pg-ax-lbl lbl-e" style="top:@cv.EY.ToString("F0")px">E @FP(cv.Entry)</span>
               }
-              @if(sl!=null&&slY>=0&&slY<=H&&Math.Abs(slY-eY)>10){
-                <span class="pg-ax-lbl lbl-sl" style="top:@slY.ToString("F0")px">SL @FP(sl.Price)</span>
+              @if(cv.SlPrice>0&&cv.SlY>=0&&cv.SlY<=148&&Math.Abs(cv.SlY-cv.EY)>10)
+              {
+                <span class="pg-ax-lbl lbl-sl" style="top:@cv.SlY.ToString("F0")px">SL @FP(cv.SlPrice)</span>
               }
-              @for(int ti=0;ti<Math.Min(tps.Count,3);ti++){
-                double ty=Y(tps[ti].Price);
-                @if(ty>=0&&ty<=H&&Math.Abs(ty-eY)>8){
-                  <span class="pg-ax-lbl lbl-tp" style="top:@ty.ToString("F0")px">TP@(ti+1) @FP(tps[ti].Price)</span>
+              @for(int ti=0;ti<Math.Min(cv.TpYs.Count,3);ti++)
+              {
+                @if(cv.TpYs[ti]>=0&&cv.TpYs[ti]<=148&&Math.Abs(cv.TpYs[ti]-cv.EY)>8)
+                {
+                  <span class="pg-ax-lbl lbl-tp" style="top:@cv.TpYs[ti].ToString("F0")px">TP@(ti+1) @FP(cv.TpPrices[ti])</span>
                 }
               }
-              @if(card.Liq>0&&lqY>=0&&lqY<=H&&Math.Abs(lqY-eY)>12){
-                <span class="pg-ax-lbl lbl-liq" style="top:@lqY.ToString("F0")px">LIQ @FP(card.Liq)</span>
+              @if(cv.LiqPrice>0&&cv.LqY>=0&&cv.LqY<=148&&Math.Abs(cv.LqY-cv.EY)>12)
+              {
+                <span class="pg-ax-lbl lbl-liq" style="top:@cv.LqY.ToString("F0")px">LIQ @FP(cv.LiqPrice)</span>
               }
-              @if(mkY>=0&&mkY<=H){
-                <span class="pg-ax-lbl lbl-m" style="top:@mkY.ToString("F0")px">@FP(live)</span>
+              @if(cv.MkY>=0&&cv.MkY<=148)
+              {
+                <span class="pg-ax-lbl lbl-m" style="top:@cv.MkY.ToString("F0")px">@FP(cv.Live)</span>
               }
             </div>
-            @if(ks.Count>=2){
-              <span class="pg-time">5m · @ks.Count bars</span>
+            @if(cv.HasKlines)
+            {
+              <span class="pg-time">5m · @cv.KlineCount bars</span>
             }
           </div>
 
@@ -349,22 +290,23 @@ html,body{background:var(--g0)!important;margin:0;padding:0;}
           <div class="pg-foot">
             <div class="pg-fi">
               <span class="pg-fi-lbl">Entry</span>
-              <span class="pg-fi-val">@FP(card.Entry)</span>
+              <span class="pg-fi-val">@FP(cv.Entry)</span>
             </div>
             <div class="pg-fi">
               <span class="pg-fi-lbl">Margin</span>
-              <span class="pg-fi-val">$@card.Margin.ToString("F2")</span>
+              <span class="pg-fi-val">$@cv.Margin.ToString("F2")</span>
             </div>
             <div class="pg-fi">
               <span class="pg-fi-lbl">Liq</span>
-              <span class="pg-fi-val" style="color:var(--redL)">@FP(card.Liq)</span>
+              <span class="pg-fi-val" style="color:var(--redL)">@FP(cv.LiqPrice)</span>
             </div>
             <div class="pg-tpsl">
-              @if(sl!=null){<span class="chip-sl">SL @FP(sl.Price)</span>}
-              @for(int ti=0;ti<tps.Count;ti++){
-                <span class="chip-tp">TP@(ti+1) @FP(tps[ti].Price)</span>
+              @if(cv.SlPrice>0){<span class="chip-sl">SL @FP(cv.SlPrice)</span>}
+              @for(int ti=0;ti<cv.TpPrices.Count;ti++)
+              {
+                <span class="chip-tp">TP@(ti+1) @FP(cv.TpPrices[ti])</span>
               }
-              @if(sl==null&&!tps.Any()){<span class="chip-none">No SL/TP</span>}
+              @if(cv.SlPrice<=0&&!cv.TpPrices.Any()){<span class="chip-none">No SL/TP</span>}
             </div>
           </div>
 
@@ -492,6 +434,97 @@ html,body{background:var(--g0)!important;margin:0;padding:0;}
         await InvokeAsync(StateHasChanged);
     }
 
+    // ── Template helpers (called from HTML, no @{ } needed) ──────
+    decimal TotalPnl() => _cards.Sum(c => CalcPnl(c));
+    int HedgeCount() => _cards.GroupBy(c=>c.Sym).Count(g=>g.Count()>1);
+
+    // Pre-computes ALL per-card values into a plain data object
+    // so the Razor template can use @(cv.Xyz) without any @{ } blocks.
+    List<CardView> BuildCardViews()
+    {
+        var result = new List<CardView>();
+        const int W=560, H=148, AX=70, CW=490;
+        foreach (var card in _cards.OrderBy(c=>c.Sym).ThenBy(c=>c.Side))
+        {
+            bool isLong = card.Side == "LONG";
+            decimal live = _prices.TryGetValue(card.Sym, out var lp) ? lp : card.Mark;
+            decimal pnl  = CalcPnl(card, live);
+            decimal roi  = card.Margin > 0 ? pnl / card.Margin * 100m : card.Roi;
+
+            var myOrders = _orders.Where(o =>
+                o.Sym == card.Sym && o.ReduceOnly &&
+                o.Side == (isLong ? "SELL" : "BUY") &&
+                (o.PosSide == "BOTH" || o.PosSide == card.Side)).ToList();
+
+            var tpOrders = myOrders.Where(o=>o.Type.Contains("TAKE_PROFIT"))
+                                   .OrderBy(o=>isLong ? o.Price : -o.Price).ToList();
+            var slOrder  = myOrders.FirstOrDefault(o=>o.Type.Contains("STOP"));
+            var ks = _klines.TryGetValue(card.Sym, out var kk) ? kk : new();
+
+            // Price range for SVG scaling
+            var allP = new List<decimal>(ks.Select(k=>k.C));
+            allP.Add(card.Entry); allP.Add(live);
+            if (card.Liq > 0) allP.Add(card.Liq);
+            if (slOrder != null) allP.Add(slOrder.Price);
+            foreach (var t in tpOrders) allP.Add(t.Price);
+            decimal mn = allP.Count > 0 ? allP.Min() : 0m;
+            decimal mx = allP.Count > 0 ? allP.Max() : 1m;
+            decimal pd = (mx-mn)*0.07m; if(pd==0) pd=mx*0.02m;
+            mn -= pd; mx += pd;
+            decimal rng = mx > mn ? mx - mn : 1m;
+
+            double ToY(decimal p) => (double)H - (double)((p-mn)/rng*(decimal)H);
+            double ToX(int i, int n) => n<=1 ? 0.0 : (double)i/(n-1)*CW;
+
+            var ptsB = new System.Text.StringBuilder();
+            var fillB = new System.Text.StringBuilder();
+            if (ks.Count >= 2) {
+                fillB.Append($"M0,{H} ");
+                for (int ki=0;ki<ks.Count;ki++) {
+                    double x=ToX(ki,ks.Count), y=ToY(ks[ki].C);
+                    ptsB.Append($"{x:F1},{y:F1} ");
+                    fillB.Append($"L{x:F1},{y:F1} ");
+                }
+                fillB.Append($"L{CW},{H} Z");
+            }
+
+            result.Add(new CardView
+            {
+                Sym       = card.Sym.Replace("USDT",""),
+                IsLong    = isLong,
+                IsHedge   = _cards.Count(c=>c.Sym==card.Sym) > 1,
+                Lev       = card.Lev, Qty = card.Qty, Size = card.Size,
+                Entry     = card.Entry, LiqPrice = card.Liq, Margin = card.Margin,
+                Live      = live, Pnl = pnl, Roi = roi, Up = pnl >= 0,
+                LineColor = isLong ? "#10b981" : "#ef4444",
+                FillColor = isLong ? "rgba(16,185,129,.09)" : "rgba(239,68,68,.09)",
+                SparkPoints = ptsB.ToString().Trim(),
+                FillPath  = fillB.ToString(),
+                HasKlines = ks.Count >= 2,
+                KlineCount= ks.Count,
+                EY        = ToY(card.Entry),
+                MkY       = live>0 ? ToY(live) : ToY(card.Entry),
+                LqY       = card.Liq>0 ? ToY(card.Liq) : -1,
+                SlY       = slOrder!=null ? ToY(slOrder.Price) : -1,
+                SlPrice   = slOrder?.Price ?? 0m,
+                TpPrices  = tpOrders.Select(o=>o.Price).ToList(),
+                TpYs      = tpOrders.Select(o=>ToY(o.Price)).ToList(),
+            });
+        }
+        return result;
+    }
+
+    class CardView
+    {
+        public string Sym="", LineColor="", FillColor="", SparkPoints="", FillPath="";
+        public bool IsLong, IsHedge, Up, HasKlines;
+        public int Lev, KlineCount;
+        public decimal Qty, Size, Entry, LiqPrice, Margin, Live, Pnl, Roi, SlPrice;
+        public double EY, MkY, LqY, SlY;
+        public List<decimal> TpPrices = new();
+        public List<double>  TpYs     = new();
+    }
+
     decimal CalcPnl(CardData c, decimal? price = null)
     {
         var p = price ?? (_prices.TryGetValue(c.Sym, out var lp) ? lp : c.Mark);
@@ -525,6 +558,7 @@ html,body{background:var(--g0)!important;margin:0;padding:0;}
         public bool ReduceOnly;
     }
 }
+
 
 
 
