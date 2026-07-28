@@ -1,5 +1,7 @@
 @page "/positions/grid"
 @using Binance.Net.Enums
+@using VertexAutoTradeBinance8.Web.Services
+@using VertexAutoTradeBinance8.Services
 @inject LiveStateService LiveState
 @inject BinanceClientFactory Factory
 @inject IJSRuntime JS
@@ -121,14 +123,14 @@ html,body{background:var(--g0)!important;margin:0;padding:0;}
         <span class="pgbar-stat-val neu">@_cards.Count</span>
       </div>
       <div class="pgbar-sep"></div>
-      @{ decimal tot = _cards.Sum(c => CalcPnl(c)); }
+      decimal tot = _cards.Sum(c => CalcPnl(c));
       <div class="pgbar-stat">
         <span class="pgbar-stat-lbl">Unrealized PnL</span>
         <span class="pgbar-stat-val @(tot>=0?"up":"dn")">
           @(tot>=0?"+":"")@tot.ToString("F2") USDT
         </span>
       </div>
-      @{ int hedges = _cards.GroupBy(c=>c.Sym).Count(g=>g.Count()>1); }
+      int hedges = _cards.GroupBy(c=>c.Sym).Count(g=>g.Count()>1);
       @if (hedges > 0)
       {
         <div class="pgbar-sep"></div>
@@ -174,8 +176,7 @@ html,body{background:var(--g0)!important;margin:0;padding:0;}
     <div class="pg-grid c@_cols">
       @foreach (var card in _cards.OrderBy(c=>c.Sym).ThenBy(c=>c.Side))
       {
-        @{
-          bool isLong = card.Side == "LONG";
+        bool isLong = card.Side == "LONG";
           decimal live = _prices.TryGetValue(card.Sym, out var lp) ? lp : card.Mark;
           decimal pnl  = CalcPnl(card, live);
           decimal roi  = card.Margin > 0 ? pnl / card.Margin * 100m : card.Roi;
@@ -523,4 +524,5 @@ html,body{background:var(--g0)!important;margin:0;padding:0;}
         public bool ReduceOnly;
     }
 }
+
 
