@@ -620,28 +620,27 @@ namespace VertexAutoTradeBinance8.Services
                 var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 if (_beMoved.TryGetValue(keyProbe, out var lastMove) && lastMove > 0)
                 {
-                    // BE already moved — now run trailing SL logic.
-                    // Trail SL at 1.5×ATR below mark price (Long) or above (Short).
-                    // Only move SL in the profit direction (ratchet — never widen).
-                    if (atr14_1m > 0 && markPrice > 0)
+                    // BE already moved — run trailing SL.
+                    // Trail at 1.5×ATR below mark (Long) or above (Short).
+                    // Ratchet: only move in profit direction, never widen.
+                    if (ATR > 0 && mark > 0)
                     {
                         decimal trailSl = side == PositionSide.Long
-                            ? markPrice - atr14_1m * 1.5m   // 1.5×ATR trailing for Long
-                            : markPrice + atr14_1m * 1.5m;  // 1.5×ATR trailing for Short
+                            ? mark - ATR * 1.5m
+                            : mark + ATR * 1.5m;
 
                         decimal currentTrail = _lastSl.TryGetValue(keyProbe, out var lt) ? lt : 0m;
                         bool shouldMove = side == PositionSide.Long
-                            ? trailSl > currentTrail && trailSl > entry  // only move up
-                            : trailSl < currentTrail && trailSl < entry; // only move down
+                            ? trailSl > currentTrail && trailSl > entry
+                            : trailSl < currentTrail && trailSl < entry;
 
-                        // Throttle: trail at most once per minute to avoid API spam
                         bool throttleOk = (now - lastMove) > 60_000;
 
                         if (shouldMove && throttleOk)
                         {
                             _logger.LogInformation(
-                                "[TRAIL SL][{sym}][{side}] {old:F4} → {new:F4} (mark={mark:F4})",
-                                symbol, side, currentTrail, trailSl, markPrice);
+                                "[TRAIL SL][{sym}][{side}] {old:F4} → {new:F4} (mark={m:F4})",
+                                symbol, side, currentTrail, trailSl, mark);
 
                             var slOrders = (await LoadOrdersAsync(client, symbol))
                                 .Where(o => o.PositionSide == side &&
@@ -655,10 +654,10 @@ namespace VertexAutoTradeBinance8.Services
                             await Task.Delay(60, ct);
                             await PlaceStopLossAtBeAsync(client, symbol, side, qty, trailSl, pos, ct);
                             _lastSl[keyProbe] = trailSl;
-                            _beMoved[keyProbe] = now; // update timestamp for throttle
+                            _beMoved[keyProbe] = now;
                         }
                     }
-                    return; // trailing logic done — don't re-run BE placement below
+                    return;
                 }
 
                 // =========================
@@ -3921,6 +3920,7 @@ namespace VertexAutoTradeBinance8.Services
     }
 
 }
+
 
 
 
