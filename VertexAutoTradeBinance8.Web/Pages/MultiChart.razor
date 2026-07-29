@@ -356,7 +356,9 @@ html,body{background:var(--bg);overflow:hidden;}
     protected override async Task OnInitializedAsync()
     {
         LiveState.PriceTicked += OnTick;
-        await LoadPositionsAsync();
+        // Load BOTH positions and open orders before building panels
+        // so RefreshTpSlLinesAsync has data when InitPanelAsync calls it
+        await Task.WhenAll(LoadPositionsAsync(), LoadOpenOrdersAsync());
         RebuildPositionPanels();
         _ = InvokeAsync(RunTimerAsync);
     }
@@ -399,6 +401,8 @@ html,body{background:var(--bg);overflow:hidden;}
     {
         if (!firstRender) return;
 
+        // Load open orders once before panel init (ensures _openOrders is populated)
+        await LoadOpenOrdersAsync();
         // Init charts in parallel — all panels simultaneously
         await Task.WhenAll(_panels.Select((p, i) => InitPanelAsync(i)));
     }
@@ -444,7 +448,10 @@ html,body{background:var(--bg);overflow:hidden;}
                 {
                     await InvokeAsync(StateHasChanged);
                     for (int i = 0; i < _panels.Count; i++)
+                    {
                         await RefreshPositionLinesAsync(i);
+                        await RefreshTpSlLinesAsync(i);
+                    }
                 }
             }
         }
@@ -610,12 +617,21 @@ html,body{background:var(--bg);overflow:hidden;}
             panel.Error   = "";
             await InvokeAsync(StateHasChanged);
 
-            // Step 4: overlay position lines + TP/SL drag lines
+            // Step 4: reload open orders (fresh data) then overlay lines
+            // Must load orders here in case this panel init runs before
+            // the global LoadOpenOrdersAsync completes (parallel init)
+            await LoadOpenOrdersAsync();
             await RefreshPositionLinesAsync(slot);
             await RefreshTpSlLinesAsync(slot);
 
             // Step 5: bind drag callbacks so JS can call back into Blazor
             // when user drags SL/TP lines or right-clicks to add TP
+            // Dispose old ref if exists (e.g. after RebuildPositionPanels re-init)
+            if (_chartRefs.TryGetValue(slot, out var oldRef))
+            {
+                _chartRefs.Remove(slot);
+                try { oldRef.Dispose(); } catch { }
+            }
             var dotNet = DotNetObjectReference.Create(new ChartCallbackBridge(
                 this, slot, panel.Symbol, panel.Side));
             _chartRefs[slot] = dotNet;
@@ -1000,4 +1016,5 @@ html,body{background:var(--bg);overflow:hidden;}
     }
 
 }
+
 
