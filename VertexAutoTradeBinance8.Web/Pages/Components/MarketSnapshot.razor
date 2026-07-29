@@ -3497,8 +3497,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
                 // ── FALLBACK: missed_trades.json (legacy, if live_signals empty) ──
                 // Also always load for archive section below.
-                // TODO: per-client path via ClientData.Root
-                var allSigs = await SignalSvc.LoadAsync();
+                var allSigs = await SignalSvc.LoadFromPathAsync(SignalSvc.GetPathForRoot(ClientData.Root));
                 if (_signals.Count == 0)
                 {
                     _signals = allSigs
