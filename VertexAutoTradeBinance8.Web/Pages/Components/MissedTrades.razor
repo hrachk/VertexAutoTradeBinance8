@@ -3,6 +3,9 @@
 @using VertexAutoTradeBinance8.Web.Models
 @using VertexAutoTradeBinance8.Models
 @inject MissedTradeFileService Svc
+@inject VertexAutoTradeBinance8.Web.Services.ClientDataService ClientData
+@using VertexAutoTradeBinance8.Web.Services.Auth
+@inject VertexAutoTradeBinance8.Web.Services.Auth.AuthSessionService Auth
 @implements IDisposable
 
 <PageTitle>Signal Log — Vertex</PageTitle>
@@ -449,7 +452,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
 
     async Task Load()
     {
-        var data = await Svc.LoadAsync();
+        var data = await Svc.LoadFromPathAsync(Svc.GetPathForRoot(ClientData.Root));
         _all = data?.ToList() ?? new();
         _execFail = _all.Count(r => r.Reason.Contains("Exec") || r.Reason.Contains("EXEC") || r.Reason.Contains("Failed"));
         Rebuild();
