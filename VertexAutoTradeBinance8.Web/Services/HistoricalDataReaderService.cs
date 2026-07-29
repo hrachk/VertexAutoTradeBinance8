@@ -112,5 +112,20 @@ namespace VertexAutoTradeBinance8.Web.Services
                 .OrderBy(s => s)
                 .ToList();
         }
+    /// <summary>
+    /// Loads klines for a specific client root folder.
+    /// Usage: await HistoricalReader.LoadForClientAsync(ClientData.Root, symbol, tf)
+    /// </summary>
+    public Task<List<KlineDto>> LoadForClientAsync(string clientRoot, string symbol, string tf)
+    {
+        var saved = _root;
+        // Temporarily create a reader for the client root
+        var clientReader = new HistoricalDataReaderService(clientRoot);
+        return clientReader.LoadAsync(symbol, tf);
+    }
+
+    // Private ctor for per-client reader
+    private HistoricalDataReaderService(string root) => _root = root;
+
     }
 }
