@@ -330,6 +330,11 @@ html,body{background:var(--bg);overflow:hidden;}
     Dictionary<string, decimal> _prices     = new();
     Dictionary<string, decimal> _prevPrices = new();
 
+    // ── TP/SL management fields ──────────────────────────────
+    internal List<OrderRow> _openOrders   = new();
+    internal bool _slTpDragBusy            = false;
+    Dictionary<int, DotNetObjectReference<ChartCallbackBridge>> _chartRefs = new();
+
     // ── Symbol list ───────────────────────────────────────────────
     List<string> _allSymbols = new()
     {
