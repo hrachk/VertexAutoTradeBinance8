@@ -197,7 +197,10 @@ html,body{background:var(--bg);overflow:hidden;}
         decimal prev = _prevPrices.TryGetValue(panel.Symbol, out var pp) ? pp : lp;
         bool    pUp  = lp >= prev;
         decimal chg  = prev > 0 && prev != lp ? (lp - prev) / prev * 100m : 0m;
-        var myPos    = _positions.Where(p => p.Symbol == panel.Symbol).ToList();
+        var myPos = _positions.Where(p =>
+            p.Symbol == panel.Symbol &&
+            (!panel.IsPositionPanel || p.Side == panel.Side)
+        ).ToList();
 
         <div class="mc-panel @(_activeSlot==s?"active":"")" @onclick="()=>_activeSlot=s">
 
@@ -309,9 +312,11 @@ html,body{background:var(--bg);overflow:hidden;}
     class Panel
     {
         public string Symbol  = "";
+        public string Side    = "";   // "LONG", "SHORT", or "" for manual/watch panels
         public string Tf      = "5m";
         public bool   Loading = false;
         public string Error   = "";
+        public bool IsPositionPanel => !string.IsNullOrEmpty(Side);
     }
     List<Panel> _panels = new();
 
@@ -346,16 +351,42 @@ html,body{background:var(--bg);overflow:hidden;}
     {
         LiveState.PriceTicked += OnTick;
         await LoadPositionsAsync();
-
-        // Start with position symbols first, then defaults
-        var syms = _positions.Select(p => p.Symbol).Distinct().ToList();
-        foreach (var d in new[]{"BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT"})
-            if (!syms.Contains(d)) syms.Add(d);
-
-        foreach (var sym in syms.Take(SlotCount()))
-            _panels.Add(new Panel { Symbol = sym, Tf = _globalTf });
-
+        RebuildPositionPanels();
         _ = InvokeAsync(RunTimerAsync);
+    }
+
+    // Rebuilds panels from current positions.
+    // One panel per POSITION (not per symbol) — so UBUSDT LONG + UBUSDT SHORT
+    // get TWO separate charts, each showing its own side's entry/liq/PnL.
+    void RebuildPositionPanels()
+    {
+        // Preserve existing TF preferences
+        var tfMap = _panels.ToDictionary(p => p.Symbol + "|" + p.Side, p => p.Tf);
+
+        var newPanels = _positions
+            .Select(pos => new Panel
+            {
+                Symbol  = pos.Symbol,
+                Side    = pos.Side,
+                Tf      = tfMap.TryGetValue(pos.Symbol + "|" + pos.Side, out var tf) ? tf : _globalTf,
+                Loading = false,
+                Error   = "",
+            })
+            .ToList();
+
+        // If no positions open — show default watch symbols
+        if (!newPanels.Any())
+        {
+            foreach (var sym in new[]{"BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT"})
+                newPanels.Add(new Panel { Symbol = sym, Side = "", Tf = _globalTf });
+        }
+
+        _panels = newPanels;
+
+        // Auto-select layout based on panel count
+        _layout = _panels.Count switch {
+            1 => "c1", 2 => "c2", 3 => "c3", 4 => "c4", _ => "c6"
+        };
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -380,15 +411,33 @@ html,body{background:var(--bg);overflow:hidden;}
 
     async Task RunTimerAsync()
     {
-        _timer = new System.Threading.PeriodicTimer(TimeSpan.FromSeconds(10));
+        _timer = new System.Threading.PeriodicTimer(TimeSpan.FromSeconds(8));
         try
         {
             while (await _timer.WaitForNextTickAsync(_cts.Token))
             {
+                var prevCount = _positions.Count;
+                var prevKeys  = _positions.Select(p => p.Symbol + p.Side).OrderBy(x => x).ToList();
+
                 await LoadPositionsAsync();
-                await InvokeAsync(StateHasChanged);
-                for (int i = 0; i < _panels.Count; i++)
-                    await RefreshPositionLinesAsync(i);
+
+                var newKeys = _positions.Select(p => p.Symbol + p.Side).OrderBy(x => x).ToList();
+                bool positionsChanged = !prevKeys.SequenceEqual(newKeys);
+
+                if (positionsChanged)
+                {
+                    // Positions opened/closed — rebuild panels and re-init charts
+                    RebuildPositionPanels();
+                    await InvokeAsync(StateHasChanged);
+                    await Task.Delay(80);
+                    await Task.WhenAll(Enumerable.Range(0, _panels.Count).Select(i => InitPanelAsync(i)));
+                }
+                else
+                {
+                    await InvokeAsync(StateHasChanged);
+                    for (int i = 0; i < _panels.Count; i++)
+                        await RefreshPositionLinesAsync(i);
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -423,23 +472,24 @@ html,body{background:var(--bg);overflow:hidden;}
         if (slot >= _panels.Count) return;
         var panel = _panels[slot];
         var cid   = $"mc-chart-{slot}";
-        var pos   = _positions.FirstOrDefault(p => p.Symbol == panel.Symbol);
         if (panel.Loading || !string.IsNullOrEmpty(panel.Error)) return;
+
+        // Match position by BOTH Symbol AND Side (handles hedge: UBUSDT LONG + UBUSDT SHORT)
+        var pos = panel.IsPositionPanel
+            ? _positions.FirstOrDefault(p => p.Symbol == panel.Symbol && p.Side == panel.Side)
+            : null;
+
         try
         {
             if (pos != null)
             {
-                // showPositionLines draws Entry + Liq lines on chart
                 await JS.InvokeVoidAsync("marketChart.showPositionLines",
                     cid, (double)pos.EntryPrice, pos.Side,
                     (double)pos.Qty, (double)pos.LiqPrice, 0.0);
 
-                // updatePnl draws the live price + PnL label ("+12.34 USDT")
-                // Uses s.entryPrice and s.qty set by showPositionLines above
                 decimal liveP = _prices.TryGetValue(pos.Symbol, out var lp) ? lp : pos.EntryPrice;
                 if (liveP > 0)
-                    await JS.InvokeVoidAsync("marketChart.updatePnl",
-                        cid, (double)liveP);
+                    await JS.InvokeVoidAsync("marketChart.updatePnl", cid, (double)liveP);
             }
             else
                 await JS.InvokeVoidAsync("marketChart.hidePositionLines", cid);
@@ -486,8 +536,10 @@ html,body{background:var(--bg);overflow:hidden;}
                             takerBuyVolume = 0.0
                         });
 
-                    // Update PnL line if position is open for this symbol
-                    var pos2 = _positions.FirstOrDefault(p => p.Symbol == sym);
+                    // Update PnL line — match by Symbol AND Side
+                    var pos2 = panel2.IsPositionPanel
+                        ? _positions.FirstOrDefault(p => p.Symbol == sym && p.Side == panel2.Side)
+                        : _positions.FirstOrDefault(p => p.Symbol == sym);
                     if (pos2 != null)
                         await JS.InvokeVoidAsync("marketChart.updatePnl",
                             $"mc-chart-{i}", (double)price);
