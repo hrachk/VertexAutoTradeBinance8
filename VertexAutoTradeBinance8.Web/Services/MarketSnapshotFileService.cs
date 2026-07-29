@@ -19,7 +19,14 @@ public sealed class MarketSnapshotFileService
         else
             _file = Path.Combine(AppContext.BaseDirectory, "market", "klines_bootstrap.json");
     }
- 
+
+    /// <summary>
+    /// Returns the klines_bootstrap.json path for a specific client root.
+    /// Used by pages to load data scoped to the logged-in client.
+    /// </summary>
+    public static string GetFileForRoot(string root)
+        => Path.Combine(root, "market", "klines_bootstrap.json");
+
     private static decimal ReadDecimal(JsonElement el)
     {
         if (el.ValueKind == JsonValueKind.Number)
