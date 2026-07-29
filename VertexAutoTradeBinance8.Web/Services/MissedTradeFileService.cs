@@ -55,6 +55,27 @@ namespace VertexAutoTradeBinance8.Web.Services
             _logger = logger;
         }
 
+        /// <summary>Load from a specific file path — for per-client data isolation.</summary>
+        public async Task<List<MissedTradeRecord>> LoadFromPathAsync(
+            string filePath, CancellationToken ct = default)
+        {
+            // Swap path temporarily by delegating to a path-parameterised inner call
+            var saved  = _filePath;
+            // Use field injection trick: directly read from the specified path
+            if (!File.Exists(filePath)) return new();
+            try
+            {
+                var fi = new FileInfo(filePath);
+                if (fi.Length == 0) return new();
+                var json = await File.ReadAllTextAsync(filePath, ct);
+                return System.Text.Json.JsonSerializer.Deserialize<List<MissedTradeRecord>>(
+                    json,
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                    ?? new();
+            }
+            catch { return new(); }
+        }
+
         public async Task<List<MissedTradeRecord>> LoadAsync(CancellationToken ct = default)
         {
             if (!File.Exists(_filePath))
