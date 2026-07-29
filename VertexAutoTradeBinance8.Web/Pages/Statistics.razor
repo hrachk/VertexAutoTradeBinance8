@@ -6,6 +6,9 @@
 @using VertexAutoTradeBinance8.Configuration
 @using Microsoft.Extensions.Options
 @inject MissedTradeFileService MissedSvc
+@inject VertexAutoTradeBinance8.Web.Services.ClientDataService ClientData
+@using VertexAutoTradeBinance8.Web.Services.Auth
+@inject VertexAutoTradeBinance8.Web.Services.Auth.AuthSessionService Auth
 @inject DemoAccountService DemoAccount
 @inject BinanceClientFactory Factory
 @inject RealDcaHistoryReader RealDcaHistory
