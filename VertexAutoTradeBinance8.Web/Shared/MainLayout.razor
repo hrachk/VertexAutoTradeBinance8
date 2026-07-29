@@ -150,6 +150,28 @@
 @inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoAccount
 
 @code {
+    static readonly HashSet<string> _public = new(StringComparer.OrdinalIgnoreCase)
+        { "/login", "/register" };
+
+    protected override void OnInitialized()
+    {
+        Auth.OnChange += OnAuthChange;
+        GuardRoute();
+    }
+
+    void OnAuthChange() { GuardRoute(); InvokeAsync(StateHasChanged); }
+
+    void GuardRoute()
+    {
+        if (Auth.IsAuthenticated) return;
+        var rel = "/" + Nav.ToBaseRelativePath(Nav.Uri).Split('?')[0].TrimStart('/');
+        if (!_public.Contains(rel))
+            Nav.NavigateTo($"/login?returnUrl={Uri.EscapeDataString(rel)}", replace: true);
+    }
+
+    public void Dispose() => Auth.OnChange -= OnAuthChange;
+
+    // Existing code below:
     ClientOptions Client => ClientOptions.Value;
 
     public decimal Balance { get; set; }
