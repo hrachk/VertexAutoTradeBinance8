@@ -64,4 +64,9 @@ public sealed class TradePermissionFileService
             .OrderByDescending(x => x.Time)
             .ToList();
     }
+
+    /// <summary>Returns the decision-trace folder for a specific client.</summary>
+    public static string GetTraceDirForRoot(string root)
+        => Path.Combine(root, "ai-models", "decision-trace");
+
 }
