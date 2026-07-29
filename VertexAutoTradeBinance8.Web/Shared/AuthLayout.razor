@@ -1,0 +1,97 @@
+@inherits LayoutComponentBase
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vertex AI</title>
+  <base href="/" />
+  <link rel="stylesheet" href="css/app.css" />
+  <link rel="stylesheet" href="VertexAutoTradeBinance8.Web.styles.css" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { min-height: 100vh; background: #050a12;
+      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; }
+
+    .auth-bg {
+      min-height: 100vh; display: flex; align-items: center;
+      justify-content: center; padding: 20px;
+      background: radial-gradient(ellipse at 50% 30%, #0f2040 0%, #050a12 70%);
+    }
+    /* grid decoration */
+    .auth-bg::before {
+      content: ''; position: fixed; inset: 0; pointer-events: none;
+      background-image:
+        linear-gradient(#1a2e44 1px, transparent 1px),
+        linear-gradient(90deg, #1a2e44 1px, transparent 1px);
+      background-size: 60px 60px; opacity: 0.18;
+    }
+
+    .auth-card {
+      position: relative; z-index: 1;
+      background: #0a1220; border: 1px solid #1a2e44;
+      border-radius: 14px; padding: 36px 40px;
+      width: 100%; max-width: 420px;
+      box-shadow: 0 24px 64px rgba(0,0,0,.55);
+    }
+    .auth-logo {
+      font-size: 26px; font-weight: 900; color: #f0f6ff;
+      letter-spacing: -.5px; text-align: center; margin-bottom: 6px;
+    }
+    .auth-logo span { color: #38bdf8; }
+    .auth-title {
+      font-size: 20px; font-weight: 800; color: #f0f6ff;
+      text-align: center; margin-bottom: 4px; margin-top: 12px;
+    }
+    .auth-sub {
+      font-size: 12px; color: #6e90b2; text-align: center;
+      margin-bottom: 24px; line-height: 1.5;
+    }
+    .auth-field { margin-bottom: 14px; }
+    .auth-field label {
+      display: block; font-size: 11px; font-weight: 700;
+      color: #6e90b2; text-transform: uppercase;
+      letter-spacing: 1px; margin-bottom: 6px;
+    }
+    .auth-field input {
+      width: 100%; height: 42px; background: #050a12;
+      border: 1px solid #1a2e44; border-radius: 7px;
+      color: #f0f6ff; font-size: 13px; padding: 0 14px;
+      outline: none; transition: border-color .15s;
+      font-family: inherit;
+    }
+    .auth-field input:focus { border-color: #3b82f6; }
+    .auth-btn {
+      width: 100%; height: 44px; background: #3b82f6;
+      border: none; border-radius: 7px; color: #fff;
+      font-size: 15px; font-weight: 700; cursor: pointer;
+      transition: background .15s; margin-top: 8px; margin-bottom: 14px;
+      font-family: inherit;
+    }
+    .auth-btn:hover:not(:disabled) { background: #2563eb; }
+    .auth-btn:disabled { opacity: .55; cursor: not-allowed; }
+    .auth-error {
+      background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.25);
+      border-radius: 6px; padding: 10px 14px; font-size: 12px;
+      color: #fca5a5; margin-bottom: 14px; text-align: center;
+    }
+    .auth-demo-note {
+      background: rgba(249,115,22,.07); border: 1px solid rgba(249,115,22,.2);
+      border-radius: 6px; padding: 10px 14px; font-size: 12px;
+      color: #fb923c; text-align: center; margin-bottom: 14px;
+    }
+    .auth-link {
+      font-size: 12px; color: #6e90b2; text-align: center;
+    }
+    .auth-link a { color: #38bdf8; text-decoration: none; }
+    .auth-link a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="auth-bg">
+    @Body
+  </div>
+  <script src="_framework/blazor.server.js"></script>
+</body>
+</html>
