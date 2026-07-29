@@ -1511,8 +1511,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 decimal risk    = slLevel - entry;
                 if (risk < atr * 0.35m || risk > atr * 4.5m) return null;
                 decimal tp1 = entry - atr * tp1Mult;
-                if ((entry - tp1) / risk < 2.0m) return null;y - atr * tp1Mult;
-                if ((entry - tp1) / risk < 1.5m) return null;
+                if ((entry - tp1) / risk < 2.0m) return null;
 
                 var s = new TradeSignal
                 {
@@ -4881,6 +4880,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
     }
 }
+
 
 
 
