@@ -255,7 +255,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
                 decimal levelPrice = group.Average(s => s.Price);
                 bool isResistance  = group.Average(s => s.IsHigh ? 1 : 0) >= 0.5;
-                decimal strength   = Math.Min(1.0, group.Count / 4.0);
+                decimal strength   = (decimal)Math.Min(1.0, group.Count / 4.0);
 
                 // Estimate volume at this level
                 decimal vol = klines.Where(k =>
@@ -263,7 +263,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     Math.Abs(k.LowPrice  - levelPrice) <= cluster)
                     .Sum(k => k.Volume);
 
-                levels.Add(new SrLevel(levelPrice, group.Count, isResistance, vol, strength));
+                levels.Add(new SrLevel(levelPrice, group.Count, isResistance, vol, (double)strength));
             }
 
             return levels.OrderBy(l => l.Price).ToList();

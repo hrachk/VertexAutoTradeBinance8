@@ -317,9 +317,7 @@
             Nav.NavigateTo($"/login?returnUrl={Uri.EscapeDataString(rel)}", replace: true);
     }
 
-    public void Dispose() => Auth.OnChange -= OnAuthChange;
-
-    // Existing code below:
+     // Existing code below:
     ClientOptions Client => ClientOptions.Value;
 
     public decimal Balance { get; set; }
@@ -404,7 +402,8 @@
     }
 
     public void Dispose()
-    {
+    { 
+        Auth.OnChange -= OnAuthChange;
         DemoAccount.DemoModeChanged -= OnDemoModeChangedInHeader;
     }
 
