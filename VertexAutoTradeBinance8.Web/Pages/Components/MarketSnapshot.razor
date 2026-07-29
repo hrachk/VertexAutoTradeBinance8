@@ -17,6 +17,9 @@
 @inject VertexAutoTradeBinance8.Services.BinanceAlgoOrderService AlgoOrders
 @inject VertexAutoTradeBinance8.Web.Services.BinanceTimeService BinanceTime
 @inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoAccount
+@inject VertexAutoTradeBinance8.Web.Services.ClientDataService ClientData
+@using VertexAutoTradeBinance8.Web.Services.Auth
+@inject AuthSessionService Auth
 @inject VertexAutoTradeBinance8.Web.Services.RealDcaHistoryReader RealDcaHistory
 @inject IJSRuntime JS
 @implements IAsyncDisposable
@@ -3461,7 +3464,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 // This file contains EVERY signal that passed PE4 (AI score >= 0.20)
                 // with Entry/SL/TP populated — regardless of whether AutoTrade opened it.
                 // This is the correct source for /market signal cards.
-                var liveSigs = await LiveSignalSvc.LoadAsync();
+                // Use client-scoped path so each user sees ONLY their own signals
+                var liveSigs = await LiveSignalSvc.ForRoot(ClientData.Root).LoadAsync();
                 var cutoffLive = DateTime.UtcNow.AddHours(-SignalLookbackHours);
                 _signals = liveSigs
                     .Where(s => s.Entry > 0 && s.StopLoss > 0
@@ -3493,6 +3497,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
                 // ── FALLBACK: missed_trades.json (legacy, if live_signals empty) ──
                 // Also always load for archive section below.
+                // TODO: per-client path via ClientData.Root
                 var allSigs = await SignalSvc.LoadAsync();
                 if (_signals.Count == 0)
                 {
