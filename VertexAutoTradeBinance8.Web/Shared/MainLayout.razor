@@ -37,9 +37,9 @@
         {
             <div class="vx-user-menu @(_userMenuOpen ? "open" : "")">
                 <button class="vx-user-btn" @onclick="ToggleUserMenu" @onclick:stopPropagation="true">
-                    <span class="vx-dot @(Auth.IsDemo ? "vx-dot-yel" : "vx-dot-grn") vx-dot-pulse"></span>
+                    <span class="vx-dot @(_demoModeEnabled ? "vx-dot-yel" : "vx-dot-grn") vx-dot-pulse"></span>
                     <span class="vx-user-name">@Auth.CurrentClient!.DisplayName</span>
-                    <span class="vx-user-plan @(Auth.IsDemo ? "plan-demo" : "plan-live")">@Auth.CurrentClient!.Plan.ToUpperInvariant()</span>
+                    <span class="vx-user-plan @(_demoModeEnabled ? "plan-demo" : "plan-live")">@(_demoModeEnabled ? "DEMO" : "LIVE")</span>
                     <svg class="vx-user-caret @(_userMenuOpen ? "open" : "")" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 4l4 4 4-4"/></svg>
                 </button>
                 @if (_userMenuOpen)
@@ -48,7 +48,12 @@
                         <div class="vx-user-dd-header">
                             <div class="vx-user-dd-name">@Auth.CurrentClient!.DisplayName</div>
                             <div class="vx-user-dd-email">@Auth.CurrentClient!.Email</div>
-                            <div class="vx-user-dd-id">ID: @Auth.CurrentClient!.Id</div>
+                            <div style="display:flex;align-items:center;gap:6px;margin-top:6px;">
+                                <span class="vx-dd-mode-badge @(_demoModeEnabled ? "badge-demo" : "badge-live")">
+                                    @(_demoModeEnabled ? "🟡 Demo Mode" : "🟢 Live Mode")
+                                </span>
+                            </div>
+                            <div class="vx-user-dd-id" style="margin-top:3px">ID: @Auth.CurrentClient!.Id</div>
                         </div>
                         <div class="vx-user-dd-sep"></div>
                         <a class="vx-user-dd-item" href="/dashboard">
@@ -179,6 +184,11 @@
     .vx-dd-logout { color: #f87171 !important; }
     .vx-dd-logout:hover { background: rgba(239,68,68,.08) !important; }
     .vx-dd-logout svg { color: #f87171 !important; }
+    .vx-dd-mode-badge {
+        font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+    }
+    .badge-demo { background: rgba(245,158,11,.12); color: #fbbf24; border: 1px solid rgba(245,158,11,.25); }
+    .badge-live { background: rgba(16,185,129,.12); color: #34d399; border: 1px solid rgba(16,185,129,.25); }
     .vx-login-topbtn {
         height: 28px; padding: 0 12px; background: #3b82f6; border-radius: 5px;
         color: #fff; font-size: 11px; font-weight: 700;
