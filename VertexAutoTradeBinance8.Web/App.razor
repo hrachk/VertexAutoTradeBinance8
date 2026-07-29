@@ -1,12 +1,41 @@
-﻿<Router AppAssembly="@typeof(App).Assembly">
+@using VertexAutoTradeBinance8.Web.Services.Auth
+@using VertexAutoTradeBinance8.Web.Shared
+@inject AuthSessionService Auth
+@inject NavigationManager Nav
+
+<Router AppAssembly="@typeof(App).Assembly">
     <Found Context="routeData">
-        <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)" />
+        <AuthorizeRouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)">
+            <NotAuthorized>
+                @* Redirect to login preserving the intended URL *@
+                @{ RedirectToLogin(); }
+            </NotAuthorized>
+            <Authorizing>
+                <div style="display:flex;align-items:center;justify-content:center;height:100vh;
+                            background:#050a12;color:#6e90b2;font-size:14px;">
+                    Проверка авторизации…
+                </div>
+            </Authorizing>
+        </AuthorizeRouteView>
         <FocusOnNavigate RouteData="@routeData" Selector="h1" />
     </Found>
     <NotFound>
-        <PageTitle>Not found</PageTitle>
+        <PageTitle>Не найдено · Vertex AI</PageTitle>
         <LayoutView Layout="@typeof(MainLayout)">
-            <p role="alert">Sorry, there's nothing at this address.</p>
+            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                        min-height:60vh;gap:12px;color:#6e90b2;">
+                <div style="font-size:48px;">404</div>
+                <div style="font-size:18px;font-weight:700;color:#f0f6ff;">Страница не найдена</div>
+                <a href="/market" style="color:#3b82f6;">← На Market</a>
+            </div>
         </LayoutView>
     </NotFound>
 </Router>
+
+@code {
+    void RedirectToLogin()
+    {
+        var path = "/" + Nav.ToBaseRelativePath(Nav.Uri).Split('?')[0].TrimStart('/');
+        Nav.NavigateTo($"/login?returnUrl={Uri.EscapeDataString(path)}", replace: true);
+    }
+}
