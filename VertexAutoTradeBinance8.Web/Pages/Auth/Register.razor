@@ -47,12 +47,14 @@
 </div>
 
 @code {
+  [SupplyParameterFromQuery] string? ReturnUrl { get; set; }
+
   string _email = "", _password = "", _password2 = "", _displayName = "", _error = "";
   bool _busy;
 
   protected override void OnInitialized()
   {
-    if (Auth.IsAuthenticated) Nav.NavigateTo("/dashboard");
+    if (Auth.IsAuthenticated) Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
   }
 
   async Task DoRegister()
@@ -62,7 +64,7 @@
     _busy = true;
     var (ok, error) = await Auth.RegisterAsync(_email, _password, _displayName);
     _busy = false;
-    if (ok) Nav.NavigateTo("/dashboard");
+    if (ok) Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
     else _error = error;
   }
 }
