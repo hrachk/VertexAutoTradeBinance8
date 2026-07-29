@@ -17,6 +17,33 @@ namespace VertexAutoTradeBinance8.Web.Services
             _filePath = Path.Combine(root, "live_signals.json");
         }
 
+        // ── Per-client access ────────────────────────────────
+        /// <summary>
+        /// Returns a scoped reader that reads live_signals.json
+        /// from the specified client root folder.
+        /// Usage in pages: await LiveSignalSvc.ForRoot(ClientData.Root).LoadAsync()
+        /// </summary>
+        public ScopedLiveSignalReader ForRoot(string root) => new(root);
+
+        public sealed class ScopedLiveSignalReader
+        {
+            private readonly string _path;
+            public ScopedLiveSignalReader(string root)
+                => _path = Path.Combine(root, "live_signals.json");
+
+            public async Task<List<LiveSignalDto>> LoadAsync()
+            {
+                try
+                {
+                    if (!File.Exists(_path)) return new();
+                    var json = await File.ReadAllTextAsync(_path);
+                    return System.Text.Json.JsonSerializer.Deserialize<List<LiveSignalDto>>(json)
+                           ?? new();
+                }
+                catch { return new(); }
+            }
+        }
+
         public async Task<List<LiveSignalDto>> LoadAsync()
         {
             try
