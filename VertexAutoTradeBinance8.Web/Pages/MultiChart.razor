@@ -5,6 +5,7 @@
 @using Binance.Net.Enums
 @inject MarketDataLiveState LiveState
 @inject BinanceClientFactory Factory
+@inject BinanceAlgoOrderService AlgoOrders
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
@@ -402,6 +403,7 @@ html,body{background:var(--bg);overflow:hidden;}
         LiveState.PriceTicked -= OnTick;
         _cts.Cancel();
         _timer?.Dispose();
+        DisposeChartRefs();
         for (int i = 0; i < _panels.Count; i++)
         {
             try { await JS.InvokeVoidAsync("marketChart.dispose", $"mc-chart-{i}"); }
@@ -420,6 +422,7 @@ html,body{background:var(--bg);overflow:hidden;}
                 var prevKeys  = _positions.Select(p => p.Symbol + p.Side).OrderBy(x => x).ToList();
 
                 await LoadPositionsAsync();
+                await LoadOpenOrdersAsync();
 
                 var newKeys = _positions.Select(p => p.Symbol + p.Side).OrderBy(x => x).ToList();
                 bool positionsChanged = !prevKeys.SequenceEqual(newKeys);
@@ -602,8 +605,17 @@ html,body{background:var(--bg);overflow:hidden;}
             panel.Error   = "";
             await InvokeAsync(StateHasChanged);
 
-            // Step 4: overlay position line if open
+            // Step 4: overlay position lines + TP/SL drag lines
             await RefreshPositionLinesAsync(slot);
+            await RefreshTpSlLinesAsync(slot);
+
+            // Step 5: bind drag callbacks so JS can call back into Blazor
+            // when user drags SL/TP lines or right-clicks to add TP
+            var dotNet = DotNetObjectReference.Create(new ChartCallbackBridge(
+                this, slot, panel.Symbol, panel.Side));
+            _chartRefs[slot] = dotNet;
+            try { await JS.InvokeVoidAsync("marketChart.bindSlTpCallbacks", cid, dotNet); }
+            catch { }
         }
         catch (Exception ex)
         {
@@ -717,6 +729,132 @@ html,body{background:var(--bg);overflow:hidden;}
     string PosPillTitle(PositionInfo pos) =>
         $"{pos.Symbol} {pos.Side} {(pos.Pnl >= 0 ? "+" : "")}{pos.Pnl:F2} USDT";
 
+    // ── Open orders ──────────────────────────────────────────
+    async Task LoadOpenOrdersAsync()
+    {
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return;
+            using var cts2 = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            var res = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(ct: cts2.Token);
+            if (!res.Success || res.Data == null) return;
+            _openOrders = res.Data.Select(o => new OpenOrderRow
+            {
+                OrderId      = o.Id,
+                Symbol       = o.Symbol,
+                Side         = o.Side.ToString().ToUpperInvariant(),
+                PositionSide = o.PositionSide.ToString().ToUpperInvariant(),
+                Type         = o.Type.ToString().ToUpperInvariant(),
+                Price        = o.StopPrice > 0 ? o.StopPrice ?? o.Price : o.Price,
+                Qty          = o.Quantity,
+                ReduceOnly   = o.ReduceOnly,
+            }).ToList();
+        }
+        catch { }
+    }
+
+    // ── TP/SL lines per panel ─────────────────────────────────
+    async Task RefreshTpSlLinesAsync(int slot)
+    {
+        if (slot >= _panels.Count) return;
+        var panel = _panels[slot];
+        var cid   = $"mc-chart-{slot}";
+        var pos   = panel.IsPositionPanel
+            ? _positions.FirstOrDefault(p => p.Symbol == panel.Symbol && p.Side == panel.Side)
+            : null;
+        if (pos == null || panel.Loading || !string.IsNullOrEmpty(panel.Error)) return;
+
+        bool MatchOrder(OpenOrderRow o) =>
+            o.Symbol == pos.Symbol && o.ReduceOnly &&
+            (o.PositionSide == "BOTH" || o.PositionSide == pos.Side);
+
+        decimal sl  = _openOrders.FirstOrDefault(o => MatchOrder(o) && o.Type.Contains("STOP"))?.Price ?? 0m;
+        decimal[] tps = _openOrders
+            .Where(o => MatchOrder(o) && o.Type.Contains("TAKE_PROFIT"))
+            .OrderBy(o => pos.Side == "LONG" ? o.Price : -o.Price)
+            .Select(o => o.Price).ToArray();
+
+        try
+        {
+            await JS.InvokeVoidAsync("marketChart.showTpSlLines",
+                cid, (double)pos.EntryPrice, (double)sl, tps.Select(p => (double)p).ToArray(), pos.Side);
+        }
+        catch { }
+    }
+
+    // ── Cancel existing SL or TP order ────────────────────────
+    internal async Task CancelProtectiveLevelAsync(string symbol, string side,
+        bool isStopLoss, int tpIndex = -1)
+    {
+        try
+        {
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return;
+
+            bool MatchOrder(OpenOrderRow o) =>
+                o.Symbol == symbol && o.ReduceOnly &&
+                (o.PositionSide == "BOTH" || o.PositionSide == side);
+
+            long? orderId = null;
+            if (isStopLoss)
+            {
+                orderId = _openOrders
+                    .FirstOrDefault(o => MatchOrder(o) && o.Type.Contains("STOP"))?.OrderId;
+            }
+            else
+            {
+                var tpOrders = _openOrders
+                    .Where(o => MatchOrder(o) && o.Type.Contains("TAKE_PROFIT"))
+                    .OrderBy(o => side == "LONG" ? o.Price : -o.Price).ToList();
+                if (tpIndex >= 0 && tpIndex < tpOrders.Count)
+                    orderId = tpOrders[tpIndex].OrderId;
+            }
+
+            if (orderId == null) return;
+            using var cts2 = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, orderId.Value, ct: cts2.Token);
+            await LoadOpenOrdersAsync();
+        }
+        catch { }
+    }
+
+    // ── Place new SL or TP via Algo Orders API ────────────────
+    internal async Task PlaceProtectiveLevelAsync(string symbol, string side,
+        decimal qty, bool isStopLoss, decimal price)
+    {
+        if (price <= 0 || qty <= 0) return;
+        try
+        {
+            var closeSide = side == "LONG"
+                ? Binance.Net.Enums.OrderSide.Sell
+                : Binance.Net.Enums.OrderSide.Buy;
+            var posSide = side == "LONG"
+                ? Binance.Net.Enums.PositionSide.Long
+                : Binance.Net.Enums.PositionSide.Short;
+
+            string algoId = $"MC_{(isStopLoss?"SL":"TP")}_{DateTime.UtcNow.Ticks}";
+            if (algoId.Length > 32) algoId = algoId[..32];
+            string orderType = isStopLoss ? "STOP_MARKET" : "TAKE_PROFIT_MARKET";
+
+            await AlgoOrders.PlaceConditionalAsync(
+                symbol: symbol, side: closeSide, positionSide: posSide,
+                type: orderType, quantity: qty, triggerPrice: price,
+                workingType: "MARK_PRICE", reduceOnly: true,
+                clientAlgoId: algoId);
+
+            await LoadOpenOrdersAsync();
+        }
+        catch { }
+    }
+
+    // ── Dispose chart DotNet refs ─────────────────────────────
+    void DisposeChartRefs()
+    {
+        foreach (var kv in _chartRefs) kv.Value.Dispose();
+        _chartRefs.Clear();
+    }
+
     // Returns the candle duration in milliseconds for a given TF label.
     // Used to compute barOpenMs = floor(nowMs / tfMs) * tfMs
     // so updateLastBar always uses the correct candle start time.
@@ -744,3 +882,116 @@ html,body{background:var(--bg);overflow:hidden;}
     }
 }
 
+
+/// <summary>
+/// Per-panel DotNetObjectReference target for JS drag callbacks.
+/// Each chart panel gets its own instance so callbacks know which
+/// position (Symbol + Side) and which panel slot to update.
+/// </summary>
+public class ChartCallbackBridge
+{
+    private readonly MultiChart _page;
+    private readonly int        _slot;
+    private readonly string     _symbol;
+    private readonly string     _side;
+
+    public ChartCallbackBridge(MultiChart page, int slot, string symbol, string side)
+    {
+        _page = page; _slot = slot; _symbol = symbol; _side = side;
+    }
+
+    private PositionInfo? Pos() => _page._positions
+        .FirstOrDefault(p => p.Symbol == _symbol && p.Side == _side);
+
+    [JSInvokable]
+    public async Task OnSlDragged(decimal price, decimal originalPrice = 0)
+    {
+        if (price <= 0 || _page._slTpDragBusy) return;
+        _page._slTpDragBusy = true;
+        try
+        {
+            var pos = Pos();
+            if (pos == null) return;
+            // Cancel old SL, place new one
+            await _page.CancelProtectiveLevelAsync(_symbol, _side, isStopLoss: true);
+            await Task.Delay(80);
+            await _page.PlaceProtectiveLevelAsync(_symbol, _side, pos.Qty,
+                isStopLoss: true, price: price);
+            await _page.InvokeAsync(async () =>
+            {
+                await _page.RefreshTpSlLinesAsync(_slot);
+                _page.StateHasChanged();
+            });
+        }
+        finally { _page._slTpDragBusy = false; }
+    }
+
+    [JSInvokable]
+    public async Task OnTpDragged(decimal price, decimal originalPrice = 0) =>
+        await OnTpDraggedAt(0, price, originalPrice);
+
+    [JSInvokable]
+    public async Task OnTpDraggedAt(int tpIndex, decimal price, decimal originalPrice = 0)
+    {
+        if (price <= 0 || _page._slTpDragBusy) return;
+        _page._slTpDragBusy = true;
+        try
+        {
+            var pos = Pos();
+            if (pos == null) return;
+            await _page.CancelProtectiveLevelAsync(_symbol, _side, isStopLoss: false, tpIndex: tpIndex);
+            await Task.Delay(80);
+            await _page.PlaceProtectiveLevelAsync(_symbol, _side, pos.Qty,
+                isStopLoss: false, price: price);
+            await _page.InvokeAsync(async () =>
+            {
+                await _page.RefreshTpSlLinesAsync(_slot);
+                _page.StateHasChanged();
+            });
+        }
+        finally { _page._slTpDragBusy = false; }
+    }
+
+    [JSInvokable]
+    public async Task OnNewTpRequested(decimal price)
+    {
+        if (price <= 0) return;
+        var pos = Pos();
+        if (pos == null) return;
+        await _page.PlaceProtectiveLevelAsync(_symbol, _side, pos.Qty,
+            isStopLoss: false, price: price);
+        await _page.InvokeAsync(async () =>
+        {
+            await _page.RefreshTpSlLinesAsync(_slot);
+            _page.StateHasChanged();
+        });
+    }
+
+    [JSInvokable]
+    public async Task OnNewTpRequestedWithPercent(decimal price, decimal pct) =>
+        await OnNewTpRequested(price);
+
+    [JSInvokable]
+    public async Task OnCancelProtectiveLevel(string kind, int index)
+    {
+        bool isSl = kind == "sl";
+        await _page.CancelProtectiveLevelAsync(_symbol, _side, isStopLoss: isSl, tpIndex: index);
+        await _page.InvokeAsync(async () =>
+        {
+            await _page.RefreshTpSlLinesAsync(_slot);
+            _page.StateHasChanged();
+        });
+    }
+
+    [JSInvokable]
+    public Task OnLimitOrderRequested(string side, decimal price, decimal qty) =>
+        Task.CompletedTask; // Not used in multi-chart mode
+
+    [JSInvokable]
+    public Task OnPricePicked(decimal price) =>
+        Task.CompletedTask; // Not used in multi-chart mode
+
+    [JSInvokable]
+    public Task<object[]> LoadMoreHistoryAsync(long beforeOpenTimeMs, int count) =>
+        Task.FromResult(Array.Empty<object>()); // Not used in multi-chart mode
+}
