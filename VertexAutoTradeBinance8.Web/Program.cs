@@ -51,8 +51,13 @@ builder.Services.AddSingleton<WeatherForecastService>();
 // ── Client Auth (JSON-based, no DB) ──────────────────────────
 // ClientDbService: singleton — reads/writes clients.json thread-safely
 // AuthSessionService: scoped — one per Blazor circuit (per browser tab)
+// ClientDataService: scoped — resolves file paths per logged-in client
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Auth.ClientDbService>();
 builder.Services.AddScoped<VertexAutoTradeBinance8.Web.Services.Auth.AuthSessionService>();
+builder.Services.AddScoped<VertexAutoTradeBinance8.Web.Services.ClientDataService>();
+
+// Authorization services required by AuthorizeRouteView in App.razor
+builder.Services.AddAuthorizationCore();
 builder.Services.AddSingleton<AiRuntimeDataProvider>();
 builder.Services.AddSingleton<SymbolRegistryService>();
 builder.Services.AddSingleton<TradePermissionFileService>();
