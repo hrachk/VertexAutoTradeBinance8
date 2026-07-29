@@ -1,0 +1,61 @@
+@page "/login"
+@using VertexAutoTradeBinance8.Web.Services.Auth
+@inject AuthSessionService Auth
+@inject NavigationManager Nav
+@layout VertexAutoTradeBinance8.Web.Shared.AuthLayout
+
+<PageTitle>Vertex AI — Вход</PageTitle>
+
+<div class="auth-card">
+  <div class="auth-logo">VERTEX <span>AI</span></div>
+  <div class="auth-title">Войти в систему</div>
+  <div class="auth-sub">Продолжить торговлю с AI-автопилотом</div>
+
+  @if (!string.IsNullOrEmpty(_error))
+  {
+    <div class="auth-error">@_error</div>
+  }
+
+  <div class="auth-field">
+    <label>Email</label>
+    <input type="email" @bind="_email" placeholder="you@example.com"
+           @onkeydown="OnKeyDown" />
+  </div>
+  <div class="auth-field">
+    <label>Пароль</label>
+    <input type="password" @bind="_password" placeholder="Ваш пароль"
+           @onkeydown="OnKeyDown" />
+  </div>
+
+  <button class="auth-btn" disabled="@_busy" @onclick="DoLogin">
+    @(_busy ? "Вход…" : "Войти")
+  </button>
+
+  <div class="auth-link">
+    Нет аккаунта? <a href="/register">Зарегистрироваться</a> — Demo бесплатно
+  </div>
+</div>
+
+@code {
+  string _email = "", _password = "", _error = "";
+  bool _busy;
+
+  protected override void OnInitialized()
+  {
+    if (Auth.IsAuthenticated) Nav.NavigateTo("/dashboard");
+  }
+
+  async Task DoLogin()
+  {
+    _error = ""; _busy = true;
+    var (ok, error) = await Auth.LoginAsync(_email, _password);
+    _busy = false;
+    if (ok) Nav.NavigateTo("/dashboard");
+    else _error = error;
+  }
+
+  async Task OnKeyDown(KeyboardEventArgs e)
+  {
+    if (e.Key == "Enter") await DoLogin();
+  }
+}
