@@ -56,8 +56,6 @@ builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Auth.ClientDb
 builder.Services.AddScoped<VertexAutoTradeBinance8.Web.Services.Auth.AuthSessionService>();
 builder.Services.AddScoped<VertexAutoTradeBinance8.Web.Services.ClientDataService>();
 
-// Authorization services required by AuthorizeRouteView in App.razor
-builder.Services.AddAuthorizationCore();
 builder.Services.AddSingleton<AiRuntimeDataProvider>();
 builder.Services.AddSingleton<SymbolRegistryService>();
 builder.Services.AddSingleton<TradePermissionFileService>();
