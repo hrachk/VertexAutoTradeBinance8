@@ -13,22 +13,36 @@
 
   @if (!string.IsNullOrEmpty(_error))
   {
-    <div class="auth-error">@_error</div>
+    <div class="auth-error">⚠ @_error</div>
   }
 
   <div class="auth-field">
     <label>Email</label>
-    <input type="email" @bind="_email" placeholder="you@example.com"
-           @onkeydown="OnKeyDown" />
+    <input type="email"
+           value="@_email"
+           @oninput="e => _email = e.Value?.ToString() ?? string.Empty"
+           placeholder="you@example.com"
+           disabled="@_busy" />
   </div>
   <div class="auth-field">
     <label>Пароль</label>
-    <input type="password" @bind="_password" placeholder="Ваш пароль"
-           @onkeydown="OnKeyDown" />
+    <input type="password"
+           value="@_password"
+           @oninput="e => _password = e.Value?.ToString() ?? string.Empty"
+           placeholder="Ваш пароль"
+           @onkeydown="OnKeyDown"
+           disabled="@_busy" />
   </div>
 
   <button class="auth-btn" disabled="@_busy" @onclick="DoLogin">
-    @(_busy ? "Вход…" : "Войти")
+    @if (_busy)
+    {
+      <span>Вход…</span>
+    }
+    else
+    {
+      <span>Войти</span>
+    }
   </button>
 
   <div class="auth-link">
@@ -50,11 +64,32 @@
 
   async Task DoLogin()
   {
-    _error = ""; _busy = true;
-    var (ok, error) = await Auth.LoginAsync(_email, _password);
-    _busy = false;
-    if (ok) Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
-    else _error = error;
+    _error = "";
+    var email = _email.Trim();
+    var pwd   = _password;
+
+    if (string.IsNullOrEmpty(email)) { _error = "Введите email."; return; }
+    if (string.IsNullOrEmpty(pwd))   { _error = "Введите пароль."; return; }
+
+    _busy = true;
+    StateHasChanged();
+
+    try
+    {
+      var (ok, error) = await Auth.LoginAsync(email, pwd);
+      if (ok)
+        Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
+      else
+        _error = error;
+    }
+    catch (Exception ex)
+    {
+      _error = $"Ошибка: {ex.Message}";
+    }
+    finally
+    {
+      _busy = false;
+    }
   }
 
   async Task OnKeyDown(KeyboardEventArgs e)
