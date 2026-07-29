@@ -324,7 +324,7 @@ html,body{background:var(--bg);overflow:hidden;}
     // ── Position model ────────────────────────────────────────────
     record PositionInfo(string Symbol, string Side, decimal EntryPrice,
                         decimal Qty, decimal LiqPrice, decimal Pnl);
-    List<PositionInfo> _positions = new();
+    internal List<PositionInfo> _positions = new();
 
     // ── Prices ───────────────────────────────────────────────────
     Dictionary<string, decimal> _prices     = new();
@@ -755,7 +755,7 @@ html,body{background:var(--bg);overflow:hidden;}
     }
 
     // ── TP/SL lines per panel ─────────────────────────────────
-    async Task RefreshTpSlLinesAsync(int slot)
+    internal async Task RefreshTpSlLinesAsync(int slot)
     {
         if (slot >= _panels.Count) return;
         var panel = _panels[slot];
@@ -995,3 +995,4 @@ html,body{background:var(--bg);overflow:hidden;}
     }
 
 }
+
