@@ -424,11 +424,23 @@ html,body{background:var(--bg);overflow:hidden;}
         var panel = _panels[slot];
         var cid   = $"mc-chart-{slot}";
         var pos   = _positions.FirstOrDefault(p => p.Symbol == panel.Symbol);
+        if (panel.Loading || !string.IsNullOrEmpty(panel.Error)) return;
         try
         {
             if (pos != null)
+            {
+                // showPositionLines draws Entry + Liq lines on chart
                 await JS.InvokeVoidAsync("marketChart.showPositionLines",
-                    cid, pos.EntryPrice, pos.Side, pos.Qty, pos.LiqPrice, 0m);
+                    cid, (double)pos.EntryPrice, pos.Side,
+                    (double)pos.Qty, (double)pos.LiqPrice, 0.0);
+
+                // updatePnl draws the live price + PnL label ("+12.34 USDT")
+                // Uses s.entryPrice and s.qty set by showPositionLines above
+                decimal liveP = _prices.TryGetValue(pos.Symbol, out var lp) ? lp : pos.EntryPrice;
+                if (liveP > 0)
+                    await JS.InvokeVoidAsync("marketChart.updatePnl",
+                        cid, (double)liveP);
+            }
             else
                 await JS.InvokeVoidAsync("marketChart.hidePositionLines", cid);
         }
@@ -446,21 +458,26 @@ html,body{background:var(--bg);overflow:hidden;}
 
         _ = InvokeAsync(async () =>
         {
-            // nowMs = current time in milliseconds for openTime field
             long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             for (int i = 0; i < _panels.Count; i++)
             {
-                if (_panels[i].Symbol != sym || !_panels[i].Loading == false) continue;
-                // Skip if panel is loading or errored
-                if (_panels[i].Loading || !string.IsNullOrEmpty(_panels[i].Error)) continue;
+                var panel2 = _panels[i];
+                if (panel2.Symbol != sym) continue;
+                if (panel2.Loading || !string.IsNullOrEmpty(panel2.Error)) continue;
+
+                // Compute openTime = start of current candle for this TF
+                // This MUST match the openTime of the last kline in the chart,
+                // otherwise updateLastBar creates a new bar instead of updating.
+                long tfMs = TfToMilliseconds(panel2.Tf);
+                long barOpenMs = tfMs > 0 ? (nowMs / tfMs) * tfMs : nowMs;
+
                 try
                 {
-                    // updateLastBar uses toCandle(k) which reads k.openTime (ms)
                     await JS.InvokeVoidAsync("marketChart.updateLastBar",
                         $"mc-chart-{i}",
                         new
                         {
-                            openTime       = nowMs,
+                            openTime       = barOpenMs,
                             open           = (double)price,
                             high           = (double)price,
                             low            = (double)price,
@@ -468,6 +485,12 @@ html,body{background:var(--bg);overflow:hidden;}
                             volume         = 0.0,
                             takerBuyVolume = 0.0
                         });
+
+                    // Update PnL line if position is open for this symbol
+                    var pos2 = _positions.FirstOrDefault(p => p.Symbol == sym);
+                    if (pos2 != null)
+                        await JS.InvokeVoidAsync("marketChart.updatePnl",
+                            $"mc-chart-{i}", (double)price);
                 }
                 catch { }
             }
@@ -642,6 +665,22 @@ html,body{background:var(--bg);overflow:hidden;}
     string PosPillTitle(PositionInfo pos) =>
         $"{pos.Symbol} {pos.Side} {(pos.Pnl >= 0 ? "+" : "")}{pos.Pnl:F2} USDT";
 
+    // Returns the candle duration in milliseconds for a given TF label.
+    // Used to compute barOpenMs = floor(nowMs / tfMs) * tfMs
+    // so updateLastBar always uses the correct candle start time.
+    static long TfToMilliseconds(string tf) => tf switch
+    {
+        "1m"  => 60_000L,
+        "3m"  => 180_000L,
+        "5m"  => 300_000L,
+        "15m" => 900_000L,
+        "30m" => 1_800_000L,
+        "1h"  => 3_600_000L,
+        "4h"  => 14_400_000L,
+        "1d"  => 86_400_000L,
+        _     => 300_000L,
+    };
+
     string FP(decimal v)
     {
         if (v <= 0)       return "—";
@@ -652,3 +691,4 @@ html,body{background:var(--bg);overflow:hidden;}
         return v.ToString("G6");
     }
 }
+
