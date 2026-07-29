@@ -1,0 +1,80 @@
+@using VertexAutoTradeBinance8.Web.Services.Auth
+@inject AuthSessionService Auth
+@inject NavigationManager Nav
+@implements IDisposable
+
+@* 
+  AuthGuard — wrap any page content to require authentication.
+  Usage:
+    <AuthGuard>
+      <p>Protected content here</p>
+    </AuthGuard>
+  
+  If user is not logged in → redirects to /login immediately.
+  Optionally require live plan:
+    <AuthGuard RequireLive="true">...</AuthGuard>
+*@
+
+@if (Auth.IsAuthenticated && (!RequireLive || Auth.IsLive))
+{
+    @ChildContent
+}
+else if (Auth.IsAuthenticated && RequireLive && !Auth.IsLive)
+{
+    <div class="guard-upgrade">
+        <div class="guard-icon">🔒</div>
+        <div class="guard-title">Требуется Live-план</div>
+        <div class="guard-sub">Подключите Binance API ключи для доступа к Live-торговле.</div>
+        <a href="/dashboard/settings" class="guard-btn">Подключить Binance API</a>
+    </div>
+}
+
+<style>
+.guard-upgrade{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:300px;gap:12px;padding:40px;}
+.guard-icon{font-size:40px;}
+.guard-title{font-size:20px;font-weight:800;color:#f0f6ff;}
+.guard-sub{font-size:13px;color:#6e90b2;text-align:center;max-width:360px;}
+.guard-btn{height:40px;padding:0 24px;background:#3b82f6;border-radius:7px;
+  color:#fff;font-size:13px;font-weight:700;text-decoration:none;
+  display:inline-flex;align-items:center;margin-top:8px;}
+.guard-btn:hover{background:#2563eb;}
+</style>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public bool RequireLive { get; set; } = false;
+
+    // Public pages — no guard needed
+    static readonly HashSet<string> _publicPaths = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "/login", "/register", "/", ""
+    };
+
+    protected override void OnInitialized()
+    {
+        Auth.OnChange += OnAuthChange;
+        RedirectIfNeeded();
+    }
+
+    protected override void OnParametersSet() => RedirectIfNeeded();
+
+    void OnAuthChange()
+    {
+        RedirectIfNeeded();
+        InvokeAsync(StateHasChanged);
+    }
+
+    void RedirectIfNeeded()
+    {
+        if (!Auth.IsAuthenticated)
+        {
+            var uri = Nav.ToBaseRelativePath(Nav.Uri).TrimStart('/');
+            var path = "/" + uri.Split('?')[0];
+            if (!_publicPaths.Contains(path))
+                Nav.NavigateTo($"/login?returnUrl={Uri.EscapeDataString(path)}", replace: true);
+        }
+    }
+
+    public void Dispose() => Auth.OnChange -= OnAuthChange;
+}
