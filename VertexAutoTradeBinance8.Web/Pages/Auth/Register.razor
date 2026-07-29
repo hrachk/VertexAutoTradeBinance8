@@ -13,28 +13,56 @@
 
   @if (!string.IsNullOrEmpty(_error))
   {
-    <div class="auth-error">@_error</div>
+    <div class="auth-error">⚠ @_error</div>
+  }
+  @if (!string.IsNullOrEmpty(_success))
+  {
+    <div class="auth-success">✓ @_success</div>
   }
 
   <div class="auth-field">
     <label>Имя / Никнейм</label>
-    <input type="text" @bind="_displayName" placeholder="Trader123" maxlength="40" />
+    <input type="text"
+           value="@_displayName"
+           @oninput="e => _displayName = e.Value?.ToString() ?? string.Empty"
+           placeholder="Trader123" maxlength="40"
+           disabled="@_busy" />
   </div>
   <div class="auth-field">
     <label>Email</label>
-    <input type="email" @bind="_email" placeholder="you@example.com" />
+    <input type="email"
+           value="@_email"
+           @oninput="e => _email = e.Value?.ToString() ?? string.Empty"
+           placeholder="you@example.com"
+           disabled="@_busy" />
   </div>
   <div class="auth-field">
     <label>Пароль</label>
-    <input type="password" @bind="_password" placeholder="Минимум 6 символов" />
+    <input type="password"
+           value="@_password"
+           @oninput="e => _password = e.Value?.ToString() ?? string.Empty"
+           placeholder="Минимум 6 символов"
+           disabled="@_busy" />
   </div>
   <div class="auth-field">
     <label>Повторите пароль</label>
-    <input type="password" @bind="_password2" placeholder="Повторите пароль" />
+    <input type="password"
+           value="@_password2"
+           @oninput="e => _password2 = e.Value?.ToString() ?? string.Empty"
+           placeholder="Повторите пароль"
+           @onkeydown="OnKeyDown"
+           disabled="@_busy" />
   </div>
 
   <button class="auth-btn" disabled="@_busy" @onclick="DoRegister">
-    @(_busy ? "Регистрация…" : "Создать аккаунт")
+    @if (_busy)
+    {
+      <span>Регистрация…</span>
+    }
+    else
+    {
+      <span>Создать аккаунт</span>
+    }
   </button>
 
   <div class="auth-demo-note">
@@ -46,25 +74,71 @@
   </div>
 </div>
 
+<style>
+.auth-success{background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.25);
+  border-radius:6px;padding:10px 14px;font-size:12px;color:#34d399;
+  margin-bottom:14px;text-align:center;}
+</style>
+
 @code {
   [SupplyParameterFromQuery] string? ReturnUrl { get; set; }
 
-  string _email = "", _password = "", _password2 = "", _displayName = "", _error = "";
+  string _email = "", _password = "", _password2 = "", _displayName = "";
+  string _error = "", _success = "";
   bool _busy;
 
   protected override void OnInitialized()
   {
-    if (Auth.IsAuthenticated) Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
+    if (Auth.IsAuthenticated)
+      Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
   }
 
   async Task DoRegister()
   {
-    _error = "";
-    if (_password != _password2) { _error = "Пароли не совпадают."; return; }
+    _error   = "";
+    _success = "";
+
+    // Validate on client before calling server
+    var email = _email.Trim();
+    var pwd   = _password;
+    var pwd2  = _password2;
+    var name  = _displayName.Trim();
+
+    if (string.IsNullOrEmpty(email))   { _error = "Введите email."; return; }
+    if (!email.Contains('@'))          { _error = "Неверный формат email."; return; }
+    if (pwd.Length < 6)                { _error = "Пароль минимум 6 символов."; return; }
+    if (pwd != pwd2)                   { _error = "Пароли не совпадают."; return; }
+
     _busy = true;
-    var (ok, error) = await Auth.RegisterAsync(_email, _password, _displayName);
-    _busy = false;
-    if (ok) Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
-    else _error = error;
+    StateHasChanged(); // show spinner immediately
+
+    try
+    {
+      var (ok, error) = await Auth.RegisterAsync(email, pwd, name);
+      if (ok)
+      {
+        _success = "Аккаунт создан! Переход…";
+        StateHasChanged();
+        await Task.Delay(800); // brief success flash
+        Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
+      }
+      else
+      {
+        _error = error;
+      }
+    }
+    catch (Exception ex)
+    {
+      _error = $"Ошибка: {ex.Message}";
+    }
+    finally
+    {
+      _busy = false;
+    }
+  }
+
+  async Task OnKeyDown(KeyboardEventArgs e)
+  {
+    if (e.Key == "Enter") await DoRegister();
   }
 }
