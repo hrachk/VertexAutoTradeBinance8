@@ -1,0 +1,105 @@
+@page "/dashboard/settings"
+@using VertexAutoTradeBinance8.Web.Services.Auth
+@inject AuthSessionService Auth
+@inject ClientDbService Db
+@inject NavigationManager Nav
+
+<PageTitle>Vertex AI — API Ключи</PageTitle>
+
+<style>
+.api-page{max-width:600px;margin:40px auto;padding:0 20px;}
+.api-card{background:#0a1220;border:1px solid #1a2e44;border-radius:12px;padding:28px 32px;}
+.api-title{font-size:18px;font-weight:800;color:#f0f6ff;margin-bottom:6px;}
+.api-sub{font-size:12px;color:#6e90b2;margin-bottom:24px;line-height:1.6;}
+.api-field{margin-bottom:16px;}
+.api-field label{display:block;font-size:11px;font-weight:700;color:#6e90b2;
+  text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;}
+.api-field input{width:100%;height:40px;background:#050a12;border:1px solid #1a2e44;
+  border-radius:6px;color:#f0f6ff;font-size:13px;font-family:monospace;padding:0 12px;outline:none;}
+.api-field input:focus{border-color:#3b82f6;}
+.api-btn-row{display:flex;gap:10px;margin-top:20px;}
+.api-btn{height:40px;padding:0 20px;border-radius:7px;border:none;
+  font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;}
+.api-btn-save{background:#3b82f6;color:#fff;}
+.api-btn-save:hover{background:#2563eb;}
+.api-btn-clear{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.2);color:#f87171;}
+.api-btn-back{background:transparent;border:1px solid #1a2e44;color:#6e90b2;}
+.api-ok{color:#34d399;font-size:13px;margin-top:10px;}
+.api-warn{background:#1c0a0a;border:1px solid #7f1d1d;border-radius:6px;
+  padding:12px 14px;font-size:12px;color:#fca5a5;margin-bottom:20px;line-height:1.6;}
+</style>
+
+@if (!Auth.IsAuthenticated)
+{
+  <div style="padding:40px;text-align:center;"><a href="/login">Войдите</a></div>
+}
+else
+{
+  <div class="api-page">
+    <div class="api-card">
+      <div class="api-title">🔑 Binance API ключи</div>
+      <div class="api-sub">
+        Ключи используются только для торговли на вашем аккаунте.<br>
+        Разрешите только <b>Futures Trading</b>. <b>НЕ</b> давайте разрешение на вывод.
+        Ключи хранятся зашифрованно (AES-256).
+      </div>
+
+      <div class="api-warn">
+        ⚠️ Никогда не давайте API-ключам разрешение на <b>вывод средств</b>.
+        Vertex AI использует только Futures Trading permission.
+      </div>
+
+      <div class="api-field">
+        <label>API Key</label>
+        <input type="text" @bind="_apiKey" placeholder="Вставьте Binance API Key" />
+      </div>
+      <div class="api-field">
+        <label>API Secret</label>
+        <input type="password" @bind="_apiSecret" placeholder="Вставьте Binance API Secret" />
+      </div>
+
+      <div class="api-btn-row">
+        <button class="api-btn api-btn-save" disabled="@_busy" @onclick="Save">
+          @(_busy ? "Сохранение…" : "💾 Сохранить")
+        </button>
+        <button class="api-btn api-btn-clear" @onclick="Clear">Удалить ключи</button>
+        <a href="/dashboard" class="api-btn api-btn-back"
+           style="display:inline-flex;align-items:center;text-decoration:none;">← Назад</a>
+      </div>
+
+      @if (!string.IsNullOrEmpty(_msg))
+      {
+        <div class="api-ok">@_msg</div>
+      }
+    </div>
+  </div>
+}
+
+@code {
+  string _apiKey = "", _apiSecret = "", _msg = "";
+  bool _busy;
+
+  protected override void OnInitialized()
+  {
+    if (!Auth.IsAuthenticated) Nav.NavigateTo("/login");
+  }
+
+  async Task Save()
+  {
+    if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret))
+    { _msg = "Введите оба ключа."; return; }
+    _busy = true;
+    await Db.SaveBinanceKeysAsync(Auth.CurrentClient!.Id, _apiKey.Trim(), _apiSecret.Trim());
+    await Auth.RefreshAsync();
+    _apiKey = _apiSecret = ""; // clear from memory
+    _msg = "✓ Ключи сохранены и зашифрованы.";
+    _busy = false;
+  }
+
+  async Task Clear()
+  {
+    await Db.SaveBinanceKeysAsync(Auth.CurrentClient!.Id, "", "");
+    await Auth.RefreshAsync();
+    _msg = "Ключи удалены.";
+  }
+}
