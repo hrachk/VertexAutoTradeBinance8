@@ -1,0 +1,68 @@
+@page "/register"
+@using VertexAutoTradeBinance8.Web.Services.Auth
+@inject AuthSessionService Auth
+@inject NavigationManager Nav
+@layout VertexAutoTradeBinance8.Web.Shared.AuthLayout
+
+<PageTitle>Vertex AI — Регистрация</PageTitle>
+
+<div class="auth-card">
+  <div class="auth-logo">VERTEX <span>AI</span></div>
+  <div class="auth-title">Создать аккаунт</div>
+  <div class="auth-sub">Начни торговать с Demo-режима бесплатно</div>
+
+  @if (!string.IsNullOrEmpty(_error))
+  {
+    <div class="auth-error">@_error</div>
+  }
+
+  <div class="auth-field">
+    <label>Имя / Никнейм</label>
+    <input type="text" @bind="_displayName" placeholder="Trader123" maxlength="40" />
+  </div>
+  <div class="auth-field">
+    <label>Email</label>
+    <input type="email" @bind="_email" placeholder="you@example.com" />
+  </div>
+  <div class="auth-field">
+    <label>Пароль</label>
+    <input type="password" @bind="_password" placeholder="Минимум 6 символов" />
+  </div>
+  <div class="auth-field">
+    <label>Повторите пароль</label>
+    <input type="password" @bind="_password2" placeholder="Повторите пароль" />
+  </div>
+
+  <button class="auth-btn" disabled="@_busy" @onclick="DoRegister">
+    @(_busy ? "Регистрация…" : "Создать аккаунт")
+  </button>
+
+  <div class="auth-demo-note">
+    🎮 После регистрации — сразу <b>$10 000 Demo</b> на живых ценах Binance
+  </div>
+
+  <div class="auth-link">
+    Уже есть аккаунт? <a href="/login">Войти</a>
+  </div>
+</div>
+
+@code {
+  string _email = "", _password = "", _password2 = "", _displayName = "", _error = "";
+  bool _busy;
+
+  protected override void OnInitialized()
+  {
+    if (Auth.IsAuthenticated) Nav.NavigateTo("/dashboard");
+  }
+
+  async Task DoRegister()
+  {
+    _error = "";
+    if (_password != _password2) { _error = "Пароли не совпадают."; return; }
+    _busy = true;
+    var (ok, error) = await Auth.RegisterAsync(_email, _password, _displayName);
+    _busy = false;
+    if (ok) Nav.NavigateTo("/dashboard");
+    else _error = error;
+  }
+}
