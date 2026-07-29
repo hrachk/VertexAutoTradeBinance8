@@ -765,7 +765,7 @@ html,body{background:var(--bg);overflow:hidden;}
             : null;
         if (pos == null || panel.Loading || !string.IsNullOrEmpty(panel.Error)) return;
 
-        bool MatchOrder(OpenOrderRow o) =>
+        bool MatchOrder(OrderRow o) =>
             o.Symbol == pos.Symbol && o.ReduceOnly &&
             (o.PositionSide == "BOTH" || o.PositionSide == pos.Side);
 
@@ -792,7 +792,7 @@ html,body{background:var(--bg);overflow:hidden;}
             var client = Factory.TryCreateRestClient();
             if (client == null) return;
 
-            bool MatchOrder(OpenOrderRow o) =>
+            bool MatchOrder(OrderRow o) =>
                 o.Symbol == symbol && o.ReduceOnly &&
                 (o.PositionSide == "BOTH" || o.PositionSide == side);
 
