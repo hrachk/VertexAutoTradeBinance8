@@ -47,6 +47,12 @@ if (builder.Environment.IsDevelopment())
 builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
 builder.Services.AddSingleton<WeatherForecastService>();
+
+// ── Client Auth (JSON-based, no DB) ──────────────────────────
+// ClientDbService: singleton — reads/writes clients.json thread-safely
+// AuthSessionService: scoped — one per Blazor circuit (per browser tab)
+builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Auth.ClientDbService>();
+builder.Services.AddScoped<VertexAutoTradeBinance8.Web.Services.Auth.AuthSessionService>();
 builder.Services.AddSingleton<AiRuntimeDataProvider>();
 builder.Services.AddSingleton<SymbolRegistryService>();
 builder.Services.AddSingleton<TradePermissionFileService>();
@@ -214,4 +220,5 @@ ExecutedSignalService.ExecutedSignalsChanged += async () =>
 };
 
 app.Run();
+
 
