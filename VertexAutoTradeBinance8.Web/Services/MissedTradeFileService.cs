@@ -8,6 +8,7 @@ namespace VertexAutoTradeBinance8.Web.Services
     public class MissedTradeFileService
     {
         private readonly string _filePath;
+        private string _globalRoot = AppContext.BaseDirectory;
         private readonly ILogger<MissedTradeFileService> _logger;
 
         private const int MaxRetries     = 4;
@@ -47,6 +48,9 @@ namespace VertexAutoTradeBinance8.Web.Services
             _filePath = !string.IsNullOrEmpty(root)
                 ? Path.Combine(root, "missed_trades.json")
                 : Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
+
+        // ── Per-client access ────────────────────────────────
+        _globalRoot = root ?? AppContext.BaseDirectory;
 
             _logger = logger;
         }
@@ -218,5 +222,8 @@ namespace VertexAutoTradeBinance8.Web.Services
                 return new();
             }
         }
+        /// <summary>Returns a reader scoped to a specific client root folder.</summary>
+        public string GetPathForRoot(string root)
+            => Path.Combine(root, "missed_trades.json");
     }
 }
