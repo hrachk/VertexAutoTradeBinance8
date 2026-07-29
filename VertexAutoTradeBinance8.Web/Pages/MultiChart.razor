@@ -324,15 +324,15 @@ html,body{background:var(--bg);overflow:hidden;}
     // ── Position model ────────────────────────────────────────────
     record PositionInfo(string Symbol, string Side, decimal EntryPrice,
                         decimal Qty, decimal LiqPrice, decimal Pnl);
-    internal List<PositionInfo> _positions = new();
+    List<PositionInfo> _positions = new();
 
     // ── Prices ───────────────────────────────────────────────────
     Dictionary<string, decimal> _prices     = new();
     Dictionary<string, decimal> _prevPrices = new();
 
     // ── TP/SL management fields ──────────────────────────────
-    internal List<OrderRow> _openOrders   = new();
-    internal bool _slTpDragBusy            = false;
+    List<OrderRow> _openOrders = new();
+    bool _slTpDragBusy = false;
     Dictionary<int, DotNetObjectReference<ChartCallbackBridge>> _chartRefs = new();
 
     // ── Symbol list ───────────────────────────────────────────────
@@ -760,7 +760,7 @@ html,body{background:var(--bg);overflow:hidden;}
     }
 
     // ── TP/SL lines per panel ─────────────────────────────────
-    internal async Task RefreshTpSlLinesAsync(int slot)
+    async Task RefreshTpSlLinesAsync(int slot)
     {
         if (slot >= _panels.Count) return;
         var panel = _panels[slot];
@@ -789,7 +789,7 @@ html,body{background:var(--bg);overflow:hidden;}
     }
 
     // ── Cancel existing SL or TP order ────────────────────────
-    internal async Task CancelProtectiveLevelAsync(string symbol, string side,
+    async Task CancelProtectiveLevelAsync(string symbol, string side,
         bool isStopLoss, int tpIndex = -1)
     {
         try
@@ -825,7 +825,7 @@ html,body{background:var(--bg);overflow:hidden;}
     }
 
     // ── Place new SL or TP via Algo Orders API ────────────────
-    internal async Task PlaceProtectiveLevelAsync(string symbol, string side,
+    async Task PlaceProtectiveLevelAsync(string symbol, string side,
         decimal qty, bool isStopLoss, decimal price)
     {
         if (price <= 0 || qty <= 0) return;
