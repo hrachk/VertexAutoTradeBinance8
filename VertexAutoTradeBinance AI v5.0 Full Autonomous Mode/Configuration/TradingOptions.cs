@@ -62,5 +62,13 @@ public class TradingOptions
     /// Writes to Trading:SupervisorManageTP in appsettings.runtime.json.
     /// Applies within seconds, no restart needed.
     /// </summary>
+    /// <summary>
+    /// Symbols to always exclude from strategy analysis.
+    /// Use for ETF-like tokens (SOXL, EWY, KORU) where EMA21 strategy
+    /// does not apply — they generate only no_signal and waste resources.
+    /// Populated from appsettings.json "SymbolBlacklist" array.
+    /// </summary>
+    public List<string> SymbolBlacklist { get; set; } = new();
+
     public bool SupervisorManageTP { get; set; } = true;
 } 
