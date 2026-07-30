@@ -146,12 +146,14 @@ namespace VertexAutoTradeBinance8.Services
             // -----------------------------
             decimal slDistance = Math.Abs(entry - stop);
 
-            // Minimum SL distance scales with leverage.
-            // At 19-25x, a 0.2% SL sits only 3-4% away from liquidation price —
-            // dangerously close. Formula: minSL = 0.5% base + 0.02% per leverage unit.
-            // Examples: 10x→0.7%, 19x→0.88%, 25x→1.0%
-            decimal minSlPct = 0.005m + leverage * 0.0002m;  // 0.5% + 0.02% per lev
-            minSlPct = Math.Clamp(minSlPct, 0.005m, 0.015m); // floor 0.5%, ceil 1.5%
+            // Minimum SL distance — lowered for professional sizing.
+            // Previous formula (0.5% + 0.02%×lev) gave 0.88% at 19x → too wide.
+            // Wide floor SL means small position: notional = riskBudget / slPct.
+            // At 19x: liquidation is 1/19 = 5.26% away from entry. A 0.3% SL
+            // is 0.3/5.26 = 5.7% of the liq distance — perfectly safe.
+            // New: 0.2% base + 0.007% per lev. Examples: 10x→0.27%, 19x→0.33%, 25x→0.38%
+            decimal minSlPct = 0.002m + leverage * 0.00007m;
+            minSlPct = Math.Clamp(minSlPct, 0.002m, 0.008m); // floor 0.2%, ceil 0.8%
 
             decimal rawSlPct = entry > 0 ? slDistance / entry : 0m;
             decimal slPercent = Math.Max(rawSlPct, minSlPct);
