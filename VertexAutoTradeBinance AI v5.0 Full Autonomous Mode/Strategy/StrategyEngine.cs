@@ -2469,21 +2469,47 @@ namespace VertexAutoTradeBinance8.Strategy
                         bool m5Bearish = smart.BaseRegime == MarketRegime.StrongDownTrend ||
                                          smart.BaseRegime == MarketRegime.DownTrend;
 
-                        // Явный конфликт: 5M и 1M в разных направлениях
-                        if ((m5Bullish && m1Bearish) || (m5Bearish && m1Bullish))
+                        // ── MTF CONFLICT: 1M vs 5M ────────────────────────────────────────
+                        // IMPROVEMENT: Previously blocked ALL 1M vs 5M conflicts.
+                        // Decision trace showed 44% of signals blocked by this rule alone.
+                        // Root cause: on alt-coins, 1M is extremely noisy — it flips
+                        // direction every 1-2 bars and almost never aligns with 5M.
+                        //
+                        // NEW LOGIC: Only hard-block when BOTH conditions are true:
+                        // 1. 1M is STRONGLY bearish/bullish (close well below/above both EMAs)
+                        // 2. The gap between ema9_1m and ema21_1m is significant (> 0.15%ATR)
+                        //    — this filters out EMA crossovers that are just noise near 0
+                        //
+                        // Weak 1M conflicts (EMAs nearly flat, price barely crossed) are
+                        // allowed through — they are 1M noise, not real directional conflict.
+                        decimal ema9ema21Gap = Math.Abs(ema9_1m - ema21_1m);
+                        decimal atr1m = atr > 0 ? atr : last.ClosePrice * 0.002m;
+                        bool strongConflict = ema9ema21Gap > atr1m * 0.15m; // >0.15×ATR gap
+
+                        if (strongConflict && ((m5Bullish && m1Bearish) || (m5Bearish && m1Bullish)))
                         {
                             _logger.LogInformation(
-                                "[MTF][{symbol}] 5M={m5} 1M={m1} conflict → skip",
+                                "[MTF][{symbol}] 5M={m5} 1M={m1} STRONG conflict (gap={gap:F4}) → skip",
                                 symbol,
                                 m5Bullish ? "BULL" : m5Bearish ? "BEAR" : "FLAT",
-                                m1Bullish ? "BULL" : m1Bearish ? "BEAR" : "FLAT");
+                                m1Bullish ? "BULL" : m1Bearish ? "BEAR" : "FLAT",
+                                ema9ema21Gap);
 
                             SafeRecordDecisionTrace(symbol, tf,
                                 SignalDecisionTrace.Fail("MTF_CONFLICT", "1M vs 5M direction mismatch"));
 
                             return FastFailResult.Fail("MTF_CONFLICT", "1M vs 5M direction mismatch");
                         }
-                    }
+                        // Weak 1M conflict → log but allow through (1M noise, not real conflict)
+                        else if ((m5Bullish && m1Bearish) || (m5Bearish && m1Bullish))
+                        {
+                            _logger.LogDebug(
+                                "[MTF][{symbol}] 5M={m5} 1M={m1} weak conflict (gap={gap:F4}) → allowed",
+                                symbol,
+                                m5Bullish ? "BULL" : m5Bearish ? "BEAR" : "FLAT",
+                                m1Bullish ? "BULL" : m1Bearish ? "BEAR" : "FLAT",
+                                ema9ema21Gap);
+                        }
                 }
                 catch { /* non-critical, continue */ }
             }
