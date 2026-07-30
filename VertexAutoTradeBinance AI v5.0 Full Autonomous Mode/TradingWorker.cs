@@ -702,7 +702,22 @@ namespace VertexAutoTradeBinance8
         CancellationToken ct)
         {
             var symbol = signal.Symbol.Trim().ToUpperInvariant();
-            //var tf = Enum.Parse<KlineInterval>(signal.Timeframe);
+
+            // ─────────────────────────────────────────────────────────────────────
+            // GUARD: Side must be Buy or Sell — never None.
+            // Decision trace showed 135 Allow=true records with Side=null, meaning
+            // signals passed AI confirmation but had no direction → execution would
+            // fail silently. Reject early with a clear reason.
+            // ─────────────────────────────────────────────────────────────────────
+            if (signal.Side != SignalSide.Buy && signal.Side != SignalSide.Sell)
+            {
+                await RejectAsync(
+                    signal, symbol, default,
+                    "INVALID_SIGNAL",
+                    $"SIDE_NONE:{signal.Side}",
+                    ct);
+                return;
+            }
 
             if (string.IsNullOrWhiteSpace(signal.Timeframe))
             {
