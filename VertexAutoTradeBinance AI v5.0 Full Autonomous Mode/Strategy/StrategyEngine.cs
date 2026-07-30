@@ -2466,9 +2466,9 @@ namespace VertexAutoTradeBinance8.Strategy
                                               .GetAwaiter().GetResult();
                     if (klines1m != null && klines1m.Count >= 15)
                     {
-                        decimal ema9_1m  = EmaClose(klines1m, 9,  klines1m.Count - 1);
+                        decimal ema9_1m = EmaClose(klines1m, 9, klines1m.Count - 1);
                         decimal ema21_1m = EmaClose(klines1m, 21, klines1m.Count - 1);
-                        decimal last1m   = klines1m[^1].ClosePrice;
+                        decimal last1m = klines1m[^1].ClosePrice;
 
                         bool m1Bullish = last1m > ema9_1m && ema9_1m > ema21_1m;
                         bool m1Bearish = last1m < ema9_1m && ema9_1m < ema21_1m;
@@ -2519,6 +2519,7 @@ namespace VertexAutoTradeBinance8.Strategy
                                 m1Bullish ? "BULL" : m1Bearish ? "BEAR" : "FLAT",
                                 ema9ema21Gap);
                         }
+                    }
                 }
                 catch { /* non-critical, continue */ }
             }
