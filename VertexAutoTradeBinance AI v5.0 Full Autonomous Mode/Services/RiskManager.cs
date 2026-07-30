@@ -169,7 +169,11 @@ namespace VertexAutoTradeBinance8.Services
                 : GetDynamicBaseRisk(balance);
 
             decimal safetyMult = signal.SafetyRiskMultiplier > 0 ? signal.SafetyRiskMultiplier : 1m;
-            decimal winRate = _ai.GetWinRate(signal.Side);
+            // Neutral default 0.50 when AI has no trade history yet.
+            // Previously GetWinRate() returned 0 when no data → hit the
+            // "very poor" band (< 0.38) → 0.70× multiplier → tiny positions.
+            decimal rawWinRate = _ai.GetWinRate(signal.Side);
+            decimal winRate = rawWinRate > 0 ? rawWinRate : 0.50m;
             decimal finalRisk = CalculateAdaptiveRisk(signal, baseRisk, riskMult, winRate);
 
             // WinRate adjustment is now applied INSIDE CalculateAdaptiveRisk
@@ -532,14 +536,18 @@ namespace VertexAutoTradeBinance8.Services
 
             // ── CONFIDENCE MULTIPLIER ────────────────────────────────────
             // Higher confidence = higher edge = scale up position.
-            // ≥0.80 is the "high conviction" zone — meaningfully size up.
+            // Thresholds aligned with MinEntry=0.33 (lowered from 0.40).
+            // Previously: conf<0.40 → 0.60× penalized signals at 0.33-0.40
+            // that had passed all structural gates — unfair double penalty.
+            // Now: minimum multiplier 0.75× for signals that cleared MinEntry.
             decimal confMult =
-                confidence < 0.40m ? 0.60m :   // very low — borderline
-                confidence < 0.52m ? 0.82m :   // below MinEntry
-                confidence < 0.65m ? 1.00m :   // normal
-                confidence < 0.72m ? 1.15m :   // good
-                confidence < 0.80m ? 1.28m :   // high
-                1.40m;                          // very high conviction
+                confidence < 0.33m ? 0.55m :   // below minimum — should not reach here
+                confidence < 0.42m ? 0.80m :   // low confidence (cleared new MinEntry)
+                confidence < 0.55m ? 0.95m :   // moderate
+                confidence < 0.65m ? 1.05m :   // normal
+                confidence < 0.72m ? 1.18m :   // good
+                confidence < 0.80m ? 1.30m :   // high
+                1.45m;                          // very high conviction
 
             // Super-signal bonus: verified confluence of multiple timeframes
             if (signal.IsSuperSignal)
@@ -613,10 +621,16 @@ namespace VertexAutoTradeBinance8.Services
             // Ceil 6%: never exceed this — MaxMarginPercent will cap
             // actual exposure downstream. At 19× leverage, 6% risk
             // = 6/1% × SL%  which is bounded by the margin cap.
-            return Math.Clamp(risk, 0.005m, 0.08m); // raised ceiling 6%→8% for high-conviction signals
+            // Floor 1.5%: below this, position size is untradeably small on
+            // most exchanges. At $455 balance and 19x leverage: 1.5% = $128
+            // notional → $6.7 margin → still meaningful exposure.
+            // Ceiling 10%: for very high conviction super-signals. MaxMarginPercent
+            // still caps actual exposure downstream, so this is safe.
+            return Math.Clamp(risk, 0.015m, 0.10m);ction signals
         }
     }
 }
+
 
 
 
