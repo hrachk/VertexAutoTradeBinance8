@@ -628,7 +628,7 @@ namespace VertexAutoTradeBinance8.Services
             // notional → $6.7 margin → still meaningful exposure.
             // Ceiling 10%: for very high conviction super-signals. MaxMarginPercent
             // still caps actual exposure downstream, so this is safe.
-            return Math.Clamp(risk, 0.015m, 0.10m);ction signals
+            return Math.Clamp(risk, 0.015m, 0.10m); 
         }
     }
 }
