@@ -2422,6 +2422,15 @@ namespace VertexAutoTradeBinance8.Strategy
             if (atr <= 0 || last.ClosePrice <= 0)
                 return FastFailResult.Fail("ATR", "invalid ATR");
 
+            // ── SYMBOL BLACKLIST ────────────────────────────────────────────────
+            // Skip ETF-like tokens that don't work with EMA/pullback strategy.
+            // Blacklist is configured in appsettings.json → Trading:SymbolBlacklist
+            if (_opt.SymbolBlacklist?.Count > 0 &&
+                _opt.SymbolBlacklist.Any(b => string.Equals(b, symbol, StringComparison.OrdinalIgnoreCase)))
+            {
+                return FastFailResult.Fail("REJECT", "symbol_blacklisted");
+            }
+
             if (atr / last.ClosePrice < 0.0008m)
                 _engineState.LastEntryDecision = "LOW_VOL_WARNING";
 
