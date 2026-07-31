@@ -163,7 +163,7 @@
     _error = ""; _busy = true; StateHasChanged();
     try
     {
-      var (ok, error) = await Auth.ConfirmEmailAsync(FullCode.Trim());
+      (bool ok, string error) = await Auth.ConfirmEmailAsync(FullCode.Trim());
       if (ok)
       {
         _success = "Email подтверждён! Переход…";
