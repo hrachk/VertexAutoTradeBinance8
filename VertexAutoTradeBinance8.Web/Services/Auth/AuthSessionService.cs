@@ -30,13 +30,17 @@ public sealed class AuthSessionService : IAsyncDisposable
     public const string CookieName  = "vertex_auth";
     public const string DemoCookie  = "vertex_demo";
 
+    private readonly EmailService _email;
+
     public AuthSessionService(
         ClientDbService db,
         SessionTokenService tokens,
+        EmailService email,
         ILogger<AuthSessionService> log)
     {
         _db     = db;
         _tokens = tokens;
+        _email  = email;
         _log    = log;
     }
 
@@ -105,9 +109,23 @@ public sealed class AuthSessionService : IAsyncDisposable
         if (!ok || client == null) return (false, error);
 
         CurrentClient = client;
-        var token = await _tokens.CreateAsync(client.Id, rememberMe: true);
-        if (_js != null)
-            await SetCookieAsync(CookieName, token, SessionTokenService.RememberMeDays);
+        // Don't set session cookie yet — require email verification first
+        // (cookie will be set in ConfirmEmailAsync after code is verified)
+
+        // Generate and send verification code
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var code = await _db.GenerateVerifyCodeAsync(client.Id);
+                if (!string.IsNullOrEmpty(code))
+                    await _email.SendVerificationCodeAsync(client.Email, client.DisplayName, code);
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "[SESSION] Failed to send verification email to {email}", client.Email);
+            }
+        });
 
         OnChange?.Invoke();
         return (true, "");
