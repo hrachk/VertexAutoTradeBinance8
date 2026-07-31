@@ -250,6 +250,94 @@ public sealed class ClientDbService
         finally { _lock.Release(); }
     }
 
+    // ── Email verification ────────────────────────────────────────────
+    /// <summary>
+    /// Generates a 6-digit verification code, stores it on the client
+    /// record (hashed), and returns the plain code to be emailed.
+    /// Code expires in 15 minutes. Max 3 attempts before lockout.
+    /// </summary>
+    public async Task<string> GenerateVerifyCodeAsync(string clientId)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var all    = ReadAll();
+            var client = all.FirstOrDefault(c => c.Id == clientId);
+            if (client == null) return "";
+
+            // Generate 6-digit code
+            var code = new Random().Next(100_000, 999_999).ToString();
+
+            client.EmailVerifyCode    = HashCode(code);
+            client.EmailVerifyExpires = DateTime.UtcNow.AddMinutes(15);
+            client.EmailVerifyAttempts = 0;
+
+            var idx = all.FindIndex(c => c.Id == clientId);
+            if (idx >= 0) all[idx] = client;
+            WriteAll(all);
+
+            return code; // plain code — email it, never store
+        }
+        finally { _lock.Release(); }
+    }
+
+    /// <summary>
+    /// Verifies the submitted code against the stored hash.
+    /// Returns (true, "") on success, (false, reason) on failure.
+    /// </summary>
+    public async Task<(bool ok, string error)> VerifyEmailAsync(string clientId, string code)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var all    = ReadAll();
+            var client = all.FirstOrDefault(c => c.Id == clientId);
+            if (client == null)           return (false, "Аккаунт не найден.");
+            if (client.IsEmailVerified)   return (true,  "");
+
+            if (client.EmailVerifyAttempts >= 3)
+                return (false, "Слишком много попыток. Запросите новый код.");
+
+            if (client.EmailVerifyExpires < DateTime.UtcNow)
+                return (false, "Код истёк. Запросите новый.");
+
+            client.EmailVerifyAttempts++;
+
+            if (!VerifyCode(code, client.EmailVerifyCode ?? ""))
+            {
+                var idx2 = all.FindIndex(c => c.Id == clientId);
+                if (idx2 >= 0) all[idx2] = client;
+                WriteAll(all);
+                int left = 3 - client.EmailVerifyAttempts;
+                return (false, $"Неверный код. Осталось попыток: {left}.");
+            }
+
+            // Success
+            client.IsEmailVerified    = true;
+            client.EmailVerifyCode    = null;
+            client.EmailVerifyExpires = null;
+            client.EmailVerifyAttempts = 0;
+            client.IsActive           = true;
+
+            var idx = all.FindIndex(c => c.Id == clientId);
+            if (idx >= 0) all[idx] = client;
+            WriteAll(all);
+            return (true, "");
+        }
+        finally { _lock.Release(); }
+    }
+
+    private static string HashCode(string code)
+    {
+        // Simple SHA256 hash — code is short-lived (15 min) so PBKDF2 unnecessary
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        var bytes = System.Text.Encoding.UTF8.GetBytes(code);
+        return Convert.ToBase64String(sha.ComputeHash(bytes));
+    }
+
+    private static bool VerifyCode(string code, string hash)
+        => HashCode(code) == hash;
+
     // ── Helpers ───────────────────────────────────────────────────────
     private void EnsureFileExists()
     {
