@@ -128,7 +128,7 @@ public sealed class SessionTokenService
     // ── Helpers ───────────────────────────────────────────────
     private static string GenerateToken()
         => Convert.ToBase64String(RandomNumberGenerator.GetBytes(48))
-            .Replace('+', '-').Replace('/', '_').Replace('=', '');
+            .Replace('+', '-').Replace('/', '_').Replace("=", "");
 
     private List<SessionEntry> Read()
     {
