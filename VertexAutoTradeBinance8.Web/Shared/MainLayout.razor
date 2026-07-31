@@ -311,9 +311,23 @@
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
-        // Restore session from vertex_auth cookie (JS interop requires AfterRender)
+
+        // 1. Restore session from vertex_auth cookie (JS interop only works after render)
         await Auth.InitializeAsync(JSRuntime);
         GuardRoute();
+
+        // 2. Restore sidebar collapsed state from localStorage
+        try
+        {
+            var saved = await JS.InvokeAsync<string>("eval",
+                "window.localStorage ? localStorage.getItem('vertex_sidebar_collapsed') : null");
+            if (saved == "1")
+            {
+                SidebarCollapsed = true;
+            }
+        }
+        catch { }
+
         StateHasChanged();
     }
 
@@ -417,23 +431,6 @@
         DemoAccount.DemoModeChanged -= OnDemoModeChangedInHeader;
     }
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (firstRender)
-        {
-            try
-            {
-                var saved = await JS.InvokeAsync<string>("eval",
-                    "window.localStorage ? localStorage.getItem('vertex_sidebar_collapsed') : null");
-                if (saved == "1")
-                {
-                    SidebarCollapsed = true;
-                    StateHasChanged();
-                }
-            }
-            catch { }
-        }
-    }
 
     async Task PersistCollapsed(bool collapsed)
     {
