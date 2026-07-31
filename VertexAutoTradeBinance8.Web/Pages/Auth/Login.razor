@@ -34,6 +34,15 @@
            disabled="@_busy" />
   </div>
 
+  <div class="auth-remember">
+    <label>
+      <input type="checkbox"
+             checked="@_rememberMe"
+             @onchange="e => _rememberMe = (bool)(e.Value ?? true)" />
+      <span>Запомнить меня на 30 дней</span>
+    </label>
+  </div>
+
   <button class="auth-btn" disabled="@_busy" @onclick="DoLogin">
     @if (_busy)
     {
@@ -54,6 +63,7 @@
   [SupplyParameterFromQuery] string? ReturnUrl { get; set; }
 
   string _email = "", _password = "", _error = "";
+  bool _rememberMe = true; // default: remember
   bool _busy;
 
   protected override void OnInitialized()
@@ -76,7 +86,7 @@
 
     try
     {
-      var (ok, error) = await Auth.LoginAsync(email, pwd);
+      var (ok, error) = await Auth.LoginAsync(email, pwd, _rememberMe);
       if (ok)
         Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
       else
