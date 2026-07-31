@@ -117,10 +117,12 @@
       var (ok, error) = await Auth.RegisterAsync(email, pwd, name);
       if (ok)
       {
-        _success = "Аккаунт создан! Переход…";
+        _success = "Аккаунт создан! Проверь email — отправили код подтверждения.";
         StateHasChanged();
-        await Task.Delay(800); // brief success flash
-        Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
+        await Task.Delay(1200);
+        // Redirect to email verification page
+        var dest = "/verify-email" + (ReturnUrl != null ? $"?returnUrl={Uri.EscapeDataString(ReturnUrl)}" : "");
+        Nav.NavigateTo(dest, replace: true);
       }
       else
       {
