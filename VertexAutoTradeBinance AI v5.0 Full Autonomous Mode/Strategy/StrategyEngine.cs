@@ -842,16 +842,20 @@ namespace VertexAutoTradeBinance8.Strategy
                 // SL widened: stops placed behind 15-bar structure + 0.5×ATR buffer.
                 // TP recalibrated: minimum R:R at TP1 = 2.0 (was 1.56).
                 // Breakeven win rate drops from 39% to 33% — more edge margin.
-                KlineInterval.OneMinute      => (1.1m,  2.2m,  3.5m,  5.2m),
-                KlineInterval.ThreeMinutes   => (1.2m,  2.4m,  3.8m,  5.6m),
-                KlineInterval.FiveMinutes    => (1.3m,  2.6m,  4.0m,  6.0m),
-                KlineInterval.FifteenMinutes => (1.6m,  3.2m,  5.0m,  7.5m),
-                KlineInterval.ThirtyMinutes  => (2.0m,  4.0m,  6.3m,  9.5m),
-                KlineInterval.OneHour        => (2.4m,  4.8m,  7.5m, 11.2m),
-                KlineInterval.TwoHour        => (2.7m,  5.4m,  8.4m, 12.6m),
-                KlineInterval.FourHour       => (3.0m,  6.0m,  9.3m, 14.0m),
-                KlineInterval.OneDay         => (3.5m,  7.0m, 11.0m, 16.5m),
-                _ => (1.3m, 2.6m, 4.0m, 6.0m)
+                // SL widened to match new 1.0×ATR buffer (was 0.5×ATR).
+                // TP widened proportionally to maintain R:R ≥ 2.2 minimum.
+                // Entry is now at EMA21 zone (not at c0.Close) so absolute
+                // distance is smaller — wider multipliers are needed.
+                KlineInterval.OneMinute      => (1.5m,  3.0m,  4.8m,  7.0m),
+                KlineInterval.ThreeMinutes   => (1.6m,  3.2m,  5.2m,  7.6m),
+                KlineInterval.FiveMinutes    => (1.8m,  3.6m,  5.6m,  8.4m),
+                KlineInterval.FifteenMinutes => (2.2m,  4.4m,  7.0m, 10.5m),
+                KlineInterval.ThirtyMinutes  => (2.6m,  5.2m,  8.2m, 12.4m),
+                KlineInterval.OneHour        => (3.0m,  6.0m,  9.5m, 14.2m),
+                KlineInterval.TwoHour        => (3.4m,  6.8m, 10.8m, 16.2m),
+                KlineInterval.FourHour       => (3.8m,  7.6m, 12.0m, 18.0m),
+                KlineInterval.OneDay         => (4.5m,  9.0m, 14.0m, 21.0m),
+                _ => (1.8m, 3.6m, 5.6m, 8.4m)
             };
 
             // ── Regime multiplier for TP (SL unchanged) ─────────────────────
@@ -1457,18 +1461,48 @@ namespace VertexAutoTradeBinance8.Strategy
                 }
                 if (!recentSweep) return null;
 
-                // ── SL: 15-bar structure low + 0.5×ATR buffer ───────────────
-                int lookbackSl = Math.Min(15, i);
+                // ══════════════════════════════════════════════════════════
+                // ENTRY: Limit-style at EMA21 zone (not market at c0.Close)
+                //
+                // PROBLEM with market entry at c0.ClosePrice + 0.03×ATR:
+                // Signal fires when c0 ALREADY closed above EMA21 (rejection
+                // complete). Market order executes 1-2×ATR above the optimal
+                // level. SL stays at structure low → real risk = 2.0-2.5×ATR
+                // instead of planned 1.3×ATR. Win rate collapses.
+                //
+                // FIX: Entry at EMA21 + 0.2×ATR (inside the zone).
+                // This is the "value area" — if price is still near EMA21,
+                // we're entering at the right spot. The 0.2×ATR premium
+                // ensures we're above EMA21 (confirmed rejection) but not
+                // chasing the move.
+                // ══════════════════════════════════════════════════════════
+                decimal entry = ema21 + atr * 0.20m;
+
+                // Reject if current price is already too far from our entry
+                // (means we missed the move — don't chase)
+                if (c0.ClosePrice > entry + atr * 0.8m) return null;
+
+                // ── SL: 15-bar structure low + 1.0×ATR buffer ────────────
+                // PROBLEM: 0.5×ATR buffer sits INSIDE the stop-hunt zone.
+                // On 5M, stop hunts reach 0.3-0.5% below structure lows.
+                // 0.5×ATR ≈ 0.15-0.25% → inside hunt zone → always hit.
+                // FIX: 1.0×ATR buffer — outside typical hunt range.
+                int lookbackSl = Math.Min(10, i); // 10 bars = 50min on 5M (cleaner structure)
                 decimal swingLow = klines.Skip(i - lookbackSl).Take(lookbackSl + 1)
                     .Min(k => k.LowPrice);
-                decimal slLevel = swingLow - atr * 0.5m;
-                decimal entry   = c0.ClosePrice + atr * 0.03m;
-                decimal candleSl = Math.Min(c0.LowPrice, c1.LowPrice) - atr * 0.5m;
-                if (entry - slLevel > atr * 4.5m) slLevel = candleSl;
-                decimal risk    = entry - slLevel;
-                if (risk < atr * 0.35m || risk > atr * 4.5m) return null;
+                decimal slLevel  = swingLow - atr * 1.0m;  // was 0.5×ATR
+
+                // Fallback: last 2 candle lows + 1.0×ATR (if structure too far)
+                decimal candleSl = Math.Min(c0.LowPrice, c1.LowPrice) - atr * 1.0m;
+                if (entry - slLevel > atr * 3.5m) slLevel = candleSl;
+
+                decimal risk = entry - slLevel;
+                if (risk < atr * 0.5m || risk > atr * 3.5m) return null;
+
                 decimal tp1 = entry + atr * tp1Mult;
-                if ((tp1 - entry) / risk < 2.0m) return null;  var s = new TradeSignal
+                // R:R filter uses 2.2 min to account for real-world slippage
+                // (market order executes ~0.1-0.15% worse than limit)
+                if ((tp1 - entry) / risk < 2.2m) return null;  var s = new TradeSignal
                 {
                     Symbol = symbol, Side = SignalSide.Buy,
                     Reason = "PULLBACK_EMA21_LONG_V2" + confirmTags, Atr = atr,
@@ -1500,18 +1534,21 @@ namespace VertexAutoTradeBinance8.Strategy
                 }
                 if (!recentSweepShort) return null;
 
-                // ── SL: 15-bar structure high + 0.5×ATR buffer ──────────────
-                int lookbackSlShort = Math.Min(15, i);
+                // Entry at EMA21 - 0.2×ATR (inside zone, not chasing)
+                decimal entry = ema21 - atr * 0.20m;
+                if (c0.ClosePrice < entry - atr * 0.8m) return null; // missed the move
+
+                // SL: structure high + 1.0×ATR buffer (was 0.5×ATR)
+                int lookbackSlShort = Math.Min(10, i);
                 decimal swingHigh = klines.Skip(i - lookbackSlShort).Take(lookbackSlShort + 1)
                     .Max(k => k.HighPrice);
-                decimal slLevel = swingHigh + atr * 0.5m;
-                decimal entry   = c0.ClosePrice - atr * 0.03m;
-                decimal candleSlShort = Math.Max(c0.HighPrice, c1.HighPrice) + atr * 0.5m;
-                if (slLevel - entry > atr * 4.5m) slLevel = candleSlShort;
-                decimal risk    = slLevel - entry;
-                if (risk < atr * 0.35m || risk > atr * 4.5m) return null;
+                decimal slLevel = swingHigh + atr * 1.0m;
+                decimal candleSlShort = Math.Max(c0.HighPrice, c1.HighPrice) + atr * 1.0m;
+                if (slLevel - entry > atr * 3.5m) slLevel = candleSlShort;
+                decimal risk = slLevel - entry;
+                if (risk < atr * 0.5m || risk > atr * 3.5m) return null;
                 decimal tp1 = entry - atr * tp1Mult;
-                if ((entry - tp1) / risk < 2.0m) return null;
+                if ((entry - tp1) / risk < 2.2m) return null;
 
                 var s = new TradeSignal
                 {
