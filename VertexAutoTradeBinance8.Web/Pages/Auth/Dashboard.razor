@@ -150,9 +150,9 @@ else
 
   public void Dispose() => Auth.OnChange -= StateHasChanged;
 
-  void Logout()
+  async Task Logout()
   {
-    Auth.Logout();
+    await Auth.LogoutAsync();
     Nav.NavigateTo("/login");
   }
 
