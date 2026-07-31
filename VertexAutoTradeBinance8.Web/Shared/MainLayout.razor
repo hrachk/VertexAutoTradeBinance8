@@ -2,6 +2,7 @@
 @inherits LayoutComponentBase
 @using VertexAutoTradeBinance8.Web.Services.Auth
 @inject AuthSessionService Auth
+@inject IJSRuntime JSRuntime
 @inject NavigationManager Nav
 @implements IDisposable
 
@@ -291,10 +292,10 @@
 
     void ToggleUserMenu() => _userMenuOpen = !_userMenuOpen;
 
-    void DoLogout()
+    async Task DoLogout()
     {
         _userMenuOpen = false;
-        Auth.Logout();
+        await Auth.LogoutAsync();
         Nav.NavigateTo("/login", replace: true);
     }
 
@@ -304,7 +305,16 @@
     protected override void OnInitialized()
     {
         Auth.OnChange += OnAuthChange;
+        // GuardRoute runs after InitializeAsync restores session
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        // Restore session from vertex_auth cookie (JS interop requires AfterRender)
+        await Auth.InitializeAsync(JSRuntime);
         GuardRoute();
+        StateHasChanged();
     }
 
     void OnAuthChange() { GuardRoute(); InvokeAsync(StateHasChanged); }
