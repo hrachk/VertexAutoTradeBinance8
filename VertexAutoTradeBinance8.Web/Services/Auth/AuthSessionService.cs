@@ -131,7 +131,55 @@ public sealed class AuthSessionService : IAsyncDisposable
         return (true, "");
     }
 
-    // ── Logout ────────────────────────────────────────────────
+    // ── Email verification ────────────────────────────────────
+    /// <summary>
+    /// Verifies the 6-digit code entered by user.
+    /// On success: sets IsEmailVerified=true, creates session cookie.
+    /// </summary>
+    public async Task<(bool ok, string error)> ConfirmEmailAsync(string code)
+    {
+        if (CurrentClient == null) return (false, "Сессия истекла. Войдите снова.");
+
+        var (ok, error) = await _db.VerifyEmailAsync(CurrentClient.Id, code.Trim());
+        if (!ok) return (false, error);
+
+        // Refresh client record to get IsEmailVerified=true
+        await RefreshAsync();
+
+        // Now set the auth cookie — user is fully verified
+        var token = await _tokens.CreateAsync(CurrentClient.Id, rememberMe: true);
+        if (_js != null)
+            await SetCookieAsync(CookieName, token, SessionTokenService.RememberMeDays);
+
+        // Send welcome email in background
+        _ = Task.Run(async () =>
+        {
+            try { await _email.SendWelcomeAsync(CurrentClient!.Email, CurrentClient!.DisplayName); }
+            catch { }
+        });
+
+        OnChange?.Invoke();
+        return (true, "");
+    }
+
+    /// <summary>
+    /// Generates a new verification code and re-sends it to the user's email.
+    /// Returns true if email was sent (or dev mode — always true).
+    /// </summary>
+    public async Task<bool> ResendVerificationCodeAsync()
+    {
+        if (CurrentClient == null) return false;
+        try
+        {
+            var code = await _db.GenerateVerifyCodeAsync(CurrentClient.Id);
+            if (string.IsNullOrEmpty(code)) return false;
+            return await _email.SendVerificationCodeAsync(
+                CurrentClient.Email, CurrentClient.DisplayName, code);
+        }
+        catch { return false; }
+    }
+
+    // ── Logout ────────────────────────────────────────────────────
     public async Task LogoutAsync()
     {
         _log.LogInformation("[SESSION] Logout: {id}", CurrentClient?.Id);
@@ -196,3 +244,4 @@ public sealed class AuthSessionService : IAsyncDisposable
         // Nothing to dispose — JS runtime handles cleanup
     }
 }
+
