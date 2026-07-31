@@ -1,0 +1,210 @@
+@page "/verify-email"
+@using VertexAutoTradeBinance8.Web.Services.Auth
+@inject AuthSessionService Auth
+@inject NavigationManager Nav
+@layout VertexAutoTradeBinance8.Web.Shared.AuthLayout
+
+<PageTitle>Vertex AI — Подтверждение email</PageTitle>
+
+<div class="auth-card">
+  <div class="auth-logo">VERTEX <span>AI</span></div>
+  <div class="auth-title">Подтверди email</div>
+  <div class="auth-sub">
+    Мы отправили 6-значный код на<br>
+    <strong style="color:#f0f6ff">@(Auth.CurrentClient?.Email ?? "твой email")</strong>
+  </div>
+
+  @if (!string.IsNullOrEmpty(_error))
+  {
+    <div class="auth-error">⚠ @_error</div>
+  }
+  @if (!string.IsNullOrEmpty(_success))
+  {
+    <div class="auth-success">✓ @_success</div>
+  }
+
+  <!-- 6 separate digit inputs for UX -->
+  <div class="code-inputs">
+    @for (int i = 0; i < 6; i++)
+    {
+      var idx = i;
+      <input type="text" maxlength="1" inputmode="numeric" pattern="[0-9]"
+             class="code-digit"
+             id="digit-@idx"
+             value="@_digits[idx]"
+             @oninput="e => OnDigitInput(idx, e)"
+             @onkeydown="e => OnDigitKey(idx, e)"
+             @onfocus="e => OnDigitFocus(idx)"
+             disabled="@_busy" />
+    }
+  </div>
+
+  <button class="auth-btn" disabled="@(_busy || CodeLength < 6)"
+          @onclick="DoVerify">
+    @if (_busy) { <span>Проверка…</span> }
+    else        { <span>Подтвердить</span> }
+  </button>
+
+  <div style="text-align:center;margin-top:4px">
+    @if (_resendCooldown > 0)
+    {
+      <span style="font-size:12px;color:var(--t2,#6e90b2)">
+        Повторная отправка через @_resendCooldown сек.
+      </span>
+    }
+    else
+    {
+      <button class="auth-resend" @onclick="DoResend" disabled="@_resendBusy">
+        @(_resendBusy ? "Отправляем…" : "Отправить код повторно")
+      </button>
+    }
+  </div>
+
+  <div class="auth-link" style="margin-top:16px">
+    <a href="/register">← Зарегистрироваться заново</a>
+  </div>
+</div>
+
+<style>
+.code-inputs {
+  display: flex; gap: 8px; justify-content: center;
+  margin: 20px 0 16px;
+}
+.code-digit {
+  width: 44px; height: 54px; text-align: center;
+  font-size: 24px; font-weight: 900; font-family: monospace;
+  background: #050a12; border: 2px solid #1a2e44;
+  border-radius: 8px; color: #38bdf8; outline: none;
+  transition: border-color .15s; caret-color: transparent;
+}
+.code-digit:focus { border-color: #3b82f6; background: #070f1c; }
+.code-digit:disabled { opacity: .5; }
+.auth-resend {
+  background: transparent; border: none; color: #3b82f6;
+  font-size: 12px; cursor: pointer; text-decoration: underline;
+  font-family: inherit;
+}
+.auth-resend:disabled { color: #334e68; cursor: not-allowed; text-decoration: none; }
+</style>
+
+@code {
+  [SupplyParameterFromQuery] string? ReturnUrl { get; set; }
+
+  string[] _digits    = new string[6];
+  string   _error     = "";
+  string   _success   = "";
+  bool     _busy;
+  bool     _resendBusy;
+  int      _resendCooldown = 0;
+  System.Threading.Timer? _cooldownTimer;
+
+  int CodeLength => _digits.Count(d => !string.IsNullOrEmpty(d));
+  string FullCode => string.Join("", _digits);
+
+  protected override void OnInitialized()
+  {
+    // If not waiting for verification → go to dashboard or login
+    if (!Auth.IsAuthenticated)
+    {
+      Nav.NavigateTo("/login", replace: true);
+      return;
+    }
+    if (Auth.CurrentClient!.IsEmailVerified)
+    {
+      Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
+      return;
+    }
+  }
+
+  void OnDigitInput(int idx, ChangeEventArgs e)
+  {
+    var raw = e.Value?.ToString() ?? "";
+    // Accept only digits
+    var digit = raw.Length > 0 ? raw[^1].ToString() : "";
+    if (!string.IsNullOrEmpty(digit) && !char.IsDigit(digit[0])) digit = "";
+    _digits[idx] = digit;
+
+    // Auto-advance to next input
+    if (!string.IsNullOrEmpty(digit) && idx < 5)
+      _ = InvokeAsync(async () =>
+      {
+        await Task.Delay(10);
+        await FocusDigit(idx + 1);
+      });
+
+    // Auto-submit when all 6 filled
+    if (CodeLength == 6)
+      _ = InvokeAsync(DoVerify);
+  }
+
+  async Task OnDigitKey(int idx, KeyboardEventArgs e)
+  {
+    if (e.Key == "Backspace" && string.IsNullOrEmpty(_digits[idx]) && idx > 0)
+    {
+      _digits[idx - 1] = "";
+      await FocusDigit(idx - 1);
+    }
+    else if (e.Key == "Enter" && CodeLength == 6)
+      await DoVerify();
+  }
+
+  void OnDigitFocus(int idx)
+  {
+    // Select content on focus so typing replaces it
+  }
+
+  async Task FocusDigit(int idx)
+  {
+    try { await InvokeAsync(StateHasChanged); } catch { }
+  }
+
+  async Task DoVerify()
+  {
+    _error = ""; _busy = true; StateHasChanged();
+    try
+    {
+      var (ok, error) = await Auth.ConfirmEmailAsync(FullCode.Trim());
+      if (ok)
+      {
+        _success = "Email подтверждён! Переход…";
+        StateHasChanged();
+        await Task.Delay(1000);
+        Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
+      }
+      else
+      {
+        _error  = error;
+        _digits = new string[6]; // clear on error
+      }
+    }
+    catch (Exception ex) { _error = $"Ошибка: {ex.Message}"; }
+    finally { _busy = false; }
+  }
+
+  async Task DoResend()
+  {
+    _resendBusy = true; _error = ""; StateHasChanged();
+    try
+    {
+      var ok = await Auth.ResendVerificationCodeAsync();
+      _success = ok ? "Код отправлен повторно." : "Не удалось отправить. Проверьте email.";
+      _resendCooldown = 60;
+      StartCooldown();
+    }
+    catch { _success = ""; _error = "Ошибка при отправке."; }
+    finally { _resendBusy = false; }
+  }
+
+  void StartCooldown()
+  {
+    _cooldownTimer?.Dispose();
+    _cooldownTimer = new System.Threading.Timer(_ =>
+    {
+      if (_resendCooldown > 0) _resendCooldown--;
+      if (_resendCooldown == 0) _cooldownTimer?.Dispose();
+      InvokeAsync(StateHasChanged);
+    }, null, 1000, 1000);
+  }
+
+  public void Dispose() => _cooldownTimer?.Dispose();
+}
