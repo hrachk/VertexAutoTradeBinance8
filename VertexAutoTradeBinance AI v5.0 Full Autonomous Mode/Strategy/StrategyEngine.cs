@@ -1502,19 +1502,40 @@ namespace VertexAutoTradeBinance8.Strategy
                 decimal tp1 = entry + atr * tp1Mult;
                 // R:R filter uses 2.2 min to account for real-world slippage
                 // (market order executes ~0.1-0.15% worse than limit)
-                if ((tp1 - entry) / risk < 2.2m) return null;  var s = new TradeSignal
+                if ((tp1 - entry) / risk < 2.2m) return null;
+
+                // ── STEP 1: Market Structure filter ─────────────────
+                // Block LONG when market is making LH+LL (downtrend).
+                // Counter-trend entries are the #1 cause of stop-outs.
+                // RANGE allowed (EMA pullback in range = mean reversion).
+                string structure = DetectMarketStructure(klines, 60, 3);
+                if (structure == "DOWNTREND") return null;
+
+                // ── STEP 2: S/R-anchored TP1 ─────────────────────────
+                // TP1 at nearest resistance above entry (if R:R ≥ 2.0).
+                // Falls back to ATR multiple if no S/R level found.
+                var srLevels = FindSRLevels(klines, 80, 3);
+                decimal atrTp1 = entry + atr * tp1Mult;
+                decimal finalTp1 = GetSRAnchordTp(true, entry, slLevel, atr,
+                    srLevels.Where(l => l.type == "R").ToList(), atrTp1, 2.0m, 5.0m);
+                decimal finalTp2 = entry + atr * tp2Mult;
+                decimal finalTp3 = entry + atr * tp3Mult;
+                if (finalTp2 <= finalTp1) finalTp2 = finalTp1 + atr * 1.5m;
+                if (finalTp3 <= finalTp2) finalTp3 = finalTp2 + atr * 1.5m;
+
+                string structTag = structure == "UPTREND" ? "_UPTREND" : "_RANGE";
+                string srTag    = finalTp1 != atrTp1 ? "_SR" : "";
+
+                var s = new TradeSignal
                 {
                     Symbol = symbol, Side = SignalSide.Buy,
-                    Reason = "PULLBACK_EMA21_LONG_V2" + confirmTags, Atr = atr,
+                    Reason = "PULLBACK_EMA21_LONG_V2" + confirmTags + structTag + srTag,
+                    Atr = atr,
                     EntryPrice = entry, StopLoss = slLevel,
-                    EntryRangeLow = entry - atr * 0.15m,
+                    EntryRangeLow  = entry - atr * 0.15m,
                     EntryRangeHigh = entry + atr * 0.15m,
-                    IsSuperSignal = ema21Slope > 0.15m,
-                    TakeProfits = new List<decimal> {
-                        entry + atr * tp1Mult,
-                        entry + atr * tp2Mult,
-                        entry + atr * tp3Mult
-                    }
+                    IsSuperSignal  = ema21Slope > 0.15m && structure == "UPTREND",
+                    TakeProfits = new List<decimal> { finalTp1, finalTp2, finalTp3 }
                 };
                 EnsureMinimumTpDistances(s, isLong: true);
                 NormalizeEntryAndSl(s);
@@ -1550,19 +1571,34 @@ namespace VertexAutoTradeBinance8.Strategy
                 decimal tp1 = entry - atr * tp1Mult;
                 if ((entry - tp1) / risk < 2.2m) return null;
 
+                // ── STEP 1: Market Structure filter ─────────────────
+                // Block SHORT when market is making HH+HL (uptrend).
+                string structureS = DetectMarketStructure(klines, 60, 3);
+                if (structureS == "UPTREND") return null;
+
+                // ── STEP 2: S/R-anchored TP1 ─────────────────────────
+                var srLevelsS = FindSRLevels(klines, 80, 3);
+                decimal atrTp1S = entry - atr * tp1Mult;
+                decimal finalTp1S = GetSRAnchordTp(false, entry, slLevel, atr,
+                    srLevelsS.Where(l => l.type == "S").ToList(), atrTp1S, 2.0m, 5.0m);
+                decimal finalTp2S = entry - atr * tp2Mult;
+                decimal finalTp3S = entry - atr * tp3Mult;
+                if (finalTp2S >= finalTp1S) finalTp2S = finalTp1S - atr * 1.5m;
+                if (finalTp3S >= finalTp2S) finalTp3S = finalTp2S - atr * 1.5m;
+
+                string structTagS = structureS == "DOWNTREND" ? "_DOWNTREND" : "_RANGE";
+                string srTagS     = finalTp1S != atrTp1S ? "_SR" : "";
+
                 var s = new TradeSignal
                 {
                     Symbol = symbol, Side = SignalSide.Sell,
-                    Reason = "PULLBACK_EMA21_SHORT_V2" + confirmTags, Atr = atr,
+                    Reason = "PULLBACK_EMA21_SHORT_V2" + confirmTags + structTagS + srTagS,
+                    Atr = atr,
                     EntryPrice = entry, StopLoss = slLevel,
-                    EntryRangeLow = entry - atr * 0.15m,
+                    EntryRangeLow  = entry - atr * 0.15m,
                     EntryRangeHigh = entry + atr * 0.15m,
-                    IsSuperSignal = ema21Slope < -0.15m,
-                    TakeProfits = new List<decimal> {
-                        entry - atr * tp1Mult,
-                        entry - atr * tp2Mult,
-                        entry - atr * tp3Mult
-                    }
+                    IsSuperSignal  = ema21Slope < -0.15m && structureS == "DOWNTREND",
+                    TakeProfits = new List<decimal> { finalTp1S, finalTp2S, finalTp3S }
                 };
                 EnsureMinimumTpDistances(s, isLong: false);
                 NormalizeEntryAndSl(s);
@@ -4951,13 +4987,106 @@ namespace VertexAutoTradeBinance8.Strategy
             }
         }
 
+        // ════════════════════════════════════════════════════════════
+        // STEP 1: Market Structure Detection — HH/HL vs LH/LL
+        // Scans last `lookback` candles for swing pivots, classifies
+        // trend from the most recent two swings on each side.
+        // Returns "UPTREND", "DOWNTREND", "RANGE", or "UNKNOWN".
+        // ════════════════════════════════════════════════════════════
+        private static string DetectMarketStructure(
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            int lookback = 60, int swingStrength = 3)
+        {
+            if (klines.Count < lookback + swingStrength * 2) return "UNKNOWN";
+            int end   = klines.Count - 1;
+            int start = Math.Max(swingStrength, end - lookback);
+            var highs = new List<decimal>();
+            var lows  = new List<decimal>();
+            for (int j = start + swingStrength; j <= end - swingStrength; j++)
+            {
+                decimal hi = klines[j].HighPrice;
+                decimal lo = klines[j].LowPrice;
+                bool isH = true, isL = true;
+                for (int k = 1; k <= swingStrength; k++)
+                {
+                    if (klines[j-k].HighPrice >= hi || klines[j+k].HighPrice >= hi) isH = false;
+                    if (klines[j-k].LowPrice  <= lo || klines[j+k].LowPrice  <= lo) isL = false;
+                }
+                if (isH) highs.Add(hi);
+                if (isL) lows.Add(lo);
+            }
+            if (highs.Count < 2 || lows.Count < 2) return "RANGE";
+            bool hhhl = highs[^1] > highs[^2] && lows[^1] > lows[^2];
+            bool lhll = highs[^1] < highs[^2] && lows[^1] < lows[^2];
+            return hhhl ? "UPTREND" : lhll ? "DOWNTREND" : "RANGE";
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // STEP 2A: Find Support & Resistance levels
+        // Clusters swing pivots within 0.3% of each other.
+        // Returns list of (price, "S" or "R") sorted high→low.
+        // ════════════════════════════════════════════════════════════
+        private static List<(decimal price, string type)> FindSRLevels(
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            int lookback = 100, int swingStrength = 4, int maxLevels = 6)
+        {
+            if (klines.Count < lookback + swingStrength * 2) return new();
+            int end = klines.Count - 1;
+            int start = Math.Max(swingStrength, end - lookback);
+            var raw = new List<(decimal price, string type)>();
+            for (int j = start + swingStrength; j <= end - swingStrength; j++)
+            {
+                decimal hi = klines[j].HighPrice, lo = klines[j].LowPrice;
+                bool isH = true, isL = true;
+                for (int k = 1; k <= swingStrength; k++)
+                {
+                    if (klines[j-k].HighPrice >= hi || klines[j+k].HighPrice >= hi) isH = false;
+                    if (klines[j-k].LowPrice  <= lo || klines[j+k].LowPrice  <= lo) isL = false;
+                }
+                if (isH) raw.Add((hi, "R"));
+                if (isL) raw.Add((lo, "S"));
+            }
+            if (raw.Count == 0) return new();
+            var used = new bool[raw.Count];
+            var result = new List<(decimal price, string type)>();
+            for (int j = 0; j < raw.Count; j++)
+            {
+                if (used[j]) continue;
+                var cluster = new List<decimal> { raw[j].price };
+                for (int k = j + 1; k < raw.Count; k++)
+                    if (!used[k] && Math.Abs(raw[k].price - raw[j].price) / raw[j].price < 0.003m)
+                    { cluster.Add(raw[k].price); used[k] = true; }
+                result.Add((cluster.Average(), raw[j].type));
+                used[j] = true;
+            }
+            return result.OrderByDescending(l => l.price).Take(maxLevels).ToList();
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // STEP 2B: Get S/R-anchored TP
+        // Finds nearest S/R level in trade direction with R:R ≥ minRR.
+        // Falls back to atrFallback when no suitable level exists.
+        // ════════════════════════════════════════════════════════════
+        private static decimal GetSRAnchordTp(
+            bool isLong, decimal entry, decimal slLevel, decimal atr,
+            List<(decimal price, string type)> srLevels, decimal atrFallback,
+            decimal minRR = 2.0m, decimal maxAtrMult = 8.0m)
+        {
+            decimal risk = Math.Abs(entry - slLevel);
+            if (risk <= 0) return atrFallback;
+            decimal bestTp = atrFallback;
+            decimal bestDist = decimal.MaxValue;
+            foreach (var (price, _) in srLevels)
+            {
+                if (isLong  && price <= entry) continue;
+                if (!isLong && price >= entry) continue;
+                decimal dist = Math.Abs(price - entry);
+                if (dist > atr * maxAtrMult) continue;
+                if (dist / risk < minRR) continue;
+                if (dist < bestDist) { bestTp = price; bestDist = dist; }
+            }
+            return bestTp;
+        }
+
     }
 }
-
-
-
-
-
-
-
-
