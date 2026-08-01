@@ -4,7 +4,7 @@ namespace VertexAutoTradeBinance8.Web.Services.Auth;
 
 /// <summary>
 /// One registered user. Stored as element of clients.json.
-/// Passwords: PBKDF2. Binance keys: AES-256. Email: verified via 6-digit code.
+/// Supports: Email/Password + Google OAuth + Telegram + Apple ID
 /// </summary>
 public sealed class ClientRecord
 {
@@ -19,6 +19,9 @@ public sealed class ClientRecord
 
     [JsonPropertyName("displayName")]
     public string DisplayName { get; set; } = "";
+
+    [JsonPropertyName("avatarUrl")]
+    public string? AvatarUrl { get; set; }
 
     [JsonPropertyName("plan")]
     public string Plan { get; set; } = "demo";
@@ -38,6 +41,24 @@ public sealed class ClientRecord
     [JsonPropertyName("emailVerifyAttempts")]
     public int EmailVerifyAttempts { get; set; } = 0;
 
+    // ── OAuth provider links ────────────────────────────────────────
+    /// <summary>Google subject ID from JWT (sub claim)</summary>
+    [JsonPropertyName("googleId")]
+    public string? GoogleId { get; set; }
+
+    /// <summary>Telegram user ID (numeric)</summary>
+    [JsonPropertyName("telegramId")]
+    public string? TelegramId { get; set; }
+
+    /// <summary>Apple subject ID from identity token</summary>
+    [JsonPropertyName("appleId")]
+    public string? AppleId { get; set; }
+
+    /// <summary>Which providers are linked to this account</summary>
+    [JsonPropertyName("authProviders")]
+    public List<string> AuthProviders { get; set; } = new(); // "email","google","telegram","apple"
+
+    // ── Account data ────────────────────────────────────────────────
     [JsonPropertyName("createdAt")]
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
@@ -60,5 +81,9 @@ public sealed class ClientRecord
     public string DataFolder => Path.Combine(@"C:\Vertex\Engines", Id);
 
     [JsonIgnore]
-    public bool NeedsEmailVerification => !IsEmailVerified && !string.IsNullOrEmpty(EmailVerifyCode);
+    public bool NeedsEmailVerification =>
+        !IsEmailVerified && AuthProviders.Contains("email");
+
+    [JsonIgnore]
+    public bool HasPassword => !string.IsNullOrEmpty(PasswordHash);
 }
