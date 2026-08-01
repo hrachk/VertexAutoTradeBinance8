@@ -54,6 +54,8 @@ builder.Services.AddSingleton<WeatherForecastService>();
 // ClientDataService: scoped — resolves file paths per logged-in client
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Auth.ClientDbService>();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Auth.EmailService>();
+builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Auth.OAuthService>();
+builder.Services.AddHttpClient("oauth", c => { c.Timeout = TimeSpan.FromSeconds(10); });
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Auth.SessionTokenService>();
 builder.Services.AddScoped<VertexAutoTradeBinance8.Web.Services.Auth.AuthSessionService>();
 builder.Services.AddScoped<VertexAutoTradeBinance8.Web.Services.ClientDataService>();
