@@ -2331,12 +2331,102 @@ namespace VertexAutoTradeBinance8.Services
             catch { }
 
             // =================================================================
+            // =================================================================
+            // SMART DEDUP — check existing TP/SL orders before placing.
+            // On position add-ons (second entry same symbol+side), calling
+            // PlaceFullProtectionAsync blindly created 6 TPs + 2 SLs.
+            // Now we fetch open orders first and decide: skip, replace, or keep.
+            // =================================================================
+            List<BinanceFuturesOrder> existingOrders = new();
+            try
+            {
+                var openRes = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(signal.Symbol, ct: ct);
+                if (openRes.Success && openRes.Data != null)
+                    existingOrders = openRes.Data
+                        .Where(o => !isHedge || o.PositionSide == posSide)
+                        .ToList();
+            }
+            catch { }
+
+            var existingTps = existingOrders
+                .Where(o => o.Type == FuturesOrderType.TakeProfitMarket)
+                .OrderBy(o => isLong ? o.StopPrice : -o.StopPrice)
+                .ToList();
+            var existingSlList = existingOrders
+                .Where(o => o.Type == FuturesOrderType.StopMarket)
+                .ToList();
+
+            _logger.LogInformation(
+                "[DEDUP][{sym}] existing TP={tp} SL={sl} | new TPs={newTp} newSL={hasSl}",
+                signal.Symbol, existingTps.Count, existingSlList.Count,
+                signal.TakeProfits?.Count ?? 0, signal.StopLoss > 0);
+
+            // ── TP dedup ───────────────────────────────────────────────────
+            bool skipTpPlacement = false;
+            if (existingTps.Count > 0 && signal.TakeProfits != null && signal.TakeProfits.Count > 0)
+            {
+                var newTps = signal.TakeProfits
+                    .Select(tp => tick > 0 ? Math.Round(tp / tick) * tick : tp).ToList();
+                bool countMatch  = existingTps.Count == newTps.Count;
+                bool levelsMatch = countMatch && existingTps.Zip(newTps, (ex, nw) =>
+                    nw == 0 || Math.Abs((ex.StopPrice - nw) / nw) < 0.003m).All(x => x);
+
+                if (levelsMatch)
+                {
+                    _logger.LogInformation("[DEDUP][{sym}] TPs match existing — skip re-placement", signal.Symbol);
+                    skipTpPlacement = true;
+                }
+                else
+                {
+                    foreach (var tp in existingTps)
+                        try { await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, tp.Id, ct: ct); } catch { }
+                    _logger.LogInformation("[DEDUP][{sym}] Cancelled {n} old TPs — placing updated levels", signal.Symbol, existingTps.Count);
+                }
+            }
+
+            // ── SL dedup ───────────────────────────────────────────────────
+            bool skipSlPlacement = false;
+            if (existingSlList.Count > 0 && signal.StopLoss > 0)
+            {
+                var bestSl = isLong
+                    ? existingSlList.OrderByDescending(o => o.StopPrice).First()
+                    : existingSlList.OrderBy(o => o.StopPrice).First();
+                decimal slNew = tick > 0 ? Math.Round(signal.StopLoss / tick) * tick : signal.StopLoss;
+                bool nearlyIdentical = Math.Abs((bestSl.StopPrice - slNew) / Math.Max(slNew, 0.0001m)) < 0.003m;
+                bool existingBetter  = isLong ? bestSl.StopPrice > slNew : bestSl.StopPrice < slNew;
+
+                if (nearlyIdentical || existingBetter)
+                {
+                    _logger.LogInformation("[DEDUP][{sym}] SL keep existing={ep} (new={np})", signal.Symbol, bestSl.StopPrice, slNew);
+                    skipSlPlacement = true;
+                    // Clean up any duplicate SLs beyond the best one
+                    foreach (var dupe in existingSlList.Where(o => o.Id != bestSl.Id))
+                        try { await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, dupe.Id, ct: ct); } catch { }
+                }
+                else
+                {
+                    // New SL is tighter — cancel old and place better one
+                    foreach (var sl in existingSlList)
+                        try { await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, sl.Id, ct: ct); } catch { }
+                    _logger.LogInformation("[DEDUP][{sym}] SL replace: old={ep} → new={np}", signal.Symbol, bestSl.StopPrice, slNew);
+                }
+            }
+            else if (existingSlList.Count > 1)
+            {
+                // Multiple SLs, no new signal SL — keep best, cancel duplicates
+                var keepSl = isLong ? existingSlList.OrderByDescending(o => o.StopPrice).First()
+                                    : existingSlList.OrderBy(o => o.StopPrice).First();
+                foreach (var dupe in existingSlList.Where(o => o.Id != keepSl.Id))
+                    try { await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, dupe.Id, ct: ct); } catch { }
+                _logger.LogWarning("[DEDUP][{sym}] Cleaned {n} duplicate SLs, kept best", signal.Symbol, existingSlList.Count - 1);
+            }
+
             // TAKE PROFITS — every level the signal actually computed, not
             // just TP1. Quantity split per the institutional weighting
             // above; the LAST level absorbs any rounding remainder so the
             // sum of all TP quantities never exceeds the real position size.
             // =================================================================
-            if (signal.TakeProfits != null && signal.TakeProfits.Count > 0)
+            if (!skipTpPlacement && signal.TakeProfits != null && signal.TakeProfits.Count > 0)
             {
                 var tps = signal.TakeProfits
                     .Select(tp => tick > 0 ? Math.Round(tp / tick) * tick : tp)
@@ -2478,7 +2568,7 @@ namespace VertexAutoTradeBinance8.Services
             // yet, so it always covers the originally-requested quantity.
             // Same proven triple-fallback pattern as the TP placement above.
             // =================================================================
-            if (signal.StopLoss > 0)
+            if (!skipSlPlacement && signal.StopLoss > 0)
             {
                 decimal slPrice = tick > 0 ? Math.Round(signal.StopLoss / tick) * tick : signal.StopLoss;
                 var slSide = signal.Side == SignalSide.Buy ? OrderSide.Sell : OrderSide.Buy;
