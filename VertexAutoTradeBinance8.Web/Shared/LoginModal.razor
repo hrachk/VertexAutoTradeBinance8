@@ -1,0 +1,444 @@
+@using VertexAutoTradeBinance8.Web.Services.Auth
+@using Microsoft.JSInterop
+@inject AuthSessionService Auth
+@inject OAuthService OAuth
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+@*
+  LoginModal — shows the provider selection screen (like the screenshot).
+  Usage in any page:
+    <LoginModal @bind-Visible="_showLogin" OnSuccess="HandleLogin" />
+  
+  Or as standalone /login page wrapping this component.
+*@
+
+@if (Visible)
+{
+  <!-- Backdrop -->
+  <div class="lm-backdrop" @onclick="Close"></div>
+
+  <!-- Modal -->
+  <div class="lm-modal" @onclick:stopPropagation="true">
+
+    <!-- Header -->
+    <div class="lm-header">
+      <div class="lm-title">
+        @if (_mode == Mode.Select)   { <span>Вход / Регистрация</span> }
+        @if (_mode == Mode.Email)    { <span>Вход с Email</span> }
+        @if (_mode == Mode.Register) { <span>Регистрация</span> }
+      </div>
+      <button class="lm-close" @onclick="Close">✕</button>
+    </div>
+
+    <!-- Error -->
+    @if (!string.IsNullOrEmpty(_error))
+    {
+      <div class="lm-error">⚠ @_error</div>
+    }
+    @if (!string.IsNullOrEmpty(_success))
+    {
+      <div class="lm-success">✓ @_success</div>
+    }
+
+    <!-- ── PROVIDER SELECTION ── -->
+    @if (_mode == Mode.Select)
+    {
+      <div class="lm-providers">
+
+        <!-- Email -->
+        <button class="lm-btn" @onclick="() => _mode = Mode.Email">
+          <span class="lm-btn-icon">✉</span>
+          <span>Войти с Email</span>
+        </button>
+
+        @if (_googleConfigured)
+        {
+          <!-- Google -->
+          <button class="lm-btn" id="lm-google-btn" @onclick="StartGoogleLogin">
+            <span class="lm-btn-icon lm-google-icon">
+              <svg viewBox="0 0 24 24" width="18" height="18">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+              </svg>
+            </span>
+            <span>Google</span>
+          </button>
+        }
+
+        @if (_telegramConfigured)
+        {
+          <!-- Telegram -->
+          <button class="lm-btn" @onclick="StartTelegramLogin">
+            <span class="lm-btn-icon" style="color:#229ED9">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="#229ED9">
+                <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221l-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.02 13.9l-2.956-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.124.659z"/>
+              </svg>
+            </span>
+            <span>Telegram</span>
+          </button>
+        }
+
+        @if (_appleConfigured)
+        {
+          <!-- Apple ID -->
+          <button class="lm-btn" @onclick="StartAppleLogin">
+            <span class="lm-btn-icon">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+              </svg>
+            </span>
+            <span>Apple ID</span>
+          </button>
+        }
+
+        <div class="lm-divider">или</div>
+
+        <button class="lm-btn lm-btn-outline" @onclick="() => _mode = Mode.Register">
+          Создать аккаунт с Email
+        </button>
+
+      </div>
+    }
+
+    <!-- ── EMAIL LOGIN ── -->
+    @if (_mode == Mode.Email)
+    {
+      <div class="lm-form">
+        <div class="lm-field">
+          <label>Email</label>
+          <input type="email" placeholder="you@example.com"
+                 value="@_email" @oninput="e => _email = e.Value?.ToString() ?? """
+                 @onkeydown="OnEnter" disabled="@_busy" autofocus />
+        </div>
+        <div class="lm-field">
+          <label>Пароль</label>
+          <input type="password" placeholder="Ваш пароль"
+                 value="@_password" @oninput="e => _password = e.Value?.ToString() ?? """
+                 @onkeydown="OnEnter" disabled="@_busy" />
+        </div>
+        <label class="lm-remember">
+          <input type="checkbox" checked="@_rememberMe"
+                 @onchange="e => _rememberMe = (bool)(e.Value ?? true)" />
+          <span>Запомнить на 30 дней</span>
+        </label>
+        <button class="lm-submit" disabled="@_busy" @onclick="DoEmailLogin">
+          @(_busy ? "Входим…" : "Войти")
+        </button>
+        <button class="lm-back" @onclick="() => { _mode = Mode.Select; _error = ""; }">
+          ← Назад
+        </button>
+      </div>
+    }
+
+    <!-- ── REGISTER ── -->
+    @if (_mode == Mode.Register)
+    {
+      <div class="lm-form">
+        <div class="lm-field">
+          <label>Имя / Никнейм</label>
+          <input type="text" placeholder="Trader123" maxlength="40"
+                 value="@_displayName" @oninput="e => _displayName = e.Value?.ToString() ?? """
+                 disabled="@_busy" autofocus />
+        </div>
+        <div class="lm-field">
+          <label>Email</label>
+          <input type="email" placeholder="you@example.com"
+                 value="@_email" @oninput="e => _email = e.Value?.ToString() ?? """
+                 disabled="@_busy" />
+        </div>
+        <div class="lm-field">
+          <label>Пароль</label>
+          <input type="password" placeholder="Минимум 6 символов"
+                 value="@_password" @oninput="e => _password = e.Value?.ToString() ?? """
+                 disabled="@_busy" />
+        </div>
+        <div class="lm-field">
+          <label>Повторите пароль</label>
+          <input type="password" placeholder="Повторите пароль"
+                 value="@_password2" @oninput="e => _password2 = e.Value?.ToString() ?? """
+                 @onkeydown="OnEnter" disabled="@_busy" />
+        </div>
+        <div class="lm-demo-note">
+          🎮 После регистрации — $10,000 Demo на живых ценах Binance
+        </div>
+        <button class="lm-submit" disabled="@_busy" @onclick="DoRegister">
+          @(_busy ? "Регистрация…" : "Создать аккаунт")
+        </button>
+        <button class="lm-back" @onclick="() => { _mode = Mode.Select; _error = ""; }">
+          ← Назад
+        </button>
+      </div>
+    }
+
+  </div>
+}
+
+<style>
+/* Backdrop */
+.lm-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;
+  animation:lmBdIn .15s ease}
+@@keyframes lmBdIn{from{opacity:0}to{opacity:1}}
+
+/* Modal */
+.lm-modal{
+  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  z-index:501;width:100%;max-width:360px;
+  background:#0a1220;border:1px solid #1e3050;border-radius:14px;
+  overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.7);
+  animation:lmIn .18s ease;
+}
+@@keyframes lmIn{from{opacity:0;transform:translate(-50%,-48%)}to{opacity:1;transform:translate(-50%,-50%)}}
+
+/* Header */
+.lm-header{display:flex;align-items:center;justify-content:space-between;
+  padding:18px 20px 14px;border-bottom:1px solid #1a2e44}
+.lm-title{font-size:16px;font-weight:800;color:#f0f6ff}
+.lm-close{width:28px;height:28px;background:none;border:none;color:#6e90b2;
+  cursor:pointer;font-size:16px;border-radius:5px;
+  display:flex;align-items:center;justify-content:center}
+.lm-close:hover{background:rgba(239,68,68,.1);color:#f87171}
+
+/* Alerts */
+.lm-error{margin:12px 20px 0;padding:10px 14px;background:rgba(239,68,68,.08);
+  border:1px solid rgba(239,68,68,.2);border-radius:7px;
+  font-size:12px;color:#fca5a5}
+.lm-success{margin:12px 20px 0;padding:10px 14px;background:rgba(16,185,129,.08);
+  border:1px solid rgba(16,185,129,.2);border-radius:7px;
+  font-size:12px;color:#34d399}
+
+/* Provider buttons */
+.lm-providers{padding:16px 20px 20px;display:flex;flex-direction:column;gap:8px}
+.lm-btn{
+  display:flex;align-items:center;gap:12px;width:100%;height:48px;
+  padding:0 18px;background:#0f1c32;border:1px solid #1e3050;border-radius:9px;
+  color:#c4d4ec;font-size:14px;font-weight:600;cursor:pointer;
+  transition:all .12s;font-family:inherit;text-align:left;
+}
+.lm-btn:hover{border-color:#3b82f6;background:#0d1f3c;color:#f0f6ff}
+.lm-btn-icon{width:22px;display:flex;align-items:center;justify-content:center;
+  font-size:16px;flex-shrink:0}
+.lm-btn-outline{background:transparent;border-color:#1a2e44;color:#6e90b2;
+  justify-content:center;height:38px}
+.lm-btn-outline:hover{border-color:#3b82f6;color:#f0f6ff}
+
+.lm-divider{text-align:center;font-size:11px;color:#334e68;
+  position:relative;margin:4px 0}
+.lm-divider::before,.lm-divider::after{content:'';position:absolute;top:50%;
+  width:40%;height:1px;background:#1a2e44}
+.lm-divider::before{left:0}.lm-divider::after{right:0}
+
+/* Form */
+.lm-form{padding:16px 20px 20px;display:flex;flex-direction:column;gap:10px}
+.lm-field{display:flex;flex-direction:column;gap:5px}
+.lm-field label{font-size:11px;font-weight:700;color:#6e90b2;
+  text-transform:uppercase;letter-spacing:.8px}
+.lm-field input{height:40px;background:#050a12;border:1px solid #1a2e44;
+  border-radius:7px;color:#f0f6ff;font-size:13px;padding:0 12px;
+  outline:none;font-family:inherit;transition:border-color .15s}
+.lm-field input:focus{border-color:#3b82f6}
+.lm-field input:disabled{opacity:.5}
+.lm-remember{display:flex;align-items:center;gap:8px;font-size:12px;
+  color:#6e90b2;cursor:pointer;user-select:none}
+.lm-remember input{accent-color:#3b82f6;cursor:pointer}
+.lm-demo-note{font-size:11px;color:#fb923c;background:rgba(249,115,22,.07);
+  border:1px solid rgba(249,115,22,.15);border-radius:6px;padding:8px 12px}
+.lm-submit{height:44px;background:#3b82f6;border:none;border-radius:8px;
+  color:#fff;font-size:14px;font-weight:700;cursor:pointer;
+  font-family:inherit;transition:background .15s;margin-top:4px}
+.lm-submit:hover:not(:disabled){background:#2563eb}
+.lm-submit:disabled{opacity:.55;cursor:not-allowed}
+.lm-back{height:34px;background:transparent;border:none;color:#6e90b2;
+  font-size:12px;cursor:pointer;font-family:inherit}
+.lm-back:hover{color:#f0f6ff}
+</style>
+
+@code {
+  // ── Parameters ────────────────────────────────────────────
+  [Parameter] public bool Visible { get; set; }
+  [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+  [Parameter] public EventCallback OnSuccess { get; set; }
+  [Parameter] public string? ReturnUrl { get; set; }
+
+  // ── State ─────────────────────────────────────────────────
+  enum Mode { Select, Email, Register }
+  Mode _mode = Mode.Select;
+
+  string _email = "", _password = "", _password2 = "", _displayName = "";
+  string _error = "", _success = "";
+  bool   _busy, _rememberMe = true;
+
+  bool _googleConfigured   = false;
+  bool _telegramConfigured = false;
+  bool _appleConfigured    = false;
+
+  DotNetObjectReference<LoginModal>? _dotNet;
+
+  protected override void OnInitialized()
+  {
+    // Will be set from JS after checking config via JSRuntime
+  }
+
+  protected override async Task OnAfterRenderAsync(bool firstRender)
+  {
+    if (!firstRender) return;
+    _dotNet = DotNetObjectReference.Create(this);
+    try
+    {
+      // Check which providers are configured (via window.vertexOAuth)
+      _googleConfigured   = await JS.InvokeAsync<bool>("vertexOAuth.isGoogleConfigured");
+      _telegramConfigured = await JS.InvokeAsync<bool>("vertexOAuth.isTelegramConfigured");
+      _appleConfigured    = await JS.InvokeAsync<bool>("vertexOAuth.isAppleConfigured");
+      StateHasChanged();
+    }
+    catch { }
+  }
+
+  void Close()
+  {
+    _mode = Mode.Select; _error = ""; _success = "";
+    VisibleChanged.InvokeAsync(false);
+  }
+
+  async Task OnEnter(KeyboardEventArgs e)
+  {
+    if (e.Key != "Enter") return;
+    if (_mode == Mode.Email)    await DoEmailLogin();
+    if (_mode == Mode.Register) await DoRegister();
+  }
+
+  // ── Email login ───────────────────────────────────────────
+  async Task DoEmailLogin()
+  {
+    _error = "";
+    if (string.IsNullOrWhiteSpace(_email))   { _error = "Введите email."; return; }
+    if (string.IsNullOrWhiteSpace(_password)) { _error = "Введите пароль."; return; }
+
+    _busy = true; StateHasChanged();
+    try
+    {
+      var (ok, error) = await Auth.LoginAsync(_email.Trim(), _password, _rememberMe);
+      if (ok) { await HandleSuccess(); }
+      else    { _error = error; }
+    }
+    catch (Exception ex) { _error = $"Ошибка: {ex.Message}"; }
+    finally { _busy = false; }
+  }
+
+  // ── Register ──────────────────────────────────────────────
+  async Task DoRegister()
+  {
+    _error = "";
+    if (string.IsNullOrWhiteSpace(_email))     { _error = "Введите email."; return; }
+    if (_password.Length < 6)                   { _error = "Пароль минимум 6 символов."; return; }
+    if (_password != _password2)                { _error = "Пароли не совпадают."; return; }
+
+    _busy = true; StateHasChanged();
+    try
+    {
+      var (ok, error) = await Auth.RegisterAsync(_email.Trim(), _password, _displayName.Trim());
+      if (ok)
+      {
+        _success = "Проверь email — отправили код подтверждения.";
+        StateHasChanged();
+        await Task.Delay(1000);
+        Close();
+        Nav.NavigateTo("/verify-email");
+      }
+      else { _error = error; }
+    }
+    catch (Exception ex) { _error = $"Ошибка: {ex.Message}"; }
+    finally { _busy = false; }
+  }
+
+  // ── Google ────────────────────────────────────────────────
+  async Task StartGoogleLogin()
+  {
+    _error = "";
+    try { await JS.InvokeVoidAsync("vertexOAuth.startGoogle", _dotNet); }
+    catch { _error = "Google недоступен. Проверьте настройки."; }
+  }
+
+  [JSInvokable]
+  public async Task OnGoogleToken(string idToken)
+  {
+    _busy = true; StateHasChanged();
+    try
+    {
+      var info = await OAuth.ValidateGoogleTokenAsync(idToken);
+      if (info == null) { _error = "Не удалось проверить Google токен."; return; }
+      var (ok, error, _) = await Auth.OAuthLoginAsync(info);
+      if (ok) await HandleSuccess();
+      else    _error = error;
+    }
+    catch (Exception ex) { _error = $"Ошибка: {ex.Message}"; }
+    finally { _busy = false; StateHasChanged(); }
+  }
+
+  // ── Telegram ──────────────────────────────────────────────
+  async Task StartTelegramLogin()
+  {
+    _error = "";
+    try { await JS.InvokeVoidAsync("vertexOAuth.startTelegram", _dotNet); }
+    catch { _error = "Telegram недоступен."; }
+  }
+
+  [JSInvokable]
+  public async Task OnTelegramData(Dictionary<string, string> data)
+  {
+    _busy = true; StateHasChanged();
+    try
+    {
+      var info = OAuth.ValidateTelegramLogin(data);
+      if (info == null) { _error = "Неверная подпись Telegram."; return; }
+      var (ok, error, _) = await Auth.OAuthLoginAsync(info);
+      if (ok) await HandleSuccess();
+      else    _error = error;
+    }
+    catch (Exception ex) { _error = $"Ошибка: {ex.Message}"; }
+    finally { _busy = false; StateHasChanged(); }
+  }
+
+  // ── Apple ─────────────────────────────────────────────────
+  async Task StartAppleLogin()
+  {
+    _error = "";
+    try { await JS.InvokeVoidAsync("vertexOAuth.startApple", _dotNet); }
+    catch { _error = "Apple ID недоступен."; }
+  }
+
+  [JSInvokable]
+  public async Task OnAppleToken(string identityToken, string? userJson)
+  {
+    _busy = true; StateHasChanged();
+    try
+    {
+      var info = OAuth.ValidateAppleToken(identityToken, userJson);
+      if (info == null) { _error = "Не удалось проверить Apple токен."; return; }
+      var (ok, error, _) = await Auth.OAuthLoginAsync(info);
+      if (ok) await HandleSuccess();
+      else    _error = error;
+    }
+    catch (Exception ex) { _error = $"Ошибка: {ex.Message}"; }
+    finally { _busy = false; StateHasChanged(); }
+  }
+
+  // ── Success ───────────────────────────────────────────────
+  async Task HandleSuccess()
+  {
+    await OnSuccess.InvokeAsync();
+    Close();
+    if (!string.IsNullOrEmpty(ReturnUrl))
+      Nav.NavigateTo(ReturnUrl, replace: true);
+    else
+      Nav.NavigateTo("/dashboard", replace: true);
+  }
+
+  public async ValueTask DisposeAsync()
+  {
+    _dotNet?.Dispose();
+  }
+}
