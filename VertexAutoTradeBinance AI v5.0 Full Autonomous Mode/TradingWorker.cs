@@ -807,6 +807,30 @@ namespace VertexAutoTradeBinance8
             catch { /* never block execution for UI write */ }
 
             // =====================================================
+            // 3.2) MinExecute threshold check
+            // ─────────────────────────────────────────────────────
+            // Signal already written to UI (watch-only signals visible).
+            // Now check if confidence is high enough to actually trade.
+            // MinDisplay (0.33) was already checked by AI gate above.
+            // MinExecute (0.55) is the execution gate — only trade
+            // high-quality signals confirmed by structure/S/R.
+            // =====================================================
+            {
+                var confRes = _confAgg.Evaluate(signal, tf);
+                var confOpts = _confOptions.CurrentValue;
+                // Per-symbol MinExecute (BTC/ETH lower, others 0.55)
+                decimal minExec = symbol.StartsWith("BTC") ? (confOpts.BTC?.MinExecute ?? 0.50m)
+                                : symbol.StartsWith("ETH") ? (confOpts.ETH?.MinExecute ?? 0.50m)
+                                : confOpts.Default?.MinExecute ?? 0.55m;
+                if (confRes.Score < (double)minExec)
+                {
+                    await RejectAsync(signal, symbol, tf, "CONF", "WATCH_ONLY",
+                        ct, extra: $"conf={confRes.Score:F2} < minExec={minExec:F2} — signal shown in UI only");
+                    return;
+                }
+            }
+
+            // =====================================================
             // 3.5) CONTEXT SIDE CHECK (NOW WITH CONFIDENCE)
             // =====================================================
             var ctx = await _marketContext.GetContextAsync(symbol, ct);
