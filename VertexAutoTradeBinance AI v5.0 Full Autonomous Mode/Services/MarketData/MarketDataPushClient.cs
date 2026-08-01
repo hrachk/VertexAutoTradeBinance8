@@ -186,4 +186,24 @@ public sealed class MarketDataPushClient : BackgroundService
             try { await connection.DisposeAsync(); } catch { }
         }
     }
+
+    /// <summary>
+    /// Called by OrderExecutor / PositionSupervisor immediately when a position
+    /// is opened or closed. Enqueues a PushPositionEvent to the Web dashboard
+    /// so the UI refreshes positions instantly without waiting 30s.
+    ///
+    /// eventType: "OPENED" | "CLOSED" | "UPDATED"
+    /// Fire-and-forget safe — drops silently if outbox is full or disconnected.
+    /// </summary>
+    public void NotifyPositionChanged(string symbol, string side, string eventType)
+    {
+        _outbox.Writer.TryWrite(async c =>
+        {
+            try
+            {
+                await c.InvokeAsync("PushPositionEvent", symbol, side, eventType);
+            }
+            catch { /* non-critical — UI falls back to 30s poll */ }
+        });
+    }
 }
