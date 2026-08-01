@@ -244,7 +244,7 @@ else if (_activeTab == "trading")
                                            :                   pnlAbs.ToString("F2"));
                                     var tip = $"{day:ddd d MMM}: {(pnl >= 0 ? "+" : "")}{pnl:F2} USDT";
                                     <div class="st-cal-day @(isToday?"st-cal-today":"") @(pnl>0?"st-cal-win":pnl<0?"st-cal-loss":"")"
-                                         style="background:@bg;border:@border"
+                                         style="background:@bg"
                                          title="@tip">
                                         <span class="st-cal-dn">@d</span>
                                         @if (pnl != 0)
