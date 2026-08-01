@@ -111,13 +111,13 @@
         <div class="lm-field">
           <label>Email</label>
           <input type="email" placeholder="you@example.com"
-                 value="@_email" @oninput="e => _email = e.Value?.ToString() ?? """
+                 value="@_email" @oninput="e => _email = e.Value?.ToString() ?? string.Empty"
                  @onkeydown="OnEnter" disabled="@_busy" autofocus />
         </div>
         <div class="lm-field">
           <label>Пароль</label>
           <input type="password" placeholder="Ваш пароль"
-                 value="@_password" @oninput="e => _password = e.Value?.ToString() ?? """
+                 value="@_password" @oninput="e => _password = e.Value?.ToString() ?? string.Empty"
                  @onkeydown="OnEnter" disabled="@_busy" />
         </div>
         <label class="lm-remember">
@@ -128,7 +128,7 @@
         <button class="lm-submit" disabled="@_busy" @onclick="DoEmailLogin">
           @(_busy ? "Входим…" : "Войти")
         </button>
-        <button class="lm-back" @onclick="() => { _mode = Mode.Select; _error = ""; }">
+        <button class="lm-back" @onclick="() => GoBack()">
           ← Назад
         </button>
       </div>
@@ -141,25 +141,25 @@
         <div class="lm-field">
           <label>Имя / Никнейм</label>
           <input type="text" placeholder="Trader123" maxlength="40"
-                 value="@_displayName" @oninput="e => _displayName = e.Value?.ToString() ?? """
+                 value="@_displayName" @oninput="e => _displayName = e.Value?.ToString() ?? string.Empty"
                  disabled="@_busy" autofocus />
         </div>
         <div class="lm-field">
           <label>Email</label>
           <input type="email" placeholder="you@example.com"
-                 value="@_email" @oninput="e => _email = e.Value?.ToString() ?? """
+                 value="@_email" @oninput="e => _email = e.Value?.ToString() ?? string.Empty"
                  disabled="@_busy" />
         </div>
         <div class="lm-field">
           <label>Пароль</label>
           <input type="password" placeholder="Минимум 6 символов"
-                 value="@_password" @oninput="e => _password = e.Value?.ToString() ?? """
+                 value="@_password" @oninput="e => _password = e.Value?.ToString() ?? string.Empty"
                  disabled="@_busy" />
         </div>
         <div class="lm-field">
           <label>Повторите пароль</label>
           <input type="password" placeholder="Повторите пароль"
-                 value="@_password2" @oninput="e => _password2 = e.Value?.ToString() ?? """
+                 value="@_password2" @oninput="e => _password2 = e.Value?.ToString() ?? string.Empty"
                  @onkeydown="OnEnter" disabled="@_busy" />
         </div>
         <div class="lm-demo-note">
@@ -168,7 +168,7 @@
         <button class="lm-submit" disabled="@_busy" @onclick="DoRegister">
           @(_busy ? "Регистрация…" : "Создать аккаунт")
         </button>
-        <button class="lm-back" @onclick="() => { _mode = Mode.Select; _error = ""; }">
+        <button class="lm-back" @onclick="() => GoBack()">
           ← Назад
         </button>
       </div>
@@ -295,6 +295,12 @@
       StateHasChanged();
     }
     catch { }
+  }
+
+  void GoBack()
+  {
+    _mode  = Mode.Select;
+    _error = string.Empty;
   }
 
   void Close()
