@@ -1974,7 +1974,13 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 @@media(max-width:1300px){.mk-body-grid{grid-template-columns:1fr;}.mk-body-grid-with-panel{grid-template-columns:1fr;}}
 .mk-main-col{min-width:0;display:flex;flex-direction:column;gap:16px;}
 .mk-charts-col-main{min-width:0;}
-.mk-charts-col-side{min-width:0;display:flex;flex-direction:column;gap:10px;}
+.mk-charts-col-side{min-width:0;display:flex;flex-direction:column;gap:10px;position:relative;}
+.mk-charts-col-side .ord-panel,
+.mk-charts-col-side .ord-pos-panel{order:-1;
+    position:sticky;
+    top:8px;
+    z-index:50;
+}
 .mk-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px;}
 
 .mk-chart-maximize{flex-shrink:0;width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;color:var(--dim);cursor:pointer;transition:all .15s;}
@@ -2183,7 +2189,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-pager-label{font-size:10px;color:var(--dim);font-family:var(--mono);margin-left:2px;}
 
 /* ORDER PANEL */
-.ord-panel{margin:0;background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.4);contain:layout;}
+.ord-panel{margin:0;background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;transition:opacity .12s ease,transform .12s ease;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.4);contain:layout;}
 .ord-panel-demo{border-color:var(--yel);box-shadow:0 0 0 1px rgba(234,179,8,.25);}
 .ord-selected-label{font-size:12px;letter-spacing:1.5px;color:var(--acc);font-weight:700;text-transform:uppercase;padding:10px 18px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
 .ord-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--bdr);background:var(--bg3);}
@@ -3788,7 +3794,13 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     // "click a Live Signal card" gesture.
     void OpenManualPanelFor(string sym, decimal lastPrice)
     {
-        _selectedPosition = null;
+        // FIX: don't clear _selectedPosition here.
+        // Previously this wiped the active position when the user clicked
+        // "Open Opposite" or "Add to Position" — the position panel disappeared
+        // and the user lost track of their open trade.
+        // The position details panel (L1526+) and the Manual Trade order panel
+        // (L1233+) can coexist — they are rendered in sequence in the sidebar.
+        // _selectedPosition is managed by SelectPosition / ClosePanel only.
         _activeSignal = new MissedTradeRecord
         {
             Symbol      = sym,
@@ -3800,12 +3812,12 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             Confidence  = 0,
             ATR         = _atr,
         };
-        _orderError        = string.Empty;
-        _orderSuccess       = string.Empty;
-        _orderType          = "Market";
+        _orderError          = string.Empty;
+        _orderSuccess        = string.Empty;
+        _orderType           = "Market";
         _orderLeverage       = 10;
-        _orderQty           = 0;
-        _orderPrice         = lastPrice;
+        _orderQty            = 0;
+        _orderPrice          = lastPrice;
         _orderPanelDismissed = false;
 
         _ = LoadSymbolInfoAndSuggestQty(_activeSignal);
@@ -6217,10 +6229,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // load right after, in the background, updating their own
         // small pieces once ready rather than gating the whole panel.
         _selectingPosition = null;
-        _selectedPosition = pos;
-        _activeSignal = null;
+        _selectedPosition  = pos;
+        _activeSignal      = null;
         _orderPanelDismissed = false;
-        _addToPositionOpen = true;
+        _addToPositionOpen   = true;
 
         var sym = pos.Symbol;
         var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == _activeTf)
@@ -6230,12 +6242,12 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         ResolveSelected();
         CalcStats();
 
-        // IMMEDIATE RENDER: Blazor does not guarantee a re-render between
-        // the onclick lambda and the first await in an async Task. Without
-        // InvokeAsync, the browser sees nothing until LoadOpenOrdersAsync
-        // finishes — making the panel appear to "pop in" after a delay.
-        // InvokeAsync schedules a render on the synchronisation context,
-        // ensuring the panel is visible BEFORE any network calls run.
+        // INSTANT RENDER — panel must appear on click frame, not after network.
+        // StateHasChanged() alone doesn't force a synchronous render in Blazor Server;
+        // InvokeAsync wraps it in the circuit dispatcher so the DOM updates
+        // immediately, before any awaited network call suspends this method.
+        StateHasChanged();
+        await Task.Yield(); // yield to allow render frame to complete
         await InvokeAsync(StateHasChanged);
 
         // Network + chart work — these update their own parts of the UI
