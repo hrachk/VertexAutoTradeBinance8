@@ -6210,10 +6210,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // small pieces once ready rather than gating the whole panel.
         _selectingPosition     = null;
         _selectedPosition      = pos;
-        _activeSignal          = null;   // clear any open signal panel on position select
+        _activeSignal          = null;   // clear any signal panel — position takes priority
         _orderPanelDismissed   = false;
-        _addToPositionOpen     = true;
-        _manualTradeCollapsed  = true;   // collapse Manual Trade if it was open — position panel takes priority
+        _addToPositionOpen     = false;  // show Add/Hedge BUTTONS first, not the form
+        _manualTradeCollapsed  = false;  // reset collapse state
 
         var sym = pos.Symbol;
         var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == _activeTf)
