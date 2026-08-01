@@ -10,7 +10,11 @@ public sealed class SignalConfidenceSettings
 
     public class ConfidenceProfile
     {
-        public decimal MinEntry { get; set; }
+        public decimal MinEntry   { get; set; }  // legacy — kept for compatibility
+        /// <summary>Minimum confidence to SHOW signal in UI (watch-only)</summary>
+        public decimal MinDisplay  { get; set; } = 0.33m;
+        /// <summary>Minimum confidence to EXECUTE trade (bot places orders)</summary>
+        public decimal MinExecute  { get; set; } = 0.55m;
         public BandsSettings Bands { get; set; } = new();
         public EarlyTpAtrSettings EarlyTpAtr { get; set; } = new();
     }
