@@ -200,7 +200,8 @@ namespace VertexAutoTradeBinance8.Services
             CooldownGuard cooldown,
             IOptionsMonitor<TradingOptions> tradingOptions,
             IAccountStateService accountState,
-            BinanceAlgoOrderService algoOrders)
+            BinanceAlgoOrderService algoOrders,
+            MarketDataPushClient? pushClient = null) // optional — null OK if not registered
         {
             _logger = logger;
             _factory = factory;
@@ -220,7 +221,8 @@ namespace VertexAutoTradeBinance8.Services
             _cooldown = cooldown;
             _tradingOptions = tradingOptions;
             _accountState = accountState;
-            _algoOrders = algoOrders;
+            _algoOrders  = algoOrders;
+            _pushClient  = pushClient;
         }
 
         /// <summary>
@@ -1837,6 +1839,11 @@ namespace VertexAutoTradeBinance8.Services
                     // TP на частичное заполнение
                     await PlaceFullProtectionAsync(client, signal, posSide, isHedge,
                         wait.EntryPrice, wait.Qty, filters, ct);
+                    // Instant UI notification — Web refreshes positions immediately
+                    _pushClient?.NotifyPositionChanged(
+                        signal.Symbol,
+                        signal.Side == SignalSide.Buy ? "LONG" : "SHORT",
+                        "OPENED");
                     return OrderResult.Successs(wait.EntryPrice, wait.Qty, entryOrderId);
                 }
 
@@ -2259,6 +2266,10 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             _entryTracker.RegisterEntry(signal.Symbol, posSide);
+            _pushClient?.NotifyPositionChanged(
+                signal.Symbol,
+                signal.Side == SignalSide.Buy ? "LONG" : "SHORT",
+                "OPENED");
             return OrderResult.Successs(entryPrice, quantity, entryOrderId);
         }
 
