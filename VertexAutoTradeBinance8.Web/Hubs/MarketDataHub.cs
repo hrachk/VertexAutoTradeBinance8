@@ -41,4 +41,15 @@ public class MarketDataHub : Hub
 
         return Task.CompletedTask;
     }
+    /// <summary>
+    /// Called by the Engine immediately when a position is opened or closed.
+    /// Triggers an instant positions refresh in the Web UI, bypassing the
+    /// 30-second polling timer so the user sees position changes in real time.
+    /// eventType: "OPENED" | "CLOSED" | "UPDATED"
+    /// </summary>
+    public Task PushPositionEvent(string symbol, string side, string eventType)
+    {
+        _state.RaisePositionChanged(symbol, side, eventType);
+        return Task.CompletedTask;
+    }
 }
