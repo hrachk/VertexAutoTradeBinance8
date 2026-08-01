@@ -289,6 +289,11 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogWarning(
                     "[FINAL CLEANUP][{symbol}][{side}] done",
                     symbol, side);
+                // Instant UI notification — position closed
+                _push?.NotifyPositionChanged(
+                    symbol,
+                    side == PositionSide.Long ? "LONG" : "SHORT",
+                    "CLOSED");
             }
             catch (Exception ex)
             {
