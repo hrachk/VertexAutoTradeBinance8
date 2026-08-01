@@ -225,21 +225,24 @@ else if (_activeTab == "trading")
                                     if (day > _dateTo) { <div class="st-cal-empty"></div> continue; }
                                     var pnl = _dailyPnl.TryGetValue(day, out var v) ? v : 0m;
                                     var isToday = day.Date == DateTime.Today;
-                                    var intensity = pnl != 0
-                                        ? (double)Math.Min(Math.Abs(pnl) / Math.Max(_maxDailyPnl, 1m), 1m)
+                                    @* Intensity: how dark is the cell color (0=min, 1=max) *@
+                                    var intensity = pnl != 0 && _maxDailyPnl > 0
+                                        ? Math.Min((double)Math.Abs(pnl) / (double)_maxDailyPnl, 1.0)
                                         : 0.0;
-                                    // opacity: 0.18 (min) → 0.92 (max) — low trades still visible
-                                    var alpha = pnl != 0 ? 0.18 + intensity * 0.74 : 0.0;
+                                    var alpha = pnl != 0 ? 0.18 + intensity * 0.75 : 0.0;
+                                    var isWeekend = day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
                                     var bg = pnl > 0 ? $"rgba(16,185,129,{alpha:F2})"
                                            : pnl < 0 ? $"rgba(239,68,68,{alpha:F2})"
-                                           : "rgba(255,255,255,0.03)";
-                                    var border = isToday ? "1px solid rgba(59,130,246,.7)" : "none";
-                                    var pnlStr = pnl == 0 ? "" :
-                                        (pnl > 0 ? "+" : "") +
-                                        (Math.Abs(pnl) >= 100 ? ((int)Math.Abs(pnl)).ToString() :
-                                         Math.Abs(pnl) >= 10  ? Math.Abs(pnl).ToString("F1") :
-                                                                  Math.Abs(pnl).ToString("F2"));
-                                    var tip = $"{day:ddd MMM d}: {(pnl >= 0 ? "+" : "")}{pnl:F2} USDT";
+                                           : isWeekend ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.04)";
+                                    @* PnL string: sign + compact number *@
+                                    var pnlAbs = Math.Abs(pnl);
+                                    var pnlStr = pnl == 0 ? string.Empty
+                                        : (pnl > 0 ? "+" : "-")
+                                          + (pnlAbs >= 1000 ? $"{pnlAbs/1000:F1}k"
+                                           : pnlAbs >= 100  ? ((int)pnlAbs).ToString()
+                                           : pnlAbs >= 10   ? pnlAbs.ToString("F1")
+                                           :                   pnlAbs.ToString("F2"));
+                                    var tip = $"{day:ddd d MMM}: {(pnl >= 0 ? "+" : "")}{pnl:F2} USDT";
                                     <div class="st-cal-day @(isToday?"st-cal-today":"") @(pnl>0?"st-cal-win":pnl<0?"st-cal-loss":"")"
                                          style="background:@bg;border:@border"
                                          title="@tip">
