@@ -1839,36 +1839,12 @@
                 </div>
             </div>
         }
-        else if (!_orderPanelDismissed && Selected != null && _openOrders.Any(o => o.Symbol == Selected.Symbol))
-        {
-            // No open position for this symbol, but there ARE open
-            // orders (e.g. a pending limit entry that hasn't filled
-            // yet) — per direct request, surface this regardless of
-            // how the symbol was selected, not only when clicking a
-            // row in the positions table.
-            <div class="ord-panel">
-                <div class="ord-selected-label">Open Orders</div>
-                <div class="ord-head">
-                    <div class="ord-title"><span class="ord-sym">@Selected.Symbol</span></div>
-                    <button class="ord-close-x" @onclick="() => Selected = null">✕</button>
-                </div>
-                <div class="ord-pos-orders">
-                    @foreach (var o in _openOrders.Where(o => o.Symbol == Selected.Symbol))
-                    {
-                        <div class="ord-pos-order-row">
-                            <span class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</span>
-                            <span class="mk-dim">@o.Type @(o.ReduceOnly ? "(R)" : "")</span>
-                            <span class="mono">@(o.Price > 0 ? FmtP(o.Price) : "Market")</span>
-                            <span class="mono mk-dim">@o.Qty.ToString("G8")</span>
-                            <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
-                                    @onclick="() => CancelOpenOrderAsync(o)">
-                                @(_cancellingOrderId == o.OrderId ? "…" : "Cancel")
-                            </button>
-                        </div>
-                    }
-                </div>
-            </div>
-        }
+        @* Orphan "Open Orders" panel removed — open orders are shown inside
+           the Position panel (when _selectedPosition != null) and in the
+           Manual Trade panel via _currentPosition. Showing a third panel
+           here caused layout overlap and confused the panel state machine.
+           If user clicks a symbol that has only pending orders (no position),
+           the Manual Trade panel opens as normal via OpenManualPanelFor(). *@
 
         </div> <!-- end mk-charts-col-side (manual-trade/position-details) -->
 
@@ -2189,7 +2165,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-pager-label{font-size:10px;color:var(--dim);font-family:var(--mono);margin-left:2px;}
 
 /* ORDER PANEL */
-.ord-panel{margin:0;background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;transition:opacity .12s ease,transform .12s ease;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.4);contain:layout;}
+.ord-panel{margin:0;background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;transition:opacity .12s ease,transform .12s ease;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.4);contain:layout;}scroll-margin-top:8px;
 .ord-panel-demo{border-color:var(--yel);box-shadow:0 0 0 1px rgba(234,179,8,.25);}
 .ord-selected-label{font-size:12px;letter-spacing:1.5px;color:var(--acc);font-weight:700;text-transform:uppercase;padding:10px 18px;background:var(--bg2);border-bottom:1px solid var(--bdr);}
 .ord-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--bdr);background:var(--bg3);}
@@ -6228,11 +6204,12 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // dependent extras (open orders list, chart, TP/SL lines)
         // load right after, in the background, updating their own
         // small pieces once ready rather than gating the whole panel.
-        _selectingPosition = null;
-        _selectedPosition  = pos;
-        _activeSignal      = null;
-        _orderPanelDismissed = false;
-        _addToPositionOpen   = true;
+        _selectingPosition     = null;
+        _selectedPosition      = pos;
+        _activeSignal          = null;   // clear any open signal panel on position select
+        _orderPanelDismissed   = false;
+        _addToPositionOpen     = true;
+        _manualTradeCollapsed  = true;   // collapse Manual Trade if it was open — position panel takes priority
 
         var sym = pos.Symbol;
         var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == _activeTf)
