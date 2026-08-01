@@ -1549,26 +1549,6 @@
                 }
                 @if (posOrders.Any())
                 {
-                    <div class="ord-pos-orders">
-                        <div class="ord-pos-orders-title">Open Orders for @pos.Symbol</div>
-                        @foreach (var o in posOrders)
-                        {
-                            <div class="ord-pos-order-row">
-                                <div class="ord-pos-order-top">
-                                    <span class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</span>
-                                    <span class="mk-dim ord-pos-order-type">@o.Type @(o.ReduceOnly ? "(R)" : "")</span>
-                                    <button class="mk-oo-cancel" disabled="@(_cancellingOrderId == o.OrderId)"
-                                            @onclick="() => CancelOpenOrderAsync(o)">
-                                        @(_cancellingOrderId == o.OrderId ? "…" : "Cancel")
-                                    </button>
-                                </div>
-                                <div class="ord-pos-order-bottom">
-                                    <span class="mono">@(o.Price > 0 ? FmtP(o.Price) : "Market")</span>
-                                    <span class="mono mk-dim">@o.Qty.ToString("G8")</span>
-                                </div>
-                            </div>
-                        }
-                    </div>
                 }
 
                 <div class="ord-body">
@@ -5096,6 +5076,12 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // Used to find the existing exchange order — which is still
         // at that price until we cancel it.
         decimal searchPrice = originalPrice > 0 ? originalPrice : newPrice;
+        // Skip drag if price didn't actually change (accidental click)
+        if (originalPrice > 0 && Math.Abs(newPrice - originalPrice) < 0.0001m)
+        {
+            await RefreshPositionLines();
+            return;
+        }
         // CRITICAL SAFETY CHECK: this previously never checked
         // _demoMode at all, meaning dragging a TP/SL line while in
         // demo mode was attempting to place a REAL order on the
@@ -5121,7 +5107,11 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         try
         {
             var client = Factory.TryCreateRestClient();
-            if (client == null) { return; }
+            if (client == null)
+            {
+                _orderError = "Binance client not available.";
+                return; // finally block releases _slTpDragBusy
+            }
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
 
@@ -5226,6 +5216,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
             if (!r.Success)
             {
+                // Retry once with 800ms delay
                 await Task.Delay(800, cts.Token);
                 r = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
                     symbol: pos.Symbol,
@@ -5238,8 +5229,34 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     clientOrderId: clientOrderId + "_R",
                     priceProtect: true,
                     ct: cts.Token);
-                if (!r.Success)
-                    _orderError = $"{(isStopLoss ? "SL" : "TP")} update failed: {r.Error?.Message}";
+            }
+
+            if (r.Success)
+            {
+                // NEW ORDER PLACED SUCCESSFULLY — now cancel the old one
+                // (atomic: position is always protected)
+                if (existing != null)
+                {
+                    try
+                    {
+                        if (existing.IsAlgo)
+                            await CancelAlgoOrderRawAsync(pos.Symbol, existing.OrderId);
+                        else
+                            await client.UsdFuturesApi.Trading.CancelOrderAsync(
+                                pos.Symbol, existing.OrderId, ct: cts.Token);
+                    }
+                    catch
+                    {
+                        // Cancel failed — duplicate order exists but position is protected.
+                        // LoadOpenOrdersAsync below will show both; user can cancel manually.
+                        _orderError = $"Warning: old {(isStopLoss ? "SL" : "TP")} may still exist. Please check Orders.";
+                    }
+                }
+            }
+            else
+            {
+                // Both attempts failed — OLD ORDER STILL EXISTS (not cancelled)
+                _orderError = $"{(isStopLoss ? "SL" : "TP")} update failed: {r.Error?.Message}. Original order preserved.";
             }
 
             await LoadOpenOrdersAsync();
