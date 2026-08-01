@@ -6,65 +6,18 @@
 
 <PageTitle>Vertex AI — Вход</PageTitle>
 
-<div class="auth-card">
-  <div class="auth-logo">VERTEX <span>AI</span></div>
-  <div class="auth-title">Войти в систему</div>
-  <div class="auth-sub">Продолжить торговлю с AI-автопилотом</div>
+<style>
+  .login-wrap{min-height:100vh;display:flex;align-items:center;
+    justify-content:center;background:#050a12;}
+</style>
 
-  @if (!string.IsNullOrEmpty(_error))
-  {
-    <div class="auth-error">⚠ @_error</div>
-  }
-
-  <div class="auth-field">
-    <label>Email</label>
-    <input type="email"
-           value="@_email"
-           @oninput="e => _email = e.Value?.ToString() ?? string.Empty"
-           placeholder="you@example.com"
-           disabled="@_busy" />
-  </div>
-  <div class="auth-field">
-    <label>Пароль</label>
-    <input type="password"
-           value="@_password"
-           @oninput="e => _password = e.Value?.ToString() ?? string.Empty"
-           placeholder="Ваш пароль"
-           @onkeydown="OnKeyDown"
-           disabled="@_busy" />
-  </div>
-
-  <div class="auth-remember">
-    <label>
-      <input type="checkbox"
-             checked="@_rememberMe"
-             @onchange="e => _rememberMe = (bool)(e.Value ?? true)" />
-      <span>Запомнить меня на 30 дней</span>
-    </label>
-  </div>
-
-  <button class="auth-btn" disabled="@_busy" @onclick="DoLogin">
-    @if (_busy)
-    {
-      <span>Вход…</span>
-    }
-    else
-    {
-      <span>Войти</span>
-    }
-  </button>
-
-  <div class="auth-link">
-    Нет аккаунта? <a href="/register">Зарегистрироваться</a> — Demo бесплатно
-  </div>
-</div>
+@* Show LoginModal immediately as standalone page *@
+<LoginModal Visible="true"
+            VisibleChanged="OnVisibleChanged"
+            ReturnUrl="@ReturnUrl" />
 
 @code {
   [SupplyParameterFromQuery] string? ReturnUrl { get; set; }
-
-  string _email = "", _password = "", _error = "";
-  bool _rememberMe = true; // default: remember
-  bool _busy;
 
   protected override void OnInitialized()
   {
@@ -72,38 +25,10 @@
       Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
   }
 
-  async Task DoLogin()
+  void OnVisibleChanged(bool visible)
   {
-    _error = "";
-    var email = _email.Trim();
-    var pwd   = _password;
-
-    if (string.IsNullOrEmpty(email)) { _error = "Введите email."; return; }
-    if (string.IsNullOrEmpty(pwd))   { _error = "Введите пароль."; return; }
-
-    _busy = true;
-    StateHasChanged();
-
-    try
-    {
-      var (ok, error) = await Auth.LoginAsync(email, pwd, _rememberMe);
-      if (ok)
-        Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
-      else
-        _error = error;
-    }
-    catch (Exception ex)
-    {
-      _error = $"Ошибка: {ex.Message}";
-    }
-    finally
-    {
-      _busy = false;
-    }
-  }
-
-  async Task OnKeyDown(KeyboardEventArgs e)
-  {
-    if (e.Key == "Enter") await DoLogin();
+    // If user closes modal on login page — go back
+    if (!visible && !Auth.IsAuthenticated)
+      Nav.NavigateTo("/", replace: true);
   }
 }
