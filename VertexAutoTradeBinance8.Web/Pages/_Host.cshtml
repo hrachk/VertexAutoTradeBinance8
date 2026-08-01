@@ -41,6 +41,23 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
  
     <script src="~/js/vertex-auth.js"></script>
+    <script src="~/js/vertex-oauth.js"></script>
+    <script>
+      // OAuth provider config — injected from appsettings on server
+      // Buttons only appear if the corresponding config is non-empty
+      window.vertexOAuthConfig = {
+        google:   { clientId: "@Configuration["OAuth:Google:ClientId"]" },
+        telegram: { botName:  "@Configuration["OAuth:Telegram:BotName"]",
+                    botId:    "@Configuration["OAuth:Telegram:BotId"]" },
+        apple:    { clientId:    "@Configuration["OAuth:Apple:ClientId"]",
+                    redirectUri: "@Configuration["OAuth:Apple:RedirectUri"]" }
+      };
+      // Clear empty strings so isXxxConfigured() returns false
+      ['google','telegram','apple'].forEach(p => {
+        const c = window.vertexOAuthConfig[p];
+        if (c) Object.keys(c).forEach(k => { if (!c[k]) delete c[k]; });
+      });
+    </script>
     <script src="~/js/vertex-ui.js"></script>
     <script src="~/js/vertex-bridge.js"></script>
     <script src="~/js/ui-state.js"></script>
