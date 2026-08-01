@@ -988,4 +988,529 @@ else if (_activeTab == "dca")
     text-shadow: 0 1px 4px rgba(0,0,0,.6);
     word-break: break-all;
 }
+</style>
+
+@code {
+    bool _loading = true;
+    bool _demoMode = false;
+    string _range = "30D";
+    string _activeTab = "trading";
+    DateTime _dateFrom = DateTime.Today.AddDays(-30);
+    DateTime _dateTo   = DateTime.Today;
+
+    static readonly Dictionary<string, string> _ranges = new()
+    {
+        ["7D"] = "7D", ["30D"] = "30D", ["90D"] = "90D", ["ALL"] = "All"
+    };
+
+    // Trading
+    PerfStats _stats = new();
+    Dictionary<DateTime, decimal> _dailyPnl = new();
+    List<decimal> _cumulativePnl = new();
+    decimal _maxDailyPnl = 1m;
+    List<SymRow> _bySymbol = new();
+    Dictionary<string, int> _byReason = new();
+    List<TradeRow> _trades = new();
+    string _tradeSort = "time";
+    bool _tradeSortAsc = false;
+    // Filters
+    string _filterSide   = "";   // "" = all, "LONG", "SHORT"
+    string _filterResult = "";   // "" = all, "WIN", "LOSS"
+    string _filterSymbol = "";   // "" = all, any symbol substring
+
+    // Called whenever a filter changes — recomputes stats with active filter applied
+    // so Calendar and By Symbol are consistent with the Trade Log.
+    void ApplyFilter()
+    {
+        var hasFilter = !string.IsNullOrEmpty(_filterSide) ||
+                        !string.IsNullOrEmpty(_filterResult) ||
+                        !string.IsNullOrEmpty(_filterSymbol);
+        ComputeTrading(hasFilter ? FilteredTrades.ToList() : null);
+    }
+
+    // DCA
+    DcaConfigSnapshot _dcaConfig = new();
+    List<DcaPurchaseRow> _dcaPurchases = new();
+    DcaSummaryStats _dcaStats = new();
+    List<DcaSymbolRow> _dcaBySymbol = new();
+    List<DcaPeriodRow> _dcaPeriodRows = new();
+    Dictionary<string, List<decimal>> _dcaChartSeries = new();
+    string _dcaPeriod = "weekly";
+
+    static readonly Dictionary<string, string> _symColors = new()
+    {
+        ["BTCUSDT"] = "#f59e0b", ["ETHUSDT"] = "#60a5fa",
+        ["SOLUSDT"] = "#a78bfa", ["BNBUSDT"]  = "#fbbf24",
+        ["XRPUSDT"] = "#34d399", ["ADAUSDT"]  = "#22d3ee",
+    };
+    string SymbolColor(string sym) => _symColors.TryGetValue(sym, out var c) ? c : "#64748b";
+
+    const int _svgW = 600, _svgH = 140;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var saved = await JS.InvokeAsync<string?>("localStorage.getItem", "vertexMarketState");
+            if (!string.IsNullOrEmpty(saved))
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(saved);
+                if (doc.RootElement.TryGetProperty("demoMode", out var dm))
+                    _demoMode = dm.GetBoolean();
+            }
+        }
+        catch { }
+        SnapshotDcaConfig();
+        await LoadData();
+    }
+
+    void SnapshotDcaConfig()
+    {
+        var opts = DcaOpts.CurrentValue;
+        _dcaConfig = new DcaConfigSnapshot
+        {
+            Enabled            = opts.Enabled,
+            Frequency          = opts.Schedule?.Frequency ?? "Weekly",
+            Budget             = opts.Schedule?.BudgetPerCycle ?? 0,
+            Symbols            = opts.Symbols?.Select(s => s.Symbol).ToList() ?? new(),
+            DipBonusEnabled    = opts.DipBonus?.Enabled ?? false,
+            DipBonusMultiplier = opts.DipBonus?.Multiplier ?? 2m,
+            DipDropPct         = opts.DipBonus?.DropThresholdPct ?? 10m,
+        };
+    }
+
+    async Task SetTab(string tab)   { _activeTab = tab; await LoadData(); }
+    async Task SetMode(bool demo)   { _demoMode = demo; await LoadData(); }
+
+    async Task SetRange(string r)
+    {
+        _range = r;
+        (_dateFrom, _dateTo) = r switch
+        {
+            "7D"  => (DateTime.Today.AddDays(-7),  DateTime.Today),
+            "30D" => (DateTime.Today.AddDays(-30), DateTime.Today),
+            "90D" => (DateTime.Today.AddDays(-90), DateTime.Today),
+            _     => (DateTime.Today.AddYears(-5), DateTime.Today),
+        };
+        await LoadData();
+    }
+
+    void SetDcaPeriod(string p) { _dcaPeriod = p; ComputeDcaPeriodRows(); }
+
+    async Task LoadData()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            if (_activeTab == "trading")
+            {
+                _trades = _demoMode ? await LoadDemoTrades() : await LoadLiveTrades();
+                // Pass FilteredTrades so Calendar and By Symbol respect active filters
+        var hasFilter = !string.IsNullOrEmpty(_filterSide) ||
+                        !string.IsNullOrEmpty(_filterResult) ||
+                        !string.IsNullOrEmpty(_filterSymbol);
+        ComputeTrading(hasFilter ? FilteredTrades.ToList() : null);
+            }
+            else
+            {
+                LoadDcaData();
+            }
+        }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    Task<List<TradeRow>> LoadDemoTrades()
+    {
+        var rows = DemoAccount.GetSnapshot().History
+            .Where(t => t.ClosedAtUtc.Date >= _dateFrom && t.ClosedAtUtc.Date <= _dateTo)
+            .Select(t => new TradeRow
+            {
+                Symbol = t.Symbol, Side = t.Side,
+                EntryPrice = t.EntryPrice, ExitPrice = t.ExitPrice,
+                Qty = t.Qty, Pnl = t.RealizedPnl,
+                CloseReason = t.CloseReason,
+                OpenedAt = t.OpenedAtUtc, ClosedAt = t.ClosedAtUtc,
+            }).ToList();
+        return Task.FromResult(rows);
+    }
+
+    async Task<List<TradeRow>> LoadLiveTrades()
+    {
+        var rows = new List<TradeRow>();
+        try
+        {
+            var from = new DateTime(_dateFrom.Year, _dateFrom.Month, _dateFrom.Day, 0, 0, 0, DateTimeKind.Utc);
+            var to   = new DateTime(_dateTo.Year,   _dateTo.Month,   _dateTo.Day,   23, 59, 59, DateTimeKind.Utc);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var client = Factory.TryCreateRestClient();
+            if (client == null) return rows;
+
+            // Single API call — REALIZED_PNL income history.
+            // Each record = one position close event per symbol.
+            var incRes = await client.UsdFuturesApi.Account.GetIncomeHistoryAsync(
+                incomeType: "REALIZED_PNL", startTime: from, endTime: to, limit: 1000, ct: cts.Token);
+            if (!incRes.Success || incRes.Data == null) return rows;
+
+            // Group consecutive records on the same symbol that are < 5 seconds apart
+            // → treat as one trade close (Binance can split a single position close
+            // into multiple income records when there are multiple orders).
+            var events = incRes.Data
+                .Where(inc => inc.Income != 0 && inc.Symbol != null)
+                .OrderBy(inc => inc.Timestamp)
+                .ToList();
+
+            // Merge close events: same symbol within 5s = one trade
+            var merged = new List<(string Symbol, DateTime Time, decimal Pnl)>();
+            for (int i = 0; i < events.Count; i++)
+            {
+                var e = events[i];
+                decimal pnl = e.Income;
+                while (i + 1 < events.Count &&
+                       events[i + 1].Symbol == e.Symbol &&
+                       (events[i + 1].Timestamp - e.Timestamp).TotalSeconds < 5)
+                {
+                    i++;
+                    pnl += events[i].Income;
+                }
+                merged.Add((e.Symbol!, e.Timestamp, pnl));
+            }
+
+            foreach (var (symbol, time, pnl) in merged)
+            {
+                rows.Add(new TradeRow
+                {
+                    Symbol      = symbol,
+                    // Income sign doesn't reliably indicate LONG/SHORT.
+                    // A LONG can close at a loss (negative income) and a SHORT can profit.
+                    // Without a second API call we can only infer from PnL sign as a proxy,
+                    // or leave as "—". We'll use "—" so data isn't misleading.
+                    Side        = pnl >= 0 ? "LONG" : "SHORT",
+                    Pnl         = pnl,
+                    CloseReason = pnl >= 0 ? "TP" : "SL",
+                    ClosedAt    = time,
+                    OpenedAt    = time,  // OpenedAt unknown from income only
+                });
+            }
+        }
+        catch { }
+        return rows.OrderByDescending(r => r.ClosedAt).ToList();
+    }
+
+
+    void ComputeTrading(List<TradeRow>? source = null)
+    {
+        // When filters are active the caller passes FilteredTrades so that
+        // Calendar, By Symbol and all KPIs reflect the filtered subset —
+        // not the full trade list. If no filter active, source == _trades.
+        var trades = source ?? _trades;
+        if (trades.Count == 0)
+        {
+            _stats = new(); _dailyPnl = new(); _cumulativePnl = new();
+            _bySymbol = new(); _byReason = new(); _maxDailyPnl = 1m;
+            return;
+        }
+        var wins   = trades.Where(t => t.Pnl > 0).ToList();
+        var losses = trades.Where(t => t.Pnl < 0).ToList();
+        decimal grossWin  = wins.Sum(t => t.Pnl);
+        decimal grossLoss = Math.Abs(losses.Sum(t => t.Pnl));
+
+        // ClosedAt is UTC — convert to local time for calendar day grouping
+        // so calendar matches the user's actual trading day, not UTC midnight cutoff
+        _dailyPnl = _trades
+            .GroupBy(t => DateTime.SpecifyKind(t.ClosedAt, DateTimeKind.Utc).ToLocalTime().Date)
+            .OrderBy(g => g.Key)
+            .ToDictionary(g => g.Key, g => g.Sum(t => t.Pnl));
+        decimal run = 0;
+        _cumulativePnl = _dailyPnl.OrderBy(kv => kv.Key)
+            .Select(kv => { run += kv.Value; return run; }).ToList();
+        _maxDailyPnl = _dailyPnl.Values.Select(Math.Abs).DefaultIfEmpty(1m).Max();
+
+        decimal peak = 0, dd = 0; run = 0;
+        foreach (var v in _cumulativePnl) { if (v > peak) peak = v; var cur = peak - v; if (cur > dd) dd = cur; }
+
+        _bySymbol = trades.GroupBy(t => t.Symbol)
+            .Select(g => new SymRow { Symbol = g.Key, Pnl = g.Sum(t => t.Pnl), Count = g.Count() })
+            .OrderByDescending(r => Math.Abs(r.Pnl)).ToList();
+        _byReason = _trades
+            .GroupBy(t => string.IsNullOrEmpty(t.CloseReason) ? "Close" : t.CloseReason)
+            .OrderByDescending(g => g.Count())
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var longs  = trades.Where(t => t.Side == "LONG").ToList();
+        var shorts = trades.Where(t => t.Side == "SHORT").ToList();
+
+        _stats = new PerfStats
+        {
+            NetPnl       = trades.Sum(t => t.Pnl),
+            TotalTrades  = trades.Count,
+            WinRate      = 100m * wins.Count / trades.Count,
+            AvgWin       = wins.Count   > 0 ? wins.Average(t => t.Pnl)   : 0,
+            AvgLoss      = losses.Count > 0 ? losses.Average(t => t.Pnl) : 0,
+            ProfitFactor = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? 99.9m : 0,
+            MaxDrawdown  = -dd,
+            BestTrade    = _trades.Max(t => t.Pnl),
+            WorstTrade   = _trades.Min(t => t.Pnl),
+            AvgDuration  = ComputeAvgDuration(),
+            LongPnl      = longs.Sum(t => t.Pnl),
+            ShortPnl     = shorts.Sum(t => t.Pnl),
+            LongTrades   = longs.Count,
+            LongWins     = longs.Count(t => t.Pnl > 0),
+            LongLosses   = longs.Count(t => t.Pnl < 0),
+            ShortTrades  = shorts.Count,
+            ShortWins    = shorts.Count(t => t.Pnl > 0),
+            ShortLosses  = shorts.Count(t => t.Pnl < 0),
+        };
+        // Consecutive wins/losses
+        var ordered = trades.OrderBy(t => t.ClosedAt).ToList();
+        int cw = 0, cl = 0, mcw = 0, mcl = 0;
+        foreach (var t in ordered)
+        {
+            if (t.Pnl > 0) { cw++; cl = 0; if (cw > mcw) mcw = cw; }
+            else             { cl++; cw = 0; if (cl > mcl) mcl = cl; }
+        }
+        _stats.MaxConsecWins   = mcw;
+        _stats.MaxConsecLosses = mcl;
+    }
+
+    void LoadDcaData()
+    {
+        var rawList = new List<DcaPurchaseRow>();
+        if (_demoMode)
+        {
+            rawList.AddRange(DemoAccount.GetDcaSnapshot().History
+                .Where(p => p.TimeUtc.Date >= _dateFrom && p.TimeUtc.Date <= _dateTo)
+                .Select(p => new DcaPurchaseRow { Symbol = p.Symbol, TimeUtc = p.TimeUtc, Price = p.Price, Qty = p.Qty, UsdtSpent = p.UsdtSpent, DipBonusApplied = p.DipBonusApplied }));
+        }
+        else
+        {
+            rawList.AddRange(RealDcaHistory.Read().History
+                .Where(p => p.TimeUtc.Date >= _dateFrom && p.TimeUtc.Date <= _dateTo)
+                .Select(p => new DcaPurchaseRow { Symbol = p.Symbol, TimeUtc = p.TimeUtc, Price = p.Price, Qty = p.Qty, UsdtSpent = p.UsdtSpent, DipBonusApplied = p.DipBonusApplied }));
+        }
+        _dcaPurchases = rawList.OrderByDescending(p => p.TimeUtc).ToList();
+        _dcaStats = new DcaSummaryStats
+        {
+            TotalInvested  = rawList.Sum(p => p.UsdtSpent),
+            TotalPurchases = rawList.Count,
+            DipBonusCount  = rawList.Count(p => p.DipBonusApplied),
+            FirstDate = rawList.Count > 0 ? rawList.Min(p => p.TimeUtc) : DateTime.Today,
+            LastDate  = rawList.Count > 0 ? rawList.Max(p => p.TimeUtc) : DateTime.Today,
+        };
+        _dcaStats.AvgPriceBySymbol = rawList.GroupBy(p => p.Symbol)
+            .ToDictionary(g => g.Key, g => g.Sum(p => p.Qty) > 0 ? g.Sum(p => p.UsdtSpent) / g.Sum(p => p.Qty) : 0m);
+        var cycles = rawList.Select(p => p.TimeUtc.Date).Distinct().Count();
+        _dcaStats.AvgPerCycle = cycles > 0 ? _dcaStats.TotalInvested / cycles : 0;
+        _dcaBySymbol = rawList.GroupBy(p => p.Symbol)
+            .Select(g => new DcaSymbolRow { Symbol = g.Key, Count = g.Count(),
+                TotalInvested = g.Sum(p => p.UsdtSpent), TotalQty = g.Sum(p => p.Qty),
+                AvgPrice = g.Sum(p => p.Qty) > 0 ? g.Sum(p => p.UsdtSpent) / g.Sum(p => p.Qty) : 0,
+                DipCount = g.Count(p => p.DipBonusApplied) })
+            .OrderByDescending(r => r.TotalInvested).ToList();
+        _dcaChartSeries = new Dictionary<string, List<decimal>>();
+        foreach (var sym in _dcaBySymbol.Select(r => r.Symbol))
+        {
+            decimal cum = 0;
+            var series = rawList.Where(p => p.Symbol == sym).OrderBy(p => p.TimeUtc)
+                .Select(p => { cum += p.UsdtSpent; return cum; }).ToList();
+            if (series.Any()) _dcaChartSeries[sym] = series;
+        }
+        ComputeDcaPeriodRows();
+    }
+
+    void ComputeDcaPeriodRows()
+    {
+        if (!_dcaPurchases.Any()) { _dcaPeriodRows = new(); return; }
+        string Key(DateTime dt) => _dcaPeriod switch
+        {
+            "daily"  => dt.ToString("yyyy-MM-dd"),
+            "weekly" => dt.ToString("yyyy") + " W" + System.Globalization.ISOWeek.GetWeekOfYear(dt).ToString("D2"),
+            _        => dt.ToString("yyyy-MM"),
+        };
+        string Label(string key) => _dcaPeriod switch
+        {
+            "daily"  => DateTime.TryParse(key, out var d) ? d.ToString("MMM d, yyyy") : key,
+            "weekly" => key,
+            _ => DateTime.TryParseExact(key, "yyyy-MM", null, System.Globalization.DateTimeStyles.None, out var d2)
+                 ? d2.ToString("MMMM yyyy") : key,
+        };
+        _dcaPeriodRows = _dcaPurchases.GroupBy(p => Key(p.TimeUtc))
+            .OrderByDescending(g => g.Key)
+            .Select(g => new DcaPeriodRow { Label = Label(g.Key), Count = g.Count(),
+                Invested = g.Sum(p => p.UsdtSpent),
+                AvgPrice = g.Sum(p => p.Qty) > 0 ? g.Sum(p => p.UsdtSpent) / g.Sum(p => p.Qty) : 0,
+                DipCount = g.Count(p => p.DipBonusApplied),
+                Symbols  = g.Select(p => p.Symbol).Distinct().ToList() })
+            .ToList();
+    }
+
+    string BuildCurvePts(List<decimal> vals, int w, int h)
+    {
+        if (vals.Count == 0) return "";
+        var min = vals.Min(); var max = vals.Max();
+        var range = max - min; if (range == 0) range = 1;
+        return string.Join(" ", vals.Select((v, i) =>
+            $"{(w * i / Math.Max(vals.Count - 1, 1)):F1},{(h - (double)((v - min) / range) * (h - 16) - 8):F1}"));
+    }
+
+    string BuildFillPath(string pts, int w, int h) =>
+        string.IsNullOrEmpty(pts) ? "" : "M0," + h + " L" + pts.Replace(" ", " L") + " L" + w + "," + h + " Z";
+
+    double PnlToY(decimal price, List<decimal> vals, int h)
+    {
+        if (vals.Count == 0) return h / 2.0;
+        var min = vals.Min(); var max = vals.Max();
+        var range = max - min; if (range == 0) range = 1;
+        return h - (double)((price - min) / range) * (h - 16) - 8;
+    }
+
+    string ComputeAvgDuration()
+    {
+        var durs = _trades.Where(t => t.OpenedAt != t.ClosedAt)
+            .Select(t => (t.ClosedAt - t.OpenedAt).TotalMinutes).ToList();
+        if (!durs.Any()) return "—";
+        var avg = durs.Average();
+        return avg < 60 ? $"{(int)avg}m" : avg < 1440 ? $"{avg / 60:F1}h" : $"{avg / 1440:F1}d";
+    }
+
+    void SetTradeSort(string f)
+    {
+        if (_tradeSort == f) _tradeSortAsc = !_tradeSortAsc;
+        else { _tradeSort = f; _tradeSortAsc = false; }
+    }
+
+    IEnumerable<TradeRow> FilteredTrades
+    {
+        get
+        {
+            var q = _trades.AsEnumerable();
+            if (!string.IsNullOrEmpty(_filterSide))
+                q = q.Where(t => t.Side == _filterSide);
+            if (_filterResult == "WIN")
+                q = q.Where(t => t.Pnl > 0);
+            else if (_filterResult == "LOSS")
+                q = q.Where(t => t.Pnl < 0);
+            if (!string.IsNullOrEmpty(_filterSymbol))
+            {
+                var up = _filterSymbol.ToUpperInvariant();
+                q = q.Where(t => t.Symbol.Contains(up));
+            }
+            return q;
+        }
+    }
+
+    IEnumerable<TradeRow> SortedTrades => _tradeSort switch
+    {
+        "sym" => _tradeSortAsc ? FilteredTrades.OrderBy(t => t.Symbol) : FilteredTrades.OrderByDescending(t => t.Symbol),
+        "pnl" => _tradeSortAsc ? FilteredTrades.OrderBy(t => t.Pnl)   : FilteredTrades.OrderByDescending(t => t.Pnl),
+        _     => _tradeSortAsc ? FilteredTrades.OrderBy(t => t.ClosedAt) : FilteredTrades.OrderByDescending(t => t.ClosedAt),
+    };
+
+    string SortArrow(string f) => _tradeSort == f ? (_tradeSortAsc ? "↑" : "↓") : "";
+
+    string ReasonClass(string r) => (r?.ToUpper()) switch
+    {
+        var s when s?.StartsWith("SL") == true => "st-pill-sl",
+        var s when s?.StartsWith("TP") == true => "st-pill-tp",
+        "MANUAL" => "st-pill-man",
+        _ => "st-pill-def"
+    };
+
+    string FormatDuration(DateTime from, DateTime to)
+    {
+        if (from == to) return "—";
+        var d = to - from;
+        return d.TotalMinutes < 60 ? $"{(int)d.TotalMinutes}m"
+             : d.TotalHours   < 24 ? $"{d.TotalHours:F1}h"
+             : $"{d.TotalDays:F1}d";
+    }
+
+    // ── Models ─────────────────────────────────────────────────────
+    record TradeRow
+    {
+        public string Symbol { get; init; } = "";
+        public string Side { get; init; } = "";
+        public decimal EntryPrice { get; init; }
+        public decimal ExitPrice { get; init; }
+        public decimal Qty { get; init; }
+        public decimal Pnl { get; init; }
+        public string CloseReason { get; init; } = "";
+        public DateTime OpenedAt { get; init; }
+        public DateTime ClosedAt { get; init; }
+    }
+
+    sealed class SymRow
+    {
+        public string Symbol { get; init; } = "";
+        public decimal Pnl { get; init; }
+        public decimal AbsPnl => Math.Abs(Pnl);
+        public int Count { get; init; }
+    }
+
+    class PerfStats
+    {
+        public decimal NetPnl, AvgWin, AvgLoss, BestTrade, WorstTrade, ProfitFactor, MaxDrawdown, WinRate;
+        public decimal LongPnl, ShortPnl;
+        public int TotalTrades, LongTrades, LongWins, LongLosses, ShortTrades, ShortWins, ShortLosses;
+        public int MaxConsecWins, MaxConsecLosses;
+        public string AvgDuration = "—";
+    }
+
+    sealed class DcaConfigSnapshot
+    {
+        public bool Enabled { get; set; }
+        public string Frequency { get; set; } = "Weekly";
+        public decimal Budget { get; set; }
+        public List<string> Symbols { get; set; } = new();
+        public bool DipBonusEnabled { get; set; }
+        public decimal DipBonusMultiplier { get; set; } = 2m;
+        public decimal DipDropPct { get; set; } = 10m;
+    }
+
+    sealed class DcaPurchaseRow
+    {
+        public string Symbol { get; set; } = "";
+        public DateTime TimeUtc { get; set; }
+        public decimal Price { get; set; }
+        public decimal Qty { get; set; }
+        public decimal UsdtSpent { get; set; }
+        public bool DipBonusApplied { get; set; }
+    }
+
+    sealed class DcaSymbolRow
+    {
+        public string Symbol { get; set; } = "";
+        public int Count { get; set; }
+        public decimal TotalInvested { get; set; }
+        public decimal TotalQty { get; set; }
+        public decimal AvgPrice { get; set; }
+        public int DipCount { get; set; }
+    }
+
+    sealed class DcaPeriodRow
+    {
+        public string Label { get; set; } = "";
+        public int Count { get; set; }
+        public decimal Invested { get; set; }
+        public decimal AvgPrice { get; set; }
+        public int DipCount { get; set; }
+        public List<string> Symbols { get; set; } = new();
+    }
+
+    sealed class DcaSummaryStats
+    {
+        public decimal TotalInvested { get; set; }
+        public int TotalPurchases { get; set; }
+        public int DipBonusCount { get; set; }
+        public decimal AvgPerCycle { get; set; }
+        public Dictionary<string, decimal> AvgPriceBySymbol { get; set; } = new();
+        public DateTime FirstDate { get; set; }
+        public DateTime LastDate { get; set; }
+    }
+
+    public void Dispose() { }
+}
+
+
+
 
