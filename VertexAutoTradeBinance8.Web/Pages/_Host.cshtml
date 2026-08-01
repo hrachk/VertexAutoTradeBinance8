@@ -2,6 +2,7 @@
 @using Microsoft.AspNetCore.Components.Web
 @namespace VertexAutoTradeBinance8.Web.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
+@inject Microsoft.Extensions.Configuration.IConfiguration Cfg
 
 <!DOCTYPE html>
 <html lang="en">
@@ -43,11 +44,11 @@
     <script src="~/js/vertex-auth.js"></script>
     <script src="~/js/vertex-oauth.js"></script>
     @{
-        var oauthGoogleClientId    = Configuration["OAuth:Google:ClientId"]    ?? "";
-        var oauthTelegramBotName   = Configuration["OAuth:Telegram:BotName"]   ?? "";
-        var oauthTelegramBotId     = Configuration["OAuth:Telegram:BotId"]     ?? "";
-        var oauthAppleClientId     = Configuration["OAuth:Apple:ClientId"]     ?? "";
-        var oauthAppleRedirectUri  = Configuration["OAuth:Apple:RedirectUri"]  ?? "";
+        var oauthGoogleClientId    = Cfg["OAuth:Google:ClientId"]    ?? "";
+        var oauthTelegramBotName   = Cfg["OAuth:Telegram:BotName"]   ?? "";
+        var oauthTelegramBotId     = Cfg["OAuth:Telegram:BotId"]     ?? "";
+        var oauthAppleClientId     = Cfg["OAuth:Apple:ClientId"]     ?? "";
+        var oauthAppleRedirectUri  = Cfg["OAuth:Apple:RedirectUri"]  ?? "";
     }
     <script>
       // OAuth provider config — injected from appsettings (server-side rendering)
