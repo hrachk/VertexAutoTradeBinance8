@@ -1948,6 +1948,8 @@
         _loading = true;
         try
         {
+            // Seed runtime.json from base if empty (first-run init)
+            await Cfg.EnsureInitialisedAsync();
             _effective = await Cfg.GetEffectiveConfigAsync();
         }
         catch (Exception ex)
