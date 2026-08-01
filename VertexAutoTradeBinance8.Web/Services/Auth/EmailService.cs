@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Mail;
+using System.Text;
 
 namespace VertexAutoTradeBinance8.Web.Services.Auth;
 
@@ -134,15 +135,28 @@ public sealed class EmailService
                 DeliveryMethod = SmtpDeliveryMethod.Network,
                 Timeout        = 15_000,
             };
+            // mail.ru и некоторые другие SMTP серверы требуют явный charset
+            // через заголовок Content-Type. SmtpClient добавит его автоматически
+            // если BodyEncoding = UTF8 и используется AlternateView.
 
             using var msg = new MailMessage
             {
-                From       = new MailAddress(_smtp.From, _smtp.FromName),
-                Subject    = subject,
-                Body       = htmlBody,
-                IsBodyHtml = true,
-                Priority   = MailPriority.Normal,
+                From     = new MailAddress(_smtp.From, _smtp.FromName),
+                Priority = MailPriority.Normal,
+                // FIX: Subject кириллица — явная UTF-8 кодировка
+                Subject  = subject,
+                SubjectEncoding = Encoding.UTF8,
+                // FIX: Body через AlternateView с charset=utf-8
+                // SmtpClient.Body по умолчанию latin-1 → кириллица = "??????"
+                // AlternateView с явным charset решает проблему для всех SMTP провайдеров
+                BodyEncoding = Encoding.UTF8,
             };
+            // HTML body с явным UTF-8 charset
+            var htmlView = AlternateView.CreateAlternateViewFromString(
+                htmlBody,
+                Encoding.UTF8,
+                "text/html");
+            msg.AlternateViews.Add(htmlView);
             msg.To.Add(new MailAddress(to));
 
             await client.SendMailAsync(msg);
