@@ -2337,7 +2337,7 @@ namespace VertexAutoTradeBinance8.Services
             // PlaceFullProtectionAsync blindly created 6 TPs + 2 SLs.
             // Now we fetch open orders first and decide: skip, replace, or keep.
             // =================================================================
-            List<BinanceFuturesOrder> existingOrders = new();
+            List<BinanceUsdFuturesOrder> existingOrders = new();
             try
             {
                 var openRes = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(signal.Symbol, ct: ct);
@@ -2350,7 +2350,7 @@ namespace VertexAutoTradeBinance8.Services
 
             var existingTps = existingOrders
                 .Where(o => o.Type == FuturesOrderType.TakeProfitMarket)
-                .OrderBy(o => isLong ? o.StopPrice : -o.StopPrice)
+                .OrderBy(o => isLong ? (o.StopPrice ?? 0m) : -(o.StopPrice ?? 0m))
                 .ToList();
             var existingSlList = existingOrders
                 .Where(o => o.Type == FuturesOrderType.StopMarket)
@@ -2369,7 +2369,7 @@ namespace VertexAutoTradeBinance8.Services
                     .Select(tp => tick > 0 ? Math.Round(tp / tick) * tick : tp).ToList();
                 bool countMatch  = existingTps.Count == newTps.Count;
                 bool levelsMatch = countMatch && existingTps.Zip(newTps, (ex, nw) =>
-                    nw == 0 || Math.Abs((ex.StopPrice - nw) / nw) < 0.003m).All(x => x);
+                    nw == 0 || Math.Abs(((ex.StopPrice ?? 0m) - nw) / nw) < 0.003m).All(x => x);
 
                 if (levelsMatch)
                 {
@@ -2389,15 +2389,15 @@ namespace VertexAutoTradeBinance8.Services
             if (existingSlList.Count > 0 && signal.StopLoss > 0)
             {
                 var bestSl = isLong
-                    ? existingSlList.OrderByDescending(o => o.StopPrice).First()
-                    : existingSlList.OrderBy(o => o.StopPrice).First();
+                    ? existingSlList.OrderByDescending(o => o.StopPrice ?? 0m).First()
+                    : existingSlList.OrderBy(o => o.StopPrice ?? 0m).First();
                 decimal slNew = tick > 0 ? Math.Round(signal.StopLoss / tick) * tick : signal.StopLoss;
-                bool nearlyIdentical = Math.Abs((bestSl.StopPrice - slNew) / Math.Max(slNew, 0.0001m)) < 0.003m;
-                bool existingBetter  = isLong ? bestSl.StopPrice > slNew : bestSl.StopPrice < slNew;
+                bool nearlyIdentical = Math.Abs(((bestSl.StopPrice ?? 0m) - slNew) / Math.Max(slNew, 0.0001m)) < 0.003m;
+                bool existingBetter  = isLong ? (bestSl.StopPrice ?? 0m) > slNew : (bestSl.StopPrice ?? 0m) < slNew;
 
                 if (nearlyIdentical || existingBetter)
                 {
-                    _logger.LogInformation("[DEDUP][{sym}] SL keep existing={ep} (new={np})", signal.Symbol, bestSl.StopPrice, slNew);
+                    _logger.LogInformation("[DEDUP][{sym}] SL keep existing={ep} (new={np})", signal.Symbol, bestSl.StopPrice ?? 0m, slNew);
                     skipSlPlacement = true;
                     // Clean up any duplicate SLs beyond the best one
                     foreach (var dupe in existingSlList.Where(o => o.Id != bestSl.Id))
@@ -2408,14 +2408,14 @@ namespace VertexAutoTradeBinance8.Services
                     // New SL is tighter — cancel old and place better one
                     foreach (var sl in existingSlList)
                         try { await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, sl.Id, ct: ct); } catch { }
-                    _logger.LogInformation("[DEDUP][{sym}] SL replace: old={ep} → new={np}", signal.Symbol, bestSl.StopPrice, slNew);
+                    _logger.LogInformation("[DEDUP][{sym}] SL replace: old={ep} → new={np}", signal.Symbol, bestSl.StopPrice ?? 0m, slNew);
                 }
             }
             else if (existingSlList.Count > 1)
             {
                 // Multiple SLs, no new signal SL — keep best, cancel duplicates
-                var keepSl = isLong ? existingSlList.OrderByDescending(o => o.StopPrice).First()
-                                    : existingSlList.OrderBy(o => o.StopPrice).First();
+                var keepSl = isLong ? existingSlList.OrderByDescending(o => o.StopPrice ?? 0m).First()
+                                    : existingSlList.OrderBy(o => o.StopPrice ?? 0m).First();
                 foreach (var dupe in existingSlList.Where(o => o.Id != keepSl.Id))
                     try { await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, dupe.Id, ct: ct); } catch { }
                 _logger.LogWarning("[DEDUP][{sym}] Cleaned {n} duplicate SLs, kept best", signal.Symbol, existingSlList.Count - 1);
