@@ -2862,7 +2862,12 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         await LoadData();
         _ = LoadOpenOrdersAsync();
         _ = LoadAllOpenPositionsAsync();
-        _timer = new PeriodicTimer(TimeSpan.FromSeconds(15)); // 15s instead of 5s — reduces GetOpenOrders weight 40 from 480/min to 160/min
+        // SMART POLLING: staggered intervals to minimize Binance API calls
+        // Prices come via SignalR (zero polling) — no need to poll prices
+        // Positions: 30s (open positions don't change that fast)
+        // Orders: 60s (only changes when user moves SL/TP)
+        // Account info: 60s (balance changes only on trade close)
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(30)); // positions every 30ses GetOpenOrders weight 40 from 480/min to 160/min
         // InvokeAsync ensures the entire async tick (and all StateHasChanged()
         // calls inside LoadData/LoadAllOpenPositions/etc.) runs on the Blazor
         // SynchronizationContext, not the ThreadPool. Without this, calling
@@ -4635,6 +4640,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     decimal _demoUnrealizedTotal;
     DateTime _lastRealizedPnlFetchUtc = DateTime.MinValue;
     bool _positionsLoading;
+    int  _tickCount = 0; // for staggered polling
     string? _pendingRestorePosKey; // see the firstRender restore logic and LoadAllOpenPositionsAsync/RefreshDemoSnapshot for why this needs a second attempt after positions actually load
     string _lastTpSlSnapshot = ""; // see the periodic TP/SL refresh check — skips redundant pill redraws when nothing has actually changed
     bool _ooPanelNeedsAutoFit;
