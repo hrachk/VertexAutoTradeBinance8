@@ -193,7 +193,7 @@ else if (_activeTab == "trading")
                     @foreach (var month in calMonths)
                     {
                         var daysInMonth  = DateTime.DaysInMonth(month.Year, month.Month);
-                        var startDow = ((int)new DateTime(month.Year, month.Month, 1).DayOfWeek + 6) % 7; // Mon=0
+                        var startDow     = (int)month.DayOfWeek; // 0=Sun
                         var monthPnl     = Enumerable.Range(1, daysInMonth)
                                             .Select(d => new DateTime(month.Year, month.Month, d))
                                             .Where(d => _dailyPnl.ContainsKey(d))
@@ -214,7 +214,7 @@ else if (_activeTab == "trading")
                             </div>
                             <!-- Day-of-week header -->
                             <div class="st-cal-grid">
-                                @foreach (var dow in new[] { "Mo","Tu","We","Th","Fr","Sa","Su" })
+                                @foreach (var dow in new[] { "Sun","Mon","Tue","Wed","Thu","Fri","Sat" })
                                 { <div class="st-cal-dow">@dow</div> }
                                 @* Empty cells before month start *@
                                 @for (int i = 0; i < startDow; i++) { <div class="st-cal-empty"></div> }
@@ -226,7 +226,7 @@ else if (_activeTab == "trading")
                                     var pnl = _dailyPnl.TryGetValue(day, out var v) ? v : 0m;
                                     var isToday = day.Date == DateTime.Today;
                                     var intensity = pnl != 0
-                                        ? (double)Math.Min(Math.Abs(pnl) / Math.Max(_maxDayAbsPnl, 1m), 1m)
+                                        ? (double)Math.Min(Math.Abs(pnl) / Math.Max(_maxDailyPnl, 1m), 1m)
                                         : 0.0;
                                     // opacity: 0.18 (min) → 0.92 (max) — low trades still visible
                                     var alpha = pnl != 0 ? 0.18 + intensity * 0.74 : 0.0;
@@ -918,40 +918,71 @@ else if (_activeTab == "dca")
 .st-svg { width: 100%; height: 100%; display: block; }
 
 /* ── CALENDAR ─────────────────────────────────────────────────────── */
-.st-calendar { overflow-x: auto; }
-/* Month-by-month layout */
-.st-cal-months{display:flex;flex-direction:column;gap:28px;padding:4px 0}
-    .st-cal-month{display:flex;flex-direction:column;gap:0}
-    .st-cal-mhd{display:flex;align-items:baseline;justify-content:space-between;
-      margin-bottom:10px;padding:0 2px}
-    .st-cal-mname{font-size:13px;font-weight:800;color:var(--st-t1)}
-    .st-cal-mtotal{font-size:12px;font-weight:700;font-family:monospace}
-    .st-cal-grid{
-      display:grid;
-      grid-template-columns:repeat(7,1fr);
-      gap:4px;
-    }
-    .st-cal-dow{
-      font-size:10px;font-weight:700;color:var(--st-t3);
-      text-align:center;padding-bottom:6px;text-transform:uppercase;letter-spacing:.5px;
-    }
-    .st-cal-empty{min-height:52px}
-    .st-cal-day{
-      min-height:52px;border-radius:6px;padding:6px 6px 4px;
-      display:flex;flex-direction:column;justify-content:space-between;
-      cursor:default;transition:opacity .12s;position:relative;
-      background:rgba(255,255,255,.04);
-    }
-    .st-cal-day:hover{opacity:.85}
-    .st-cal-today{outline:2px solid rgba(59,130,246,.7);outline-offset:-1px}
-    .st-cal-num{
-      font-size:12px;font-weight:700;color:var(--st-t2);line-height:1;
-      align-self:flex-start;
-    }
-    .st-cal-win .st-cal-num{color:rgba(255,255,255,.7)}
-    .st-cal-loss .st-cal-num{color:rgba(255,255,255,.7)}
-    .st-cal-pnl{
-      font-size:11px;font-weight:800;font-family:monospace;
-      color:#fff;line-height:1;align-self:flex-end;text-align:right;
-      text-shadow:0 1px 3px rgba(0,0,0,.5);
-    }
+.st-calendar { padding: 0; }
+.st-cal-months { display: flex; flex-direction: column; gap: 32px; padding: 2px 0; }
+
+.st-cal-month { display: flex; flex-direction: column; }
+
+.st-cal-mhd {
+    display: flex; align-items: baseline;
+    justify-content: space-between; margin-bottom: 12px; padding: 0 2px;
+}
+.st-cal-mname { font-size: 14px; font-weight: 800; color: var(--st-t1); }
+.st-cal-mtotal { font-size: 12px; font-weight: 700; font-family: monospace; }
+
+.st-cal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 3px;
+}
+
+.st-cal-dow {
+    font-size: 10px; font-weight: 700; color: var(--st-t3);
+    text-align: center; padding: 0 0 8px;
+    text-transform: uppercase; letter-spacing: .4px;
+}
+
+.st-cal-empty { min-height: 56px; border-radius: 6px; }
+
+.st-cal-day {
+    min-height: 56px;
+    border-radius: 6px;
+    padding: 6px 7px 5px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    cursor: default;
+    transition: transform .1s, opacity .1s;
+    background: rgba(255,255,255,.04);
+    position: relative;
+}
+.st-cal-day:hover { transform: scale(1.04); z-index: 2; }
+.st-cal-today {
+    outline: 2px solid rgba(59,130,246,.8);
+    outline-offset: -1px;
+}
+
+/* Day number — top left, subtle */
+.st-cal-dn {
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(255,255,255,.35);
+    line-height: 1;
+    align-self: flex-start;
+}
+.st-cal-win .st-cal-dn,
+.st-cal-loss .st-cal-dn { color: rgba(255,255,255,.5); }
+
+/* PnL value — bottom right, prominent */
+.st-cal-pv {
+    font-size: 11px;
+    font-weight: 800;
+    font-family: monospace;
+    color: #fff;
+    line-height: 1;
+    align-self: flex-end;
+    text-align: right;
+    text-shadow: 0 1px 4px rgba(0,0,0,.6);
+    word-break: break-all;
+}
+
