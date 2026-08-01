@@ -176,7 +176,7 @@ else if (_activeTab == "trading")
             </div>
 
             <!-- Calendar heatmap — month-by-month like Binance -->
-            <div class="st-card" style="resize:vertical;overflow:auto;min-height:180px;">
+            <div class="st-card">
                 <div class="st-card-hd">
                     <span class="st-card-icon">🗓</span>
                     <span class="st-card-title">Daily PnL Calendar</span>
@@ -193,7 +193,7 @@ else if (_activeTab == "trading")
                     @foreach (var month in calMonths)
                     {
                         var daysInMonth  = DateTime.DaysInMonth(month.Year, month.Month);
-                        var startDow     = (int)month.DayOfWeek; // 0=Sun
+                        var startDow = ((int)new DateTime(month.Year, month.Month, 1).DayOfWeek + 6) % 7; // Mon=0
                         var monthPnl     = Enumerable.Range(1, daysInMonth)
                                             .Select(d => new DateTime(month.Year, month.Month, d))
                                             .Where(d => _dailyPnl.ContainsKey(d))
@@ -214,7 +214,7 @@ else if (_activeTab == "trading")
                             </div>
                             <!-- Day-of-week header -->
                             <div class="st-cal-grid">
-                                @foreach (var dow in new[] { "Sun","Mon","Tue","Wed","Thu","Fri","Sat" })
+                                @foreach (var dow in new[] { "Пн","Вт","Ср","Чт","Пт","Сб","Вс" })
                                 { <div class="st-cal-dow">@dow</div> }
                                 @* Empty cells before month start *@
                                 @for (int i = 0; i < startDow; i++) { <div class="st-cal-empty"></div> }
@@ -240,13 +240,13 @@ else if (_activeTab == "trading")
                                          Math.Abs(pnl) >= 10  ? Math.Abs(pnl).ToString("F1") :
                                                                   Math.Abs(pnl).ToString("F2"));
                                     var tip = $"{day:ddd MMM d}: {(pnl >= 0 ? "+" : "")}{pnl:F2} USDT";
-                                    <div class="st-cal-day @(isToday ? "st-cal-today" : "")"
+                                    <div class="st-cal-day @(isToday?"st-cal-today":"") @(pnl>0?"st-cal-win":pnl<0?"st-cal-loss":"")"
                                          style="background:@bg;border:@border"
                                          title="@tip">
-                                        <span class="st-cal-num">@d</span>
+                                        <span class="st-cal-dn">@d</span>
                                         @if (pnl != 0)
                                         {
-                                            <span class="st-cal-pnl @(pnl > 0 ? "st-cal-pos" : "st-cal-neg")">@pnlStr</span>
+                                            <span class="st-cal-pv">@pnlStr</span>
                                         }
                                     </div>
                                 }
