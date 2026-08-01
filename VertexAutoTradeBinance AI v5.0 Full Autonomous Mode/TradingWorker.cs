@@ -56,6 +56,7 @@ namespace VertexAutoTradeBinance8
         private readonly LiquidityGuardService _liq;
         private readonly OrderCleanerService _cleaner;
         private readonly PredictiveEngineV4ConfirmationService _predict;
+        private readonly IOptionsMonitor<VertexAutoTradeBinance8.Configuration.SignalConfidenceSettings> _confSettings;
         private readonly PositionSupervisorService _supervisor;
         private readonly AiStopLossOptimizer _slOpt;
         private readonly AiRiskScalerV2 _riskScaler;
@@ -156,6 +157,7 @@ namespace VertexAutoTradeBinance8
             , RealtimePriceService price, SymbolInfoService symbolInfo,
             FundingRateService fundingRate,
             RealtimeMomentumDetector momentum,
+            IOptionsMonitor<VertexAutoTradeBinance8.Configuration.SignalConfidenceSettings> confSettings,
             VertexAutoTradeBinance8.Services.HistoricalData.DataDbSymbolFeed? dataDbFeed = null)
         {
             _logger = logger;
@@ -195,6 +197,7 @@ namespace VertexAutoTradeBinance8
             _price = price;
             _resolver = resolver;
             _symbolInfo = symbolInfo;
+            _confSettings = confSettings;
         }
 
         private int _lastCyclesPerMinute = 0;
@@ -816,16 +819,19 @@ namespace VertexAutoTradeBinance8
             // high-quality signals confirmed by structure/S/R.
             // =====================================================
             {
-                var confRes = _confAgg.Evaluate(signal, tf);
-                var confOpts = _confOptions.CurrentValue;
-                // Per-symbol MinExecute (BTC/ETH lower, others 0.55)
-                decimal minExec = symbol.StartsWith("BTC") ? (confOpts.BTC?.MinExecute ?? 0.50m)
-                                : symbol.StartsWith("ETH") ? (confOpts.ETH?.MinExecute ?? 0.50m)
-                                : confOpts.Default?.MinExecute ?? 0.55m;
-                if (confRes.Score < (double)minExec)
+                // MinExecute gate: signal.Confidence is set by PredictiveEngineV4.
+                // Signals below MinExecute are written to UI (watch-only) but not traded.
+                var confCfg = _confSettings.CurrentValue;
+                decimal minExec = symbol.StartsWith("BTC", StringComparison.OrdinalIgnoreCase)
+                                    ? (confCfg.BTC?.MinExecute ?? 0.50m)
+                    : symbol.StartsWith("ETH", StringComparison.OrdinalIgnoreCase)
+                                    ? (confCfg.ETH?.MinExecute ?? 0.50m)
+                                    : confCfg.Default?.MinExecute ?? 0.55m;
+                double sigConf = signal.Confidence / 100.0; // Confidence is 0-100 int
+                if (sigConf < (double)minExec)
                 {
                     await RejectAsync(signal, symbol, tf, "CONF", "WATCH_ONLY",
-                        ct, extra: $"conf={confRes.Score:F2} < minExec={minExec:F2} — signal shown in UI only");
+                        ct, extra: $"conf={sigConf:F2} < minExec={minExec:F2} — shown in UI only");
                     return;
                 }
             }
