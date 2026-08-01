@@ -198,6 +198,11 @@ namespace VertexAutoTradeBinance8.Services
                     if (order.ClientOrderId == null)
                         continue;
 
+                    // Never cancel orders placed manually by the user from UI
+                    // (MANUAL_ prefix from ReplaceProtectiveOrderAsync in MarketSnapshot)
+                    if (order.ClientOrderId.StartsWith("MANUAL_", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
                     if (order.ClientOrderId.StartsWith(BE_PREFIX) ||
                         order.ClientOrderId.StartsWith(SL_PREFIX) ||
                         order.ClientOrderId.StartsWith(TR_PREFIX))
@@ -226,6 +231,9 @@ namespace VertexAutoTradeBinance8.Services
                 if (!algo.IsStop) continue;
 
                 if (algo.ClientAlgoId == null) continue;
+                // Never cancel MANUAL_ orders — placed by user from UI
+                if (algo.ClientAlgoId.StartsWith("MANUAL_", StringComparison.OrdinalIgnoreCase))
+                    continue;
                 if (algo.ClientAlgoId.StartsWith(BE_PREFIX) ||
                     algo.ClientAlgoId.StartsWith(SL_PREFIX) ||
                     algo.ClientAlgoId.StartsWith(TR_PREFIX))
@@ -510,7 +518,10 @@ namespace VertexAutoTradeBinance8.Services
                 decimal BE_TRIGGER = ATR * (isDcaPos ? 3.0m : 1.3m);
 
                 // ── Which phase? ─────────────────────────────────────────
-                bool tp1Fired = peakQty > 0 && qty < peakQty * 0.55m;
+                // tp1Fired: true when at least 30% of position was closed
+                // 0.70 threshold catches TP1 even with 35/30/20 allocation
+                // (35% closed → qty = 65% → 0.65 < 0.70 → tp1Fired=true)
+                bool tp1Fired = peakQty > 0 && qty < peakQty * 0.70m;
                 bool tp2Fired = peakQty > 0 && qty < peakQty * 0.30m;
 
                 // Phase 0: nothing fired → DO NOT touch SL at all
@@ -533,39 +544,64 @@ namespace VertexAutoTradeBinance8.Services
                 }
                 else
                 {
-                    // Phase 1: TP1 fired → check retest before BE
-                    // Retest = price pulled back AND held above structure:
-                    //   LONG: mark still > entry + 1.5×ATR (above TP1 zone)
-                    //   SHORT: mark still < entry - 1.5×ATR
-                    decimal tp1Zone = side == PositionSide.Long
-                        ? entry + ATR * 1.5m
-                        : entry - ATR * 1.5m;
-                    bool priceAboveTp1Zone = side == PositionSide.Long
-                        ? mark > tp1Zone
-                        : mark < tp1Zone;
+                    // Phase 1: TP1 fired — two-tier BE logic:
+                    //
+                    // 1a. DANGER (price pulling back toward entry):
+                    //     If price drops below entry + 0.5×ATR (LONG) or
+                    //     rises above entry - 0.5×ATR (SHORT) → move to BE
+                    //     IMMEDIATELY for protection. TP1 hit but losing ground.
+                    //
+                    // 1b. TREND CONTINUING (price still above TP1 zone):
+                    //     If price > entry + 1.5×ATR AND EMA21 intact →
+                    //     move to BE as confirmation (trade is running well).
+                    //
+                    // 1c. NEUTRAL (between 0.5× and 1.5×ATR): wait, let breathe.
+                    //     Don't touch SL — normal post-TP1 consolidation.
 
-                    // EMA21 intact? Price must not have broken below EMA21
-                    // klines1m is available via closure from SuperviseAsync outer scope
                     decimal ema21 = klines1m != null && klines1m.Count >= 21
                         ? klines1m.Skip(klines1m.Count - 21).Average(k => (decimal)k.ClosePrice)
                         : 0m;
-                    bool ema21Intact = ema21 <= 0m || (
-                        side == PositionSide.Long
-                            ? mark > ema21 * 0.998m   // LONG: above EMA21
-                            : mark < ema21 * 1.002m); // SHORT: below EMA21
 
-                    beConditionMet = priceAboveTp1Zone && ema21Intact;
-                    if (!beConditionMet)
+                    // Distance from entry in ATR units
+                    decimal distFromEntry = side == PositionSide.Long
+                        ? mark - entry   // positive = profitable
+                        : entry - mark;  // positive = profitable
+
+                    bool inDangerZone = distFromEntry < ATR * 0.5m;  // price nearly back at entry
+                    bool trendConfirmed = distFromEntry > ATR * 1.5m  // still above TP1 area
+                        && (ema21 <= 0m || (
+                            side == PositionSide.Long
+                                ? mark > ema21 * 0.998m
+                                : mark < ema21 * 1.002m));
+
+                    if (inDangerZone)
                     {
-                        _logger.LogDebug(
-                            "[SUPERVISOR][{sym}][{side}] Phase 1 — TP1 fired, " +
-                            "waiting retest (mark={m:F4} tp1Zone={z:F4} ema={e:F4} ema21Ok={ok})",
-                            symbol, side, mark, tp1Zone, ema21, ema21Intact);
-                        return; // SL untouched — wait for retest
+                        // 1a: Price pulling back fast — protect immediately
+                        beConditionMet = true;
+                        _logger.LogInformation(
+                            "[SUPERVISOR][{sym}][{side}] Phase 1a — TP1 fired + DANGER " +
+                            "(dist={d:F4} < 0.5×ATR={a:F4}) → BE now for protection",
+                            symbol, side, distFromEntry, ATR * 0.5m);
                     }
-                    _logger.LogInformation(
-                        "[SUPERVISOR][{sym}][{side}] Phase 1 — retest confirmed → BE",
-                        symbol, side);
+                    else if (trendConfirmed)
+                    {
+                        // 1b: Trend still running — move BE to lock in
+                        beConditionMet = true;
+                        _logger.LogInformation(
+                            "[SUPERVISOR][{sym}][{side}] Phase 1b — TP1 fired + trend " +
+                            "continuing (dist={d:F4} > 1.5×ATR={a:F4}) → BE confirmed",
+                            symbol, side, distFromEntry, ATR * 1.5m);
+                    }
+                    else
+                    {
+                        // 1c: Neutral zone — let position breathe
+                        beConditionMet = false;
+                        _logger.LogDebug(
+                            "[SUPERVISOR][{sym}][{side}] Phase 1c — TP1 fired, " +
+                            "neutral zone (dist={d:F4}, 0.5×ATR={lo:F4}, 1.5×ATR={hi:F4}) — wait",
+                            symbol, side, distFromEntry, ATR * 0.5m, ATR * 1.5m);
+                        return;
+                    }
                 }
 
                 if (!beConditionMet) return;
