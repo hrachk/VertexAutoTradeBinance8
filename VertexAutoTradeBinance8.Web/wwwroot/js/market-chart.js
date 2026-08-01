@@ -596,6 +596,31 @@
                 box.textContent = `Expected ${isProfitSide ? 'Profit' : 'Loss'} ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)}`;
             }, listenerOpts);
 
+            // FIX: mouseleave while dragging = treat as mouseup
+            // Without this, dragging outside chart leaves line at wrong
+            // position with no callback fired → ghost line / no order update
+            container.addEventListener('mouseleave', (e) => {
+                const session = sessions.get(containerId) || {};
+                if (session.draggingLine) {
+                    // Snap back to original price — don't commit an accidental
+                    // drag-outside. Better UX than placing order at wrong price.
+                    const origPrice = session.draggingLineOriginalPrice;
+                    if (origPrice > 0) {
+                        try { session.draggingLine.applyOptions({ price: origPrice }); } catch(e) {}
+                        if (session.draggingLineKind === 'tp' && session.tpLines) {
+                            const tp = session.tpLines.find(t => t.index === session.draggingLineIdx);
+                            if (tp) tp.price = origPrice;
+                        }
+                    }
+                    session.draggingLine = null;
+                    session.draggingLineKind = null;
+                    session.draggingLineIdx = null;
+                    session.draggingLineOriginalPrice = null;
+                    container.style.cursor = 'crosshair';
+                    this.repositionAllPills(containerId, session._lastPnlFor || null);
+                }
+            }, listenerOpts);
+
             container.addEventListener('mouseup', (e) => {
                 const session = sessions.get(containerId) || {};
                 // Finished dragging an EXISTING SL/TP line to a new
@@ -614,12 +639,14 @@
                     session.draggingLineKind = null;
                     session.draggingLineIdx = null;
                     container.style.cursor = 'crosshair';
-                    // Freeze hideTpSlLines for 8s after drag completes.
+                    // Immediately reposition pills to reflect new line position
+                    this.repositionAllPills(containerId, session._lastPnlFor || null);
+                    // Freeze hideTpSlLines for 5s after drag completes.
                     // C# will cancel old order, place new one, then call
                     // showTpSlLines. Without this freeze, showTpSlLines calls
                     // hideTpSlLines first (to reset), which DELETES the line
                     // the user just moved — making it look like drag failed.
-                    session._tpSlHideFreezeUntil = Date.now() + 30000; // 30s — cleared by next showTpSlLines call
+                    session._tpSlHideFreezeUntil = Date.now() + 5000; // 5s — cleared by next showTpSlLines call
                     // Apply any showTpSlLines call that was deferred during drag
                     if (session._pendingTpSlArgs) {
                         const p = session._pendingTpSlArgs;
@@ -640,12 +667,16 @@
                             if (origPriceSl > 0 && session.slLine) {
                                 try { session.slLine.applyOptions({ price: committedPrice }); } catch(e) {}
                             }
-                            if (session.onSlChanged) session.onSlChanged(committedPrice, origPriceSl);
+                            // Guard: originalPrice must be > 0 for C# to find the order
+                    const safeOrigSl = (origPriceSl > 0) ? origPriceSl : committedPrice;
+                    if (session.onSlChanged) session.onSlChanged(committedPrice, safeOrigSl);
                         } else if (kind === 'tp') {
                             // Pass BOTH new price AND original price so C# can find
                             // the existing order (still at old price on exchange)
-                            const origPrice = session.draggingLineOriginalPrice || committedPrice;
-                            if (session.onTpChangedAt) session.onTpChangedAt(idx, committedPrice, origPrice);
+                            // Guard: originalPrice must be > 0
+                            const origPriceTp = (session.draggingLineOriginalPrice > 0)
+                                ? session.draggingLineOriginalPrice : committedPrice;
+                            if (session.onTpChangedAt) session.onTpChangedAt(idx, committedPrice, origPriceTp);
                         }
                     } else {
                         // Price is null or <=0 (mouse went outside chart area).
