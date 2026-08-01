@@ -263,4 +263,79 @@ public sealed class RuntimeConfigService
             }
         }
     }
+    /// <summary>
+    /// If the runtime override file is empty or doesn't exist, seeds it
+    /// with a copy of all UI-managed settings from base appsettings.json.
+    /// This ensures the Settings page shows correct values and UI changes
+    /// persist correctly on top of a known baseline.
+    ///
+    /// Called once on Settings page load — safe to call multiple times
+    /// (no-op if runtime.json already has content).
+    /// </summary>
+    public async Task EnsureInitialisedAsync()
+    {
+        await _writeLock.WaitAsync();
+        try
+        {
+            // If runtime file already has meaningful content, don't overwrite
+            if (File.Exists(_runtimePath))
+            {
+                var existing = await ReadJsonFileStrippingCommentsAsync(_runtimePath);
+                if (existing != null && existing.Count > 2)
+                    return; // already initialised (>2 sections = not the empty stub)
+            }
+
+            // Seed from base appsettings.json — extract only the keys
+            // that the Settings UI manages (sparse subset of the full config)
+            if (!File.Exists(_baseAppSettingsPath))
+            {
+                _logger.LogWarning("[RuntimeConfig] Base appsettings not found at {p}", _baseAppSettingsPath);
+                return;
+            }
+
+            var baseJson = await ReadJsonFileStrippingCommentsAsync(_baseAppSettingsPath);
+            if (baseJson == null) return;
+
+            // Build the runtime.json from base — only UI-managed sections
+            var uiSections = new[]
+            {
+                "Strategy", "StrategyRouting", "SignalConfidence",
+                "Trading", "Trading:BTC", "Trading:ETH",
+                "TakeProfit", "MeanReversion", "SymbolSelection",
+                "SymbolBlacklist", "AdaptiveEngine", "HedgeKill",
+                "PositionSupervisor", "HistoricalData", "Dca", "Debug"
+            };
+
+            var seed = new System.Text.Json.Nodes.JsonObject();
+            foreach (var section in uiSections)
+            {
+                if (section.Contains(':'))
+                {
+                    // Flat key like "Trading:BTC" — look up nested path
+                    var parts = section.Split(':');
+                    System.Text.Json.Nodes.JsonNode? cur = baseJson;
+                    foreach (var part in parts)
+                        cur = (cur as System.Text.Json.Nodes.JsonObject)?[part];
+                    if (cur != null)
+                        seed[section] = cur.DeepClone();
+                }
+                else if (baseJson[section] is { } node)
+                {
+                    seed[section] = node.DeepClone();
+                }
+            }
+
+            var seedText = seed.ToJsonString(new System.Text.Json.JsonSerializerOptions
+                { WriteIndented = true });
+            await File.WriteAllTextAsync(_runtimePath, seedText);
+            _logger.LogInformation("[RuntimeConfig] Seeded runtime.json with {n} sections from base config",
+                seed.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[RuntimeConfig] Failed to initialise runtime.json");
+        }
+        finally { _writeLock.Release(); }
+    }
+
 }
