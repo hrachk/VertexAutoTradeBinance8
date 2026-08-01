@@ -1,4 +1,4 @@
-﻿using VertexAutoTradeBinance8.Web.Models;
+using VertexAutoTradeBinance8.Web.Models;
 
 namespace VertexAutoTradeBinance8.Web.Services;
 
@@ -16,9 +16,20 @@ public sealed class MarketDataLiveState
     /// <summary>Fires when a candle closes (symbol, timeframe, kline).</summary>
     public event Action<string, string, KlineDto>? KlineClosed;
 
+    /// <summary>
+    /// Fires immediately when a position is opened or closed by the Engine.
+    /// Payload: (symbol, side, eventType) where eventType = "OPENED" | "CLOSED" | "UPDATED".
+    /// Web uses this to trigger an immediate Binance positions refresh
+    /// instead of waiting for the 30-second polling timer.
+    /// </summary>
+    public event Action<string, string, string>? PositionChanged;
+
     public void RaisePriceTicked(string symbol, decimal price)
         => PriceTicked?.Invoke(symbol, price);
 
     public void RaiseKlineClosed(string symbol, string timeframe, KlineDto kline)
         => KlineClosed?.Invoke(symbol, timeframe, kline);
+
+    public void RaisePositionChanged(string symbol, string side, string eventType)
+        => PositionChanged?.Invoke(symbol, side, eventType);
 }
