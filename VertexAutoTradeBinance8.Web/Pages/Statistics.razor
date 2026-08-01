@@ -7,8 +7,6 @@
 @using Microsoft.Extensions.Options
 @inject MissedTradeFileService MissedSvc
 @inject VertexAutoTradeBinance8.Web.Services.ClientDataService ClientData
-@using VertexAutoTradeBinance8.Web.Services.Auth
-@inject VertexAutoTradeBinance8.Web.Services.Auth.AuthSessionService Auth
 @inject DemoAccountService DemoAccount
 @inject BinanceClientFactory Factory
 @inject RealDcaHistoryReader RealDcaHistory
@@ -176,7 +174,7 @@ else if (_activeTab == "trading")
             </div>
 
             <!-- Calendar heatmap — month-by-month like Binance -->
-            <div class="st-card">
+            <div class="st-card" style="resize:vertical;overflow:auto;min-height:180px;">
                 <div class="st-card-hd">
                     <span class="st-card-icon">🗓</span>
                     <span class="st-card-title">Daily PnL Calendar</span>
@@ -193,7 +191,8 @@ else if (_activeTab == "trading")
                     @foreach (var month in calMonths)
                     {
                         var daysInMonth  = DateTime.DaysInMonth(month.Year, month.Month);
-                        var startDow = ((int)new DateTime(month.Year, month.Month, 1).DayOfWeek + 6) % 7; // Mon=0
+                        // Week starts Mon: Mon=0..Sun=6
+                        var startDow     = ((int)new DateTime(month.Year, month.Month, 1).DayOfWeek + 6) % 7;
                         var monthPnl     = Enumerable.Range(1, daysInMonth)
                                             .Select(d => new DateTime(month.Year, month.Month, d))
                                             .Where(d => _dailyPnl.ContainsKey(d))
@@ -225,31 +224,28 @@ else if (_activeTab == "trading")
                                     if (day > _dateTo) { <div class="st-cal-empty"></div> continue; }
                                     var pnl = _dailyPnl.TryGetValue(day, out var v) ? v : 0m;
                                     var isToday = day.Date == DateTime.Today;
-                                    @* Intensity: how dark is the cell color (0=min, 1=max) *@
-                                    var intensity = pnl != 0 && _maxDailyPnl > 0
-                                        ? Math.Min((double)Math.Abs(pnl) / (double)_maxDailyPnl, 1.0)
+                                    var intensity = pnl != 0
+                                        ? (double)Math.Min(Math.Abs(pnl) / Math.Max(_maxDayAbsPnl, 1m), 1m)
                                         : 0.0;
-                                    var alpha = pnl != 0 ? 0.18 + intensity * 0.75 : 0.0;
-                                    var isWeekend = day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+                                    // opacity: 0.18 (min) → 0.92 (max) — low trades still visible
+                                    var alpha = pnl != 0 ? 0.18 + intensity * 0.74 : 0.0;
                                     var bg = pnl > 0 ? $"rgba(16,185,129,{alpha:F2})"
                                            : pnl < 0 ? $"rgba(239,68,68,{alpha:F2})"
-                                           : isWeekend ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.04)";
-                                    @* PnL string: sign + compact number *@
-                                    var pnlAbs = Math.Abs(pnl);
-                                    var pnlStr = pnl == 0 ? string.Empty
-                                        : (pnl > 0 ? "+" : "-")
-                                          + (pnlAbs >= 1000 ? $"{pnlAbs/1000:F1}k"
-                                           : pnlAbs >= 100  ? ((int)pnlAbs).ToString()
-                                           : pnlAbs >= 10   ? pnlAbs.ToString("F1")
-                                           :                   pnlAbs.ToString("F2"));
-                                    var tip = $"{day:ddd d MMM}: {(pnl >= 0 ? "+" : "")}{pnl:F2} USDT";
-                                    <div class="st-cal-day @(isToday?"st-cal-today":"") @(pnl>0?"st-cal-win":pnl<0?"st-cal-loss":"")"
-                                         style="background:@bg"
+                                           : "rgba(255,255,255,0.03)";
+                                    var border = isToday ? "1px solid rgba(59,130,246,.7)" : "none";
+                                    var pnlStr = pnl == 0 ? "" :
+                                        (pnl > 0 ? "+" : "") +
+                                        (Math.Abs(pnl) >= 100 ? ((int)Math.Abs(pnl)).ToString() :
+                                         Math.Abs(pnl) >= 10  ? Math.Abs(pnl).ToString("F1") :
+                                                                  Math.Abs(pnl).ToString("F2"));
+                                    var tip = $"{day:ddd MMM d}: {(pnl >= 0 ? "+" : "")}{pnl:F2} USDT";
+                                    <div class="st-cal-day @(isToday ? "st-cal-today" : "")"
+                                         style="background:@bg;border:@border"
                                          title="@tip">
-                                        <span class="st-cal-dn">@d</span>
+                                        <span class="st-cal-num">@d</span>
                                         @if (pnl != 0)
                                         {
-                                            <span class="st-cal-pv">@pnlStr</span>
+                                            <span class="st-cal-pnl @(pnl > 0 ? "st-cal-pos" : "st-cal-neg")">@pnlStr</span>
                                         }
                                     </div>
                                 }
@@ -921,73 +917,223 @@ else if (_activeTab == "dca")
 .st-svg { width: 100%; height: 100%; display: block; }
 
 /* ── CALENDAR ─────────────────────────────────────────────────────── */
-.st-calendar { padding: 0; }
-.st-cal-months { display: flex; flex-direction: column; gap: 32px; padding: 2px 0; }
-
-.st-cal-month { display: flex; flex-direction: column; }
-
+.st-calendar { overflow-x: auto; }
+/* Month-by-month layout */
+.st-cal-months { display: flex; flex-direction: column; gap: 16px; }
+.st-cal-month  { display: flex; flex-direction: column; gap: 4px; }
 .st-cal-mhd {
-    display: flex; align-items: baseline;
-    justify-content: space-between; margin-bottom: 12px; padding: 0 2px;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--st-bdr);
 }
-.st-cal-mname { font-size: 14px; font-weight: 800; color: var(--st-t1); }
-.st-cal-mtotal { font-size: 12px; font-weight: 700; font-family: monospace; }
-
+.st-cal-mname {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--st-txt);
+    letter-spacing: .2px;
+}
+.st-cal-mtotal {
+    font-size: 10px;
+    font-weight: 700;
+    font-family: monospace;
+}
+/* Grid: 7 equal columns — cells scale with card width automatically */
 .st-cal-grid {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
-    gap: 3px;
+    gap: 2px;
+    width: 100%;
 }
-
 .st-cal-dow {
-    font-size: 10px; font-weight: 700; color: var(--st-t3);
-    text-align: center; padding: 0 0 8px;
-    text-transform: uppercase; letter-spacing: .4px;
+    font-size: 8px;
+    font-weight: 700;
+    color: var(--st-dim);
+    text-align: center;
+    padding: 1px 0 3px;
+    text-transform: uppercase;
+    letter-spacing: .3px;
 }
-
-.st-cal-empty { min-height: 56px; border-radius: 6px; }
-
+/* Empty cells maintain grid shape */
+.st-cal-empty {
+    aspect-ratio: 1.4;
+    border-radius: 4px;
+}
+/* Day cells — compact, fluid, responsive to card resize */
 .st-cal-day {
-    min-height: 56px;
-    border-radius: 6px;
-    padding: 6px 7px 5px;
+    aspect-ratio: 1.4;        /* wider than tall — fits date + PnL comfortably */
+    border-radius: 4px;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
+    align-items: center;
+    justify-content: center;
     cursor: default;
-    transition: transform .1s, opacity .1s;
-    background: rgba(255,255,255,.04);
+    transition: transform .1s, box-shadow .1s;
+    gap: 0px;
     position: relative;
+    overflow: hidden;
+    min-width: 0;
+    min-height: 0;
 }
-.st-cal-day:hover { transform: scale(1.04); z-index: 2; }
-.st-cal-today {
-    outline: 2px solid rgba(59,130,246,.8);
-    outline-offset: -1px;
+.st-cal-day:hover {
+    transform: scale(1.06);
+    z-index: 2;
+    box-shadow: 0 2px 6px rgba(0,0,0,.45);
 }
+.st-cal-today { outline: 1px solid rgba(59,130,246,.75); outline-offset: -1px; }
+.st-cal-num {
+    font-size: clamp(7px, 1.1vw, 9px);
+    color: rgba(255,255,255,.4);
+    font-weight: 600;
+    line-height: 1.1;
+}
+.st-cal-pnl {
+    font-size: clamp(7px, 1vw, 9px);
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: -.2px;
+    font-family: monospace;
+    white-space: nowrap;
+}
+.st-cal-pos { color: rgba(255,255,255,.95); }
+.st-cal-neg { color: rgba(255,255,255,.95); }
 
-/* Day number — top left, subtle */
-.st-cal-dn {
+/* ── LONG / SHORT ─────────────────────────────────────────────────── */
+.st-split-row { display: flex; }
+.st-split-side { flex: 1; text-align: center; padding: 10px 8px; }
+.st-split-label { font-size: 10px; font-weight: 800; letter-spacing: 1.5px; color: var(--st-dim); margin-bottom: 8px; }
+.st-split-val  { font-size: 24px; font-weight: 800; font-family: monospace; }
+.st-split-meta, .st-split-wr { font-size: 12px; color: var(--st-dim); margin-top: 5px; }
+.st-split-divider { width: 1px; background: var(--st-bdr); margin: 6px 0; }
+
+/* ── BY SYMBOL ────────────────────────────────────────────────────── */
+.st-sym-list { display: flex; flex-direction: column; gap: 9px; }
+.st-sym-row  { display: flex; align-items: center; gap: 10px; }
+.st-sym-name { font-size: 12px; font-weight: 700; font-family: monospace; width: 86px; flex-shrink: 0; color: var(--st-txt); }
+.st-sym-bar-wrap { flex: 1; height: 5px; background: rgba(255,255,255,.05); border-radius: 3px; overflow: hidden; }
+.st-sym-bar  { height: 100%; border-radius: 3px; transition: width .4s cubic-bezier(.4,0,.2,1); }
+.st-bar-pos  { background: linear-gradient(90deg, #10b981, #34d399); }
+.st-bar-neg  { background: linear-gradient(90deg, #ef4444, #f87171); }
+.st-sym-pnl  { font-size: 13px; font-weight: 700; font-family: monospace; width: 76px; text-align: right; flex-shrink: 0; }
+.st-sym-cnt  { font-size: 10px; color: var(--st-dim); width: 36px; text-align: right; flex-shrink: 0; }
+
+/* ── CLOSE REASONS ────────────────────────────────────────────────── */
+.st-reason-list { display: flex; flex-direction: column; gap: 8px; }
+.st-reason-row  { display: flex; align-items: center; gap: 10px; }
+.st-reason-lbl  { width: 72px; font-size: 12px; font-weight: 600; color: var(--st-txt); flex-shrink: 0; }
+.st-reason-bar-wrap { flex: 1; height: 5px; background: rgba(255,255,255,.05); border-radius: 3px; overflow: hidden; }
+.st-reason-bar  { height: 100%; background: var(--st-acc); border-radius: 3px; transition: width .4s; }
+.st-reason-cnt  { font-size: 12px; color: var(--st-t2); font-family: monospace; font-weight: 700; width: 32px; text-align: right; flex-shrink: 0; }
+.st-reason-pct  { font-size: 10px; color: var(--st-dim); width: 32px; text-align: right; flex-shrink: 0; }
+
+/* ── TRADE LOG ────────────────────────────────────────────────────── */
+.st-card-log { padding-bottom: 0; }
+.st-tbl-wrap {
+    overflow: auto;
+    border-radius: 0 0 12px 12px;
+    height: calc(100% - 42px);
+    min-height: 180px;
+}
+.st-tbl {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.st-tbl th {
+    text-align: left;
+    padding: 8px 10px;
+    background: var(--st-bg3);
+    color: var(--st-dim);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    border-bottom: 1px solid var(--st-bdr);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+.st-tbl th:hover { color: var(--st-txt); }
+.st-tbl td {
+    padding: 7px 10px;
+    border-bottom: 1px solid rgba(26,40,64,.6);
+    white-space: nowrap;
+}
+.st-tbl tr:last-child td { border-bottom: none; }
+.st-tbl tr:hover td { background: rgba(255,255,255,.02); }
+
+.st-tc-dim  { color: var(--st-dim); }
+.st-tc-sym  { font-weight: 700; color: var(--st-txt); font-size: 12px; }
+.st-tc-side { font-weight: 700; font-size: 11px; }
+
+.st-pill {
+    border-radius: 5px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 800;
+    white-space: nowrap;
+    letter-spacing: .3px;
+}
+.st-pill-sl  { background: rgba(239,68,68,.14);  color: #f87171; }
+.st-pill-tp  { background: rgba(16,185,129,.14);  color: #34d399; }
+.st-pill-man { background: rgba(59,130,246,.14);  color: #60a5fa; }
+.st-pill-def { background: rgba(148,163,184,.08); color: #94a3b8; }
+
+/* ── DCA ──────────────────────────────────────────────────────────── */
+.dca-banner {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 24px;
+    background: rgba(29,78,216,.08);
+    border: 1px solid rgba(59,130,246,.2);
+    border-radius: 12px;
+    padding: 12px 22px;
+}
+.dca-banner-item  { display: flex; align-items: center; gap: 8px; }
+.dca-banner-lbl   { font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--st-dim); }
+.dca-banner-val   { font-size: 14px; font-weight: 700; color: var(--st-txt); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.dca-freq-badge   { font-size: 10px; font-weight: 800; letter-spacing: 1.5px; padding: 3px 10px; border-radius: 20px; }
+.dca-freq-daily   { background: rgba(59,130,246,.14); color: #60a5fa; border: 1px solid rgba(59,130,246,.3); }
+.dca-freq-weekly  { background: rgba(168,85,247,.14); color: #c084fc; border: 1px solid rgba(168,85,247,.3); }
+.dca-freq-monthly { background: rgba(245,158,11,.12); color: #fbbf24; border: 1px solid rgba(245,158,11,.3); }
+.dca-chip {
+    display: inline-block;
+    background: rgba(37,99,235,.15);
+    color: #60a5fa;
+    border: 1px solid rgba(37,99,235,.35);
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: monospace;
+}
+.dca-chip-sm { font-size: 10px; padding: 1px 6px; margin-right: 3px; }
+.dca-legend      { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.dca-legend-dot  { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.dca-legend-lbl  { font-size: 11px; font-weight: 600; color: var(--st-dim); }
+.dca-period-tabs { display: flex; gap: 3px; margin-left: auto; }
+.dca-ptab {
+    padding: 3px 10px;
+    border-radius: 5px;
+    border: 1px solid var(--st-bdr);
+    background: transparent;
+    color: var(--st-dim);
+    cursor: pointer;
     font-size: 11px;
     font-weight: 600;
-    color: rgba(255,255,255,.35);
-    line-height: 1;
-    align-self: flex-start;
+    transition: all .12s;
 }
-.st-cal-win .st-cal-dn,
-.st-cal-loss .st-cal-dn { color: rgba(255,255,255,.5); }
-
-/* PnL value — bottom right, prominent */
-.st-cal-pv {
-    font-size: 11px;
-    font-weight: 800;
-    font-family: monospace;
-    color: #fff;
-    line-height: 1;
-    align-self: flex-end;
-    text-align: right;
-    text-shadow: 0 1px 4px rgba(0,0,0,.6);
-    word-break: break-all;
-}
+.dca-ptab:hover { color: var(--st-txt); }
+.dca-ptab-on    { background: rgba(59,130,246,.12) !important; border-color: rgba(59,130,246,.5) !important; color: #60a5fa !important; }
+.dca-period-label { font-weight: 700; color: var(--st-txt); }
+.dca-tc-inv     { color: #60a5fa; font-weight: 700; }
+.dca-sym-detail { font-size: 11px; color: var(--st-dim); margin: -4px 0 5px; padding-left: 2px; display: flex; gap: 8px; flex-wrap: wrap; }
+.dca-row-dip td { background: rgba(16,185,129,.04) !important; }
 </style>
 
 @code {
@@ -1007,7 +1153,7 @@ else if (_activeTab == "dca")
     PerfStats _stats = new();
     Dictionary<DateTime, decimal> _dailyPnl = new();
     List<decimal> _cumulativePnl = new();
-    decimal _maxDailyPnl = 1m;
+    decimal _maxDayAbsPnl = 1m;
     List<SymRow> _bySymbol = new();
     Dictionary<string, int> _byReason = new();
     List<TradeRow> _trades = new();
@@ -1207,7 +1353,7 @@ else if (_activeTab == "dca")
         if (trades.Count == 0)
         {
             _stats = new(); _dailyPnl = new(); _cumulativePnl = new();
-            _bySymbol = new(); _byReason = new(); _maxDailyPnl = 1m;
+            _bySymbol = new(); _byReason = new(); _maxDayAbsPnl = 1m;
             return;
         }
         var wins   = trades.Where(t => t.Pnl > 0).ToList();
@@ -1224,7 +1370,7 @@ else if (_activeTab == "dca")
         decimal run = 0;
         _cumulativePnl = _dailyPnl.OrderBy(kv => kv.Key)
             .Select(kv => { run += kv.Value; return run; }).ToList();
-        _maxDailyPnl = _dailyPnl.Values.Select(Math.Abs).DefaultIfEmpty(1m).Max();
+        _maxDayAbsPnl = _dailyPnl.Values.Select(Math.Abs).DefaultIfEmpty(1m).Max();
 
         decimal peak = 0, dd = 0; run = 0;
         foreach (var v in _cumulativePnl) { if (v > peak) peak = v; var cur = peak - v; if (cur > dd) dd = cur; }
