@@ -2814,7 +2814,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // algorithm can't match elements with different ids.
         _chartInstanceId = Guid.NewGuid().ToString("N")[..8];
 
-        LiveState.PriceTicked += OnLivePriceTicked;
+        LiveState.PriceTicked   += OnLivePriceTicked;
+        LiveState.PositionChanged += OnLivePositionChanged;
         DemoAccount.Updated += OnDemoAccountUpdated;
         DemoAccount.DemoModeChanged += OnDemoModeChangedExternally;
         _demoMode = DemoAccount.DemoMode;
@@ -2903,6 +2904,44 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         _orderSuccess = "";
         RefreshDemoSnapshot();
         _ = InvokeAsync(StateHasChanged);
+    }
+
+    // ── Instant position refresh ─────────────────────────────────────
+    // Fires immediately when Engine opens/closes a position via
+    // MarketDataPushClient.NotifyPositionChanged. Bypasses the 30s timer.
+    // Guards: debounce 1s (multiple fills on same order), demo mode skip.
+    DateTime _lastPosRefresh = DateTime.MinValue;
+    bool _posRefreshBusy;
+
+    void OnLivePositionChanged(string symbol, string side, string eventType)
+    {
+        if (_demoMode) return; // demo positions are in-memory, already live
+
+        // Debounce — engine may fire multiple events within 1 second
+        // for the same position (fill + protection orders)
+        if ((DateTime.UtcNow - _lastPosRefresh).TotalSeconds < 1.0) return;
+        _lastPosRefresh = DateTime.UtcNow;
+
+        if (_posRefreshBusy) return;
+        _posRefreshBusy = true;
+
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                // Brief delay so Binance position endpoint reflects the fill
+                await Task.Delay(600);
+                // Refresh positions + orders in parallel (same as timer tick)
+                await Task.WhenAll(
+                    LoadAllOpenPositionsAsync(),
+                    LoadOpenOrdersAsync(),
+                    LoadData()
+                );
+                StateHasChanged();
+            }
+            catch { /* non-critical */ }
+            finally { _posRefreshBusy = false; }
+        });
     }
 
     void OnLivePriceTicked(string symbol, decimal price)
@@ -7668,7 +7707,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             catch { }
         }
 
-        LiveState.PriceTicked -= OnLivePriceTicked;
+        LiveState.PriceTicked   -= OnLivePriceTicked;
+        LiveState.PositionChanged -= OnLivePositionChanged;
         DemoAccount.Updated -= OnDemoAccountUpdated;
         DemoAccount.DemoModeChanged -= OnDemoModeChangedExternally;
         LiveState.KlineClosed -= OnLiveKlineClosed;
