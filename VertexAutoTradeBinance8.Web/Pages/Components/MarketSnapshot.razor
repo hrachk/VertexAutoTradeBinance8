@@ -3795,6 +3795,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         _orderQty            = 0;
         _orderPrice          = lastPrice;
         _orderPanelDismissed = false;
+        // Expand Manual Trade unless a position panel is already shown
+        // (in which case it was already auto-collapsed by SelectPosition)
+        if (_selectedPosition == null)
+            _manualTradeCollapsed = false;
 
         _ = LoadSymbolInfoAndSuggestQty(_activeSignal);
         _ = LoadCurrentPositionAsync(sym);
@@ -7105,9 +7109,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     void ClosePanel()
     {
-        _activeSignal        = null;
-        _currentPosition     = null;
-        _orderPanelDismissed = true;
+        _activeSignal         = null;
+        _currentPosition      = null;
+        _orderPanelDismissed  = true;
+        _manualTradeCollapsed = false; // reset so next open is fully expanded
         _ = JS.InvokeVoidAsync("marketChart.clearPriceLine", $"chartContainer-{_chartInstanceId}");
     }
 
