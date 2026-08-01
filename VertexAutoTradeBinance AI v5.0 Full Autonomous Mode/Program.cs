@@ -350,7 +350,9 @@ public class Program
                     services.AddHostedService<TradingWorker>();
                     services.AddHostedService<BinanceUserDataHostedService>();
                     services.AddHostedService<KlineSnapshotLiveSaver>();
-                    services.AddHostedService<MarketDataPushClient>();
+                    // Register as singleton first so OrderExecutor / PSS can inject it
+                    services.AddSingleton<MarketDataPushClient>();
+                    services.AddHostedService(sp => sp.GetRequiredService<MarketDataPushClient>());
                     services.AddHostedService<DecisionMarkersPersistenceHostedService>();
                     services.AddHostedService<StrategyModeFileWatcher>();
 
