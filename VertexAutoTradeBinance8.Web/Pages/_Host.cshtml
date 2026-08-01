@@ -42,20 +42,27 @@
  
     <script src="~/js/vertex-auth.js"></script>
     <script src="~/js/vertex-oauth.js"></script>
+    @{
+        var oauthGoogleClientId    = Configuration["OAuth:Google:ClientId"]    ?? "";
+        var oauthTelegramBotName   = Configuration["OAuth:Telegram:BotName"]   ?? "";
+        var oauthTelegramBotId     = Configuration["OAuth:Telegram:BotId"]     ?? "";
+        var oauthAppleClientId     = Configuration["OAuth:Apple:ClientId"]     ?? "";
+        var oauthAppleRedirectUri  = Configuration["OAuth:Apple:RedirectUri"]  ?? "";
+    }
     <script>
-      // OAuth provider config — injected from appsettings on server
-      // Buttons only appear if the corresponding config is non-empty
+      // OAuth provider config — injected from appsettings (server-side rendering)
+      // Buttons only appear when the corresponding config value is non-empty
       window.vertexOAuthConfig = {
-        google:   { clientId: "@Configuration["OAuth:Google:ClientId"]" },
-        telegram: { botName:  "@Configuration["OAuth:Telegram:BotName"]",
-                    botId:    "@Configuration["OAuth:Telegram:BotId"]" },
-        apple:    { clientId:    "@Configuration["OAuth:Apple:ClientId"]",
-                    redirectUri: "@Configuration["OAuth:Apple:RedirectUri"]" }
+        google:   { clientId:    "@oauthGoogleClientId" },
+        telegram: { botName:     "@oauthTelegramBotName",
+                    botId:       "@oauthTelegramBotId" },
+        apple:    { clientId:    "@oauthAppleClientId",
+                    redirectUri: "@oauthAppleRedirectUri" }
       };
-      // Clear empty strings so isXxxConfigured() returns false
-      ['google','telegram','apple'].forEach(p => {
-        const c = window.vertexOAuthConfig[p];
-        if (c) Object.keys(c).forEach(k => { if (!c[k]) delete c[k]; });
+      // Remove empty values so isXxxConfigured() checks work correctly
+      ['google','telegram','apple'].forEach(function(p) {
+        var c = window.vertexOAuthConfig[p];
+        if (c) Object.keys(c).forEach(function(k) { if (!c[k]) delete c[k]; });
       });
     </script>
     <script src="~/js/vertex-ui.js"></script>
