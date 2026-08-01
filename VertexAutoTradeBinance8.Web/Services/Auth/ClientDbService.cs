@@ -250,6 +250,95 @@ public sealed class ClientDbService
         finally { _lock.Release(); }
     }
 
+    // ── OAuth find-or-create ──────────────────────────────────────────
+    /// <summary>
+    /// Finds existing account by OAuth provider ID, or creates a new one.
+    /// Handles account linking: if email already exists, links the OAuth
+    /// provider to the existing account.
+    /// </summary>
+    public async Task<(ClientRecord client, bool isNew)>
+        OAuthFindOrCreateAsync(OAuthUserInfo info)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var all = ReadAll();
+
+            // 1. Find by provider ID (most reliable)
+            ClientRecord? client = info.Provider switch
+            {
+                "google"   => all.FirstOrDefault(c => c.GoogleId   == info.ProviderId),
+                "telegram" => all.FirstOrDefault(c => c.TelegramId == info.ProviderId),
+                "apple"    => all.FirstOrDefault(c => c.AppleId    == info.ProviderId),
+                _ => null
+            };
+
+            // 2. Find by email (link providers to existing account)
+            if (client == null && !string.IsNullOrEmpty(info.Email)
+                && !info.Email.EndsWith(".vertex"))
+            {
+                client = all.FirstOrDefault(c =>
+                    string.Equals(c.Email, info.Email, StringComparison.OrdinalIgnoreCase));
+            }
+
+            bool isNew = client == null;
+
+            if (isNew)
+            {
+                // Create new account
+                int nextNum = all.Count == 0 ? 1
+                    : all.Select(c => {
+                        var parts = c.Id.Split('_');
+                        return parts.Length >= 2 && int.TryParse(parts[^1], out int n) ? n : 0;
+                    }).Max() + 1;
+
+                client = new ClientRecord
+                {
+                    Id            = $"client_{nextNum:D3}",
+                    Email         = info.Email,
+                    DisplayName   = info.DisplayName,
+                    AvatarUrl     = info.AvatarUrl,
+                    Plan          = "demo",
+                    IsActive      = true,
+                    IsEmailVerified = true, // OAuth providers verify email
+                    DemoBalance   = 10_000m,
+                    CreatedAt     = DateTime.UtcNow,
+                };
+
+                try { Directory.CreateDirectory(client.DataFolder); } catch { }
+            }
+
+            // Link provider ID to account
+            switch (info.Provider)
+            {
+                case "google":   client.GoogleId   = info.ProviderId; break;
+                case "telegram": client.TelegramId = info.ProviderId; break;
+                case "apple":    client.AppleId    = info.ProviderId; break;
+            }
+
+            if (!client.AuthProviders.Contains(info.Provider))
+                client.AuthProviders.Add(info.Provider);
+
+            // Update avatar if not set
+            if (string.IsNullOrEmpty(client.AvatarUrl) && !string.IsNullOrEmpty(info.AvatarUrl))
+                client.AvatarUrl = info.AvatarUrl;
+
+            client.LastLoginAt = DateTime.UtcNow;
+
+            // Save
+            var idx = all.FindIndex(c => c.Id == client.Id);
+            if (idx >= 0) all[idx] = client;
+            else all.Add(client);
+            WriteAll(all);
+
+            _log.LogInformation("[OAUTH] {provider} login: {id} {email} isNew={n}",
+                info.Provider, client.Id, client.Email, isNew);
+
+            return (client, isNew);
+        }
+        finally { _lock.Release(); }
+    }
+
     // ── Email verification ────────────────────────────────────────────
     /// <summary>
     /// Generates a 6-digit verification code, stores it on the client
