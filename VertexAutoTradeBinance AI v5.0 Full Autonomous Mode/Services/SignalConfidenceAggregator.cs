@@ -73,7 +73,7 @@ namespace VertexAutoTradeBinance8.Strategy.Confidence
             // PA signals: highest quality — they passed Market Structure + MOMO + Volume + VWAP + S/R checks
             if (reason.Contains("PA_STRUCTURE"))
                 conf = 0.82m;  // structure trade (HH/HL, LH/LL + S/R confluence)
-            if (r.Contains("_UPTREND_SR") || r.Contains("_DOWNTREND_SR"))
+            if (reason.Contains("_UPTREND_SR") || reason.Contains("_DOWNTREND_SR"))
                 conf = 0.87m;  // confirmed structure + S/R-anchored TP (highest quality)
             else if (reason.Contains("PA_BREAKOUT"))
                 conf = 0.78m;  // pattern breakout (triangle, parallel range)
