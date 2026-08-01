@@ -101,6 +101,35 @@ public sealed class AuthSessionService : IAsyncDisposable
         return (true, "");
     }
 
+    // ── OAuth login ───────────────────────────────────────────
+    /// <summary>
+    /// Called after OAuthService validates the token.
+    /// Finds or creates the account and sets the session cookie.
+    /// </summary>
+    public async Task<(bool ok, string error, bool isNew)>
+        OAuthLoginAsync(OAuthUserInfo info)
+    {
+        try
+        {
+            var (client, isNew) = await _db.OAuthFindOrCreateAsync(info);
+            if (!client.IsActive) return (false, "Аккаунт заблокирован.", false);
+
+            CurrentClient = client;
+
+            var token = await _tokens.CreateAsync(client.Id, rememberMe: true);
+            if (_js != null)
+                await SetCookieAsync(CookieName, token, SessionTokenService.RememberMeDays);
+
+            OnChange?.Invoke();
+            return (true, "", isNew);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "[SESSION] OAuthLogin failed for {p}", info.Provider);
+            return (false, "Ошибка авторизации. Попробуйте снова.", false);
+        }
+    }
+
     // ── Register ──────────────────────────────────────────────
     public async Task<(bool ok, string error)>
         RegisterAsync(string email, string password, string displayName)
