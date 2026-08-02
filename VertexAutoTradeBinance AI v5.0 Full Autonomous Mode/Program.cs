@@ -265,6 +265,9 @@ public class Program
                     // =====================================================
                     services.AddSingleton<VertexAutoTradeBinance8.Services.HistoricalData.HistoricalDataStore>();
                     services.AddHostedService<HistoricalDataLoaderService>();
+                    // On-demand kline fetcher for Web UI symbol requests
+                    services.AddSingleton<KlineOnDemandService>();
+                    services.AddHostedService(sp => sp.GetRequiredService<KlineOnDemandService>());
 
                     // ===== SYMBOL REGISTRY =====
                     services.AddSingleton<SymbolRegistryService>();
