@@ -6289,35 +6289,35 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         await Task.Yield(); // yield to allow render frame to complete
         await InvokeAsync(StateHasChanged);
 
-        // ── PARALLEL: chart + open orders (both network-bound, independent) ──
-        // Don't await them sequentially — that was the source of the slowness.
-        // Chart data comes from local files (fast). Orders come from Binance (~400ms).
-        // Running in parallel cuts total wait from ~800ms to ~400ms.
+        // ── Correct sequence: network first, then JS on circuit thread ──
+        // CRITICAL: RenderCharts() and all RefreshXxx() use JS.InvokeVoidAsync.
+        // JS Interop MUST run on the Blazor circuit thread — never inside Task.Run().
+        // Using Task.Run() moves JS calls to ThreadPool → silent failure → no chart lines.
+        //
+        // What CAN run in parallel: LoadOpenOrdersAsync (pure HTTP, no JS).
+        // Start it now, do other setup, then await when we need the data.
         _dotNetRef ??= DotNetObjectReference.Create(this);
 
-        // Fire symbol precision in background (non-critical for initial render)
-        _ = LoadSymbolPrecisionAsync(pos.Symbol);
-
-        // Run chart render + orders fetch in parallel
-        var chartTask  = Task.Run(async () => {
-            try { await RenderCharts(); } catch { }
-        });
+        // Start Binance HTTP fetch now (runs in background while we do JS work)
         var ordersTask = LoadOpenOrdersAsync();
 
-        // Bind TP/SL callbacks immediately (before chart finishes — they use containerId)
+        // Fire symbol precision in background (non-critical)
+        _ = LoadSymbolPrecisionAsync(pos.Symbol);
+
+        // Bind TP/SL drag callbacks — needs circuit thread (JS interop)
         try { await JS.InvokeVoidAsync("marketChart.bindSlTpCallbacks",
             $"chartContainer-{_chartInstanceId}", _dotNetRef); } catch { }
 
-        // Wait for orders first — needed for TP/SL lines
+        // Render chart — MUST be on circuit thread (JS interop)
+        try { await RenderCharts(); } catch { }
+
+        // Now wait for orders (likely already done while chart was rendering)
         await ordersTask;
 
-        // Draw position entry/liq lines immediately after orders loaded
+        // Draw Entry/Liq/BE/SL/TP lines — all JS, all on circuit thread
         await RefreshPositionLines();
 
-        // Chart may still be rendering — wait for it before drawing order lines
-        await chartTask;
-
-        // Draw order lines + scroll symbol into view (fire & forget — non-blocking)
+        // Order lines + scroll — fire and forget (non-critical timing)
         _ = RefreshOrderLinesAsync();
         _ = JS.InvokeVoidAsync("tickerDragScroll.scrollSymbolIntoView", pos.Symbol);
 
