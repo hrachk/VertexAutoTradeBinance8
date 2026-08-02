@@ -2848,7 +2848,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     DateTime _lastLiveRender = DateTime.MinValue;
     DateTime _lastDemoPnlRender = DateTime.MinValue;
     bool _onTickBusy;
-    static readonly TimeSpan LiveRenderThrottle = TimeSpan.FromMilliseconds(80); // 80ms = ~12fps chart updates, feels fluid without extra load
+    static readonly TimeSpan LiveRenderThrottle  = TimeSpan.FromMilliseconds(200); // chart JS: 5fps
+    static readonly TimeSpan StateHasChangedThrottle = TimeSpan.FromMilliseconds(500); // Blazor diff: 2fps ~12fps chart updates, feels fluid without extra load
 
     int _liveTickCount = 0;
     int _liveKlineCount = 0;
@@ -3390,19 +3391,26 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 // LIVE: run all three concurrently to minimize tick latency.
                 var loadOrdersTask    = _demoMode ? Task.CompletedTask : LoadOpenOrdersAsync();
                 var loadPositionsTask = _demoMode ? Task.CompletedTask : LoadAllOpenPositionsAsync();
-                var loadCurrentPosTask = (!_demoMode && _activeSignal != null)
-                    ? LoadCurrentPositionAsync(_activeSignal.Symbol)
-                    : Task.CompletedTask;
-                await Task.WhenAll(loadDataTask, loadOrdersTask, loadPositionsTask, loadCurrentPosTask);
+                // Removed: LoadCurrentPositionAsync was an extra Binance REST call
+                // every tick — LoadAllOpenPositionsAsync already covers this.
+                await Task.WhenAll(loadDataTask, loadOrdersTask, loadPositionsTask);
 
-                // Refresh open order lines on chart every tick
-                _ = RefreshOrderLinesAsync();
+                // Refresh order lines only when _openOrders actually changed
+                var ordersHash = string.Concat(_openOrders
+                    .Where(o => o.Symbol == _activeSym)
+                    .Select(o => o.OrderId));
+                if (ordersHash != _lastOrdersHash)
+                {
+                    _lastOrdersHash = ordersHash;
+                    _ = RefreshOrderLinesAsync();
+                }
 
                 SweepExpiredSignals();
                 // CleanupOrphanedProtectiveOrders only makes sense in LIVE mode:
                 // in DEMO, _openOrders and _allPositions are always empty (demo
                 // uses _demoSnapshot instead), so there's nothing to clean up.
-                if (!_demoMode)
+                // Cleanup orphaned orders every 3rd tick (90s) — not time-critical
+                if (!_demoMode && _tickCount % 3 == 0)
                     await CleanupOrphanedProtectiveOrdersAsync();
 
                 // Safety net: if there is no selected position AND
@@ -3414,7 +3422,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 // no position exists for the active symbol.
                 // DEMO: uses DisplayedPositions (which reads _demoSnapshot.Positions)
                 // LIVE: uses _allPositions
-                if (_selectedPosition == null && _chartInitDone &&
+                // Safety net: hide chart lines if no position — but only
+                // if we think lines are currently showing (avoids JS call every tick)
+                if (_selectedPosition == null && _chartInitDone && _positionLinesVisible &&
                     !string.IsNullOrEmpty(_activeSym) &&
                     !DisplayedPositions.Any(p => p.Symbol == _activeSym))
                 {
@@ -3424,6 +3434,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                             $"chartContainer-{_chartInstanceId}");
                         await JS.InvokeVoidAsync("marketChart.hideTpSlLines",
                             $"chartContainer-{_chartInstanceId}");
+                        _positionLinesVisible = false;
                     }
                     catch { }
                 }
