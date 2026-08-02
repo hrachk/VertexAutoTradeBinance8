@@ -32,4 +32,13 @@ public sealed class MarketDataLiveState
 
     public void RaisePositionChanged(string symbol, string side, string eventType)
         => PositionChanged?.Invoke(symbol, side, eventType);
+
+    /// <summary>
+    /// Fires when the Engine finishes loading on-demand kline history.
+    /// (symbol, tf, barCount) — Web should refresh chart for this symbol+tf.
+    /// </summary>
+    public event Action<string, string, int>? KlineHistoryReady;
+
+    public void RaiseKlineHistoryReady(string symbol, string tf, int barCount)
+        => KlineHistoryReady?.Invoke(symbol, tf, barCount);
 }
