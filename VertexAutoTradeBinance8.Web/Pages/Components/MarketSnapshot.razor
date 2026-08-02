@@ -1230,7 +1230,7 @@
 
         <div class="mk-charts-col-side">
 
-        @if (_activeSignal != null)
+        @if (_hasSignal)
         {
             // TRADE ORDER PANEL (right sidebar, exchange-style)
             bool isBuy = _activeSignal.Side?.ToUpper() == "BUY" || _activeSignal.Side?.ToUpper() == "LONG";
@@ -1815,6 +1815,38 @@
                                 </button>
                             }
                         </div>
+                    }
+                </div>
+            </div>
+        else
+        {
+            @* ord-panel idle placeholder — panel always visible *@
+            <div class="ord-panel @(_demoMode ? "ord-panel-demo" : "") ord-panel-idle">
+                <div class="ord-panel-placeholder">
+                    <div class="ord-placeholder-icon">📊</div>
+                    <div class="ord-placeholder-title">
+                        @if (!string.IsNullOrEmpty(_activeSym))
+                        { <span>@_activeSym</span> }
+                        else
+                        { <span style="color:var(--dim)">Select symbol</span> }
+                    </div>
+                    <div class="ord-placeholder-sub">
+                        @if (!string.IsNullOrEmpty(_activeSym))
+                        { <span>Click to open trade panel</span> }
+                        else
+                        { <span>Pick a symbol from the left panel</span> }
+                    </div>
+                    @if (!string.IsNullOrEmpty(_activeSym))
+                    {
+                        var _lprice = Series.FirstOrDefault(s => s.Symbol == _activeSym)?.Klines.LastOrDefault()?.Close ?? 0m;
+                        <button class="ord-placeholder-btn ord-placeholder-btn-long"
+                            @onclick="() => OpenManualPanelFor(_activeSym!, _lprice)">
+                            ▲ Long @_activeSym
+                        </button>
+                        <button class="ord-placeholder-btn ord-placeholder-btn-short"
+                            @onclick="() => { OpenManualPanelFor(_activeSym!, _lprice); if (_activeSignal != null) _activeSignal.Side = "SELL"; }">
+                            ▼ Short @_activeSym
+                        </button>
                     }
                 </div>
             </div>
