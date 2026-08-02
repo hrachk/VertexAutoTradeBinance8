@@ -7604,39 +7604,31 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             // Detect hedge mode (cached — fetch once per session)
             bool needHedgeCheck = _isHedgeMode == null;
 
-            // Run both in parallel to avoid sequential latency
-            var leverageTask = needLeverage
-                ? client.UsdFuturesApi.Account.ChangeInitialLeverageAsync(
-                    _activeSignal.Symbol, _orderLeverage, ct: cts.Token)
-                : Task.FromResult<Binance.Net.Objects.Models.Futures.BinanceFuturesInitialLeverageChangeResult?>(null);
-            var hedgeTask = needHedgeCheck
-                ? client.UsdFuturesApi.Account.GetPositionModeAsync(ct: cts.Token)
-                : Task.FromResult<CryptoExchange.Net.Objects.WebCallResult<Binance.Net.Objects.Models.Futures.BinanceFuturesPositionMode>?>(null);
-
-            // Wait both (already parallel)
-            try
+            // Set leverage + detect hedge mode (cached — skip if already done)
+            if (needLeverage)
             {
-                if (needLeverage)
+                try
                 {
-                    await leverageTask;
+                    await client.UsdFuturesApi.Account.ChangeInitialLeverageAsync(
+                        _activeSignal.Symbol, _orderLeverage, ct: cts.Token);
                     _lastLeverageSym = _activeSignal.Symbol;
                     _lastLeverage    = _orderLeverage;
                 }
+                catch { }
             }
-            catch { }
 
             bool isHedge = _isHedgeMode ?? false;
-            try
+            if (needHedgeCheck)
             {
-                if (needHedgeCheck)
+                try
                 {
-                    var pm = await hedgeTask;
-                    if (pm != null && pm.Success)
+                    var pm = await client.UsdFuturesApi.Account.GetPositionModeAsync(ct: cts.Token);
+                    if (pm.Success)
                         _isHedgeMode = pm.Data?.IsHedgeMode == true;
                     isHedge = _isHedgeMode ?? false;
                 }
+                catch { _isHedgeMode = false; }
             }
-            catch { }
 
             long? orderId = null;
 
