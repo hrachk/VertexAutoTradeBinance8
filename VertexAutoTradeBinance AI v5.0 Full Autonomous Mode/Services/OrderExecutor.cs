@@ -31,6 +31,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly RiskManager _risk;
         private readonly MarketDataFacade _marketDataFacade;
         private readonly AiLiquidityClusterService _liquidityClusterService;
+        private readonly MarketDataPushClient? _pushClient;
 
 
         // ===== ENTRY EXECUTION TUNING (PRODUCTION) =====
