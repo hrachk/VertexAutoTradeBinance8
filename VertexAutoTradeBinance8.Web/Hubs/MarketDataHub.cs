@@ -52,4 +52,15 @@ public class MarketDataHub : Hub
         _state.RaisePositionChanged(symbol, side, eventType);
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Called by the Engine when on-demand kline history is ready.
+    /// Fires KlineHistoryReady event → Web MarketSnapshot refreshes chart.
+    /// symbol: e.g. "BTCUSDT", tf: e.g. "15m", barCount: how many bars loaded.
+    /// </summary>
+    public Task PushKlineHistoryReady(string symbol, string tf, int barCount)
+    {
+        _state.RaiseKlineHistoryReady(symbol, tf, barCount);
+        return Task.CompletedTask;
+    }
 }
