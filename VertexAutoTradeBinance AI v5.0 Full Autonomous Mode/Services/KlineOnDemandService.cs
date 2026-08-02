@@ -189,15 +189,14 @@ public sealed class KlineOnDemandService : BackgroundService
                 return;
             }
 
-            var klines = res.Data.Select(k => new HistoricalKline
-            {
-                OpenTime  = new DateTimeOffset(k.OpenTime.ToUniversalTime()).ToUnixTimeMilliseconds(),
-                Open      = k.OpenPrice,
-                High      = k.HighPrice,
-                Low       = k.LowPrice,
-                Close     = k.ClosePrice,
-                Volume    = k.Volume,
-            }).ToList();
+            var klines = res.Data.Select(k => new HistoricalKline(
+                OpenTime : new DateTimeOffset(k.OpenTime.ToUniversalTime()).ToUnixTimeMilliseconds(),
+                Open     : k.OpenPrice,
+                High     : k.HighPrice,
+                Low      : k.LowPrice,
+                Close    : k.ClosePrice,
+                Volume   : k.Volume
+            )).ToList();
 
             fetched = klines.Count;
             await _store.AppendAsync(symbol, tfLabel, klines);
