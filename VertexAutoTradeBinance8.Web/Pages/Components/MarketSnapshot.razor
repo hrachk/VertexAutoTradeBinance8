@@ -4652,6 +4652,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     DateTime _lastRealizedPnlFetchUtc = DateTime.MinValue;
     bool _positionsLoading;
     int  _tickCount = 0; // for staggered polling
+    bool? _isHedgeMode; // cached — changes only on account switch
+    string? _lastLeverageSym; int _lastLeverage; // avoid duplicate leverage calls
     string? _pendingRestorePosKey; // see the firstRender restore logic and LoadAllOpenPositionsAsync/RefreshDemoSnapshot for why this needs a second attempt after positions actually load
     string _lastTpSlSnapshot = ""; // see the periodic TP/SL refresh check — skips redundant pill redraws when nothing has actually changed
     bool _ooPanelNeedsAutoFit;
@@ -7578,17 +7580,44 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             decimal tick  = _symTickSize > 0 ? _symTickSize : 0.0001m;
             decimal price = tick > 0 ? RoundPrice(_orderPrice, tick) : _orderPrice;
 
-            // Set leverage
-            try { await client.UsdFuturesApi.Account.ChangeInitialLeverageAsync(
-                _activeSignal.Symbol, _orderLeverage, ct: cts.Token); }
-            catch { }
+            // Set leverage (skip if same symbol+leverage already set this session)
+            bool needLeverage = _lastLeverageSym != _activeSignal.Symbol
+                             || _lastLeverage    != _orderLeverage;
 
-            // Detect hedge mode
-            bool isHedge = false;
+            // Detect hedge mode (cached — fetch once per session)
+            bool needHedgeCheck = _isHedgeMode == null;
+
+            // Run both in parallel to avoid sequential latency
+            var leverageTask = needLeverage
+                ? client.UsdFuturesApi.Account.ChangeInitialLeverageAsync(
+                    _activeSignal.Symbol, _orderLeverage, ct: cts.Token)
+                : Task.FromResult<Binance.Net.Objects.Models.Futures.BinanceFuturesInitialLeverageChangeResult?>(null);
+            var hedgeTask = needHedgeCheck
+                ? client.UsdFuturesApi.Account.GetPositionModeAsync(ct: cts.Token)
+                : Task.FromResult<CryptoExchange.Net.Objects.WebCallResult<Binance.Net.Objects.Models.Futures.BinanceFuturesPositionMode>?>(null);
+
+            // Wait both (already parallel)
             try
             {
-                var pm = await client.UsdFuturesApi.Account.GetPositionModeAsync(ct: cts.Token);
-                isHedge = pm.Success && pm.Data?.IsHedgeMode == true;
+                if (needLeverage)
+                {
+                    await leverageTask;
+                    _lastLeverageSym = _activeSignal.Symbol;
+                    _lastLeverage    = _orderLeverage;
+                }
+            }
+            catch { }
+
+            bool isHedge = _isHedgeMode ?? false;
+            try
+            {
+                if (needHedgeCheck)
+                {
+                    var pm = await hedgeTask;
+                    if (pm != null && pm.Success)
+                        _isHedgeMode = pm.Data?.IsHedgeMode == true;
+                    isHedge = _isHedgeMode ?? false;
+                }
             }
             catch { }
 
