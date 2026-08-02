@@ -42,6 +42,27 @@ namespace VertexAutoTradeBinance8.Web.Services
             File.Exists(FilePath(symbol, timeframeLabel));
 
         /// <summary>
+        /// Returns approximate bar count without fully deserialising the file.
+        /// Counts JSON array elements by counting root-level '{' occurrences.
+        /// Fast enough for a UI check (file is already on local disk).
+        /// </summary>
+        public int ApproxBarCount(string symbol, string timeframeLabel)
+        {
+            var path = FilePath(symbol, timeframeLabel);
+            if (!File.Exists(path)) return 0;
+            try
+            {
+                // Each bar starts with '{' — count them as proxy for bar count
+                // (accurate for a flat JSON array of objects)
+                var text = File.ReadAllText(path);
+                int count = 0;
+                foreach (char c in text) if (c == '{') count++;
+                return count;
+            }
+            catch { return 0; }
+        }
+
+        /// <summary>
         /// Loads all archived bars for a symbol+timeframe label (e.g.
         /// "15m", "1h" — same labels the Engine's loader uses). Returns
         /// an empty list if nothing is archived, never throws for a
