@@ -6289,19 +6289,36 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         await Task.Yield(); // yield to allow render frame to complete
         await InvokeAsync(StateHasChanged);
 
-        // Network + chart work — these update their own parts of the UI
-        // incrementally once ready; panel header/PnL already visible above.
-        await LoadOpenOrdersAsync();
-        // Load tickSize+stepSize so drag TP/SL works without precision errors
+        // ── PARALLEL: chart + open orders (both network-bound, independent) ──
+        // Don't await them sequentially — that was the source of the slowness.
+        // Chart data comes from local files (fast). Orders come from Binance (~400ms).
+        // Running in parallel cuts total wait from ~800ms to ~400ms.
+        _dotNetRef ??= DotNetObjectReference.Create(this);
+
+        // Fire symbol precision in background (non-critical for initial render)
         _ = LoadSymbolPrecisionAsync(pos.Symbol);
 
-        _dotNetRef ??= DotNetObjectReference.Create(this);
-        try { await JS.InvokeVoidAsync("marketChart.bindSlTpCallbacks", $"chartContainer-{_chartInstanceId}", _dotNetRef); } catch { }
+        // Run chart render + orders fetch in parallel
+        var chartTask  = Task.Run(async () => {
+            try { await RenderCharts(); } catch { }
+        });
+        var ordersTask = LoadOpenOrdersAsync();
 
-        try { await RenderCharts(); } catch { }
+        // Bind TP/SL callbacks immediately (before chart finishes — they use containerId)
+        try { await JS.InvokeVoidAsync("marketChart.bindSlTpCallbacks",
+            $"chartContainer-{_chartInstanceId}", _dotNetRef); } catch { }
+
+        // Wait for orders first — needed for TP/SL lines
+        await ordersTask;
+
+        // Draw position entry/liq lines immediately after orders loaded
         await RefreshPositionLines();
-        await RefreshOrderLinesAsync();  // AFTER chart ready — draw open order lines
 
+        // Chart may still be rendering — wait for it before drawing order lines
+        await chartTask;
+
+        // Draw order lines + scroll symbol into view (fire & forget — non-blocking)
+        _ = RefreshOrderLinesAsync();
         _ = JS.InvokeVoidAsync("tickerDragScroll.scrollSymbolIntoView", pos.Symbol);
 
         StateHasChanged();
