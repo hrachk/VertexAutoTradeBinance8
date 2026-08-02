@@ -2817,8 +2817,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // algorithm can't match elements with different ids.
         _chartInstanceId = Guid.NewGuid().ToString("N")[..8];
 
-        LiveState.PriceTicked   += OnLivePriceTicked;
-        LiveState.PositionChanged += OnLivePositionChanged;
+        LiveState.PriceTicked      += OnLivePriceTicked;
+        LiveState.PositionChanged  += OnLivePositionChanged;
+        LiveState.KlineHistoryReady += OnKlineHistoryReady;
         DemoAccount.Updated += OnDemoAccountUpdated;
         DemoAccount.DemoModeChanged += OnDemoModeChangedExternally;
         _demoMode = DemoAccount.DemoMode;
@@ -2907,6 +2908,57 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         _orderSuccess = "";
         RefreshDemoSnapshot();
         _ = InvokeAsync(StateHasChanged);
+    }
+
+    // ── On-Demand Kline Loading ──────────────────────────────────────────
+    // When user selects a symbol with no/few bars in datadb/, we write a
+    // request to the shared queue file. Engine's KlineOnDemandService picks
+    // it up, fetches from Binance, saves to datadb/, then fires
+    // KlineHistoryReady → we refresh the chart automatically.
+
+    void RequestOnDemandKlines(string symbol, string tf, int bars = 1000)
+    {
+        if (string.IsNullOrEmpty(symbol)) return;
+
+        _klineLoadingSymbol = symbol;
+        _ = InvokeAsync(StateHasChanged);
+
+        // Write request to shared queue file — Engine polls every 2s
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // Build queue file path from SharedData:Root config
+                var root = Configuration["SharedData:Root"]
+                        ?? System.IO.Path.Combine(AppContext.BaseDirectory);
+                var queueFile = System.IO.Path.Combine(root, "kline_ondemand_queue.json");
+                var request = System.Text.Json.JsonSerializer.Serialize(
+                    new[] { new { Symbol = symbol, Tf = tf, Bars = bars } });
+                await System.IO.File.WriteAllTextAsync(queueFile, request);
+            }
+            catch { /* non-critical */ }
+        });
+    }
+
+    void OnKlineHistoryReady(string symbol, string tf, int barCount)
+    {
+        // Engine finished loading history for this symbol — refresh chart
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                if (_klineLoadingSymbol == symbol)
+                    _klineLoadingSymbol = null;
+
+                // Only refresh if this is the currently viewed symbol
+                if (_activeSym == symbol)
+                {
+                    try { await RenderCharts(); } catch { }
+                    StateHasChanged();
+                }
+            }
+            catch { }
+        });
     }
 
     // ── Instant position refresh ─────────────────────────────────────
@@ -3657,6 +3709,17 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         {
             _preloadedSymbols.TryRemove(sym, out _); // allow re-fetch
             _ = PreloadPositionSymbolKlinesAsync(sym);
+        }
+
+        // Check if datadb has history for this symbol+TF
+        // If not (or very few bars) → request on-demand fetch from Engine
+        var wantTfForCheck = _symTf.TryGetValue(sym, out var ct2) ? ct2 : _activeTf;
+        if (!string.IsNullOrEmpty(wantTfForCheck)
+            && !HistoryReader.Has(sym, wantTfForCheck))
+        {
+            // No history yet — request it from Engine
+            // Engine will load 1000 bars and notify us via KlineHistoryReady
+            RequestOnDemandKlines(sym, wantTfForCheck, 1000);
         }
 
         if (autoSelectExistingPosition)
@@ -4672,6 +4735,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     bool _positionsLoading;
     int  _tickCount = 0; // for staggered polling
     bool? _isHedgeMode; // cached — changes only on account switch
+    // On-demand kline loading indicator
+    string? _klineLoadingSymbol; // null = idle, set = loading in progress
+    readonly string _onDemandQueueFile = string.Empty; // set from config in OnInitializedAsync
     string? _lastLeverageSym; int _lastLeverage; // avoid duplicate leverage calls
     string? _pendingRestorePosKey; // see the firstRender restore logic and LoadAllOpenPositionsAsync/RefreshDemoSnapshot for why this needs a second attempt after positions actually load
     string _lastTpSlSnapshot = ""; // see the periodic TP/SL refresh check — skips redundant pill redraws when nothing has actually changed
@@ -7769,8 +7835,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             catch { }
         }
 
-        LiveState.PriceTicked   -= OnLivePriceTicked;
-        LiveState.PositionChanged -= OnLivePositionChanged;
+        LiveState.PriceTicked      -= OnLivePriceTicked;
+        LiveState.PositionChanged  -= OnLivePositionChanged;
+        LiveState.KlineHistoryReady -= OnKlineHistoryReady;
         DemoAccount.Updated -= OnDemoAccountUpdated;
         DemoAccount.DemoModeChanged -= OnDemoModeChangedExternally;
         LiveState.KlineClosed -= OnLiveKlineClosed;
