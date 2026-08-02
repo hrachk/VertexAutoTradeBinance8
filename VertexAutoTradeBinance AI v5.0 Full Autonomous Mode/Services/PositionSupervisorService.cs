@@ -33,6 +33,7 @@ namespace VertexAutoTradeBinance8.Services
     public class PositionSupervisorService
     {
         private readonly ILogger<PositionSupervisorService> _logger;
+        private readonly MarketDataPushClient? _push;
         private readonly BinanceClientFactory _factory;
         private readonly SymbolInfoService _symbolInfo;
         private readonly AiSelfLearningService _aiLearning;
@@ -147,7 +148,8 @@ namespace VertexAutoTradeBinance8.Services
             FundingRateService fundingRate,
             IOptionsMonitor<TradingSettings> tradingSettings,
             IOptionsMonitor<TradingOptions> tradingOptions,
-            IOptionsMonitor<DcaOptions> dcaOptions)
+            IOptionsMonitor<DcaOptions> dcaOptions,
+            MarketDataPushClient? push = null)
         {
             _logger = logger;
             _factory = factory;
@@ -172,6 +174,7 @@ namespace VertexAutoTradeBinance8.Services
             _tradingSettings = tradingSettings;
             _tradingOptions = tradingOptions;
             _dcaOptions = dcaOptions;
+            _push = push;
         }
 
 
