@@ -2754,6 +2754,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     void OnInstrumentSearchChanged(ChangeEventArgs e) => _instrumentSearch = e.Value?.ToString() ?? "";
     void ClearInstrumentSearch() => _instrumentSearch = "";
     string _activeTf  = "";
+    // Per-symbol TF memory — survives symbol switches
+    // Key: symbol, Value: last TF used for that symbol
+    readonly Dictionary<string,string> _symTf = new();
     List<string> _symbols = new();
 
     // Puts the currently-active symbol first in the ticker bar display
@@ -3158,16 +3161,25 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                         if (!string.IsNullOrEmpty(saved.ooTab)) _ooActiveTab = saved.ooTab;
                         _chartMaximized = saved.chartMaximized;
 
+                        // Restore per-symbol TF memory
+                        if (saved.symTf != null)
+                            foreach (var kv in saved.symTf)
+                                _symTf[kv.Key] = kv.Value;
+
                         if (!string.IsNullOrEmpty(saved.sym))
                         {
-                            var match = !string.IsNullOrEmpty(saved.tf)
-                                ? Series.FirstOrDefault(s => s.Symbol == saved.sym && s.Timeframe == saved.tf)
+                            // Use per-symbol TF if available, else saved global TF
+                            var wantTf = (_symTf.TryGetValue(saved.sym, out var st) ? st : null)
+                                      ?? saved.tf;
+                            var match = !string.IsNullOrEmpty(wantTf)
+                                ? Series.FirstOrDefault(s => s.Symbol == saved.sym && s.Timeframe == wantTf)
                                 : null;
                             match ??= Series.FirstOrDefault(s => s.Symbol == saved.sym);
                             if (match != null && (match.Symbol != _activeSym || match.Timeframe != _activeTf))
                             {
                                 _activeSym = match.Symbol;
                                 _activeTf = match.Timeframe;
+                                _symTf[_activeSym] = _activeTf;
                                 ResolveSelected();
                                 CalcStats();
                             }
@@ -3626,10 +3638,15 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     {
         _activeSym = sym;
         _orderPanelDismissed = false;
-        // Try to keep current TF, fallback to first available
-        var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == _activeTf)
+        // TF priority: 1) this symbol's last-used TF, 2) current global TF, 3) first available
+        var wantTf = _symTf.TryGetValue(sym, out var remembered) ? remembered : _activeTf;
+        var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == wantTf)
             ?? Series.FirstOrDefault(s => s.Symbol == sym);
-        if (available != null) _activeTf = available.Timeframe;
+        if (available != null)
+        {
+            _activeTf = available.Timeframe;
+            _symTf[sym] = _activeTf; // remember for next time
+        }
         ResolveSelected();
         CalcStats();
         // If this symbol has no klines (e.g. manually opened position
@@ -3749,6 +3766,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             {
                 sym = _activeSym,
                 tf = _activeTf,
+                symTf = _symTf, // per-symbol TF memory
                 demoMode = _demoMode,
                 ooTab = _ooActiveTab,
                 selectedPosKey = _selectedPosition != null ? $"{_selectedPosition.Symbol}:{_selectedPosition.Side}" : "",
@@ -4312,6 +4330,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     {
         _activeSym = s.Symbol;
         _activeTf  = s.Timeframe;
+        _symTf[s.Symbol] = s.Timeframe; // remember per-symbol TF
         _orderPanelDismissed = false;
         Selected = s;
         CalcStats();
@@ -6274,10 +6293,15 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         _manualTradeCollapsed  = false;  // reset collapse state
 
         var sym = pos.Symbol;
-        var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == _activeTf)
+        var wantTfPos = _symTf.TryGetValue(sym, out var remPos) ? remPos : _activeTf;
+        var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == wantTfPos)
             ?? Series.FirstOrDefault(s => s.Symbol == sym);
         _activeSym = sym;
-        if (available != null) _activeTf = available.Timeframe;
+        if (available != null)
+        {
+            _activeTf = available.Timeframe;
+            _symTf[sym] = _activeTf;
+        }
         ResolveSelected();
         CalcStats();
 
