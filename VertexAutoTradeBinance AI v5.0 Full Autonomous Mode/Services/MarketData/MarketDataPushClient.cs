@@ -199,11 +199,21 @@ public sealed class MarketDataPushClient : BackgroundService
     {
         _outbox.Writer.TryWrite(async c =>
         {
-            try
-            {
-                await c.InvokeAsync("PushPositionEvent", symbol, side, eventType);
-            }
-            catch { /* non-critical — UI falls back to 30s poll */ }
+            try { await c.InvokeAsync("PushPositionEvent", symbol, side, eventType); }
+            catch { }
+        });
+    }
+
+    /// <summary>
+    /// Notifies Web that on-demand kline history for symbol+tf is ready in datadb/.
+    /// Web MarketSnapshot will auto-refresh the chart for that symbol.
+    /// </summary>
+    public void NotifyKlineHistoryReady(string symbol, string tf, int barCount)
+    {
+        _outbox.Writer.TryWrite(async c =>
+        {
+            try { await c.InvokeAsync("PushKlineHistoryReady", symbol, tf, barCount); }
+            catch { }
         });
     }
 }
