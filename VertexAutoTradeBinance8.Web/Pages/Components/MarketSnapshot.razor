@@ -1531,7 +1531,7 @@
                 {
                     <div class="ord-placeholder-title">@_activeSym</div>
                     <div class="ord-placeholder-sub">Click to open trade panel</div>
-                    @{ var lpIdle = Series.FirstOrDefault(s => s.Symbol == _activeSym)?.Klines.LastOrDefault()?.Close ?? 0m; }
+                    var lpIdle = Series.FirstOrDefault(s => s.Symbol == _activeSym)?.Klines.LastOrDefault()?.Close ?? 0m;
                     <button class="ord-placeholder-btn ord-placeholder-btn-long"
                         @onclick="() => OpenManualPanelFor(_activeSym!, lpIdle)">
                         ▲ Long @_activeSym
@@ -7307,6 +7307,12 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             OpenManualPanelFor(_activeSym, _last);
         else
             _activeSignal = null;
+    }
+
+    void OpenShortManualPanel(string sym, decimal price)
+    {
+        OpenManualPanelFor(sym, price);
+        if (_activeSignal != null) _activeSignal.Side = "SELL";
     }
 
     void ClosePanel()
