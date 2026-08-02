@@ -933,6 +933,23 @@ namespace VertexAutoTradeBinance8.Services
        IReadOnlyList<BinanceFuturesUsdtKline>? klines,
        CancellationToken ct)
             {
+                // ══════════════════════════════════════════════════════════
+                // ЖЁСТКАЯ ЗАЩИТА: не трогать позиции без контекста бота.
+                // signal == null  → позиция открыта вручную, нет памяти.
+                // signal.IsManual → явно помечена как ручная.
+                // В обоих случаях: полный hands-off. Никаких SL, TP, BE.
+                // Эта проверка дублирует защиту в SuperviseAsync (L815-818)
+                // на случай если что-то просочится.
+                // ══════════════════════════════════════════════════════════
+                if (signal == null || signal.IsManual)
+                {
+                    _logger.LogDebug(
+                        "[SUPERVISOR][{sym}][{side}] HandleSideAsync: no bot context " +
+                        "(signal={sn}, isManual={m}) — complete hands-off",
+                        symbol, side, signal?.Reason ?? "null", signal?.IsManual ?? false);
+                    return;
+                }
+
                 decimal qtyAbs = Math.Abs(pos.Quantity);
 
                 var key = $"{symbol}_{side}";
@@ -1241,7 +1258,8 @@ namespace VertexAutoTradeBinance8.Services
                     // GetOpenAlgoOrdersAsync has 20s cache — it may falsely return
                     // 0 TPs for a few seconds after user places one. For manual
                     // positions skip emergency TP entirely to avoid conflicts.
-                    bool isManualPos = signal?.IsManual == true;
+                    // signal != null гарантирован ранним return выше
+                    bool isManualPos = signal == null || signal.IsManual;
                     if (_tradingOptions.CurrentValue.SupervisorManageTP && !isManualPos)
                     {
                         await CreateEmergencyTPAsync(client, symbol, side, qtyAbs, entry, signal, ct);
