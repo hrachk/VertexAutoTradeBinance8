@@ -3751,7 +3751,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // If not (or very few bars) → request on-demand fetch from Engine
         var wantTfForCheck = _symTf.TryGetValue(sym, out var ct2) ? ct2 : _activeTf;
         if (!string.IsNullOrEmpty(wantTfForCheck)
-            && !HistoryReader.Has(sym, wantTfForCheck))
+            && !HistoricalReader.Has(sym, wantTfForCheck))
         {
             // No history yet — request it from Engine
             // Engine will load 1000 bars and notify us via KlineHistoryReady
@@ -3855,6 +3855,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public string posSortField { get; set; } = "pnl";
         public bool posSortAsc { get; set; }
         public bool posFilterCurrentSym { get; set; }
+        public Dictionary<string,string>? symTf { get; set; }
     }
 
     async Task SaveSelectionState()
