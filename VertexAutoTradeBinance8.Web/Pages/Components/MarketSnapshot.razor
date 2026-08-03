@@ -857,48 +857,6 @@
                                                     @onclick="@(() => OpenShareCardFromHistory(t))">Share</button>
                                         </td>
                                     </tr>
-                                    @if (_tpSlOpenKey == $"{pos.Symbol}:{pos.Side}")
-                                    {
-                                        <tr class="mk-tpsl-form-row">
-                                            <td colspan="13">
-                                                <div class="mk-tpsl-form">
-                                                    <div class="mk-tpsl-form-title">
-                                                        TP/SL for <strong>@pos.Symbol</strong>
-                                                        <span class="@(pos.Side == "LONG" ? "up" : "dn")">@pos.Side</span>
-                                                    </div>
-                                                    <div class="mk-tpsl-form-inputs">
-                                                        <div class="mk-tpsl-input-group">
-                                                            <label>Stop Loss</label>
-                                                            <input type="number" class="mk-tpsl-input mono"
-                                                                   placeholder="SL price"
-                                                                   step="any"
-                                                                   value="@(_tpSlFormSl > 0 ? _tpSlFormSl.ToString("G8") : "")"
-                                                                   @onchange="e => { if (decimal.TryParse(e.Value?.ToString(), out var v)) _tpSlFormSl = v; }" />
-                                                        </div>
-                                                        <div class="mk-tpsl-input-group">
-                                                            <label>Take Profit</label>
-                                                            <input type="number" class="mk-tpsl-input mono"
-                                                                   placeholder="TP price"
-                                                                   step="any"
-                                                                   value="@(_tpSlFormTp > 0 ? _tpSlFormTp.ToString("G8") : "")"
-                                                                   @onchange="e => { if (decimal.TryParse(e.Value?.ToString(), out var v)) _tpSlFormTp = v; }" />
-                                                        </div>
-                                                        <button class="mk-tpsl-confirm" disabled="@_orderLoading"
-                                                                @onclick="() => ConfirmTpSlForm(pos)">
-                                                            @if (_orderLoading) { <span class="ord-spin"></span> }
-                                                            else { <span>Confirm</span> }
-                                                        </button>
-                                                        <button class="mk-tpsl-cancel"
-                                                                @onclick="() => _tpSlOpenKey = string.Empty">✕</button>
-                                                    </div>
-                                                    @if (!string.IsNullOrEmpty(_orderError))
-                                                    {
-                                                        <div class="ord-error" style="margin-top:4px">⚠ @_orderError</div>
-                                                    }
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    }
                                 }
                             </tbody>
                         </table>
@@ -1147,6 +1105,46 @@
                                                 </button>
                                             </td>
                                         </tr>
+                                    @if (_tpSlOpenKey == $"{pos.Symbol}:{pos.Side}")
+                                    {
+                                        <tr class="mk-tpsl-form-row">
+                                            <td colspan="13">
+                                                <div class="mk-tpsl-form">
+                                                    <div class="mk-tpsl-form-title">
+                                                        TP/SL for <strong>@pos.Symbol</strong>
+                                                        <span class="@(pos.Side == "LONG" ? "up" : "dn")">@pos.Side</span>
+                                                    </div>
+                                                    <div class="mk-tpsl-form-inputs">
+                                                        <div class="mk-tpsl-input-group">
+                                                            <label>Stop Loss</label>
+                                                            <input type="number" class="mk-tpsl-input mono"
+                                                                   placeholder="SL price" step="any"
+                                                                   value="@(_tpSlFormSl > 0 ? _tpSlFormSl.ToString("G8") : "")"
+                                                                   @onchange="e => { if (decimal.TryParse(e.Value?.ToString(), out var v)) _tpSlFormSl = v; }" />
+                                                        </div>
+                                                        <div class="mk-tpsl-input-group">
+                                                            <label>Take Profit</label>
+                                                            <input type="number" class="mk-tpsl-input mono"
+                                                                   placeholder="TP price" step="any"
+                                                                   value="@(_tpSlFormTp > 0 ? _tpSlFormTp.ToString("G8") : "")"
+                                                                   @onchange="e => { if (decimal.TryParse(e.Value?.ToString(), out var v)) _tpSlFormTp = v; }" />
+                                                        </div>
+                                                        <button class="mk-tpsl-confirm" disabled="@_orderLoading"
+                                                                @onclick="() => ConfirmTpSlForm(pos)">
+                                                            @if (_orderLoading) { <span class="ord-spin"></span> }
+                                                            else { <span>Confirm</span> }
+                                                        </button>
+                                                        <button class="mk-tpsl-cancel"
+                                                                @onclick="() => { _tpSlOpenKey = string.Empty; }">✕</button>
+                                                    </div>
+                                                    @if (!string.IsNullOrEmpty(_orderError))
+                                                    {
+                                                        <div class="ord-error" style="margin-top:4px">@_orderError</div>
+                                                    }
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    }
                                     }
                                 </tbody>
                             </table>
@@ -7485,7 +7483,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 decimal slP = RoundPrice(_tpSlFormSl);
                 var slR = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
                     pos.Symbol, closeSide, ConditionalOrderType.StopMarket,
-                    pos.Qty, posSide, triggerPrice: slP, workingType: WorkingType.Mark,
+                    pos.Qty, price: null, positionSide: posSide, triggerPrice: slP, workingType: WorkingType.Mark,
                     clientOrderId: $"MANUAL_SL_{pos.Symbol}_{DateTime.UtcNow:HHmmss}",
                     priceProtect: true, ct: cts.Token);
                 if (!slR.Success) _orderError = $"SL: {slR.Error?.Message}";
@@ -7500,7 +7498,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 decimal tpP = RoundPrice(_tpSlFormTp);
                 var tpR = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
                     pos.Symbol, closeSide, ConditionalOrderType.TakeProfitMarket,
-                    pos.Qty, posSide, triggerPrice: tpP, workingType: WorkingType.Mark,
+                    pos.Qty, price: null, positionSide: posSide, triggerPrice: tpP, workingType: WorkingType.Mark,
                     clientOrderId: $"MANUAL_TP_{pos.Symbol}_{DateTime.UtcNow:HHmmss}",
                     priceProtect: true, ct: cts.Token);
                 if (!tpR.Success) _orderError = $"TP: {tpR.Error?.Message}";
