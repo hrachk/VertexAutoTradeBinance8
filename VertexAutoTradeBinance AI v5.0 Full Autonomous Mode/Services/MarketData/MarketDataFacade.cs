@@ -44,6 +44,11 @@ namespace VertexAutoTradeBinance8.Services
         private volatile bool _restoreAttempted;
         private volatile bool _readyBySnapshot;
 
+        // Serialises RestoreSnapshotStateAsync so the lazy self-heal path in
+        // GetKlinesAsync cannot run it concurrently with TradingWorker's
+        // explicit call (or with itself, from parallel symbol warmups).
+        private readonly SemaphoreSlim _restoreGate = new(1, 1);
+
         public bool HasSnapshotState => _restoreAttempted;   // semantic: restore attempt completed
         public bool ReadyBySnapshot => _readyBySnapshot;     // semantic: snapshot exists => rest backfill disabled
 
@@ -324,6 +329,27 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================
         public async Task RestoreSnapshotStateAsync(CancellationToken ct)
         {
+            // Idempotent: whoever gets here first does the work, everyone
+            // else returns immediately. Cheap fast-path before the gate.
+            if (_restoreAttempted)
+                return;
+
+            await _restoreGate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                if (_restoreAttempted)
+                    return;
+
+                await RestoreSnapshotStateCoreAsync(ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                _restoreGate.Release();
+            }
+        }
+
+        private async Task RestoreSnapshotStateCoreAsync(CancellationToken ct)
+        {
             try
             {
                 _logger.LogWarning("[MD][RESTORE] Restoring market snapshot state...");
@@ -577,8 +603,31 @@ namespace VertexAutoTradeBinance8.Services
 
             if (!_restoreAttempted)
             {
-                // restore wasn't called yet -> best-effort WS only, but do NOT brick the system forever
-                _logger.LogCritical("[MD][HARD-GUARD] GetKlinesAsync called BEFORE RestoreSnapshotStateAsync {symbol} {tf}", symbol, tf);
+                // Hosted-service start order is not guaranteed relative to
+                // TradingWorker's explicit RestoreSnapshotStateAsync() call,
+                // so an early caller used to land here, log FATAL, and then
+                // proceed against a facade whose _barsAvailable /
+                // _readyBySnapshot state had never been populated — silently
+                // degrading every readiness decision that followed.
+                //
+                // Self-heal instead: run the restore now. It's idempotent and
+                // gated, so the later explicit call becomes a no-op.
+                _logger.LogWarning(
+                    "[MD][SELF-HEAL] GetKlinesAsync before restore ({symbol} {tf}) — restoring now",
+                    symbol, tf);
+
+                try
+                {
+                    await RestoreSnapshotStateAsync(ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    // Never block market data on a restore failure — the WS
+                    // path below still works from an empty buffer.
+                    _logger.LogError(ex, "[MD][SELF-HEAL] Lazy restore failed — continuing cold");
+                    _restoreAttempted = true;
+                }
             }
 
             var key = Key(symbol, tf);
