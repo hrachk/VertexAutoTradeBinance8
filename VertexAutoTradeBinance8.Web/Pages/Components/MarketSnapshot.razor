@@ -5339,13 +5339,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     (isStopLoss ? o.Type.Contains("STOP") : o.Type.Contains("TAKE_PROFIT")));
             }
 
-            if (existing != null)
-            {
-                if (existing.IsAlgo)
-                    await CancelAlgoOrderRawAsync(pos.Symbol, existing.OrderId);
-                else
-                    await client.UsdFuturesApi.Trading.CancelOrderAsync(pos.Symbol, existing.OrderId, ct: cts.Token);
-            }
+            // existing order found — will be cancelled AFTER new order is
+            // successfully placed (atomic: position is always protected).
+            // DO NOT cancel here! Old cancel-first caused SL to disappear
+            // when place failed → position left unprotected.
 
             // Same conditional-order pattern the Engine itself uses for
             // placing SL/TP (see PositionSupervisorService.cs) — trigger
