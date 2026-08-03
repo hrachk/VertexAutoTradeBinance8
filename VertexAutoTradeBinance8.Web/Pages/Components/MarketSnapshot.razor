@@ -1521,7 +1521,6 @@
                 }
 
                 } <!-- end manualTradeCollapsed check -->
-            </div>
         }
         else
         {
@@ -4772,6 +4771,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     bool _positionsLoading;
     int  _tickCount = 0; // for staggered polling
     bool? _isHedgeMode; // cached — changes only on account switch
+    string _lastOrdersHash = string.Empty;
+    bool _positionLinesVisible;
     // On-demand kline loading indicator
     string? _klineLoadingSymbol; // null = idle, set = loading in progress
     readonly string _onDemandQueueFile = string.Empty; // set from config in OnInitializedAsync
