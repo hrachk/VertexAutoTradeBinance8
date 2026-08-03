@@ -3798,12 +3798,32 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         }
         else if (!string.IsNullOrEmpty(_activeSym))
         {
-            // Fallback: best available TF for this symbol
-            Selected = Series
-                .Where(s => s.Symbol == _activeSym)
-                .OrderByDescending(s => s.Klines.Count)
-                .FirstOrDefault();
-            if (Selected != null) _activeTf = Selected.Timeframe;
+            // The requested timeframe is in neither Series nor the archive.
+            //
+            // If the user explicitly chose it, keep the request alive with an
+            // empty placeholder: RequestOnDemandKlines / EnsureActiveTfLoadedAsync
+            // will fill it, and the TF button stays on what was actually asked
+            // for. Rewriting _activeTf here was the real cause of the "always
+            // snaps back to 1m" behaviour — LoadData calls ResolveSelected on
+            // the 5-second timer, so this line reverted every single selection
+            // moments after it was made, no matter which code path made it.
+            bool userChoseThisTf =
+                _symTf.TryGetValue(_activeSym, out var chosenTf) && chosenTf == _activeTf;
+
+            if (userChoseThisTf)
+            {
+                Selected = new MarketSeries(_activeSym, _activeTf, new List<KlineDto>());
+            }
+            else
+            {
+                // No explicit preference to protect — show the richest series
+                // we have and adopt its timeframe.
+                Selected = Series
+                    .Where(s => s.Symbol == _activeSym)
+                    .OrderByDescending(s => s.Klines.Count)
+                    .FirstOrDefault();
+                if (Selected != null) _activeTf = Selected.Timeframe;
+            }
         }
     }
 
@@ -3848,7 +3868,13 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         if (IsTfUsable(sym, _activeTf))
             return _activeTf;
 
-        return Series.FirstOrDefault(s => s.Symbol == sym)?.Timeframe ?? _activeTf;
+        // Richest series rather than Series.FirstOrDefault: the list order is
+        // arbitrary and in practice put 1m first, which is precisely how every
+        // symbol ended up on 1m.
+        return Series.Where(s => s.Symbol == sym)
+                     .OrderByDescending(s => s.Klines.Count)
+                     .FirstOrDefault()?.Timeframe
+               ?? _activeTf;
     }
 
     /// <summary>
@@ -4621,11 +4647,25 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     void Pick(MarketSeries s)
     {
         _activeSym = s.Symbol;
-        _activeTf  = s.Timeframe;
-        _symTf[s.Symbol] = s.Timeframe; // remember per-symbol TF
         _orderPanelDismissed = false;
-        Selected = s;
+
+        // Honour this symbol's remembered timeframe instead of blindly taking
+        // the one carried by whichever Series row the caller happened to hand
+        // us. Clicking a ticker row used to force that row's timeframe, which
+        // is another route by which every selection landed on 1m.
+        var tf = ResolveTfForSymbol(s.Symbol);
+        _activeTf = string.IsNullOrEmpty(tf) ? s.Timeframe : tf;
+
+        if (!_symTf.TryGetValue(s.Symbol, out var prevTf) || IsTfUsable(s.Symbol, prevTf))
+            _symTf[s.Symbol] = _activeTf;
+
+        // Re-resolve against the timeframe we actually settled on.
+        ResolveSelected();
+        if (Selected == null) Selected = s;
+
         CalcStats();
+        _ = EnsureActiveTfLoadedAsync();
+        _ = SaveSelectionState();
 
         var existingPos = DisplayedPositions.FirstOrDefault(p => p.Symbol == s.Symbol);
         if (existingPos != null)
