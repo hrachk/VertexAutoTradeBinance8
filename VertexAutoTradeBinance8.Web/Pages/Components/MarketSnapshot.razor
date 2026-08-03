@@ -1025,7 +1025,7 @@
                                             @if (_partialCloseOpenKey != $"{pos.Symbol}:{pos.Side}")
                                             {
                                                 <button class="mk-pos-tpsl-btn"
-                                                        @onclick="async () => { _tpSlEditMode = true; await SelectPosition(pos); }"
+                                                        @onclick="() => OnTpSlButtonClick(pos)"
                                                         title="Set TP/SL">⚡ TP/SL
                                                 </button>
                                                 <button class="mk-pos-partial-btn2" disabled="@_orderLoading"
@@ -7381,10 +7381,15 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     async Task QuickSetTpSl(ActivePositionInfo pos)
     {
-        // Same as clicking position row, but ensures TP/SL edit mode is on
         _tpSlEditMode = true;
         await SelectPosition(pos);
         StateHasChanged();
+    }
+
+    async Task OnTpSlButtonClick(ActivePositionInfo pos)
+    {
+        _tpSlEditMode = true;
+        await SelectPosition(pos);
     }
 
     void ClosePanel()
