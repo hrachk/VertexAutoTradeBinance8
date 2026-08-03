@@ -68,11 +68,23 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
         // reported "no signals for 2-3 hours after restart" — REST
         // bootstrap now explicitly covers every timeframe the strategy
         // actually needs, not just the one nothing trades on directly.
+        // HTF (1h/4h/1d) added per audit: MarketContextService reads exactly
+        // these three to compute regime alignment (the confidence boost up to
+        // x1.25 and the LongOnly/ShortOnly bias gate). They were NOT
+        // bootstrapped here, so on any start where the snapshot file lacked
+        // them the only other source was live WebSocket - which delivers ONE
+        // 1d bar per day. A cold start therefore left 1d effectively empty for
+        // weeks, making MarketContextService.Read() hit its "< 20 bars ->
+        // return Range" guard permanently and silently disabling HTF
+        // confirmation even with HtfConfirmationEnabled = true.
         var tfsToBootstrap = new[]
         {
             KlineInterval.OneMinute,
             KlineInterval.FiveMinutes,
             KlineInterval.FifteenMinutes,
+            KlineInterval.OneHour,
+            KlineInterval.FourHour,
+            KlineInterval.OneDay,
         };
 
         foreach (var symbol in pinned)
@@ -224,6 +236,12 @@ public sealed class SupervisorBootstrapHostedService : BackgroundService
         KlineInterval.OneMinute => "1m",
         KlineInterval.FiveMinutes => "5m",
         KlineInterval.FifteenMinutes => "15m",
+        // HTF labels must match HistoricalDataLoaderService's lowercase
+        // datadb/SYMBOL/TF.json filenames so HTF can also warm-start from the
+        // local archive instead of always hitting REST.
+        KlineInterval.OneHour => "1h",
+        KlineInterval.FourHour => "4h",
+        KlineInterval.OneDay => "1d",
         _ => null
     };
 }
