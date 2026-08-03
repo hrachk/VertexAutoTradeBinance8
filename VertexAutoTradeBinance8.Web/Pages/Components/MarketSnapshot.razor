@@ -8116,7 +8116,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
         LiveState.PriceTicked      -= OnLivePriceTicked;
         LiveState.PositionChanged  -= OnLivePositionChanged;
-        LiveState.KlineHistoryReady -= OnKlineHistoryReady;
+        LiveState.PriceTicked        -= OnLivePriceTicked;
+        LiveState.PositionChanged    -= OnLivePositionChanged;
+        LiveState.KlineHistoryReady  -= OnKlineHistoryReady;
         DemoAccount.Updated -= OnDemoAccountUpdated;
         DemoAccount.DemoModeChanged -= OnDemoModeChangedExternally;
         LiveState.KlineClosed -= OnLiveKlineClosed;
