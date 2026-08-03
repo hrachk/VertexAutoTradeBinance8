@@ -3338,20 +3338,27 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
                         if (!string.IsNullOrEmpty(saved.sym))
                         {
-                            // Use per-symbol TF if available, else saved global TF
-                            var wantTf = (_symTf.TryGetValue(saved.sym, out var st) ? st : null)
-                                      ?? saved.tf;
-                            var match = !string.IsNullOrEmpty(wantTf)
-                                ? Series.FirstOrDefault(s => s.Symbol == saved.sym && s.Timeframe == wantTf)
-                                : null;
-                            match ??= Series.FirstOrDefault(s => s.Symbol == saved.sym);
-                            if (match != null && (match.Symbol != _activeSym || match.Timeframe != _activeTf))
+                            // Adopt the saved global TF first so ResolveTfForSymbol
+                            // can use it as the priority-2 candidate.
+                            if (!string.IsNullOrEmpty(saved.tf))
+                                _activeTf = saved.tf;
+
+                            // Same resolver the rest of the page uses: honours the
+                            // per-symbol memory and treats archive-only timeframes
+                            // as valid. The previous version checked Series only and
+                            // then wrote the fallback back into _symTf, so every page
+                            // load silently reset the remembered timeframe to 1m.
+                            var restoredTf = ResolveTfForSymbol(saved.sym);
+
+                            if (saved.sym != _activeSym || restoredTf != _activeTf)
                             {
-                                _activeSym = match.Symbol;
-                                _activeTf = match.Timeframe;
-                                _symTf[_activeSym] = _activeTf;
+                                _activeSym = saved.sym;
+                                if (!string.IsNullOrEmpty(restoredTf))
+                                    _activeTf = restoredTf;
+
                                 ResolveSelected();
                                 CalcStats();
+                                _ = EnsureActiveTfLoadedAsync();
                             }
                         }
 
@@ -3814,21 +3821,104 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     string  _editError = string.Empty;
     bool    _editSaving;
 
+    /// <summary>
+    /// A timeframe counts as usable for a symbol when it is present in the
+    /// in-memory Series OR in the datadb archive on disk. This mirrors the
+    /// availability test the TF buttons already use, so what the buttons
+    /// show as selectable and what symbol selection will actually honour
+    /// can no longer disagree.
+    /// </summary>
+    bool IsTfUsable(string sym, string? tf)
+        => !string.IsNullOrEmpty(sym)
+        && !string.IsNullOrEmpty(tf)
+        && (Series.Any(s => s.Symbol == sym && s.Timeframe == tf)
+            || HistoricalReader.Has(sym, TfLabel(tf!).ToLowerInvariant()));
+
+    /// <summary>
+    /// Priority:
+    ///   1. the timeframe this symbol was last viewed on (user's choice)
+    ///   2. the timeframe currently on screen (carry it across symbols)
+    ///   3. whatever the symbol actually has
+    /// </summary>
+    string ResolveTfForSymbol(string sym)
+    {
+        if (_symTf.TryGetValue(sym, out var remembered) && IsTfUsable(sym, remembered))
+            return remembered;
+
+        if (IsTfUsable(sym, _activeTf))
+            return _activeTf;
+
+        return Series.FirstOrDefault(s => s.Symbol == sym)?.Timeframe ?? _activeTf;
+    }
+
+    /// <summary>
+    /// Loads the active symbol+timeframe from the datadb archive when Series
+    /// holds only an empty placeholder for it, and registers the result in
+    /// Series so every later lookup finds it normally.
+    /// Returns true when something was actually loaded.
+    /// </summary>
+    async Task<bool> LoadActiveTfFromArchiveAsync()
+    {
+        if (Selected == null || Selected.Klines.Count > 0) return false;
+        if (string.IsNullOrEmpty(_activeSym) || string.IsNullOrEmpty(_activeTf)) return false;
+
+        try
+        {
+            var label = TfLabel(_activeTf).ToLowerInvariant();
+            var archived = await HistoricalReader.LoadAsync(_activeSym, label);
+            if (archived.Count == 0) return false;
+
+            Selected = Selected with { Klines = archived };
+
+            var idx = Series.FindIndex(s => s.Symbol == _activeSym && s.Timeframe == _activeTf);
+            if (idx >= 0) Series[idx] = Selected; else Series.Add(Selected);
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Fire-and-forget variant that refreshes the UI if it loaded anything.</summary>
+    async Task EnsureActiveTfLoadedAsync()
+    {
+        if (!await LoadActiveTfFromArchiveAsync()) return;
+
+        CalcStats();
+        await InvokeAsync(StateHasChanged);
+        _ = RenderCharts();
+    }
+
     void PickSym(string sym, bool autoSelectExistingPosition = true)
     {
         _activeSym = sym;
         _orderPanelDismissed = false;
-        // TF priority: 1) this symbol's last-used TF, 2) current global TF, 3) first available
-        var wantTf = _symTf.TryGetValue(sym, out var remembered) ? remembered : _activeTf;
-        var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == wantTf)
-            ?? Series.FirstOrDefault(s => s.Symbol == sym);
-        if (available != null)
+
+        // Resolve which timeframe this symbol should open on. See
+        // ResolveTfForSymbol for the priority order.
+        var resolvedTf = ResolveTfForSymbol(sym);
+        if (!string.IsNullOrEmpty(resolvedTf))
         {
-            _activeTf = available.Timeframe;
-            _symTf[sym] = _activeTf; // remember for next time
+            _activeTf = resolvedTf;
+
+            // Only persist when this is a genuine choice. If we fell back
+            // because the preferred timeframe has no data *yet*, the old
+            // code overwrote the preference with the fallback and the user
+            // could never get back to it. Keep it instead, so it applies
+            // again the moment that timeframe has data.
+            if (!_symTf.TryGetValue(sym, out var prev) || IsTfUsable(sym, prev))
+                _symTf[sym] = resolvedTf;
         }
+
         ResolveSelected();
         CalcStats();
+
+        // The chosen timeframe may exist only in the datadb archive and not
+        // in the narrow klines_bootstrap snapshot Series is built from.
+        // Pull it in so the chart isn't blank.
+        _ = EnsureActiveTfLoadedAsync();
         // If this symbol has no klines (e.g. manually opened position
         // on a coin not in the bot universe), trigger fetch.
         // Force re-fetch regardless of _preloadedSymbols — user explicitly
@@ -3841,9 +3931,11 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
         // Check if datadb has history for this symbol+TF
         // If not (or very few bars) → request on-demand fetch from Engine
+        _ = SaveSelectionState();
+
         var wantTfForCheck = _symTf.TryGetValue(sym, out var ct2) ? ct2 : _activeTf;
         if (!string.IsNullOrEmpty(wantTfForCheck)
-            && !HistoricalReader.Has(sym, wantTfForCheck))
+            && !HistoricalReader.Has(sym, TfLabel(wantTfForCheck).ToLowerInvariant()))
         {
             // No history yet — request it from Engine
             // Engine will load 1000 bars and notify us via KlineHistoryReady
@@ -4053,6 +4145,14 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     async Task PickTf(string tf)
     {
         _activeTf = tf;
+
+        // Record the user's explicit choice for THIS symbol. Without this
+        // line the per-symbol memory only ever contained whatever fallback
+        // PickSym had computed, so returning to a symbol always replayed
+        // that fallback (in practice: 1m) instead of the chosen timeframe.
+        if (!string.IsNullOrEmpty(_activeSym))
+            _symTf[_activeSym] = tf;
+
         ResolveSelected();
 
         // If ResolveSelected created an empty placeholder (this
@@ -4062,21 +4162,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // Klines.Count < 5, so it can never be the thing that performs
         // this initial fill; this loader bypasses that gate entirely
         // for exactly this bootstrap case.
-        if (Selected != null && Selected.Klines.Count == 0 && !string.IsNullOrEmpty(_activeSym))
-        {
-            var label = TfLabel(_activeTf).ToLowerInvariant();
-            var archived = await HistoricalReader.LoadAsync(_activeSym, label);
-            if (archived.Count > 0)
-            {
-                Selected = Selected with { Klines = archived };
-                // Also register this in Series so subsequent lookups
-                // (ResolveSelected, the TF-button hasSeries check,
-                // etc) find it normally from now on, same as any
-                // other timeframe that was present from the start.
-                var idx = Series.FindIndex(s => s.Symbol == _activeSym && s.Timeframe == _activeTf);
-                if (idx >= 0) Series[idx] = Selected; else Series.Add(Selected);
-            }
-        }
+        await LoadActiveTfFromArchiveAsync();
 
         CalcStats();
         StateHasChanged();
@@ -6486,14 +6572,16 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         _manualTradeCollapsed  = false;  // reset collapse state
 
         var sym = pos.Symbol;
-        var wantTfPos = _symTf.TryGetValue(sym, out var remPos) ? remPos : _activeTf;
-        var available = Series.FirstOrDefault(s => s.Symbol == sym && s.Timeframe == wantTfPos)
-            ?? Series.FirstOrDefault(s => s.Symbol == sym);
         _activeSym = sym;
-        if (available != null)
+
+        // Same resolver as PickSym so opening a position and clicking the
+        // symbol land on the identical timeframe.
+        var posTf = ResolveTfForSymbol(sym);
+        if (!string.IsNullOrEmpty(posTf))
         {
-            _activeTf = available.Timeframe;
-            _symTf[sym] = _activeTf;
+            _activeTf = posTf;
+            if (!_symTf.TryGetValue(sym, out var prevPos) || IsTfUsable(sym, prevPos))
+                _symTf[sym] = posTf;
         }
         ResolveSelected();
         CalcStats();
