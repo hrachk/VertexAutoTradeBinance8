@@ -141,24 +141,69 @@ namespace VertexAutoTradeBinance8.MarketData
         // =====================================================
         // ⚠ LEGACY SNAPSHOT API (used by MarketDataFacade)
         // =====================================================
+        /// <summary>
+        /// Path the live snapshot is actually persisted to. Set once by
+        /// KlineBufferPersistence's constructor (it has IConfiguration and
+        /// therefore knows SharedData:Root). Until then it falls back to the
+        /// legacy location so nothing breaks if the wiring ever changes.
+        ///
+        /// WHY THIS EXISTS: LoadSnapshot() used to hardcode
+        /// AppContext.BaseDirectory/market-klines.snapshot.json — a file
+        /// NOTHING in the system has ever written. KlineBufferPersistence
+        /// writes SharedData:Root/market/klines_bootstrap.json instead. The
+        /// result was that MarketDataFacade.RestoreSnapshotStateAsync() ALWAYS
+        /// found an empty snapshot, always logged "COLD START", and never
+        /// populated _barsAvailable / _readyBySnapshot — even on restarts where
+        /// SupervisorBootstrapHostedService had already correctly refilled the
+        /// buffer from the real file moments earlier.
+        /// </summary>
+        public string SnapshotFilePath { get; set; }
+            = Path.Combine(AppContext.BaseDirectory, "market-klines.snapshot.json");
+
         public Dictionary<string, List<BinanceFuturesUsdtKline>> LoadSnapshot()
         {
-            var path = Path.Combine(AppContext.BaseDirectory, "market-klines.snapshot.json");
-
-            if (!File.Exists(path))
-                return new();
-
-            try
+            // Try the real persistence path first, then the legacy one.
+            var candidates = new[]
             {
-                var json = File.ReadAllText(path);
-                return JsonSerializer.Deserialize<
-                    Dictionary<string, List<BinanceFuturesUsdtKline>>
-                >(json) ?? new();
-            }
-            catch
+                SnapshotFilePath,
+                Path.Combine(AppContext.BaseDirectory, "market", "klines_bootstrap.json"),
+                Path.Combine(AppContext.BaseDirectory, "market-klines.snapshot.json"),
+            };
+
+            foreach (var path in candidates)
             {
-                return new();
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                    continue;
+
+                try
+                {
+                    var json = File.ReadAllText(path);
+                    if (string.IsNullOrWhiteSpace(json))
+                        continue;
+
+                    // The live saver writes KlineSnapshotDto (camelCase
+                    // openTime/open/high/low/close/volume). The legacy format
+                    // was raw BinanceFuturesUsdtKline. Support both so an
+                    // existing on-disk file from either era still restores.
+                    var opts = new JsonSerializerOptions
+                    {
+                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                        PropertyNameCaseInsensitive = true
+                    };
+
+                    var parsed = JsonSerializer.Deserialize<
+                        Dictionary<string, List<BinanceFuturesUsdtKline>>>(json, opts);
+
+                    if (parsed != null && parsed.Count > 0)
+                        return parsed;
+                }
+                catch
+                {
+                    // try next candidate
+                }
             }
+
+            return new();
         }
 
         public Dictionary<string, List<BinanceFuturesUsdtKline>> DumpAll()
