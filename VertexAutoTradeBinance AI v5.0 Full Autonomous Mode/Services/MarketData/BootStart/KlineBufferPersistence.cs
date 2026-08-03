@@ -38,6 +38,12 @@ public sealed class KlineBufferPersistence
         _path = !string.IsNullOrWhiteSpace(root)
             ? Path.Combine(root, "market", "klines_bootstrap.json")
             : Path.Combine(AppContext.BaseDirectory, "market", "klines_bootstrap.json");
+
+        // Tell the buffer where the snapshot actually lives, so the OTHER
+        // restore path (MarketDataFacade.RestoreSnapshotStateAsync ->
+        // MarketDataKlineBuffer.LoadSnapshot) reads the same file this class
+        // writes instead of a legacy path nothing has ever produced.
+        _buffer.SnapshotFilePath = _path;
     }
 
     // =====================================================================
