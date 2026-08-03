@@ -7324,6 +7324,12 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         if (_activeSignal != null) _activeSignal.Side = "SELL";
     }
 
+    async Task QuickSetTpSl(ActivePositionInfo pos)
+    {
+        await SelectPosition(pos);
+        try { await RefreshPositionLines(); } catch { }
+    }
+
     void ClosePanel()
     {
         _activeSignal         = null;
