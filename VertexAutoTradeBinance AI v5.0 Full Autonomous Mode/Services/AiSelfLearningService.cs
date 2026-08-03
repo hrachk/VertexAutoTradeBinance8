@@ -810,21 +810,85 @@ namespace VertexAutoTradeBinance8.Services
 
                 File.WriteAllText(tmpPath, json, Encoding.UTF8);
 
-                if (File.Exists(FilePath))
-                {
-                    // 🔒 ATOMIC replace
-                    File.Replace(tmpPath, FilePath, backupPath, ignoreMetadataErrors: true);
-                }
-                else
+                if (!File.Exists(FilePath))
                 {
                     File.Move(tmpPath, FilePath);
-                    File.Copy(FilePath, backupPath, overwrite: true);
+                    TryBackup(backupPath);
+                    return;
+                }
+
+                // File.Replace is atomic but fails outright with
+                // "Unable to remove the file to be replaced" whenever ANY
+                // process holds a handle on the destination — antivirus
+                // real-time scanning, the Windows Search indexer, or the Web
+                // process reading the snapshot. The old code let that
+                // exception escape, so a transient lock meant the AI state
+                // was simply never persisted for that cycle.
+                //
+                // Retry briefly (locks of this kind clear in tens of ms),
+                // then degrade gracefully rather than losing the write.
+                const int maxAttempts = 4;
+
+                for (int attempt = 1; attempt <= maxAttempts; attempt++)
+                {
+                    try
+                    {
+                        File.Replace(tmpPath, FilePath, backupPath, ignoreMetadataErrors: true);
+                        return; // success
+                    }
+                    catch (IOException) when (attempt < maxAttempts)
+                    {
+                        Thread.Sleep(40 * attempt); // 40 / 80 / 120 ms
+                    }
+                    catch (UnauthorizedAccessException) when (attempt < maxAttempts)
+                    {
+                        Thread.Sleep(40 * attempt);
+                    }
+                }
+
+                // Still locked after retries: fall back to a non-atomic
+                // overwrite. Slightly weaker guarantee, but the alternative
+                // is losing the snapshot entirely — and the backup copy
+                // written just below covers the torn-write case.
+                try
+                {
+                    TryBackup(backupPath);
+                    File.Copy(tmpPath, FilePath, overwrite: true);
+                    TryDelete(tmpPath);
+
+                    _logger.LogWarning(
+                        "[AI] Atomic replace blocked by a file lock — fell back to direct overwrite");
+                }
+                catch (Exception ex)
+                {
+                    TryDelete(tmpPath);
+                    _logger.LogError(ex, "[AI] Snapshot save failed after all fallbacks");
+                    throw;
                 }
             }
             finally
             {
                 _saveMutex.ReleaseMutex();
             }
+        }
+
+        /// <summary>Best-effort copy of the current snapshot to the backup slot.</summary>
+        private void TryBackup(string backupPath)
+        {
+            try
+            {
+                if (File.Exists(FilePath))
+                    File.Copy(FilePath, backupPath, overwrite: true);
+            }
+            catch
+            {
+                // backup is a convenience, never a reason to fail the save
+            }
+        }
+
+        private static void TryDelete(string path)
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
         }
 
         private void Load()
