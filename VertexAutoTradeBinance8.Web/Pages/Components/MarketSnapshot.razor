@@ -1142,46 +1142,6 @@
                                                 </button>
                                             </td>
                                         </tr>
-                                    @if (_tpSlOpenKey == $"{pos.Symbol}:{pos.Side}")
-                                    {
-                                        <tr class="mk-tpsl-form-row">
-                                            <td colspan="13">
-                                                <div class="mk-tpsl-form">
-                                                    <div class="mk-tpsl-form-title">
-                                                        TP/SL for <strong>@pos.Symbol</strong>
-                                                        <span class="@(pos.Side == "LONG" ? "up" : "dn")">@pos.Side</span>
-                                                    </div>
-                                                    <div class="mk-tpsl-form-inputs">
-                                                        <div class="mk-tpsl-input-group">
-                                                            <label>Stop Loss</label>
-                                                            <input type="number" class="mk-tpsl-input mono"
-                                                                   placeholder="SL price" step="any"
-                                                                   value="@(_tpSlFormSl > 0 ? _tpSlFormSl.ToString("G8") : "")"
-                                                                   @onchange="e => { if (decimal.TryParse(e.Value?.ToString(), out var v)) _tpSlFormSl = v; }" />
-                                                        </div>
-                                                        <div class="mk-tpsl-input-group">
-                                                            <label>Take Profit</label>
-                                                            <input type="number" class="mk-tpsl-input mono"
-                                                                   placeholder="TP price" step="any"
-                                                                   value="@(_tpSlFormTp > 0 ? _tpSlFormTp.ToString("G8") : "")"
-                                                                   @onchange="e => { if (decimal.TryParse(e.Value?.ToString(), out var v)) _tpSlFormTp = v; }" />
-                                                        </div>
-                                                        <button class="mk-tpsl-confirm" disabled="@_orderLoading"
-                                                                @onclick="() => ConfirmTpSlForm(pos)">
-                                                            @if (_orderLoading) { <span class="ord-spin"></span> }
-                                                            else { <span>Confirm</span> }
-                                                        </button>
-                                                        <button class="mk-tpsl-cancel"
-                                                                @onclick="() => { _tpSlOpenKey = string.Empty; }">✕</button>
-                                                    </div>
-                                                    @if (!string.IsNullOrEmpty(_orderError))
-                                                    {
-                                                        <div class="ord-error" style="margin-top:4px">@_orderError</div>
-                                                    }
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    }
                                     }
                                 </tbody>
                             </table>
