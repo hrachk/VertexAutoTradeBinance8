@@ -2956,7 +2956,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             try
             {
                 // Build queue file path from SharedData:Root config
-                var root = Configuration["SharedData:Root"]
+                var root = AppConfig["SharedData:Root"]
                         ?? System.IO.Path.Combine(AppContext.BaseDirectory);
                 var queueFile = System.IO.Path.Combine(root, "kline_ondemand_queue.json");
                 var request = System.Text.Json.JsonSerializer.Serialize(
