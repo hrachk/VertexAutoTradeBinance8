@@ -353,6 +353,9 @@ public class Program
                     services.AddHostedService<TradingWorker>();
                     services.AddHostedService<BinanceUserDataHostedService>();
                     services.AddHostedService<KlineSnapshotLiveSaver>();
+                    // Warms 1h/4h/1d for every universe symbol (not just pinned).
+                    // Waits on BootGate internally, so it never delays startup.
+                    services.AddHostedService<HtfUniverseWarmupService>();
                     // Register as singleton first so OrderExecutor / PSS can inject it
                     services.AddSingleton<MarketDataPushClient>();
                     services.AddHostedService(sp => sp.GetRequiredService<MarketDataPushClient>());
