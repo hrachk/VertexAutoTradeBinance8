@@ -3086,35 +3086,79 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     DateTime _lastPosRefresh = DateTime.MinValue;
     bool _posRefreshBusy;
 
+    // Refresh schedule after a position event. The first attempt is
+    // immediate — Binance's REST view usually already reflects the fill by
+    // the time the engine's SignalR notification reaches us. The later
+    // attempts only exist to cover the occasional lag, and the loop stops
+    // the moment the position set actually changes, so in the common case
+    // exactly ONE request is made.
+    static readonly int[] PositionRefreshBackoffMs = { 0, 250, 700, 1500 };
+
+    bool _posEventPending;
+
     void OnLivePositionChanged(string symbol, string side, string eventType)
     {
         if (_demoMode) return; // demo positions are in-memory, already live
 
-        // Debounce — engine may fire multiple events within 1 second
-        // for the same position (fill + protection orders)
-        if ((DateTime.UtcNow - _lastPosRefresh).TotalSeconds < 1.0) return;
-        _lastPosRefresh = DateTime.UtcNow;
+        // Coalesce instead of drop. A single trade produces several events
+        // (entry fill, then each protection order), and the old 1-second
+        // debounce discarded every one after the first — including, when the
+        // ordering worked out badly, the only one that carried the change we
+        // needed. Setting a flag means a refresh already in flight simply
+        // runs one more round afterwards.
+        _posEventPending = true;
+        if (_posRefreshBusy) return;
 
+        _ = InvokeAsync(RefreshPositionsUntilChangedAsync);
+    }
+
+    /// <summary>
+    /// Fingerprint of the current position set. Used to detect when Binance's
+    /// REST view has caught up with the fill we were told about.
+    /// </summary>
+    string PositionsFingerprint()
+    {
+        var snap = _allPositions;
+        if (snap.Count == 0) return "";
+        return string.Join('|', snap.Select(p => $"{p.Symbol}:{p.Side}:{p.Qty}"));
+    }
+
+    async Task RefreshPositionsUntilChangedAsync()
+    {
         if (_posRefreshBusy) return;
         _posRefreshBusy = true;
 
-        _ = InvokeAsync(async () =>
+        try
         {
-            try
+            do
             {
-                // Brief delay so Binance position endpoint reflects the fill
-                await Task.Delay(600);
-                // Refresh positions + orders in parallel (same as timer tick)
-                await Task.WhenAll(
-                    LoadAllOpenPositionsAsync(),
-                    LoadOpenOrdersAsync(),
-                    LoadData()
-                );
-                StateHasChanged();
+                _posEventPending = false;
+                _lastPosRefresh = DateTime.UtcNow;
+
+                var before = PositionsFingerprint();
+
+                foreach (var delayMs in PositionRefreshBackoffMs)
+                {
+                    if (delayMs > 0) await Task.Delay(delayMs);
+
+                    // Positions + orders only. LoadData() reloads the whole
+                    // market snapshot and has nothing to do with a fill —
+                    // calling it here just made every position event heavier.
+                    await Task.WhenAll(
+                        LoadAllOpenPositionsAsync(),
+                        LoadOpenOrdersAsync());
+
+                    await InvokeAsync(StateHasChanged);
+
+                    // Binance has caught up — stop, don't burn the remaining
+                    // attempts.
+                    if (PositionsFingerprint() != before) break;
+                }
             }
-            catch { /* non-critical */ }
-            finally { _posRefreshBusy = false; }
-        });
+            while (_posEventPending);
+        }
+        catch { /* non-critical */ }
+        finally { _posRefreshBusy = false; }
     }
 
     void OnLivePriceTicked(string symbol, decimal price)
