@@ -1025,7 +1025,7 @@
                                             @if (_partialCloseOpenKey != $"{pos.Symbol}:{pos.Side}")
                                             {
                                                 <button class="mk-pos-tpsl-btn"
-                                                        @onclick="() => QuickSetTpSl(pos)"
+                                                        @onclick="async () => { _tpSlEditMode = true; await SelectPosition(pos); }"
                                                         title="Set TP/SL">⚡ TP/SL
                                                 </button>
                                                 <button class="mk-pos-partial-btn2" disabled="@_orderLoading"
@@ -1336,6 +1336,12 @@
                         </div>
                     }
 
+                    <!-- Available Balance -->
+                    <div class="ord-avail-bal">
+                        <span class="ord-avail-label">Available</span>
+                        <span class="ord-avail-value mono">@_acctAvailableBalance.ToString("F2") USDT</span>
+                    </div>
+
                     <!-- Quantity + notional hint -->
                     <div class="ord-row">
                         <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -1356,7 +1362,19 @@
                             <span class="ord-input-sfx">@_activeSignal!.Symbol.Replace("USDT","")</span>
                         </div>
                     </div>
-
+                    <!-- Qty slider: 0-100% of max position -->
+                    <div class="ord-qty-slider-wrap">
+                        <input type="range" min="0" max="100" step="1"
+                               class="ord-qty-slider"
+                               value="@_qtySliderPct"
+                               @oninput="OnQtySliderChange" />
+                        <div class="ord-qty-pct-row">
+                            <button class="ord-qty-pct-btn" @onclick="() => SetQtyPct(25)">25%</button>
+                            <button class="ord-qty-pct-btn" @onclick="() => SetQtyPct(50)">50%</button>
+                            <button class="ord-qty-pct-btn" @onclick="() => SetQtyPct(75)">75%</button>
+                            <button class="ord-qty-pct-btn" @onclick="() => SetQtyPct(100)">100%</button>
+                        </div>
+                    </div>
 
                     <!-- SL + multi-TP — auto-filled from the signal's own
                          levels when this is a strategy signal (one click
@@ -7287,6 +7305,33 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out var v)) return;
         _manualTps[idx].Pct = Math.Clamp(v, 1m, 100m);
+    }
+
+    decimal CalcMaxQty()
+    {
+        // Max qty = (available × leverage) / price
+        decimal price = _orderPrice > 0 ? _orderPrice
+            : Series.FirstOrDefault(s => s.Symbol == _activeSym)?.Klines.LastOrDefault()?.Close ?? 0m;
+        if (price <= 0 || _orderLeverage <= 0) return 0;
+        decimal maxNotional = _acctAvailableBalance * _orderLeverage;
+        decimal maxQty = maxNotional / price;
+        if (_symStep > 0) maxQty = Math.Floor(maxQty / _symStep) * _symStep;
+        return maxQty;
+    }
+
+    void SetQtyPct(int pct)
+    {
+        _qtySliderPct = pct;
+        decimal maxQty = CalcMaxQty();
+        _orderQty = maxQty * pct / 100m;
+        if (_symStep > 0) _orderQty = Math.Floor(_orderQty / _symStep) * _symStep;
+        StateHasChanged();
+    }
+
+    void OnQtySliderChange(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out int pct))
+            SetQtyPct(pct);
     }
 
     void OnQtyChange(ChangeEventArgs e)
