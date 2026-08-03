@@ -6832,7 +6832,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
             if (PosIdentityEquals(_selectedPosition, pos)) _selectedPosition = null;
             OpenShareCard(pos.Symbol, pos.Side, pos.Leverage, pos.Roi * 100m, pos.Pnl, pos.EntryPrice, pos.MarkPrice, isOpen: false);
-            await LoadAllOpenPositionsAsync();
+            // Verify-and-retry instead of a single fetch: Binance's REST
+            // view can still show the position for a few hundred ms.
+            await RefreshPositionsUntilChangedAsync();
         }
         catch { }
         finally { _orderLoading = false; }
@@ -6912,7 +6914,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 ct: cts.Token);
 
             OpenShareCard(pos.Symbol, pos.Side, pos.Leverage, pos.Roi * 100m, pos.Pnl, pos.EntryPrice, pos.MarkPrice, isOpen: false);
-            await LoadAllOpenPositionsAsync();
+            await RefreshPositionsUntilChangedAsync();
         }
         catch { }
         finally { _orderLoading = false; StateHasChanged(); }
@@ -7027,7 +7029,14 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             }
         }
         catch (Exception ex) { _orderError = ex.Message; }
-        finally { _orderLoading = false; StateHasChanged(); }
+        finally
+        {
+            _orderLoading = false;
+            StateHasChanged();
+            // This handler used to reload nothing at all, so a manual close
+            // only disappeared from the UI on the next 15s timer tick.
+            _ = RefreshPositionsUntilChangedAsync();
+        }
     }
 
     sealed class OpenOrderRow
@@ -8240,6 +8249,12 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 if (r.Success) orderId = r.Data?.Id;
                 else { _orderError = $"Error {r.Error?.Code}: {r.Error?.Message}"; return; }
             }
+
+            // Entry accepted — pull the position in now instead of leaving
+            // the user watching an empty Positions list until the next
+            // timer tick. Fire-and-forget so SL/TP placement below is not
+            // delayed by it.
+            _ = RefreshPositionsUntilChangedAsync();
 
             string entrySummary = $"Order #{orderId} placed · {_orderType} · {qty} {_activeSignal.Symbol.Replace("USDT","")}";
 
