@@ -7450,6 +7450,72 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         await SelectPosition(pos);
     }
 
+    void ToggleTpSlForm(ActivePositionInfo pos)
+    {
+        var key = $"{pos.Symbol}:{pos.Side}";
+        if (_tpSlOpenKey == key) { _tpSlOpenKey = ""; return; }
+        _tpSlOpenKey = key;
+        _orderError = "";
+        var posOrders = _openOrders.Where(o => o.Symbol == pos.Symbol).ToList();
+        _tpSlFormSl = posOrders.FirstOrDefault(o => o.Type.Contains("STOP"))?.Price ?? 0m;
+        _tpSlFormTp = posOrders.FirstOrDefault(o => o.Type.Contains("TAKE_PROFIT"))?.Price ?? 0m;
+    }
+
+    async Task ConfirmTpSlForm(ActivePositionInfo pos)
+    {
+        var client = Factory.TryCreateRestClient();
+        if (client == null) { _orderError = "No Binance client"; return; }
+        _orderLoading = true; _orderError = "";
+        StateHasChanged();
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            bool isLong = pos.Side == "LONG";
+            var closeSide = isLong ? OrderSide.Sell : OrderSide.Buy;
+            var posSide = isLong ? PositionSide.Long : PositionSide.Short;
+            await LoadSymbolPrecisionAsync(pos.Symbol);
+            var posOrders = _openOrders.Where(o => o.Symbol == pos.Symbol).ToList();
+
+            if (_tpSlFormSl > 0)
+            {
+                var oldSl = posOrders.FirstOrDefault(o => o.Type.Contains("STOP"));
+                if (oldSl != null)
+                    try { if (oldSl.IsAlgo) await CancelAlgoOrderRawAsync(pos.Symbol, oldSl.OrderId);
+                          else await client.UsdFuturesApi.Trading.CancelOrderAsync(pos.Symbol, oldSl.OrderId, ct: cts.Token); } catch { }
+                decimal slP = RoundPrice(_tpSlFormSl);
+                var slR = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                    pos.Symbol, closeSide, ConditionalOrderType.StopMarket,
+                    pos.Qty, posSide, triggerPrice: slP, workingType: WorkingType.Mark,
+                    clientOrderId: $"MANUAL_SL_{pos.Symbol}_{DateTime.UtcNow:HHmmss}",
+                    priceProtect: true, ct: cts.Token);
+                if (!slR.Success) _orderError = $"SL: {slR.Error?.Message}";
+            }
+
+            if (_tpSlFormTp > 0 && string.IsNullOrEmpty(_orderError))
+            {
+                var oldTp = posOrders.FirstOrDefault(o => o.Type.Contains("TAKE_PROFIT"));
+                if (oldTp != null)
+                    try { if (oldTp.IsAlgo) await CancelAlgoOrderRawAsync(pos.Symbol, oldTp.OrderId);
+                          else await client.UsdFuturesApi.Trading.CancelOrderAsync(pos.Symbol, oldTp.OrderId, ct: cts.Token); } catch { }
+                decimal tpP = RoundPrice(_tpSlFormTp);
+                var tpR = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                    pos.Symbol, closeSide, ConditionalOrderType.TakeProfitMarket,
+                    pos.Qty, posSide, triggerPrice: tpP, workingType: WorkingType.Mark,
+                    clientOrderId: $"MANUAL_TP_{pos.Symbol}_{DateTime.UtcNow:HHmmss}",
+                    priceProtect: true, ct: cts.Token);
+                if (!tpR.Success) _orderError = $"TP: {tpR.Error?.Message}";
+            }
+
+            if (string.IsNullOrEmpty(_orderError))
+            {
+                _tpSlOpenKey = "";
+                await LoadOpenOrdersAsync();
+            }
+        }
+        catch (Exception ex) { _orderError = ex.Message; }
+        finally { _orderLoading = false; StateHasChanged(); }
+    }
+
     void ClosePanel()
     {
         _activeSignal         = null;
