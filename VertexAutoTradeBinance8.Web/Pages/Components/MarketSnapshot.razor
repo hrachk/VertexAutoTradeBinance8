@@ -1024,6 +1024,10 @@
                                         <td class="mk-pos-actions" @onclick:stopPropagation="true">
                                             @if (_partialCloseOpenKey != $"{pos.Symbol}:{pos.Side}")
                                             {
+                                                <button class="mk-pos-tpsl-btn"
+                                                        @onclick="() => QuickSetTpSl(pos)"
+                                                        title="Set TP/SL">⚡ TP/SL
+                                                </button>
                                                 <button class="mk-pos-partial-btn2" disabled="@_orderLoading"
                                                         @onclick="() => OpenPartialClose(pos)">⅟₂ Partial</button>
                                                 <button class="mk-pos-close-btn" disabled="@_orderLoading"
@@ -5289,14 +5293,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
 
-            // Round to the symbol's tick size if known, otherwise leave
-            // as-is — better to place a slightly-off-tick order than to
-            // silently snap to a wrong precision.
-        // Always fetch tickSize/stepSize fresh — _symTickSize may be 0
-        // (not loaded for this symbol) causing division by zero → NaN/∞
-        // → Binance "Precision over maximum defined for asset" error.
-        if (_symTickSize <= 0 || _symStep <= 0)
-            await LoadSymbolPrecisionAsync(pos.Symbol);
+            // Fetch tickSize/stepSize if not loaded
+            if (_symTickSize <= 0 || _symStep <= 0)
+                await LoadSymbolPrecisionAsync(pos.Symbol);
             decimal price = RoundPrice(newPrice);
 
             bool isLong = pos.Side == "LONG";
