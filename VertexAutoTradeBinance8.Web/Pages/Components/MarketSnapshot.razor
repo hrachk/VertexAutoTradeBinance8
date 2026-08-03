@@ -3859,19 +3859,33 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     /// </summary>
     async Task<bool> LoadActiveTfFromArchiveAsync()
     {
-        if (Selected == null || Selected.Klines.Count > 0) return false;
-        if (string.IsNullOrEmpty(_activeSym) || string.IsNullOrEmpty(_activeTf)) return false;
+        // Capture into locals up front. Selected / _activeSym / _activeTf are
+        // fields that the 5s timer and the SignalR handlers can reassign while
+        // the await below is in flight, so reading them again afterwards could
+        // mutate the wrong series - and the compiler's null-state analysis for
+        // a field does not survive an await either.
+        var current = Selected;
+        var sym = _activeSym;
+        var tf = _activeTf;
+
+        if (current == null || current.Klines.Count > 0) return false;
+        if (string.IsNullOrEmpty(sym) || string.IsNullOrEmpty(tf)) return false;
 
         try
         {
-            var label = TfLabel(_activeTf).ToLowerInvariant();
-            var archived = await HistoricalReader.LoadAsync(_activeSym, label);
-            if (archived.Count == 0) return false;
+            var label = TfLabel(tf).ToLowerInvariant();
+            var archived = await HistoricalReader.LoadAsync(sym, label);
+            if (archived == null || archived.Count == 0) return false;
 
-            Selected = Selected with { Klines = archived };
+            // The user may have switched symbol or timeframe during the load.
+            // Applying stale data would blank or corrupt the current chart.
+            if (_activeSym != sym || _activeTf != tf) return false;
 
-            var idx = Series.FindIndex(s => s.Symbol == _activeSym && s.Timeframe == _activeTf);
-            if (idx >= 0) Series[idx] = Selected; else Series.Add(Selected);
+            var filled = current with { Klines = archived };
+            Selected = filled;
+
+            var idx = Series.FindIndex(s => s.Symbol == sym && s.Timeframe == tf);
+            if (idx >= 0) Series[idx] = filled; else Series.Add(filled);
 
             return true;
         }
