@@ -7326,8 +7326,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     async Task QuickSetTpSl(ActivePositionInfo pos)
     {
+        // Same as clicking position row, but ensures TP/SL edit mode is on
+        _tpSlEditMode = true;
         await SelectPosition(pos);
-        try { await RefreshPositionLines(); } catch { }
+        StateHasChanged();
     }
 
     void ClosePanel()
