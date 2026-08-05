@@ -1985,8 +1985,8 @@
         // Entry/SL/TP/Liq/BE labels and the price scale all compete.
         updatePnl(containerId, currentPrice) {
             const s = sessions.get(containerId);
-            if (!s) { console.warn('[PnL] no session for', containerId); return; }
-            if (!s.entryPrice) { console.warn('[PnL] session has no entryPrice set yet — showPositionLines may not have run'); return; }
+            if (!s) return;
+            if (!s.entryPrice) { return; // no position selected — normal, not an errornLines may not have run'); return; }
             s.candleSeries.applyOptions({ priceLineVisible: false });
             s.lastPnlPrice = currentPrice; // for the scroll/zoom subscription below to reposition without waiting for the next tick
 
