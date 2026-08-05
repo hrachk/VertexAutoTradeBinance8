@@ -71,7 +71,214 @@
     </div>
 
     <div class="mk-sticky-top">
-    </div> <!-- end mk-sticky-top (signals moved to left panel) -->
+    <!-- LIVE SIGNALS — compact horizontal strip -->
+    <div class="sig-panel">
+            <div class="sig-panel-head">
+                <div class="sig-panel-title">
+                    <span class="sig-dot"></span>
+                    LIVE SIGNALS
+                    <span class="sig-count">@DisplayedSignals.Count</span>
+                </div>
+                <div class="mk-header-scan">
+                    <span class="mk-header-scan-dot"></span>
+                    Detecting
+                    @if (_symbols.Any())
+                    {
+                        <span class="mk-header-scan-sym">@_symbols[_scanSymIdx % _symbols.Count]</span>
+                    }
+                </div>
+            </div>
+            <div class="sig-panel-right">
+                    <div class="sig-pager @(DisplayedSignals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
+                        @for (int p = 0; p < _sigPageCount; p++)
+                        {
+                            int pageIdx = p;
+                            <span class="sig-pager-dot @(pageIdx == _sigPage ? "active" : "")"
+                                  @onclick="() => GoToSigPage(pageIdx)"></span>
+                        }
+                        <span class="sig-pager-label">@(_sigPage+1)/@_sigPageCount</span>
+                    </div>
+                    @if (!_showHiddenSignals)
+                    {
+                        <div class="sig-panel-sub">
+                            @if (_signals.Any())
+                            { <text>Click a signal to trade manually</text> }
+                            else
+                            { <text>No live signals — click History to see last hour</text> }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="sig-panel-sub">Signal archive · last 1 hour</div>
+                    }
+                    <button class="sig-hidden-toggle @(_showHiddenSignals ? "sig-hidden-toggle-on" : "")"
+                            @onclick="ToggleHiddenSignals"
+                            title="@(_showHiddenSignals ? "Back to live signals" : "Show all signals from the last hour (archive)")">
+                        @if (_showHiddenSignals)
+                        {
+                            <span>▶ Live</span>
+                        }
+                        else
+                        {
+                            <span>📋 History</span>
+                            @if (_recentExpiredSignals.Count > 0)
+                            {
+                                <span class="sig-hidden-count">@_recentExpiredSignals.Count</span>
+                            }
+                        }
+                    </button>
+                </div>
+            @if (DisplayedSignals.Any())
+            {
+            <div class="sig-cards" id="sigCardsScroll" @ref="_sigCardsEl">
+                @foreach (var sig in DisplayedSignals)
+                {
+                    bool sigIsBuy = sig.Side?.ToUpper() == "BUY" || sig.Side?.ToUpper() == "LONG";
+                    bool isActive = _activeSignal == sig;
+                    decimal sigTp1 = sig.TakeProfits?.FirstOrDefault() ?? 0m;
+                    decimal rr = sig.StopLoss > 0 && sig.Entry > 0 && sigTp1 > 0
+                        ? Math.Abs(sigTp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry)
+                        : 0m;
+                    int conf = sig.Confidence;
+
+                    var (belowThreshold, lowRr, minRr) = IsWeakSignal(sig, conf, rr);
+
+                    var ttl = GetSignalTtl(sig);
+                    bool isRemoving = _expiredSignals.ContainsKey(SignalKey(sig));
+
+                    <div class="sig-card @(sigIsBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @((belowThreshold || lowRr) ? "sc-below-threshold" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "") @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-pinned" : "")"
+                         @key="SignalKey(sig)"
+                         @onclick="() => SelectSignal(sig)">
+
+                        @if (!_seenSignalKeys.Contains(SignalKey(sig)))
+                        {
+                            <span class="sc-new-dot" title="New signal — not yet viewed"></span>
+                        }
+
+                        <!-- COMPACT (always visible): symbol, side, time, pin button -->
+                        <div class="sc-top">
+                            <div class="sc-sym-wrap">
+                                <span class="sc-sym">@sig.Symbol.Replace("USDT","")</span>
+                                <span class="sc-usdt">USDT</span>
+                            </div>
+                            <span class="sc-side @(sigIsBuy ? "sc-side-b" : "sc-side-s")">
+                                @(sigIsBuy ? "▲ LONG" : "▼ SHORT")
+                            </span>
+                            <span class="sc-ago">@FmtAgo(sig.Time)</span>
+                            @* Pin button — right-aligned, always visible *@
+                            <button class="sc-pin-btn @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-pin-btn-on" : "")"
+                                    title="@(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "Unpin" : "Pin (keep expanded)")"
+                                    @onclick="() => TogglePinSignal(sig)" @onclick:stopPropagation="true">
+                                📌
+                            </button>
+                        </div>
+                        <div class="sc-conf-wrap">
+                            <div class="sc-conf-bar" style="width:@conf%"
+                                 style2="background:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")"></div>
+                        </div>
+                        @if (belowThreshold || lowRr)
+                        {
+                            <div class="sc-warn-strip">
+                                @if (belowThreshold) { <span>⚠ Below threshold</span> }
+                                @if (lowRr) { <span>⚠ Weak R/R</span> }
+                            </div>
+                        }
+
+                        <!-- EXPANDED: normally kept in DOM (off-screen via
+                             display:none on the card itself) purely as a
+                             content source for the JS-driven fixed overlay
+                             (sig-card-hover.js) — that overlay only ever
+                             supports one active card at a time though, so a
+                             PINNED card instead renders this inline for
+                             real (no display:none), achieved entirely via
+                             Blazor state rather than the JS hover mechanism,
+                             letting multiple cards stay expanded
+                             simultaneously. -->
+                        <div class="sc-expand @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-expand-pinned" : "")"
+                             id="sc-expand-@SignalKey(sig)"
+                             style="@(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "" : "display:none;")">
+                            @if (belowThreshold)
+                            {
+                                <div class="sc-threshold-badge" title="@($"Confidence {conf}% is below this symbol's {(ConfidenceResolver.Resolve(sig.Symbol).MinEntry*100).ToString("F0")}% entry threshold — the bot would not have opened this trade")">
+                                    ⚠ Below entry threshold
+                                </div>
+                            }
+                            @if (lowRr)
+                            {
+                                <div class="sc-threshold-badge" title="@($"This trade risks more than it could gain compared to what the strategy normally requires in this market condition (needs at least {minRr:F1}x reward-to-risk here, this signal only offers {rr:F1}x)")">
+                                    ⚠ Weak reward/risk (@(rr.ToString("F1"))x, needs @(minRr.ToString("F1"))x+)
+                                </div>
+                            }
+
+                            <!-- Prices grid: Entry + SL on first row, TPs below -->
+                            <div class="sc-prices-grid">
+                                <div class="sc-price-cell">
+                                    <span class="sc-pl2">Entry</span>
+                                    <span class="sc-pv2 mono">@FmtP(sig.Entry)</span>
+                                    @if (sig.EntryRangeLow.HasValue && sig.EntryRangeHigh.HasValue)
+                                    {
+                                        <span class="sc-entry-range mono" title="Entry zone">@FmtP(sig.EntryRangeLow.Value)–@FmtP(sig.EntryRangeHigh.Value)</span>
+                                    }
+                                </div>
+                                <div class="sc-price-cell">
+                                    <span class="sc-pl2 dn">SL</span>
+                                    <span class="sc-pv2 mono dn">@FmtP(sig.StopLoss)</span>
+                                </div>
+                            </div>
+                            @if (sig.TakeProfits != null && sig.TakeProfits.Count > 0)
+                            {
+                                <div class="sc-tp-grid">
+                                    @for (int tpI = 0; tpI < sig.TakeProfits.Count; tpI++)
+                                    {
+                                        var tpVal = sig.TakeProfits[tpI];
+                                        <div class="sc-price-cell">
+                                            <span class="sc-pl2 up">TP@(sig.TakeProfits.Count > 1 ? (tpI + 1).ToString() : "")</span>
+                                            <span class="sc-pv2 mono up">@FmtP(tpVal)</span>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                            @if (!string.IsNullOrEmpty(sig.SmartType) || sig.Regime != VertexAutoTradeBinance8.Models.MarketRegime.Unknown)
+                            {
+                                <!-- Regime/strategy context — genuinely
+                                     populated on every signal but
+                                     previously never surfaced here, even
+                                     though it's exactly the kind of
+                                     context (trend vs range, which
+                                     sub-strategy fired) a trader needs to
+                                     judge whether to act on a signal. -->
+                                <div class="sc-regime-row mk-dim">
+                                    @if (sig.Regime != VertexAutoTradeBinance8.Models.MarketRegime.Unknown) { <span>@sig.Regime</span> }
+                                    @if (!string.IsNullOrEmpty(sig.SmartType)) { <span>· @sig.SmartType</span> }
+                                </div>
+                            }
+
+                            <!-- Footer: confidence/RR/ATR + TTL bar combined in one slim row -->
+                            <div class="sc-foot">
+                                <span class="sc-conf @(conf>=60?"up":conf>=45?"yel":"dn")">@conf%</span>
+                                @if (rr > 0) { <span class="sc-rr">RR @rr.ToString("F1")</span> }
+                                @if (sig.Reason != null && sig.Reason.Contains("_VWAP"))
+                                {
+                                    <span class="sc-confirm-badge" title="This signal's direction was confirmed by VWAP">VWAP✓</span>
+                                }
+                                @if (sig.Reason != null && sig.Reason.Contains("_HTF"))
+                                {
+                                    <span class="sc-confirm-badge" title="This signal's direction was confirmed by the higher-timeframe structure of the same symbol">HTF✓</span>
+                                }
+                                <span class="sc-atr mk-dim">ATR @FmtP(sig.ATR)</span>
+                                <div class="sc-ttl-bar-wrap" title="Estimated relevance window based on volatility (ATR)">
+                                    <div class="sc-ttl-bar @(ttl.IsExpiring ? "ttl-low" : ttl.Pct < 50 ? "ttl-mid" : "ttl-high")"
+                                         style="width:@(ttl.Pct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                                </div>
+                                <span class="sc-ttl-label mk-dim">@ttl.Label</span>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+            }
+    </div> <!-- end sig-panel -->
+    </div> <!-- end mk-sticky-top -->
 
     <!-- ROW 1: SYMBOL TICKER -->
     <div class="mk-ticker-bar">
@@ -271,215 +478,6 @@
                 }
             </div>
         </div> <!-- end mk-side-tbl -->
-
-        <!-- LIVE SIGNALS — moved from top bar into left panel -->
-            <!-- LIVE SIGNALS — compact horizontal strip -->
-        <div class="sig-panel sig-panel-side">
-                <div class="sig-panel-head">
-                    <div class="sig-panel-title">
-                        <span class="sig-dot"></span>
-                        LIVE SIGNALS
-                        <span class="sig-count">@DisplayedSignals.Count</span>
-                    </div>
-                    <div class="mk-header-scan">
-                        <span class="mk-header-scan-dot"></span>
-                        Detecting
-                        @if (_symbols.Any())
-                        {
-                            <span class="mk-header-scan-sym">@_symbols[_scanSymIdx % _symbols.Count]</span>
-                        }
-                    </div>
-                </div>
-                <div class="sig-panel-right">
-                        <div class="sig-pager @(DisplayedSignals.Count > _sigPageSize ? "" : "sig-pager-hidden")">
-                            @for (int p = 0; p < _sigPageCount; p++)
-                            {
-                                int pageIdx = p;
-                                <span class="sig-pager-dot @(pageIdx == _sigPage ? "active" : "")"
-                                      @onclick="() => GoToSigPage(pageIdx)"></span>
-                            }
-                            <span class="sig-pager-label">@(_sigPage+1)/@_sigPageCount</span>
-                        </div>
-                        @if (!_showHiddenSignals)
-                        {
-                            <div class="sig-panel-sub">
-                                @if (_signals.Any())
-                                { <text>Click a signal to trade manually</text> }
-                                else
-                                { <text>No live signals — click History to see last hour</text> }
-                            </div>
-                        }
-                        else
-                        {
-                            <div class="sig-panel-sub">Signal archive · last 1 hour</div>
-                        }
-                        <button class="sig-hidden-toggle @(_showHiddenSignals ? "sig-hidden-toggle-on" : "")"
-                                @onclick="ToggleHiddenSignals"
-                                title="@(_showHiddenSignals ? "Back to live signals" : "Show all signals from the last hour (archive)")">
-                            @if (_showHiddenSignals)
-                            {
-                                <span>▶ Live</span>
-                            }
-                            else
-                            {
-                                <span>📋 History</span>
-                                @if (_recentExpiredSignals.Count > 0)
-                                {
-                                    <span class="sig-hidden-count">@_recentExpiredSignals.Count</span>
-                                }
-                            }
-                        </button>
-                    </div>
-                @if (DisplayedSignals.Any())
-                {
-                <div class="sig-cards" id="sigCardsScroll" @ref="_sigCardsEl">
-                    @foreach (var sig in DisplayedSignals)
-                    {
-                        bool sigIsBuy = sig.Side?.ToUpper() == "BUY" || sig.Side?.ToUpper() == "LONG";
-                        bool isActive = _activeSignal == sig;
-                        decimal sigTp1 = sig.TakeProfits?.FirstOrDefault() ?? 0m;
-                        decimal rr = sig.StopLoss > 0 && sig.Entry > 0 && sigTp1 > 0
-                            ? Math.Abs(sigTp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry)
-                            : 0m;
-                        int conf = sig.Confidence;
-
-                        var (belowThreshold, lowRr, minRr) = IsWeakSignal(sig, conf, rr);
-
-                        var ttl = GetSignalTtl(sig);
-                        bool isRemoving = _expiredSignals.ContainsKey(SignalKey(sig));
-
-                        <div class="sig-card @(sigIsBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @((belowThreshold || lowRr) ? "sc-below-threshold" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "") @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-pinned" : "")"
-                             @key="SignalKey(sig)"
-                             @onclick="() => SelectSignal(sig)">
-
-                            @if (!_seenSignalKeys.Contains(SignalKey(sig)))
-                            {
-                                <span class="sc-new-dot" title="New signal — not yet viewed"></span>
-                            }
-
-                            <!-- COMPACT (always visible): symbol, side, time, pin button -->
-                            <div class="sc-top">
-                                <div class="sc-sym-wrap">
-                                    <span class="sc-sym">@sig.Symbol.Replace("USDT","")</span>
-                                    <span class="sc-usdt">USDT</span>
-                                </div>
-                                <span class="sc-side @(sigIsBuy ? "sc-side-b" : "sc-side-s")">
-                                    @(sigIsBuy ? "▲ LONG" : "▼ SHORT")
-                                </span>
-                                <span class="sc-ago">@FmtAgo(sig.Time)</span>
-                                @* Pin button — right-aligned, always visible *@
-                                <button class="sc-pin-btn @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-pin-btn-on" : "")"
-                                        title="@(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "Unpin" : "Pin (keep expanded)")"
-                                        @onclick="() => TogglePinSignal(sig)" @onclick:stopPropagation="true">
-                                    📌
-                                </button>
-                            </div>
-                            <div class="sc-conf-wrap">
-                                <div class="sc-conf-bar" style="width:@conf%"
-                                     style2="background:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")"></div>
-                            </div>
-                            @if (belowThreshold || lowRr)
-                            {
-                                <div class="sc-warn-strip">
-                                    @if (belowThreshold) { <span>⚠ Below threshold</span> }
-                                    @if (lowRr) { <span>⚠ Weak R/R</span> }
-                                </div>
-                            }
-
-                            <!-- EXPANDED: normally kept in DOM (off-screen via
-                                 display:none on the card itself) purely as a
-                                 content source for the JS-driven fixed overlay
-                                 (sig-card-hover.js) — that overlay only ever
-                                 supports one active card at a time though, so a
-                                 PINNED card instead renders this inline for
-                                 real (no display:none), achieved entirely via
-                                 Blazor state rather than the JS hover mechanism,
-                                 letting multiple cards stay expanded
-                                 simultaneously. -->
-                            <div class="sc-expand @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-expand-pinned" : "")"
-                                 id="sc-expand-@SignalKey(sig)"
-                                 style="@(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "" : "display:none;")">
-                                @if (belowThreshold)
-                                {
-                                    <div class="sc-threshold-badge" title="@($"Confidence {conf}% is below this symbol's {(ConfidenceResolver.Resolve(sig.Symbol).MinEntry*100).ToString("F0")}% entry threshold — the bot would not have opened this trade")">
-                                        ⚠ Below entry threshold
-                                    </div>
-                                }
-                                @if (lowRr)
-                                {
-                                    <div class="sc-threshold-badge" title="@($"This trade risks more than it could gain compared to what the strategy normally requires in this market condition (needs at least {minRr:F1}x reward-to-risk here, this signal only offers {rr:F1}x)")">
-                                        ⚠ Weak reward/risk (@(rr.ToString("F1"))x, needs @(minRr.ToString("F1"))x+)
-                                    </div>
-                                }
-
-                                <!-- Prices grid: Entry + SL on first row, TPs below -->
-                                <div class="sc-prices-grid">
-                                    <div class="sc-price-cell">
-                                        <span class="sc-pl2">Entry</span>
-                                        <span class="sc-pv2 mono">@FmtP(sig.Entry)</span>
-                                        @if (sig.EntryRangeLow.HasValue && sig.EntryRangeHigh.HasValue)
-                                        {
-                                            <span class="sc-entry-range mono" title="Entry zone">@FmtP(sig.EntryRangeLow.Value)–@FmtP(sig.EntryRangeHigh.Value)</span>
-                                        }
-                                    </div>
-                                    <div class="sc-price-cell">
-                                        <span class="sc-pl2 dn">SL</span>
-                                        <span class="sc-pv2 mono dn">@FmtP(sig.StopLoss)</span>
-                                    </div>
-                                </div>
-                                @if (sig.TakeProfits != null && sig.TakeProfits.Count > 0)
-                                {
-                                    <div class="sc-tp-grid">
-                                        @for (int tpI = 0; tpI < sig.TakeProfits.Count; tpI++)
-                                        {
-                                            var tpVal = sig.TakeProfits[tpI];
-                                            <div class="sc-price-cell">
-                                                <span class="sc-pl2 up">TP@(sig.TakeProfits.Count > 1 ? (tpI + 1).ToString() : "")</span>
-                                                <span class="sc-pv2 mono up">@FmtP(tpVal)</span>
-                                            </div>
-                                        }
-                                    </div>
-                                }
-                                @if (!string.IsNullOrEmpty(sig.SmartType) || sig.Regime != VertexAutoTradeBinance8.Models.MarketRegime.Unknown)
-                                {
-                                    <!-- Regime/strategy context — genuinely
-                                         populated on every signal but
-                                         previously never surfaced here, even
-                                         though it's exactly the kind of
-                                         context (trend vs range, which
-                                         sub-strategy fired) a trader needs to
-                                         judge whether to act on a signal. -->
-                                    <div class="sc-regime-row mk-dim">
-                                        @if (sig.Regime != VertexAutoTradeBinance8.Models.MarketRegime.Unknown) { <span>@sig.Regime</span> }
-                                        @if (!string.IsNullOrEmpty(sig.SmartType)) { <span>· @sig.SmartType</span> }
-                                    </div>
-                                }
-
-                                <!-- Footer: confidence/RR/ATR + TTL bar combined in one slim row -->
-                                <div class="sc-foot">
-                                    <span class="sc-conf @(conf>=60?"up":conf>=45?"yel":"dn")">@conf%</span>
-                                    @if (rr > 0) { <span class="sc-rr">RR @rr.ToString("F1")</span> }
-                                    @if (sig.Reason != null && sig.Reason.Contains("_VWAP"))
-                                    {
-                                        <span class="sc-confirm-badge" title="This signal's direction was confirmed by VWAP">VWAP✓</span>
-                                    }
-                                    @if (sig.Reason != null && sig.Reason.Contains("_HTF"))
-                                    {
-                                        <span class="sc-confirm-badge" title="This signal's direction was confirmed by the higher-timeframe structure of the same symbol">HTF✓</span>
-                                    }
-                                    <span class="sc-atr mk-dim">ATR @FmtP(sig.ATR)</span>
-                                    <div class="sc-ttl-bar-wrap" title="Estimated relevance window based on volatility (ATR)">
-                                        <div class="sc-ttl-bar @(ttl.IsExpiring ? "ttl-low" : ttl.Pct < 50 ? "ttl-mid" : "ttl-high")"
-                                             style="width:@(ttl.Pct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
-                                    </div>
-                                    <span class="sc-ttl-label mk-dim">@ttl.Label</span>
-                                </div>
-                            </div>
-                        </div>
-                    }
-                </div>
-                }
-        </div> <!-- end sig-panel -->
 
         <!-- LEFT: chart + RSI + Volume, then OPEN POSITIONS, then OPEN ORDERS — all share this one column's width -->
         <div class="mk-main-col">
@@ -2097,7 +2095,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .mk-chart-head-left{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
 .mk-legend{display:flex;gap:14px;font-size:11px;color:var(--dim);}
 /* TICKER BAR */
-.mk-ticker-bar{display:none;} /* hidden per redesign */
+.mk-ticker-bar{display:none;}
 .mk-ticker-bar::-webkit-scrollbar{display:none;}
 .mk-ticker-scroll{display:flex;align-items:center;padding:0 4px;width:max-content;}
 .mk-tk{display:inline-flex;align-items:center;gap:5px;padding:8px 14px;background:transparent;border:none;border-right:1px solid var(--bdr);cursor:pointer;transition:background .15s;white-space:nowrap;flex-shrink:0;}
@@ -2125,12 +2123,6 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 /* SIGNAL PANEL */
 .mk-sticky-top{position:sticky;z-index:26;background:var(--bg2);box-shadow:0 4px 12px rgba(0,0,0,.25);}
 .sig-panel{padding:6px 14px;border-bottom:1px solid var(--bdr);background:var(--bg2);display:flex;align-items:center;gap:10px;}
-.sig-panel-side{margin:8px 0 0;border-radius:8px;}
-.sig-panel-side .sig-cards{flex-direction:column;overflow-y:auto;overflow-x:hidden;max-height:400px;gap:6px;padding:6px;scrollbar-width:thin;}
-.sig-panel-side .sig-card{min-width:unset;width:100%;flex-shrink:0;}
-.sig-panel-side .sig-panel-head{flex-wrap:wrap;}
-.sig-panel-side .sig-panel-right{flex-wrap:wrap;gap:4px;}
-.sig-panel-side .sig-pager{order:10;}
 .sig-panel-head{display:flex;align-items:center;gap:8px;flex-shrink:0;}
 .sig-panel-title{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:1.5px;color:var(--dim);text-transform:uppercase;}
 .sig-dot{width:7px;height:7px;border-radius:50%;background:var(--grn);animation:pulse 1.5s infinite;}
