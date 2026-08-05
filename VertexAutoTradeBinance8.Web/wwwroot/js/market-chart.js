@@ -1986,7 +1986,7 @@
         updatePnl(containerId, currentPrice) {
             const s = sessions.get(containerId);
             if (!s) return;
-            if (!s.entryPrice) { return; // no position selected — normal, not an errornLines may not have run'); return; }
+            if (!s.entryPrice) return;
             s.candleSeries.applyOptions({ priceLineVisible: false });
             s.lastPnlPrice = currentPrice; // for the scroll/zoom subscription below to reposition without waiting for the next tick
 
