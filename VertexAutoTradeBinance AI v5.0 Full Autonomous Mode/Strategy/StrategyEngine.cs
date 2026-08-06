@@ -1091,15 +1091,15 @@ namespace VertexAutoTradeBinance8.Strategy
 
                 decimal atrMult = s.Reason switch
                 {
-                    "PULLBACK_EMA21_LONG" or "PULLBACK_EMA21_SHORT" => 0.55m,
-                    "LIQUIDITY_GRAB_CONTINUATION_LONG" or "LIQUIDITY_GRAB_CONTINUATION_SHORT" => 0.65m,
-                    "VOLATILITY_EXPANSION_BREAKOUT_LONG" or "VOLATILITY_EXPANSION_BREAKOUT_SHORT" => 0.85m,
-                    _ => 0.60m
+                    "PULLBACK_EMA21_LONG" or "PULLBACK_EMA21_SHORT" => 1.2m,
+                    "LIQUIDITY_GRAB_CONTINUATION_LONG" or "LIQUIDITY_GRAB_CONTINUATION_SHORT" => 1.4m,
+                    "VOLATILITY_EXPANSION_BREAKOUT_LONG" or "VOLATILITY_EXPANSION_BREAKOUT_SHORT" => 1.6m,
+                    _ => 1.3m
                 };
 
                 minDist = atr * atrMult;
 
-                decimal hardFloor = s.EntryPrice * 0.0015m;
+                decimal hardFloor = s.EntryPrice * 0.005m;
                 if (minDist < hardFloor)
                     minDist = hardFloor;
             }
@@ -2851,7 +2851,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
             var atr = signal.Atr ?? 0m;
 
-            if (atr > 0m && slDist < atr * 0.35m)
+            if (atr > 0m && slDist < atr * 0.80m)
                 return FastFailResult.Fail("RR", "SL too tight vs ATR");
 
             // ============================================================
@@ -2874,8 +2874,8 @@ namespace VertexAutoTradeBinance8.Strategy
             var rr = tpDist / slDist;
 
             // абсолютный мусор фильтр
-            if (rr <= 0.6m)
-                return FastFailResult.Fail("RR", $"rr={rr:F2} too low");
+            if (rr <= 1.2m)
+                return FastFailResult.Fail("RR", $"rr={rr:F2} too low (min 1.2)");
 
             // ============================================================
             // 3️⃣ RELAX MODE
