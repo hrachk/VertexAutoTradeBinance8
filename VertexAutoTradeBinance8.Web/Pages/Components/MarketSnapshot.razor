@@ -2124,7 +2124,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
 /* SIGNAL PANEL */
 /* .mk-sticky-top removed — signals now in left panel */
-.sig-panel{background:var(--bg2);border-top:1px solid var(--bdr);padding:0;overflow:hidden;flex:1;min-height:200px;display:flex;flex-direction:column;}
+.sig-panel{background:var(--bg2);border-top:1px solid var(--bdr);padding:0;overflow:hidden;flex:1;min-height:250px;display:flex;flex-direction:column;}
 .sig-panel .sig-cards{flex-direction:column;overflow-y:auto;overflow-x:hidden;flex:1;min-height:0;gap:6px;padding:6px;scrollbar-width:thin;}
 .sig-panel .sig-card{min-width:unset;width:100%;flex-shrink:0;}
 .sig-panel .sig-panel-head{padding:8px 10px 4px;flex-shrink:0;}
@@ -2405,8 +2405,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .ord-position-close-btn:hover:not(:disabled){background:rgba(239,68,68,.18);box-shadow:0 4px 14px rgba(239,68,68,.25);}
 .ord-position-close-btn:disabled{opacity:.5;cursor:not-allowed;}
 
-.mk-side-tbl{display:flex;flex-direction:column;background:var(--bg2);border-right:1px solid var(--bdr);overflow:hidden;}
-.mk-side-instruments{display:none;}
+.mk-side-tbl{display:flex;flex-direction:column;background:var(--bg2);border-right:1px solid var(--bdr);overflow:hidden;height:100%;}
+.mk-side-instruments{flex:0 0 auto;max-height:50vh;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;border-bottom:1px solid var(--bdr);}
 .mk-side-tbl::-webkit-scrollbar{display:none;}
 .mk-side-tbl-title{font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--dim);font-weight:700;padding:10px 14px 8px;flex-shrink:0;}
 
