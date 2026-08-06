@@ -827,7 +827,7 @@ namespace VertexAutoTradeBinance8
                     : symbol.StartsWith("ETH", StringComparison.OrdinalIgnoreCase)
                                     ? (confCfg.ETH?.MinExecute ?? 0.50m)
                                     : confCfg.Default?.MinExecute ?? 0.55m;
-                double sigConf = (double)(signal.Confidence ?? 0m) / 100.0; // Confidence is decimal? 0-100
+                double sigConf = (double)(signal.Confidence ?? 0m); /*/ 100.0;*/ // Confidence is decimal? 0-100
                 if (sigConf < (double)minExec)
                 {
                     await RejectAsync(signal, symbol, tf, "CONF", "WATCH_ONLY",
