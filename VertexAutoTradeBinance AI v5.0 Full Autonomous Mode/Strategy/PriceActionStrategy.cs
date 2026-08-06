@@ -204,8 +204,8 @@ namespace VertexAutoTradeBinance8.Strategy
         {
             // Entry: close + small buffer
             decimal entry = isLong
-                ? c0.ClosePrice + atr * 0.02m
-                : c0.ClosePrice - atr * 0.02m;
+                ? c0.ClosePrice + atr * 0.08m
+                : c0.ClosePrice - atr * 0.08m;
 
             // Structural SL — behind nearest swing point
             decimal stopLoss = MarketStructureAnalyzer.CalcStructuralSl(
@@ -214,10 +214,10 @@ namespace VertexAutoTradeBinance8.Strategy
             decimal slDist = Math.Abs(entry - stopLoss);
 
             // Expand SL if too tight
-            if (slDist < atr * 0.25m)
+            if (slDist < atr * 1.0m)
             {
-                stopLoss = isLong ? entry - atr * 0.25m : entry + atr * 0.25m;
-                slDist   = atr * 0.25m;
+                stopLoss = isLong ? entry - atr * 1.0m : entry + atr * 1.0m;
+                slDist   = atr * 1.0m;
             }
             // Skip if SL too wide
             if (slDist > atr * MaxSlAtrMult) return null;
@@ -225,7 +225,7 @@ namespace VertexAutoTradeBinance8.Strategy
             // R-Multiple TPs (1R / 2R / 3R)
             var (tp1, tp2, tp3) = MarketStructureAnalyzer.CalcRMultipleTps(
                 entry, stopLoss, isLong,
-                r1: 1.0m, r2: 2.0m, r3: 3.0m,
+                r1: 1.5m, r2: 2.5m, r3: 3.5m,
                 srLevels: msi.SrLevels);
 
             // RR check
