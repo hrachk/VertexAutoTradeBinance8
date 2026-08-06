@@ -557,7 +557,7 @@ namespace VertexAutoTradeBinance8.Strategy
             decimal buffer = 0.0025m)
         {
             if (swings.Count == 0 || atr <= 0)
-                return isLong ? entry * (1m - 0.015m) : entry * (1m + 0.015m);
+                return isLong ? entry * (1m - 0.020m) : entry * (1m + 0.020m);
 
             if (isLong)
             {
@@ -569,10 +569,10 @@ namespace VertexAutoTradeBinance8.Strategy
                 {
                     decimal slBase = swingLows[0].Price;
                     // Buffer: small amount below the swing low
-                    decimal sl = slBase - Math.Max(atr * 0.20m, slBase * buffer);
+                    decimal sl = slBase - Math.Max(atr * 0.35m, slBase * buffer);
                     // Safety: SL must not be more than 3×ATR from entry
-                    if (entry - sl > atr * 3.0m)
-                        sl = entry - atr * 1.8m;
+                    if (entry - sl > atr * 4.0m)
+                        sl = entry - atr * 2.5m;
                     return sl;
                 }
             }
@@ -585,17 +585,17 @@ namespace VertexAutoTradeBinance8.Strategy
                 if (swingHighs.Count > 0)
                 {
                     decimal slBase = swingHighs[0].Price;
-                    decimal sl = slBase + Math.Max(atr * 0.20m, slBase * buffer);
-                    if (sl - entry > atr * 3.0m)
-                        sl = entry + atr * 1.8m;
+                    decimal sl = slBase + Math.Max(atr * 0.35m, slBase * buffer);
+                    if (sl - entry > atr * 4.0m)
+                        sl = entry + atr * 2.5m;
                     return sl;
                 }
             }
 
             // Fallback to ATR-based
             return isLong
-                ? entry - atr * 1.5m
-                : entry + atr * 1.5m;
+                ? entry - atr * 2.0m
+                : entry + atr * 2.0m;
         }
 
         // ── Math helpers ──────────────────────────────────────────────────
