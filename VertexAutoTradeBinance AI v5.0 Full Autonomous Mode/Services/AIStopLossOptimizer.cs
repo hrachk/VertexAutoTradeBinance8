@@ -55,22 +55,22 @@ namespace VertexAutoTradeBinance8.Services
             if (strongTrend)
             {
                 if (ultraLowVol)
-                    return 1.0m;   // чистый сильный тренд — SL ближе
+                    return 1.5m;   // quiet trend — still needs breathing room
                 if (lowVol)
-                    return 1.2m;   // нормальный тренд
+                    return 1.7m;   // normal trend
                 if (highVol)
-                    return 1.5m;   // тренд, но рывки — SL шире
-                return 1.3m;
+                    return 2.0m;   // volatile trend — wide SL mandatory
+                return 1.8m;
             }
             else
             {
-                // Range / Squeeze / непонятный режим — шире SL
+                // Range / Squeeze / unclear regime — even wider
                 if (ultraLowVol)
-                    return 1.4m;
+                    return 2.0m;
                 if (highVol)
-                    return 1.8m;
+                    return 2.5m;   // choppy range — widest SL
 
-                return 1.6m;
+                return 2.2m;
             }
         }
 
@@ -111,16 +111,12 @@ namespace VertexAutoTradeBinance8.Services
             decimal dist    = Math.Abs(signal.EntryPrice - oldSl);
             bool isMeanRev  = signal.Reason?.StartsWith("MEANREV_", StringComparison.OrdinalIgnoreCase) == true;
 
-            // ── 1. Low-vol + trend: tighten SL by 30% to improve RR ──────────
-            if ((decision.Trend == "UP" || decision.Trend == "DOWN") &&
-                decision.AtrPct < 0.0015m &&
-                dist > atr14 * 0.5m)
-            {
-                decimal tighten = dist * 0.30m;
-                newSl = isLong
-                    ? signal.EntryPrice - (dist - tighten)
-                    : signal.EntryPrice + (dist - tighten);
-            }
+            // ── 1. REMOVED: Low-vol tighten was shrinking SL by 30% ─────────
+            // This was the #1 cause of stop-outs: in a quiet trend the SL
+            // was pulled INTO the noise band. The idea "quiet trend = tight SL"
+            // is backwards — quiet trends have random micro-wicks that look
+            // like nothing on the chart but are enough to trigger a tight SL.
+            // Correct approach: keep the structural SL where it was placed.
 
             // ── 2. Anti-stophunt: push SL past significant wick ──────────────
             decimal upperWick = last.HighPrice - Math.Max(last.OpenPrice, last.ClosePrice);
