@@ -4042,6 +4042,96 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         _ = RenderCharts();
     }
 
+    /// <summary>
+    /// Calculates Entry / SL / TP1-3 from current klines and populates
+    /// the Manual Trade panel fields. Runs on every symbol selection so
+    /// the trader always sees a ready-to-fire setup.
+    /// </summary>
+    void CalcAutoLevels()
+    {
+        if (Selected == null || Selected.Klines.Count < 30) return;
+        var klines = Selected.Klines;
+        int n = klines.Count;
+
+        // ATR(14)
+        decimal atrSum = 0m;
+        int atrN = Math.Min(14, n - 1);
+        for (int a = n - atrN; a < n; a++)
+            atrSum += klines[a].High - klines[a].Low;
+        decimal atr = atrN > 0 ? atrSum / atrN : 0m;
+        if (atr <= 0) return;
+
+        // EMA21
+        decimal ema = klines[0].Close;
+        decimal k21 = 2m / 22m;
+        for (int e = 1; e < n; e++)
+            ema = klines[e].Close * k21 + ema * (1m - k21);
+
+        var c0 = klines[n - 1];
+        decimal price = c0.Close;
+
+        // Direction: price above EMA = LONG, below = SHORT
+        bool isLong = price >= ema;
+
+        // Swing low/high for structural SL (last 15 bars)
+        decimal swingLow = decimal.MaxValue;
+        decimal swingHigh = 0m;
+        for (int s = Math.Max(0, n - 15); s < n; s++)
+        {
+            if (klines[s].Low < swingLow) swingLow = klines[s].Low;
+            if (klines[s].High > swingHigh) swingHigh = klines[s].High;
+        }
+
+        decimal entry, sl, tp1, tp2, tp3;
+
+        if (isLong)
+        {
+            entry = price;
+            // SL below swing low with 0.35 ATR buffer
+            sl = swingLow - atr * 0.35m;
+            // Minimum 1.0 ATR from entry
+            if (entry - sl < atr * 1.0m)
+                sl = entry - atr * 1.0m;
+            decimal risk = entry - sl;
+            tp1 = entry + risk * 1.5m;
+            tp2 = entry + risk * 2.5m;
+            tp3 = entry + risk * 3.5m;
+        }
+        else
+        {
+            entry = price;
+            sl = swingHigh + atr * 0.35m;
+            if (sl - entry < atr * 1.0m)
+                sl = entry + atr * 1.0m;
+            decimal risk = sl - entry;
+            tp1 = entry - risk * 1.5m;
+            tp2 = entry - risk * 2.5m;
+            tp3 = entry - risk * 3.5m;
+        }
+
+        // Round to tick size if known
+        if (_symTickSize > 0)
+        {
+            entry = Math.Round(entry / _symTickSize) * _symTickSize;
+            sl    = Math.Round(sl    / _symTickSize) * _symTickSize;
+            tp1   = Math.Round(tp1   / _symTickSize) * _symTickSize;
+            tp2   = Math.Round(tp2   / _symTickSize) * _symTickSize;
+            tp3   = Math.Round(tp3   / _symTickSize) * _symTickSize;
+        }
+
+        // Populate the Manual Trade panel
+        _orderPrice = entry;
+        _manualSlPrice = sl;
+        _manualTps = new List<ManualTpRow>
+        {
+            new ManualTpRow { Price = tp1, Pct = 50m },
+            new ManualTpRow { Price = tp2, Pct = 30m },
+            new ManualTpRow { Price = tp3, Pct = 20m },
+        };
+        _orderPanelDismissed = false;
+        _manualTradeCollapsed = false;
+    }
+
     void PickSym(string sym, bool autoSelectExistingPosition = true)
     {
         _activeSym = sym;
@@ -4065,6 +4155,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
         ResolveSelected();
         CalcStats();
+
+        // Auto-calculate Entry/SL/TP for the Manual Trade panel
+        CalcAutoLevels();
 
         // The chosen timeframe may exist only in the datadb archive and not
         // in the narrow klines_bootstrap snapshot Series is built from.
@@ -4775,6 +4868,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         if (Selected == null) Selected = s;
 
         CalcStats();
+        CalcAutoLevels();
         _ = EnsureActiveTfLoadedAsync();
         _ = SaveSelectionState();
 
