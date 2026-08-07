@@ -1,0 +1,196 @@
+@page "/executed-signals"
+@implements IAsyncDisposable
+@using Microsoft.AspNetCore.SignalR.Client
+@using VertexAutoTradeBinance8.Models
+@inject ExecutedSignalUiService Signals
+@inject NavigationManager Nav
+
+<PageTitle>Исполненные — Vertex Console</PageTitle>
+
+<VPageHeader Eyebrow="История"
+             Title="Исполненные сигналы"
+             Sub="Что движок действительно отправил на биржу и чем это закончилось.">
+    <Tools>
+        <input class="v-input" placeholder="Фильтр по инструменту" @bind="Filter" @bind:event="oninput" />
+        <VBadge Tone="@(Connected ? VBadge.BadgeTone.Ok : VBadge.BadgeTone.Warn)" Dot="true">
+            @(Connected ? "Живой поток" : "Поток прерван")
+        </VBadge>
+    </Tools>
+</VPageHeader>
+
+<div class="v-stack">
+
+    <div class="v-grid v-grid--stats">
+        <VCard Flush="true">
+            <VStat Label="Всего записей" Value="@All.Count.ToString()" />
+        </VCard>
+        <VCard Flush="true">
+            <VStat Label="Закрыто в плюс"
+                   Value="@Wins.ToString()"
+                   Tone="VStat.StatTone.Ok"
+                   Foot="@WinRateFoot" />
+        </VCard>
+        <VCard Flush="true">
+            <VStat Label="Закрыто в минус"
+                   Value="@Losses.ToString()"
+                   Tone="@(Losses > 0 ? VStat.StatTone.Bad : VStat.StatTone.Neutral)" />
+        </VCard>
+        <VCard Flush="true">
+            <VStat Label="Суммарный PnL"
+                   Value="@Money(TotalPnl)"
+                   Unit="USDT"
+                   Tone="@(TotalPnl > 0 ? VStat.StatTone.Ok : TotalPnl < 0 ? VStat.StatTone.Bad : VStat.StatTone.Neutral)" />
+        </VCard>
+    </div>
+
+    <VCard Title="Журнал исполнения" Note="@($"показано {Rows.Count}")" Flush="true">
+        @if (Rows.Count == 0)
+        {
+            <VEmpty Title="@(All.Count == 0 ? "Движок ещё не входил в сделки" : "Ничего не найдено")"
+                    Hint="@(All.Count == 0
+                            ? "Каждая попытка входа — успешная или отклонённая — попадёт сюда."
+                            : "Очистите фильтр, чтобы увидеть весь журнал.")" />
+        }
+        else
+        {
+            <div class="v-tablewrap">
+                <table class="v-table">
+                    <thead>
+                        <tr>
+                            <th>Время</th>
+                            <th>Инструмент</th>
+                            <th>Сторона</th>
+                            <th class="r">Вход</th>
+                            <th class="r">Стоп</th>
+                            <th class="r">Объём</th>
+                            <th>Статус</th>
+                            <th class="r">PnL</th>
+                            <th class="r">Score</th>
+                            <th>Комментарий</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var r in Rows)
+                        {
+                            <tr>
+                                <td class="num">@r.Time.ToLocalTime().ToString("dd.MM HH:mm:ss")</td>
+                                <td class="sym">@r.Symbol</td>
+                                <td>
+                                    <VBadge Tone="@(r.Side == SignalSide.Buy ? VBadge.BadgeTone.Long : VBadge.BadgeTone.Short)">
+                                        @(r.Side == SignalSide.Buy ? "LONG" : "SHORT")
+                                    </VBadge>
+                                </td>
+                                <td class="r num">@Price(r.Entry)</td>
+                                <td class="r num">
+                                    @if (r.StopLoss > 0)
+                                    {
+                                        @Price(r.StopLoss)
+                                    }
+                                    else
+                                    {
+                                        <span class="v-neg">—</span>
+                                    }
+                                </td>
+                                <td class="r num">@Money(r.Notional)</td>
+                                <td><VBadge Tone="@StatusTone(r.Status)">@r.Status</VBadge></td>
+                                <td class="r num @PnlClass(r.PnL ?? 0)">
+                                    @(r.PnL.HasValue ? Money(r.PnL.Value) : "—")
+                                </td>
+                                <td class="r num">@r.OpportunityScore</td>
+                                <td class="v-note">@r.Reason</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </VCard>
+</div>
+
+@code {
+    private HubConnection? _hub;
+    private string Filter = "";
+
+    private List<ExecutedSignalRecord> All = new();
+
+    private List<ExecutedSignalRecord> Rows =>
+        All.Where(x => string.IsNullOrWhiteSpace(Filter)
+                       || x.Symbol.Contains(Filter, StringComparison.OrdinalIgnoreCase))
+           .OrderByDescending(x => x.Time)
+           .ToList();
+
+    private bool Connected => _hub?.State == HubConnectionState.Connected;
+
+    private int Wins => All.Count(x => x.PnL > 0);
+    private int Losses => All.Count(x => x.PnL < 0);
+    private decimal TotalPnl => All.Where(x => x.PnL.HasValue).Sum(x => x.PnL!.Value);
+
+    private string WinRateFoot
+    {
+        get
+        {
+            var closed = Wins + Losses;
+            return closed == 0 ? "Закрытых сделок нет" : $"{(decimal)Wins / closed * 100m:0.#}% закрытых";
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Reload();
+
+        _hub = new HubConnectionBuilder()
+            .WithUrl(Nav.ToAbsoluteUri("/hubs/executedSignals"))
+            .WithAutomaticReconnect()
+            .Build();
+
+        _hub.On("ExecutedSignalsUpdated", () =>
+        {
+            Reload();
+            InvokeAsync(StateHasChanged);
+        });
+
+        _hub.Reconnected += _ => InvokeAsync(StateHasChanged);
+        _hub.Closed += _ => InvokeAsync(StateHasChanged);
+
+        try { await _hub.StartAsync(); }
+        catch { /* UI остаётся рабочим и без живого потока */ }
+    }
+
+    private void Reload() => All = Signals.GetAll() ?? new();
+
+    private static VBadge.BadgeTone StatusTone(TradeExecutionStatus s) => s switch
+    {
+        TradeExecutionStatus.PositionOpened => VBadge.BadgeTone.Ok,
+        TradeExecutionStatus.PositionClosedTp => VBadge.BadgeTone.Ok,
+
+        TradeExecutionStatus.SignalCreated => VBadge.BadgeTone.Neutral,
+        TradeExecutionStatus.OrderCreated => VBadge.BadgeTone.Warn,
+        TradeExecutionStatus.OrderPartiallyFilled => VBadge.BadgeTone.Warn,
+        TradeExecutionStatus.PositionClosedManual => VBadge.BadgeTone.Neutral,
+        TradeExecutionStatus.Cancelled => VBadge.BadgeTone.Neutral,
+
+        // Закрытие по стопу — не ошибка, но и не успех: риск сработал как задумано
+        TradeExecutionStatus.PositionClosedSl => VBadge.BadgeTone.Warn,
+        TradeExecutionStatus.PositionError => VBadge.BadgeTone.Bad,
+
+        _ => VBadge.BadgeTone.Neutral
+    };
+
+    private static string Money(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture);
+
+    private static string Price(decimal v)
+    {
+        if (v == 0m) return "—";
+        var abs = Math.Abs(v);
+        var digits = abs >= 1000m ? 2 : abs >= 1m ? 4 : 6;
+        return v.ToString("N" + digits, CultureInfo.InvariantCulture);
+    }
+
+    private static string PnlClass(decimal v) => v > 0 ? "v-pos" : v < 0 ? "v-neg" : "v-zero";
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_hub != null)
+            await _hub.DisposeAsync();
+    }
+}

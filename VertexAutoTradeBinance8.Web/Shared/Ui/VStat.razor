@@ -1,0 +1,35 @@
+@*  Одно число с подписью. Tone задаёт смысл, а не настроение:
+    Bad только когда оператору нужно вмешаться. *@
+
+<div class="v-stat @ToneClass">
+    <span class="v-stat__label">@Label</span>
+    <span class="v-stat__value">
+        @Value
+        @if (!string.IsNullOrWhiteSpace(Unit))
+        {
+            <span class="v-stat__unit">@Unit</span>
+        }
+    </span>
+    @if (!string.IsNullOrWhiteSpace(Foot))
+    {
+        <span class="v-stat__foot">@Foot</span>
+    }
+</div>
+
+@code {
+    public enum StatTone { Neutral, Ok, Warn, Bad }
+
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public string Value { get; set; } = "—";
+    [Parameter] public string? Unit { get; set; }
+    [Parameter] public string? Foot { get; set; }
+    [Parameter] public StatTone Tone { get; set; } = StatTone.Neutral;
+
+    private string? ToneClass => Tone switch
+    {
+        StatTone.Ok   => "v-stat--ok",
+        StatTone.Warn => "v-stat--warn",
+        StatTone.Bad  => "v-stat--bad",
+        _             => null
+    };
+}

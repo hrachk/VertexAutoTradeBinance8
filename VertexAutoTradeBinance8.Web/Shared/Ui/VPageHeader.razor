@@ -1,0 +1,27 @@
+@*  Шапка экрана. Eyebrow даёт координату в системе (Console / Engine / AI),
+    Title — что именно перед оператором, Sub — как это читать. *@
+
+<header class="v-page__head">
+    <div>
+        @if (!string.IsNullOrWhiteSpace(Eyebrow))
+        {
+            <div class="v-page__eyebrow">@Eyebrow</div>
+        }
+        <h1 class="v-page__title">@Title</h1>
+        @if (!string.IsNullOrWhiteSpace(Sub))
+        {
+            <div class="v-page__sub">@Sub</div>
+        }
+    </div>
+    @if (Tools != null)
+    {
+        <div class="v-page__tools">@Tools</div>
+    }
+</header>
+
+@code {
+    [Parameter] public string? Eyebrow { get; set; }
+    [Parameter] public string Title { get; set; } = "";
+    [Parameter] public string? Sub { get; set; }
+    [Parameter] public RenderFragment? Tools { get; set; }
+}

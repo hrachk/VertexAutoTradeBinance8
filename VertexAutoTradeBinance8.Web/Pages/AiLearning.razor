@@ -1,0 +1,213 @@
+@page "/ai-learning"
+@using VertexAutoTradeBinance8.Models
+@using VertexAutoTradeBinance8.Services
+@inject AiLearningFileService Learning
+
+<PageTitle>Статистика AI — Vertex Console</PageTitle>
+
+<VPageHeader Eyebrow="Обучение"
+             Title="Статистика AI"
+             Sub="Что движок вынес из закрытых сделок, в разрезе инструментов и режимов рынка.">
+    <Tools>
+        <button class="v-btn" @onclick="Reload" disabled="@Busy">
+            @if (Busy)
+            {
+                <span class="v-spinner"></span>
+            }
+            Перечитать
+        </button>
+    </Tools>
+</VPageHeader>
+
+@if (Snapshot == null)
+{
+    <VCard>
+        <VEmpty Title="Снимок обучения не найден"
+                Hint="Движок пишет ai-models/ai_learning.json после закрытия сделок. Если файла нет, ни одна позиция ещё не закрывалась при работающем детекторе закрытий." />
+    </VCard>
+}
+else
+{
+    <div class="v-stack">
+
+        <div class="v-grid v-grid--stats">
+            <VCard Flush="true">
+                <VStat Label="Сделок в выборке" Value="@TotalTrades.ToString()" />
+            </VCard>
+            <VCard Flush="true">
+                <VStat Label="Доля прибыльных"
+                       Value="@(TotalTrades == 0 ? "—" : WinRate.ToString("0.#"))"
+                       Unit="@(TotalTrades == 0 ? null : "%")"
+                       Tone="@(TotalTrades == 0 ? VStat.StatTone.Neutral
+                               : WinRate >= 50m ? VStat.StatTone.Ok : VStat.StatTone.Bad)" />
+            </VCard>
+            <VCard Flush="true">
+                <VStat Label="Инструментов" Value="@(Snapshot.Symbols?.Count.ToString() ?? "0")" />
+            </VCard>
+            <VCard Flush="true">
+                <VStat Label="Снимок от"
+                       Value="@Snapshot.CreatedAtUtc.ToLocalTime().ToString("dd.MM HH:mm")" />
+            </VCard>
+        </div>
+
+        <VCard Title="Инструменты и режимы"
+               Note="Строка — связка «инструмент × режим рынка»"
+               Flush="true">
+            @if (Stats.Count == 0)
+            {
+                <VEmpty Title="Статистики по режимам пока нет"
+                        Hint="Она накапливается по мере закрытия сделок." />
+            }
+            else
+            {
+                <div class="v-tablewrap">
+                    <table class="v-table">
+                        <thead>
+                            <tr>
+                                <th>Инструмент</th>
+                                <th>Режим рынка</th>
+                                <th class="r">Сделок</th>
+                                <th class="r">Плюс</th>
+                                <th class="r">Минус</th>
+                                <th class="r">Доля прибыльных</th>
+                                <th style="min-width:120px"></th>
+                                <th class="r">Средний PnL</th>
+                                <th class="r">R: макс / мин</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in Stats)
+                            {
+                                <tr>
+                                    <td class="sym">@row.Symbol</td>
+                                    <td>@row.Regime</td>
+                                    <td class="r num">@row.Trades</td>
+                                    <td class="r num v-pos">@row.Wins</td>
+                                    <td class="r num v-neg">@row.Losses</td>
+                                    <td class="r num">@(row.Trades == 0 ? "—" : row.WinRate.ToString("0.#") + "%")</td>
+                                    <td>
+                                        <VMeter Percent="@row.WinRate"
+                                                Tone="@(row.WinRate >= 50m ? VMeter.MeterTone.Ok : VMeter.MeterTone.Bad)" />
+                                    </td>
+                                    <td class="r num @PnlClass(row.AvgPnl)">@row.AvgPnl.ToString("N2", CultureInfo.InvariantCulture)</td>
+                                    <td class="r num v-note">
+                                        @row.MaxRr.ToString("0.##", CultureInfo.InvariantCulture) /
+                                        @row.MinRr.ToString("0.##", CultureInfo.InvariantCulture)
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </VCard>
+
+        <VCard Title="Последние закрытые сделки" Flush="true">
+            @if (Trades.Count == 0)
+            {
+                <VEmpty Title="Закрытых сделок в снимке нет"
+                        Hint="Записи появляются, когда позиция уходит в ноль на бирже." />
+            }
+            else
+            {
+                <div class="v-tablewrap">
+                    <table class="v-table">
+                        <thead>
+                            <tr>
+                                <th>Время</th>
+                                <th>Инструмент</th>
+                                <th>Сторона</th>
+                                <th class="r">Вход</th>
+                                <th class="r">Выход</th>
+                                <th class="r">PnL</th>
+                                <th>Режим</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var t in Trades)
+                            {
+                                <tr>
+                                    <td class="num">@t.Time.ToLocalTime().ToString("dd.MM HH:mm")</td>
+                                    <td class="sym">@t.Symbol</td>
+                                    <td>
+                                        <VBadge Tone="@(t.Side == SignalSide.Buy ? VBadge.BadgeTone.Long : VBadge.BadgeTone.Short)">
+                                            @(t.Side == SignalSide.Buy ? "LONG" : "SHORT")
+                                        </VBadge>
+                                    </td>
+                                    <td class="r num">@Price(t.Entry)</td>
+                                    <td class="r num">@Price(t.Exit)</td>
+                                    <td class="r num @PnlClass(t.Pnl)">@t.Pnl.ToString("N2", CultureInfo.InvariantCulture)</td>
+                                    <td class="v-note">@t.Regime</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </VCard>
+    </div>
+}
+
+@code {
+    private bool Busy;
+    private AiLearningSnapshot? Snapshot;
+
+    private sealed record StatRow(
+        string Symbol,
+        MarketRegime Regime,
+        int Trades,
+        int Wins,
+        int Losses,
+        decimal AvgPnl,
+        decimal MaxRr,
+        decimal MinRr)
+    {
+        public decimal WinRate => Trades == 0 ? 0m : (decimal)Wins / Trades * 100m;
+    }
+
+    private List<StatRow> Stats = new();
+
+    private List<AiSelfLearningService.TradeHistoryEntry> Trades =>
+        Snapshot?.Trades?.OrderByDescending(x => x.Time).Take(100).ToList()
+        ?? new List<AiSelfLearningService.TradeHistoryEntry>();
+
+    private int TotalTrades => Stats.Sum(x => x.Trades);
+    private int TotalWins => Stats.Sum(x => x.Wins);
+    private decimal WinRate => TotalTrades == 0 ? 0m : (decimal)TotalWins / TotalTrades * 100m;
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        Busy = true;
+
+        Snapshot = await Learning.GetAllAsync();
+
+        Stats = Snapshot?.Symbols?
+            .SelectMany(s => (s.Regimes ?? new()).Select(r => new StatRow(
+                s.Symbol,
+                r.Regime,
+                r.Trades,
+                r.Wins,
+                r.Losses,
+                r.AvgPnl,
+                r.MaxRr,
+                r.MinRr)))
+            .Where(r => r.Trades > 0)
+            .OrderByDescending(r => r.Trades)
+            .ToList()
+            ?? new List<StatRow>();
+
+        Busy = false;
+    }
+
+    private static string PnlClass(decimal v) => v > 0 ? "v-pos" : v < 0 ? "v-neg" : "v-zero";
+
+    private static string Price(decimal v)
+    {
+        if (v == 0m) return "—";
+        var abs = Math.Abs(v);
+        var digits = abs >= 1000m ? 2 : abs >= 1m ? 4 : 6;
+        return v.ToString("N" + digits, CultureInfo.InvariantCulture);
+    }
+}

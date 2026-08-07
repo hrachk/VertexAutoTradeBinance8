@@ -1,0 +1,33 @@
+@*  Панель. Заголовок — моно-эйбрау, тело — свободный слот.
+    Alarm=true подсвечивает рамку: используется только там, где есть
+    действие для оператора, иначе цвет обесценивается. *@
+
+<div class="v-card @(Alarm ? "v-card--alarm" : null) @Class">
+    @if (!string.IsNullOrWhiteSpace(Title) || Tools != null)
+    {
+        <div class="v-card__head">
+            <span class="v-card__title">@Title</span>
+            @if (!string.IsNullOrWhiteSpace(Note))
+            {
+                <span class="v-card__note">@Note</span>
+            }
+            @if (Tools != null)
+            {
+                <div class="v-card__tools">@Tools</div>
+            }
+        </div>
+    }
+    <div class="v-card__body @(Flush ? "v-card__body--flush" : null)">
+        @ChildContent
+    </div>
+</div>
+
+@code {
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string? Note { get; set; }
+    [Parameter] public bool Alarm { get; set; }
+    [Parameter] public bool Flush { get; set; }
+    [Parameter] public string? Class { get; set; }
+    [Parameter] public RenderFragment? Tools { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

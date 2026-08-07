@@ -1,0 +1,148 @@
+@page "/missed-signals"
+@inject MissedTradeFileService Missed
+
+<PageTitle>Пропущенные — Vertex Console</PageTitle>
+
+<VPageHeader Eyebrow="История"
+             Title="Пропущенные сигналы"
+             Sub="Сделки, которые движок нашёл, но не открыл. Причина отказа важнее самого сигнала.">
+    <Tools>
+        <input class="v-input" placeholder="Фильтр по инструменту" @bind="Filter" @bind:event="oninput" />
+        <button class="v-btn" @onclick="Reload" disabled="@Busy">
+            @if (Busy)
+            {
+                <span class="v-spinner"></span>
+            }
+            Перечитать
+        </button>
+    </Tools>
+</VPageHeader>
+
+<div class="v-stack">
+
+    @if (All.Count > 0)
+    {
+        @*  Причины отказа — это не список, а распределение: одна доминирующая
+            причина означает, что настройка упирается в один параметр. *@
+        <VCard Title="Почему бот не вошёл" Note="@($"{All.Count} отказов")">
+            <div class="v-stack">
+                @foreach (var g in Reasons)
+                {
+                    <div>
+                        <div class="v-row" style="justify-content:space-between; margin-bottom:6px">
+                            <span>@g.Key</span>
+                            <span class="num v-note">@g.Value · @Share(g.Value)%</span>
+                        </div>
+                        <VMeter Percent="@ShareValue(g.Value)"
+                                Tone="@(ShareValue(g.Value) > 50m ? VMeter.MeterTone.Warn : VMeter.MeterTone.Ok)" />
+                    </div>
+                }
+            </div>
+        </VCard>
+    }
+
+    <VCard Title="Журнал отказов" Note="@($"показано {Rows.Count}")" Flush="true">
+        @if (Rows.Count == 0)
+        {
+            <VEmpty Title="@(All.Count == 0 ? "Отказов пока нет" : "Ничего не найдено")"
+                    Hint="@(All.Count == 0
+                            ? "Файл missed_trades.json появляется рядом с движком после первого отклонённого сигнала."
+                            : "Очистите фильтр, чтобы увидеть весь журнал.")" />
+        }
+        else
+        {
+            <div class="v-tablewrap">
+                <table class="v-table">
+                    <thead>
+                        <tr>
+                            <th>Время</th>
+                            <th>Инструмент</th>
+                            <th>Сторона</th>
+                            <th class="r">Вход</th>
+                            <th class="r">Стоп</th>
+                            <th class="r">Хотел, USDT</th>
+                            <th class="r">Минимум биржи</th>
+                            <th class="r">Свободно</th>
+                            <th class="r">Score</th>
+                            <th>Режим</th>
+                            <th>Причина</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var r in Rows)
+                        {
+                            <tr>
+                                <td class="num">@r.Time.ToLocalTime().ToString("dd.MM HH:mm")</td>
+                                <td class="sym">@r.Symbol</td>
+                                <td>
+                                    @if (!string.IsNullOrWhiteSpace(r.Side))
+                                    {
+                                        <VBadge Tone="@(IsLong(r.Side) ? VBadge.BadgeTone.Long : VBadge.BadgeTone.Short)">
+                                            @r.Side
+                                        </VBadge>
+                                    }
+                                </td>
+                                <td class="r num">@Price(r.Entry)</td>
+                                <td class="r num">@Price(r.StopLoss)</td>
+                                <td class="r num">@Money(r.AttemptNotional)</td>
+                                <td class="r num @(r.AttemptNotional < r.RequiredMinNotional ? "v-neg" : null)">
+                                    @Money(r.RequiredMinNotional)
+                                </td>
+                                <td class="r num">@Money(r.FreeBalance)</td>
+                                <td class="r num">@r.Score</td>
+                                <td class="v-note">@r.Regime</td>
+                                <td class="v-note">@r.Reason</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </VCard>
+</div>
+
+@code {
+    private bool Busy;
+    private string Filter = "";
+    private List<MissedTradeRecord> All = new();
+
+    private List<MissedTradeRecord> Rows =>
+        All.Where(x => string.IsNullOrWhiteSpace(Filter)
+                       || x.Symbol.Contains(Filter, StringComparison.OrdinalIgnoreCase))
+           .OrderByDescending(x => x.Time)
+           .Take(500)
+           .ToList();
+
+    private List<KeyValuePair<string, int>> Reasons =>
+        All.GroupBy(x => string.IsNullOrWhiteSpace(x.Reason) ? "Без причины" : x.Reason)
+           .OrderByDescending(g => g.Count())
+           .Take(8)
+           .Select(g => new KeyValuePair<string, int>(g.Key, g.Count()))
+           .ToList();
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        Busy = true;
+        All = await Missed.LoadAsync();
+        Busy = false;
+    }
+
+    private decimal ShareValue(int count) => All.Count == 0 ? 0m : (decimal)count / All.Count * 100m;
+    private string Share(int count) => ShareValue(count).ToString("0.#", CultureInfo.InvariantCulture);
+
+    private static bool IsLong(string side) =>
+        side.Contains("LONG", StringComparison.OrdinalIgnoreCase)
+        || side.Contains("BUY", StringComparison.OrdinalIgnoreCase);
+
+    private static string Money(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture);
+
+    private static string Price(decimal v)
+    {
+        if (v == 0m) return "—";
+        var abs = Math.Abs(v);
+        var digits = abs >= 1000m ? 2 : abs >= 1m ? 4 : 6;
+        return v.ToString("N" + digits, CultureInfo.InvariantCulture);
+    }
+}

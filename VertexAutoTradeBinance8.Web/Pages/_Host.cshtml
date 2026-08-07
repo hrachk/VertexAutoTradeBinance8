@@ -1,19 +1,26 @@
-﻿@page "/"
+@page "/"
 @using Microsoft.AspNetCore.Components.Web
 @namespace VertexAutoTradeBinance8.Web.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
 
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0b1220" />
+    <title>Vertex Console</title>
     <base href="~/" />
-    <link rel="stylesheet" href="css/bootstrap/bootstrap.min.css" />
-    <link href="css/site.css" rel="stylesheet" />
-    <link href="/css/missed-trades.css" rel="stylesheet" />
-    <link href="VertexAutoTradeBinance8.Web.styles.css" rel="stylesheet" />
-    <link rel="icon" type="image/png" href="favicon.png"/>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" />
+
+    <link rel="stylesheet" href="css/vertex.css" />
+    <link rel="icon" type="image/png" href="favicon.png" />
+
     <component type="typeof(HeadOutlet)" render-mode="ServerPrerendered" />
 </head>
 <body>
@@ -21,21 +28,15 @@
 
     <div id="blazor-error-ui">
         <environment include="Staging,Production">
-            An error has occurred. This application may no longer respond until reloaded.
+            Консоль потеряла связь с сервером. Перезагрузите страницу.
         </environment>
         <environment include="Development">
-            An unhandled exception has occurred. See browser dev tools for details.
+            Необработанное исключение. Подробности — в консоли браузера.
         </environment>
-        <a href="" class="reload">Reload</a>
-        <a class="dismiss">🗙</a>
+        <a href="" class="reload">Перезагрузить</a>
+        <a class="dismiss">×</a>
     </div>
 
     <script src="_framework/blazor.server.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="~/js/learningchart.js"></script>
-
-
-
-
 </body>
 </html>

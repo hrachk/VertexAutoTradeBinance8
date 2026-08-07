@@ -1,0 +1,37 @@
+@*  Компактный статус. Dot=true добавляет точку — только для живых состояний
+    (движок, соединение), не для статических ярлыков вроде LONG/SHORT. *@
+
+<span class="v-badge @ToneClass @Class">
+    @if (Dot)
+    {
+        <span class="v-dot @DotClass"></span>
+    }
+    @ChildContent
+</span>
+
+@code {
+    public enum BadgeTone { Neutral, Ok, Warn, Bad, Long, Short }
+
+    [Parameter] public BadgeTone Tone { get; set; } = BadgeTone.Neutral;
+    [Parameter] public bool Dot { get; set; }
+    [Parameter] public string? Class { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private string? ToneClass => Tone switch
+    {
+        BadgeTone.Ok    => "v-badge--ok",
+        BadgeTone.Warn  => "v-badge--warn",
+        BadgeTone.Bad   => "v-badge--bad",
+        BadgeTone.Long  => "v-badge--long",
+        BadgeTone.Short => "v-badge--short",
+        _               => null
+    };
+
+    private string? DotClass => Tone switch
+    {
+        BadgeTone.Ok   => "v-dot--ok",
+        BadgeTone.Warn => "v-dot--warn",
+        BadgeTone.Bad  => "v-dot--bad",
+        _              => null
+    };
+}

@@ -1,0 +1,20 @@
+<div class="v-meter" title="@Title">
+    <div class="v-meter__fill @ToneClass" style="width:@(Clamped.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+</div>
+
+@code {
+    public enum MeterTone { Ok, Warn, Bad }
+
+    [Parameter] public decimal Percent { get; set; }
+    [Parameter] public MeterTone Tone { get; set; } = MeterTone.Ok;
+    [Parameter] public string? Title { get; set; }
+
+    private decimal Clamped => Math.Clamp(Percent, 0m, 100m);
+
+    private string? ToneClass => Tone switch
+    {
+        MeterTone.Warn => "v-meter__fill--warn",
+        MeterTone.Bad  => "v-meter__fill--bad",
+        _              => null
+    };
+}

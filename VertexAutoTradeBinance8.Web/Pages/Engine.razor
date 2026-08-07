@@ -1,0 +1,173 @@
+@page "/engine"
+@implements IDisposable
+@inject EngineStateService EngineState
+
+<PageTitle>Движок — Vertex Console</PageTitle>
+
+<VPageHeader Eyebrow="Сейчас"
+             Title="Состояние движка"
+             Sub="@SubLine">
+    <Tools>
+        <VBadge Tone="@FreshnessTone" Dot="true">@FreshnessLabel</VBadge>
+        <button class="v-btn" @onclick="Reload">Перечитать</button>
+    </Tools>
+</VPageHeader>
+
+@if (S == null)
+{
+    <VCard>
+        <VEmpty Title="Файл состояния не найден"
+                Hint="@($"Ожидается {EngineState.FilePath}. Движок пишет его на каждом цикле — если файла нет, процесс не запущен или запущен из другой папки.")" />
+    </VCard>
+}
+else
+{
+    <div class="v-stack">
+
+        <div class="v-grid v-grid--stats">
+            <VCard Flush="true">
+                <VStat Label="Статус" Value="@Dash(S.Status)" />
+            </VCard>
+            <VCard Flush="true">
+                <VStat Label="Режим торговли" Value="@Dash(S.Mode)" />
+            </VCard>
+            <VCard Flush="true">
+                <VStat Label="Баланс"
+                       Value="@S.BalanceUsdt.ToString("N2", CultureInfo.InvariantCulture)"
+                       Unit="USDT" />
+            </VCard>
+            <VCard Flush="true">
+                <VStat Label="Последняя запись"
+                       Value="@S.LastUpdate.ToLocalTime().ToString("HH:mm:ss")"
+                       Tone="@(IsStale ? VStat.StatTone.Bad : VStat.StatTone.Ok)"
+                       Foot="@($"{S.LastUpdate.ToLocalTime():dd.MM.yyyy}")" />
+            </VCard>
+        </div>
+
+        <div class="v-grid v-grid--halves">
+
+            <VCard Title="Что движок видит на рынке">
+                <dl class="v-kv">
+                    <dt>Инструмент</dt><dd>@Dash(S.Symbol)</dd>
+                    <dt>Таймфрейм</dt><dd>@Dash(S.Timeframe)</dd>
+                    <dt>Базовый режим</dt><dd>@Dash(S.MarketRegime)</dd>
+                    <dt>Smart-режим</dt><dd>@Dash(S.SmartRegime)</dd>
+                    <dt>Наклон</dt><dd>@S.Slope.ToString("0.#####", CultureInfo.InvariantCulture)</dd>
+                    <dt>Волатильность</dt><dd>@S.Volatility.ToString("0.#####", CultureInfo.InvariantCulture)</dd>
+                </dl>
+
+                <div style="margin-top:var(--s5)">
+                    <div class="v-row" style="justify-content:space-between; margin-bottom:6px">
+                        <span class="v-note">Уверенность</span>
+                        <span class="num">@S.Confidence.ToString("0.##", CultureInfo.InvariantCulture)</span>
+                    </div>
+                    <VMeter Percent="@ConfidencePercent"
+                            Tone="@(ConfidencePercent >= 60m ? VMeter.MeterTone.Ok
+                                    : ConfidencePercent >= 35m ? VMeter.MeterTone.Warn
+                                    : VMeter.MeterTone.Bad)" />
+                </div>
+            </VCard>
+
+            <VCard Title="Что движок сейчас разрешает"
+                   Alarm="@(S.BlockedByLiquidity)">
+                <div class="v-stack">
+
+                    <div class="v-row" style="justify-content:space-between">
+                        <span>Вход по ликвидности</span>
+                        @if (S.BlockedByLiquidity)
+                        {
+                            <VBadge Tone="VBadge.BadgeTone.Bad" Dot="true">Заблокирован</VBadge>
+                        }
+                        else
+                        {
+                            <VBadge Tone="VBadge.BadgeTone.Ok">Разрешён</VBadge>
+                        }
+                    </div>
+
+                    <div class="v-row" style="justify-content:space-between">
+                        <span>Ликвидность рынка</span>
+                        @if (S.LiquidityDanger)
+                        {
+                            <VBadge Tone="VBadge.BadgeTone.Warn">Опасная зона</VBadge>
+                        }
+                        else
+                        {
+                            <VBadge Tone="VBadge.BadgeTone.Ok">В норме</VBadge>
+                        }
+                    </div>
+
+                    <div class="v-row" style="justify-content:space-between">
+                        <span>Мягкий вход</span>
+                        <VBadge>@(S.SoftEntry ? "Включён" : "Выключен")</VBadge>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(S.LiquidityReason))
+                    {
+                        <div class="v-note" style="border-top:1px solid var(--rule); padding-top:var(--s3)">
+                            @S.LiquidityReason
+                        </div>
+                    }
+                </div>
+            </VCard>
+
+        </div>
+
+        @if (IsStale)
+        {
+            <VCard Title="Данные устарели" Alarm="true">
+                <div class="v-note">
+                    Последняя запись сделана @FormatAge(Age) назад. Консоль показывает снимок,
+                    а не текущее состояние: движок остановлен, завис или пишет файл в другую папку.
+                    Ожидаемый путь — @EngineState.FilePath
+                </div>
+            </VCard>
+        }
+    </div>
+}
+
+@code {
+    private EngineStateModel? S;
+    private Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        Reload();
+
+        // Файл на диске: опрос раз в 3 секунды дешевле, чем FileSystemWatcher,
+        // и не ломается при частичной записи файла движком.
+        _timer = new Timer(_ =>
+        {
+            Reload();
+            InvokeAsync(StateHasChanged);
+        }, null, 3000, 3000);
+    }
+
+    private void Reload() => S = EngineState.Load();
+
+    private TimeSpan Age => S == null ? TimeSpan.Zero : DateTime.UtcNow - S.LastUpdate;
+    private bool IsStale => S != null && Age > TimeSpan.FromMinutes(2);
+
+    private decimal ConfidencePercent =>
+        S == null ? 0m : S.Confidence <= 1m ? S.Confidence * 100m : Math.Min(S.Confidence, 100m);
+
+    private string SubLine => S == null
+        ? "Снимок недоступен"
+        : IsStale
+            ? $"Снимок устарел на {FormatAge(Age)}"
+            : "Снимок актуален";
+
+    private VBadge.BadgeTone FreshnessTone =>
+        S == null ? VBadge.BadgeTone.Warn : IsStale ? VBadge.BadgeTone.Bad : VBadge.BadgeTone.Ok;
+
+    private string FreshnessLabel =>
+        S == null ? "Нет данных" : IsStale ? "Движок молчит" : "Движок пишет";
+
+    private static string FormatAge(TimeSpan age) =>
+        age.TotalHours >= 1 ? $"{(int)age.TotalHours} ч {age.Minutes} мин"
+        : age.TotalMinutes >= 1 ? $"{(int)age.TotalMinutes} мин"
+        : $"{(int)age.TotalSeconds} с";
+
+    private static string Dash(string? v) => string.IsNullOrWhiteSpace(v) ? "—" : v;
+
+    public void Dispose() => _timer?.Dispose();
+}

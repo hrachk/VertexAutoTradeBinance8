@@ -1,0 +1,17 @@
+@*  Пустой экран — это приглашение к действию, а не извинение.
+    Title говорит, что произошло; Hint — что делать дальше. *@
+
+<div class="v-empty">
+    <div class="v-empty__title">@Title</div>
+    @if (!string.IsNullOrWhiteSpace(Hint))
+    {
+        <div class="v-empty__hint">@Hint</div>
+    }
+    @ChildContent
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Пусто";
+    [Parameter] public string? Hint { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

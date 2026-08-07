@@ -1,0 +1,131 @@
+@using VertexAutoTradeBinance8.Web.Models
+
+@*  ===========================================================================
+    RISK RAIL
+    ---------------------------------------------------------------------------
+    Одна позиция — одна шкала прибора.
+
+      стоп ──────── вход ─────●──────── тейк
+                             mark
+
+    Шкала строится так, чтобы вход всегда стоял ровно посередине: тогда
+    смещение метки влево или вправо читается без чтения цифр — где сейчас
+    сделка относительно риска.
+
+    Если стопа нет, шкалы нет: показывается разомкнутая пунктирная линия и
+    флаг NO STOP. Это единственное анимированное состояние в интерфейсе,
+    поэтому оно ловит взгляд.
+    =========================================================================== *@
+
+<div class="v-rail @(Naked ? "v-rail--naked" : null)">
+    <div class="v-rail__track" title="@Hint">
+        @if (!Naked)
+        {
+            <span class="v-rail__stop" style="left:@Pct(StopPos)"></span>
+            <span class="v-rail__entry" style="left:@Pct(50m)"></span>
+
+            @if (Position.TakeProfitPrice is > 0)
+            {
+                <span class="v-rail__tp" style="left:@Pct(TpPos)"></span>
+            }
+        }
+
+        <span class="v-rail__mark @MarkClass" style="left:@Pct(MarkPos)"></span>
+    </div>
+
+    <div class="v-rail__scale">
+        @if (Naked)
+        {
+            <span class="v-rail__flag">Стоп не выставлен</span>
+            <b>@Fmt(Position.MarkPrice)</b>
+        }
+        else
+        {
+            <span>SL <b>@Fmt(Position.StopPrice)</b></span>
+            <span>@Fmt(Position.MarkPrice)</span>
+            <span>
+                @if (Position.TakeProfitPrice is > 0)
+                {
+                    <text>TP </text><b>@Fmt(Position.TakeProfitPrice)</b>
+                }
+                else
+                {
+                    <text>без TP</text>
+                }
+            </span>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public PositionProtectionModel Position { get; set; } = new();
+
+    private bool Naked => !Position.HasStop;
+
+    /// <summary>Половина ширины шкалы в цене — расстояние вход→стоп.</summary>
+    private decimal Span
+    {
+        get
+        {
+            if (Position.StopPrice is not > 0 || Position.EntryPrice <= 0)
+                return 0m;
+
+            var d = Math.Abs(Position.EntryPrice - Position.StopPrice.Value);
+            return d > 0 ? d : 0m;
+        }
+    }
+
+    /// <summary>Позиция стопа: всегда край риска — 8% слева для LONG, справа для SHORT.</summary>
+    private decimal StopPos => Position.IsLong ? 8m : 92m;
+
+    private decimal TpPos => ToPercent(Position.TakeProfitPrice ?? Position.EntryPrice);
+
+    private decimal MarkPos => Naked
+        ? 50m
+        : ToPercent(Position.MarkPrice > 0 ? Position.MarkPrice : Position.EntryPrice);
+
+    /// <summary>
+    /// Вход = 50%, стоп = 8% (LONG). Значит 1R по цене = 42% ширины.
+    /// Всё за пределами шкалы прижимается к краю, а не улетает наружу.
+    /// </summary>
+    private decimal ToPercent(decimal price)
+    {
+        if (Span <= 0 || Position.EntryPrice <= 0)
+            return 50m;
+
+        var rMultiple = (price - Position.EntryPrice) / Span;   // в единицах риска
+        if (!Position.IsLong) rMultiple = -rMultiple;
+
+        var pos = 50m + rMultiple * 42m;
+        return Math.Clamp(pos, 2m, 98m);
+    }
+
+    private string? MarkClass
+    {
+        get
+        {
+            if (Position.UnrealizedPnl > 0) return "v-rail__mark--up";
+            if (Position.UnrealizedPnl < 0) return "v-rail__mark--down";
+            return null;
+        }
+    }
+
+    private string Hint => Naked
+        ? $"{Position.Symbol} {Position.PositionSide}: защитного ордера на бирже нет"
+        : $"{Position.Symbol} {Position.PositionSide}: стоп {Fmt(Position.StopPrice)}, " +
+          $"дистанция {Position.StopDistancePercent?.ToString("0.00") ?? "—"}%";
+
+    private static string Pct(decimal v) =>
+        v.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) + "%";
+
+    private static string Fmt(decimal? v)
+    {
+        if (v is null or 0m) return "—";
+
+        var abs = Math.Abs(v.Value);
+        var digits = abs >= 1000m ? 2 : abs >= 1m ? 4 : 6;
+        return v.Value.ToString("N" + digits, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static string Fmt(decimal v) => Fmt((decimal?)v);
+}

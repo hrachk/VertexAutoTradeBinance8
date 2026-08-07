@@ -1,0 +1,226 @@
+@page "/"
+@implements IDisposable
+@inject ProtectionUiService Protection
+@inject EngineStateService EngineState
+
+<PageTitle>Обзор — Vertex Console</PageTitle>
+
+<VPageHeader Eyebrow="Консоль"
+             Title="Обзор"
+             Sub="@SubLine">
+    <Tools>
+        <button class="v-btn" @onclick="Refresh" disabled="@Busy">
+            @if (Busy)
+            {
+                <span class="v-spinner"></span>
+            }
+            Обновить
+        </button>
+    </Tools>
+</VPageHeader>
+
+<div class="v-stack">
+
+    @*  Первый экран отвечает на один вопрос — защищена ли машина.
+        Поэтому незащищённые позиции стоят выше PnL: деньги можно потерять
+        только там, где нет стопа. *@
+    @if (S.Unprotected > 0)
+    {
+        <VCard Title="Требует вмешательства"
+               Note="@($"{S.Unprotected} из {S.Total} позиций без защитного ордера")"
+               Alarm="true"
+               Flush="true">
+            <div class="v-tablewrap">
+                <table class="v-table">
+                    <thead>
+                        <tr>
+                            <th>Инструмент</th>
+                            <th>Сторона</th>
+                            <th class="r">Объём, USDT</th>
+                            <th class="r">PnL</th>
+                            <th style="min-width:240px">Риск</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var p in S.Positions.Where(x => !x.HasStop))
+                        {
+                            <tr>
+                                <td class="sym">@p.Symbol</td>
+                                <td>
+                                    <VBadge Tone="@(p.IsLong ? VBadge.BadgeTone.Long : VBadge.BadgeTone.Short)">
+                                        @p.PositionSide
+                                    </VBadge>
+                                </td>
+                                <td class="r num">@Money(Math.Abs(p.Notional))</td>
+                                <td class="r num @PnlClass(p.UnrealizedPnl)">@Money(p.UnrealizedPnl)</td>
+                                <td><VRiskRail Position="p" /></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </VCard>
+    }
+
+    <div class="v-grid v-grid--stats">
+        <VCard Flush="true">
+            <VStat Label="Открыто позиций"
+                   Value="@S.Total.ToString()"
+                   Foot="@(S.Total == 0 ? "Счёт пуст" : $"на {Money(S.TotalNotional)} USDT")" />
+        </VCard>
+
+        <VCard Flush="true">
+            <VStat Label="Без стопа"
+                   Value="@S.Unprotected.ToString()"
+                   Tone="@(S.Unprotected > 0 ? VStat.StatTone.Bad : VStat.StatTone.Ok)"
+                   Foot="@(S.Unprotected > 0 ? "Позиция не ограничена по убытку" : "Каждая позиция ограничена")" />
+        </VCard>
+
+        <VCard Flush="true">
+            <VStat Label="Нереализованный PnL"
+                   Value="@Money(S.TotalPnl)"
+                   Unit="USDT"
+                   Tone="@(S.TotalPnl > 0 ? VStat.StatTone.Ok : S.TotalPnl < 0 ? VStat.StatTone.Bad : VStat.StatTone.Neutral)" />
+        </VCard>
+
+        <VCard Flush="true">
+            <VStat Label="Риск до стопов"
+                   Value="@Money(S.KnownRisk)"
+                   Unit="USDT"
+                   Foot="@RiskFoot" />
+        </VCard>
+    </div>
+
+    <div class="v-grid v-grid--halves">
+
+        <VCard Title="Позиции под защитой" Flush="true">
+            @if (Protected.Count == 0)
+            {
+                <VEmpty Title="@(S.Total == 0 ? "Открытых позиций нет" : "Ни одна позиция не защищена")"
+                        Hint="@(S.Total == 0
+                                ? "Как только движок войдёт в сделку, она появится здесь вместе со шкалой риска."
+                                : "Проверьте журнал движка: постановка стопа не прошла.")" />
+            }
+            else
+            {
+                <div class="v-tablewrap">
+                    <table class="v-table">
+                        <thead>
+                            <tr>
+                                <th>Инструмент</th>
+                                <th class="r">PnL</th>
+                                <th style="min-width:220px">Шкала риска</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var p in Protected)
+                            {
+                                <tr>
+                                    <td>
+                                        <div class="sym">@p.Symbol</div>
+                                        <div class="v-note">@p.PositionSide · @(p.Leverage?.ToString() ?? "—")x</div>
+                                    </td>
+                                    <td class="r num @PnlClass(p.UnrealizedPnl)">@Money(p.UnrealizedPnl)</td>
+                                    <td><VRiskRail Position="p" /></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </VCard>
+
+        <VCard Title="Состояние движка">
+            @if (Engine == null)
+            {
+                <VEmpty Title="Файл состояния не найден"
+                        Hint="Движок пишет engine_state.json рядом со своим исполняемым файлом. Запустите движок или проверьте рабочую папку." />
+            }
+            else
+            {
+                <dl class="v-kv">
+                    <dt>Статус</dt><dd>@Engine.Status</dd>
+                    <dt>Режим</dt><dd>@Engine.Mode</dd>
+                    <dt>Инструмент</dt><dd>@Engine.Symbol @Engine.Timeframe</dd>
+                    <dt>Режим рынка</dt><dd>@Engine.MarketRegime</dd>
+                    <dt>Smart</dt><dd>@Engine.SmartRegime</dd>
+                    <dt>Уверенность</dt><dd>@Engine.Confidence.ToString("0.##")</dd>
+                    <dt>Волатильность</dt><dd>@Engine.Volatility.ToString("0.####")</dd>
+                    <dt>Наклон</dt><dd>@Engine.Slope.ToString("0.####")</dd>
+                    <dt>Обновлено</dt><dd>@Engine.LastUpdate.ToLocalTime().ToString("HH:mm:ss")</dd>
+                </dl>
+
+                @if (Engine.BlockedByLiquidity || Engine.LiquidityDanger)
+                {
+                    <div style="margin-top:var(--s4)">
+                        <VBadge Tone="VBadge.BadgeTone.Warn" Dot="true">
+                            Вход придержан по ликвидности
+                        </VBadge>
+                        @if (!string.IsNullOrWhiteSpace(Engine.LiquidityReason))
+                        {
+                            <div class="v-note" style="margin-top:var(--s2)">@Engine.LiquidityReason</div>
+                        }
+                    </div>
+                }
+            }
+        </VCard>
+
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(S.Error))
+    {
+        <VCard Title="Связь с биржей">
+            <div class="v-note">@S.Error</div>
+        </VCard>
+    }
+</div>
+
+@code {
+    private IDisposable? _sub;
+    private bool Busy;
+
+    private ProtectionSummary S => Protection.Snapshot;
+    private List<PositionProtectionModel> Protected => S.Positions.Where(x => x.HasStop).ToList();
+    private EngineStateModel? Engine;
+
+    protected override void OnInitialized()
+    {
+        _sub = Protection.Subscribe(OnChanged);
+        Engine = EngineState.Load();
+    }
+
+    private void OnChanged()
+    {
+        Engine = EngineState.Load();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task Refresh()
+    {
+        Busy = true;
+        await Protection.RefreshAsync();
+        Busy = false;
+    }
+
+    private string SubLine => S.Total == 0
+        ? "Открытых позиций нет"
+        : S.Unprotected > 0
+            ? $"{S.Unprotected} позиций без стопа — это первое, что нужно закрыть"
+            : $"{S.Total} позиций, все со стопом на бирже";
+
+    private string RiskFoot
+    {
+        get
+        {
+            if (S.Total == 0) return "Нечего терять";
+            if (S.Unprotected > 0) return $"Не считая {S.Unprotected} без стопа";
+            return "Максимальный убыток при срабатывании всех стопов";
+        }
+    }
+
+    private static string Money(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture);
+
+    private static string PnlClass(decimal v) => v > 0 ? "v-pos" : v < 0 ? "v-neg" : "v-zero";
+
+    public void Dispose() => _sub?.Dispose();
+}

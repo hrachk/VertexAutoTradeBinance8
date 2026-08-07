@@ -1,12 +1,18 @@
-﻿<Router AppAssembly="@typeof(App).Assembly">
+<Router AppAssembly="@typeof(App).Assembly">
     <Found Context="routeData">
         <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)" />
         <FocusOnNavigate RouteData="@routeData" Selector="h1" />
     </Found>
     <NotFound>
-        <PageTitle>Not found</PageTitle>
+        <PageTitle>Страница не найдена — Vertex Console</PageTitle>
         <LayoutView Layout="@typeof(MainLayout)">
-            <p role="alert">Sorry, there's nothing at this address.</p>
+            <VPageHeader Eyebrow="404" Title="Такого экрана нет" />
+            <VCard>
+                <VEmpty Title="Адрес не соответствует ни одному экрану"
+                        Hint="Проверьте ссылку или вернитесь к обзору — там видно состояние счёта целиком.">
+                    <a class="v-btn" href="">К обзору</a>
+                </VEmpty>
+            </VCard>
         </LayoutView>
     </NotFound>
 </Router>

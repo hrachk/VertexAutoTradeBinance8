@@ -1,0 +1,188 @@
+@page "/positions"
+@implements IDisposable
+@inject ProtectionUiService Protection
+
+<PageTitle>Позиции — Vertex Console</PageTitle>
+
+<VPageHeader Eyebrow="Сейчас"
+             Title="Открытые позиции"
+             Sub="Данные берутся с биржи, а не из состояния движка — расхождение между ними как раз и стоит замечать.">
+    <Tools>
+        <button class="v-btn @(OnlyNaked ? "v-btn--on" : null)" @onclick="ToggleFilter">
+            Только без стопа
+        </button>
+        <button class="v-btn" @onclick="Refresh" disabled="@Busy">
+            @if (Busy)
+            {
+                <span class="v-spinner"></span>
+            }
+            Обновить
+        </button>
+    </Tools>
+</VPageHeader>
+
+<div class="v-stack">
+
+    <div class="v-grid v-grid--stats">
+        <VCard Flush="true">
+            <VStat Label="Позиций" Value="@S.Total.ToString()" />
+        </VCard>
+        <VCard Flush="true">
+            <VStat Label="Без стопа"
+                   Value="@S.Unprotected.ToString()"
+                   Tone="@(S.Unprotected > 0 ? VStat.StatTone.Bad : VStat.StatTone.Ok)" />
+        </VCard>
+        <VCard Flush="true">
+            <VStat Label="Дубли стопов"
+                   Value="@S.Duplicates.ToString()"
+                   Tone="@(S.Duplicates > 0 ? VStat.StatTone.Warn : VStat.StatTone.Neutral)"
+                   Foot="@(S.Duplicates > 0 ? "Два стопа на одну сторону" : null)" />
+        </VCard>
+        <VCard Flush="true">
+            <VStat Label="Экспозиция"
+                   Value="@Money(S.TotalNotional)"
+                   Unit="USDT" />
+        </VCard>
+    </div>
+
+    <VCard Title="Реестр позиций" Note="@Note" Flush="true" Alarm="@(S.Unprotected > 0 && !OnlyNaked)">
+        @if (Rows.Count == 0)
+        {
+            <VEmpty Title="@EmptyTitle" Hint="@EmptyHint" />
+        }
+        else
+        {
+            <div class="v-tablewrap">
+                <table class="v-table">
+                    <thead>
+                        <tr>
+                            <th>Инструмент</th>
+                            <th>Сторона</th>
+                            <th class="r">Количество</th>
+                            <th class="r">Вход</th>
+                            <th class="r">Рынок</th>
+                            <th class="r">PnL</th>
+                            <th class="r">Риск, USDT</th>
+                            <th>Защита</th>
+                            <th style="min-width:240px">Шкала риска</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var p in Rows)
+                        {
+                            <tr>
+                                <td>
+                                    <div class="sym">@p.Symbol</div>
+                                    @if (p.LiquidationPrice is > 0)
+                                    {
+                                        <div class="v-note">ликв. @Price(p.LiquidationPrice)</div>
+                                    }
+                                </td>
+                                <td>
+                                    <VBadge Tone="@(p.IsLong ? VBadge.BadgeTone.Long : VBadge.BadgeTone.Short)">
+                                        @p.PositionSide
+                                    </VBadge>
+                                    @if (p.Leverage is > 0)
+                                    {
+                                        <div class="v-note">@p.Leverage x</div>
+                                    }
+                                </td>
+                                <td class="r num">@Qty(p.Quantity)</td>
+                                <td class="r num">@Price(p.EntryPrice)</td>
+                                <td class="r num">@Price(p.MarkPrice)</td>
+                                <td class="r num @PnlClass(p.UnrealizedPnl)">@Money(p.UnrealizedPnl)</td>
+                                <td class="r num">
+                                    @if (p.RiskUsdt is { } risk)
+                                    {
+                                        @Money(risk)
+                                        <div class="v-note">@p.StopDistancePercent?.ToString("0.00")%</div>
+                                    }
+                                    else
+                                    {
+                                        <span class="v-neg">не ограничен</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (!p.HasStop)
+                                    {
+                                        <VBadge Tone="VBadge.BadgeTone.Bad" Dot="true">Нет стопа</VBadge>
+                                    }
+                                    else if (p.HasDuplicateStops)
+                                    {
+                                        <VBadge Tone="VBadge.BadgeTone.Warn">@p.StopOrderCount стопа</VBadge>
+                                    }
+                                    else if (p.TakeProfitPrice is > 0)
+                                    {
+                                        <VBadge Tone="VBadge.BadgeTone.Ok">SL + TP</VBadge>
+                                    }
+                                    else
+                                    {
+                                        <VBadge Tone="VBadge.BadgeTone.Ok">SL</VBadge>
+                                    }
+                                </td>
+                                <td><VRiskRail Position="p" /></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </VCard>
+
+    @if (!string.IsNullOrWhiteSpace(S.Error))
+    {
+        <VCard Title="Связь с биржей">
+            <div class="v-note">@S.Error</div>
+        </VCard>
+    }
+</div>
+
+@code {
+    private IDisposable? _sub;
+    private bool Busy;
+    private bool OnlyNaked;
+
+    private ProtectionSummary S => Protection.Snapshot;
+
+    private List<PositionProtectionModel> Rows =>
+        (OnlyNaked ? S.Positions.Where(x => !x.HasStop) : S.Positions).ToList();
+
+    protected override void OnInitialized() => _sub = Protection.Subscribe(OnChanged);
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    private void ToggleFilter() => OnlyNaked = !OnlyNaked;
+
+    private async Task Refresh()
+    {
+        Busy = true;
+        await Protection.RefreshAsync();
+        Busy = false;
+    }
+
+    private string Note => $"обновлено {S.TimeUtc.ToLocalTime():HH:mm:ss}";
+
+    private string EmptyTitle => OnlyNaked
+        ? "Незащищённых позиций нет"
+        : "Открытых позиций нет";
+
+    private string EmptyHint => OnlyNaked
+        ? "Под каждой открытой позицией стоит стоп-ордер. Снимите фильтр, чтобы увидеть весь реестр."
+        : "Движок пока не входил в сделки. Позиции появятся здесь сразу после заливки ордера.";
+
+    private static string Money(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture);
+    private static string Qty(decimal v) => Math.Abs(v).ToString("0.########", CultureInfo.InvariantCulture);
+
+    private static string Price(decimal? v)
+    {
+        if (v is null or 0m) return "—";
+        var abs = Math.Abs(v.Value);
+        var digits = abs >= 1000m ? 2 : abs >= 1m ? 4 : 6;
+        return v.Value.ToString("N" + digits, CultureInfo.InvariantCulture);
+    }
+
+    private static string Price(decimal v) => Price((decimal?)v);
+    private static string PnlClass(decimal v) => v > 0 ? "v-pos" : v < 0 ? "v-neg" : "v-zero";
+
+    public void Dispose() => _sub?.Dispose();
+}

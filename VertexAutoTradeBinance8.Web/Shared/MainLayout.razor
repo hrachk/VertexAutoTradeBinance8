@@ -1,49 +1,118 @@
-﻿@inherits LayoutComponentBase
+@inherits LayoutComponentBase
+@implements IDisposable
+@using VertexAutoTradeBinance8.Web.Services
+@using VertexAutoTradeBinance8.Web.Shared.Ui
+@inject ProtectionUiService Protection
+@inject EngineStateService EngineState
 
-<PageTitle>VERTEX AUTOTRADE AI</PageTitle>
+<PageTitle>Vertex Console</PageTitle>
 
-<!-- === MOBILE MENU BUTTON === -->
-<button class="menu-toggle" @onclick="ToggleMenu">☰</button>
+<div class="v-shell">
 
-<header class="vertex-header">
-    <div class="vertex-left">
-        <img src="images/vertexailogo.png" class="vertex-logo" alt="logo" />
-        <span class="vertex-title">VERTEX AUTOTRADE AI</span>
-        <span class="vertex-subtitle">Quant Engine v8</span>
-    </div>
+    @*  Шапка — приборный рельс. Слева идентификация, справа три факта,
+        которые оператор должен видеть всегда: жив ли движок, сколько денег
+        на счету и есть ли позиция без стопа. Последний факт важнее остальных,
+        поэтому он единственный меняет цвет. *@
+    <header class="v-header">
+        <button class="v-header__burger" @onclick="ToggleNav" aria-label="Открыть меню">☰</button>
 
-    <div class="vertex-right">
-        <span class="vertex-status-dot @(EngineStatus == "Running" ? "ok" : "bad")"></span>
-        <span class="vertex-status-text">@EngineStatus</span>
-        <span class="vertex-balance">Balance: @Balance USDT</span>
-        <span class="vertex-mode">Mode: @TradingMode</span>
-    </div>
-</header>
+        <div class="v-header__brand">
+            <img src="images/vertexailogo.png" class="v-header__logo" alt="" />
+            <span class="v-header__name">Vertex Console</span>
+        </div>
 
-<div class="page">
-    <div class="sidebar @(ShowSidebar ? "sidebar-open" : "")">
-        <NavMenu />
-    </div>
+        <div class="v-header__rail">
+            <VBadge Tone="@EngineTone" Dot="true">@EngineLabel</VBadge>
 
-    <!-- BACKDROP when menu open on mobile -->
-    @if (ShowSidebar)
-    {
-        <div class="sidebar-backdrop" @onclick="ToggleMenu"></div>
-    }
+            @if (Balance > 0)
+            {
+                <VBadge>@Balance.ToString("N2") USDT</VBadge>
+            }
 
-    <main>
-        <article class="content px-4">
+            @if (Snapshot.Unprotected > 0)
+            {
+                <VBadge Tone="VBadge.BadgeTone.Bad" Dot="true">
+                    @Snapshot.Unprotected без стопа
+                </VBadge>
+            }
+            else if (Snapshot.Total > 0)
+            {
+                <VBadge Tone="VBadge.BadgeTone.Ok">@Snapshot.Total под защитой</VBadge>
+            }
+        </div>
+    </header>
+
+    <div class="v-body">
+        <aside class="v-sidebar @(NavOpen ? "v-sidebar--open" : null)">
+            <NavMenu Unprotected="Snapshot.Unprotected" OnNavigate="CloseNav" />
+        </aside>
+
+        @if (NavOpen)
+        {
+            <div class="v-backdrop" @onclick="CloseNav"></div>
+        }
+
+        <main class="v-main">
             @Body
-        </article>
-    </main>
+        </main>
+    </div>
 </div>
 
 @code {
-    public decimal Balance { get; set; }
-    public string EngineStatus { get; set; } = "Loading...";
-    public string TradingMode { get; set; } = "Detecting...";
+    private IDisposable? _sub;
+    private bool NavOpen;
 
-    private bool ShowSidebar = false;
+    private ProtectionSummary Snapshot => Protection.Snapshot;
 
-    void ToggleMenu() => ShowSidebar = !ShowSidebar;
+    private decimal Balance;
+    private string EngineLabel = "Движок: нет данных";
+    private VBadge.BadgeTone EngineTone = VBadge.BadgeTone.Warn;
+
+    protected override void OnInitialized()
+    {
+        _sub = Protection.Subscribe(OnChanged);
+        ReadEngineState();
+    }
+
+    private void OnChanged()
+    {
+        ReadEngineState();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void ReadEngineState()
+    {
+        var s = EngineState.Load();
+
+        if (s == null)
+        {
+            EngineLabel = "Движок: нет данных";
+            EngineTone = VBadge.BadgeTone.Warn;
+            return;
+        }
+
+        Balance = s.BalanceUsdt;
+
+        // Файл состояния старше двух минут — движок, скорее всего, не пишет
+        var age = DateTime.UtcNow - s.LastUpdate;
+
+        if (age > TimeSpan.FromMinutes(2))
+        {
+            EngineLabel = $"Движок молчит {FormatAge(age)}";
+            EngineTone = VBadge.BadgeTone.Bad;
+        }
+        else
+        {
+            EngineLabel = string.IsNullOrWhiteSpace(s.Status) ? "Движок работает" : $"Движок: {s.Status}";
+            EngineTone = VBadge.BadgeTone.Ok;
+        }
+    }
+
+    private static string FormatAge(TimeSpan age) =>
+        age.TotalHours >= 1 ? $"{(int)age.TotalHours} ч" : $"{(int)age.TotalMinutes} мин";
+
+    private void ToggleNav() => NavOpen = !NavOpen;
+    private void CloseNav() => NavOpen = false;
+
+    public void Dispose() => _sub?.Dispose();
 }
