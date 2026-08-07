@@ -1451,15 +1451,34 @@ namespace VertexAutoTradeBinance8.Strategy
             {
                               // ── SWEEP CHECK (LONG) ──────────────────────────────────────
                 // Enter long only after a liquidity sweep below EMA21.
+                // ── STRUCTURAL SWEEP CHECK ──────────────────────────
+                // A real sweep = wick PIERCED the swing low but CLOSED
+                // back above it. A random long wick is just noise.
                 bool recentSweep = false;
-                for (int si = Math.Max(0, i - 4); si <= i; si++)
+                decimal recentSwingLow = decimal.MaxValue;
+                for (int sl2 = Math.Max(0, i - 15); sl2 < i - 1; sl2++)
+                    recentSwingLow = Math.Min(recentSwingLow, klines[sl2].LowPrice);
+
+                // Only check last 2 bars (current + previous)
+                for (int si = Math.Max(0, i - 1); si <= i; si++)
                 {
                     var ks = klines[si];
+                    // Wick must have gone BELOW the swing low (sweep)
+                    bool piercedSwing = ks.LowPrice < recentSwingLow;
+                    // But candle CLOSED above it (recovery = false break)
+                    bool closedAbove = ks.ClosePrice > recentSwingLow;
+                    // Wick size must be significant (> 0.8 ATR)
                     decimal lowerWick = Math.Min(ks.OpenPrice, ks.ClosePrice) - ks.LowPrice;
-                    if (lowerWick > atr * 0.55m && ks.ClosePrice > ema21 * 0.998m)
+                    if (piercedSwing && closedAbove && lowerWick > atr * 0.8m)
                         recentSweep = true;
                 }
                 if (!recentSweep) return null;
+
+                // Volume confirmation: rejection candle must have
+                // above-average volume (signal = real buying pressure)
+                decimal avgVol20 = klines.Skip(Math.Max(0, i - 20)).Take(20)
+                    .Average(k => k.Volume);
+                if (c0.Volume < avgVol20 * 1.3m) return null;
 
                 // ══════════════════════════════════════════════════════════
                 // ENTRY: Limit-style at EMA21 zone (not market at c0.Close)
@@ -1504,6 +1523,13 @@ namespace VertexAutoTradeBinance8.Strategy
                 // (market order executes ~0.1-0.15% worse than limit)
                 if ((tp1 - entry) / risk < 2.2m) return null;
 
+                // ── Resistance blocker: skip if strong S/R sits between
+                // entry and TP1 (price likely stalls before reaching target)
+                var srBetween = srLevels
+                    .Where(l => l.type == "R" && l.price > entry && l.price < tp1 && l.strength >= 0.6)
+                    .ToList();
+                if (srBetween.Count > 0) return null;
+
                 // ── STEP 1: Market Structure filter ─────────────────
                 // Block LONG when market is making LH+LL (downtrend).
                 // Counter-trend entries are the #1 cause of stop-outs.
@@ -1545,19 +1571,31 @@ namespace VertexAutoTradeBinance8.Strategy
             if (shortRejection)
             {
                               // ── SWEEP CHECK (SHORT) ──────────────────────────────────────
+                // ── STRUCTURAL SWEEP CHECK (SHORT) ─────────────────
                 bool recentSweepShort = false;
-                for (int si = Math.Max(0, i - 4); si <= i; si++)
+                decimal recentSwingHigh = 0m;
+                for (int sh2 = Math.Max(0, i - 15); sh2 < i - 1; sh2++)
+                    recentSwingHigh = Math.Max(recentSwingHigh, klines[sh2].HighPrice);
+
+                for (int si = Math.Max(0, i - 1); si <= i; si++)
                 {
                     var ks = klines[si];
+                    bool piercedSwing = ks.HighPrice > recentSwingHigh;
+                    bool closedBelow  = ks.ClosePrice < recentSwingHigh;
                     decimal upperWick = ks.HighPrice - Math.Max(ks.OpenPrice, ks.ClosePrice);
-                    if (upperWick > atr * 0.55m && ks.ClosePrice < ema21 * 1.002m)
+                    if (piercedSwing && closedBelow && upperWick > atr * 0.8m)
                         recentSweepShort = true;
                 }
                 if (!recentSweepShort) return null;
 
+                // Volume confirmation
+                decimal avgVol20S = klines.Skip(Math.Max(0, i - 20)).Take(20)
+                    .Average(k => k.Volume);
+                if (c0.Volume < avgVol20S * 1.3m) return null;
+
                 // Entry at EMA21 - 0.2×ATR (inside zone, not chasing)
                 decimal entry = ema21 - atr * 0.20m;
-                if (c0.ClosePrice < entry - atr * 0.8m) return null; // missed the move
+                if (c0.ClosePrice < entry - atr * 0.5m) return null; // tighter chase guard
 
                 // SL: structure high + 1.0×ATR buffer (was 0.5×ATR)
                 int lookbackSlShort = Math.Min(10, i);
@@ -1570,6 +1608,12 @@ namespace VertexAutoTradeBinance8.Strategy
                 if (risk < atr * 0.5m || risk > atr * 3.5m) return null;
                 decimal tp1 = entry - atr * tp1Mult;
                 if ((entry - tp1) / risk < 2.2m) return null;
+
+                // ── Support blocker
+                var srBetweenS = srLevelsS
+                    .Where(l => l.type == "S" && l.price < entry && l.price > tp1 && l.strength >= 0.6)
+                    .ToList();
+                if (srBetweenS.Count > 0) return null;
 
                 // ── STEP 1: Market Structure filter ─────────────────
                 // Block SHORT when market is making HH+HL (uptrend).
