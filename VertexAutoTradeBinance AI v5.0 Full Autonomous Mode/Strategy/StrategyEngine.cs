@@ -1495,11 +1495,15 @@ namespace VertexAutoTradeBinance8.Strategy
                 // ensures we're above EMA21 (confirmed rejection) but not
                 // chasing the move.
                 // ══════════════════════════════════════════════════════════
-                decimal entry = ema21 + atr * 0.20m;
+                // Entry = actual market price (c0.Close). The EMA zone check
+                // above already confirmed price is near EMA21 (rejection zone).
+                // Using EMA+0.2ATR as "entry" was fiction: market order executes
+                // at c0.Close regardless, so SL/TP math was wrong from the start.
+                decimal entry = c0.ClosePrice;
 
-                // Reject if current price is already too far from our entry
-                // (means we missed the move — don't chase)
-                if (c0.ClosePrice > entry + atr * 0.8m) return null;
+                // Chase guard: reject if price ran too far above EMA
+                // (the pullback already played out, we're late)
+                if (entry > ema21 + atr * 1.5m) return null;
 
                 // ── SL: 15-bar structure low + 1.0×ATR buffer ────────────
                 // PROBLEM: 0.5×ATR buffer sits INSIDE the stop-hunt zone.
@@ -1542,9 +1546,6 @@ namespace VertexAutoTradeBinance8.Strategy
                 if (finalTp2 <= finalTp1) finalTp2 = finalTp1 + atr * 1.5m;
                 if (finalTp3 <= finalTp2) finalTp3 = finalTp2 + atr * 1.5m;
 
-                // ── Resistance blocker: skip if S/R sits between entry and TP1
-                if (srLevels.Any(l => l.type == "R" && l.price > entry && l.price < finalTp1))
-                    return null;
 
                 string structTag = structure == "UPTREND" ? "_UPTREND" : "_RANGE";
                 string srTag    = finalTp1 != atrTp1 ? "_SR" : "";
@@ -1621,9 +1622,6 @@ namespace VertexAutoTradeBinance8.Strategy
                 if (finalTp2S >= finalTp1S) finalTp2S = finalTp1S - atr * 1.5m;
                 if (finalTp3S >= finalTp2S) finalTp3S = finalTp2S - atr * 1.5m;
 
-                // ── Support blocker: skip if S/R sits between entry and TP1
-                if (srLevelsS.Any(l => l.type == "S" && l.price < entry && l.price > finalTp1S))
-                    return null;
 
                 string structTagS = structureS == "DOWNTREND" ? "_DOWNTREND" : "_RANGE";
                 string srTagS     = finalTp1S != atrTp1S ? "_SR" : "";
