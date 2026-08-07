@@ -1,8 +1,18 @@
 // ============================================================================
-// - Если ордер Filled/позиция появилась → возвращаем SUCCESS,
-//   а SL/TP СТАВИТ PositionSupervisorService v8.1 (NORMAL → ALGO RAW)
-// - OrderExecutor НЕ ставит SL/TP вообще.
-
+// OrderExecutor v6 (FIXED)
+//
+// БЫЛО: позиция открывалась, SL НЕ ставился здесь вообще — ответственность
+//       перекладывалась на PositionSupervisorService, который ставил его
+//       через IOrderDispatcher.Enqueue (fire-and-forget). Дефекты цепочки:
+//         - OrderDispatcher не был зарегистрирован как HostedService → очередь
+//           никогда не читалась → SL не ставился НИКОГДА;
+//         - даже при рабочей очереди SL слался с reduceOnly:true в Hedge Mode → -1106;
+//         - результат постановки никто не проверял.
+//
+// СТАЛО: SL ставится ЗДЕСЬ, синхронно, сразу после подтверждения позиции,
+//        от РЕАЛЬНОЙ цены входа, с ретраями и проверкой результата.
+//        Если стоп поставить не удалось — позиция закрывается по рынку (fail-closed).
+//        Supervisor остаётся реконсилятором (BE / трейлинг / восстановление).
 // ============================================================================
 
 using Binance.Net.Clients;
@@ -23,6 +33,8 @@ namespace VertexAutoTradeBinance8.Services
         private readonly AiMarketRegimeService _marketRegimeService;
         private readonly SmartRegimeService _smartRegime;
         private readonly LiquidityGuardService _liquidityGuard;
+        private readonly ProtectionOrderService _protection;
+        private readonly TradeSignalMemoryService _signalMemory;
 
         public OrderExecutor(
             ILogger<OrderExecutor> logger,
@@ -33,8 +45,12 @@ namespace VertexAutoTradeBinance8.Services
             MarketDataService marketData,
             AiMarketRegimeService marketRegimeService,
             SmartRegimeService smartRegime,
-            LiquidityGuardService liquidityGuard)
+            LiquidityGuardService liquidityGuard,
+            ProtectionOrderService protection,
+            TradeSignalMemoryService signalMemory)
         {
+            _protection = protection;
+            _signalMemory = signalMemory;
             _logger = logger;
             _factory = factory;
             _symbolInfo = symbolInfo;
@@ -72,6 +88,40 @@ namespace VertexAutoTradeBinance8.Services
             var posSide = signal.Side == SignalSide.Buy ? PositionSide.Long : PositionSide.Short;
 
             decimal entryPrice = Round(signal.EntryPrice, tick);
+
+            // =============================================================
+            // ЖЁСТКИЙ ГЕЙТ: без валидного SL вход запрещён.
+            // plannedRisk = расстояние до стопа, на котором RiskManager считал qty.
+            // Именно ЕГО мы переносим на реальную цену заливки, иначе при
+            // проскальзывании (особенно на MARKET-входе) реальный риск
+            // разъезжается с расчётным.
+            // =============================================================
+            decimal plannedRisk = Math.Abs(signal.EntryPrice - signal.StopLoss);
+
+            if (signal.StopLoss <= 0 || plannedRisk <= 0)
+            {
+                _logger.LogError("[ORDER][{symbol}] NO VALID STOPLOSS in signal → entry rejected", signal.Symbol);
+                await _simulator.SimulateMissedTradeAsync(signal, "NoStopLoss");
+                return OrderResult.Fail("NO_STOPLOSS");
+            }
+
+            bool sideConsistent = signal.Side == SignalSide.Buy
+                ? signal.StopLoss < signal.EntryPrice
+                : signal.StopLoss > signal.EntryPrice;
+
+            if (!sideConsistent)
+            {
+                _logger.LogError(
+                    "[ORDER][{symbol}] STOPLOSS НА НЕВЕРНОЙ СТОРОНЕ: side={side} entry={e} sl={sl} → entry rejected",
+                    signal.Symbol, signal.Side, signal.EntryPrice, signal.StopLoss);
+                await _simulator.SimulateMissedTradeAsync(signal, "StopLossWrongSide");
+                return OrderResult.Fail("SL_WRONG_SIDE");
+            }
+
+            // Сигнал нужен CheckAfterFill / ManualPositionHandler — раньше он
+            // сохранялся только для ручных позиций, поэтому страховочный слой
+            // всегда получал null и молча пропускал алго-позиции.
+            _signalMemory.Save(signal);
 
             // =============================================================
             // 0) Regime / SmartRegime → UI / analytics
@@ -264,31 +314,61 @@ namespace VertexAutoTradeBinance8.Services
             );
 
             // =====================================================================
-            // 3) COMPUTE SL / TP (NO PLACEMENT HERE)
-            // Responsibility: PositionSupervisorService v8.1 (NORMAL → ALGO RAW)
+            // 3) STOP-LOSS — СТАВИМ НЕМЕДЛЕННО, СИНХРОННО, ОТ РЕАЛЬНОГО ВХОДА
             // =====================================================================
 
-            decimal atr = signal.Atr ?? 0m;
-            decimal sl = signal.StopLoss;
+            // Переносим ЗАПЛАНИРОВАННОЕ расстояние риска на фактическую цену заливки.
+            // signal.StopLoss брать «как есть» нельзя: он посчитан от signal.EntryPrice,
+            // а MARKET-вход в импульсе легко даёт другую цену → реальный риск ≠ расчётному.
+            decimal sl = posSide == PositionSide.Long
+                ? entryPrice - plannedRisk
+                : entryPrice + plannedRisk;
 
-            // TP FIX
-            decimal tp = signal.TakeProfit ?? 0;
-            if (tp <= 0 && signal.TakeProfits != null && signal.TakeProfits.Count > 0)
-                tp = signal.TakeProfits[0];
+            sl = Round(sl, tick);
 
-            if (atr > 0)
+            decimal slipPct = signal.EntryPrice > 0
+                ? Math.Abs(entryPrice - signal.EntryPrice) / signal.EntryPrice
+                : 0m;
+
+            if (slipPct > 0.002m)
             {
-                sl = Round(sl, tick);
-                if (tp > 0)
-                    tp = Round(tp, tick);
+                _logger.LogWarning(
+                    "[ORDER][{symbol}] SLIPPAGE {slip:P2}: plan={pe} real={re} → SL пересчитан {plannedSl} → {sl}",
+                    signal.Symbol, slipPct, signal.EntryPrice, entryPrice, signal.StopLoss, sl);
             }
 
-            _logger.LogWarning(
-                "[ORDER][{symbol}] PROTECTION COMPUTED ONLY → SL={sl}, TP={tp}. Supervisor will place orders (NORMAL/ALGO).",
-                signal.Symbol, sl, tp
-            );
+            var stop = await _protection.EnsureStopAsync(signal.Symbol, posSide, sl, ct);
 
-            // ❗ НИЧЕГО НЕ СТАВИМ ЗДЕСЬ
+            if (!stop.Success)
+            {
+                // FAIL-CLOSED: незащищённая позиция недопустима.
+                _logger.LogCritical(
+                    "[ORDER][{symbol}] SL НЕ ПОСТАВЛЕН ({reason}) → аварийное закрытие позиции",
+                    signal.Symbol, stop.Reason);
+
+                await _protection.ForceClosePositionAsync(signal.Symbol, posSide, ct);
+
+                _executedSignalService.UpdateStatus(
+                    symbol: signal.Symbol,
+                    time: DateTime.UtcNow,
+                    status: TradeExecutionStatus.PositionError,
+                    qty: quantity,
+                    notional: quantity * entryPrice,
+                    entryPrice
+                );
+
+                return OrderResult.Fail($"SL_NOT_PLACED:{stop.Reason}");
+            }
+
+            // Фиксируем фактический стоп в сигнале — Supervisor (BE/трейлинг)
+            // и AI-learning должны работать от реального уровня, а не от планового.
+            signal.StopLoss = stop.StopPrice;
+
+            _logger.LogWarning(
+                "[ORDER][{symbol}] POSITION PROTECTED → entry={entry} SL={sl} risk={risk} ({reason})",
+                signal.Symbol, entryPrice, stop.StopPrice, plannedRisk, stop.Reason);
+
+            // TP остаётся зоной ответственности Supervisor (мульти-TP, раннер, harvest).
             return OrderResult.Successs(entryPrice, quantity, entryOrderId);
         }
 

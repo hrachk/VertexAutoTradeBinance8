@@ -4,8 +4,6 @@ using Binance.Net.Objects.Models.Futures;
 using CryptoExchange.Net.Objects;
 using System.Collections.Concurrent;
 using System.Globalization;
-using System.Security.Cryptography;
-using System.Text;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -32,7 +30,8 @@ namespace VertexAutoTradeBinance8.Services
         private readonly MarketDataService _marketData;
         private readonly AiMarketRegimeService _regime;
         private readonly ManualPositionHandler _manualHandler;
-        private readonly BinanceAlgoOrderRaw _algoRaw;
+        private readonly IAlgoOrderRawClient _algoRaw;
+        private readonly ProtectionOrderService _protection;
         private readonly LiquidityGuardService _liquidityGuard;
         private readonly IOrderDispatcher _dispatcher;
         private MarketRegime _regimeNow;
@@ -58,10 +57,11 @@ namespace VertexAutoTradeBinance8.Services
             MarketDataService marketData,
             AiMarketRegimeService regime,
             ManualPositionHandler manualHandler,
-            IConfiguration cfg,
-            IHttpClientFactory httpFactory,
             LiquidityGuardService liquidityGuard,
-            IOrderDispatcher dispatcher, EngineStateSnapshotService stateSvc)
+            IOrderDispatcher dispatcher,
+            EngineStateSnapshotService stateSvc,
+            IAlgoOrderRawClient algoRaw,
+            ProtectionOrderService protection)
         {
             _logger = logger;
             _factory = factory;
@@ -74,7 +74,8 @@ namespace VertexAutoTradeBinance8.Services
 
             _regimeNow = MarketRegime.Range;
 
-            _algoRaw = new BinanceAlgoOrderRaw(cfg, httpFactory, _logger);
+            _algoRaw = algoRaw;
+            _protection = protection;
             _liquidityGuard = liquidityGuard;
             _dispatcher = dispatcher;
             _stateSvc = stateSvc;
@@ -106,6 +107,13 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogWarning("[SUPERVISOR] No positions {symbol}", symbol);
                 return;
             }
+
+            // FIX: детект закрытия ДО фильтра по Quantity != 0.
+            // Раньше нулевые позиции отсекались здесь, поэтому ветка
+            // "prevQty != 0 && pos.Quantity == 0" в HandleSideAsync была
+            // недостижима: результаты сделок не попадали в ai_learning.json,
+            // а guard-словари _earlyTpDone/_beMoved никогда не чистились.
+            DetectClosures(symbol, posInfo.Data);
 
             var positions = posInfo.Data
     .Where(p => p.Symbol == symbol && p.Quantity != 0m)
@@ -183,6 +191,64 @@ namespace VertexAutoTradeBinance8.Services
 
 
 
+        // =====================================================================
+        // CLOSE DETECTOR (v2)
+        // Вызывается ДО фильтрации нулевых позиций — иначе факт закрытия
+        // невозможно увидеть в принципе.
+        // =====================================================================
+        private void DetectClosures(string symbol, IEnumerable<BinancePositionDetailsUsdt> all)
+        {
+            foreach (var side in new[] { PositionSide.Long, PositionSide.Short })
+            {
+                var pos = all.FirstOrDefault(p => p.Symbol == symbol && p.PositionSide == side);
+                if (pos == null) continue;
+
+                var key = $"{symbol}_{side}";
+                var prevQty = _manualHandler.GetPrevQty(key);
+                var prevEntry = _manualHandler.GetPrevEntry(key);
+
+                _manualHandler.SetPrevState(key, pos.Quantity, pos.EntryPrice);
+
+                if (prevQty == 0m || pos.Quantity != 0m)
+                    continue;
+
+                decimal exitPrice = pos.MarkPrice > 0 ? pos.MarkPrice : prevEntry;
+                if (exitPrice <= 0 || prevEntry <= 0)
+                    continue;
+
+                var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
+
+                try
+                {
+                    _aiLearning.RecordTrade(symbol, sigSide, entry: prevEntry, exit: exitPrice, regime: _regimeNow);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[AI][{symbol}] RecordTrade failed on close", symbol);
+                }
+
+                _logger.LogWarning(
+                    "[AI][{symbol}][{side}] POSITION CLOSED → ai_learning | entry={entry} exit={exit}",
+                    symbol, side, prevEntry, exitPrice);
+
+                bool isStopLoss = side == PositionSide.Long
+                    ? exitPrice < prevEntry
+                    : exitPrice > prevEntry;
+
+                if (isStopLoss)
+                {
+                    _manualHandler.RegisterStop(symbol);
+                    _logger.LogWarning("[STOP][{symbol}][{side}] StopLoss detected → cooldown registered", symbol, side);
+                }
+
+                var guardKey = BuildPosGuardKey(symbol, side, prevEntry, Math.Abs(prevQty));
+                _earlyTpDone.TryRemove(guardKey, out _);
+                _beMoved.TryRemove(guardKey, out _);
+                _restoredEntries.TryRemove(key, out _);
+                _recentPartialClose.TryRemove($"{symbol}|{side}", out _);
+            }
+        }
+
         private async Task<List<BinanceUsdFuturesOrder>> LoadOrdersAsync(BinanceRestClient client, string symbol)
         {
             var res = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol);
@@ -203,54 +269,7 @@ namespace VertexAutoTradeBinance8.Services
             CancellationToken ct)
         {
             decimal qtyAbs = Math.Abs(pos.Quantity);
-
-            // ---------- CLOSE DETECTOR ----------
             var key = $"{symbol}_{side}";
-            var prevQty = _manualHandler.GetPrevQty(key);
-            var prevEntry = _manualHandler.GetPrevEntry(key);
-            _manualHandler.SetPrevState(key, pos.Quantity, pos.EntryPrice);
-
-            if (prevQty != 0 && pos.Quantity == 0)
-            {
-                decimal exitPrice = pos.MarkPrice > 0
-             ? pos.MarkPrice
-             : pos.EntryPrice; // fallback safety
-             var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
-
-                _aiLearning.RecordTrade(symbol, sigSide, entry: prevEntry, exit: exitPrice, regime: _regimeNow);
-
-                _logger.LogWarning(
-                    "[AI][{symbol}] POSITION CLOSED → saved to ai_learning.json | entry={entry} exit={exit}",
-                    symbol, prevEntry, exitPrice);
-
-
-                // =======================================
-                // STOP LOSS DETECT → STRATEGY COOLDOWN
-                // =======================================
-                bool isStopLoss =
-     side == PositionSide.Long
-         ? exitPrice < prevEntry
-         : exitPrice > prevEntry;
-
-                if (isStopLoss)
-                {
-                    _manualHandler.RegisterStop(symbol);
-
-                    _logger.LogWarning(
-                        "[STOP][{symbol}] StopLoss detected → cooldown registered",
-                        symbol);
-                }
-
-
-
-
-                // cleanup guards
-                _earlyTpDone.TryRemove(BuildPosGuardKey(symbol, side, prevEntry, prevQty), out _);
-                _beMoved.TryRemove(BuildPosGuardKey(symbol, side, prevEntry, prevQty), out _);
-
-
-                return;
-            }
 
             if (qtyAbs <= 0)
             {
@@ -305,9 +324,6 @@ namespace VertexAutoTradeBinance8.Services
             bool hasMultipleSL = orders.Count(o => o.Type == FuturesOrderType.StopMarket) > 1;
             bool hasMultipleTP = orders.Count(o => o.Type == FuturesOrderType.TakeProfitMarket) > 1;
 
-            if (hasMultipleSL)
-                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] Multiple SL detected → skip SL create", symbol, side);
-
             if (hasMultipleTP)
                 _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] Multiple TP detected → skip TP create", symbol, side);
 
@@ -315,21 +331,61 @@ namespace VertexAutoTradeBinance8.Services
             var tp = orders.FirstOrDefault(o => o.Side == closeSide && o.Type == FuturesOrderType.TakeProfitMarket);
 
             // =================================================================
-            // v8.2: EARLY PROFIT + BE MOVE (До restore TP/SL)
+            // 0) SL ВСЕГДА ПЕРВЫМ.
+            //
+            // Раньше EarlyTP / BE / Harvest выполнялись ДО восстановления стопа,
+            // то есть частичные закрытия шли на незащищённой позиции.
+            // Также при hasMultipleSL код просто писал warning и пропускал
+            // создание — дубли жили до закрытия позиции.
+            // =================================================================
+            if (hasMultipleSL)
+            {
+                await _protection.CancelDuplicateStopsAsync(symbol, side, ct);
+                orders = (await LoadOrdersAsync(client, symbol)).Where(o => o.PositionSide == side).ToList();
+                sl = orders.FirstOrDefault(o => o.Side == closeSide && o.Type == FuturesOrderType.StopMarket);
+            }
+
+            if (sl == null)
+            {
+                var desired = ResolveDesiredStop(symbol, side, entry, atr14, signal);
+
+                if (desired <= 0)
+                {
+                    _logger.LogError("[SUPERVISOR][{symbol}][{side}] SL level unresolved → abort side", symbol, side);
+                    return;
+                }
+
+                var restored = await _protection.EnsureStopAsync(symbol, side, desired, ct);
+
+                if (!restored.Success)
+                {
+                    _logger.LogCritical(
+                        "[SUPERVISOR][{symbol}][{side}] SL RESTORE FAILED: {reason} → дальнейшие операции отменены",
+                        symbol, side, restored.Reason);
+                    return;
+                }
+
+                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] SL restored @ {sl}", symbol, side, restored.StopPrice);
+
+                orders = (await LoadOrdersAsync(client, symbol)).Where(o => o.PositionSide == side).ToList();
+                sl = orders.FirstOrDefault(o => o.Side == closeSide && o.Type == FuturesOrderType.StopMarket);
+            }
+
+            // =================================================================
+            // 1) EARLY PROFIT + BE MOVE — только на защищённой позиции
             // =================================================================
             if (klines != null && klines.Count >= 50 && atr14 > 0 && entry > 0)
             {
-                // 1) EARLY TP (partial 35% at +0.9 ATR)
+                // EARLY TP (partial 35% at +0.9 ATR)
                 await TryEarlyPartialTakeAsync(client, symbol, side, qtyAbs, entry, atr14, signal, klines, ct);
 
-                // 2) SL -> BE when +1.2 ATR (only if SL exists)
+                // SL -> BE when +1.2 ATR
                 if (sl != null)
                     await TryMoveSlToBeAsync(client, symbol, side, qtyAbs, entry, atr14, sl, signal, klines, ct);
             }
 
-
-                        /// =================================================================
-            // PROFIT HARVEST (ПОСЛЕ early/BE, ДО restore SL/TP)
+            // =================================================================
+            // 2) PROFIT HARVEST
             // =================================================================
             if (klines != null && klines.Count >= 50)
             {
@@ -350,25 +406,15 @@ namespace VertexAutoTradeBinance8.Services
                     ct);
             }
 
-
-
-            // 1) SL отсутствует → аварийный SL (если нет дублей)
-            if (sl == null && !hasMultipleSL)
-            {
-                await CreateEmergencySLAsync(client, symbol, side, qtyAbs, entry, signal, ct);
-                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] SL restored", symbol, side);
-                //return;
-            }
-
-            // 2) TP отсутствует → аварийный TP (если нет дублей)
+            // =================================================================
+            // 3) TP отсутствует → аварийный TP (если нет дублей)
+            // =================================================================
             if (tp == null && !hasMultipleTP)
             {
                 await CreateEmergencyTPAsync(client, symbol, side, qtyAbs, entry, signal, ct);
-                _logger.LogWarning("[SUPERVISOR][{symbol}][{side}] TP restored", symbol, side);
-               // return;
             }
 
-            // 3) Трейлинг + раннер
+            // 4) Трейлинг + раннер
             if (klines != null && klines.Count >= 50)
             {
                 await ManageRunnerTpAsync(client, symbol, side, qtyAbs, entry, orders, signal, klines, ct);
@@ -557,166 +603,60 @@ namespace VertexAutoTradeBinance8.Services
             return $"{symbol}|{side}|e={E(entry)}|q={E(qty)}";
         }
         // =====================================================================
-        // EMERGENCY SL  (TRY NORMAL → FALLBACK ALGO RAW on -4120)
+        // РАСЧЁТ УРОВНЯ SL
+        //
+        // Заменяет CreateEmergencySLAsync. Старый метод слал ордер с
+        // reduceOnly:true + positionSide, а Binance в Hedge Mode отклоняет
+        // reduceOnly кодом -1106. IsAlgoRequired ловит только -4120, поэтому
+        // фолбэка не было — стоп не вставал никогда, в лог падал только LogError.
+        // Постановка теперь целиком в ProtectionOrderService (без reduceOnly,
+        // closePosition:true, синхронно, с проверкой результата).
+        //
+        // Здесь остался только расчёт уровня.
         // =====================================================================
-        private async Task CreateEmergencySLAsync(
-            BinanceRestClient client,
+        private decimal ResolveDesiredStop(
             string symbol,
             PositionSide side,
-            decimal qty,
-            decimal entryPrice,
-            TradeSignal? signal,
-            CancellationToken ct)
+            decimal entry,
+            decimal atr,
+            TradeSignal? signal)
         {
-            try
+            if (entry <= 0)
+                return 0m;
+
+            // Сигнальный стоп годится, только если он на правильной стороне от входа.
+            // SuperviseAsync вызывается из внешнего цикла с lastSignal = null, а
+            // ManualPositionHandler подставляет виртуальный сигнал — стоп от чужой
+            // стороны даёт мгновенный триггер или -2021.
+            if (signal != null && signal.Symbol == symbol && signal.StopLoss > 0)
             {
-                // ==========================================================
-                // 1) ЖЁСТКАЯ ПРОВЕРКА ФАКТИЧЕСКОЙ ПОЗИЦИИ
-                // ==========================================================
-                var posInfo = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: ct);
-                if (!posInfo.Success || posInfo.Data == null)
-                    return;
+                bool valid = side == PositionSide.Long
+                    ? signal.StopLoss < entry
+                    : signal.StopLoss > entry;
 
-                var pos = posInfo.Data.FirstOrDefault(p =>
-                    p.PositionSide == side &&
-                    Math.Abs(p.Quantity) > 0);
+                if (valid)
+                    return signal.StopLoss;
 
-                if (pos == null)
-                {
-                    _logger.LogWarning(
-                        "[SUPERVISOR][{symbol}][{side}] SKIP SL → no open position",
-                        symbol, side);
-                    return;
-                }
-
-                // ==========================================================
-                // 2) КОЛИЧЕСТВО ЗАКРЫТИЯ
-                // ==========================================================
-                var closeQty = Math.Min(Math.Abs(pos.Quantity), qty);
-                if (closeQty <= 0)
-                    return;
-
-                // ==========================================================
-                // 3) РАСЧЁТ SL
-                // ==========================================================
-                decimal rawSl;
-
-                if (signal?.StopLoss > 0)
-                {
-                    rawSl = signal.StopLoss;
-                }
-                else
-                {
-                    var kl = await _marketData.GetKlines(symbol, KlineInterval.OneMinute, 100);
-                    if (kl.Count < 30) return;
-
-                    var atr = _marketData.CalculateAtr(kl, 14);
-                    if (atr <= 0) return;
-
-                    var atrMult = _regimeNow switch
-                    {
-                        MarketRegime.Range => 1.2m,
-                        MarketRegime.Squeeze => 1.5m,
-                        MarketRegime.UpTrend or MarketRegime.DownTrend => 1.8m,
-                        MarketRegime.VolatileChop => 2.0m,
-                        _ => 2.2m
-                    };
-
-                    rawSl = side == PositionSide.Long
-                        ? entryPrice - atr * atrMult
-                        : entryPrice + atr * atrMult;
-                }
-
-                // ==========================================================
-                // 4) TICK + MARK PRICE SAFETY
-                // ==========================================================
-                var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-                var tick = filters.tickSize > 0 ? filters.tickSize : 0.0001m;
-
-                decimal sl = Math.Round(rawSl / tick) * tick;
-                decimal mark = await GetMarkPriceSafeAsync(client, symbol, entryPrice, ct);
-
-                if (mark > 0)
-                {
-                    if (side == PositionSide.Long && sl >= mark)
-                        sl = mark - tick;
-
-                    if (side == PositionSide.Short && sl <= mark)
-                        sl = mark + tick;
-                }
-
-                var orderSide = side == PositionSide.Long
-                    ? OrderSide.Sell
-                    : OrderSide.Buy;
-
-                // ==========================================================
-                // 5) ОТПРАВКА (NORMAL → ALGO RAW)
-                // ==========================================================
-                _dispatcher.Enqueue(async ct =>
-                {
-                    using var c = _factory.CreateRestClient();
-
-                    var res = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
-                        symbol: symbol,
-                        side: orderSide,
-                        type: FuturesOrderType.StopMarket,
-                        quantity: closeQty,
-                        positionSide: side,
-                        stopPrice: sl,
-                        reduceOnly: true,
-                        ct: ct);
-
-                    if (res.Success)
-                    {
-                        _logger.LogInformation(
-                            "[SUPERVISOR] SL CREATED (NORMAL) {symbol} {side} sl={sl}",
-                            symbol, side, sl);
-                        return;
-                    }
-
-                    // ======================================================
-                    // 6) FALLBACK → ALGO RAW (-4120)
-                    // ======================================================
-                    if (IsAlgoRequired(res.Error))
-                    {
-                        _logger.LogWarning(
-                            "[SUPERVISOR] SL requires ALGO endpoint (-4120) → RAW ALGO {symbol} {side}",
-                            symbol, side);
-
-                        var ok = await _algoRaw.PlaceConditionalAsync(
-                            symbol: symbol,
-                            side: orderSide,
-                            positionSide: side,
-                            type: "STOP_MARKET",
-                            quantity: closeQty,
-                            triggerPrice: sl,
-                            workingType: "CONTRACT_PRICE",
-                            reduceOnly: true,
-                            ct: ct);
-
-                        if (ok)
-                        {
-                            _logger.LogInformation(
-                                "[SUPERVISOR] SL CREATED (ALGO-RAW) {symbol} {side} sl={sl}",
-                                symbol, side, sl);
-                            return;
-                        }
-
-                        _logger.LogWarning(
-                            "[SUPERVISOR] SL skipped: ALGO-RAW failed {symbol} {side}",
-                            symbol, side);
-                        return;
-                    }
-
-                    _logger.LogError(
-                        "[SUPERVISOR] ERROR SL create (NORMAL) {symbol}: {err}",
-                        symbol, res.Error);
-                });
+                _logger.LogWarning(
+                    "[SUPERVISOR][{symbol}][{side}] signal.StopLoss={sl} на неверной стороне от entry={e} → ATR-фолбэк",
+                    symbol, side, signal.StopLoss, entry);
             }
-            catch (Exception ex)
+
+            if (atr <= 0)
+                return 0m;
+
+            var mult = _regimeNow switch
             {
-                _logger.LogError(ex, "[SUPERVISOR] EX SL create {symbol}", symbol);
-            }
+                MarketRegime.Range => 1.2m,
+                MarketRegime.Squeeze => 1.5m,
+                MarketRegime.UpTrend or MarketRegime.DownTrend => 1.8m,
+                MarketRegime.VolatileChop => 2.0m,
+                _ => 2.2m
+            };
+
+            return side == PositionSide.Long
+                ? entry - atr * mult
+                : entry + atr * mult;
         }
 
         // =====================================================================
@@ -806,6 +746,9 @@ namespace VertexAutoTradeBinance8.Services
                 {
                     using var c = _factory.CreateRestClient();
 
+                    // FIX: reduceOnly убран — в Hedge Mode Binance отклоняет его
+                    // кодом -1106, а IsAlgoRequired ловит только -4120,
+                    // поэтому TP не вставал и фолбэк не срабатывал.
                     var res = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
                         symbol: symbol,
                         side: orderSide,
@@ -813,7 +756,7 @@ namespace VertexAutoTradeBinance8.Services
                         quantity: closeQty,
                         positionSide: side,
                         stopPrice: trigger,
-                        reduceOnly: true,
+                        workingType: WorkingType.Mark,
                         ct: ct);
 
                     if (res.Success)
@@ -842,8 +785,9 @@ namespace VertexAutoTradeBinance8.Services
                                 type: "TAKE_PROFIT_MARKET",
                                 quantity: closeQty,
                                 triggerPrice: trigger,
-                                workingType: "CONTRACT_PRICE",
-                                reduceOnly: true,
+                                workingType: "MARK_PRICE",
+                                reduceOnly: null,
+                                closePosition: false,
                                 ct: ct);
 
                             if (ok)
@@ -990,14 +934,17 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         /// <summary>
-        /// v8.2 PRO SL update:
-        /// - Cancel old SL
-        /// - Place new SL via NORMAL endpoint
-        /// - If -4120 -> ALGO-RAW
-        /// - NO reduceOnly (важно для Hedge/ошибок -1106)
-        /// - WorkingType.Mark используем осторожно: сначала пробуем, если Binance ругается — повтор без него
+        /// SL update v3.
+        ///
+        /// Было: старый стоп ОТМЕНЯЛСЯ, затем новый ставился внутри
+        /// _dispatcher.Enqueue(...) с внешним catch {}. Если постановка падала,
+        /// позиция оставалась голой и никто об этом не узнавал. Плюс метод
+        /// возвращал Task.FromResult(true) ещё до отправки чего-либо.
+        ///
+        /// Стало: place-then-cancel внутри ProtectionOrderService, синхронно,
+        /// с реальным результатом. Если новый стоп не встал — старый остаётся жив.
         /// </summary>
-        private Task<bool> UpdateSL_ProAsync(
+        private async Task<bool> UpdateSL_ProAsync(
          BinanceRestClient client,
          string symbol,
          PositionSide side,
@@ -1008,87 +955,38 @@ namespace VertexAutoTradeBinance8.Services
          TradeSignal? signal,
          CancellationToken ct)
         {
-            if (qty <= 0 || newSl <= 0) return Task.FromResult(false);
+            if (qty <= 0 || newSl <= 0) return false;
 
             decimal oldSl = slOrder.StopPrice ?? slOrder.Price;
-            if (oldSl <= 0) return Task.FromResult(false);
+            if (oldSl <= 0) return false;
 
-            if (side == PositionSide.Long && newSl <= oldSl) return Task.FromResult(false);
-            if (side == PositionSide.Short && newSl >= oldSl) return Task.FromResult(false);
+            // Двигаем стоп только в сторону улучшения
+            if (side == PositionSide.Long && newSl <= oldSl) return false;
+            if (side == PositionSide.Short && newSl >= oldSl) return false;
 
-            _dispatcher.Enqueue(async token =>
+            var res = await _protection.EnsureStopAsync(symbol, side, newSl, ct, replaceExisting: true);
+
+            if (!res.Success)
             {
-                using var c = _factory.CreateRestClient();
-
-                var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-                var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
-                var s = Math.Round(newSl / tick) * tick;
-
-                try
-                {
-                    try
-                    {
-                        await c.UsdFuturesApi.Trading.CancelOrderAsync(symbol, slOrder.Id, ct: token);
-                    }
-                    catch { }
-
-                    var orderSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-
-                    var r1 = await c.UsdFuturesApi.Trading.PlaceOrderAsync(
-                        symbol: symbol,
-                        side: orderSide,
-                        type: FuturesOrderType.StopMarket,
-                        quantity: qty,
-                        stopPrice: s,
-                        positionSide: side,
-                        workingType: WorkingType.Mark,
-                        ct: token);
-
-                    if (!r1.Success && IsAlgoRequired(r1.Error))
-                    {
-                        await _algoRaw.PlaceConditionalAsync(
-                            symbol: symbol,
-                            side: orderSide,
-                            positionSide: side,
-                            type: "STOP_MARKET",
-                            quantity: qty,
-                            triggerPrice: s,
-                            workingType: "CONTRACT_PRICE",
-                            reduceOnly: null,
-                            ct: token);
-                    }
-                    else if (!r1.Success)
-                    {
-                        await c.UsdFuturesApi.Trading.PlaceOrderAsync(
-                            symbol: symbol,
-                            side: orderSide,
-                            type: FuturesOrderType.StopMarket,
-                            quantity: qty,
-                            stopPrice: s,
-                            positionSide: side,
-                            ct: token);
-                    } 
-                    HookAiLearningOnSlMove(signal, symbol, side, entry, s);
-                }
-                catch { }
-            });
-
-            return Task.FromResult(true);
-        } 
-        private void HookAiLearningOnSlMove(TradeSignal? signal, string symbol, PositionSide side, decimal entry, decimal newSl)
-        {
-            try
-            {
-                if (signal != null && !signal.IsManual)
-                {
-                    var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
-
-                    _manualHandler.RegisterStop(symbol);
-                    _aiLearning.RecordTrade(symbol, sigSide, entry, newSl, _regimeNow);
-                }
+                _logger.LogError(
+                    "[SL-UPDATE][{symbol}][{side}] новый SL не встал ({reason}) — позиция может остаться без стопа",
+                    symbol, side, res.Reason);
+                return false;
             }
-            catch { }
-        } 
+
+            _logger.LogWarning(
+                "[SL-UPDATE][{symbol}][{side}] SL {old} → {new}",
+                symbol, side, oldSl, res.StopPrice);
+
+            return true;
+        }
+
+        // FIX: HookAiLearningOnSlMove удалён из путей обновления стопа.
+        // Он записывал в _aiLearning.RecordTrade «сделку» с exit = newSl при
+        // ПЕРЕНОСЕ стопа в BE и дёргал _manualHandler.RegisterStop(symbol).
+        // Перенос стопа — не закрытие: это отравляло обучающую выборку
+        // фиктивными результатами и вешало cooldown на символ.
+        // Запись результата теперь только в DetectClosures().
         private async Task MultiLayerTrailingAsync(
             BinanceRestClient client,
             string symbol,
@@ -1122,120 +1020,9 @@ namespace VertexAutoTradeBinance8.Services
             return fallback > 0 ? fallback : 0m;
         }
         // =====================================================================
-        // RAW BINANCE ALGO ORDER (POST /fapi/v1/algoOrder)
+        // RAW BINANCE ALGO ORDER вынесен в Services/AlgoOrderRawClient.cs
+        // (нужен и OrderExecutor'у, и Supervisor'у → один общий путь фолбэка -4120)
         // =====================================================================
-        private sealed class BinanceAlgoOrderRaw
-        {
-            private readonly HttpClient _http;
-            private readonly ILogger _logger;
-            private readonly string _apiKey;
-            private readonly string _apiSecret;
-            private readonly string _baseUrl;
-            public BinanceAlgoOrderRaw(IConfiguration cfg, IHttpClientFactory httpFactory, ILogger logger)
-            {
-                _logger = logger;
-
-                _apiKey = cfg["Binance:ApiKey"] ?? string.Empty;
-                _apiSecret = cfg["Binance:ApiSecret"] ?? string.Empty;
-                _baseUrl = (cfg["Binance:FuturesBaseUrl"] ?? "https://fapi.binance.com").TrimEnd('/');
-
-                _http = httpFactory.CreateClient("BinanceAlgoRaw");
-                _http.Timeout = TimeSpan.FromSeconds(8);
-            }
-            public async Task<bool> PlaceConditionalAsync(
-                string symbol,
-                OrderSide side,
-                PositionSide positionSide,
-                string type,
-                decimal quantity,
-                decimal triggerPrice,
-                string workingType,
-                bool? reduceOnly,
-                CancellationToken ct)
-            {
-                if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret))
-                {
-                    _logger.LogError("[ALGO-RAW] Missing Binance:ApiKey / Binance:ApiSecret in config");
-                    return false;
-                }
-
-                var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                string D(decimal v) => v.ToString("0.########", CultureInfo.InvariantCulture);
-
-                var q = new List<KeyValuePair<string, string>>
-                {
-                    new("algoType", "CONDITIONAL"),
-                    new("symbol", symbol),
-                    new("side", side == OrderSide.Buy ? "BUY" : "SELL"),
-                    new("type", type),
-                    new("timestamp", ts.ToString(CultureInfo.InvariantCulture)),
-                    new("workingType", workingType),
-                    new("triggerPrice", D(triggerPrice)),
-                    new("positionSide", positionSide.ToString().ToUpperInvariant()),
-                    new("quantity", D(quantity))
-                };
-
-                // reduceOnly — только если positionSide == BOTH (в Hedge не шлём)
-                if (reduceOnly.HasValue && positionSide == PositionSide.Both)
-                    q.Add(new("reduceOnly", reduceOnly.Value ? "true" : "false"));
-
-                var query = BuildQuery(q);
-                var sig = Sign(query, _apiSecret);
-
-                var url = $"{_baseUrl}/fapi/v1/algoOrder?{query}&signature={sig}";
-
-                using var req = new HttpRequestMessage(HttpMethod.Post, url);
-                req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", _apiKey);
-
-                try
-                {
-                    using var resp = await _http.SendAsync(req, ct);
-                    var body = await resp.Content.ReadAsStringAsync(ct);
-
-                    if (!resp.IsSuccessStatusCode)
-                    {
-                        _logger.LogError("[ALGO-RAW] HTTP {code} body={body}", (int)resp.StatusCode, body);
-                        return false;
-                    }
-
-                    _logger.LogInformation("[ALGO-RAW] OK {symbol} {type} posSide={ps} trig={tp} body={body}",
-                        symbol, type, positionSide, triggerPrice, body);
-
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "[ALGO-RAW] EX PlaceConditionalAsync {symbol}", symbol);
-                    return false;
-                }
-            }
-
-            private static string BuildQuery(IEnumerable<KeyValuePair<string, string>> q)
-            {
-                var sb = new StringBuilder();
-                foreach (var kv in q)
-                {
-                    if (sb.Length > 0) sb.Append('&');
-                    sb.Append(Uri.EscapeDataString(kv.Key));
-                    sb.Append('=');
-                    sb.Append(Uri.EscapeDataString(kv.Value));
-                }
-                return sb.ToString();
-            }
-
-            private static string Sign(string queryString, string secret)
-            {
-                using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-                var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(queryString));
-                var sb = new StringBuilder(hash.Length * 2);
-                foreach (var b in hash) sb.Append(b.ToString("x2"));
-                return sb.ToString();
-            }
-
-
-
-        }
-
 
         private async Task TryHarvestProfitAsync(
     BinanceRestClient client,

@@ -47,6 +47,23 @@ namespace VertexAutoTradeBinance8.Services
             if (!openOrders.Any())
                 return;
 
+            // =============================================================
+            // FIX: раньше метод отменял любой Stop-ордер, чей StopPrice
+            // отличался от SL нового сигнала больше чем на 3 тика — БЕЗ
+            // проверки открытой позиции и без фильтра по PositionSide.
+            // То есть новый сигнал мог снять защиту с уже живой позиции.
+            // Собираем стороны с открытыми позициями и не трогаем их
+            // защитные ордера вообще.
+            // =============================================================
+            var posRes = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: ct);
+
+            var openSides = posRes.Success && posRes.Data != null
+                ? posRes.Data
+                    .Where(p => p.Symbol == symbol && p.Quantity != 0m)
+                    .Select(p => p.PositionSide)
+                    .ToHashSet()
+                : new HashSet<PositionSide>();
+
             _logger.LogInformation(
                 $"🧹 CLEANER START {symbol}: найдено {openOrders.Length} активных ордеров");
 
@@ -64,6 +81,16 @@ namespace VertexAutoTradeBinance8.Services
             foreach (var order in openOrders)
             {
                 bool shouldDelete = false;
+
+                // Защитные ордера живой позиции неприкосновенны
+                if (openSides.Contains(order.PositionSide) &&
+                    order.Type is FuturesOrderType.Stop
+                               or FuturesOrderType.StopMarket
+                               or FuturesOrderType.TakeProfit
+                               or FuturesOrderType.TakeProfitMarket)
+                {
+                    continue;
+                }
 
                 // =============================================================
                 // 1) Удаляем старые ENTRY, если цена убежала слишком далеко

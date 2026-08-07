@@ -278,14 +278,39 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
-            // ------------------ 4. RISK-MANAGER v6 --------------------
-            decimal safety = signal?.SafetyRiskMultiplier ?? 1.0m;
+            // ------------------ 4. SL OPTIMIZATION --------------------
+            // ВАЖНО: раньше этот шаг стоял ПОСЛЕ CalculateSafeQty.
+            // OptimizeSlAndTp через GetDynamicSlAtrMult расширяет стоп вплоть
+            // до 1.8×ATR, поэтому размер позиции считался по старому, более
+            // узкому стопу → фактический риск на сделку превышал BaseRiskPercent.
+            signal.StopLoss = _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
 
+            if (signal.StopLoss <= 0)
+            {
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ SL", "SL=0");
+                return;
+            }
+
+            bool slSideOk = signal.Side == SignalSide.Buy
+                ? signal.StopLoss < signal.EntryPrice
+                : signal.StopLoss > signal.EntryPrice;
+
+            if (!slSideOk)
+            {
+                _logger.LogError(
+                    "[SL][{symbol}] SL на неверной стороне после оптимизации: side={side} entry={e} sl={sl}",
+                    symbol, signal.Side, signal.EntryPrice, signal.StopLoss);
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ SL", "WRONG SIDE");
+                return;
+            }
+
+            // ------------------ 5. RISK-MANAGER v6 --------------------
+            decimal safety = signal.SafetyRiskMultiplier;
 
             decimal qty = await _risk.CalculateSafeQty(signal,
                 signal.Symbol,
                 signal.EntryPrice,
-                signal.StopLoss,
+                signal.StopLoss,          // ← уже оптимизированный
                 riskMult,
                 safety,
                 signal.Leverage ?? 1m,
@@ -293,15 +318,11 @@ namespace VertexAutoTradeBinance8
                 signal.TakeProfits,
                 ct);
 
-
             if (qty <= 0)
             {
                 ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "❌ QTY=0", "SIZE ZERO");
                 return;
             }
-
-            // ------------------ 5. SL OPTIMIZATION -------------------
-            signal.StopLoss = _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
 
             // ------------------ 6. CLEANUP OLD ORDERS -----------------
             await _cleaner.CleanupOutdatedOrdersAsync(symbol, signal, ct);

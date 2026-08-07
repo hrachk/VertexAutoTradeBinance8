@@ -1,4 +1,5 @@
-﻿public interface IOrderDispatcher
+public interface IOrderDispatcher
 {
-    void Enqueue(Func<CancellationToken, Task> orderAction);
+    /// <summary>Ставит действие в очередь. false = очередь переполнена, действие НЕ будет выполнено.</summary>
+    bool Enqueue(Func<CancellationToken, Task> orderAction);
 }

@@ -59,11 +59,8 @@ public class Program
 
                 services.AddSingleton<AiModelSnapshotService>();
                 services.AddSingleton<TradeResultMonitorService>();
-                services.AddSingleton<CheckAfterFillService>();
                 services.AddSingleton<TradeSignalMemoryService>();
                 services.AddSingleton<OrderTracerService>();
-                services.AddSingleton<RecoverLostOrdersService>();
-                services.AddSingleton<TradeSignalMemoryService>();
                 services.AddSingleton<ManualPositionHandler>();
                 services.AddSingleton<AiLeverageService>();
 
@@ -100,7 +97,32 @@ public class Program
                 services.AddSingleton<ReverseProbeEngine>();
 
                 services.AddSingleton<ExecutedSignalService>();
-                services.AddSingleton<IOrderDispatcher, OrderDispatcher>();
+
+                // =========================================================
+                // FIX: OrderDispatcher — BackgroundService, но раньше был
+                // зарегистрирован ТОЛЬКО как AddSingleton. ExecuteAsync не
+                // вызывался, канал не читался → ВСЕ SL/TP/BE/трейлинг,
+                // поставленные через Enqueue, никогда не уходили на биржу.
+                // Регистрируем один инстанс и как интерфейс, и как hosted.
+                // =========================================================
+                services.AddSingleton<OrderDispatcher>();
+                services.AddSingleton<IOrderDispatcher>(sp => sp.GetRequiredService<OrderDispatcher>());
+                services.AddHostedService(sp => sp.GetRequiredService<OrderDispatcher>());
+
+                // =========================================================
+                // Защита позиций: единая точка постановки стопа
+                // =========================================================
+                services.AddSingleton<IAlgoOrderRawClient, AlgoOrderRawClient>();
+                services.AddSingleton<ProtectionOrderService>();
+
+                // =========================================================
+                // Страховочные фоновые сервисы (тоже были не hosted)
+                // =========================================================
+                services.AddSingleton<RecoverLostOrdersService>();
+                services.AddHostedService(sp => sp.GetRequiredService<RecoverLostOrdersService>());
+
+                services.AddSingleton<CheckAfterFillService>();
+                services.AddHostedService(sp => sp.GetRequiredService<CheckAfterFillService>());
 
 
             })

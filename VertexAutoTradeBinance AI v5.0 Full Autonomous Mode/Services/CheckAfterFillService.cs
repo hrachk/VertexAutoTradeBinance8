@@ -1,181 +1,160 @@
-﻿using System;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Binance.Net.Enums;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
 {
+    /// <summary>
+    /// CheckAfterFillService v2 — тонкий сторож поверх ProtectionOrderService.
+    ///
+    /// Старая версия была неработоспособна и опасна:
+    ///   1) Класс BackgroundService, но регистрировался как AddSingleton →
+    ///      ExecuteAsync не вызывался, сервис вообще не работал.
+    ///   2) hasTP проверял FuturesOrderType.Limit, а Supervisor ставит
+    ///      TakeProfitMarket → условие всегда false → сервис каждые 3 секунды
+    ///      доставлял новую пачку лимитных TP.
+    ///   3) Открытые ордера не фильтровались по PositionSide: в Hedge Mode стоп
+    ///      на LONG засчитывался как стоп для SHORT.
+    ///   4) signal = _memory.GetLastSignal(symbol) мог быть от противоположной
+    ///      стороны → SL уходил не туда. Плюс сигналы алго-стратегии вообще
+    ///      никогда не сохранялись (Save вызывался только из ManualPositionHandler).
+    ///   5) SL ставился как FuturesOrderType.Stop (стоп-лимит) — на быстром
+    ///      проливе такой ордер не исполняется.
+    ///
+    /// Теперь: сервис только ДЕТЕКТИРУЕТ незащищённую позицию и передаёт
+    /// постановку в ProtectionOrderService. Логика стопа живёт в одном месте.
+    /// TP здесь не трогаем — это зона Supervisor'а (мульти-TP, раннер, harvest).
+    /// </summary>
     public class CheckAfterFillService : BackgroundService
     {
         private readonly ILogger<CheckAfterFillService> _logger;
         private readonly BinanceClientFactory _factory;
-        private readonly SymbolInfoService _symbolInfo;
-        private readonly TradeSignalMemoryService _memory; // хранит сигналы
+        private readonly ProtectionOrderService _protection;
+        private readonly MarketDataService _marketData;
+        private readonly TradeSignalMemoryService _memory;
 
         public CheckAfterFillService(
             ILogger<CheckAfterFillService> logger,
             BinanceClientFactory factory,
-            SymbolInfoService symbolInfo,
+            ProtectionOrderService protection,
+            MarketDataService marketData,
             TradeSignalMemoryService memory)
         {
             _logger = logger;
             _factory = factory;
-            _symbolInfo = symbolInfo;
+            _protection = protection;
+            _marketData = marketData;
             _memory = memory;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            _logger.LogWarning("[FILL-GUARD] started");
+
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
                 {
                     await ScanAllSymbols(stoppingToken);
                 }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "CheckAfterFillService fatal error");
+                    _logger.LogError(ex, "[FILL-GUARD] scan error");
                 }
 
-                await Task.Delay(3000, stoppingToken); // 3 сек
+                await Task.Delay(5000, stoppingToken);
             }
         }
 
         private async Task ScanAllSymbols(CancellationToken ct)
         {
             using var client = _factory.CreateRestClient();
-            var positions = await client.UsdFuturesApi.Account.GetPositionInformationAsync();
 
+            var positions = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
             if (!positions.Success || positions.Data == null)
                 return;
 
-            foreach (var pos in positions.Data)
-            {
-                if (ct.IsCancellationRequested)
-                    return;
+            var live = positions.Data.Where(p => p.Quantity != 0m).ToList();
+            if (live.Count == 0)
+                return;
 
-                var qty = Math.Abs(pos.Quantity);
-                if (qty <= 0) continue;
+            foreach (var pos in live)
+            {
+                ct.ThrowIfCancellationRequested();
 
                 var symbol = pos.Symbol;
                 var side = pos.PositionSide;
 
-                // ищем последний сигнал
-                var signal = _memory.GetLastSignal(symbol);
-                if (signal == null) continue;
-
-                // проверяем, есть ли активные SL/TP
-                var openOrders = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol);
-                if (!openOrders.Success) continue;
-
-                bool hasSL = openOrders.Data.Any(o => o.Type == FuturesOrderType.Stop || o.Type == FuturesOrderType.StopMarket);
-                bool hasTP = openOrders.Data.Any(o => o.Type == FuturesOrderType.Limit);
-
-                if (hasSL && hasTP)
+                if (await _protection.HasStopAsync(symbol, side, ct))
                     continue;
 
-                _logger.LogWarning($"[FIX-TP/SL] {symbol}: POSITION OPEN but SL/TP missing → creating...");
+                var entry = pos.EntryPrice > 0 ? pos.EntryPrice : pos.MarkPrice;
+                if (entry <= 0)
+                    continue;
 
-                await PlaceMissingOrders(symbol, qty, side, signal, ct);
+                var stopLevel = await ResolveStopAsync(symbol, side, entry, ct);
+                if (stopLevel <= 0)
+                {
+                    _logger.LogError("[FILL-GUARD][{s}][{side}] уровень SL не определён", symbol, side);
+                    continue;
+                }
+
+                _logger.LogWarning(
+                    "[FILL-GUARD][{s}][{side}] ПОЗИЦИЯ БЕЗ SL (qty={qty}, entry={e}) → ставим",
+                    symbol, side, Math.Abs(pos.Quantity), entry);
+
+                var res = await _protection.EnsureStopAsync(symbol, side, stopLevel, ct);
+
+                if (!res.Success)
+                {
+                    _logger.LogCritical(
+                        "[FILL-GUARD][{s}][{side}] SL не поставлен: {reason}",
+                        symbol, side, res.Reason);
+                }
             }
         }
 
-        private async Task PlaceMissingOrders(
+        private async Task<decimal> ResolveStopAsync(
             string symbol,
-            decimal qty,
             PositionSide side,
-            TradeSignal signal,
+            decimal entry,
             CancellationToken ct)
         {
-            using var client = _factory.CreateRestClient();
+            // 1) Сигнал — только если стоп на правильной стороне от входа.
+            var signal = _memory.GetLastSignal(symbol);
 
-            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-            decimal step = filters.step <= 0 ? 0.001m : filters.step;
-            decimal tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
-
-            decimal Round(decimal x, decimal t) =>
-                t <= 0 ? x : Math.Round(x / t) * t;
-
-            // ================================
-            // STOP LOSS
-            // ================================
-            decimal slTrig = Round(signal.StopLoss, tick);
-            decimal slLimit = side == PositionSide.Long
-                ? Round(slTrig - tick, tick)
-                : Round(slTrig + tick, tick);
-
-            var slSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-
-            var slOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol,
-                slSide,
-                FuturesOrderType.Stop,
-                qty,
-                stopPrice: slTrig,
-                price: slLimit,
-                timeInForce: TimeInForce.GoodTillCanceled,
-                positionSide: side
-            );
-
-            if (!slOrder.Success)
+            if (signal != null && signal.StopLoss > 0)
             {
-                _logger.LogError($"❌ [FIX SL ERROR] {symbol}: {slOrder.Error?.Message}");
-            }
-            else
-            {
-                _logger.LogInformation($"✔ FIX SL placed: {symbol} sl={slTrig}");
+                bool valid = side == PositionSide.Long
+                    ? signal.StopLoss < entry
+                    : signal.StopLoss > entry;
+
+                if (valid)
+                    return signal.StopLoss;
             }
 
-            // ================================
-            // TAKE PROFITS
-            // ================================
-            if (signal.TakeProfits == null || signal.TakeProfits.Count == 0)
-                return;
-
-            decimal totalPlanned = 0m;
-
-            for (int i = 0; i < signal.TakeProfits.Count; i++)
+            // 2) Фолбэк по ATR
+            try
             {
-                decimal tpPart = signal.GetTpPart(i);
-                if (tpPart <= 0) continue;
+                var kl = await _marketData.GetKlines(symbol, KlineInterval.OneMinute, 100);
+                if (kl == null || kl.Count < 30)
+                    return 0m;
 
-                decimal tpQty = Math.Floor((qty * tpPart) / step) * step;
-                if (tpQty <= 0) continue;
+                var atr = _marketData.CalculateAtr(kl, 14);
+                if (atr <= 0)
+                    return 0m;
 
-                if (totalPlanned + tpQty > qty)
-                    tpQty = Math.Floor((qty - totalPlanned) / step) * step;
-
-                if (tpQty <= 0) continue;
-
-                decimal tpPrice = Round(signal.TakeProfits[i], tick);
-
-                var tpSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
-
-                var tpOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol,
-                    tpSide,
-                    FuturesOrderType.Limit,
-                    tpQty,
-                    price: tpPrice,
-                    timeInForce: TimeInForce.GoodTillCanceled,
-                    positionSide: side
-                );
-
-                if (!tpOrder.Success)
-                {
-                    _logger.LogError($"❌ FIX TP{i + 1} ERROR {symbol}: {tpOrder.Error?.Message}");
-                }
-                else
-                {
-                    totalPlanned += tpQty;
-                    _logger.LogInformation($"✔ FIX TP{i + 1}: {tpPrice} qty={tpQty}");
-                }
-
-                if (totalPlanned >= qty) break;
+                return side == PositionSide.Long
+                    ? entry - atr * 1.8m
+                    : entry + atr * 1.8m;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[FILL-GUARD][{s}] ATR fallback failed", symbol);
+                return 0m;
             }
         }
     }
