@@ -2125,7 +2125,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 /* SIGNAL PANEL */
 /* .mk-sticky-top removed — signals now in left panel */
 .sig-panel{background:var(--bg2);border-top:1px solid var(--bdr);padding:0;overflow:hidden;flex:1;min-height:250px;display:flex;flex-direction:column;}
-.sig-panel .sig-cards{flex-direction:column;overflow-y:auto;overflow-x:hidden;flex:1;min-height:0;gap:6px;padding:6px;scrollbar-width:thin;}
+/* sig-panel .sig-cards override consolidated into base .sig-cards rule */
+.sig-panel .sig-cards{flex:1;min-height:0;padding:6px;scrollbar-width:thin;}
 .sig-panel .sig-card{min-width:unset;width:100%;flex-shrink:0;}
 .sig-panel .sig-panel-head{padding:8px 10px 4px;flex-shrink:0;}
 .sig-panel .sig-panel-right{flex-wrap:wrap;gap:4px;padding:4px 10px;flex-shrink:0;}
@@ -2140,7 +2141,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-hidden-toggle:hover{border-color:var(--acc);}
 .sig-hidden-toggle.sig-hidden-toggle-on{background:var(--cyan-d);border-color:var(--cyan-b);color:var(--cyan);}
 .sig-hidden-count{background:var(--bg2);border-radius:8px;padding:0 6px;font-size:10px;}
-.sig-cards{display:flex;gap:8px;overflow-x:auto;padding-bottom:0;scrollbar-width:none;flex:1;}
+.sig-cards{display:flex;flex-direction:column;gap:8px;overflow-y:auto;overflow-x:hidden;padding:6px;scrollbar-width:thin;flex:1;min-height:0;}
 .sig-cards::-webkit-scrollbar{display:none;}
 
 /* Signal card */
@@ -2222,7 +2223,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sc-ttl-label{font-size:9px;white-space:nowrap;color:var(--dim);flex-shrink:0;}
 
 /* Fade-out when expiring */
-.sig-card{transition:opacity .2s,transform .2s,border-color .2s,background .2s,max-width .6s ease,margin .6s ease,padding .6s ease;}
+.sig-card{background:var(--bg3);border:1px solid var(--bdr);border-radius:8px;padding:10px 12px;position:relative;cursor:pointer;transition:opacity .2s,transform .2s,border-color .2s,background .2s,max-width .6s ease,margin .6s ease,padding .6s ease;}
 .sc-fading{opacity:.35;}
 .sig-card.sc-removing{opacity:0!important;max-width:0!important;padding-left:0!important;padding-right:0!important;margin:0!important;overflow:hidden;border-width:0;}
 
