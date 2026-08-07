@@ -76,6 +76,7 @@ namespace VertexAutoTradeBinance8
         private readonly SymbolInfoService _symbolInfo;
         private readonly FundingRateService _fundingRate;
         private readonly RealtimeMomentumDetector _momentum;
+        private readonly TradeStateManager _tradeState;
 
         private DateTime _lastQuantTick = DateTime.UtcNow;
 
@@ -158,7 +159,8 @@ namespace VertexAutoTradeBinance8
             FundingRateService fundingRate,
             RealtimeMomentumDetector momentum,
             IOptionsMonitor<VertexAutoTradeBinance8.Configuration.SignalConfidenceSettings> confSettings,
-            VertexAutoTradeBinance8.Services.HistoricalData.DataDbSymbolFeed? dataDbFeed = null)
+            VertexAutoTradeBinance8.Services.HistoricalData.DataDbSymbolFeed? dataDbFeed = null,
+            TradeStateManager tradeState = null)
         {
             _logger = logger;
             _options = options.Value;
@@ -170,6 +172,7 @@ namespace VertexAutoTradeBinance8
             _risk = risk;
             _executor   = executor;
             _dataDbFeed = dataDbFeed;
+            _tradeState = tradeState ?? new TradeStateManager();
             _factory = factory;
             _liq = liq;
             _cleaner = cleaner;
@@ -1341,13 +1344,22 @@ namespace VertexAutoTradeBinance8
                 ? trading.CooldownSeconds
                 : (_options.CooldownSeconds > 0 ? _options.CooldownSeconds : 300);
 
-            // After-SL penalty: double the cooldown for this symbol
+            // ── TradeStateManager checks (shared with PositionSupervisor) ──
+            // 3 consecutive SL hits → block this symbol until a win
+            if (_tradeState.IsLosingStreakLimit(symbol, 3))
+                return true;
+
+            // After any SL: 2× cooldown from TradeStateManager
+            int penaltyMin = Math.Max(1, cooldownSec * 2 / 60);
+            if (_tradeState.IsInCooldown(symbol, penaltyMin))
+                return true;
+
+            // ── Local fallback ──
             if (_slPenalty.TryGetValue(symbol, out var slTime))
             {
                 var penaltySec = cooldownSec * 2;
                 if (DateTime.UtcNow - slTime < TimeSpan.FromSeconds(penaltySec))
                     return true;
-                // Penalty expired — remove it
                 _slPenalty.TryRemove(symbol, out _);
             }
 
