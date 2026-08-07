@@ -278,6 +278,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     IsSuperSignal = true
                 };
 
+
                 NormalizeEntryAndSl(s);
                 return s;
             }
