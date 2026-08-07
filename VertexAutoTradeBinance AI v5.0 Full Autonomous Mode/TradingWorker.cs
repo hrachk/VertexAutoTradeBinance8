@@ -1339,7 +1339,17 @@ namespace VertexAutoTradeBinance8
             var trading = _resolver.Resolve(symbol);
             int cooldownSec = trading.CooldownSeconds > 0
                 ? trading.CooldownSeconds
-                : (_options.CooldownSeconds > 0 ? _options.CooldownSeconds : 90);
+                : (_options.CooldownSeconds > 0 ? _options.CooldownSeconds : 300);
+
+            // After-SL penalty: double the cooldown for this symbol
+            if (_slPenalty.TryGetValue(symbol, out var slTime))
+            {
+                var penaltySec = cooldownSec * 2;
+                if (DateTime.UtcNow - slTime < TimeSpan.FromSeconds(penaltySec))
+                    return true;
+                // Penalty expired — remove it
+                _slPenalty.TryRemove(symbol, out _);
+            }
 
             return _lastTrade.TryGetValue(symbol, out var last)
                    && DateTime.UtcNow - last < TimeSpan.FromSeconds(cooldownSec);
@@ -1347,6 +1357,26 @@ namespace VertexAutoTradeBinance8
 
         private void MarkTrade(string symbol) =>
             _lastTrade[symbol] = DateTime.UtcNow;
+
+        // After a SL hit, double the cooldown for that symbol to prevent
+        // re-entering the same trap. The penalty decays: if the NEXT trade
+        // is a winner, normal cooldown resumes.
+        private readonly ConcurrentDictionary<string, DateTime> _slPenalty = new();
+
+        /// <summary>Call when a position is closed by stop loss.</summary>
+        public void MarkStopLossHit(string symbol)
+        {
+            _slPenalty[symbol] = DateTime.UtcNow;
+            // Also push _lastTrade forward so InCooldown picks it up
+            _lastTrade[symbol] = DateTime.UtcNow;
+            _logger.LogWarning("[COOLDOWN] SL hit on {symbol} — 2× cooldown penalty active", symbol);
+        }
+
+        /// <summary>Call when a position is closed by TP (winner).</summary>
+        public void ClearStopLossPenalty(string symbol)
+        {
+            _slPenalty.TryRemove(symbol, out _);
+        }
 
         private async Task RunQuantRealtimeTick(CancellationToken ct)
         {
