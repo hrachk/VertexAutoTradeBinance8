@@ -2129,10 +2129,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-panel .sig-card{min-width:unset;width:100%;flex-shrink:0;}
 .sig-panel .sig-panel-head{padding:8px 10px 4px;flex-shrink:0;}
 .sig-panel .sig-panel-right{flex-wrap:wrap;gap:4px;padding:4px 10px;flex-shrink:0;}
-.sig-panel .sig-cards{flex-direction:column;overflow-y:auto;overflow-x:hidden;max-height:calc(45vh - 50px);gap:6px;padding:6px;scrollbar-width:thin;}
-.sig-panel .sig-card{min-width:unset;width:100%;flex-shrink:0;}
-.sig-panel .sig-panel-head{padding:8px 10px 4px;}
-.sig-panel .sig-panel-right{flex-wrap:wrap;gap:4px;padding:4px 10px;}
+/* duplicate sig-panel rules removed — single source at L2128 */
 .sig-panel-head{display:flex;align-items:center;gap:8px;flex-shrink:0;}
 .sig-panel-title{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:1.5px;color:var(--dim);text-transform:uppercase;}
 .sig-dot{width:7px;height:7px;border-radius:50%;background:var(--grn);animation:pulse 1.5s infinite;}
@@ -2147,19 +2144,19 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-cards::-webkit-scrollbar{display:none;}
 
 /* Signal card */
-.sig-card{flex-shrink:0;width:auto;max-width:280px;min-height:0;background:var(--bg3);border:1px solid var(--bdr2);border-radius:6px;padding:5px 10px;cursor:pointer;transition:border-color .15s,box-shadow .15s;position:relative;overflow:hidden;}
+/* duplicate .sig-card removed — single source above */
 .sig-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:10px 0 0 10px;}
 .sc-buy::before{background:var(--grn);}
 .sc-sell::before{background:var(--red);}
-.sig-card:hover{border-color:var(--acc);transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.3);}
+.sig-card:hover{border-color:var(--acc);box-shadow:0 4px 16px rgba(0,0,0,.25);}
 .sc-active{border-color:var(--acc)!important;background:rgba(59,130,246,.08)!important;}
 .sc-below-threshold{opacity:.7;}
 .sc-threshold-badge{font-size:9.5px;font-weight:700;color:#eab308;background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.3);border-radius:5px;padding:2px 7px;margin-bottom:6px;display:inline-block;cursor:help;}
-.sc-top{display:flex;align-items:center;gap:6px;margin-bottom:0;flex-wrap:nowrap;overflow:hidden;}
+.sc-top{display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:nowrap;overflow:hidden;}
 .sc-sym-wrap{display:flex;align-items:baseline;gap:3px;}
-.sc-sym{font-family:var(--mono);font-size:13px;font-weight:800;color:var(--txt);}
+.sc-sym{font-family:var(--mono);font-size:14px;font-weight:800;color:var(--txt);}
 .sc-usdt{font-size:8px;color:var(--dim2);}
-.sc-side{font-size:9px;font-weight:800;padding:1px 5px;border-radius:3px;white-space:nowrap;letter-spacing:.3px;}
+.sc-side{font-size:10px;font-weight:800;padding:2px 7px;border-radius:4px;white-space:nowrap;letter-spacing:.3px;}
 .sc-side-b{background:var(--grn-d);color:var(--grn);border:1px solid rgba(16,185,129,.2);}
 .sc-side-s{background:var(--red-d);color:var(--red);border:1px solid rgba(239,68,68,.2);}
 .sc-ago{color:#94a3b8;font-weight:500;font-size:10px;white-space:nowrap;flex-shrink:0;}
@@ -2178,7 +2175,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 /* Expanded details — hidden by default (height:0, no padding), grows
    open on hover via max-height transition. Kept in the DOM always (not
    display:none) so hover doesn't have to wait on a layout reflow. */
-.sig-card{flex-shrink:0;width:auto;max-width:280px;min-height:0;background:var(--bg3);border:1px solid var(--bdr2);border-radius:6px;padding:5px 10px;cursor:pointer;transition:border-color .15s,box-shadow .15s;position:relative;overflow:hidden;}
+/* duplicate .sig-card removed — single source above */
 .sig-card.sc-pinned{overflow:visible;border-color:var(--acc);box-shadow:0 0 0 1px rgba(59,130,246,.2);}
 .sc-pin-btn{background:none;border:none;font-size:11px;opacity:.6;cursor:pointer;padding:0 2px;line-height:1;margin-left:auto;flex-shrink:0;}
 .sc-pin-btn:hover{opacity:.8;}
@@ -2209,7 +2206,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sc-pl{font-size:10px;color:var(--dim);}
 .sc-pv{font-size:12px;}
 .sc-entry-range{font-size:9.5px;color:var(--dim);margin-left:3px;cursor:help;}
-.sc-foot{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;}
+.sc-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px;}
 .sc-conf{font-family:var(--mono);font-size:12px;font-weight:700;flex-shrink:0;}
 .sc-rr{font-size:10px;background:rgba(59,130,246,.12);color:var(--acc);padding:1px 5px;border-radius:3px;flex-shrink:0;}
 .sc-confirm-badge{font-size:9px;font-weight:700;background:rgba(34,197,94,.12);color:var(--grn);padding:1px 5px;border-radius:3px;flex-shrink:0;cursor:help;}
@@ -2739,12 +2736,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
   border-color:rgba(59,130,246,.4)!important;
 }
 
-/* 6. Signal strip — compact */
-.sig-card{
-  border-radius:6px!important;
-  padding:3px 9px!important;
-  font-size:11px!important;
-}
+/* 6. Signal cards — styled for left panel vertical layout */
 
 /* 7. Positions panel — cleaner */
 .mk-oo-panel{
