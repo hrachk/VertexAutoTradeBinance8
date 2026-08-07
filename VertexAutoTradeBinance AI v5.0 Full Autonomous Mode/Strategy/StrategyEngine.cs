@@ -1542,11 +1542,9 @@ namespace VertexAutoTradeBinance8.Strategy
                 if (finalTp2 <= finalTp1) finalTp2 = finalTp1 + atr * 1.5m;
                 if (finalTp3 <= finalTp2) finalTp3 = finalTp2 + atr * 1.5m;
 
-                // ── Resistance blocker: skip if strong S/R between entry and TP1
-                var srBetween = srLevels
-                    .Where(l => l.type == "R" && l.price > entry && l.price < finalTp1 && l.strength >= 0.6)
-                    .ToList();
-                if (srBetween.Count > 0) return null;
+                // ── Resistance blocker: skip if S/R sits between entry and TP1
+                if (srLevels.Any(l => l.type == "R" && l.price > entry && l.price < finalTp1))
+                    return null;
 
                 string structTag = structure == "UPTREND" ? "_UPTREND" : "_RANGE";
                 string srTag    = finalTp1 != atrTp1 ? "_SR" : "";
@@ -1623,11 +1621,9 @@ namespace VertexAutoTradeBinance8.Strategy
                 if (finalTp2S >= finalTp1S) finalTp2S = finalTp1S - atr * 1.5m;
                 if (finalTp3S >= finalTp2S) finalTp3S = finalTp2S - atr * 1.5m;
 
-                // ── Support blocker: skip if strong S/R between entry and TP1
-                var srBetweenS = srLevelsS
-                    .Where(l => l.type == "S" && l.price < entry && l.price > finalTp1S && l.strength >= 0.6)
-                    .ToList();
-                if (srBetweenS.Count > 0) return null;
+                // ── Support blocker: skip if S/R sits between entry and TP1
+                if (srLevelsS.Any(l => l.type == "S" && l.price < entry && l.price > finalTp1S))
+                    return null;
 
                 string structTagS = structureS == "DOWNTREND" ? "_DOWNTREND" : "_RANGE";
                 string srTagS     = finalTp1S != atrTp1S ? "_SR" : "";
