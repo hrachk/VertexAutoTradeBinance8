@@ -993,10 +993,15 @@ namespace VertexAutoTradeBinance8.Services
                     _earlyTpDone.TryRemove(BuildPosGuardKey(symbol, side, prevEntry, prevQty), out _);
                     _beMoved.TryRemove(BuildPosGuardKey(symbol, side, prevEntry, prevQty), out _);
 
-                    return;
+                    // *** CRITICAL FIX: was `return` here, which skipped the
+                    // order cleanup block below (L1007-1088). Every SL/TP/BE
+                    // order survived position close and sat on the exchange
+                    // as a dangling order with no position behind it.
+                    // Now falls through to the qtyAbs<=0 cleanup block. ***
                 }
 
-                _manualHandler.SetPrevState(key, pos.Quantity, pos.EntryPrice);
+                if (pos.Quantity != 0)
+                    _manualHandler.SetPrevState(key, pos.Quantity, pos.EntryPrice);
 
             // =====================================================
             // ❌ НЕТ ПОЗИЦИИ → ЧИСТИМ LIFECYCLE
