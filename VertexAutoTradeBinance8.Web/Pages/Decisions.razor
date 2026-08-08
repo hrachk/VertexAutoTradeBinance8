@@ -1,4 +1,5 @@
 @page "/decisions"
+@using VertexAutoTradeBinance8.Models
 @using VertexAutoTradeBinance8.Services.Storage
 @inject TradeDecisionJournal Journal
 
@@ -62,7 +63,7 @@
                    Foot="@(All.Count == 0 ? null : $"{(decimal)Entered / All.Count * 100m:0.#}% сигналов")" />
         </VCard>
         <VCard Flush="true">
-            <VStat Label="Отклонено" Value="@(All.Count - Entered).ToString()" />
+            <VStat Label="Отклонено" Value="@((All.Count - Entered).ToString())" />
         </VCard>
         <VCard Flush="true">
             <VStat Label="Главная причина отказа"
