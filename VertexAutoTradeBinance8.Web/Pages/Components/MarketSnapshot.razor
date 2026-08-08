@@ -373,6 +373,12 @@
                                     📌
                                 </button>
                             </div>
+                            <!-- Meta row: TF + RR + confidence % -->
+                            <div class="sc-meta">
+                                <span class="sc-meta-tag">TF <span class="sc-meta-val">@sig.Timeframe</span></span>
+                                <span class="sc-meta-tag">R:R <span class="sc-meta-val">@rr.ToString("F1")</span></span>
+                                <span class="sc-meta-conf" style="color:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")">@conf%</span>
+                            </div>
                             <div class="sc-conf-wrap">
                                 <div class="sc-conf-bar" style="width:@conf%"
                                      style2="background:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")"></div>
@@ -2161,6 +2167,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sc-side-b{background:var(--grn-d);color:var(--grn);border:1px solid rgba(16,185,129,.2);}
 .sc-side-s{background:var(--red-d);color:var(--red);border:1px solid rgba(239,68,68,.2);}
 .sc-ago{color:#94a3b8;font-weight:500;font-size:10px;white-space:nowrap;flex-shrink:0;}
+.sc-meta{display:flex;align-items:center;gap:10px;margin-top:4px;margin-bottom:2px;}
+.sc-meta-tag{font-size:10px;color:var(--dim);font-weight:600;}
+.sc-meta-val{color:var(--txt2);font-family:var(--mono);font-weight:700;margin-left:2px;}
+.sc-meta-conf{font-size:12px;font-weight:800;font-family:var(--mono);margin-left:auto;}
 .sc-conf-wrap{height:2px;background:var(--bdr);border-radius:2px;overflow:hidden;margin-top:3px;}
 .sc-conf-bar{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--acc),var(--grn));}
 
@@ -7077,6 +7087,40 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             await InvokeAsync(StateHasChanged);
         }
         catch { }
+    }
+
+    /// <summary>
+    /// Cancels all remaining SL/TP orders for a symbol+side after position close.
+    /// Fire-and-forget safe — never throws.
+    /// </summary>
+    async Task CancelOrphanedOrdersForSymbolAsync(
+        Binance.Net.Interfaces.Clients.IBinanceRestClient client,
+        string symbol, PositionSide posSide, CancellationToken ct)
+    {
+        try
+        {
+            var openOrders = await client.UsdFuturesApi.Trading
+                .GetOpenOrdersAsync(symbol, ct: ct);
+            if (openOrders.Success && openOrders.Data != null)
+            {
+                foreach (var o in openOrders.Data)
+                {
+                    if (o.PositionSide != posSide) continue;
+                    if (o.Type != Binance.Net.Enums.FuturesOrderType.StopMarket &&
+                        o.Type != Binance.Net.Enums.FuturesOrderType.TakeProfitMarket &&
+                        o.Type != Binance.Net.Enums.FuturesOrderType.Stop &&
+                        o.Type != Binance.Net.Enums.FuturesOrderType.TakeProfit) continue;
+
+                    try
+                    {
+                        await client.UsdFuturesApi.Trading
+                            .CancelOrderAsync(symbol, o.Id, ct: ct);
+                    }
+                    catch { /* best effort per order */ }
+                }
+            }
+        }
+        catch { /* non-critical — supervisor will catch stragglers */ }
     }
 
     async Task CloseCurrentPosition()
