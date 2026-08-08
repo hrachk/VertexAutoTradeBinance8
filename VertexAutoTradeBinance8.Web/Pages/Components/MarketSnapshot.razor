@@ -358,14 +358,11 @@
     
                             <!-- COMPACT (always visible): symbol, side, time, pin button -->
                             <div class="sc-top">
-                                <div class="sc-sym-wrap">
-                                    <span class="sc-sym">@sig.Symbol.Replace("USDT","")</span>
-                                    <span class="sc-usdt">USDT</span>
-                                </div>
                                 <span class="sc-side @(sigIsBuy ? "sc-side-b" : "sc-side-s")">
                                     @(sigIsBuy ? "▲ LONG" : "▼ SHORT")
                                 </span>
-                                <span class="sc-ago">@FmtAgo(sig.Time)</span>
+                                <span class="sc-sym">@sig.Symbol.Replace("USDT","")<span class="sc-usdt">USDT</span></span>
+                                <span class="sc-conf-pct" style="color:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")">@conf%</span>
                                 @* Pin button — right-aligned, always visible *@
                                 <button class="sc-pin-btn @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-pin-btn-on" : "")"
                                         title="@(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "Unpin" : "Pin (keep expanded)")"
@@ -375,9 +372,9 @@
                             </div>
                             <!-- Meta row: TF + RR + confidence % -->
                             <div class="sc-meta">
-                                <span class="sc-meta-tag">TF <span class="sc-meta-val">@(sig.Event?.Split('_').FirstOrDefault() ?? "—")</span></span>
+                                <span class="sc-meta-tag">TF <span class="sc-meta-val">@(sig.SmartType ?? "—")</span></span>
                                 <span class="sc-meta-tag">R:R <span class="sc-meta-val">@rr.ToString("F1")</span></span>
-                                <span class="sc-meta-conf" style="color:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")">@conf%</span>
+                                <span class="sc-ago">@FmtAgo(sig.Time)</span>
                             </div>
                             <div class="sc-conf-wrap">
                                 <div class="sc-conf-bar" style="width:@conf%"
@@ -2160,9 +2157,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sc-below-threshold{opacity:.7;}
 .sc-threshold-badge{font-size:9.5px;font-weight:700;color:#eab308;background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.3);border-radius:5px;padding:2px 7px;margin-bottom:6px;display:inline-block;cursor:help;}
 .sc-top{display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:nowrap;overflow:hidden;}
-.sc-sym-wrap{display:flex;align-items:baseline;gap:3px;}
+/* sc-sym-wrap removed — sym is inline with side badge */
 .sc-sym{font-family:var(--mono);font-size:14px;font-weight:800;color:var(--txt);}
-.sc-usdt{font-size:8px;color:var(--dim2);}
+.sc-usdt{font-size:9px;color:var(--dim2);margin-left:1px;}
 .sc-side{font-size:10px;font-weight:800;padding:2px 7px;border-radius:4px;white-space:nowrap;letter-spacing:.3px;}
 .sc-side-b{background:var(--grn-d);color:var(--grn);border:1px solid rgba(16,185,129,.2);}
 .sc-side-s{background:var(--red-d);color:var(--red);border:1px solid rgba(239,68,68,.2);}
@@ -2170,7 +2167,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sc-meta{display:flex;align-items:center;gap:10px;margin-top:4px;margin-bottom:2px;}
 .sc-meta-tag{font-size:10px;color:var(--dim);font-weight:600;}
 .sc-meta-val{color:var(--txt2);font-family:var(--mono);font-weight:700;margin-left:2px;}
-.sc-meta-conf{font-size:12px;font-weight:800;font-family:var(--mono);margin-left:auto;}
+.sc-conf-pct{font-size:13px;font-weight:800;font-family:var(--mono);margin-left:auto;}
+/* sc-meta-conf removed — conf% now in sc-top as sc-conf-pct */
 .sc-conf-wrap{height:2px;background:var(--bdr);border-radius:2px;overflow:hidden;margin-top:3px;}
 .sc-conf-bar{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--acc),var(--grn));}
 
