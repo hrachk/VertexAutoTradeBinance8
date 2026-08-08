@@ -30,7 +30,7 @@ builder.Services.AddSignalR();
 // OPTIONS
 // ============================================================================
 builder.Services.Configure<TradingOptions>(builder.Configuration.GetSection("TradingOptions"));
-builder.Services.Configure<BinanceOptions>(builder.Configuration.GetSection("Binance"));
+builder.Services.Configure<Binance.Net.Objects.Options.BinanceOptions>(builder.Configuration.GetSection("Binance"));
 
 // ============================================================================
 // ENGINE CORE (общее с движком)
