@@ -7119,6 +7119,13 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             if (r.Success)
             {
                 _orderSuccess    = $"Position closed · {_currentPosition.Symbol} · {_currentPosition.Qty}";
+
+                // Cancel ALL remaining SL/TP/algo orders for this position.
+                // Without this, orders placed by the bot (or manually) survive
+                // the position close and sit on the exchange as orphans.
+                _ = CancelOrphanedOrdersForSymbolAsync(
+                    client, _currentPosition.Symbol, posSide, cts.Token);
+
                 _currentPosition = null;
             }
             else
@@ -7131,8 +7138,6 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         {
             _orderLoading = false;
             StateHasChanged();
-            // This handler used to reload nothing at all, so a manual close
-            // only disappeared from the UI on the next 15s timer tick.
             _ = RefreshPositionsUntilChangedAsync();
         }
     }
