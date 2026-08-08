@@ -375,7 +375,7 @@
                             </div>
                             <!-- Meta row: TF + RR + confidence % -->
                             <div class="sc-meta">
-                                <span class="sc-meta-tag">TF <span class="sc-meta-val">@sig.Timeframe</span></span>
+                                <span class="sc-meta-tag">TF <span class="sc-meta-val">@(sig.Event?.Split('_').FirstOrDefault() ?? "—")</span></span>
                                 <span class="sc-meta-tag">R:R <span class="sc-meta-val">@rr.ToString("F1")</span></span>
                                 <span class="sc-meta-conf" style="color:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")">@conf%</span>
                             </div>
