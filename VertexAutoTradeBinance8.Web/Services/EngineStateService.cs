@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using VertexAutoTradeBinance8.Services.Storage;
 using VertexAutoTradeBinance8.Web.Models;
 
 namespace VertexAutoTradeBinance8.Web.Services;
@@ -10,13 +11,14 @@ public class EngineStateService
 
     public EngineStateService(
         ILogger<EngineStateService> logger,
-        IConfiguration config)
+        VertexPaths paths)
     {
         _logger = logger;
 
-      //  FilePath = config["EngineState:Path"]
-                //   ?? throw new Exception("EngineState path not found in config");
-        FilePath = Path.Combine(AppContext.BaseDirectory, "engine_state.json");
+        // Ключ EngineState:Path из конфига был мёртвым: сервис его не читал,
+        // а путь считал от собственного BaseDirectory — то есть от папки Web,
+        // куда движок никогда ничего не писал.
+        FilePath = paths.EngineState;
     }
 
     public EngineStateModel? Load()

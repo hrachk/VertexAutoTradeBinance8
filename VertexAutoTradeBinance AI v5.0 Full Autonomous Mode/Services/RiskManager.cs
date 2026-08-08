@@ -1,4 +1,5 @@
-﻿using Binance.Net.Enums;
+﻿using VertexAutoTradeBinance8.Services.Storage;
+using Binance.Net.Enums;
 using System.Text.Json;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
@@ -17,8 +18,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly SmartRegimeService _smartRegime;
         private readonly SimulatedTradeService _simulator;
 
-        private static readonly string MissedTradesPath =
-            Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
+        private static readonly string MissedTradesPath = new VertexPaths().MissedTrades;
 
 
         public decimal LastBalanceUsdt { get; private set; }

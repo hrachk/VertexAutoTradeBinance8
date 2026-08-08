@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using VertexAutoTradeBinance8.Services.Storage;
 using VertexAutoTradeBinance8.Web.Models;
 
 namespace VertexAutoTradeBinance8.Web.Services
@@ -14,13 +15,9 @@ namespace VertexAutoTradeBinance8.Web.Services
             AllowTrailingCommas = true
         };
 
-        public MissedTradeFileService(IWebHostEnvironment env)
+        public MissedTradeFileService(VertexPaths paths)
         {
-            _filePath = Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
-
-
-          //  _filePath = @"C:\Users\karap\source\repos\VertexAutoTradeBinance8\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\missed_trades.json";
-          //  _filePath = @"F:\VERTEX TRADING SYSTEM\TradingAI\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\missed_trades.json";
+            _filePath = paths.MissedTrades;
         }
         public async Task<List<MissedTradeRecord>> LoadAsync()
         {

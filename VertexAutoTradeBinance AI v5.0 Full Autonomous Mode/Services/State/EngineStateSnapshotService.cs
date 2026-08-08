@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Options;
+﻿using VertexAutoTradeBinance8.Services.Storage;
+using Microsoft.Extensions.Options;
 using System.Text.Json;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
@@ -25,14 +26,15 @@ namespace VertexAutoTradeBinance8.Services
 
         public EngineStateSnapshotService(
      ILogger<EngineStateSnapshotService> logger,
-     IOptions<EngineStateSettings> options)
+     IOptions<EngineStateSettings> options,
+     VertexPaths paths)
         {
             _logger = logger;
-            //_path = options.Value.SnapshotPath
-            //    ?? Path.Combine(AppContext.BaseDirectory, "engine_state.json");
 
-
-            _path =   Path.Combine(AppContext.BaseDirectory, "engine_state.json");
+            // Путь берётся из общего корня данных, а не из BaseDirectory:
+            // движок и Web — разные процессы с разными BaseDirectory, поэтому
+            // раньше Web читал файл, которого в его папке никогда не было.
+            _path = paths.EngineState;
 
 
             _backupPath = _path + ".bak";

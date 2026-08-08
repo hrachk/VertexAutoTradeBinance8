@@ -1,6 +1,7 @@
 ﻿using System.Text.Json;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
+using VertexAutoTradeBinance8.Services.Storage;
 using VertexAutoTradeBinance8.Web.Models;
 
 namespace VertexAutoTradeBinance8.Web.Services
@@ -18,15 +19,14 @@ namespace VertexAutoTradeBinance8.Web.Services
             AllowTrailingCommas = true
         };
 
-        public AiLearningFileService(IWebHostEnvironment env, ILogger<AiLearningFileService> logger)
+        public AiLearningFileService(
+            IWebHostEnvironment env,
+            ILogger<AiLearningFileService> logger,
+            VertexPaths paths)
         {
-            // путь к файлу ai-models/ai_learning.json
-          //  FilePath =  @"C:\Users\karap\source\repos\VertexAutoTradeBinance8\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\ai-models\ai_learning.json";
-            //   FilePath = @"F:\VERTEX TRADING SYSTEM\TradingAI\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\ai-models\ai_learning.json";
-
             _env = env;
             _logger = logger;
-            FilePath = Path.Combine(AppContext.BaseDirectory, "ai-models","ai_learning.json");
+            FilePath = paths.AiLearning;
         }
 
         public AiLearningSnapshot? LoadSnapshot()

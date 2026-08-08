@@ -1,6 +1,7 @@
 @page "/engine"
 @implements IDisposable
 @inject EngineStateService EngineState
+@inject VertexAutoTradeBinance8.Services.Storage.VertexPaths Paths
 
 <PageTitle>Движок — Vertex Console</PageTitle>
 
@@ -12,6 +13,26 @@
         <button class="v-btn" @onclick="Reload">Перечитать</button>
     </Tools>
 </VPageHeader>
+
+<VCard Title="Где лежат данные"
+       Note="@Paths.RootSource"
+       Class="v-card--paths">
+    <div class="v-note" style="margin-bottom:var(--s3)">
+        Движок и консоль — разные процессы. Если раздел пуст, первое, что стоит
+        проверить, — читают ли они одну папку. Ниже путь, который использует консоль;
+        у движка он должен совпадать.
+    </div>
+    <dl class="v-kv">
+        <dt>Корень</dt><dd style="text-align:left">@Paths.Root</dd>
+        <dt>Состояние</dt><dd style="text-align:left">@FileMark(Paths.EngineState)</dd>
+        <dt>Решения</dt><dd style="text-align:left">@FileMark(Paths.Decisions)</dd>
+        <dt>Исполненные</dt><dd style="text-align:left">@FileMark(Paths.ExecutedSignals)</dd>
+        <dt>Пропущенные</dt><dd style="text-align:left">@FileMark(Paths.MissedTrades)</dd>
+        <dt>Обучение AI</dt><dd style="text-align:left">@FileMark(Paths.AiLearning)</dd>
+    </dl>
+</VCard>
+
+<div style="height:var(--s4)"></div>
 
 @if (S == null)
 {
@@ -168,6 +189,29 @@ else
         : $"{(int)age.TotalSeconds} с";
 
     private static string Dash(string? v) => string.IsNullOrWhiteSpace(v) ? "—" : v;
+
+    /// <summary>Есть ли файл и когда он обновлялся — быстрый ответ на «почему пусто».</summary>
+    private static string FileMark(string path)
+    {
+        try
+        {
+            var fi = new FileInfo(path);
+            if (!fi.Exists) return "файла нет";
+
+            var age = DateTime.UtcNow - fi.LastWriteTimeUtc;
+            var size = fi.Length < 1024 ? $"{fi.Length} Б" : $"{fi.Length / 1024} КБ";
+
+            return age.TotalMinutes < 1
+                ? $"{size}, только что"
+                : age.TotalHours < 1
+                    ? $"{size}, {(int)age.TotalMinutes} мин назад"
+                    : $"{size}, {(int)age.TotalHours} ч назад";
+        }
+        catch
+        {
+            return "недоступен";
+        }
+    }
 
     public void Dispose() => _timer?.Dispose();
 }

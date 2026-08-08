@@ -1,0 +1,214 @@
+@page "/decisions"
+@using VertexAutoTradeBinance8.Services.Storage
+@inject TradeDecisionJournal Journal
+
+<PageTitle>Решения — Vertex Console</PageTitle>
+
+<VPageHeader Eyebrow="История"
+             Title="Журнал решений"
+             Sub="Каждый сигнал и то, чем он закончился. Отказ на любой стадии объяснён числами, а не кодом ошибки.">
+    <Tools>
+        <input class="v-input" placeholder="Инструмент" @bind="Filter" @bind:event="oninput" />
+        <button class="v-btn @(OnlyEntered ? "v-btn--on" : null)" @onclick="() => Toggle(ref OnlyEntered)">
+            Только входы
+        </button>
+        <button class="v-btn" @onclick="Reload">Перечитать</button>
+    </Tools>
+</VPageHeader>
+
+<div class="v-stack">
+
+    @*  Воронка — главный смысл этой страницы. Она отвечает не «сколько
+        отказов», а «на каком шаге теряется большинство сигналов». Ровно
+        один доминирующий этап означает, что настройка упирается в него. *@
+    <VCard Title="Где останавливаются сигналы"
+           Note="@($"{All.Count} решений в журнале")">
+        @if (All.Count == 0)
+        {
+            <VEmpty Title="Журнал пуст"
+                    Hint="Движок запишет сюда первое решение при следующем сигнале. Если файл не появляется, проверьте корень данных на странице «Движок»." />
+        }
+        else
+        {
+            <div class="v-stack">
+                @foreach (var stage in Funnel)
+                {
+                    <div>
+                        <div class="v-row" style="justify-content:space-between; margin-bottom:6px">
+                            <span>
+                                <span class="v-badge" style="margin-right:8px">@((int)stage.Stage)</span>
+                                @StageName(stage.Stage)
+                            </span>
+                            <span class="num v-note">@stage.Count · @stage.Share.ToString("0.#")%</span>
+                        </div>
+                        <VMeter Percent="@stage.Share"
+                                Tone="@(stage.Stage == DecisionStage.Entered ? VMeter.MeterTone.Ok
+                                        : stage.Share > 40m ? VMeter.MeterTone.Warn
+                                        : VMeter.MeterTone.Bad)" />
+                    </div>
+                }
+            </div>
+        }
+    </VCard>
+
+    <div class="v-grid v-grid--stats">
+        <VCard Flush="true">
+            <VStat Label="Всего решений" Value="@All.Count.ToString()" />
+        </VCard>
+        <VCard Flush="true">
+            <VStat Label="Вошли в позицию"
+                   Value="@Entered.ToString()"
+                   Tone="VStat.StatTone.Ok"
+                   Foot="@(All.Count == 0 ? null : $"{(decimal)Entered / All.Count * 100m:0.#}% сигналов")" />
+        </VCard>
+        <VCard Flush="true">
+            <VStat Label="Отклонено" Value="@(All.Count - Entered).ToString()" />
+        </VCard>
+        <VCard Flush="true">
+            <VStat Label="Главная причина отказа"
+                   Value="@TopReasonCount"
+                   Foot="@TopReasonName" />
+        </VCard>
+    </div>
+
+    <VCard Title="Решения" Note="@($"показано {Rows.Count}")" Flush="true">
+        @if (Rows.Count == 0)
+        {
+            <VEmpty Title="Ничего не найдено" Hint="Снимите фильтры, чтобы увидеть весь журнал." />
+        }
+        else
+        {
+            <div class="v-tablewrap">
+                <table class="v-table">
+                    <thead>
+                        <tr>
+                            <th>Время</th>
+                            <th>Инструмент</th>
+                            <th>Сторона</th>
+                            <th>Итог</th>
+                            <th class="r">Вход</th>
+                            <th class="r">Стоп</th>
+                            <th class="r">SL, ATR</th>
+                            <th class="r">R:R</th>
+                            <th class="r">Объём</th>
+                            <th>Что произошло</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var r in Rows)
+                        {
+                            <tr>
+                                <td class="num">@r.TimeUtc.ToLocalTime().ToString("dd.MM HH:mm:ss")</td>
+                                <td>
+                                    <div class="sym">@r.Symbol</div>
+                                    <div class="v-note">@r.Timeframe</div>
+                                </td>
+                                <td>
+                                    @if (r.Side != SignalSide.None)
+                                    {
+                                        <VBadge Tone="@(r.Side == SignalSide.Buy ? VBadge.BadgeTone.Long : VBadge.BadgeTone.Short)">
+                                            @(r.Side == SignalSide.Buy ? "LONG" : "SHORT")
+                                        </VBadge>
+                                    }
+                                </td>
+                                <td>
+                                    @if (r.EnteredPosition)
+                                    {
+                                        <VBadge Tone="VBadge.BadgeTone.Ok" Dot="true">Вошли</VBadge>
+                                    }
+                                    else
+                                    {
+                                        <VBadge Tone="VBadge.BadgeTone.Warn">@StageName(r.Stage)</VBadge>
+                                    }
+                                </td>
+                                <td class="r num">@Price(r.EnteredPosition ? r.FilledPrice ?? r.EntryPrice : r.EntryPrice)</td>
+                                <td class="r num">@Price(r.StopLoss)</td>
+                                <td class="r num">@(r.StopAtrMultiple?.ToString("0.00") ?? "—")</td>
+                                <td class="r num">@(r.RiskReward?.ToString("0.00") ?? "—")</td>
+                                <td class="r num">@(r.Notional?.ToString("N2", CultureInfo.InvariantCulture) ?? "—")</td>
+                                <td>
+                                    <div>@r.Explanation</div>
+                                    @if (!string.IsNullOrWhiteSpace(r.StopMethod))
+                                    {
+                                        <div class="v-note">
+                                            метод стопа: @r.StopMethod
+                                            @if (r.StructureLevel is > 0)
+                                            {
+                                                <text> · структура @Price(r.StructureLevel)</text>
+                                            }
+                                        </div>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </VCard>
+</div>
+
+@code {
+    private List<TradeDecision> All = new();
+    private string Filter = "";
+    private bool OnlyEntered;
+
+    private sealed record FunnelRow(DecisionStage Stage, int Count, decimal Share);
+
+    private List<TradeDecision> Rows =>
+        All.Where(x => string.IsNullOrWhiteSpace(Filter)
+                       || x.Symbol.Contains(Filter, StringComparison.OrdinalIgnoreCase))
+           .Where(x => !OnlyEntered || x.EnteredPosition)
+           .OrderByDescending(x => x.TimeUtc)
+           .Take(400)
+           .ToList();
+
+    private int Entered => All.Count(x => x.EnteredPosition);
+
+    private List<FunnelRow> Funnel =>
+        All.GroupBy(x => x.Stage)
+           .OrderBy(g => (int)g.Key)
+           .Select(g => new FunnelRow(g.Key, g.Count(),
+                        All.Count == 0 ? 0m : (decimal)g.Count() / All.Count * 100m))
+           .ToList();
+
+    private IGrouping<string, TradeDecision>? TopReason =>
+        All.Where(x => !x.EnteredPosition)
+           .GroupBy(x => x.Reason)
+           .OrderByDescending(g => g.Count())
+           .FirstOrDefault();
+
+    private string TopReasonCount => TopReason?.Count().ToString() ?? "—";
+    private string TopReasonName => TopReason?.Key ?? "Отказов нет";
+
+    protected override void OnInitialized() => Reload();
+
+    private void Reload() => All = Journal.Load();
+
+    private void Toggle(ref bool flag) => flag = !flag;
+
+    private static string StageName(DecisionStage s) => s switch
+    {
+        DecisionStage.Data => "Данные",
+        DecisionStage.Strategy => "Стратегия",
+        DecisionStage.Cooldown => "Кулдаун",
+        DecisionStage.AiGate => "Фильтр AI",
+        DecisionStage.RiskGate => "Риск-множитель",
+        DecisionStage.Liquidity => "Ликвидность",
+        DecisionStage.Levels => "Уровни SL/TP",
+        DecisionStage.Sizing => "Расчёт объёма",
+        DecisionStage.Execution => "Исполнение",
+        DecisionStage.Entered => "Вход выполнен",
+        _ => s.ToString()
+    };
+
+    private static string Price(decimal? v)
+    {
+        if (v is null or 0m) return "—";
+        var abs = Math.Abs(v.Value);
+        var digits = abs >= 1000m ? 2 : abs >= 1m ? 4 : 6;
+        return v.Value.ToString("N" + digits, CultureInfo.InvariantCulture);
+    }
+
+    private static string Price(decimal v) => Price((decimal?)v);
+}

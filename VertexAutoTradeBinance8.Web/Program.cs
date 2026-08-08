@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.SignalR;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Services;
+using VertexAutoTradeBinance8.Services.Storage;
 using VertexAutoTradeBinance8.Web.Confs;
 using VertexAutoTradeBinance8.Web.Services;
 
@@ -35,6 +36,10 @@ builder.Services.Configure<Binance.Net.Objects.Options.BinanceOptions>(builder.C
 // ============================================================================
 // ENGINE CORE (общее с движком)
 // ============================================================================
+// Тот же корень данных, что и у движка — иначе страницы снова опустеют
+builder.Services.AddSingleton<VertexPaths>();
+builder.Services.AddSingleton<TradeDecisionJournal>();
+
 builder.Services.AddSingleton<BinanceClientFactory>();
 builder.Services.AddSingleton<MarketDataService>();
 builder.Services.AddSingleton<SymbolInfoService>();

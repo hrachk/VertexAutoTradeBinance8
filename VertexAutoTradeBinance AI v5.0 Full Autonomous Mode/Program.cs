@@ -2,6 +2,8 @@
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
+using VertexAutoTradeBinance8.Services.Levels;
+using VertexAutoTradeBinance8.Services.Storage;
 using VertexAutoTradeBinance8.Strategy;
 
 namespace VertexAutoTradeBinance8;
@@ -114,6 +116,21 @@ public class Program
                 // =========================================================
                 services.AddSingleton<IAlgoOrderRawClient, AlgoOrderRawClient>();
                 services.AddSingleton<ProtectionOrderService>();
+
+                // =========================================================
+                // ХРАНИЛИЩЕ И ЖУРНАЛ РЕШЕНИЙ
+                // VertexPaths даёт движку и Web один корень данных: раньше
+                // каждый писал и читал в свой bin\Debug и они не встречались.
+                // =========================================================
+                services.AddSingleton<VertexPaths>();
+                services.AddSingleton<TradeDecisionJournal>();
+
+                // =========================================================
+                // МЕТОДОЛОГИЯ УРОВНЕЙ SL / TP
+                // =========================================================
+                var levelOptions = ctx.Configuration.GetSection("Levels").Get<LevelOptions>() ?? new LevelOptions();
+                services.AddSingleton(levelOptions);
+                services.AddSingleton<TradeLevelEngine>();
 
                 // =========================================================
                 // Страховочные фоновые сервисы (тоже были не hosted)
