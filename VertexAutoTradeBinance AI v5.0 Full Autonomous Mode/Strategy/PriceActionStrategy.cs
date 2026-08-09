@@ -30,9 +30,9 @@ namespace VertexAutoTradeBinance8.Strategy
     public static class PriceActionStrategy
     {
         // ── Config ────────────────────────────────────────────────────────
-        private const decimal MinMomoScore   = 55m;   // was 35 — only strong momentum   // min MOMO to enter
-        private const decimal MinVolumeRatio = 1.0m;  // was 0.3 — require real volume  // min VOL x average
-        private const decimal MinRR          = 2.0m;  // was 1.2 — only quality RR  // min risk:reward
+        private const decimal MinMomoScore   = 40m;   // balanced: not noise, not impossible   // min MOMO to enter
+        private const decimal MinVolumeRatio = 0.6m;  // above dead market, not above-average  // min VOL x average
+        private const decimal MinRR          = 1.5m;  // 1.5:1 minimum reward:risk  // min risk:reward
         private const decimal MaxSlAtrMult   = 3.0m;  // SL never > 3×ATR from entry
 
         // ── Main entry ────────────────────────────────────────────────────
