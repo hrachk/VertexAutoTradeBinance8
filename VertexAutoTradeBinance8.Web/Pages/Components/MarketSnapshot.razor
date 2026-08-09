@@ -2127,7 +2127,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
 /* SIGNAL PANEL */
 /* .mk-sticky-top removed — signals now in left panel */
-.sig-panel{background:var(--bg2);border-top:1px solid var(--bdr);padding:0;overflow:hidden;flex:1;min-height:250px;display:flex;flex-direction:column;}
+.sig-panel{background:var(--bg1);border-top:1px solid var(--bdr);padding:0;overflow:hidden;flex:1;min-height:200px;display:flex;flex-direction:column;}
 /* sig-panel .sig-cards override consolidated into base .sig-cards rule */
 .sig-panel .sig-cards{flex:1;min-height:0;padding:6px;scrollbar-width:thin;}
 .sig-panel .sig-card{min-width:unset;width:100%;flex-shrink:0;}
@@ -2156,21 +2156,21 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sc-active{border-color:var(--acc)!important;background:rgba(59,130,246,.08)!important;}
 .sc-below-threshold{opacity:.7;}
 .sc-threshold-badge{font-size:9.5px;font-weight:700;color:#eab308;background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.3);border-radius:5px;padding:2px 7px;margin-bottom:6px;display:inline-block;cursor:help;}
-.sc-top{display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:nowrap;overflow:hidden;}
+.sc-top{display:flex;align-items:center;gap:6px;margin-bottom:5px;}
 /* sc-sym-wrap removed — sym is inline with side badge */
 .sc-sym{font-family:var(--mono);font-size:14px;font-weight:800;color:var(--txt);}
 .sc-usdt{font-size:9px;color:var(--dim2);margin-left:1px;}
 .sc-side{font-size:10px;font-weight:800;padding:2px 7px;border-radius:4px;white-space:nowrap;letter-spacing:.3px;}
 .sc-side-b{background:var(--grn-d);color:var(--grn);border:1px solid rgba(16,185,129,.2);}
 .sc-side-s{background:var(--red-d);color:var(--red);border:1px solid rgba(239,68,68,.2);}
-.sc-ago{color:#94a3b8;font-weight:500;font-size:10px;white-space:nowrap;flex-shrink:0;}
-.sc-meta{display:flex;align-items:center;gap:10px;margin-top:4px;margin-bottom:2px;}
+.sc-ago{color:#94a3b8;font-weight:500;font-size:10px;white-space:nowrap;flex-shrink:0;margin-left:auto;}
+.sc-meta{display:flex;align-items:center;gap:10px;}
 .sc-meta-tag{font-size:10px;color:var(--dim);font-weight:600;}
 .sc-meta-val{color:var(--txt2);font-family:var(--mono);font-weight:700;margin-left:2px;}
 .sc-conf-pct{font-size:13px;font-weight:800;font-family:var(--mono);margin-left:auto;}
 /* sc-meta-conf removed — conf% now in sc-top as sc-conf-pct */
-.sc-conf-wrap{height:2px;background:var(--bdr);border-radius:2px;overflow:hidden;margin-top:3px;}
-.sc-conf-bar{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--acc),var(--grn));}
+.sc-conf-wrap{height:2px;background:var(--bdr);border-radius:1px;overflow:hidden;margin-top:6px;}
+.sc-conf-bar{height:100%;border-radius:1px;background:linear-gradient(90deg,var(--acc),var(--grn));}
 
 /* Compact-state warning strip (shown collapsed; the full badges with
    tooltips live in sc-expand for hover) */
@@ -2231,7 +2231,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sc-ttl-label{font-size:9px;white-space:nowrap;color:var(--dim);flex-shrink:0;}
 
 /* Fade-out when expiring */
-.sig-card{background:var(--bg3);border:1px solid var(--bdr);border-radius:8px;padding:10px 12px;position:relative;cursor:pointer;transition:opacity .2s,transform .2s,border-color .2s,background .2s,max-width .6s ease,margin .6s ease,padding .6s ease;}
+.sig-card{background:var(--bg3);border:1px solid var(--bdr);border-radius:8px;padding:10px 12px;position:relative;cursor:pointer;overflow:hidden;transition:border-color .12s,box-shadow .12s;}
 .sc-fading{opacity:.35;}
 .sig-card.sc-removing{opacity:0!important;max-width:0!important;padding-left:0!important;padding-right:0!important;margin:0!important;overflow:hidden;border-width:0;}
 
@@ -2412,7 +2412,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .ord-position-close-btn:disabled{opacity:.5;cursor:not-allowed;}
 
 .mk-side-tbl{display:flex;flex-direction:column;background:var(--bg2);border-right:1px solid var(--bdr);overflow:hidden;height:100%;}
-.mk-side-instruments{flex:0 0 auto;max-height:50vh;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;border-bottom:1px solid var(--bdr);}
+.mk-side-instruments{flex:0 0 auto;max-height:50vh;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;border-bottom:1px solid var(--bdr);background:var(--bg1);}
 .mk-side-tbl::-webkit-scrollbar{display:none;}
 .mk-side-tbl-title{font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--dim);font-weight:700;padding:10px 14px 8px;flex-shrink:0;}
 
