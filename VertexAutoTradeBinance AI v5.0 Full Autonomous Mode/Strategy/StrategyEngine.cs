@@ -1469,7 +1469,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     bool closedAbove = ks.ClosePrice > recentSwingLow;
                     // Wick size must be significant (> 0.8 ATR)
                     decimal lowerWick = Math.Min(ks.OpenPrice, ks.ClosePrice) - ks.LowPrice;
-                    if (piercedSwing && closedAbove && lowerWick > atr * 0.8m)
+                    if (piercedSwing && closedAbove && lowerWick > atr * 0.5m)
                         recentSweep = true;
                 }
                 if (!recentSweep) return null;
@@ -1478,7 +1478,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 // above-average volume (signal = real buying pressure)
                 decimal avgVol20 = klines.Skip(Math.Max(0, i - 20)).Take(20)
                     .Average(k => k.Volume);
-                if (c0.Volume < avgVol20 * 1.3m) return null;
+                if (c0.Volume < avgVol20 * 1.0m) return null;
 
                 // ══════════════════════════════════════════════════════════
                 // ENTRY: Limit-style at EMA21 zone (not market at c0.Close)
@@ -1581,7 +1581,7 @@ namespace VertexAutoTradeBinance8.Strategy
                     bool piercedSwing = ks.HighPrice > recentSwingHigh;
                     bool closedBelow  = ks.ClosePrice < recentSwingHigh;
                     decimal upperWick = ks.HighPrice - Math.Max(ks.OpenPrice, ks.ClosePrice);
-                    if (piercedSwing && closedBelow && upperWick > atr * 0.8m)
+                    if (piercedSwing && closedBelow && upperWick > atr * 0.5m)
                         recentSweepShort = true;
                 }
                 if (!recentSweepShort) return null;
@@ -1589,7 +1589,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 // Volume confirmation
                 decimal avgVol20S = klines.Skip(Math.Max(0, i - 20)).Take(20)
                     .Average(k => k.Volume);
-                if (c0.Volume < avgVol20S * 1.3m) return null;
+                if (c0.Volume < avgVol20S * 1.0m) return null;
 
                 // Entry at EMA21 - 0.2×ATR (inside zone, not chasing)
                 decimal entry = ema21 - atr * 0.20m;
@@ -2888,7 +2888,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
             var atr = signal.Atr ?? 0m;
 
-            if (atr > 0m && slDist < atr * 0.80m)
+            if (atr > 0m && slDist < atr * 0.50m)
                 return FastFailResult.Fail("RR", "SL too tight vs ATR");
 
             // ============================================================
