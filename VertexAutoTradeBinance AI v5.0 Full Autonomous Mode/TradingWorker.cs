@@ -1342,11 +1342,11 @@ namespace VertexAutoTradeBinance8
             var trading = _resolver.Resolve(symbol);
             int cooldownSec = trading.CooldownSeconds > 0
                 ? trading.CooldownSeconds
-                : (_options.CooldownSeconds > 0 ? _options.CooldownSeconds : 300);
+                : (_options.CooldownSeconds > 0 ? _options.CooldownSeconds : 180);
 
             // ── TradeStateManager checks (shared with PositionSupervisor) ──
             // 3 consecutive SL hits → block this symbol until a win
-            if (_tradeState.IsLosingStreakLimit(symbol, 3))
+            if (_tradeState.IsLosingStreakLimit(symbol, 5))
                 return true;
 
             // After any SL: 2× cooldown from TradeStateManager
