@@ -1269,7 +1269,7 @@ else if (_activeTab == "dca")
     Task<List<TradeRow>> LoadDemoTrades()
     {
         var rows = DemoAccount.GetSnapshot().History
-            .Where(t => t.ClosedAtUtc.Date >= _dateFrom && t.ClosedAtUtc.Date <= _dateTo)
+            .Where(t => DateTime.SpecifyKind(t.ClosedAtUtc, DateTimeKind.Utc).ToLocalTime().Date >= _dateFrom && DateTime.SpecifyKind(t.ClosedAtUtc, DateTimeKind.Utc).ToLocalTime().Date <= _dateTo)
             .Select(t => new TradeRow
             {
                 Symbol = t.Symbol, Side = t.Side,
@@ -1314,7 +1314,7 @@ else if (_activeTab == "dca")
                 decimal pnl = e.Income;
                 while (i + 1 < events.Count &&
                        events[i + 1].Symbol == e.Symbol &&
-                       (events[i + 1].Timestamp - e.Timestamp).TotalSeconds < 5)
+                       (events[i + 1].Timestamp - e.Timestamp).TotalSeconds < 30)
                 {
                     i++;
                     pnl += events[i].Income;
@@ -1331,9 +1331,9 @@ else if (_activeTab == "dca")
                     // A LONG can close at a loss (negative income) and a SHORT can profit.
                     // Without a second API call we can only infer from PnL sign as a proxy,
                     // or leave as "—". We'll use "—" so data isn't misleading.
-                    Side        = pnl >= 0 ? "LONG" : "SHORT",
+                    Side        = "—",  // Income API doesn't indicate LONG/SHORT
                     Pnl         = pnl,
-                    CloseReason = pnl >= 0 ? "TP" : "SL",
+                    CloseReason = pnl >= 0 ? "WIN" : "LOSS",  // not TP/SL — just result
                     ClosedAt    = time,
                     OpenedAt    = time,  // OpenedAt unknown from income only
                 });
@@ -1363,7 +1363,8 @@ else if (_activeTab == "dca")
 
         // ClosedAt is UTC — convert to local time for calendar day grouping
         // so calendar matches the user's actual trading day, not UTC midnight cutoff
-        _dailyPnl = _trades
+        // FIXED: was using _trades (ignoring filters), now uses `trades` (filtered)
+        _dailyPnl = trades
             .GroupBy(t => DateTime.SpecifyKind(t.ClosedAt, DateTimeKind.Utc).ToLocalTime().Date)
             .OrderBy(g => g.Key)
             .ToDictionary(g => g.Key, g => g.Sum(t => t.Pnl));
