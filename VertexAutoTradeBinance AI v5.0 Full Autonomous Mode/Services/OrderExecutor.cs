@@ -2375,6 +2375,33 @@ namespace VertexAutoTradeBinance8.Services
             }
             catch { }
 
+            // Also fetch Algo/Conditional orders (Dec 2025 migration).
+            // GetOpenOrdersAsync does NOT return orders placed via the
+            // Algo Order endpoint — without this check, DEDUP thinks
+            // there are no existing TP/SL and places duplicates.
+            try
+            {
+                var algoOrders = await _algoOrders.GetOpenAlgoOrders(signal.Symbol);
+                if (algoOrders != null)
+                {
+                    foreach (var ao in algoOrders.Where(a => !isHedge || a.PositionSide == posSide))
+                    {
+                        // Convert algo orders to the same shape for uniform dedup
+                        existingOrders.Add(new BinanceUsdFuturesOrder
+                        {
+                            Id = ao.AlgoId,
+                            Symbol = ao.Symbol,
+                            Type = ao.IsTakeProfit ? FuturesOrderType.TakeProfitMarket : FuturesOrderType.StopMarket,
+                            Side = ao.Side,
+                            PositionSide = ao.PositionSide,
+                            StopPrice = ao.TriggerPrice,
+                            Quantity = ao.Quantity,
+                        });
+                    }
+                }
+            }
+            catch { /* algo query failed — proceed with regular orders only */ }
+
             var existingTps = existingOrders
                 .Where(o => o.Type == FuturesOrderType.TakeProfitMarket)
                 .OrderBy(o => isLong ? (o.StopPrice ?? 0m) : -(o.StopPrice ?? 0m))
