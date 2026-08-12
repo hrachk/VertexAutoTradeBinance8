@@ -1259,6 +1259,21 @@ namespace VertexAutoTradeBinance8.Services
             if (signal.Reason is "RANGE_BOUND_LONG" or "RANGE_BOUND_SHORT")
                 useMarket = false;
 
+            // ── PHASE 2: Pullback signals → Limit Order ──────────────
+            // Market orders at c0.Close buy the TOP of the rejection
+            // candle. Limit order at EntryPrice (= c0.Close) with the
+            // aggressive limit logic below gives us fill at or BELOW
+            // close — a better entry that improves RR by 0.3-0.5 points.
+            // The existing aggrLimitPrice calc already handles bid/ask
+            // offset for Limit, and there's a Market fallback at L1700
+            // if the Limit doesn't fill within 10s.
+            if (signal.Reason != null && signal.Reason.Contains("PULLBACK_EMA21"))
+                useMarket = false;
+
+            // MeanReversion → also Limit (entering at extremes, no chase)
+            if (signal.Reason != null && signal.Reason.Contains("MEANREV"))
+                useMarket = false;
+
             FuturesOrderType entryType = useMarket ? FuturesOrderType.Market : FuturesOrderType.Limit;
 
             // =====================================================
