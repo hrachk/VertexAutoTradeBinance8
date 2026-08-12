@@ -202,10 +202,10 @@ namespace VertexAutoTradeBinance8.Strategy
             decimal atr, MarketStructureInfo msi,
             bool isLong, string reason, decimal confidence)
         {
-            // Entry: close + small buffer
-            decimal entry = isLong
-                ? c0.ClosePrice + atr * 0.08m
-                : c0.ClosePrice - atr * 0.08m;
+            // Entry: actual close price. OrderExecutor now uses Limit Orders
+            // for pullback signals, so the aggrLimitPrice logic handles the
+            // bid/ask offset. Adding 0.08×ATR here made the entry fictional.
+            decimal entry = c0.ClosePrice;
 
             // Structural SL — behind nearest swing point
             decimal stopLoss = MarketStructureAnalyzer.CalcStructuralSl(
