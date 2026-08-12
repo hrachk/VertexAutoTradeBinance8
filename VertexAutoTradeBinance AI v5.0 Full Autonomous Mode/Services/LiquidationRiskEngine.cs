@@ -285,7 +285,7 @@ namespace VertexAutoTradeBinance8.Services
 
                     case LiqRiskLevel.Critical:
                         // Критично — частично закрываем позицию немедленно
-                        decimal reduceQty = Math.Round(pos.Qty * 0.5m, 8); // закрываем 50%
+                        decimal reduceQty = Math.Round(pos.Qty * 0.25m, 8); // закрываем 50%
                         if (reduceQty > 0)
                         {
                             _logger.LogError(
