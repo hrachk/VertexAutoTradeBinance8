@@ -1449,6 +1449,12 @@ namespace VertexAutoTradeBinance8.Strategy
 
             if (longRejection)
             {
+                // ── PULLBACK CONFIRMATION ──────────────────────────
+                // c1 (previous candle) must be bearish = the actual pullback.
+                // c0 is bullish (confirmed above) = the reversal.
+                // Without this: any random bullish candle near EMA = false signal.
+                if (c1.ClosePrice > c1.OpenPrice) return null; // c1 not bearish = no pullback
+
                               // ── SWEEP CHECK (LONG) ──────────────────────────────────────
                 // Enter long only after a liquidity sweep below EMA21.
                 // ── STRUCTURAL SWEEP CHECK ──────────────────────────
@@ -1499,10 +1505,21 @@ namespace VertexAutoTradeBinance8.Strategy
                 // above already confirmed price is near EMA21 (rejection zone).
                 // Using EMA+0.2ATR as "entry" was fiction: market order executes
                 // at c0.Close regardless, so SL/TP math was wrong from the start.
+                // ── CANDLE CONFIRMATION ────────────────────────────
+                // c0 MUST be bullish (close > open). A bearish candle
+                // that wicked below the swing is NOT a buy signal —
+                // it means sellers are still in control.
+                if (c0.ClosePrice <= c0.OpenPrice) return null;
+
+                // Body must be at least 30% of the candle range
+                // (strong close, not a doji/spinning top)
+                decimal bodyRatio = Math.Abs(c0.ClosePrice - c0.OpenPrice)
+                                  / Math.Max(0.0001m, c0.HighPrice - c0.LowPrice);
+                if (bodyRatio < 0.30m) return null;
+
                 decimal entry = c0.ClosePrice;
 
                 // Chase guard: reject if price ran too far above EMA
-                // (the pullback already played out, we're late)
                 if (entry > ema21 + atr * 1.5m) return null;
 
                 // ── SL: 15-bar structure low + 1.0×ATR buffer ────────────
@@ -1525,7 +1542,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 decimal tp1 = entry + atr * tp1Mult;
                 // R:R filter uses 2.2 min to account for real-world slippage
                 // (market order executes ~0.1-0.15% worse than limit)
-                if ((tp1 - entry) / risk < 2.2m) return null;
+                if ((tp1 - entry) / risk < 1.5m) return null;
 
                 // ── STEP 1: Market Structure filter ─────────────────
                 // Block LONG when market is making LH+LL (downtrend).
@@ -1569,6 +1586,10 @@ namespace VertexAutoTradeBinance8.Strategy
             if (shortRejection)
             {
                               // ── SWEEP CHECK (SHORT) ──────────────────────────────────────
+                // ── PULLBACK CONFIRMATION (SHORT) ──────────────────
+                // c1 must be bullish (the rally), c0 bearish (the reversal)
+                if (c1.ClosePrice < c1.OpenPrice) return null; // c1 not bullish = no rally to sell
+
                 // ── STRUCTURAL SWEEP CHECK (SHORT) ─────────────────
                 bool recentSweepShort = false;
                 decimal recentSwingHigh = 0m;
@@ -1591,9 +1612,19 @@ namespace VertexAutoTradeBinance8.Strategy
                     .Average(k => k.Volume);
                 if (c0.Volume < avgVol20S * 1.0m) return null;
 
-                // Entry at EMA21 - 0.2×ATR (inside zone, not chasing)
-                decimal entry = ema21 - atr * 0.20m;
-                if (c0.ClosePrice < entry - atr * 0.5m) return null; // tighter chase guard
+                // ── CANDLE CONFIRMATION (SHORT) ───────────────────
+                // c0 MUST be bearish (close < open). A bullish candle
+                // that wicked above swing is NOT a sell signal.
+                if (c0.ClosePrice >= c0.OpenPrice) return null;
+
+                decimal bodyRatioS = Math.Abs(c0.ClosePrice - c0.OpenPrice)
+                                   / Math.Max(0.0001m, c0.HighPrice - c0.LowPrice);
+                if (bodyRatioS < 0.30m) return null;
+
+                decimal entry = c0.ClosePrice;
+
+                // Chase guard: reject if price ran too far below EMA
+                if (entry < ema21 - atr * 1.5m) return null;
 
                 // SL: structure high + 1.0×ATR buffer (was 0.5×ATR)
                 int lookbackSlShort = Math.Min(10, i);
@@ -1605,7 +1636,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 decimal risk = slLevel - entry;
                 if (risk < atr * 0.5m || risk > atr * 3.5m) return null;
                 decimal tp1 = entry - atr * tp1Mult;
-                if ((entry - tp1) / risk < 2.2m) return null;
+                if ((entry - tp1) / risk < 1.5m) return null;
 
                 // ── STEP 1: Market Structure filter ─────────────────
                 // Block SHORT when market is making HH+HL (uptrend).
