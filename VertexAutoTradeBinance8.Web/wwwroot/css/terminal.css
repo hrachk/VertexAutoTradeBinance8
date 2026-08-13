@@ -558,3 +558,45 @@ table.vt-table .sym {
 }
 .vt-toast.ok { border-color: rgba(14,203,129,.4); }
 .vt-toast.err { border-color: rgba(246,70,93,.4); }
+
+.vt-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 4px;
+}
+@media (max-width: 900px) {
+  .vt-kpi-grid { grid-template-columns: repeat(2, 1fr); }
+}
+.vt-kpi {
+  background: var(--vt-bg-card);
+  border: 1px solid var(--vt-border);
+  border-radius: var(--vt-radius);
+  padding: 14px 16px;
+}
+.vt-kpi-label { color: var(--vt-text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.vt-kpi-value { font-size: 22px; font-weight: 700; margin-top: 4px; font-family: var(--vt-mono); }
+.vt-kpi-sub { color: var(--vt-text-dim); font-size: 11px; margin-top: 2px; }
+.vt-table-wrap { overflow: auto; }
+.vt-table { width: 100%; border-collapse: collapse; }
+.vt-table th {
+  text-align: left; color: var(--vt-text-muted); font-weight: 600; font-size: 11px;
+  text-transform: uppercase; letter-spacing: .03em; padding: 10px 8px; border-bottom: 1px solid var(--vt-border);
+}
+.vt-table td { padding: 9px 8px; border-bottom: 1px solid var(--vt-border-soft); vertical-align: middle; }
+.vt-table tr:hover td { background: var(--vt-bg-hover); }
+.vt-page-title { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; gap:12px; }
+.vt-page-title h1 { margin:0; font-size:20px; font-weight:700; }
+.vt-page-title p { margin:4px 0 0; color:var(--vt-text-muted); font-size:12.5px; }
+.vt-card { background:var(--vt-bg-card); border:1px solid var(--vt-border); border-radius:var(--vt-radius); padding:14px 16px; }
+.vt-card-title { font-weight:600; margin-bottom:12px; font-size:13px; }
+.vt-btn {
+  background: var(--vt-bg-hover); border: 1px solid var(--vt-border); color: var(--vt-text);
+  border-radius: 8px; padding: 7px 12px; font-size: 12px; cursor: pointer;
+}
+.vt-btn:hover { border-color: var(--vt-accent); color: var(--vt-accent); }
+.vt-input {
+  background: var(--vt-bg); border: 1px solid var(--vt-border); color: var(--vt-text);
+  border-radius: 8px; padding: 8px 10px;
+}
+.vt-hint { color: var(--vt-text-muted); font-size: 12px; }

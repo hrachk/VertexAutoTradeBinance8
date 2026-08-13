@@ -1,34 +1,37 @@
-﻿@using VertexAutoTradeBinance8.Services
+@using VertexAutoTradeBinance8.Services
 @if (Trades == null || Trades.Count == 0)
 {
-    <div class="ai-empty">Нет симулированных сделок.</div>
+    <div class="vt-hint" style="padding:12px 0;">Нет симулированных сделок в снапшоте.</div>
 }
 else
 {
-    <table class="ai-table">
+    <table class="vt-table">
         <thead>
             <tr>
-                <th>Time</th>
-                <th>Symbol</th>
-                <th>Side</th>
+                <th>Время</th>
+                <th>Символ</th>
+                <th>Сторона</th>
                 <th>Entry</th>
                 <th>Exit</th>
                 <th>PnL %</th>
-                <th>Reason</th>
+                <th>Режим / причина</th>
             </tr>
         </thead>
-
         <tbody>
-            @foreach (var t in Trades.OrderByDescending(t => t.Time))
+            @foreach (var t in Trades.OrderByDescending(t => t.Time).Take(40))
             {
                 <tr>
-                    <td>@t.Time.ToLocalTime().ToString("dd.MM HH:mm")</td>
-                    <td>@t.Symbol</td>
-                    <td>@t.Side</td>
-                    <td>@t.Entry</td>
-                    <td>@t.Exit</td>
-                    <td class="@(t.Pnl >= 0 ? "pnl-win" : "pnl-loss")">@t.Pnl.ToString("0.0")%</td>
-                    <td>@t.Regime</td>
+                    <td class="mono">@t.Time.ToLocalTime().ToString("dd.MM HH:mm")</td>
+                    <td><span class="sym">@t.Symbol</span></td>
+                    <td>
+                        <span class="pill @(t.Side?.ToString().Contains("Buy", StringComparison.OrdinalIgnoreCase)==true || t.Side?.ToString().Contains("Long", StringComparison.OrdinalIgnoreCase)==true ? "pill-up" : "pill-down")">
+                            @t.Side
+                        </span>
+                    </td>
+                    <td class="mono">@FormatPx(t.Entry)</td>
+                    <td class="mono">@FormatPx(t.Exit)</td>
+                    <td class="mono @(t.Pnl >= 0 ? "score-good" : "score-low")">@t.Pnl.ToString("+0.00;-0.00")%</td>
+                    <td><span class="reason">@t.Regime</span></td>
                 </tr>
             }
         </tbody>
@@ -37,4 +40,11 @@ else
 
 @code {
     [Parameter] public List<AiSelfLearningService.TradeHistoryEntry> Trades { get; set; } = new();
+
+    private static string FormatPx(decimal v)
+    {
+        if (v >= 1000) return v.ToString("0.00");
+        if (v >= 1) return v.ToString("0..####");
+        return v.ToString("0.########");
+    }
 }

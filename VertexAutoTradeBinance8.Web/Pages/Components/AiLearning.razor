@@ -1,4 +1,4 @@
-﻿@page "/ai-learning"
+@page "/ai-learning"
 
 @using VertexAutoTradeBinance8.Services
 @using VertexAutoTradeBinance8.Web.Services
@@ -8,237 +8,304 @@
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
-<div class="ai-learn-container">
+<div class="vt-page-title">
+    <div>
+        <h1>AI Learning</h1>
+        <p>Как бот «учится» на рынке: score, режимы, блокировки и симуляции</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+        <button class="vt-btn" @onclick="() => _showHelp = true">? Как читать</button>
+        <button class="vt-btn" @onclick="RefreshNow">↻ Обновить</button>
+    </div>
+</div>
 
-    <!-- KPI блоки -->
-    <div class="ai-learn-kpi-row">
-        <div class="ai-kpi-card">
-            <div class="ai-kpi-label">Всего записей</div>
-            <div class="ai-kpi-value">@_filtered.Count</div>
+@if (_showHelp)
+{
+    <div class="ai-help-backdrop" @onclick="() => _showHelp = false"></div>
+    <div class="ai-help-modal">
+        <div class="ai-help-head">
+            <span>Как читать AI Learning</span>
+            <button class="vt-btn" @onclick="() => _showHelp = false">✕</button>
         </div>
-
-        <div class="ai-kpi-card">
-            <div class="ai-kpi-label">Уникальных символов</div>
-            <div class="ai-kpi-value">@_uniqueSymbols</div>
-        </div>
-
-        <div class="ai-kpi-card">
-            <div class="ai-kpi-label">Последнее событие</div>
-            <div class="ai-kpi-value">
-                @(_filtered.Count == 0
-                                ? "-"
-                                : _filtered.Max(x => x.Time).ToLocalTime().ToString("dd.MM.yyyy HH:mm"))
+        <div class="ai-help-body">
+            <div class="ai-help-grid">
+                <div>
+                    <div class="ai-help-tag" style="background:rgba(30,144,255,.15);color:#5eb3ff;">Score</div>
+                    <p>Общая «оценка ситуации» 0–100. Чем стабильнее линия, тем спокойнее рынок для бота. Резкие провалы = шум / смена режима.</p>
+                </div>
+                <div>
+                    <div class="ai-help-tag" style="background:rgba(14,203,129,.15);color:var(--vt-green);">Confidence</div>
+                    <p>Уверенность SmartRegime в текущем режиме (тренд / флэт / хаос). Низкая confidence → бот осторожнее.</p>
+                </div>
+                <div>
+                    <div class="ai-help-tag" style="background:rgba(155,89,255,.15);color:#c9a0ff;">Slope ×8000</div>
+                    <p>Наклон тренда, увеличенный для графика. Большие пики = сильный тренд. Около нуля = боковик.</p>
+                </div>
+                <div>
+                    <div class="ai-help-tag" style="background:rgba(240,185,11,.15);color:var(--vt-yellow);">Volatility %</div>
+                    <p>Волатильность. Высокая → шире SL, меньше размер, больше шансов на стоп-хант.</p>
+                </div>
+                <div>
+                    <div class="ai-help-tag" style="background:rgba(246,70,93,.15);color:var(--vt-red);">Liquidity Danger</div>
+                    <p>Красные всплески = опасная стена в стакане. Такие входы бот часто блокирует.</p>
+                </div>
+                <div>
+                    <div class="ai-help-tag" style="background:rgba(94,102,115,.2);color:var(--vt-text-muted);">Причины (Reason)</div>
+                    <p><b>BASE_REGIME</b> — обычный анализ режима · <b>SOFT_ENTRY</b> — мягкий вход по тренду · <b>LIQUIDITY_DANGER</b> — блок по стакану · <b>RR_BLOCK</b> — плохой Risk/Reward · <b>PERIODIC_30s</b> — фоновый скан.</p>
+                </div>
             </div>
-        </div>
-
-        <div class="ai-kpi-card">
-            <div class="ai-kpi-label">Средний Score</div>
-            <div class="ai-kpi-value">
-                @(_filtered.Count == 0 ? "-" : _filtered.Average(x => x.Score).ToString("0.0"))
-            </div>
+            <p class="ai-help-note">Таблица «Последние симуляции» — это <b>не реальные сделки</b>, а обучающие эпизоды (что бот «увидел»). Реальные сделки смотри в Executed / Positions.</p>
         </div>
     </div>
+}
 
-    <!-- === График обучения === -->
-    <div class="ai-section">
-        <div class="ai-section-title flex-between">
-            График обучения
-            <button class="help-btn" @onclick="() => _showHelp = true">ℹ</button>
+<!-- KPI -->
+<div class="vt-kpi-grid">
+    <div class="vt-kpi">
+        <div class="vt-kpi-label">Записей в фильтре</div>
+        <div class="vt-kpi-value">@_filtered.Count</div>
+        <div class="vt-kpi-sub">из @_all.Count всего</div>
+    </div>
+    <div class="vt-kpi">
+        <div class="vt-kpi-label">Символов</div>
+        <div class="vt-kpi-value">@_uniqueSymbols</div>
+        <div class="vt-kpi-sub">уникальных в выборке</div>
+    </div>
+    <div class="vt-kpi">
+        <div class="vt-kpi-label">Последнее событие</div>
+        <div class="vt-kpi-value" style="font-size:16px;">
+            @(_filtered.Count == 0 ? "—" : _filtered.Max(x => x.Time).ToLocalTime().ToString("dd.MM HH:mm"))
         </div>
+        <div class="vt-kpi-sub">локальное время</div>
+    </div>
+    <div class="vt-kpi">
+        <div class="vt-kpi-label">Средний Score</div>
+        <div class="vt-kpi-value @ScoreClass()">
+            @(_filtered.Count == 0 ? "—" : _filtered.Average(x => x.Score).ToString("0.0"))
+        </div>
+        <div class="vt-kpi-sub">порог фильтра ≥ @_minScore</div>
+    </div>
+</div>
 
-        @if (_showHelp)
-        {
-            <div class="help-overlay" @onclick="() => _showHelp = false"></div>
-
-            <div class="help-modal">
-                <div class="help-header">
-                    <span>Пояснение графика AI Learning</span>
-                    <button class="help-close" @onclick="() => _showHelp = false">✕</button>
-                </div>
-
-                <div class="help-body ai-help-scroll">
-
-                    <h4>🟦 Score</h4>
-                    <p>Уровень уверенности AI в общем рыночном состоянии. 0–100. Стабильность Score означает чистое состояние рынка.</p>
-
-                    <h4>🟩 Confidence %</h4>
-                    <p>Уверенность SmartRegime-модуля. Чем стабильнее линия — тем меньше манипуляций и резких смен режимов.</p>
-
-                    <h4>🟪 Slope ×8000</h4>
-                    <p>Показывает силу тренда и импульсы. Высокие пики — ускорения тренда. Падения — выход из импульса.</p>
-
-                    <h4>🟦 Volatility %</h4>
-                    <p>Оценивает колебания размера свечей. Стабильность показывает отсутствие хаоса на рынке.</p>
-
-                    <h4>🟥 Liquidity Danger</h4>
-                    <p>Флаг манипуляций: охота за стопами, резкие шпильки, выбросы объёма. Если линия равна 0 — рынок чистый.</p>
-
-                    <h4>📊 Топ причин обучающих событий</h4>
-                    <p>
-                        <b>BASE_REGIME</b> — базовое состояние рынка.<br />
-                        <b>SOFT_ENTRY</b> — потенциальный вход, недостаточно подтверждений.<br />
-                        <b>RR_BLOCK</b> — отказ из-за плохого соотношения риск/прибыль.<br />
-                        <b>MICRO_SIGNAL</b> — слабые микро-сигналы AI.<br />
-                        <b>AI_PATTERN_BLOCK</b> — найден паттерн, но не подтверждён.<br />
-                        <b>LIQUIDITY_DANGER</b> — события опасной ликвидности.
-                    </p>
-
-                    <h4>📈 Как читать график</h4>
-                    <p>
-                        • Ровные Score + Confidence = рынок предсказуем.<br />
-                        • Высокие Slope = сильные тренды.<br />
-                        • Нулевая Liquidity Danger = чистый рынок.<br />
-                        • Сильные всплески Slope без волатильности = структурные импульсы (идеально для торговли).
-                    </p>
-
-                </div>
+<!-- Filters + Chart -->
+<div class="vt-card" style="margin-top:14px;">
+    <div class="vt-card-title" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;">
+        <span>График обучения</span>
+        <div class="ai-filters">
+            <div class="ai-seg">
+                <button class="ai-seg-btn @(_timeFilter == TimeFilter.Last24h ? "active" : "")" @onclick="() => SetTimeFilter(TimeFilter.Last24h)">24ч</button>
+                <button class="ai-seg-btn @(_timeFilter == TimeFilter.Last7d ? "active" : "")" @onclick="() => SetTimeFilter(TimeFilter.Last7d)">7д</button>
+                <button class="ai-seg-btn @(_timeFilter == TimeFilter.Last30d ? "active" : "")" @onclick="() => SetTimeFilter(TimeFilter.Last30d)">30д</button>
+                <button class="ai-seg-btn @(_timeFilter == TimeFilter.All ? "active" : "")" @onclick="() => SetTimeFilter(TimeFilter.All)">Всё</button>
             </div>
-        }
-
-        <!-- Фильтры для графика (и для статистики одновременно) -->
-        <div class="ai-learn-filters">
-            <div class="ai-filter-group">
-                <span class="ai-filter-label">Период:</span>
-
-                <button class="@ChipClass(TimeFilter.Last24h)" @onclick="@(() => SetTimeFilter(TimeFilter.Last24h))">
-                    24 часа
-                </button>
-                <button class="@ChipClass(TimeFilter.Last7d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last7d))">
-                    7 дней
-                </button>
-                <button class="@ChipClass(TimeFilter.Last30d)" @onclick="@(() => SetTimeFilter(TimeFilter.Last30d))">
-                    30 дней
-                </button>
-                <button class="@ChipClass(TimeFilter.All)" @onclick="@(() => SetTimeFilter(TimeFilter.All))">
-                    Всё время
-                </button>
-            </div>
-
-            <div class="ai-filter-group">
-                <span class="ai-filter-label">Мин. Score:</span>
-                <input type="range"
-                       min="0" max="100" step="5"
-                       @bind="_minScore"
-                       @bind:event="oninput" />
-                <span class="ai-filter-badge">@_minScore</span>
-            </div>
-
-            <!-- 🔥 Новый фильтр по символу -->
-            <div class="ai-filter-group">
-                <span class="ai-filter-label">Символ:</span>
-                <select value="@_selectedSymbol" @onchange="OnSymbolChanged">
+            <label class="ai-filter-label">
+                Min Score
+                <input type="range" min="0" max="100" step="5" value="@_minScore"
+                       @oninput="OnMinScoreInput" class="ai-range" />
+                <span class="ai-range-val">@_minScore</span>
+            </label>
+            <label class="ai-filter-label">
+                Символ
+                <select class="vt-input ai-select" value="@(_selectedSymbol ?? "")" @onchange="OnSymbolChanged">
                     <option value="">Все</option>
                     @foreach (var s in _allSymbols)
                     {
                         <option value="@s">@s</option>
                     }
                 </select>
-            </div>
-        </div>
-
-        <div class="chart-wrapper" style="height:400px; margin-top:15px;">
-            <div style="position:relative; height:400px;">
-                <canvas id="learningChart"></canvas>
-
-                @if (_chartPoints.Count == 0)
-                {
-                    <div class="ai-empty"
-                         style="
-                    position:absolute;
-                    top:0; left:0; right:0; bottom:0;
-                    display:flex;
-                    align-items:center;
-                    justify-content:center;
-                    background:rgba(0,0,0,0.4);
-                    backdrop-filter:blur(4px);
-                    font-size:18px;">
-                        Нет данных по фильтрам
-                    </div>
-                }
-            </div>
-
+            </label>
         </div>
     </div>
 
-    <!-- Последние симулированные сделки -->
-    @if (_snapshot != null)
-    {
-        <div class="ai-section">
-            <div class="ai-section-title">Последние симулированные сделки</div>
-            <TradeTable Trades="_snapshot.Trades" />
-        </div>
-    }
+    <div class="ai-legend">
+        <span><i class="lg lg-score"></i> Score</span>
+        <span><i class="lg lg-conf"></i> Confidence</span>
+        <span><i class="lg lg-slope"></i> Slope ×8000</span>
+        <span><i class="lg lg-vol"></i> Volatility %</span>
+        <span><i class="lg lg-liq"></i> Liquidity Danger</span>
+    </div>
 
-    <!-- ТОП причин (Reason) -->
-    <div class="ai-section">
-        <div class="ai-section-title">Топ причин обучающих событий</div>
-
-        @if (_reasonStats.Count == 0)
+    <div class="ai-chart-box">
+        <LearningChart />
+        @if (_chartPoints.Count == 0)
         {
-            <div class="ai-empty">Нет данных под текущие фильтры.</div>
+            <div class="ai-chart-empty">Нет точек для графика — снизь Min Score или смени период/символ</div>
+        }
+    </div>
+</div>
+
+<!-- Sims + reasons -->
+<div class="ai-two-col">
+    <div class="vt-card">
+        <div class="vt-card-title">Симулированные сделки
+            <span class="vt-hint" style="margin-left:8px;font-weight:400;">результат «что было бы», не ордера на бирже</span>
+        </div>
+        @if (_snapshot != null)
+        {
+            <div class="vt-table-wrap ai-trade-wrap">
+                <TradeTable Trades="_snapshot.Trades" />
+            </div>
         }
         else
         {
-            <div class="ai-reason-list">
-                @foreach (var r in _reasonStats)
+            <div class="vt-hint">Снапшот ещё не загружен</div>
+        }
+    </div>
+
+    <div class="vt-card">
+        <div class="vt-card-title">Топ причин (что бот чаще всего «видел»)</div>
+        <div class="ai-reason-list">
+            @if (_reasonStats.Count == 0)
+            {
+                <div class="vt-hint">Нет статистики</div>
+            }
+            else
+            {
+                @foreach (var r in _reasonStats.Take(10))
                 {
                     <div class="ai-reason-row">
-                        <div class="ai-reason-main">
-                            <div class="ai-reason-name">@r.Reason</div>
-                            <div class="ai-reason-meta">
-                                @r.Count событий • сред. Score @r.AvgScore.ToString("0.0") • Conf @r.AvgConf.ToString("0.0")%
-                            </div>
+                        <div class="ai-reason-top">
+                            <span class="reason">@r.Reason</span>
+                            <span class="mono">@r.Count · score @r.AvgScore.ToString("0.0")</span>
                         </div>
-                        <div class="ai-reason-bar-wrap">
-                            <div class="ai-reason-bar-bg">
-                                <div class="ai-reason-bar-fill" style="width:@r.PercentOfMax%"></div>
-                            </div>
-                        </div>
+                        <div class="ai-bar"><div class="ai-bar-fill" style="width:@(r.PercentOfMax)%"></div></div>
+                        <div class="vt-hint">Conf ~ @r.AvgConf.ToString("0.0")%</div>
                     </div>
                 }
-            </div>
-        }
+            }
+        </div>
     </div>
-
-    <!-- ТОП символов -->
-    <div class="ai-section">
-        <div class="ai-section-title">Символы с наибольшим количеством обучающих эпизодов</div>
-
-        @if (_symbolStats.Count == 0)
-        {
-            <div class="ai-empty">Нет данных под текущие фильтры.</div>
-        }
-        else
-        {
-            <table class="ai-table">
-                <thead>
-                    <tr>
-                        <th>Символ</th>
-                        <th>Эпизодов</th>
-                        <th>Средний Score</th>
-                        <th>Средний Conf%</th>
-                        <th>Частый режим</th>
-                        <th>Частый SmartType</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var s in _symbolStats)
-                    {
-                        <tr>
-                            <td>@s.Symbol</td>
-                            <td>@s.Count</td>
-                            <td>@s.AvgScore.ToString("0.0")</td>
-                            <td>@s.AvgConf.ToString("0.0")</td>
-                            <td>@s.TopRegime</td>
-                            <td>@s.TopSmartType</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        }
-    </div>
-
 </div>
+
+<!-- Market episodes -->
+<div class="vt-card" style="margin-top:14px;">
+    <div class="vt-card-title">Последние рыночные наблюдения
+        <span class="vt-hint" style="margin-left:8px;font-weight:400;">MarketStates — режимы и score по символам</span>
+    </div>
+    <div class="vt-table-wrap">
+        <table class="vt-table">
+            <thead>
+                <tr>
+                    <th>Время</th>
+                    <th>Символ</th>
+                    <th>Режим</th>
+                    <th>Score</th>
+                    <th>Conf</th>
+                    <th>Vol %</th>
+                    <th>Slope %</th>
+                    <th>Причина</th>
+                </tr>
+            </thead>
+            <tbody>
+            @if (_filtered.Count == 0)
+            {
+                <tr><td colspan="8" class="vt-hint">Нет данных под фильтры</td></tr>
+            }
+            else
+            {
+                @foreach (var x in _filtered.Take(50))
+                {
+                    <tr>
+                        <td class="mono">@x.Time.ToLocalTime().ToString("dd.MM HH:mm")</td>
+                        <td><span class="sym">@x.Symbol</span></td>
+                        <td><span class="pill @RegimePill(x.Regime)">@ShortRegime(x.Regime)</span></td>
+                        <td class="mono">@x.Score</td>
+                        <td class="mono">@x.Confidence%</td>
+                        <td class="mono">@x.VolatilityPercent.ToString("0.00")</td>
+                        <td class="mono">@x.TrendSlopePercent.ToString("0.00")</td>
+                        <td><span class="reason">@x.Reason</span></td>
+                    </tr>
+                }
+            }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Symbols table -->
+<div class="vt-card" style="margin-top:14px;">
+    <div class="vt-card-title">Символы с наибольшим числом обучающих эпизодов</div>
+    <div class="vt-table-wrap">
+        <table class="vt-table">
+            <thead>
+                <tr>
+                    <th>Символ</th>
+                    <th>Эпизодов</th>
+                    <th>Avg Score</th>
+                    <th>Avg Conf</th>
+                    <th>Частый режим</th>
+                    <th>Частая причина</th>
+                </tr>
+            </thead>
+            <tbody>
+            @if (_symbolStats.Count == 0)
+            {
+                <tr><td colspan="6" class="vt-hint">Нет данных</td></tr>
+            }
+            else
+            {
+                @foreach (var s in _symbolStats.Take(20))
+                {
+                    <tr>
+                        <td><span class="sym">@s.Symbol</span></td>
+                        <td class="mono">@s.Count</td>
+                        <td class="mono">@s.AvgScore.ToString("0.0")</td>
+                        <td class="mono">@s.AvgConf.ToString("0.0")</td>
+                        <td><span class="pill @RegimePill(s.TopRegime)">@ShortRegime(s.TopRegime)</span></td>
+                        <td><span class="reason">@s.TopSmartType</span></td>
+                    </tr>
+                }
+            }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<style>
+.ai-filters { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+.ai-seg { display:inline-flex; background:var(--vt-bg); border:1px solid var(--vt-border); border-radius:8px; overflow:hidden; }
+.ai-seg-btn { background:transparent; border:0; color:var(--vt-text-muted); padding:6px 12px; font-size:12px; cursor:pointer; }
+.ai-seg-btn.active { background:var(--vt-bg-hover); color:var(--vt-text); font-weight:600; }
+.ai-filter-label { display:flex; align-items:center; gap:8px; color:var(--vt-text-muted); font-size:12px; }
+.ai-range { width:100px; accent-color:var(--vt-accent); }
+.ai-range-val { font-family:var(--vt-mono); min-width:24px; color:var(--vt-text); }
+.ai-select { width:140px; padding:6px 8px; font-size:12px; }
+.ai-legend { display:flex; flex-wrap:wrap; gap:14px; padding:8px 0 4px; font-size:11px; color:var(--vt-text-muted); }
+.ai-legend .lg { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:middle; }
+.lg-score { background:#1e90ff; }
+.lg-conf { background:#0ecb81; }
+.lg-slope { background:#9b59ff; }
+.lg-vol { background:#f0b90b; }
+.lg-liq { background:#f6465d; }
+.ai-chart-box { position:relative; min-height:280px; background:var(--vt-bg); border-radius:8px; border:1px solid var(--vt-border-soft); padding:8px; }
+.ai-chart-empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--vt-text-dim); pointer-events:none; }
+.ai-two-col { display:grid; grid-template-columns:1.4fr 1fr; gap:14px; margin-top:14px; }
+@media (max-width:1100px){ .ai-two-col { grid-template-columns:1fr; } }
+.mono { font-family:var(--vt-mono); font-size:12px; }
+.sym { font-weight:600; letter-spacing:.02em; }
+.reason { font-family:var(--vt-mono); font-size:11px; color:var(--vt-text-muted); }
+.pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; }
+.pill-up { background:var(--vt-green-dim); color:var(--vt-green); }
+.pill-down { background:var(--vt-red-dim); color:var(--vt-red); }
+.pill-flat { background:rgba(94,102,115,.25); color:var(--vt-text-muted); }
+.pill-chop { background:var(--vt-yellow-dim); color:var(--vt-yellow); }
+.ai-reason-list { display:flex; flex-direction:column; gap:12px; }
+.ai-reason-top { display:flex; justify-content:space-between; gap:8px; margin-bottom:4px; font-size:12px; }
+.ai-bar { height:6px; background:var(--vt-bg); border-radius:4px; overflow:hidden; }
+.ai-bar-fill { height:100%; background:linear-gradient(90deg, var(--vt-green), var(--vt-blue)); border-radius:4px; }
+.ai-help-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:200; }
+.ai-help-modal { position:fixed; z-index:210; top:50%; left:50%; transform:translate(-50%,-50%); width:min(720px,92vw); max-height:80vh; overflow:auto; background:var(--vt-bg-card); border:1px solid var(--vt-border); border-radius:12px; box-shadow:var(--vt-shadow); }
+.ai-help-head { display:flex; justify-content:space-between; align-items:center; padding:14px 16px; border-bottom:1px solid var(--vt-border); font-weight:600; }
+.ai-help-body { padding:16px; }
+.ai-help-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+@media (max-width:700px){ .ai-help-grid { grid-template-columns:1fr; } }
+.ai-help-tag { display:inline-block; padding:3px 8px; border-radius:6px; font-size:11px; font-weight:700; margin-bottom:6px; }
+.ai-help-body p { margin:0; color:var(--vt-text-muted); font-size:12.5px; line-height:1.5; }
+.ai-help-note { margin-top:16px; padding:10px 12px; background:var(--vt-yellow-dim); border-radius:8px; color:var(--vt-text); font-size:12.5px; }
+.score-good { color:var(--vt-green); }
+.score-mid { color:var(--vt-yellow); }
+.score-low { color:var(--vt-red); }
+</style>
 
 
 @code {
@@ -417,6 +484,7 @@
         // === Статистика причин/символов ===
         BuildReasonStats();
         BuildSymbolStats();
+        _needsChartUpdate = true;
 
         // === Точки для графика ===
         _chartPoints = _filtered
@@ -526,7 +594,58 @@
         public string TopSmartType { get; set; } = string.Empty;
     }
 
-    public async ValueTask DisposeAsync()
+    
+    private async Task RefreshNow()
+    {
+        var snap = await AiLearnService.GetAllAsync();
+        if (snap != null)
+        {
+            _snapshot = snap;
+            BuildFromSnapshot(snap);
+            ApplyFilters();
+        }
+    }
+
+    private void OnMinScoreInput(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var v))
+        {
+            _minScore = v;
+            ApplyFilters();
+        }
+    }
+
+    private string ScoreClass()
+    {
+        if (_filtered.Count == 0) return "";
+        var avg = _filtered.Average(x => x.Score);
+        if (avg >= 65) return "score-good";
+        if (avg >= 45) return "score-mid";
+        return "score-low";
+    }
+
+    private static string ShortRegime(string? r)
+    {
+        if (string.IsNullOrEmpty(r)) return "—";
+        return r
+            .Replace("StrongUpTrend", "↑ Strong")
+            .Replace("StrongDownTrend", "↓ Strong")
+            .Replace("UpTrend", "↑ Trend")
+            .Replace("DownTrend", "↓ Trend")
+            .Replace("VolatileChop", "⚡ Chop")
+            .Replace("Range", "↔ Range");
+    }
+
+    private static string RegimePill(string? r)
+    {
+        if (string.IsNullOrEmpty(r)) return "pill-flat";
+        if (r.Contains("Up", StringComparison.OrdinalIgnoreCase)) return "pill-up";
+        if (r.Contains("Down", StringComparison.OrdinalIgnoreCase)) return "pill-down";
+        if (r.Contains("Chop", StringComparison.OrdinalIgnoreCase) || r.Contains("Volatile", StringComparison.OrdinalIgnoreCase)) return "pill-chop";
+        return "pill-flat";
+    }
+
+public async ValueTask DisposeAsync()
     {
         if (_timer != null)
         {
