@@ -153,7 +153,15 @@ namespace VertexAutoTradeBinance8.Services
                 tp = signal.EntryPrice - (atr14 * 2); // Для продажи TP будет ниже
             }
 
-            // Логируем изменения SL и TP
+            // Записываем TP в сигнал (раньше только логировали → OrderExecutor видел tp=0)
+            signal.TakeProfit = tp;
+            if (signal.TakeProfits == null)
+                signal.TakeProfits = new List<decimal>();
+            if (signal.TakeProfits.Count == 0)
+                signal.TakeProfits.Add(tp);
+            else
+                signal.TakeProfits[0] = tp;
+
             _logger.LogInformation(
                 "AI-SL/TP Updated: Symbol={Symbol}, oldSL={Old:F4}, newSL={New:F4}, TP={Tp:F4}, atr={Atr:F4}, trend={Trend}, dynMult={Mult:F2}",
                 symbol, oldSl, newSl, tp, atr14, decision.Trend, dynMult);

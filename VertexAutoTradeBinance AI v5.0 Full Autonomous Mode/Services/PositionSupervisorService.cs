@@ -1219,8 +1219,28 @@ namespace VertexAutoTradeBinance8.Services
                 }
             }
 
+            // -2021 guard: не ставим SL, который сразу триггерится
+            if (mark > 0)
+            {
+                if (side == PositionSide.Long && s >= mark - tick)
+                {
+                    _logger.LogWarning("[SUPERVISOR] TRAIL SKIP {symbol}: SL {sl} too close/above mark {mark}", symbol, s, mark);
+                    return;
+                }
+                if (side == PositionSide.Short && s <= mark + tick)
+                {
+                    _logger.LogWarning("[SUPERVISOR] TRAIL SKIP {symbol}: SL {sl} too close/below mark {mark}", symbol, s, mark);
+                    return;
+                }
+            }
+
             // Algo orders cancel via CancelConditionalOrderAsync (algoId)
-            await client.UsdFuturesApi.Trading.CancelConditionalOrderAsync(orderId: slOrder.Id, ct: ct);
+            var cancelRes = await client.UsdFuturesApi.Trading.CancelConditionalOrderAsync(orderId: slOrder.Id, ct: ct);
+            if (!cancelRes.Success)
+            {
+                // fallback: maybe it was a regular order id
+                try { await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, slOrder.Id, ct: ct); } catch { }
+            }
 
             var res = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
                 symbol: symbol,
@@ -1236,6 +1256,21 @@ namespace VertexAutoTradeBinance8.Services
             if (!res.Success)
             {
                 _logger.LogError("[SUPERVISOR] ERROR update SL {symbol}: {err}", symbol, res.Error);
+                // если отменили старый SL и новый не встал — попробуем вернуть старый
+                try
+                {
+                    await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                        symbol: symbol,
+                        side: side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
+                        type: ConditionalOrderType.StopMarket,
+                        quantity: qty,
+                        triggerPrice: oldSl,
+                        positionSide: side,
+                        workingType: WorkingType.Mark,
+                        timeInForce: TimeInForce.GoodTillCanceled,
+                        ct: ct);
+                }
+                catch { }
                 return;
             }
 

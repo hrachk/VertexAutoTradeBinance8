@@ -5,7 +5,7 @@ namespace VertexAutoTradeBinance8.Web.Services;
 
 /// <summary>
 /// Reads/writes bot appsettings.json (Trading / SymbolSelection / Strategy / TakeProfit / TestMode).
-/// Path can be overridden via config key BotSettings:Path.
+/// Path: BotSettings:Path, else auto-discover common locations.
 /// </summary>
 public class TradingSettingsService
 {
@@ -21,15 +21,60 @@ public class TradingSettingsService
     public TradingSettingsService(ILogger<TradingSettingsService> logger, IConfiguration config)
     {
         _logger = logger;
-        _path = config["BotSettings:Path"]
-            ?? Path.GetFullPath(Path.Combine(
-                AppContext.BaseDirectory,
-                "..", "..", "..", "..",
-                "VertexAutoTradeBinance AI v5.0 Full Autonomous Mode",
-                "appsettings.json"));
+        var configured = config["BotSettings:Path"];
+        _path = ResolvePath(configured);
+        _logger.LogInformation("[SETTINGS] Using bot config path: {path} (exists={exists})", _path, File.Exists(_path));
     }
 
     public string PathUsed => _path;
+
+    private static string ResolvePath(string? configured)
+    {
+        if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
+            return configured!;
+
+        var candidates = new List<string>();
+
+        // Explicit config even if missing (user intent)
+        if (!string.IsNullOrWhiteSpace(configured))
+            candidates.Add(configured!);
+
+        // Shared folder (same as engine_state)
+        candidates.Add(@"C:\VertexShared\appsettings.json");
+        candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "VertexShared", "appsettings.json"));
+
+        // Next to published web / bot
+        var baseDir = AppContext.BaseDirectory;
+        candidates.Add(Path.Combine(baseDir, "appsettings.json"));
+        candidates.Add(Path.Combine(baseDir, "bot-appsettings.json"));
+
+        // Walk up from publish dir looking for AI v5.0 project
+        var dir = new DirectoryInfo(baseDir);
+        for (int i = 0; i < 8 && dir != null; i++, dir = dir.Parent)
+        {
+            candidates.Add(Path.Combine(dir.FullName,
+                "VertexAutoTradeBinance AI v5.0 Full Autonomous Mode", "appsettings.json"));
+            candidates.Add(Path.Combine(dir.FullName, "appsettings.json"));
+        }
+
+        // Common repo path for this user
+        candidates.Add(@"C:\Users\karap\source\repos\VertexAutoTradeBinance8\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\appsettings.json");
+
+        foreach (var c in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                if (File.Exists(c))
+                    return Path.GetFullPath(c);
+            }
+            catch { /* ignore */ }
+        }
+
+        // Default writable shared path (will show "not found" until user creates/copies)
+        var fallback = @"C:\VertexShared\appsettings.json";
+        return string.IsNullOrWhiteSpace(configured) ? fallback : configured!;
+    }
 
     public TradingSettingsDto Load()
     {
@@ -94,9 +139,7 @@ public class TradingSettingsService
 
             var test = root["TestMode"] as JsonObject;
             if (test != null)
-            {
                 dto.TestModeEnabled = test["Enabled"]?.GetValue<bool>() ?? false;
-            }
 
             var binance = root["Binance"] as JsonObject;
             if (binance != null)
@@ -118,16 +161,26 @@ public class TradingSettingsService
     {
         try
         {
-            if (!File.Exists(_path))
-                return (false, $"File not found: {_path}");
+            // Ensure directory exists for shared path
+            var dir = Path.GetDirectoryName(_path);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
 
-            var json = File.ReadAllText(_path);
-            var root = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions
+            JsonObject root;
+            if (File.Exists(_path))
             {
-                CommentHandling = JsonCommentHandling.Skip,
-                AllowTrailingCommas = true
-            }) as JsonObject;
-            if (root == null) return (false, "Invalid JSON");
+                var json = File.ReadAllText(_path);
+                root = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions
+                {
+                    CommentHandling = JsonCommentHandling.Skip,
+                    AllowTrailingCommas = true
+                }) as JsonObject ?? new JsonObject();
+            }
+            else
+            {
+                // Create minimal structure if missing
+                root = new JsonObject();
+            }
 
             var trading = root["Trading"] as JsonObject ?? new JsonObject();
             trading["RiskPerTrade"] = dto.RiskPerTrade;
@@ -169,17 +222,19 @@ public class TradingSettingsService
             test["Enabled"] = dto.TestModeEnabled;
             root["TestMode"] = test;
 
-            // backup
-            var bak = _path + $".bak.{DateTime.UtcNow:yyyyMMddHHmmss}";
-            File.Copy(_path, bak, overwrite: true);
+            if (File.Exists(_path))
+            {
+                var bak = _path + $".bak.{DateTime.UtcNow:yyyyMMddHHmmss}";
+                File.Copy(_path, bak, overwrite: true);
+            }
 
             File.WriteAllText(_path, root.ToJsonString(Opts));
-            return (true, $"Saved. Backup: {Path.GetFileName(bak)}. Restart bot to apply.");
+            return (true, $"Saved → {_path}. Restart bot worker to apply.");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Save settings failed");
-            return (false, ex.Message);
+            return (false, $"Save failed: {ex.Message} (path={_path})");
         }
     }
 
@@ -212,23 +267,19 @@ public class TradingSettingsDto
     public decimal BaseRiskPercent { get; set; } = 1.0m;
     public decimal MinNotional { get; set; } = 10m;
     public decimal MinNotionalGuard { get; set; } = 30m;
-
     public int TopVolumeCount { get; set; } = 25;
     public decimal Min24hVolume { get; set; } = 2_000_000m;
     public decimal MinPrice { get; set; } = 0.005m;
     public int RefreshIntervalMin { get; set; } = 5;
-
     public string StrategyMode { get; set; } = "Pullback";
     public string PullbackType { get; set; } = "CandleNearEma";
     public int EmaPeriod { get; set; } = 21;
     public decimal EmaZonePercent { get; set; } = 0.002m;
-
     public string TpMode { get; set; } = "MultiAtr";
     public int AtrPeriod { get; set; } = 14;
     public decimal Tp1Multiplier { get; set; } = 1.0m;
     public decimal Tp2Multiplier { get; set; } = 1.5m;
     public decimal Tp3Multiplier { get; set; } = 2.0m;
-
     public bool TestModeEnabled { get; set; }
     public string ApiKeyMasked { get; set; } = "••••";
     public bool IsTestNet { get; set; }

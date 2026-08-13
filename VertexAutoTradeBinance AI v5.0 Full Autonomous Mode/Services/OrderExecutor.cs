@@ -194,14 +194,21 @@ namespace VertexAutoTradeBinance8.Services
             // =====================================================================
             decimal atr = signal.Atr ?? 0;
             decimal sl = signal.StopLoss;
-            decimal tp = signal.TakeProfit ?? 0;
+            // TakeProfit (singular) часто null — стратегия кладёт TP в TakeProfits[]
+            decimal tp = signal.TakeProfit
+                ?? (signal.TakeProfits != null && signal.TakeProfits.Count > 0 ? signal.TakeProfits[0] : 0m);
 
-            if (atr > 0)
+            if (tp <= 0 && atr > 0)
             {
-                sl = Round(sl, tick);
-                if (tp > 0)
-                    tp = Round(tp, tick);
+                // fallback: 1.5 * ATR от entry, если стратегия/AI не дали TP
+                tp = signal.Side == SignalSide.Buy
+                    ? signal.EntryPrice + atr * 1.5m
+                    : signal.EntryPrice - atr * 1.5m;
             }
+
+            sl = Round(sl, tick);
+            if (tp > 0)
+                tp = Round(tp, tick);
 
             _logger.LogInformation(
                 "[ORDER][{symbol}] PROTECTION → SL={sl}, TP={tp}, qty={qty}",
