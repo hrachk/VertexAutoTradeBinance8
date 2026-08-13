@@ -55,14 +55,14 @@
 
     private void Load()
     {
-        var all = ExecutedUi.GetAll() ?? new List<ExecutedSignalRecord>();
+        var all = ExecutedUi.GetAll();
         total = all.Count;
         var closed = all.Where(x => x.PnL.HasValue).ToList();
         wins = closed.Count(x => x.PnL > 0);
         losses = closed.Count(x => x.PnL < 0);
         winrate = closed.Count == 0 ? 0 : (decimal)wins / closed.Count * 100m;
         pnl = closed.Sum(x => x.PnL ?? 0);
-        try { missed = MissedService.Load()?.Count ?? 0; } catch { missed = 0; }
+        try { missed = MissedService.Load().Count; } catch { missed = 0; }
 
         bySymbol = all.GroupBy(x => x.Symbol)
             .Select(g =>

@@ -1,4 +1,5 @@
 @page "/"
+@using VertexAutoTradeBinance8.Models
 @using VertexAutoTradeBinance8.Web.Models
 @using VertexAutoTradeBinance8.Web.Services
 @inject EngineStateService EngineService
@@ -186,8 +187,7 @@
 
         try
         {
-            var list = ExecutedUi.GetAll()?.OrderByDescending(x => x.Time).Take(8).ToList()
-                       ?? new List<ExecutedSignalRecord>();
+            var list = ExecutedUi.GetAll().OrderByDescending(x => x.Time).Take(8).ToList();
             recent = list.Select(x => new ExecutedSignalRow
             {
                 Time = x.Time,
@@ -201,7 +201,7 @@
         }
         catch { recent = new(); executedCount = 0; }
 
-        try { missedCount = MissedService.Load()?.Count ?? 0; } catch { missedCount = 0; }
+        try { missedCount = MissedService.Load().Count; } catch { missedCount = 0; }
 
         if (state == null)
         {
