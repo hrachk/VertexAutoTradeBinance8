@@ -1,0 +1,618 @@
+@page "/market"
+@using System.Net.Http.Json
+@using System.Globalization
+@using System.Text.Json.Serialization
+@using VertexAutoTradeBinance8.Web.Services
+@inject HttpClient Http
+@inject EngineStateService EngineService
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<div class="vt-page-title" style="margin-bottom:10px;">
+    <div>
+        <h1>Market</h1>
+        <p>Биржевой терминал · график · ручная торговля · сигналы-подсказки</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+        <span class="mk-badge-live">LIVE data</span>
+        <button class="vt-btn" @onclick="RefreshAllAsync">↻</button>
+    </div>
+</div>
+
+<div class="mk-shell">
+    <!-- LEFT: symbols + signals -->
+    <aside class="mk-left">
+        <div class="mk-search">
+            <input placeholder="Search symbol…" @bind="_search" @bind:event="oninput" />
+        </div>
+        <div class="mk-tabs-mini">
+            <button class="@(_listTab=="hot"?"active":"")" @onclick='() => _listTab="hot"'>🔥 Hot</button>
+            <button class="@(_listTab=="up"?"active":"")" @onclick='() => _listTab="up"'>Gainers</button>
+            <button class="@(_listTab=="dn"?"active":"")" @onclick='() => _listTab="dn"'>Losers</button>
+        </div>
+        <div class="mk-sym-list">
+            @foreach (var s in FilteredSymbols)
+            {
+                <div class="mk-sym @(s.Symbol==_symbol?"active":"")" @onclick="() => SelectSymbolAsync(s.Symbol)">
+                    <div>
+                        <div class="mk-sym-name">@s.Symbol</div>
+                    </div>
+                    <div>
+                        <div class="mk-sym-px">@FmtPx(s.Price)</div>
+                        <div class="mk-sym-chg @(s.ChangePct>=0?"mk-up":"mk-dn")">
+                            @(s.ChangePct >= 0 ? "+" : "")@s.ChangePct.ToString("0.0")%
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+        <div class="mk-signals">
+            <div class="mk-signals-title">
+                <span>Live signals · setup hints</span>
+                <span style="color:var(--vt-green)">@_signals.Count</span>
+            </div>
+            @if (_signals.Count == 0)
+            {
+                <div class="vt-hint" style="font-size:11px;">Нет активных подсказок. Soft/BASE сигналы появятся из engine.</div>
+            }
+            @foreach (var sig in _signals)
+            {
+                <div class="mk-sig" @onclick="() => ApplySignalHintAsync(sig)">
+                    <div class="mk-sig-top">
+                        <span class="@(sig.Side=="LONG"?"mk-sig-side-long":"mk-sig-side-short")">▲ @sig.Side</span>
+                        <span>@sig.Symbol</span>
+                    </div>
+                    <div class="mk-sig-meta">
+                        conf @sig.Confidence% · @sig.Reason
+                    </div>
+                    <div class="mk-sig-meta" style="margin-top:2px;">
+                        entry @FmtPx(sig.Entry) · SL @FmtPx(sig.Sl) · TP @FmtPx(sig.Tp)
+                    </div>
+                </div>
+            }
+        </div>
+    </aside>
+
+    <!-- CENTER: chart -->
+    <section class="mk-center">
+        <div class="mk-chart-bar">
+            <span class="mk-chart-sym">@_symbol</span>
+            <span class="mk-chart-px @(_changePct>=0?"mk-up":"mk-dn")">@FmtPx(_lastPrice)</span>
+            <span class="@(_changePct>=0?"mk-up":"mk-dn")" style="font-family:var(--vt-mono);font-size:12px;">
+                @(_changePct >= 0 ? "+" : "")@_changePct.ToString("0.00")%
+            </span>
+            <div class="mk-tf">
+                @foreach (var tf in _tfs)
+                {
+                    <button class="@(_interval==tf?"active":"")" @onclick="() => SetIntervalAsync(tf)">@tf</button>
+                }
+            </div>
+        </div>
+        <div class="mk-chart-host">
+            <div id="mkChart" style="width:100%;height:100%;min-height:300px;"></div>
+        </div>
+        <div class="mk-bal-row">
+            <div class="mk-bal-item">
+                <div class="l">Margin balance</div>
+                <div class="v">$@_balance.ToString("0.00")</div>
+            </div>
+            <div class="mk-bal-item">
+                <div class="l">Wallet</div>
+                <div class="v">$@_balance.ToString("0.00")</div>
+            </div>
+            <div class="mk-bal-item">
+                <div class="l">Unrealized</div>
+                <div class="v @(_unrealized>=0?"mk-up":"mk-dn")">@(_unrealized>=0?"+":"")@_unrealized.ToString("0.00")</div>
+            </div>
+            <div class="mk-bal-item">
+                <div class="l">Open positions</div>
+                <div class="v">@_demoPositions.Count</div>
+            </div>
+            <div class="mk-bal-item">
+                <div class="l">Regime</div>
+                <div class="v" style="font-size:11px;">@_regime</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- RIGHT: manual trade -->
+    <aside class="mk-right">
+        <div class="mk-panel">
+            <div class="mk-panel-title">
+                <span>Manual Trade · @_symbol</span>
+            </div>
+            <div class="mk-order-types">
+                <button class="@(_orderType=="Market"?"active":"")" @onclick='() => _orderType="Market"'>Market</button>
+                <button class="@(_orderType=="Limit"?"active":"")" @onclick='() => _orderType="Limit"'>Limit</button>
+                <button class="@(_orderType=="Stop"?"active":"")" @onclick='() => _orderType="Stop"'>Stop</button>
+            </div>
+
+            <div class="mk-field">
+                <label>Leverage · @_leverage× / 50× max</label>
+                <input type="range" min="1" max="50" @bind="_leverage" @bind:event="oninput" style="width:100%;accent-color:var(--vt-accent);" />
+                <div class="mk-lev-row">
+                    @foreach (var l in new[]{1,5,10,20,30,50})
+                    {
+                        <button class="@(_leverage==l?"active":"")" @onclick="() => _leverage=l">@l×</button>
+                    }
+                </div>
+            </div>
+
+            <div class="mk-field">
+                <label>Available · $@_balance.ToString("0.00") USDT</label>
+            </div>
+
+            <div class="mk-field">
+                <label>Quantity · ≈ @Notional.ToString("0.00") USDT</label>
+                <input type="number" step="any" @bind="_qty" />
+                <div class="mk-qty-pct">
+                    <button @onclick="() => SetQtyPct(0.25m)">25%</button>
+                    <button @onclick="() => SetQtyPct(0.50m)">50%</button>
+                    <button @onclick="() => SetQtyPct(0.75m)">75%</button>
+                    <button @onclick="() => SetQtyPct(1.00m)">100%</button>
+                </div>
+            </div>
+
+            @if (_orderType != "Market")
+            {
+                <div class="mk-field">
+                    <label>Price</label>
+                    <input type="number" step="any" @bind="_limitPrice" />
+                </div>
+            }
+
+            <div class="mk-field">
+                <label>Stop Loss (optional)</label>
+                <input type="number" step="any" @bind="_sl" placeholder="SL price" />
+            </div>
+            <div class="mk-field">
+                <label>Take Profit (optional)</label>
+                <input type="number" step="any" @bind="_tp" placeholder="TP price" />
+            </div>
+
+            <div class="mk-side-btns">
+                <button class="mk-buy" @onclick="() => PlaceDemoAsync(true)">Buy @(_orderType)</button>
+                <button class="mk-sell" @onclick="() => PlaceDemoAsync(false)">Sell @(_orderType)</button>
+            </div>
+
+            <div class="mk-hint-box">
+                <strong>Сигнал как подсказка сетапа</strong><br/>
+                Кликни Live signal слева — подставятся Entry / SL / TP на график и в форму.
+                Реальные ордера исполняет worker-бот (Algo SL/TP). Эта панель — управление и превью риска.
+                @if (!string.IsNullOrEmpty(_actionMsg))
+                {
+                    <div style="margin-top:8px;color:var(--vt-accent);">@_actionMsg</div>
+                }
+            </div>
+        </div>
+
+        @if (_selectedPos != null)
+        {
+            <div class="mk-pos-card">
+                <div class="mk-panel-title" style="margin-bottom:8px;">
+                    <span>Открытая позиция</span>
+                    <span class="mk-sig-side-long">▲ @_selectedPos.Side @_selectedPos.Lev×</span>
+                </div>
+                <div class="row"><span class="vt-hint">Entry</span><span class="mono">@FmtPx(_selectedPos.Entry)</span></div>
+                <div class="row"><span class="vt-hint">Mark</span><span class="mono">@FmtPx(_lastPrice)</span></div>
+                <div class="row"><span class="vt-hint">Size</span><span class="mono">@_selectedPos.Size.ToString("0.####")</span></div>
+                <div class="row"><span class="vt-hint">Margin</span><span class="mono">$@_selectedPos.Margin.ToString("0.00")</span></div>
+                <div class="row">
+                    <span class="vt-hint">PnL</span>
+                    <span class="mono @(_selectedPos.Pnl>=0?"mk-up":"mk-dn")">
+                        @(_selectedPos.Pnl>=0?"+":"")@_selectedPos.Pnl.ToString("0.00") (@_selectedPos.Roi.ToString("+0.0;-0.0")%)
+                    </span>
+                </div>
+                <button class="mk-close-btn" @onclick="() => ClosePos(_selectedPos)">× Close Position</button>
+            </div>
+        }
+    </aside>
+
+    <!-- BOTTOM: positions / orders -->
+    <div class="mk-bottom">
+        <div class="mk-bottom-tabs">
+            <button class="@(_bottomTab=="pos"?"active":"")" @onclick='() => _bottomTab="pos"'>Positions @_demoPositions.Count</button>
+            <button class="@(_bottomTab=="ord"?"active":"")" @onclick='() => _bottomTab="ord"'>Orders</button>
+            <button class="@(_bottomTab=="hist"?"active":"")" @onclick='() => _bottomTab="hist"'>History</button>
+            <span style="margin-left:auto;padding-right:10px;" class="mk-badge-live">LIVE</span>
+        </div>
+        <div class="mk-bottom-body">
+            @if (_bottomTab == "pos")
+            {
+                <table class="vt-table">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th><th>Side</th><th>Lev</th><th>Entry</th><th>Mark</th>
+                            <th>Size</th><th>Margin</th><th>PnL</th><th>ROI</th><th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @if (_demoPositions.Count == 0)
+                    {
+                        <tr><td colspan="10" class="vt-hint">Нет позиций. Buy/Sell создаст локальный preview (worker закрывает реальные).</td></tr>
+                    }
+                    @foreach (var p in _demoPositions)
+                    {
+                        <tr class="@(p.Symbol==_symbol?"active":"")" style="cursor:pointer;" @onclick="() => SelectPos(p)">
+                            <td><span class="sym">@p.Symbol</span></td>
+                            <td class="@(p.Side=="LONG"?"mk-up":"mk-dn")">@p.Side</td>
+                            <td class="mono">@p.Lev×</td>
+                            <td class="mono">@FmtPx(p.Entry)</td>
+                            <td class="mono">@FmtPx(p.Symbol==_symbol?_lastPrice:p.Mark)</td>
+                            <td class="mono">@p.Size.ToString("0.####")</td>
+                            <td class="mono">$@p.Margin.ToString("0.00")</td>
+                            <td class="mono @(p.Pnl>=0?"mk-up":"mk-dn")">@p.Pnl.ToString("+0.00;-0.00")</td>
+                            <td class="mono @(p.Roi>=0?"mk-up":"mk-dn")">@p.Roi.ToString("+0.0;-0.0")%</td>
+                            <td>
+                                <div class="mk-pos-actions">
+                                    <button @onclick:stopPropagation="true" @onclick="() => ApplyTpSlFromPos(p)">TP/SL</button>
+                                    <button class="danger" @onclick:stopPropagation="true" @onclick="() => ClosePos(p)">Close</button>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            }
+            else if (_bottomTab == "ord")
+            {
+                <div class="vt-hint" style="padding:16px;">Открытые ордера worker’а (algo SL/TP) — смотри вкладку Open Orders / логи SUPERVISOR.</div>
+            }
+            else
+            {
+                <div class="vt-hint" style="padding:16px;">История — Executed signals / Reports.</div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private string _symbol = "BTCUSDT";
+    private string _interval = "15m";
+    private readonly string[] _tfs = { "1m","3m","5m","15m","30m","1h","4h","1d" };
+    private string _search = "";
+    private string _listTab = "hot";
+    private string _orderType = "Market";
+    private string _bottomTab = "pos";
+    private int _leverage = 10;
+    private decimal _qty = 0.01m;
+    private decimal _limitPrice;
+    private decimal _sl;
+    private decimal _tp;
+    private decimal _lastPrice;
+    private decimal _changePct;
+    private decimal _balance = 35m;
+    private decimal _unrealized;
+    private string _regime = "—";
+    private string _actionMsg = "";
+    private bool _chartReady;
+    private List<SymRow> _symbols = new();
+    private List<SignalHint> _signals = new();
+    private List<PosRow> _demoPositions = new();
+    private PosRow? _selectedPos;
+    private PeriodicTimer? _timer;
+    private CancellationTokenSource? _cts;
+
+    private IEnumerable<SymRow> FilteredSymbols
+    {
+        get
+        {
+            IEnumerable<SymRow> q = _symbols;
+            if (!string.IsNullOrWhiteSpace(_search))
+                q = q.Where(s => s.Symbol.Contains(_search, StringComparison.OrdinalIgnoreCase));
+            q = _listTab switch
+            {
+                "up" => q.OrderByDescending(s => s.ChangePct),
+                "dn" => q.OrderBy(s => s.ChangePct),
+                _ => q.OrderByDescending(s => Math.Abs(s.ChangePct))
+            };
+            return q.Take(40);
+        }
+    }
+
+    private decimal Notional => _qty * (_lastPrice > 0 ? _lastPrice : 1);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var st = EngineService.Load();
+        if (st != null)
+        {
+            _balance = st.BalanceUsdt > 0 ? st.BalanceUsdt : _balance;
+            _regime = $"{st.SmartRegime}";
+            if (!string.IsNullOrWhiteSpace(st.Symbol))
+                _symbol = st.Symbol;
+            SeedSignalFromEngine(st);
+        }
+        await LoadSymbolsAsync();
+        _cts = new CancellationTokenSource();
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(12));
+        _ = LoopAsync(_cts.Token);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("VertexMarketChart.init", "mkChart");
+                _chartReady = true;
+                await LoadKlinesAsync();
+            }
+            catch (Exception ex)
+            {
+                _actionMsg = "Chart init: " + ex.Message;
+            }
+        }
+    }
+
+    private async Task LoopAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (_timer != null && await _timer.WaitForNextTickAsync(ct))
+            {
+                await InvokeAsync(async () =>
+                {
+                    await LoadTickerAsync();
+                    RecalcUnrealized();
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task RefreshAllAsync()
+    {
+        await LoadSymbolsAsync();
+        await LoadKlinesAsync();
+        await LoadTickerAsync();
+    }
+
+    private async Task LoadSymbolsAsync()
+    {
+        try
+        {
+            var list = await Http.GetFromJsonAsync<List<SymRow>>("api/market/symbols");
+            if (list != null && list.Count > 0)
+                _symbols = list;
+        }
+        catch
+        {
+            if (_symbols.Count == 0)
+                _symbols = new List<SymRow> {
+                    new() { Symbol = "BTCUSDT", Price = 0 },
+                    new() { Symbol = "ETHUSDT", Price = 0 },
+                    new() { Symbol = "SKHYUSDT", Price = 0 },
+                };
+        }
+    }
+
+    private async Task LoadTickerAsync()
+    {
+        try
+        {
+            var t = await Http.GetFromJsonAsync<SymRow>($"api/market/ticker?symbol={_symbol}");
+            if (t != null)
+            {
+                _lastPrice = t.Price;
+                _changePct = t.ChangePct;
+                if (_limitPrice <= 0) _limitPrice = t.Price;
+            }
+        }
+        catch { }
+    }
+
+    private async Task LoadKlinesAsync()
+    {
+        if (!_chartReady) return;
+        try
+        {
+            var candles = await Http.GetFromJsonAsync<List<CandleDto>>(
+                $"api/market/klines?symbol={_symbol}&interval={_interval}&limit=200");
+            if (candles == null || candles.Count == 0) return;
+            await JS.InvokeVoidAsync("VertexMarketChart.setData", candles);
+            if (_lastPrice <= 0 && candles.Count > 0)
+                _lastPrice = candles[^1].Close;
+            await JS.InvokeVoidAsync("VertexMarketChart.setLevels",
+                _selectedPos?.Entry ?? 0m, _sl, _tp);
+        }
+        catch (Exception ex)
+        {
+            _actionMsg = "Klines: " + ex.Message;
+        }
+    }
+
+    private async Task SelectSymbolAsync(string sym)
+    {
+        _symbol = sym;
+        _sl = 0; _tp = 0;
+        _selectedPos = _demoPositions.FirstOrDefault(p => p.Symbol == sym);
+        await LoadTickerAsync();
+        await LoadKlinesAsync();
+        SetQtyPct(0.25m);
+    }
+
+    private async Task SetIntervalAsync(string tf)
+    {
+        _interval = tf;
+        await LoadKlinesAsync();
+    }
+
+    private void SetQtyPct(decimal pct)
+    {
+        if (_lastPrice <= 0 || _leverage <= 0) return;
+        var maxNotional = _balance * _leverage * 0.95m;
+        var ntn = maxNotional * pct;
+        _qty = Math.Round(ntn / _lastPrice, 4, MidpointRounding.ToZero);
+        if (_qty <= 0) _qty = 0.001m;
+    }
+
+    private async Task ApplySignalHintAsync(SignalHint sig)
+    {
+        _symbol = sig.Symbol;
+        _sl = sig.Sl;
+        _tp = sig.Tp;
+        _limitPrice = sig.Entry;
+        if (sig.Entry > 0 && _balance > 0)
+            SetQtyPct(0.25m);
+        _actionMsg = $"Setup: {sig.Side} {sig.Symbol} · conf {sig.Confidence}% · {sig.Reason}";
+        await LoadTickerAsync();
+        await LoadKlinesAsync();
+        try
+        {
+            await JS.InvokeVoidAsync("VertexMarketChart.setLevels", sig.Entry, sig.Sl, sig.Tp);
+            var markers = new[]
+            {
+                new { time = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), position = "belowBar", color = "#0ecb81", shape = "arrowUp", text = "Entry" }
+            };
+            // markers need candle times — skip if mismatch
+        }
+        catch { }
+    }
+
+    private void SeedSignalFromEngine(Models.EngineStateModel st)
+    {
+        if (string.IsNullOrWhiteSpace(st.Symbol)) return;
+        _signals = new List<SignalHint>
+        {
+            new()
+            {
+                Symbol = st.Symbol,
+                Side = (st.SmartRegime ?? "").Contains("Down", StringComparison.OrdinalIgnoreCase) ? "SHORT" : "LONG",
+                Confidence = st.Confidence,
+                Reason = st.SmartRegime ?? "ENGINE",
+                Entry = 0,
+                // levels filled when user opens chart prices
+            }
+        };
+    }
+
+    private async Task PlaceDemoAsync(bool buy)
+    {
+        if (_lastPrice <= 0 || _qty <= 0)
+        {
+            _actionMsg = "Нет цены или qty";
+            return;
+        }
+        var entry = _orderType == "Market" ? _lastPrice : (_limitPrice > 0 ? _limitPrice : _lastPrice);
+        var margin = (_qty * entry) / Math.Max(1, _leverage);
+        if (margin > _balance * 1.01m)
+        {
+            _actionMsg = $"Недостаточно маржи: нужно ~${margin:0.00}, available ${_balance:0.00}";
+            return;
+        }
+        var pos = new PosRow
+        {
+            Symbol = _symbol,
+            Side = buy ? "LONG" : "SHORT",
+            Lev = _leverage,
+            Entry = entry,
+            Mark = _lastPrice,
+            Size = _qty,
+            Margin = margin,
+            Sl = _sl,
+            Tp = _tp
+        };
+        RecalcPos(pos);
+        _demoPositions.RemoveAll(p => p.Symbol == _symbol && p.Side == pos.Side);
+        _demoPositions.Insert(0, pos);
+        _selectedPos = pos;
+        _balance = Math.Max(0, _balance); // preview only — real balance from engine
+        _actionMsg = $"Preview {(buy ? "LONG" : "SHORT")} {_qty} {_symbol} @ {FmtPx(entry)} · SL={FmtPx(_sl)} TP={FmtPx(_tp)}. Реальный вход — через worker AutoTrade.";
+        try { await JS.InvokeVoidAsync("VertexMarketChart.setLevels", entry, _sl, _tp); } catch { }
+    }
+
+    private void SelectPos(PosRow p)
+    {
+        _selectedPos = p;
+        _ = SelectSymbolAsync(p.Symbol);
+    }
+
+    private void ApplyTpSlFromPos(PosRow p)
+    {
+        _sl = p.Sl; _tp = p.Tp;
+        _actionMsg = $"TP/SL подставлены: SL={FmtPx(_sl)} TP={FmtPx(_tp)}";
+        _ = JS.InvokeVoidAsync("VertexMarketChart.setLevels", p.Entry, p.Sl, p.Tp);
+    }
+
+    private void ClosePos(PosRow p)
+    {
+        _demoPositions.Remove(p);
+        if (_selectedPos == p) _selectedPos = null;
+        _actionMsg = $"Preview close {p.Symbol}. На бирже — Close через worker / Binance.";
+    }
+
+    private void RecalcUnrealized()
+    {
+        foreach (var p in _demoPositions)
+        {
+            if (p.Symbol == _symbol) p.Mark = _lastPrice;
+            RecalcPos(p);
+        }
+        _unrealized = _demoPositions.Sum(p => p.Pnl);
+    }
+
+    private static void RecalcPos(PosRow p)
+    {
+        var dir = p.Side == "LONG" ? 1m : -1m;
+        p.Pnl = dir * (p.Mark - p.Entry) * p.Size;
+        p.Roi = p.Margin > 0 ? p.Pnl / p.Margin * 100m : 0;
+    }
+
+    private static string FmtPx(decimal v)
+    {
+        if (v <= 0) return "—";
+        if (v >= 1000) return v.ToString("0.00", CultureInfo.InvariantCulture);
+        if (v >= 1) return v.ToString("0.####", CultureInfo.InvariantCulture);
+        return v.ToString("0.########", CultureInfo.InvariantCulture);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _cts?.Cancel();
+        _timer?.Dispose();
+        await Task.CompletedTask;
+    }
+
+    private sealed class SymRow
+    {
+        [JsonPropertyName("symbol")] public string Symbol { get; set; } = "";
+        [JsonPropertyName("price")] public decimal Price { get; set; }
+        [JsonPropertyName("changePct")] public decimal ChangePct { get; set; }
+    }
+    private sealed class CandleDto
+    {
+        [JsonPropertyName("time")] public long Time { get; set; }
+        [JsonPropertyName("open")] public decimal Open { get; set; }
+        [JsonPropertyName("high")] public decimal High { get; set; }
+        [JsonPropertyName("low")] public decimal Low { get; set; }
+        [JsonPropertyName("close")] public decimal Close { get; set; }
+        [JsonPropertyName("volume")] public decimal Volume { get; set; }
+    }
+    private sealed class SignalHint
+    {
+        public string Symbol { get; set; } = "";
+        public string Side { get; set; } = "LONG";
+        public int Confidence { get; set; }
+        public string Reason { get; set; } = "";
+        public decimal Entry { get; set; }
+        public decimal Sl { get; set; }
+        public decimal Tp { get; set; }
+    }
+    private sealed class PosRow
+    {
+        public string Symbol { get; set; } = "";
+        public string Side { get; set; } = "LONG";
+        public int Lev { get; set; }
+        public decimal Entry { get; set; }
+        public decimal Mark { get; set; }
+        public decimal Size { get; set; }
+        public decimal Margin { get; set; }
+        public decimal Pnl { get; set; }
+        public decimal Roi { get; set; }
+        public decimal Sl { get; set; }
+        public decimal Tp { get; set; }
+    }
+}

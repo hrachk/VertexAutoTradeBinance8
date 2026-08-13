@@ -7,6 +7,14 @@ using VertexAutoTradeBinance8.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddHttpClient("binance", c =>
+{
+    c.BaseAddress = new Uri("https://fapi.binance.com");
+    c.Timeout = TimeSpan.FromSeconds(15);
+});
+builder.Services.AddHttpClient(); // default for Blazor HttpClient if needed
+
+
 // ===============================
 // Конфиги (правильная версия)
 // ===============================
@@ -71,6 +79,11 @@ builder.Services.AddControllers();
 // Blazor Server
 
 builder.Services.AddHttpClient();
+builder.Services.AddScoped(sp =>
+{
+    var nav = sp.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>();
+    return new HttpClient { BaseAddress = new Uri(nav.BaseUri) };
+});
 builder.Services.AddSignalR();
 
 
