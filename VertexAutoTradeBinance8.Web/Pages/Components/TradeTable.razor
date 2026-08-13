@@ -18,20 +18,20 @@ else
             </tr>
         </thead>
         <tbody>
-            @foreach (var t in Trades.OrderByDescending(t => t.Time).Take(40))
+            @foreach (var tr in Trades.OrderByDescending(x => x.Time).Take(40))
             {
                 <tr>
-                    <td class="mono">@t.Time.ToLocalTime().ToString("dd.MM HH:mm")</td>
-                    <td><span class="sym">@t.Symbol</span></td>
+                    <td class="mono">@tr.Time.ToLocalTime().ToString("dd.MM HH:mm")</td>
+                    <td><span class="sym">@tr.Symbol</span></td>
                     <td>
-                        <span class="pill @(t.Side?.ToString().Contains("Buy", StringComparison.OrdinalIgnoreCase)==true || t.Side?.ToString().Contains("Long", StringComparison.OrdinalIgnoreCase)==true ? "pill-up" : "pill-down")">
-                            @t.Side
+                        <span class="pill @(IsBuy(tr.Side) ? "pill-up" : "pill-down")">
+                            @tr.Side
                         </span>
                     </td>
-                    <td class="mono">@FormatPx(t.Entry)</td>
-                    <td class="mono">@FormatPx(t.Exit)</td>
-                    <td class="mono @(t.Pnl >= 0 ? "score-good" : "score-low")">@t.Pnl.ToString("+0.00;-0.00")%</td>
-                    <td><span class="reason">@t.Regime</span></td>
+                    <td class="mono">@FormatPx(tr.Entry)</td>
+                    <td class="mono">@FormatPx(tr.Exit)</td>
+                    <td class="mono @(tr.Pnl >= 0 ? "score-good" : "score-low")">@tr.Pnl.ToString("+0.00;-0.00")%</td>
+                    <td><span class="reason">@tr.Regime</span></td>
                 </tr>
             }
         </tbody>
@@ -44,7 +44,14 @@ else
     private static string FormatPx(decimal v)
     {
         if (v >= 1000) return v.ToString("0.00");
-        if (v >= 1) return v.ToString("0..####");
+        if (v >= 1) return v.ToString("0.####");
         return v.ToString("0.########");
+    }
+
+    private static bool IsBuy(object side)
+    {
+        var s = side?.ToString() ?? "";
+        return s.Contains("Buy", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("Long", StringComparison.OrdinalIgnoreCase);
     }
 }
