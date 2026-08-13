@@ -448,8 +448,21 @@
         if (_lastPrice <= 0 || _leverage <= 0) return;
         var free = _available > 0 ? _available : 35m;
         var maxNotional = free * _leverage * 0.95m;
-        _qty = Math.Round((maxNotional * pct) / _lastPrice, 4, MidpointRounding.ToZero);
-        if (_qty <= 0) _qty = 0.001m;
+        var raw = (maxNotional * pct) / _lastPrice;
+        // precision by price tier (cheap alts need more decimals)
+        int dec = _lastPrice >= 1000 ? 3 : _lastPrice >= 1 ? 4 : _lastPrice >= 0.01m ? 0 : 0;
+        if (_lastPrice >= 1000) dec = 3;
+        else if (_lastPrice >= 10) dec = 3;
+        else if (_lastPrice >= 1) dec = 4;
+        else if (_lastPrice >= 0.1m) dec = 2;
+        else if (_lastPrice >= 0.01m) dec = 0;
+        else dec = 0; // for ~0.006 coins step is often whole coins
+        // use more sensible rounding for micro prices: keep integer size when huge
+        if (raw >= 1000) _qty = Math.Floor(raw);
+        else if (raw >= 10) _qty = Math.Round(raw, 2, MidpointRounding.ToZero);
+        else if (_lastPrice < 0.01m) _qty = Math.Floor(raw); // AKE-style
+        else _qty = Math.Round(raw, Math.Max(dec, 4), MidpointRounding.ToZero);
+        if (_qty <= 0) _qty = _lastPrice < 0.01m ? 1 : 0.001m;
     }
 
     private async Task ApplySignalHintAsync(SignalHint sig)
