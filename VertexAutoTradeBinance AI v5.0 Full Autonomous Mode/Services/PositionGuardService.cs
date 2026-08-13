@@ -91,7 +91,7 @@ public class PositionGuardService
             _logger.LogInformation(
                 "[GUARD][{symbol}] Block: open side={pos} signal side={want}",
                 symbol, posSide > 0 ? "LONG" : "SHORT", want > 0 ? "LONG" : "SHORT");
-            return EntryDecision.Block("OppositeSideOpen");
+            return EntryDecision.Denied("OppositeSideOpen");
         }
 
         int count = _entryCount.GetOrAdd(symbol, 1); // уже есть поза → минимум 1 вход был
@@ -108,7 +108,7 @@ public class PositionGuardService
             _logger.LogInformation(
                 "[GUARD][{symbol}] Block: max entries {max} reached (count={c})",
                 symbol, _maxEntries, count);
-            return EntryDecision.Block($"MaxEntries:{count}/{_maxEntries}");
+            return EntryDecision.Denied($"MaxEntries:{count}/{_maxEntries}");
         }
 
         // Добор разрешён (2-й вход). Чуть больше объём, если super — ещё чуть.
@@ -169,5 +169,5 @@ public sealed class EntryDecision
 
     public static EntryDecision AllowNew() => new() { Block = false, IsAdd = false, QtyMultiplier = 1m, Reason = "New" };
     public static EntryDecision AllowAdd(decimal mult) => new() { Block = false, IsAdd = true, QtyMultiplier = mult, Reason = "Add" };
-    public static EntryDecision Block(string reason) => new() { Block = true, IsAdd = false, QtyMultiplier = 0m, Reason = reason };
+    public static EntryDecision Denied(string reason) => new() { Block = true, IsAdd = false, QtyMultiplier = 0m, Reason = reason };
 }
