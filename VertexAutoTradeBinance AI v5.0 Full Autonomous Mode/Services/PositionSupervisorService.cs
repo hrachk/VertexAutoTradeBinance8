@@ -22,8 +22,9 @@ namespace VertexAutoTradeBinance8.Services
     /// - Безопасная защита от -2021 (order would immediately trigger)
     /// - Manual + AI позиции (через ManualPositionHandler)
     /// - QUANT-LEARN: фикс закрытий
-    /// - ВАЖНО: все SL/TP через STOP_MARKET / TAKE_PROFIT_MARKET
-    ///          (никаких STOP/TAKE_PROFIT, чтобы не ловить -4120 "use Algo API")
+    /// - ВАЖНО: все SL/TP через PlaceConditionalOrderAsync (Algo Order API /fapi/v1/algoOrder)
+    ///          Обычный PlaceOrderAsync для STOP*/TAKE_PROFIT* → -4120 с 2025-12-09
+    ///          В hedge mode не слать reduceOnly вместе с positionSide (-1106)
     /// </summary>
     public class PositionSupervisorService
     {
@@ -87,10 +88,19 @@ namespace VertexAutoTradeBinance8.Services
         {
             var sideClose = pos.PositionSide == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
 
+            // Обычные ордера + Algo (conditional) — после миграции Binance SL только в algo
             var orders = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol);
             bool hasSL = orders.Success && orders.Data.Any(o =>
                 o.Side == sideClose &&
                 (o.Type == FuturesOrderType.StopMarket || o.Type == FuturesOrderType.Stop));
+
+            if (!hasSL)
+            {
+                var algo = await client.UsdFuturesApi.Trading.GetOpenConditionalOrdersAsync(symbol: symbol);
+                hasSL = algo.Success && algo.Data != null && algo.Data.Any(o =>
+                    o.Side == sideClose &&
+                    (o.Type == FuturesOrderType.StopMarket || o.Type == FuturesOrderType.Stop));
+            }
 
             if (hasSL)
                 return true;
@@ -103,13 +113,13 @@ namespace VertexAutoTradeBinance8.Services
 
             try
             {
-                // ВАЖНО: STOP_MARKET, БЕЗ reduceOnly, БЕЗ price (чистый stopPrice)
-                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                // Algo Order API (обязательно с 2025-12-09). Без reduceOnly при positionSide (hedge).
+                var res = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
                     symbol: symbol,
                     side: sideClose,
-                    type: FuturesOrderType.StopMarket,
+                    type: ConditionalOrderType.StopMarket,
                     quantity: Math.Abs(pos.Quantity),
-                    stopPrice: sl,
+                    triggerPrice: sl,
                     positionSide: pos.PositionSide,
                     workingType: WorkingType.Mark,
                     timeInForce: TimeInForce.GoodTillCanceled);
@@ -145,6 +155,14 @@ namespace VertexAutoTradeBinance8.Services
                 o.Side == sideClose &&
                 (o.Type == FuturesOrderType.TakeProfitMarket || o.Type == FuturesOrderType.TakeProfit));
 
+            if (!hasTP)
+            {
+                var algo = await client.UsdFuturesApi.Trading.GetOpenConditionalOrdersAsync(symbol: symbol);
+                hasTP = algo.Success && algo.Data != null && algo.Data.Any(o =>
+                    o.Side == sideClose &&
+                    (o.Type == FuturesOrderType.TakeProfitMarket || o.Type == FuturesOrderType.TakeProfit));
+            }
+
             if (hasTP)
                 return true;
 
@@ -156,13 +174,13 @@ namespace VertexAutoTradeBinance8.Services
 
             try
             {
-                // ВАЖНО: TAKE_PROFIT_MARKET, без reduceOnly / price
-                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                // Algo Order API
+                var res = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
                     symbol: symbol,
                     side: sideClose,
-                    type: FuturesOrderType.TakeProfitMarket,
+                    type: ConditionalOrderType.TakeProfitMarket,
                     quantity: Math.Abs(pos.Quantity),
-                    stopPrice: tp,
+                    triggerPrice: tp,
                     positionSide: pos.PositionSide,
                     workingType: WorkingType.Mark,
                     timeInForce: TimeInForce.GoodTillCanceled);
@@ -382,6 +400,55 @@ namespace VertexAutoTradeBinance8.Services
                     (o.Type == FuturesOrderType.Limit && o.ReduceOnly == true)
                 ));
 
+            // Algo conditional orders (обязательны после -4120 миграции)
+            if (sl == null || tp == null)
+            {
+                var algoRes = await client.UsdFuturesApi.Trading.GetOpenConditionalOrdersAsync(symbol: symbol, ct: ct);
+                if (algoRes.Success && algoRes.Data != null)
+                {
+                    if (sl == null)
+                    {
+                        var a = algoRes.Data.FirstOrDefault(o =>
+                            o.Side == closeSide &&
+                            (o.Type == FuturesOrderType.StopMarket || o.Type == FuturesOrderType.Stop) &&
+                            (o.PositionSide == side || o.PositionSide == PositionSide.Both));
+                        if (a != null)
+                        {
+                            sl = new BinanceUsdFuturesOrder
+                            {
+                                Id = a.Id,
+                                Side = a.Side,
+                                Type = a.Type,
+                                StopPrice = a.TriggerPrice,
+                                Price = a.Price,
+                                Quantity = a.Quantity,
+                                PositionSide = a.PositionSide
+                            };
+                        }
+                    }
+                    if (tp == null)
+                    {
+                        var a = algoRes.Data.FirstOrDefault(o =>
+                            o.Side == closeSide &&
+                            (o.Type == FuturesOrderType.TakeProfitMarket || o.Type == FuturesOrderType.TakeProfit) &&
+                            (o.PositionSide == side || o.PositionSide == PositionSide.Both));
+                        if (a != null)
+                        {
+                            tp = new BinanceUsdFuturesOrder
+                            {
+                                Id = a.Id,
+                                Side = a.Side,
+                                Type = a.Type,
+                                StopPrice = a.TriggerPrice,
+                                Price = a.Price,
+                                Quantity = a.Quantity,
+                                PositionSide = a.PositionSide
+                            };
+                        }
+                    }
+                }
+            }
+
             decimal entry = pos.EntryPrice;
             if (entry <= 0 && signal != null && signal.Symbol == symbol)
                 entry = signal.EntryPrice;
@@ -477,12 +544,12 @@ namespace VertexAutoTradeBinance8.Services
 
             try
             {
-                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol,
-                    side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
-                    FuturesOrderType.StopMarket,
-                    qty,
-                    stopPrice: sl,
+                var res = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                    symbol: symbol,
+                    side: side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
+                    type: ConditionalOrderType.StopMarket,
+                    quantity: qty,
+                    triggerPrice: sl,
                     positionSide: side,
                     workingType: WorkingType.Mark,
                     timeInForce: TimeInForce.GoodTillCanceled,
@@ -560,12 +627,12 @@ namespace VertexAutoTradeBinance8.Services
 
             try
             {
-                var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol,
-                    side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
-                    FuturesOrderType.TakeProfitMarket,
-                    qty,
-                    stopPrice: trigger,
+                var res = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                    symbol: symbol,
+                    side: side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
+                    type: ConditionalOrderType.TakeProfitMarket,
+                    quantity: qty,
+                    triggerPrice: trigger,
                     positionSide: side,
                     workingType: WorkingType.Mark,
                     timeInForce: TimeInForce.GoodTillCanceled,
@@ -822,6 +889,32 @@ namespace VertexAutoTradeBinance8.Services
             var slOrder = orders.FirstOrDefault(o =>
                 o.Side == closeSide &&
                 (o.Type == FuturesOrderType.StopMarket || o.Type == FuturesOrderType.Stop));
+
+            // После миграции Binance SL живёт в Algo Orders — подтягиваем, если нет в обычных
+            if (slOrder == null)
+            {
+                var algoRes = await client.UsdFuturesApi.Trading.GetOpenConditionalOrdersAsync(symbol: symbol, ct: ct);
+                if (algoRes.Success && algoRes.Data != null)
+                {
+                    var algoSl = algoRes.Data.FirstOrDefault(o =>
+                        o.Side == closeSide &&
+                        (o.Type == FuturesOrderType.StopMarket || o.Type == FuturesOrderType.Stop));
+                    if (algoSl != null)
+                    {
+                        // Синтетический ордер для UpdateSLAsync (Id = algoId, StopPrice = trigger)
+                        slOrder = new BinanceUsdFuturesOrder
+                        {
+                            Id = algoSl.Id,
+                            Side = algoSl.Side,
+                            Type = algoSl.Type,
+                            StopPrice = algoSl.TriggerPrice,
+                            Price = algoSl.Price,
+                            Quantity = algoSl.Quantity,
+                            PositionSide = algoSl.PositionSide
+                        };
+                    }
+                }
+            }
 
             if (slOrder == null)
             {
@@ -1126,14 +1219,15 @@ namespace VertexAutoTradeBinance8.Services
                 }
             }
 
-            await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, slOrder.Id, ct: ct);
+            // Algo orders cancel via CancelConditionalOrderAsync (algoId)
+            await client.UsdFuturesApi.Trading.CancelConditionalOrderAsync(orderId: slOrder.Id, ct: ct);
 
-            var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol,
-                side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
-                FuturesOrderType.StopMarket,
-                qty,
-                stopPrice: s,
+            var res = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                symbol: symbol,
+                side: side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
+                type: ConditionalOrderType.StopMarket,
+                quantity: qty,
+                triggerPrice: s,
                 positionSide: side,
                 workingType: WorkingType.Mark,
                 timeInForce: TimeInForce.GoodTillCanceled,

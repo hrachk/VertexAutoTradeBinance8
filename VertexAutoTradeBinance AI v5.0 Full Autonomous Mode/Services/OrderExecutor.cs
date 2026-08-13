@@ -208,20 +208,19 @@ namespace VertexAutoTradeBinance8.Services
                 signal.Symbol, sl, tp, quantity);
 
             // =====================================================================
-            // 4) CREATE SL (STOP-LIMIT, reduceOnly=true)
+            // 4) CREATE SL via Algo Order API (STOP_MARKET) — required since Binance 2025-12-09
+            //    Do NOT send reduceOnly together with positionSide (hedge mode → -1106)
             // =====================================================================
-            var slLimit = posSide == PositionSide.Long ? sl - tick : sl + tick;
-            slLimit = Round(slLimit, tick);
+            var closeSide = side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy;
 
-            var slOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+            var slOrder = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
                 symbol: signal.Symbol,
-                side: side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy,
-                type: FuturesOrderType.Stop,
+                side: closeSide,
+                type: ConditionalOrderType.StopMarket,
                 quantity: quantity,
-                price: slLimit,
-                stopPrice: sl,
-                reduceOnly: true,
+                triggerPrice: sl,
                 positionSide: posSide,
+                workingType: WorkingType.Mark,
                 timeInForce: TimeInForce.GoodTillCanceled,
                 ct: ct);
 
@@ -232,23 +231,22 @@ namespace VertexAutoTradeBinance8.Services
                 return OrderResult.Fail("SL_CREATE_ERROR");
             }
 
-            _logger.LogInformation("[ORDER][{symbol}] SL OK: stop={sl}, limit={limit}",
-                signal.Symbol, sl, slLimit);
+            _logger.LogInformation("[ORDER][{symbol}] SL OK (algo): trigger={sl}, algoId={id}",
+                signal.Symbol, sl, slOrder.Data?.Id);
 
             // =====================================================================
-            // 5) CREATE TP (LIMIT, reduceOnly=true)
+            // 5) CREATE TP via Algo Order API (TAKE_PROFIT_MARKET)
             // =====================================================================
             if (tp > 0)
             {
-                var tpOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                var tpOrder = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
                     symbol: signal.Symbol,
-                    side: side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy,
-                    type: FuturesOrderType.TakeProfit,
+                    side: closeSide,
+                    type: ConditionalOrderType.TakeProfitMarket,
                     quantity: quantity,
-                    price: tp,
-                    stopPrice: null,
-                    reduceOnly: true,
+                    triggerPrice: tp,
                     positionSide: posSide,
+                    workingType: WorkingType.Mark,
                     timeInForce: TimeInForce.GoodTillCanceled,
                     ct: ct);
 
@@ -259,7 +257,8 @@ namespace VertexAutoTradeBinance8.Services
                     return OrderResult.Fail("TP_CREATE_ERROR");
                 }
 
-                _logger.LogInformation("[ORDER][{symbol}] TP OK: price={tp}", signal.Symbol, tp);
+                _logger.LogInformation("[ORDER][{symbol}] TP OK (algo): trigger={tp}, algoId={id}",
+                    signal.Symbol, tp, tpOrder.Data?.Id);
             }
             else
             {
