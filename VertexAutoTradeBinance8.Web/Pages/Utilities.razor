@@ -1,0 +1,53 @@
+@page "/utilities"
+
+<div class="vt-page-title">
+    <div>
+        <h1>Utilities</h1>
+        <p>Operational tools · paths · diagnostics</p>
+    </div>
+</div>
+
+<div class="vt-grid vt-grid-2">
+    <div class="vt-card">
+        <div class="vt-card-title" style="margin-bottom:12px;">Paths & files</div>
+        <table class="vt-table">
+            <tbody>
+                <tr><td class="sym">Engine state</td><td>C:\VertexShared\engine_state.json</td></tr>
+                <tr><td class="sym">AI learning</td><td>ai_learning.json (bot bin)</td></tr>
+                <tr><td class="sym">Missed trades</td><td>missed_trades.json</td></tr>
+                <tr><td class="sym">Bot settings</td><td>AI v5.0 …/appsettings.json</td></tr>
+            </tbody>
+        </table>
+        <div class="vt-hint" style="margin-top:10px;">Web dashboard читает snapshot и JSON-отчёты, которые пишет worker-бот.</div>
+    </div>
+
+    <div class="vt-card">
+        <div class="vt-card-title" style="margin-bottom:12px;">Checklist</div>
+        <ul style="margin:0;padding-left:18px;color:var(--vt-text-muted);line-height:1.8;">
+            <li>Binance.Net 11.11+ · Algo Order API для SL/TP</li>
+            <li>Hedge mode: не слать reduceOnly с positionSide</li>
+            <li>EngineState path совпадает у bot и web</li>
+            <li>После Save settings — рестарт worker</li>
+            <li>API keys только в worker appsettings</li>
+        </ul>
+    </div>
+
+    <div class="vt-card">
+        <div class="vt-card-title" style="margin-bottom:12px;">Quick links</div>
+        <div style="display:grid;gap:8px;">
+            <a class="vt-btn" href="settings">⚙ Settings</a>
+            <a class="vt-btn" href="engine">◎ Engine</a>
+            <a class="vt-btn" href="logs">☰ Logs view</a>
+            <a class="vt-btn" href="ai-dashboard">◆ AI Dashboard</a>
+        </div>
+    </div>
+
+    <div class="vt-card">
+        <div class="vt-card-title" style="margin-bottom:12px;">API migration notes</div>
+        <p style="color:var(--vt-text-muted);margin:0;line-height:1.6;">
+            С 2025-12-09 Binance требует <code>POST /fapi/v1/algoOrder</code> для STOP / TAKE_PROFIT.
+            Ветка NEW-PSUPERVISOR переведена на <code>PlaceConditionalOrderAsync</code>.
+            Ошибки <code>-4120</code> и <code>-1106</code> после обновления должны исчезнуть.
+        </p>
+    </div>
+</div>

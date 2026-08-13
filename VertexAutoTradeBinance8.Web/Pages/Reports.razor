@@ -1,0 +1,90 @@
+@page "/reports"
+@using VertexAutoTradeBinance8.Models
+@using VertexAutoTradeBinance8.Web.Services
+@inject ExecutedSignalUiService ExecutedUi
+@inject MissedTradeFileService MissedService
+
+<div class="vt-page-title">
+    <div>
+        <h1>Reports</h1>
+        <p>PnL · winrate · activity breakdown</p>
+    </div>
+    <button class="vt-btn" @onclick="Load">↻ Refresh</button>
+</div>
+
+<div class="vt-grid vt-grid-4" style="margin-bottom:14px;">
+    <div class="vt-card tight"><div class="vt-kpi"><span class="label">Trades</span><span class="value">@total</span></div></div>
+    <div class="vt-card tight"><div class="vt-kpi green"><span class="label">Wins</span><span class="value">@wins</span></div></div>
+    <div class="vt-card tight"><div class="vt-kpi red"><span class="label">Losses</span><span class="value">@losses</span></div></div>
+    <div class="vt-card tight"><div class="vt-kpi yellow"><span class="label">Winrate</span><span class="value">@winrate.ToString("0.0")%</span></div></div>
+</div>
+
+<div class="vt-grid vt-grid-2" style="margin-bottom:14px;">
+    <div class="vt-card tight"><div class="vt-kpi @(pnl>=0?"green":"red")"><span class="label">Realized PnL</span><span class="value">@pnl.ToString("0.####")</span><span class="sub">sum of closed records</span></div></div>
+    <div class="vt-card tight"><div class="vt-kpi"><span class="label">Missed signals</span><span class="value">@missed</span><span class="sub">PriceRunAway / filters</span></div></div>
+</div>
+
+<div class="vt-card">
+    <div class="vt-card-title" style="margin-bottom:12px;">By symbol</div>
+    <div class="vt-table-wrap">
+        <table class="vt-table">
+            <thead>
+                <tr><th>Symbol</th><th>Count</th><th>PnL</th><th>Avg ROI %</th></tr>
+            </thead>
+            <tbody>
+                @foreach (var g in bySymbol)
+                {
+                    <tr>
+                        <td class="sym">@g.Symbol</td>
+                        <td>@g.Count</td>
+                        <td class="@(g.Pnl>=0?"pnl-pos":"pnl-neg")">@g.Pnl.ToString("0.####")</td>
+                        <td>@g.AvgRoi.ToString("0.00")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    private int total, wins, losses, missed;
+    private decimal winrate, pnl;
+    private List<SymAgg> bySymbol = new();
+
+    protected override void OnInitialized() => Load();
+
+    private void Load()
+    {
+        var all = ExecutedUi.GetAll() ?? new List<ExecutedSignalRecord>();
+        total = all.Count;
+        var closed = all.Where(x => x.PnL.HasValue).ToList();
+        wins = closed.Count(x => x.PnL > 0);
+        losses = closed.Count(x => x.PnL < 0);
+        winrate = closed.Count == 0 ? 0 : (decimal)wins / closed.Count * 100m;
+        pnl = closed.Sum(x => x.PnL ?? 0);
+        try { missed = MissedService.Load()?.Count ?? 0; } catch { missed = 0; }
+
+        bySymbol = all.GroupBy(x => x.Symbol)
+            .Select(g =>
+            {
+                var rois = g.Where(x => x.RoiPercent.HasValue).Select(x => x.RoiPercent!.Value).ToList();
+                return new SymAgg
+                {
+                    Symbol = g.Key,
+                    Count = g.Count(),
+                    Pnl = g.Sum(x => x.PnL ?? 0),
+                    AvgRoi = rois.Count == 0 ? 0 : rois.Average()
+                };
+            })
+            .OrderByDescending(x => x.Count)
+            .ToList();
+    }
+
+    private class SymAgg
+    {
+        public string Symbol { get; set; } = "";
+        public int Count { get; set; }
+        public decimal Pnl { get; set; }
+        public decimal AvgRoi { get; set; }
+    }
+}

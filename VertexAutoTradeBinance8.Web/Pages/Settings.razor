@@ -1,0 +1,197 @@
+@page "/settings"
+@using VertexAutoTradeBinance8.Web.Services
+@inject TradingSettingsService SettingsService
+
+<div class="vt-page-title">
+    <div>
+        <h1>Settings</h1>
+        <p>Risk · strategy · symbols · test mode · exchange</p>
+    </div>
+    <div style="display:flex;gap:8px;">
+        <button class="vt-btn" @onclick="Reload">↻ Reload</button>
+        <button class="vt-btn primary" @onclick="Save" disabled="@saving">@((saving ? "Saving…" : "💾 Save"))</button>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(message))
+{
+    <div class="vt-toast @(ok ? "ok" : "err")" style="position:static;margin-bottom:14px;">@message</div>
+}
+
+<div class="vt-hint" style="margin-bottom:12px;">Config file: <code>@SettingsService.PathUsed</code></div>
+
+<div class="vt-settings-layout">
+    <div class="vt-settings-nav">
+        <button class="@(tab==0?"active":"")" @onclick="() => tab=0">Risk & Size</button>
+        <button class="@(tab==1?"active":"")" @onclick="() => tab=1">Symbols</button>
+        <button class="@(tab==2?"active":"")" @onclick="() => tab=2">Strategy</button>
+        <button class="@(tab==3?"active":"")" @onclick="() => tab=3">Take Profit</button>
+        <button class="@(tab==4?"active":"")" @onclick="() => tab=4">Test / Exchange</button>
+    </div>
+
+    <div class="vt-card">
+        @if (tab == 0)
+        {
+            <div class="vt-card-title" style="margin-bottom:14px;">Risk & position sizing</div>
+            <div class="vt-form-grid">
+                <div class="vt-field">
+                    <label class="vt-label">Deposit (USDT)</label>
+                    <input class="vt-input" type="number" step="0.01" @bind="dto.Deposit" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Risk per trade</label>
+                    <input class="vt-input" type="number" step="0.001" @bind="dto.RiskPerTrade" />
+                    <div class="vt-hint">Fraction of deposit, e.g. 0.025 = 2.5%</div>
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Leverage</label>
+                    <input class="vt-input" type="number" min="1" max="125" @bind="dto.Leverage" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Cooldown (seconds)</label>
+                    <input class="vt-input" type="number" @bind="dto.CooldownSeconds" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Timeframe (minutes)</label>
+                    <input class="vt-input" type="number" @bind="dto.TimeframeMinutes" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Max risk %</label>
+                    <input class="vt-input" type="number" step="0.1" @bind="dto.MaxRiskPercent" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Base risk %</label>
+                    <input class="vt-input" type="number" step="0.1" @bind="dto.BaseRiskPercent" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Min notional</label>
+                    <input class="vt-input" type="number" step="0.1" @bind="dto.MinNotional" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Min notional guard</label>
+                    <input class="vt-input" type="number" step="0.1" @bind="dto.MinNotionalGuard" />
+                </div>
+            </div>
+        }
+        else if (tab == 1)
+        {
+            <div class="vt-card-title" style="margin-bottom:14px;">Auto symbol selection</div>
+            <div class="vt-form-grid">
+                <div class="vt-field">
+                    <label class="vt-label">Top volume count</label>
+                    <input class="vt-input" type="number" @bind="dto.TopVolumeCount" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Min 24h volume (USDT)</label>
+                    <input class="vt-input" type="number" @bind="dto.Min24hVolume" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Min price</label>
+                    <input class="vt-input" type="number" step="0.0001" @bind="dto.MinPrice" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Refresh interval (min)</label>
+                    <input class="vt-input" type="number" @bind="dto.RefreshIntervalMin" />
+                </div>
+            </div>
+        }
+        else if (tab == 2)
+        {
+            <div class="vt-card-title" style="margin-bottom:14px;">Strategy</div>
+            <div class="vt-form-grid">
+                <div class="vt-field">
+                    <label class="vt-label">Mode</label>
+                    <input class="vt-input" @bind="dto.StrategyMode" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Pullback type</label>
+                    <input class="vt-input" @bind="dto.PullbackType" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">EMA period</label>
+                    <input class="vt-input" type="number" @bind="dto.EmaPeriod" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">EMA zone %</label>
+                    <input class="vt-input" type="number" step="0.0001" @bind="dto.EmaZonePercent" />
+                </div>
+            </div>
+        }
+        else if (tab == 3)
+        {
+            <div class="vt-card-title" style="margin-bottom:14px;">Take profit (ATR multi)</div>
+            <div class="vt-form-grid">
+                <div class="vt-field">
+                    <label class="vt-label">TP mode</label>
+                    <input class="vt-input" @bind="dto.TpMode" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">ATR period</label>
+                    <input class="vt-input" type="number" @bind="dto.AtrPeriod" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">TP1 × ATR</label>
+                    <input class="vt-input" type="number" step="0.1" @bind="dto.Tp1Multiplier" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">TP2 × ATR</label>
+                    <input class="vt-input" type="number" step="0.1" @bind="dto.Tp2Multiplier" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">TP3 × ATR</label>
+                    <input class="vt-input" type="number" step="0.1" @bind="dto.Tp3Multiplier" />
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="vt-card-title" style="margin-bottom:14px;">Test mode & exchange</div>
+            <div class="vt-form-grid">
+                <div class="vt-field">
+                    <label class="vt-switch">
+                        <input type="checkbox" @bind="dto.TestModeEnabled" />
+                        <span>Test mode enabled</span>
+                    </label>
+                    <div class="vt-hint">В проде должно быть выключено</div>
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">API key</label>
+                    <input class="vt-input" value="@dto.ApiKeyMasked" readonly />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Network</label>
+                    <div class="vt-badge @(dto.IsTestNet ? "warn" : "ok")">@(dto.IsTestNet ? "TESTNET" : "MAINNET")</div>
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Market</label>
+                    <div class="vt-badge info">@(dto.UseFutures ? "USD-M Futures" : "Spot")</div>
+                </div>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private TradingSettingsDto dto = new();
+    private int tab;
+    private bool saving;
+    private string message = "";
+    private bool ok;
+
+    protected override void OnInitialized() => Reload();
+
+    private void Reload()
+    {
+        dto = SettingsService.Load();
+        message = "";
+    }
+
+    private void Save()
+    {
+        saving = true;
+        var (success, msg) = SettingsService.Save(dto);
+        ok = success;
+        message = msg;
+        saving = false;
+    }
+}

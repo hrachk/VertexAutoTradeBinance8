@@ -50,6 +50,7 @@ builder.Services.AddSingleton<AiSelfLearningService>();
 builder.Services.AddSingleton<AiLearningFileService>();
 builder.Services.AddSingleton<MissedTradeFileService>();
 builder.Services.AddSingleton<EngineStateService>();
+builder.Services.AddSingleton<TradingSettingsService>();
 
 builder.Services.AddSingleton<ExecutedSignalUiService>();
 builder.Services.AddSingleton<ExecutedSignalsPushService>();

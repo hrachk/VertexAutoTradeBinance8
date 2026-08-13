@@ -1,0 +1,33 @@
+@page "/logs"
+
+<div class="vt-page-title">
+    <div>
+        <h1>Logs</h1>
+        <p>Что смотреть в консоли worker-бота</p>
+    </div>
+</div>
+
+<div class="vt-card">
+    <div class="vt-card-title" style="margin-bottom:12px;">Ключевые префиксы</div>
+    <table class="vt-table">
+        <thead><tr><th>Prefix</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td class="sym">[SMART]</td><td>Smart regime evaluation</td></tr>
+            <tr><td class="sym">[ORDER]</td><td>Entry / SL / TP placement</td></tr>
+            <tr><td class="sym">[EXEC]</td><td>Executed signal status pipeline</td></tr>
+            <tr><td class="sym">[SUPERVISOR]</td><td>Position guard, trailing, ensure SL/TP</td></tr>
+            <tr><td class="sym">[SIM]</td><td>Missed trade simulation</td></tr>
+            <tr><td class="sym">[AI-LEARN]</td><td>Self-learning records</td></tr>
+            <tr><td class="sym">[MANUAL]</td><td>Detected manual position</td></tr>
+            <tr><td class="sym">[ENGINE STATE]</td><td>Snapshot write</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="vt-card" style="margin-top:14px;">
+    <div class="vt-card-title" style="margin-bottom:12px;">Healthy SL/TP after Algo migration</div>
+    <pre style="background:var(--vt-bg);padding:12px;border-radius:8px;overflow:auto;color:var(--vt-green);font-family:var(--vt-mono);font-size:12px;margin:0;">[ORDER][SYMBOL] SL OK (algo): trigger=..., algoId=...
+[ORDER][SYMBOL] TP OK (algo): trigger=..., algoId=...
+[SUPERVISOR][SYMBOL] MANUAL SL created @ ...</pre>
+    <div class="vt-hint" style="margin-top:10px;">Если снова видишь -4120 — worker не на коммите с PlaceConditionalOrderAsync.</div>
+</div>

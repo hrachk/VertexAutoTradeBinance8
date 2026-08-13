@@ -1,49 +1,143 @@
-﻿@inherits LayoutComponentBase
+@inherits LayoutComponentBase
+@inject EngineStateService EngineService
+@implements IDisposable
 
-<PageTitle>VERTEX AUTOTRADE AI</PageTitle>
+<div class="vt-shell">
+    <header class="vt-header">
+        <div class="vt-brand">
+            <div class="vt-brand-mark">V</div>
+            <div>
+                VERTEX <span class="sub">TERMINAL</span>
+            </div>
+        </div>
 
-<!-- === MOBILE MENU BUTTON === -->
-<button class="menu-toggle" @onclick="ToggleMenu">☰</button>
+        <div class="vt-header-center">
+            <div class="vt-header-stat">
+                <span class="lbl">Balance</span>
+                <span class="val">@FormatMoney(balance) USDT</span>
+            </div>
+            <div class="vt-header-stat">
+                <span class="lbl">Symbol</span>
+                <span class="val">@(string.IsNullOrEmpty(symbol) ? "—" : symbol)</span>
+            </div>
+            <div class="vt-header-stat">
+                <span class="lbl">Regime</span>
+                <span class="val">@(string.IsNullOrEmpty(regime) ? "—" : regime)</span>
+            </div>
+            <div class="vt-header-stat">
+                <span class="lbl">Confidence</span>
+                <span class="val">@confidence%</span>
+            </div>
+        </div>
 
-<header class="vertex-header">
-    <div class="vertex-left">
-        <img src="images/vertexailogo.png" class="vertex-logo" alt="logo" />
-        <span class="vertex-title">VERTEX AUTOTRADE AI</span>
-        <span class="vertex-subtitle">Quant Engine v8</span>
-    </div>
+        <div class="vt-header-right">
+            <span class="vt-pill @statusClass">
+                <span class="dot"></span>
+                @statusText
+            </span>
+            <span class="vt-pill" title="Last engine snapshot">
+                ⏱ @lastUpdateText
+            </span>
+        </div>
+    </header>
 
-    <div class="vertex-right">
-        <span class="vertex-status-dot @(EngineStatus == "Running" ? "ok" : "bad")"></span>
-        <span class="vertex-status-text">@EngineStatus</span>
-        <span class="vertex-balance">Balance: @Balance USDT</span>
-        <span class="vertex-mode">Mode: @TradingMode</span>
-    </div>
-</header>
-
-<div class="page">
-    <div class="sidebar @(ShowSidebar ? "sidebar-open" : "")">
+    <aside class="vt-sidebar">
         <NavMenu />
-    </div>
+        <div class="vt-sidebar-foot">
+            VertexAutoTrade · Futures USD-M<br />
+            Algo SL/TP · AI Regime
+        </div>
+    </aside>
 
-    <!-- BACKDROP when menu open on mobile -->
-    @if (ShowSidebar)
-    {
-        <div class="sidebar-backdrop" @onclick="ToggleMenu"></div>
-    }
-
-    <main>
-        <article class="content px-4">
-            @Body
-        </article>
+    <main class="vt-main">
+        @Body
     </main>
 </div>
 
 @code {
-    public decimal Balance { get; set; }
-    public string EngineStatus { get; set; } = "Loading...";
-    public string TradingMode { get; set; } = "Detecting...";
+    private System.Threading.Timer? _timer;
+    private decimal balance;
+    private string symbol = "";
+    private string regime = "";
+    private decimal confidence;
+    private string statusText = "OFFLINE";
+    private string statusClass = "danger";
+    private string lastUpdateText = "—";
 
-    private bool ShowSidebar = false;
+    protected override void OnInitialized()
+    {
+        RefreshHeader();
+        _timer = new System.Threading.Timer(_ =>
+        {
+            InvokeAsync(() =>
+            {
+                RefreshHeader();
+                StateHasChanged();
+            });
+        }, null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
+    }
 
-    void ToggleMenu() => ShowSidebar = !ShowSidebar;
+    private void RefreshHeader()
+    {
+        try
+        {
+            var s = EngineService.Load();
+            if (s == null)
+            {
+                statusText = "NO DATA";
+                statusClass = "warn";
+                lastUpdateText = "—";
+                return;
+            }
+
+            balance = s.BalanceUsdt;
+            symbol = s.Symbol ?? "";
+            regime = string.IsNullOrWhiteSpace(s.SmartRegime) ? (s.MarketRegime ?? "") : s.SmartRegime;
+            confidence = s.Confidence;
+
+            var st = (s.Status ?? "").Trim();
+            if (string.IsNullOrEmpty(st))
+            {
+                statusText = "IDLE";
+                statusClass = "warn";
+            }
+            else if (st.Contains("RUN", StringComparison.OrdinalIgnoreCase) ||
+                     st.Contains("ACTIVE", StringComparison.OrdinalIgnoreCase) ||
+                     st.Contains("OK", StringComparison.OrdinalIgnoreCase))
+            {
+                statusText = st.ToUpperInvariant();
+                statusClass = "live";
+            }
+            else if (st.Contains("ERR", StringComparison.OrdinalIgnoreCase) ||
+                     st.Contains("FAIL", StringComparison.OrdinalIgnoreCase) ||
+                     st.Contains("STOP", StringComparison.OrdinalIgnoreCase))
+            {
+                statusText = st.ToUpperInvariant();
+                statusClass = "danger";
+            }
+            else
+            {
+                statusText = st.ToUpperInvariant();
+                statusClass = "warn";
+            }
+
+            var age = DateTime.UtcNow - s.LastUpdate.ToUniversalTime();
+            if (age.TotalSeconds < 0) age = TimeSpan.Zero;
+            if (age.TotalSeconds < 90)
+                lastUpdateText = $"{(int)age.TotalSeconds}s ago";
+            else if (age.TotalMinutes < 60)
+                lastUpdateText = $"{(int)age.TotalMinutes}m ago";
+            else
+                lastUpdateText = s.LastUpdate.ToLocalTime().ToString("HH:mm:ss");
+        }
+        catch
+        {
+            statusText = "ERROR";
+            statusClass = "danger";
+        }
+    }
+
+    private static string FormatMoney(decimal v) => v.ToString("0.##");
+
+    public void Dispose() => _timer?.Dispose();
 }

@@ -1,0 +1,55 @@
+@page "/positions"
+@using VertexAutoTradeBinance8.Web.Services
+@inject EngineStateService EngineService
+
+<div class="vt-page-title">
+    <div>
+        <h1>Positions</h1>
+        <p>Open exposure from engine snapshot · protection status</p>
+    </div>
+    <button class="vt-btn" @onclick="() => { }">↻ Refresh</button>
+</div>
+
+<div class="vt-card">
+    <div class="vt-card-header">
+        <div class="vt-card-title">Active context</div>
+        <span class="vt-badge info">from engine_state.json</span>
+    </div>
+    @if (state == null)
+    {
+        <div class="vt-empty"><div class="ico">▣</div>Нет snapshot. Когда бот откроет позицию — статус появится здесь и в логах SUPERVISOR.</div>
+    }
+    else
+    {
+        <div class="vt-grid vt-grid-3" style="margin-bottom:16px;">
+            <div class="vt-kpi">
+                <span class="label">Symbol</span>
+                <span class="value" style="font-size:18px;">@state.Symbol</span>
+            </div>
+            <div class="vt-kpi">
+                <span class="label">Balance</span>
+                <span class="value">@state.BalanceUsdt.ToString("0.##")</span>
+            </div>
+            <div class="vt-kpi">
+                <span class="label">Regime</span>
+                <span class="value" style="font-size:16px;">@state.SmartRegime</span>
+                <span class="sub">@state.MarketRegime · conf @state.Confidence%</span>
+            </div>
+        </div>
+        <div class="vt-hint">
+            Полный список позиций Binance читается ботом (PositionSupervisor). Для live REST-позиций
+            подключи API-ключ только на стороне worker-процесса. Dashboard показывает engine context
+            и ссылки на executed / missed.
+        </div>
+        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
+            <a class="vt-btn" href="executed-signals">Executed signals</a>
+            <a class="vt-btn" href="engine">Engine state</a>
+            <a class="vt-btn primary" href="utilities">Utilities / tools</a>
+        </div>
+    }
+</div>
+
+@code {
+    private Models.EngineStateModel? state;
+    protected override void OnInitialized() => state = EngineService.Load();
+}

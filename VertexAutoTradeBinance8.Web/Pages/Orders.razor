@@ -1,0 +1,19 @@
+@page "/orders"
+
+<div class="vt-page-title">
+    <div>
+        <h1>Open Orders</h1>
+        <p>Conditional (Algo) SL/TP + limit orders</p>
+    </div>
+</div>
+
+<div class="vt-card">
+    <div class="vt-empty">
+        <div class="ico">≡</div>
+        <div>Live open orders подтягиваются из Binance worker’ом (GetOpenOrders + GetOpenConditionalOrders).</div>
+        <div class="vt-hint" style="margin-top:8px;">Смотри логи [ORDER] / [SUPERVISOR] и раздел Executed Signals для статуса защиты позиции.</div>
+        <div style="margin-top:14px;">
+            <a class="vt-btn primary" href="executed-signals">↗ Executed signals</a>
+        </div>
+    </div>
+</div>

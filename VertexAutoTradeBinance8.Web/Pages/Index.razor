@@ -1,9 +1,233 @@
-﻿@page "/"
+@page "/"
+@using VertexAutoTradeBinance8.Web.Models
+@using VertexAutoTradeBinance8.Web.Services
+@inject EngineStateService EngineService
+@inject ExecutedSignalUiService ExecutedUi
+@inject MissedTradeFileService MissedService
+@implements IDisposable
 
-<PageTitle>Index</PageTitle>
+<div class="vt-page-title">
+    <div>
+        <h1>Trading Terminal</h1>
+        <p>Live overview · engine · risk · recent activity</p>
+    </div>
+    <div style="display:flex;gap:8px;">
+        <button class="vt-btn" @onclick="Refresh">↻ Refresh</button>
+        <a class="vt-btn primary" href="settings">⚙ Settings</a>
+    </div>
+</div>
 
-<h1>Hello, world!</h1>
+<div class="vt-status-strip">
+    @if (state != null)
+    {
+        <span class="vt-badge @(state.LiquidityDanger ? "err" : "ok")">
+            Liquidity @(state.LiquidityDanger ? "DANGER" : "OK")
+        </span>
+        <span class="vt-badge @(state.SoftEntry ? "warn" : "neutral")">
+            SoftEntry @(state.SoftEntry ? "ON" : "OFF")
+        </span>
+        <span class="vt-badge @(state.BlockedByLiquidity ? "err" : "ok")">
+            @(state.BlockedByLiquidity ? "Blocked by liquidity" : "Entries allowed")
+        </span>
+        <span class="vt-badge info">@state.Mode</span>
+        <span class="vt-badge neutral">TF @state.Timeframe</span>
+    }
+    else
+    {
+        <span class="vt-badge warn">Waiting for engine_state.json…</span>
+    }
+</div>
 
-Welcome to your new app.
+<div class="vt-grid vt-grid-4" style="margin-bottom:14px;">
+    <div class="vt-card tight">
+        <div class="vt-kpi yellow">
+            <span class="label">Balance</span>
+            <span class="value">@Fmt(state?.BalanceUsdt ?? 0)</span>
+            <span class="sub">USDT futures wallet</span>
+        </div>
+    </div>
+    <div class="vt-card tight">
+        <div class="vt-kpi blue">
+            <span class="label">Active Symbol</span>
+            <span class="value" style="font-size:18px;">@(state?.Symbol ?? "—")</span>
+            <span class="sub">@regimeText</span>
+        </div>
+    </div>
+    <div class="vt-card tight">
+        <div class="vt-kpi @(slope >= 0 ? "green" : "red")">
+            <span class="label">Slope / Vol</span>
+            <span class="value">@Fmt(slope)%</span>
+            <span class="sub">vol @Fmt(vol)% · conf @Fmt(conf)%</span>
+        </div>
+    </div>
+    <div class="vt-card tight">
+        <div class="vt-kpi">
+            <span class="label">Today activity</span>
+            <span class="value">@executedCount</span>
+            <span class="sub">@missedCount missed · engine pulse</span>
+        </div>
+    </div>
+</div>
 
-<SurveyPrompt Title="How is Blazor working for you?" />
+<div class="vt-grid vt-grid-2" style="margin-bottom:14px;">
+    <div class="vt-card">
+        <div class="vt-card-header">
+            <div class="vt-card-title">Engine snapshot</div>
+            <span class="vt-badge neutral">@((state?.LastUpdate.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")) ?? "—")</span>
+        </div>
+        @if (state == null)
+        {
+            <div class="vt-empty"><div class="ico">◎</div>Нет данных от движка. Проверь EngineState path в appsettings.</div>
+        }
+        else
+        {
+            <table class="vt-table">
+                <tbody>
+                    <tr><td class="sym">Status</td><td>@state.Status</td></tr>
+                    <tr><td class="sym">Mode</td><td>@state.Mode</td></tr>
+                    <tr><td class="sym">Base regime</td><td>@state.MarketRegime</td></tr>
+                    <tr><td class="sym">Smart regime</td><td>@state.SmartRegime</td></tr>
+                    <tr><td class="sym">Slope</td><td>@state.Slope</td></tr>
+                    <tr><td class="sym">Volatility</td><td>@state.Volatility</td></tr>
+                    <tr><td class="sym">Confidence</td><td>@state.Confidence %</td></tr>
+                    <tr><td class="sym">Liquidity reason</td><td>@(string.IsNullOrEmpty(state.LiquidityReason) ? "—" : state.LiquidityReason)</td></tr>
+                </tbody>
+            </table>
+        }
+    </div>
+
+    <div class="vt-card">
+        <div class="vt-card-header">
+            <div class="vt-card-title">Quick actions</div>
+        </div>
+        <div style="display:grid;gap:10px;">
+            <a class="vt-btn" href="engine">◎ Open full engine state</a>
+            <a class="vt-btn" href="executed-signals">↗ Executed signals</a>
+            <a class="vt-btn" href="missed-trades">⊘ Missed trades / signals</a>
+            <a class="vt-btn" href="ai-learning">✎ AI learning stats</a>
+            <a class="vt-btn" href="reports">▦ PnL & reports</a>
+            <a class="vt-btn primary" href="settings">⚙ Risk & strategy settings</a>
+        </div>
+        <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--vt-border);">
+            <div class="vt-label">System health</div>
+            <div class="vt-meter" style="margin-top:8px;"><span style="width:@healthPct%"></span></div>
+            <div class="vt-hint" style="margin-top:8px;">@healthText</div>
+        </div>
+    </div>
+</div>
+
+<div class="vt-card">
+    <div class="vt-card-header">
+        <div class="vt-card-title">Recent executed signals</div>
+        <a href="executed-signals" class="vt-btn ghost">View all →</a>
+    </div>
+    @if (recent.Count == 0)
+    {
+        <div class="vt-empty"><div class="ico">↗</div>Пока нет исполненных сигналов</div>
+    }
+    else
+    {
+        <div class="vt-table-wrap">
+            <table class="vt-table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Qty</th>
+                        <th>Notional</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in recent)
+                    {
+                        <tr>
+                            <td>@r.Time.ToLocalTime().ToString("HH:mm:ss")</td>
+                            <td class="sym">@r.Symbol</td>
+                            <td class="@(r.Side?.Contains("Buy", StringComparison.OrdinalIgnoreCase)==true ? "pos-long" : "pos-short")">@r.Side</td>
+                            <td>@r.Qty</td>
+                            <td>@Fmt(r.Notional)</td>
+                            <td><span class="vt-badge info">@r.Status</span></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    private EngineStateModel? state;
+    private System.Threading.Timer? _timer;
+    private int executedCount;
+    private int missedCount;
+    private decimal slope, vol, conf;
+    private string regimeText = "—";
+    private int healthPct = 30;
+    private string healthText = "Waiting for engine…";
+    private List<ExecutedSignalRow> recent = new();
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        _timer = new System.Threading.Timer(_ => InvokeAsync(() => { Refresh(); StateHasChanged(); }),
+            null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+    }
+
+    private void Refresh()
+    {
+        state = EngineService.Load();
+        slope = state?.Slope ?? 0;
+        vol = state?.Volatility ?? 0;
+        conf = state?.Confidence ?? 0;
+        regimeText = state == null ? "—" :
+            $"{state.SmartRegime} · {state.MarketRegime}";
+
+        try
+        {
+            var list = ExecutedUi.GetAll()?.OrderByDescending(x => x.Time).Take(8).ToList()
+                       ?? new List<ExecutedSignalRecord>();
+            recent = list.Select(x => new ExecutedSignalRow
+            {
+                Time = x.Time,
+                Symbol = x.Symbol,
+                Side = x.Side.ToString(),
+                Qty = x.Qty,
+                Notional = x.Notional,
+                Status = x.Status.ToString()
+            }).ToList();
+            executedCount = list.Count;
+        }
+        catch { recent = new(); executedCount = 0; }
+
+        try { missedCount = MissedService.Load()?.Count ?? 0; } catch { missedCount = 0; }
+
+        if (state == null)
+        {
+            healthPct = 20;
+            healthText = "Engine snapshot missing — check path C:\\VertexShared\\engine_state.json";
+        }
+        else
+        {
+            var age = DateTime.UtcNow - state.LastUpdate.ToUniversalTime();
+            if (age.TotalMinutes < 2) { healthPct = 95; healthText = "Engine live · snapshot fresh"; }
+            else if (age.TotalMinutes < 10) { healthPct = 70; healthText = "Engine snapshot aging"; }
+            else { healthPct = 40; healthText = "Engine snapshot stale — is bot running?"; }
+            if (state.LiquidityDanger) { healthPct = Math.Min(healthPct, 55); healthText += " · liquidity risk"; }
+        }
+    }
+
+    private static string Fmt(decimal v) => v.ToString("0.##");
+    public void Dispose() => _timer?.Dispose();
+
+    private class ExecutedSignalRow
+    {
+        public DateTime Time { get; set; }
+        public string Symbol { get; set; } = "";
+        public string? Side { get; set; }
+        public decimal Qty { get; set; }
+        public decimal Notional { get; set; }
+        public string Status { get; set; } = "";
+    }
+}

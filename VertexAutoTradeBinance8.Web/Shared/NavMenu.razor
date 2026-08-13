@@ -1,78 +1,43 @@
-﻿@*  
-<img src="images/vertexailogo.png" class="vertex-logo" alt="logo" style="width: auto;
-    height: 234px;" />
- *@
- 
-<div class="@NavMenuCssClass nav-scrollable" @onclick="ToggleNavMenu">
-    <nav class="flex-column">
-        @* <div class="nav-item px-3">
-            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                <span class="oi oi-home" aria-hidden="true"></span> Home
-            </NavLink>
-        </div> *@
-       @*  <div class="nav-item px-3">
-            <NavLink class="nav-link" href="counter">
-                <span class="oi oi-plus" aria-hidden="true"></span> Counter
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="fetchdata">
-                <span class="oi oi-list-rich" aria-hidden="true"></span> Fetch data
-            </NavLink>
-        </div> *@
-        <li class="nav-item px-3">
-            <NavLink class="nav-link" href="/engine">
-                <span class="oi oi-dashboard"></span> Engine Dashboard
-            </NavLink>
-        </li>
+<div class="vt-nav-section">Overview</div>
+<NavLink class="vt-nav-link" href="" Match="NavLinkMatch.All">
+    <span class="ico">◈</span> Terminal
+</NavLink>
+<NavLink class="vt-nav-link" href="engine">
+    <span class="ico">◎</span> Engine State
+</NavLink>
+<NavLink class="vt-nav-link" href="positions">
+    <span class="ico">▣</span> Positions
+</NavLink>
 
-        <div class="nav-item px-3">
-            
-                <NavLink class="nav-link" href="ai-dashboard" Match="NavLinkMatch.All">
-                    <span class="oi oi-graph" aria-hidden="true"></span> AI Dashboard
-                </NavLink>
-           
-           
-        </div>
+<div class="vt-nav-section">Trading</div>
+<NavLink class="vt-nav-link" href="executed-signals">
+    <span class="ico">↗</span> Executed
+</NavLink>
+<NavLink class="vt-nav-link" href="missed-trades">
+    <span class="ico">⊘</span> Missed / Signals
+</NavLink>
+<NavLink class="vt-nav-link" href="orders">
+    <span class="ico">≡</span> Open Orders
+</NavLink>
 
-        <div class="nav-item px-3">
-           
-                <NavLink class="nav-link" href="ai-learning" Match="NavLinkMatch.All">
-                    <span class="oi oi-home" aria-hidden="true"></span> AI LEARNING
-                </NavLink>
-            
-       </div>
+<div class="vt-nav-section">AI & Analytics</div>
+<NavLink class="vt-nav-link" href="ai-dashboard">
+    <span class="ico">◆</span> AI Dashboard
+</NavLink>
+<NavLink class="vt-nav-link" href="ai-learning">
+    <span class="ico">✎</span> AI Learning
+</NavLink>
+<NavLink class="vt-nav-link" href="reports">
+    <span class="ico">▦</span> Reports
+</NavLink>
 
-        @* <div class="nav-item px-3">
-            <li class="nav-item px-3">
-                <NavLink class="nav-link" href="ai-marketheatmap" Match="NavLinkMatch.All">
-                    <span class="oi oi-graph" aria-hidden="true"></span> AI Market
-                </NavLink>
-            </li>
-        </div> *@
-        <div class="nav-item px-3">
-           
-                <NavLink class="nav-link" href="missed-trades" Match="NavLinkMatch.All">
-                    <span class="oi oi-graph" aria-hidden="true"></span> Signals
-                </NavLink>
-            
-        </div>
-        <li class="nav-item px-3">
-            <NavLink class="nav-link" href="executed-signals" Match="NavLinkMatch.All">
-                <span class="oi oi-list-rich" aria-hidden="true"></span> Executed Signals
-            </NavLink>
-        </li>
-
-
-    </nav>
-</div>
-@code {
-    private bool collapseNavMenu = true;
-
-    private string? NavMenuCssClass => collapseNavMenu ? "collapse" : null;
-
-    private void ToggleNavMenu()
-    {
-        collapseNavMenu = !collapseNavMenu;
-    }
-}
+<div class="vt-nav-section">System</div>
+<NavLink class="vt-nav-link" href="settings">
+    <span class="ico">⚙</span> Settings
+</NavLink>
+<NavLink class="vt-nav-link" href="utilities">
+    <span class="ico">⚒</span> Utilities
+</NavLink>
+<NavLink class="vt-nav-link" href="logs">
+    <span class="ico">☰</span> Logs
+</NavLink>

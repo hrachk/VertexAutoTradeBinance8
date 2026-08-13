@@ -1,114 +1,79 @@
-﻿@page "/engine"
+@page "/engine"
 @using VertexAutoTradeBinance8.Web.Models
 @using VertexAutoTradeBinance8.Web.Services
 @inject EngineStateService EngineService
+@implements IDisposable
 
-<div class="engine-container">
-
-    @if (state == null)
-    {
-        <div class="empty">Нет данных от движка...</div>
-    }
-    else
-    {
-        <div class="engine-title">Vertex Engine — Реальное состояние</div>
-
-        <div class="engine-grid">
-
-            <div class="block">
-                <div class="label">Статус</div>
-                <div class="value">@state.Status</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Режим</div>
-                <div class="value">@state.Mode</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Баланс USDT</div>
-                <div class="value">@state.BalanceUsdt</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Символ</div>
-                <div class="value">@state.Symbol</div>
-            </div>
-
-            <div class="block">
-                <div class="label">TF</div>
-                <div class="value">@state.Timeframe</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Base Regime</div>
-                <div class="value">@state.MarketRegime</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Smart Regime</div>
-                <div class="value">@state.SmartRegime</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Confidence</div>
-                <div class="value">@state.Confidence %</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Slope</div>
-                <div class="value">@state.Slope</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Volatility</div>
-                <div class="value">@state.Volatility</div>
-            </div>
-
-            <div class="block danger">
-                <div class="label">Liquidity Danger</div>
-                <div class="value">@state.LiquidityDanger</div>
-            </div>
-
-            <div class="block reason">
-                <div class="label">Причина блокировки</div>
-                <div class="value">@state.LiquidityReason</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Soft Entry</div>
-                <div class="value">@state.SoftEntry</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Blocked By Liquidity</div>
-                <div class="value">@state.BlockedByLiquidity</div>
-            </div>
-
-            <div class="block">
-                <div class="label">Последнее обновление</div>
-                <div class="value">@state.LastUpdate.ToLocalTime()</div>
-            </div>
-        </div>
-    }
+<div class="vt-page-title">
+    <div>
+        <h1>Engine State</h1>
+        <p>Live snapshot from @EngineService.FilePath</p>
+    </div>
+    <button class="vt-btn" @onclick="Refresh">↻ Refresh</button>
 </div>
+
+@if (state == null)
+{
+    <div class="vt-card">
+        <div class="vt-empty">
+            <div class="ico">◎</div>
+            Нет данных от движка. Убедись, что worker пишет engine_state.json.
+        </div>
+    </div>
+}
+else
+{
+    <div class="vt-grid vt-grid-4" style="margin-bottom:14px;">
+        <div class="vt-card tight"><div class="vt-kpi"><span class="label">Status</span><span class="value" style="font-size:18px;">@state.Status</span></div></div>
+        <div class="vt-card tight"><div class="vt-kpi yellow"><span class="label">Balance</span><span class="value">@state.BalanceUsdt.ToString("0.##")</span></div></div>
+        <div class="vt-card tight"><div class="vt-kpi blue"><span class="label">Symbol</span><span class="value" style="font-size:16px;">@state.Symbol</span><span class="sub">@state.Timeframe</span></div></div>
+        <div class="vt-card tight"><div class="vt-kpi"><span class="label">Confidence</span><span class="value">@state.Confidence%</span></div></div>
+    </div>
+
+    <div class="vt-grid vt-grid-3" style="margin-bottom:14px;">
+        <div class="vt-card">
+            <div class="vt-card-title">Regimes</div>
+            <table class="vt-table">
+                <tbody>
+                    <tr><td class="sym">Mode</td><td>@state.Mode</td></tr>
+                    <tr><td class="sym">Base</td><td>@state.MarketRegime</td></tr>
+                    <tr><td class="sym">Smart</td><td>@state.SmartRegime</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="vt-card">
+            <div class="vt-card-title">Market metrics</div>
+            <table class="vt-table">
+                <tbody>
+                    <tr><td class="sym">Slope</td><td>@state.Slope</td></tr>
+                    <tr><td class="sym">Volatility</td><td>@state.Volatility</td></tr>
+                    <tr><td class="sym">Updated</td><td>@state.LastUpdate.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="vt-card">
+            <div class="vt-card-title">Guards</div>
+            <div class="vt-status-strip">
+                <span class="vt-badge @(state.LiquidityDanger?"err":"ok")">Liquidity @(state.LiquidityDanger?"DANGER":"OK")</span>
+                <span class="vt-badge @(state.SoftEntry?"warn":"neutral")">SoftEntry @(state.SoftEntry?"ON":"OFF")</span>
+                <span class="vt-badge @(state.BlockedByLiquidity?"err":"ok")">@(state.BlockedByLiquidity?"BLOCKED":"ALLOW")</span>
+            </div>
+            <div class="vt-hint">@(string.IsNullOrEmpty(state.LiquidityReason)?"—":state.LiquidityReason)</div>
+        </div>
+    </div>
+}
 
 @code {
     private EngineStateModel? state;
+    private System.Threading.Timer? _timer;
 
     protected override void OnInitialized()
     {
-      
-        Load();
-        var timer = new System.Timers.Timer(2000);
-        timer.Elapsed += (_, _) => InvokeAsync(Load);
-        timer.Start();
+        Refresh();
+        _timer = new System.Threading.Timer(_ => InvokeAsync(() => { Refresh(); StateHasChanged(); }),
+            null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
     }
 
-    private void Load()
-    {
-        
-        state = EngineService.Load();
-        StateHasChanged();
-    }
+    private void Refresh() => state = EngineService.Load();
+    public void Dispose() => _timer?.Dispose();
 }
