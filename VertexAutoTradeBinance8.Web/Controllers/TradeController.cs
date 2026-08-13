@@ -46,16 +46,20 @@ public class TradeController : ControllerBase
                 foreach (var p in pos.Data.Where(x => x.Quantity != 0))
                 {
                     unrealized += p.UnrealizedPnl;
+                    var qty = Math.Abs(p.Quantity);
+                    var entry = p.EntryPrice;
+                    var lev = p.Leverage > 0 ? p.Leverage : 1m;
+                    var margin = entry > 0 && lev > 0 ? (qty * entry) / lev : 0m;
                     open.Add(new
                     {
                         symbol = p.Symbol,
                         side = p.Quantity > 0 ? "LONG" : "SHORT",
-                        qty = Math.Abs(p.Quantity),
-                        entry = p.AveragePrice,
+                        qty,
+                        entry,
                         mark = p.MarkPrice,
                         pnl = p.UnrealizedPnl,
-                        leverage = (int)p.Leverage,
-                        margin = p.InitialMargin,
+                        leverage = (int)lev,
+                        margin,
                         positionSide = p.PositionSide.ToString()
                     });
                 }
@@ -147,7 +151,7 @@ public class TradeController : ControllerBase
             if (err != null || orderData == null)
                 return Ok(new { ok = false, error = err ?? "order failed" });
 
-            var entry = orderData.AverageFillPrice ?? orderData.Price ?? req.Price ?? 0m;
+            var entry = orderData.AveragePrice > 0 ? orderData.AveragePrice : (orderData.Price > 0 ? orderData.Price : (req.Price ?? 0m));
             long? slId = null, tpId = null;
             var closeSide = req.IsBuy ? OrderSide.Sell : OrderSide.Buy;
 
