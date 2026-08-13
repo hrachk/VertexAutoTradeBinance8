@@ -38,6 +38,15 @@ builder.Services.AddSingleton<WeatherForecastService>();
 
 
 // ============= DEPENDENCY INJECTION =============
+// Bot appsettings (API keys, trading) — same file worker uses
+var botSettingsPath = builder.Configuration["BotSettings:Path"];
+if (!string.IsNullOrWhiteSpace(botSettingsPath) && File.Exists(botSettingsPath))
+{
+    builder.Configuration.AddJsonFile(botSettingsPath, optional: true, reloadOnChange: true);
+}
+
+builder.Services.Configure<BinanceOptions>(builder.Configuration.GetSection("Binance"));
+builder.Services.Configure<TradingOptions>(builder.Configuration.GetSection("Trading"));
 builder.Services.Configure<TradingOptions>(
     builder.Configuration.GetSection("TradingOptions"));
 

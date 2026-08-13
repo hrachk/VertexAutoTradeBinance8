@@ -29,7 +29,7 @@ window.VertexMarketChart = {
       rightPriceScale: { borderColor: '#2a313c' },
       timeScale: { borderColor: '#2a313c', timeVisible: true, secondsVisible: false },
       width: el.clientWidth,
-      height: el.clientHeight || 360,
+      height: Math.max(el.clientHeight || 0, 320),
     });
 
     this.candleSeries = this.chart.addCandlestickSeries({
