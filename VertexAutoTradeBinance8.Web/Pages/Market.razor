@@ -481,7 +481,7 @@
             {
                 Symbol = st.Symbol,
                 Side = (st.SmartRegime ?? "").Contains("Down", StringComparison.OrdinalIgnoreCase) ? "SHORT" : "LONG",
-                Confidence = st.Confidence,
+                Confidence = (int)Math.Round(st.Confidence),
                 Reason = st.SmartRegime ?? "ENGINE",
                 Entry = 0,
                 // levels filled when user opens chart prices
