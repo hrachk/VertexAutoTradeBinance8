@@ -293,6 +293,16 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
+            // ------------------ 3b. POSITION GUARD (max 2 entries / symbol) ----------
+            bool wantLong = signal.Side == SignalSide.Buy;
+            var entryDecision = await _guard.EvaluateAsync(symbol, wantLong, signal.IsSuperSignal);
+            if (entryDecision.Block)
+            {
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🛡 GUARD", entryDecision.Reason);
+                _logger.LogInformation("[GUARD][{symbol}] skip: {reason}", symbol, entryDecision.Reason);
+                return;
+            }
+
             // ------------------ 4. RISK-MANAGER v6 --------------------
             decimal safety = signal?.SafetyRiskMultiplier ?? 1.0m;
 
@@ -315,6 +325,14 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
+            // Добор: чуть больше объём (×1.25 / ×1.40 super), но не бесконечные мелкие входы
+            if (entryDecision.IsAdd && entryDecision.QtyMultiplier > 1m)
+            {
+                qty = qty * entryDecision.QtyMultiplier;
+                _logger.LogInformation("[GUARD][{symbol}] ADD size boost ×{m} → qty={q}",
+                    symbol, entryDecision.QtyMultiplier, qty);
+            }
+
             // ------------------ 5. SL OPTIMIZATION -------------------
             signal.StopLoss = _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
 
@@ -329,14 +347,16 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
-            // ------------------ 8. COOLDOWN ---------------------------
+            // ------------------ 8. COOLDOWN + entry count -------------
             MarkTrade(symbol);
+            _guard.RegisterSuccessfulEntry(symbol);
 
             // ------------------ 9. SUPERVISOR -------------------------
             await _supervisor.SuperviseAsync(symbol, signal, ct);
 
             // ------------------ 10. UI -------------------------------
-            ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🟩 OK", $"qty={qty:F4}");
+            var tag = entryDecision.IsAdd ? "ADD" : "NEW";
+            ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🟩 OK", $"{tag} qty={qty:F4}");
  
         }
        

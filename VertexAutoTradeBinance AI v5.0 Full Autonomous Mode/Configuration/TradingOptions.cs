@@ -27,6 +27,9 @@ public class TradingOptions
     /// <summary>Минимальный процент → если позиция получается слишком маленькой</summary>
     public decimal MinNotionalGuardPercent { get; set; } = 0.003m; // 0.3% капитала
 
+    /// <summary>Макс. число входов по одному символу пока позиция открыта (1 = только первый, 2 = +один добор).</summary>
+    public int MaxEntriesPerSymbol { get; set; } = 2;
+
 
 
     
