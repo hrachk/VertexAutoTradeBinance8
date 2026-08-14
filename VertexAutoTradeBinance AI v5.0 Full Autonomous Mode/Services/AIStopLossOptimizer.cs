@@ -47,6 +47,7 @@ namespace VertexAutoTradeBinance8.Services
         private static decimal GetDynamicSlAtrMult(string trend, decimal atrPct)
         {
             // atrPct ожидаем в долях (0.001 = 0.1 %)
+            // RISK FIX 2026-08: floors подняты — убираем SL из зоны noise на crypto futures
             bool strongTrend = trend == "UP" || trend == "DOWN";
             bool ultraLowVol = atrPct < 0.0010m;    // <0.10%
             bool lowVol = atrPct < 0.0020m;    // <0.20%
@@ -55,22 +56,22 @@ namespace VertexAutoTradeBinance8.Services
             if (strongTrend)
             {
                 if (ultraLowVol)
-                    return 1.0m;   // чистый сильный тренд — SL ближе
+                    return 1.2m;   // было 1.0 — даже в тренде не лезем в шум
                 if (lowVol)
-                    return 1.2m;   // нормальный тренд
+                    return 1.35m;  // было 1.2
                 if (highVol)
-                    return 1.5m;   // тренд, но рывки — SL шире
-                return 1.3m;
+                    return 1.7m;   // было 1.5
+                return 1.45m;      // было 1.3
             }
             else
             {
-                // Range / Squeeze / непонятный режим — шире SL
+                // Range / Squeeze — ещё шире
                 if (ultraLowVol)
-                    return 1.4m;
+                    return 1.5m;   // было 1.4
                 if (highVol)
-                    return 1.8m;
+                    return 2.0m;   // было 1.8
 
-                return 1.6m;
+                return 1.7m;       // было 1.6
             }
         }
 
@@ -145,15 +146,28 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // =======================
-            // Динамическая настройка TP
+            // HARD FLOOR: никогда не отдаём SL ближе 1.0 ATR (crypto noise floor)
             // =======================
-            decimal tp = signal.EntryPrice + (atr14 * 2); // TP на 2x ATR от Entry
-            if (signal.Side == SignalSide.Sell)
+            decimal hardFloor = atr14 * 1.0m;
+            decimal distNow = Math.Abs(signal.EntryPrice - newSl);
+            if (distNow < hardFloor && atr14 > 0)
             {
-                tp = signal.EntryPrice - (atr14 * 2); // Для продажи TP будет ниже
+                if (signal.Side == SignalSide.Buy)
+                    newSl = signal.EntryPrice - hardFloor;
+                else
+                    newSl = signal.EntryPrice + hardFloor;
             }
 
-            // Записываем TP в сигнал (раньше только логировали → OrderExecutor видел tp=0)
+            // =======================
+            // Динамическая настройка TP (под расширенный SL, RR ≈ 1.8–2.2)
+            // =======================
+            decimal slDist = Math.Abs(signal.EntryPrice - newSl);
+            decimal tpDist = Math.Max(atr14 * 2.0m, slDist * 1.8m); // не хуже ~1.8R
+            decimal tp = signal.Side == SignalSide.Buy
+                ? signal.EntryPrice + tpDist
+                : signal.EntryPrice - tpDist;
+
+            // Записываем TP в сигнал
             signal.TakeProfit = tp;
             if (signal.TakeProfits == null)
                 signal.TakeProfits = new List<decimal>();
@@ -162,9 +176,11 @@ namespace VertexAutoTradeBinance8.Services
             else
                 signal.TakeProfits[0] = tp;
 
+            signal.StopLoss = newSl;
+
             _logger.LogInformation(
-                "AI-SL/TP Updated: Symbol={Symbol}, oldSL={Old:F4}, newSL={New:F4}, TP={Tp:F4}, atr={Atr:F4}, trend={Trend}, dynMult={Mult:F2}",
-                symbol, oldSl, newSl, tp, atr14, decision.Trend, dynMult);
+                "AI-SL/TP Updated: Symbol={Symbol}, oldSL={Old:F4}, newSL={New:F4}, TP={Tp:F4}, atr={Atr:F4}, trend={Trend}, dynMult={Mult:F2}, slDistAtr={Dist:F2}",
+                symbol, oldSl, newSl, tp, atr14, decision.Trend, dynMult, atr14 > 0 ? slDist / atr14 : 0m);
 
             return newSl;
         }
