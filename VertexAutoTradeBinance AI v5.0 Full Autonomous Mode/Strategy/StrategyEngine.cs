@@ -459,13 +459,14 @@ namespace VertexAutoTradeBinance8.Strategy
                 ? entry - atr * 1.2m
                 : entry + atr * 1.2m;
 
+            // RR ≈ 2.4 at SL 1.2 ATR — запас над minRr с AI-bias
             decimal tp1 = upTrend
-                ? entry + atr * 2.5m
-                : entry - atr * 2.5m;
+                ? entry + atr * 2.9m
+                : entry - atr * 2.9m;
 
             decimal tp2 = upTrend
-                ? entry + atr * 3.5m
-                : entry - atr * 3.5m;
+                ? entry + atr * 4.0m
+                : entry - atr * 4.0m;
 
             var s = new TradeSignal
             {
@@ -633,10 +634,11 @@ namespace VertexAutoTradeBinance8.Strategy
                 }
                 else
                 {
-                    // сигнал против AI-тренда → ужесточаем RR
+                    // сигнал против AI-тренда → чуть строже, но не до 2.2+ (убивало soft RR=2.08)
                     var extra = (1.0m - trend.RrBias);
                     if (extra < 0) extra = 0;
-                    minRr *= 1.0m + extra;           // +0…0.25
+                    if (extra > 0.12m) extra = 0.12m;
+                    minRr *= 1.0m + extra;
                 }
 
                 _logger.LogDebug(
@@ -645,7 +647,7 @@ namespace VertexAutoTradeBinance8.Strategy
 
             // safety-коридор
             if (minRr < 1.50m) minRr = 1.50m;
-            if (minRr > 2.40m) minRr = 2.40m;
+            if (minRr > 2.10m) minRr = 2.10m; // cap: soft/structure TP ~2.0–2.4R
 
             _logger.LogDebug(
                 $"[STRAT][{symbol}][{interval}] Dynamic RR итог: minRR={minRr:F2}, regime={regime}, smart={smartType}, slope={slope:P2}, vol={vol:P2}, atr%={atrPct:P2}");
@@ -1079,21 +1081,51 @@ $@"📊 Режим рынка:
 
                 if (rr < minRr)
                 {
-                    _aiLearning.RecordMarketStateTriggered(
-                        reason: "RR_BLOCK",
-                        symbol: symbol,
-                        timeframe: interval.ToString(),
-                        regime: smart.BaseRegime,
-                        slope: smart.TrendSlopePercent,
-                        volatility: smart.VolatilityPercent,
-                        atr: baseSignal.Atr ?? 0,
-                        confidence: smart.Confidence
-                    );
+                    // Structure SL часто шире ATR*mult → RR падает.
+                    // Растягиваем TP до minRr вместо мгновенного kill.
+                    decimal needTpDist = slDist * minRr;
+                    if (baseSignal.Side == SignalSide.Buy)
+                    {
+                        baseSignal.TakeProfits[0] = baseSignal.EntryPrice + needTpDist;
+                        if (baseSignal.TakeProfits.Count > 1)
+                            baseSignal.TakeProfits[1] = baseSignal.EntryPrice + needTpDist * 1.35m;
+                        if (baseSignal.TakeProfits.Count > 2)
+                            baseSignal.TakeProfits[2] = baseSignal.EntryPrice + needTpDist * 1.7m;
+                    }
+                    else
+                    {
+                        baseSignal.TakeProfits[0] = baseSignal.EntryPrice - needTpDist;
+                        if (baseSignal.TakeProfits.Count > 1)
+                            baseSignal.TakeProfits[1] = baseSignal.EntryPrice - needTpDist * 1.35m;
+                        if (baseSignal.TakeProfits.Count > 2)
+                            baseSignal.TakeProfits[2] = baseSignal.EntryPrice - needTpDist * 1.7m;
+                    }
+
+                    tp1 = baseSignal.TakeProfits[0];
+                    tpDist = Math.Abs(tp1 - baseSignal.EntryPrice);
+                    rr = tpDist / slDist;
 
                     _logger.LogInformation(
-                        $"🚫 RR filter: RR={rr:F2} < minRR={minRr:F2} (entry={baseSignal.EntryPrice:F4}, SL={baseSignal.StopLoss:F4}, TP1={tp1:F4}) → сигнал отброшен.");
-                    _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    return null;
+                        $"⚠ RR stretch: was below minRR={minRr:F2} → TP1 adjusted to {tp1:F4}, RR={rr:F2}");
+
+                    if (rr < minRr * 0.98m)
+                    {
+                        _aiLearning.RecordMarketStateTriggered(
+                            reason: "RR_BLOCK",
+                            symbol: symbol,
+                            timeframe: interval.ToString(),
+                            regime: smart.BaseRegime,
+                            slope: smart.TrendSlopePercent,
+                            volatility: smart.VolatilityPercent,
+                            atr: baseSignal.Atr ?? 0,
+                            confidence: smart.Confidence
+                        );
+
+                        _logger.LogInformation(
+                            $"🚫 RR filter: RR={rr:F2} < minRR={minRr:F2} after stretch → сигнал отброшен.");
+                        _logger.LogInformation("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                        return null;
+                    }
                 }
 
                 _logger.LogInformation(
