@@ -63,19 +63,22 @@ namespace VertexAutoTradeBinance8.Strategy
         private static (decimal slMult, decimal tp1Mult, decimal tp2Mult, decimal tp3Mult)
             GetAtrConfig(KlineInterval interval)
         {
-            // RISK FIX 2026-08: SL вынесен из зоны шума (было 0.8/1.2 → слишком tight на crypto)
-            // Цель: меньше stop-out по wick/noise → выше net winrate / expectancy
+            // RISK FIX: SL вне шума + TP согласован с RR-фильтром (TP1/SL ≥ ~2.0R)
+            // Иначе после расширения SL все сигналы умирали на RR_BLOCK.
             return interval switch
             {
+                // SL 1.3 → TP1 2.7 (RR≈2.08), TP2 3.5, TP3 4.5
                 KlineInterval.OneMinute or KlineInterval.FiveMinutes
-                    => (1.3m, 1.6m, 2.4m, 3.4m),   // M1/M5: SL ~1.3 ATR (было 0.8 — в шуме)
+                    => (1.3m, 2.7m, 3.5m, 4.5m),
+                // SL 1.5 → TP1 3.0 (RR=2.0)
                 KlineInterval.FifteenMinutes
-                    => (1.5m, 1.8m, 2.6m, 3.6m),   // M15: чуть шире
+                    => (1.5m, 3.0m, 4.0m, 5.2m),
+                // SL 2.0 → TP1 4.0 (RR=2.0)
                 KlineInterval.OneHour or KlineInterval.FourHour
-                    => (2.0m, 1.8m, 2.8m, 3.8m),   // H1/H4: без изменений
+                    => (2.0m, 4.0m, 5.5m, 7.0m),
                 KlineInterval.OneDay
-                    => (2.5m, 2.0m, 3.0m, 4.5m),   // D1: без изменений
-                _ => (1.3m, 1.6m, 2.4m, 3.4m)
+                    => (2.5m, 5.0m, 7.0m, 9.0m),
+                _ => (1.3m, 2.7m, 3.5m, 4.5m)
             };
         }
 
@@ -451,19 +454,18 @@ namespace VertexAutoTradeBinance8.Strategy
             var side = upTrend ? SignalSide.Buy : SignalSide.Sell;
 
             decimal entry = c.ClosePrice;
-            // RISK FIX: soft probe больше не ставит SL в шум (0.6 ATR → 1.2 ATR)
+            // Soft: SL 1.2 ATR (вне шума), TP1 2.5 ATR → RR ≈ 2.08 (проходит minRr)
             decimal sl = upTrend
                 ? entry - atr * 1.2m
                 : entry + atr * 1.2m;
 
-            // TP поднят, чтобы RR оставался ≥ ~1.5 после расширения SL
             decimal tp1 = upTrend
-                ? entry + atr * 1.8m
-                : entry - atr * 1.8m;
+                ? entry + atr * 2.5m
+                : entry - atr * 2.5m;
 
             decimal tp2 = upTrend
-                ? entry + atr * 2.6m
-                : entry - atr * 2.6m;
+                ? entry + atr * 3.5m
+                : entry - atr * 3.5m;
 
             var s = new TradeSignal
             {
@@ -583,28 +585,26 @@ namespace VertexAutoTradeBinance8.Strategy
             bool highVol = vol >= 0.015m || atrPct >= 0.015m;     // > 1.5%
             bool lowVol = vol <= 0.005m || atrPct <= 0.005m;      // < 0.5%
 
-            decimal minRr = 2.0m; // базовый
+            // Согласовано с ATR-конфигом (цель ~2.0R на TP1). Не завышаем minRr впустую.
+            decimal minRr = 1.85m; // базовый (было 2.0)
 
             if (isSqueeze)
             {
-                // рынок в капкане → требуем максимальный запас по RR
-                minRr = 2.5m;
+                minRr = 2.2m; // было 2.5 — squeeze всё ещё строже
             }
             else if (isStrongTrendLike && strongSlope)
             {
-                // сильный тренд + норм/высокая волатильность → можно ослабить RR
                 if (highVol)
-                    minRr = 1.7m; // хай-вола: swing-амплитуда большая
+                    minRr = 1.60m; // было 1.7
                 else
-                    minRr = 1.8m;
+                    minRr = 1.70m; // было 1.8
             }
             else
             {
-                // слабый / обычный тренд
                 if (lowVol)
-                    minRr = 2.2m; // рынок вязкий → требуем больше RR
+                    minRr = 2.0m;  // было 2.2
                 else
-                    minRr = 2.0m;
+                    minRr = 1.85m;
             }
 
             // --- AI TREND PREDICTOR (QUANT-REALTIME MAX) --------------------
@@ -644,8 +644,8 @@ namespace VertexAutoTradeBinance8.Strategy
             }
 
             // safety-коридор
-            if (minRr < 1.4m) minRr = 1.4m;
-            if (minRr > 2.6m) minRr = 2.6m;
+            if (minRr < 1.50m) minRr = 1.50m;
+            if (minRr > 2.40m) minRr = 2.40m;
 
             _logger.LogDebug(
                 $"[STRAT][{symbol}][{interval}] Dynamic RR итог: minRR={minRr:F2}, regime={regime}, smart={smartType}, slope={slope:P2}, vol={vol:P2}, atr%={atrPct:P2}");

@@ -162,7 +162,7 @@ namespace VertexAutoTradeBinance8.Services
             // Динамическая настройка TP (под расширенный SL, RR ≈ 1.8–2.2)
             // =======================
             decimal slDist = Math.Abs(signal.EntryPrice - newSl);
-            decimal tpDist = Math.Max(atr14 * 2.0m, slDist * 1.8m); // не хуже ~1.8R
+            decimal tpDist = Math.Max(atr14 * 2.5m, slDist * 2.0m); // ≥ ~2.0R, согласовано с RR-фильтром
             decimal tp = signal.Side == SignalSide.Buy
                 ? signal.EntryPrice + tpDist
                 : signal.EntryPrice - tpDist;
