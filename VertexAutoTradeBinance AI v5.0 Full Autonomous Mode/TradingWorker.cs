@@ -43,6 +43,7 @@ namespace VertexAutoTradeBinance8
         private readonly EngineStateBuilder  _engineState;
         private readonly EngineStateSnapshotService  _engineStateSnapshot;
         private readonly ExecutedSignalService _executedSignals;
+        private readonly TradingSessionGate _sessionGate;
         private readonly Dictionary<string, DateTime> _lastClose = new(StringComparer.OrdinalIgnoreCase);
 
 
@@ -88,7 +89,8 @@ namespace VertexAutoTradeBinance8
             AiTimeframeSelectorService tfSelector,
             EngineStateBuilder engineState,
             EngineStateSnapshotService engineStateSnapshot,
-            ExecutedSignalService executedSignals)
+            ExecutedSignalService executedSignals,
+            TradingSessionGate sessionGate)
         {
             _logger = logger;
 
@@ -116,6 +118,7 @@ namespace VertexAutoTradeBinance8
             _engineState = engineState;
             _engineStateSnapshot = engineStateSnapshot;
             _executedSignals = executedSignals;
+            _sessionGate = sessionGate;
             learn.ForceSnapshot();
         }
 
@@ -148,6 +151,7 @@ namespace VertexAutoTradeBinance8
             while (!ct.IsCancellationRequested)
             {
                 await RunQuantRealtimeTick(ct);
+                _sessionGate.LogStatusThrottled();
 
                 foreach (var symbol in _symbols.ActiveSymbols)
                 {
@@ -387,10 +391,24 @@ namespace VertexAutoTradeBinance8
             // ------------------ 5. SL OPTIMIZATION -------------------
             signal.StopLoss = _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
 
-            // ------------------ 6. CLEANUP OLD ORDERS -----------------
+            // ------------------ 6. SESSION GATE (London + NY + early start) ----------
+            // Вне сессий: анализ уже прошёл выше; новый вход запрещён. Supervisor снаружи цикла жив.
+            if (!_sessionGate.IsTradingAllowed(out var sessionReason, out var activeSession))
+            {
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "👁 OBS", "Session off");
+                _logger.LogInformation(
+                    "[SESSION][{symbol}] signal ready but OBSERVE ONLY — {reason}",
+                    symbol, sessionReason);
+                return;
+            }
+
+            // ------------------ 7. CLEANUP OLD ORDERS -----------------
             await _cleaner.CleanupOutdatedOrdersAsync(symbol, signal, ct);
 
-            // ------------------ 7. EXECUTE ORDER ----------------------
+            // ------------------ 8. EXECUTE ORDER ----------------------
+            _logger.LogInformation(
+                "[SESSION][{symbol}] TRADING window active={sess} — executing",
+                symbol, activeSession);
             var result = await _executor.ExecuteAsync(signal, qty, ct);
             if (!result.Success)
             {

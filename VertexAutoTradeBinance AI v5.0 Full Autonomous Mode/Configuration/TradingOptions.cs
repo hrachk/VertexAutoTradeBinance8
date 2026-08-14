@@ -60,4 +60,42 @@ public class TradingOptions
     public bool LowerRegimeThreshold { set; get; } = false;
 
 
+
+
+    /// <summary>
+    /// Торговые сессии: вне окон — только наблюдение/анализ, без новых входов.
+    /// </summary>
+    public TradingSessionsOptions TradingSessions { get; set; } = new();
+}
+
+/// <summary>Окно одной биржевой сессии (время в UTC, HH:mm).</summary>
+public class SessionWindowOptions
+{
+    public string Name { get; set; } = "";
+    /// <summary>Начало сессии UTC, формат "HH:mm" или "H:mm".</summary>
+    public string StartUtc { get; set; } = "07:00";
+    /// <summary>Конец сессии UTC (не включая, если End &lt; Start — через полночь).</summary>
+    public string EndUtc { get; set; } = "16:00";
+}
+
+public class TradingSessionsOptions
+{
+    /// <summary>true = фильтр сессий включён.</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Насколько раньше официального open разрешать торги (минуты).
+    /// 60 = за час до London/NY open.
+    /// </summary>
+    public int EarlyStartMinutes { get; set; } = 60;
+
+    /// <summary>
+    /// Разрешённые сессии. По умолчанию London + NewYork (эффективный блок дня).
+    /// Overlap 12:00–16 UTC автоматически внутри объединения окон.
+    /// </summary>
+    public List<SessionWindowOptions> Windows { get; set; } = new()
+    {
+        new() { Name = "London", StartUtc = "07:00", EndUtc = "16:00" },
+        new() { Name = "NewYork", StartUtc = "12:00", EndUtc = "21:00" }
+    };
 }

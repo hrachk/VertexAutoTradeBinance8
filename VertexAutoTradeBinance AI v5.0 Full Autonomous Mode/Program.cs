@@ -53,6 +53,7 @@ public class Program
                 services.AddSingleton<TradeSignalMemoryService>();
                 services.AddSingleton<ManualPositionHandler>();
                 services.AddSingleton<ManagedPositionRegistry>();
+                services.AddSingleton<TradingSessionGate>();
                 services.AddSingleton<AiLeverageService>();
 
                 services.AddSingleton<AiLiquidityClusterService>();
