@@ -1325,7 +1325,7 @@ namespace VertexAutoTradeBinance8.Services
             decimal atr = CalculateAtr(klines);
             if (atr <= 0) atr = entryPrice * 0.005m; // fallback 0.5%
 
-            decimal currentSl = slOrder.StopPrice;
+            decimal currentSl = (decimal)slOrder.StopPrice;
 
             // =============================================================
             // BREAK-EVEN LOCK v1
