@@ -959,21 +959,71 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             var last = klines.Last();
+            // Mark price предпочтительнее close — меньше ложных BE на wick
             decimal mark = last.ClosePrice;
+            try
+            {
+                var mp = await GetMarkPriceSafeAsync(client, symbol, last.ClosePrice, ct);
+                if (mp > 0) mark = mp;
+            }
+            catch { /* keep close */ }
 
             PositionSide realSide = side;
             if (side == PositionSide.Both)
                 realSide = mark >= entryPrice ? PositionSide.Long : PositionSide.Short;
 
             decimal atr = CalculateAtr(klines);
-            if (atr <= 0) return;
+            if (atr <= 0) atr = entryPrice * 0.005m; // fallback 0.5%
+
+            decimal currentSl = slOrder.StopPrice;
+
+            // =============================================================
+            // BREAK-EVEN LOCK v1
+            // Как только позиция в плюсе — сразу тянем SL на entry.
+            // Цель: не отдавать депозит, если цена развернулась после плюса.
+            // Триггер: прибыль ≥ max(0.20×ATR, 0.12% цены) — фильтр шума.
+            // =============================================================
+            decimal beBuffer = Math.Max(atr * 0.20m, entryPrice * 0.0012m);
+            bool inProfit = realSide == PositionSide.Long
+                ? mark >= entryPrice + beBuffer
+                : mark <= entryPrice - beBuffer;
+
+            if (inProfit && entryPrice > 0)
+            {
+                // Чуть выше/ниже entry, чтобы покрыть комиссии (~0.04–0.08%)
+                decimal feePad = entryPrice * 0.0004m;
+                decimal beSl = realSide == PositionSide.Long
+                    ? entryPrice + feePad
+                    : entryPrice - feePad;
+
+                bool needBe = realSide == PositionSide.Long
+                    ? currentSl < beSl
+                    : (currentSl <= 0 || currentSl > beSl);
+
+                if (needBe)
+                {
+                    _logger.LogInformation(
+                        "[SUPERVISOR][{symbol}] BREAK-EVEN LOCK → SL {old} → {be} (entry={entry}, mark={mark})",
+                        symbol, currentSl, beSl, entryPrice, mark);
+
+                    await UpdateSLAsync(
+                        client, symbol, realSide, qty,
+                        slOrder, entryPrice, beSl,
+                        signal, ct);
+
+                    // после BE обновляем локальный currentSl для дальнейшего трейла
+                    currentSl = beSl;
+                    // перечитаем algo SL id может смениться — следующий цикл подхватит
+                }
+            }
 
             var contLevel = EvaluateTrendContinuation(realSide, entryPrice, atr, klines);
 
+            // HIGH trend: не трогаем агрессивный trail, но BE уже поставлен выше
             if (contLevel == TrendContinuationLevel.High)
             {
                 _logger.LogInformation(
-                    "[SUPERVISOR] {symbol} {side}: trend continuation HIGH → trailing HOLD (keep SL as is)",
+                    "[SUPERVISOR] {symbol} {side}: trend continuation HIGH → trailing HOLD (BE already applied if in profit)",
                     symbol, realSide);
                 return;
             }
@@ -1006,6 +1056,21 @@ namespace VertexAutoTradeBinance8.Services
                 PositionSide.Short => new[] { slAtr, slEma, slSt, slMicro }.Min(),
                 _ => signal.StopLoss
             };
+
+            // Пол после BE: никогда не опускаем SL ниже entry, если уже были в плюсе
+            if (inProfit)
+            {
+                if (realSide == PositionSide.Long)
+                    targetSl = Math.Max(targetSl, entryPrice);
+                else if (realSide == PositionSide.Short)
+                    targetSl = Math.Min(targetSl, entryPrice);
+            }
+
+            // Тянем SL только в прибыльную сторону (не ослабляем)
+            if (realSide == PositionSide.Long && targetSl <= currentSl)
+                return;
+            if (realSide == PositionSide.Short && currentSl > 0 && targetSl >= currentSl)
+                return;
 
             await UpdateSLAsync(
                 client, symbol, realSide, qty,
