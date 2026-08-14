@@ -84,10 +84,10 @@ public class Program
                 services.AddHostedService<BackgroundMarketScannerService>();
                 services.AddSingleton<SymbolLiquidityScanner>();
                 services.AddHostedService<TradingWorker>();
-                services.AddSingleton<SymbolRegistryService>();
                 services.AddSingleton<AiTimeframeSelectorService>();
 
                 services.AddSingleton<ExecutedSignalService>();
+                services.AddSingleton<SymbolRegistryService>();
 
 
             })
