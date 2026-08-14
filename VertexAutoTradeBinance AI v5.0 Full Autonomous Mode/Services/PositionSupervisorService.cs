@@ -37,6 +37,8 @@ namespace VertexAutoTradeBinance8.Services
         private readonly AiMarketRegimeService _regime;
         private readonly ManualPositionHandler _manualHandler;
         private readonly ExecutedSignalService _executed;
+        private readonly ManagedPositionRegistry _managed;
+        private readonly TradeSignalMemoryService _signalMemory;
 
         private MarketRegime _regimeNow;
 
@@ -65,7 +67,9 @@ namespace VertexAutoTradeBinance8.Services
             MarketDataService marketData,
             AiMarketRegimeService regime,
             ManualPositionHandler manualHandler,
-            ExecutedSignalService executed)
+            ExecutedSignalService executed,
+            ManagedPositionRegistry managed,
+            TradeSignalMemoryService signalMemory)
         {
             _logger = logger;
             _factory = factory;
@@ -76,6 +80,8 @@ namespace VertexAutoTradeBinance8.Services
             _regime = regime;
             _manualHandler = manualHandler;
             _executed = executed;
+            _managed = managed;
+            _signalMemory = signalMemory;
 
             _regimeNow = MarketRegime.Range;
         }
@@ -83,6 +89,212 @@ namespace VertexAutoTradeBinance8.Services
         // --------------------------------------------------------------------
         // PATCH BLOCK: ручная проверка SL/TP для уже открытых позиций
         // --------------------------------------------------------------------
+
+        // --------------------------------------------------------------------
+        // SMART RESTORE: только bot-managed. Manual не трогаем.
+        // --------------------------------------------------------------------
+        private async Task EnsureProtectionForManagedAsync(
+            BinanceRestClient client,
+            string symbol,
+            BinancePositionDetailsUsdt pos,
+            PositionSide side,
+            TradeSignal? signal,
+            decimal tick,
+            CancellationToken ct)
+        {
+            if (!_managed.CanAttemptRestore(symbol, side) && _managed.IsManaged(symbol, side))
+            {
+                _logger.LogWarning("[SUPERVISOR][{symbol}] restore paused (too many fails)", symbol);
+                return;
+            }
+
+            // Если ещё не в registry, но signal бота есть — зарегистрировать
+            if (!_managed.IsManaged(symbol, side) && signal != null && !signal.IsManual)
+                _managed.RegisterFromSignal(signal, pos.EntryPrice);
+
+            var info = _managed.Get(symbol, side);
+
+            // AllowManualOverride / user cleared → не восстанавливаем
+            if (info != null && (info.AllowManualOverride || info.UserClearedProtection))
+            {
+                _logger.LogInformation("[SUPERVISOR][{symbol}] manual override — skip restore", symbol);
+                return;
+            }
+
+            bool hasSl = await HasStopLossAsync(client, symbol, side, ct);
+            bool hasTp = await HasTakeProfitAsync(client, symbol, side, ct);
+
+            if (hasSl && hasTp)
+                return;
+
+            decimal entry = pos.EntryPrice > 0 ? pos.EntryPrice : (signal?.EntryPrice ?? 0);
+            decimal qty = Math.Abs(pos.Quantity);
+            if (entry <= 0 || qty <= 0) return;
+
+            if (!hasSl)
+            {
+                decimal sl = 0;
+                if (info != null && info.CalculatedSL > 0) sl = info.CalculatedSL;
+                else if (signal != null && signal.StopLoss > 0) sl = signal.StopLoss;
+
+                if (sl <= 0)
+                {
+                    // fallback ATR ~1.3
+                    try
+                    {
+                        var kl = await _marketData.GetKlines(symbol, KlineInterval.OneMinute, 100);
+                        var atr = _marketData.CalculateAtr(kl, 14);
+                        if (atr > 0)
+                            sl = side == PositionSide.Long ? entry - atr * 1.3m : entry + atr * 1.3m;
+                    }
+                    catch { }
+                }
+
+                if (sl <= 0)
+                    sl = side == PositionSide.Long ? entry * 0.987m : entry * 1.013m;
+
+                sl = Math.Round(sl / tick) * tick;
+                var ok = await PlaceManagedSlAsync(client, symbol, side, qty, sl, ct);
+                _managed.MarkRestoreAttempt(symbol, side, ok);
+                if (ok)
+                    _logger.LogWarning("[SUPERVISOR][{symbol}] SMART RESTORE SL @ {sl} (bot-managed)", symbol, sl);
+            }
+
+            if (!hasTp)
+            {
+                decimal tp = 0;
+                if (info != null && info.CalculatedTPs.Count > 0) tp = info.CalculatedTPs[0];
+                else if (signal?.TakeProfit is > 0) tp = signal.TakeProfit.Value;
+                else if (signal?.TakeProfits != null && signal.TakeProfits.Count > 0) tp = signal.TakeProfits[0];
+
+                if (tp <= 0)
+                {
+                    try
+                    {
+                        var kl = await _marketData.GetKlines(symbol, KlineInterval.OneMinute, 100);
+                        var atr = _marketData.CalculateAtr(kl, 14);
+                        if (atr > 0)
+                            tp = side == PositionSide.Long ? entry + atr * 2.0m : entry - atr * 2.0m;
+                    }
+                    catch { }
+                }
+
+                if (tp <= 0)
+                    tp = side == PositionSide.Long ? entry * 1.02m : entry * 0.98m;
+
+                tp = Math.Round(tp / tick) * tick;
+                var ok = await PlaceManagedTpAsync(client, symbol, side, qty, tp, ct);
+                _managed.MarkRestoreAttempt(symbol, side, ok);
+                if (ok)
+                    _logger.LogWarning("[SUPERVISOR][{symbol}] SMART RESTORE TP @ {tp} (bot-managed)", symbol, tp);
+            }
+        }
+
+        private async Task<bool> HasStopLossAsync(BinanceRestClient client, string symbol, PositionSide side, CancellationToken ct)
+        {
+            var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+            var orders = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
+            if (orders.Success && orders.Data != null &&
+                orders.Data.Any(o => o.Side == closeSide &&
+                    (o.Type == FuturesOrderType.StopMarket || o.Type == FuturesOrderType.Stop) &&
+                    (o.PositionSide == side || o.PositionSide == PositionSide.Both)))
+                return true;
+
+            try
+            {
+                var algo = await client.UsdFuturesApi.Trading.GetOpenConditionalOrdersAsync(symbol: symbol, ct: ct);
+                if (algo.Success && algo.Data != null &&
+                    algo.Data.Any(o => o.Side == closeSide &&
+                        (o.Type == FuturesOrderType.StopMarket || o.Type == FuturesOrderType.Stop) &&
+                        (o.PositionSide == side || o.PositionSide == PositionSide.Both)))
+                    return true;
+            }
+            catch { }
+            return false;
+        }
+
+        private async Task<bool> HasTakeProfitAsync(BinanceRestClient client, string symbol, PositionSide side, CancellationToken ct)
+        {
+            var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+            var orders = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
+            if (orders.Success && orders.Data != null &&
+                orders.Data.Any(o => o.Side == closeSide &&
+                    (o.Type == FuturesOrderType.TakeProfitMarket || o.Type == FuturesOrderType.TakeProfit ||
+                     (o.Type == FuturesOrderType.Limit && o.ReduceOnly == true)) &&
+                    (o.PositionSide == side || o.PositionSide == PositionSide.Both)))
+                return true;
+
+            try
+            {
+                var algo = await client.UsdFuturesApi.Trading.GetOpenConditionalOrdersAsync(symbol: symbol, ct: ct);
+                if (algo.Success && algo.Data != null &&
+                    algo.Data.Any(o => o.Side == closeSide &&
+                        (o.Type == FuturesOrderType.TakeProfitMarket || o.Type == FuturesOrderType.TakeProfit) &&
+                        (o.PositionSide == side || o.PositionSide == PositionSide.Both)))
+                    return true;
+            }
+            catch { }
+            return false;
+        }
+
+        private async Task<bool> PlaceManagedSlAsync(
+            BinanceRestClient client, string symbol, PositionSide side, decimal qty, decimal sl, CancellationToken ct)
+        {
+            try
+            {
+                var res = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                    symbol: symbol,
+                    side: side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
+                    type: ConditionalOrderType.StopMarket,
+                    quantity: qty,
+                    triggerPrice: sl,
+                    positionSide: side,
+                    workingType: WorkingType.Mark,
+                    timeInForce: TimeInForce.GoodTillCanceled,
+                    ct: ct);
+                if (!res.Success)
+                {
+                    _logger.LogError("[SUPERVISOR] SMART SL fail {symbol}: {err}", symbol, res.Error);
+                    return false;
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SUPERVISOR] SMART SL exception {symbol}", symbol);
+                return false;
+            }
+        }
+
+        private async Task<bool> PlaceManagedTpAsync(
+            BinanceRestClient client, string symbol, PositionSide side, decimal qty, decimal tp, CancellationToken ct)
+        {
+            try
+            {
+                var res = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                    symbol: symbol,
+                    side: side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
+                    type: ConditionalOrderType.TakeProfitMarket,
+                    quantity: qty,
+                    triggerPrice: tp,
+                    positionSide: side,
+                    workingType: WorkingType.Mark,
+                    timeInForce: TimeInForce.GoodTillCanceled,
+                    ct: ct);
+                if (!res.Success)
+                {
+                    _logger.LogError("[SUPERVISOR] SMART TP fail {symbol}: {err}", symbol, res.Error);
+                    return false;
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SUPERVISOR] SMART TP exception {symbol}", symbol);
+                return false;
+            }
+        }
+
         private async Task<bool> EnsureStopLossExists(
             BinanceRestClient client,
             string symbol,
@@ -213,14 +425,26 @@ namespace VertexAutoTradeBinance8.Services
         {
             using var client = _factory.CreateRestClient();
 
-            // 0) Detect manual position
+            // 0) Resolve ownership signal (bot vs pure manual)
+            // Binance не имеет MagicNumber — ownership = registry / memory / non-manual signal
             if (lastSignal == null)
+            {
+                var mem = _signalMemory.GetLastSignal(symbol);
+                if (mem != null && !mem.IsManual)
+                    lastSignal = mem;
+            }
+
+            // Pure manual detection ONLY for logging — НЕ управляем ею
+            if (lastSignal == null && !_managed.IsManagedAny(symbol))
             {
                 var manualSignal = await _manualHandler.DetectManualAsync(client, symbol, ct);
                 if (manualSignal != null)
                 {
+                    // IsManual=true → supervisor пропустит restore/trail
                     lastSignal = manualSignal;
-                    _logger.LogWarning("[MANUAL][{symbol}] Virtual signal injected", symbol);
+                    _logger.LogInformation(
+                        "[SUPERVISOR][{symbol}] pure MANUAL position — bot will NOT manage SL/TP/trail",
+                        symbol);
                 }
             }
 
@@ -232,21 +456,6 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-            // PATCH: manual positions SL/TP ensure
-            var posResult = await client.UsdFuturesApi.Account.GetPositionInformationAsync(symbol);
-            var posForPatch = posResult.Data?.FirstOrDefault();
-
-            if (posForPatch != null && posForPatch.Quantity != 0)
-            {
-                _logger.LogInformation("[PATCH] Existing/manual position detected for {symbol}. Checking SL/TP…", symbol);
-
-                var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-                var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
-
-                await EnsureStopLossExists(client, symbol, posForPatch, tick);
-                await EnsureTakeProfitExists(client, symbol, posForPatch, tick);
-            }
-
             var longPos = posInfo.Data.FirstOrDefault(p => p.PositionSide == PositionSide.Long);
             var shortPos = posInfo.Data.FirstOrDefault(p => p.PositionSide == PositionSide.Short);
 
@@ -255,11 +464,36 @@ namespace VertexAutoTradeBinance8.Services
 
             if (!hasLong && !hasShort)
             {
-                _logger.LogInformation("[SUPERVISOR] {symbol}: no positions — ensuring residual orders are cleared", symbol);
-                // Safety net: if position already gone (restart / missed transition) still wipe leftover SL/TP
+                _logger.LogInformation("[SUPERVISOR] {symbol}: no positions — clear residual + unregister managed", symbol);
                 await CancelAllOrdersForSymbolAsync(client, symbol, PositionSide.Long, ct);
                 await CancelAllOrdersForSymbolAsync(client, symbol, PositionSide.Short, ct);
+                _managed.UnregisterAll(symbol);
+                _signalMemory.Clear(symbol);
                 return;
+            }
+
+            // 1b) SMART RESTORE только для BOT-managed позиций (не manual)
+            var filters0 = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+            var tick0 = filters0.tickSize <= 0 ? 0.0001m : filters0.tickSize;
+
+            if (hasLong)
+            {
+                bool botLong = _managed.IsManaged(symbol, PositionSide.Long) ||
+                               (lastSignal != null && !lastSignal.IsManual && lastSignal.Side == SignalSide.Buy);
+                if (botLong)
+                    await EnsureProtectionForManagedAsync(client, symbol, longPos!, PositionSide.Long, lastSignal, tick0, ct);
+                else
+                    _logger.LogDebug("[SUPERVISOR][{symbol}] LONG is not bot-managed — skip ensure", symbol);
+            }
+
+            if (hasShort)
+            {
+                bool botShort = _managed.IsManaged(symbol, PositionSide.Short) ||
+                                (lastSignal != null && !lastSignal.IsManual && lastSignal.Side == SignalSide.Sell);
+                if (botShort)
+                    await EnsureProtectionForManagedAsync(client, symbol, shortPos!, PositionSide.Short, lastSignal, tick0, ct);
+                else
+                    _logger.LogDebug("[SUPERVISOR][{symbol}] SHORT is not bot-managed — skip ensure", symbol);
             }
 
             // 2) Load open orders
@@ -507,8 +741,11 @@ namespace VertexAutoTradeBinance8.Services
                     symbol, prevEntry, exitPrice, pnl
                 );
 
-                // CRITICAL: after full close (TP / SL / manual) — remove ALL leftover protective orders for this coin
+                // CRITICAL: after full close — clear orders + ownership
                 await CancelAllOrdersForSymbolAsync(client, symbol, side, ct);
+                _managed.Unregister(symbol, side);
+                if (!_managed.IsManagedAny(symbol))
+                    _signalMemory.Clear(symbol);
 
                 return;
             }
@@ -516,6 +753,19 @@ namespace VertexAutoTradeBinance8.Services
             if (qty <= 0)
             {
                 _logger.LogInformation("[SUPERVISOR] {symbol} {side}: no qty", symbol, side);
+                return;
+            }
+
+            // Pure manual / not owned by bot → do not trail, do not emergency-create
+            bool isBotManaged =
+                _managed.IsManaged(symbol, side) ||
+                (signal != null && !signal.IsManual);
+
+            if (!isBotManaged)
+            {
+                _logger.LogInformation(
+                    "[SUPERVISOR][{symbol}] {side} MANUAL/external — ignore (no SL/TP restore, no trail)",
+                    symbol, side);
                 return;
             }
 

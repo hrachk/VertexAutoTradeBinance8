@@ -52,6 +52,7 @@ public class Program
                 services.AddSingleton<RecoverLostOrdersService>();
                 services.AddSingleton<TradeSignalMemoryService>();
                 services.AddSingleton<ManualPositionHandler>();
+                services.AddSingleton<ManagedPositionRegistry>();
                 services.AddSingleton<AiLeverageService>();
 
                 services.AddSingleton<AiLiquidityClusterService>();

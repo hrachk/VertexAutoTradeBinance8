@@ -30,6 +30,8 @@ namespace VertexAutoTradeBinance8.Services
         private readonly MarketDataService _marketData;
         private readonly AiMarketRegimeService _marketRegimeService;
         private readonly SmartRegimeService _smartRegime;
+        private readonly TradeSignalMemoryService _signalMemory;
+        private readonly ManagedPositionRegistry _managed;
 
         public OrderExecutor(
             ILogger<OrderExecutor> logger,
@@ -39,7 +41,9 @@ namespace VertexAutoTradeBinance8.Services
             ExecutedSignalService executedSignalService,
             MarketDataService marketData,
             AiMarketRegimeService marketRegimeService,
-            SmartRegimeService smartRegime)
+            SmartRegimeService smartRegime,
+            TradeSignalMemoryService signalMemory,
+            ManagedPositionRegistry managed)
         {
             _logger = logger;
             _factory = factory;
@@ -49,6 +53,8 @@ namespace VertexAutoTradeBinance8.Services
             _marketData = marketData;
             _marketRegimeService = marketRegimeService;
             _smartRegime = smartRegime;
+            _signalMemory = signalMemory;
+            _managed = managed;
         }
 
         // =====================================================================
@@ -214,6 +220,20 @@ namespace VertexAutoTradeBinance8.Services
                 "[ORDER][{symbol}] PROTECTION → SL={sl}, TP={tp}, qty={qty}",
                 signal.Symbol, sl, tp, quantity);
 
+            // Ownership ASAP (даже если PlaceConditionalOrder упадёт — supervisor восстановит)
+            signal.IsManual = false;
+            signal.EntryPrice = entryPrice;
+            signal.StopLoss = sl;
+            if (tp > 0)
+            {
+                signal.TakeProfit = tp;
+                signal.TakeProfits ??= new List<decimal>();
+                if (signal.TakeProfits.Count == 0) signal.TakeProfits.Add(tp);
+                else signal.TakeProfits[0] = tp;
+            }
+            _signalMemory.Save(signal);
+            _managed.RegisterFromSignal(signal, entryPrice);
+
             // =====================================================================
             // 3.5) CLEAR OLD protective orders (SL/TP algo + reduceOnly) BEFORE placing new ones
             //      Critical: after reopen / second entry / leftover from previous cycle
@@ -277,6 +297,10 @@ namespace VertexAutoTradeBinance8.Services
             {
                 _logger.LogWarning("[ORDER][{symbol}] TP not set (tp=0) — защищаем только SL", signal.Symbol);
             }
+
+            _logger.LogInformation(
+                "[ORDER][{symbol}] MANAGED OK entry={e} SL={sl} TP={tp}",
+                signal.Symbol, entryPrice, sl, tp);
 
             return OrderResult.Successs(entryPrice, quantity, entryOrderId);
         }
