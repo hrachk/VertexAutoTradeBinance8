@@ -215,10 +215,16 @@ namespace VertexAutoTradeBinance8.Services
                 signal.Symbol, sl, tp, quantity);
 
             // =====================================================================
+            // 3.5) CLEAR OLD protective orders (SL/TP algo + reduceOnly) BEFORE placing new ones
+            //      Critical: after reopen / second entry / leftover from previous cycle
+            // =====================================================================
+            var closeSide = side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy;
+            await CancelAllProtectiveOrdersAsync(client, signal.Symbol, posSide, closeSide, ct);
+
+            // =====================================================================
             // 4) CREATE SL via Algo Order API (STOP_MARKET) — required since Binance 2025-12-09
             //    Do NOT send reduceOnly together with positionSide (hedge mode → -1106)
             // =====================================================================
-            var closeSide = side == OrderSide.Buy ? OrderSide.Sell : OrderSide.Buy;
 
             var slOrder = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
                 symbol: signal.Symbol,
@@ -273,6 +279,103 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             return OrderResult.Successs(entryPrice, quantity, entryOrderId);
+        }
+
+
+        // =====================================================================
+        // CANCEL ALL protective (SL/TP/algo) orders for symbol+side before new placement
+        // =====================================================================
+        private async Task CancelAllProtectiveOrdersAsync(
+            BinanceRestClient client,
+            string symbol,
+            PositionSide posSide,
+            OrderSide closeSide,
+            CancellationToken ct)
+        {
+            try
+            {
+                // 1) Regular open orders (legacy STOP/TP/Limit reduceOnly)
+                var openRes = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
+                if (openRes.Success && openRes.Data != null)
+                {
+                    foreach (var o in openRes.Data)
+                    {
+                        bool isProtective =
+                            (o.PositionSide == posSide || o.PositionSide == PositionSide.Both) &&
+                            o.Side == closeSide &&
+                            (
+                                o.Type == FuturesOrderType.StopMarket ||
+                                o.Type == FuturesOrderType.Stop ||
+                                o.Type == FuturesOrderType.TakeProfitMarket ||
+                                o.Type == FuturesOrderType.TakeProfit ||
+                                (o.Type == FuturesOrderType.Limit && o.ReduceOnly == true)
+                            );
+
+                        if (!isProtective) continue;
+
+                        try
+                        {
+                            var c = await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, o.Id, ct: ct);
+                            if (c.Success)
+                                _logger.LogInformation("[ORDER][{symbol}] CLEARED old order id={id} type={t}", symbol, o.Id, o.Type);
+                            else
+                                _logger.LogWarning("[ORDER][{symbol}] CLEAR order fail id={id}: {err}", symbol, o.Id, c.Error);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "[ORDER][{symbol}] CLEAR order exception id={id}", symbol, o.Id);
+                        }
+                    }
+                }
+
+                // 2) Algo / conditional orders (primary path after Binance 2025-12-09)
+                try
+                {
+                    var algoRes = await client.UsdFuturesApi.Trading.GetOpenConditionalOrdersAsync(symbol: symbol, ct: ct);
+                    if (algoRes.Success && algoRes.Data != null)
+                    {
+                        foreach (var a in algoRes.Data)
+                        {
+                            bool isProtective =
+                                (a.PositionSide == posSide || a.PositionSide == PositionSide.Both) &&
+                                a.Side == closeSide &&
+                                (
+                                    a.Type == FuturesOrderType.StopMarket ||
+                                    a.Type == FuturesOrderType.Stop ||
+                                    a.Type == FuturesOrderType.TakeProfitMarket ||
+                                    a.Type == FuturesOrderType.TakeProfit
+                                );
+
+                            if (!isProtective) continue;
+
+                            try
+                            {
+                                var c = await client.UsdFuturesApi.Trading.CancelConditionalOrderAsync(orderId: a.Id, ct: ct);
+                                if (c.Success)
+                                    _logger.LogInformation("[ORDER][{symbol}] CLEARED old ALGO id={id} type={t}", symbol, a.Id, a.Type);
+                                else
+                                {
+                                    // fallback: try regular cancel
+                                    try { await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, a.Id, ct: ct); } catch { }
+                                    _logger.LogWarning("[ORDER][{symbol}] CLEAR algo fail id={id}: {err}", symbol, a.Id, c.Error);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "[ORDER][{symbol}] CLEAR algo exception id={id}", symbol, a.Id);
+                            }
+                        }
+                    }
+                }
+                catch (Exception exAlgo)
+                {
+                    _logger.LogWarning(exAlgo, "[ORDER][{symbol}] GetOpenConditionalOrders failed", symbol);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[ORDER][{symbol}] CancelAllProtectiveOrders failed", symbol);
+            }
         }
 
         // =====================================================================

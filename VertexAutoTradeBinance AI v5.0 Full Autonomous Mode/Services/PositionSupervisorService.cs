@@ -255,7 +255,10 @@ namespace VertexAutoTradeBinance8.Services
 
             if (!hasLong && !hasShort)
             {
-                _logger.LogInformation("[SUPERVISOR] {symbol}: no positions", symbol);
+                _logger.LogInformation("[SUPERVISOR] {symbol}: no positions — ensuring residual orders are cleared", symbol);
+                // Safety net: if position already gone (restart / missed transition) still wipe leftover SL/TP
+                await CancelAllOrdersForSymbolAsync(client, symbol, PositionSide.Long, ct);
+                await CancelAllOrdersForSymbolAsync(client, symbol, PositionSide.Short, ct);
                 return;
             }
 
@@ -336,6 +339,100 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         // HANDLE SIDE
         // =====================================================================
+
+        // =====================================================================
+        // CANCEL ALL orders (regular + algo) for symbol after full position close
+        // =====================================================================
+        private async Task CancelAllOrdersForSymbolAsync(
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            CancellationToken ct)
+        {
+            try
+            {
+                var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+                // 1) Regular open orders
+                var openRes = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
+                if (openRes.Success && openRes.Data != null)
+                {
+                    foreach (var o in openRes.Data)
+                    {
+                        // Cancel protective orders for this side (or Both)
+                        bool matchSide = o.PositionSide == side || o.PositionSide == PositionSide.Both;
+                        bool isProtective =
+                            matchSide &&
+                            (
+                                o.Side == closeSide ||
+                                o.Type == FuturesOrderType.StopMarket ||
+                                o.Type == FuturesOrderType.Stop ||
+                                o.Type == FuturesOrderType.TakeProfitMarket ||
+                                o.Type == FuturesOrderType.TakeProfit ||
+                                (o.Type == FuturesOrderType.Limit && o.ReduceOnly == true)
+                            );
+
+                        if (!isProtective && matchSide == false)
+                            continue;
+
+                        // Be aggressive: if same symbol and position fully closed — cancel all residual reduce/conditional
+                        try
+                        {
+                            var c = await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, o.Id, ct: ct);
+                            if (c.Success)
+                                _logger.LogInformation("[SUPERVISOR][{symbol}] CLOSED→CLEARED order id={id} type={t}", symbol, o.Id, o.Type);
+                            else
+                                _logger.LogWarning("[SUPERVISOR][{symbol}] CLOSED→CLEAR fail id={id}: {err}", symbol, o.Id, c.Error);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "[SUPERVISOR][{symbol}] CLOSED→CLEAR exception id={id}", symbol, o.Id);
+                        }
+                    }
+                }
+
+                // 2) Algo / conditional orders
+                try
+                {
+                    var algoRes = await client.UsdFuturesApi.Trading.GetOpenConditionalOrdersAsync(symbol: symbol, ct: ct);
+                    if (algoRes.Success && algoRes.Data != null)
+                    {
+                        foreach (var a in algoRes.Data)
+                        {
+                            bool matchSide = a.PositionSide == side || a.PositionSide == PositionSide.Both;
+                            if (!matchSide) continue;
+
+                            try
+                            {
+                                var c = await client.UsdFuturesApi.Trading.CancelConditionalOrderAsync(orderId: a.Id, ct: ct);
+                                if (c.Success)
+                                    _logger.LogInformation("[SUPERVISOR][{symbol}] CLOSED→CLEARED ALGO id={id} type={t}", symbol, a.Id, a.Type);
+                                else
+                                {
+                                    try { await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, a.Id, ct: ct); } catch { }
+                                    _logger.LogWarning("[SUPERVISOR][{symbol}] CLOSED→CLEAR algo fail id={id}: {err}", symbol, a.Id, c.Error);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "[SUPERVISOR][{symbol}] CLOSED→CLEAR algo exception id={id}", symbol, a.Id);
+                            }
+                        }
+                    }
+                }
+                catch (Exception exAlgo)
+                {
+                    _logger.LogWarning(exAlgo, "[SUPERVISOR][{symbol}] GetOpenConditionalOrders on close failed", symbol);
+                }
+
+                _logger.LogInformation("[SUPERVISOR][{symbol}] {side} FULL CLOSE → all protective orders cleaned", symbol, side);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[SUPERVISOR][{symbol}] CancelAllOrdersForSymbol failed", symbol);
+            }
+        }
+
         private async Task HandleSideAsync(
             BinanceRestClient client,
             string symbol,
@@ -409,6 +506,9 @@ namespace VertexAutoTradeBinance8.Services
                     "[AI][{symbol}] POSITION CLOSED → saved to ai_learning.json | entry={entry} exit={exit} pnl={pnl:F4}",
                     symbol, prevEntry, exitPrice, pnl
                 );
+
+                // CRITICAL: after full close (TP / SL / manual) — remove ALL leftover protective orders for this coin
+                await CancelAllOrdersForSymbolAsync(client, symbol, side, ct);
 
                 return;
             }

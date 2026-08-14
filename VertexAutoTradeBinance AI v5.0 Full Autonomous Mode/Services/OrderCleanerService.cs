@@ -126,6 +126,76 @@ namespace VertexAutoTradeBinance8.Services
             _logger.LogInformation($"🧹 CLEANER END {symbol}");
         }
 
+
+        // =============================================================
+        // 🔥 Полная очистка ВСЕХ ордеров (regular + algo) по монете
+        //    Использовать после полного закрытия позиции / перед вторым входом
+        // =============================================================
+        public async Task CancelAllOrdersForSymbolAsync(
+            string symbol,
+            CancellationToken ct = default)
+        {
+            using var client = _factory.CreateRestClient();
+
+            int cleared = 0;
+
+            try
+            {
+                var openRes = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
+                if (openRes.Success && openRes.Data != null)
+                {
+                    foreach (var o in openRes.Data)
+                    {
+                        try
+                        {
+                            var c = await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, o.Id, ct: ct);
+                            if (c.Success)
+                            {
+                                cleared++;
+                                _logger.LogInformation($"🧹 FULL-CLEAN {symbol}: cancelled order {o.Id} type={o.Type}");
+                            }
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, $"[Cleaner] GetOpenOrders {symbol} failed");
+            }
+
+            try
+            {
+                var algoRes = await client.UsdFuturesApi.Trading.GetOpenConditionalOrdersAsync(symbol: symbol, ct: ct);
+                if (algoRes.Success && algoRes.Data != null)
+                {
+                    foreach (var a in algoRes.Data)
+                    {
+                        try
+                        {
+                            var c = await client.UsdFuturesApi.Trading.CancelConditionalOrderAsync(orderId: a.Id, ct: ct);
+                            if (c.Success)
+                            {
+                                cleared++;
+                                _logger.LogInformation($"🧹 FULL-CLEAN {symbol}: cancelled ALGO {a.Id} type={a.Type}");
+                            }
+                            else
+                            {
+                                try { await client.UsdFuturesApi.Trading.CancelOrderAsync(symbol, a.Id, ct: ct); } catch { }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, $"[Cleaner] GetOpenConditionalOrders {symbol} failed");
+            }
+
+            _logger.LogInformation($"🧹 FULL-CLEAN END {symbol}: cleared={cleared}");
+        }
+
         private static decimal Round(decimal x, decimal tick)
         {
             if (tick <= 0) return x;
