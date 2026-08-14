@@ -195,9 +195,10 @@ namespace VertexAutoTradeBinance8.Services
                 {
                     rec.Time = time; // close timestamp
                     _lastCloseUtc[symbol] = time;
+                    _lastCloseSide[symbol] = rec.Side;
                     _logger.LogInformation(
-                        "[EXEC][{symbol}] CLOSE recorded @ {t:u} → post-close cooldown starts",
-                        symbol, time);
+                        "[EXEC][{symbol}] CLOSE recorded @ {t:u} side={side} → cooldown (any + same-side)",
+                        symbol, time, rec.Side);
                 }
 
                 SaveInternal(list);
@@ -209,10 +210,23 @@ namespace VertexAutoTradeBinance8.Services
 
         // In-memory last close (быстрый путь; файл — для рестарта)
         private readonly Dictionary<string, DateTime> _lastCloseUtc = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, SignalSide> _lastCloseSide = new(StringComparer.OrdinalIgnoreCase);
+
+        private ExecutedSignalRecord? FindLastCloseUnlocked(string symbol)
+        {
+            var list = LoadInternal();
+            return list
+                .Where(x =>
+                    string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase) &&
+                    (x.Status == TradeExecutionStatus.PositionClosedTp ||
+                     x.Status == TradeExecutionStatus.PositionClosedSl ||
+                     x.Status == TradeExecutionStatus.PositionClosedManual))
+                .OrderByDescending(x => x.Time)
+                .FirstOrDefault();
+        }
 
         /// <summary>
-        /// true если по символу было полное закрытие меньше чем cooldownMinutes назад.
-        /// Блокирует повторный вход (в т.ч. тем же направлением) после фиксации профита/убытка.
+        /// true если по символу было полное закрытие меньше чем cooldownMinutes назад (любая сторона).
         /// </summary>
         public bool IsInPostCloseCooldown(string symbol, int cooldownMinutes)
         {
@@ -227,20 +241,12 @@ namespace VertexAutoTradeBinance8.Services
                 if (_lastCloseUtc.TryGetValue(symbol, out var mem) && now - mem < window)
                     return true;
 
-                var list = LoadInternal();
-                var lastClose = list
-                    .Where(x =>
-                        string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase) &&
-                        (x.Status == TradeExecutionStatus.PositionClosedTp ||
-                         x.Status == TradeExecutionStatus.PositionClosedSl ||
-                         x.Status == TradeExecutionStatus.PositionClosedManual))
-                    .OrderByDescending(x => x.Time)
-                    .FirstOrDefault();
-
+                var lastClose = FindLastCloseUnlocked(symbol);
                 if (lastClose == null)
                     return false;
 
                 _lastCloseUtc[symbol] = lastClose.Time;
+                _lastCloseSide[symbol] = lastClose.Side;
                 return now - lastClose.Time < window;
             }
         }
@@ -251,18 +257,94 @@ namespace VertexAutoTradeBinance8.Services
             {
                 if (_lastCloseUtc.TryGetValue(symbol, out var mem))
                     return mem;
+                return FindLastCloseUnlocked(symbol)?.Time;
+            }
+        }
 
-                var list = LoadInternal();
-                var lastClose = list
-                    .Where(x =>
-                        string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase) &&
-                        (x.Status == TradeExecutionStatus.PositionClosedTp ||
-                         x.Status == TradeExecutionStatus.PositionClosedSl ||
-                         x.Status == TradeExecutionStatus.PositionClosedManual))
-                    .OrderByDescending(x => x.Time)
-                    .FirstOrDefault();
+        public SignalSide? GetLastCloseSide(string symbol)
+        {
+            lock (_lock)
+            {
+                if (_lastCloseSide.TryGetValue(symbol, out var side))
+                    return side;
+                var last = FindLastCloseUnlocked(symbol);
+                if (last == null) return null;
+                _lastCloseSide[symbol] = last.Side;
+                _lastCloseUtc[symbol] = last.Time;
+                return last.Side;
+            }
+        }
 
-                return lastClose?.Time;
+        /// <summary>
+        /// Умный re-entry:
+        /// - strategy уже решила side по текущему рынку (не «помнит» прошлую сделку);
+        /// - короткий rest на любой вход после close;
+        /// - длинный rest только на ПОВТОР той же стороны (анти-инерция / revenge same-side).
+        /// Противоположный side после короткого rest — можно, если стратегия дала сигнал.
+        /// </summary>
+        public bool ShouldBlockReentry(
+            string symbol,
+            SignalSide proposedSide,
+            int anySideCooldownMinutes,
+            int sameSideCooldownMinutes,
+            out string reason)
+        {
+            reason = "";
+            if (string.IsNullOrWhiteSpace(symbol))
+                return false;
+
+            var now = DateTime.UtcNow;
+
+            lock (_lock)
+            {
+                DateTime? closeTime = null;
+                SignalSide? closeSide = null;
+
+                if (_lastCloseUtc.TryGetValue(symbol, out var memT))
+                {
+                    closeTime = memT;
+                    if (_lastCloseSide.TryGetValue(symbol, out var memS))
+                        closeSide = memS;
+                }
+
+                if (closeTime == null || closeSide == null)
+                {
+                    var last = FindLastCloseUnlocked(symbol);
+                    if (last != null)
+                    {
+                        closeTime = last.Time;
+                        closeSide = last.Side;
+                        _lastCloseUtc[symbol] = last.Time;
+                        _lastCloseSide[symbol] = last.Side;
+                    }
+                }
+
+                if (closeTime == null)
+                    return false;
+
+                var elapsed = now - closeTime.Value;
+
+                // 1) короткий rest на любой re-entry
+                if (anySideCooldownMinutes > 0 &&
+                    elapsed < TimeSpan.FromMinutes(anySideCooldownMinutes))
+                {
+                    var left = anySideCooldownMinutes - elapsed.TotalMinutes;
+                    reason = $"post-close rest {left:F0}m left (any side)";
+                    return true;
+                }
+
+                // 2) длинный rest только если стратегия снова предлагает ТУ ЖЕ сторону
+                if (sameSideCooldownMinutes > 0 &&
+                    closeSide.HasValue &&
+                    closeSide.Value == proposedSide &&
+                    elapsed < TimeSpan.FromMinutes(sameSideCooldownMinutes))
+                {
+                    var left = sameSideCooldownMinutes - elapsed.TotalMinutes;
+                    reason = $"same-side={proposedSide} blocked {left:F0}m left after last close (need new context/trend)";
+                    return true;
+                }
+
+                return false;
             }
         }
 

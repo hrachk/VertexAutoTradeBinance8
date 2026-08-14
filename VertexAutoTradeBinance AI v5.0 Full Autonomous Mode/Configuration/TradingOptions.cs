@@ -9,11 +9,18 @@ public class TradingOptions
     public int CooldownSeconds { get; set; } = 120;
 
     /// <summary>
-    /// Отдых символа после ПОЛНОГО закрытия позиции (минуты).
-    /// Защита от re-entry тем же направлением через 15–60 мин, когда тренд уже развернулся.
-    /// По умолчанию 4 часа.
+    /// Минимальная пауза после close перед ЛЮБЫМ новым входом по символу (минуты).
+    /// Короткий «остыть» — не слепой блок на часы. Default 45m.
     /// </summary>
-    public int PostCloseCooldownMinutes { get; set; } = 240;
+    public int PostCloseCooldownMinutes { get; set; } = 45;
+
+    /// <summary>
+    /// Пауза на ПОВТОР ТОЙ ЖЕ стороны после close (минуты).
+    /// Тот же side не входим «по инерции» — ждём смену контекста / новый анализ.
+    /// Противоположный side может войти раньше (см. PostCloseCooldownMinutes).
+    /// Default 240m = 4h.
+    /// </summary>
+    public int SameSideCooldownMinutes { get; set; } = 240;
     public int Leverage { get; set; } = 15;
 
 

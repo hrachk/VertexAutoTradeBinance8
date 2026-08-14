@@ -214,38 +214,44 @@ namespace VertexAutoTradeBinance8
          
 
         /// <summary>
-        /// Cooldown:
-        ///  1) Post-close 4h (default) — главный фикс: не бить тот же символ сразу после выхода
-        ///  2) Short post-open — анти-дубль ордеров
+        /// Re-entry policy (не «слепой» повтор стороны):
+        ///  1) Strategy каждый цикл заново считает side по текущим klines/trend.
+        ///  2) Короткий rest после close на ЛЮБОЙ вход (остыть).
+        ///  3) Длинный rest только на ТУ ЖЕ сторону что был last close.
+        ///  4) Противоположная сторона — можно раньше, если анализ дал сигнал.
+        ///  5) Короткий anti-dupe после open.
         /// </summary>
-        private bool InCooldown(string symbol)
+        private bool InCooldown(string symbol, SignalSide? proposedSide = null)
         {
             var now = DateTime.UtcNow;
 
-            // --- 1) POST-CLOSE rest (главный баг-фикс) ---
-            int postCloseMin = _options.PostCloseCooldownMinutes > 0
+            int anyMin = _options.PostCloseCooldownMinutes > 0
                 ? _options.PostCloseCooldownMinutes
+                : 45;
+            int sameMin = _options.SameSideCooldownMinutes > 0
+                ? _options.SameSideCooldownMinutes
                 : 240;
 
-            if (_executedSignals.IsInPostCloseCooldown(symbol, postCloseMin))
+            // --- post-close: side-aware ---
+            if (proposedSide.HasValue)
             {
-                var last = _executedSignals.GetLastCloseUtc(symbol);
-                var left = last.HasValue
-                    ? postCloseMin - (now - last.Value).TotalMinutes
-                    : postCloseMin;
-                _logger.LogInformation(
-                    "[COOLDOWN][{symbol}] POST-CLOSE rest active (~{left:F0} min left of {total}m) — skip re-entry",
-                    symbol, Math.Max(0, left), postCloseMin);
-                return true;
+                if (_executedSignals.ShouldBlockReentry(
+                        symbol, proposedSide.Value, anyMin, sameMin, out var why))
+                {
+                    _logger.LogInformation(
+                        "[COOLDOWN][{symbol}] skip re-entry side={side}: {why}",
+                        symbol, proposedSide.Value, why);
+                    return true;
+                }
+            }
+            else
+            {
+                // fallback без side — только короткий any-side rest
+                if (_executedSignals.IsInPostCloseCooldown(symbol, anyMin))
+                    return true;
             }
 
-            if (_lastClose.TryGetValue(symbol, out var memClose) &&
-                now - memClose < TimeSpan.FromMinutes(postCloseMin))
-            {
-                return true;
-            }
-
-            // --- 2) short cooldown after successful OPEN ---
+            // --- short cooldown after successful OPEN (anti duplicate orders) ---
             int openCd = _options.CooldownMinutes > 0
                 ? _options.CooldownMinutes
                 : Math.Max(1, _options.CooldownSeconds / 60);
@@ -308,9 +314,10 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
-            if (InCooldown(symbol))
+            // Cooldown AFTER signal: side уже от стратегии (текущий тренд), не от прошлой сделки
+            if (InCooldown(symbol, signal.Side))
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🕒 CD", "Rest 4h");
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🕒 CD", "Re-entry hold");
                 return;
             }
 
