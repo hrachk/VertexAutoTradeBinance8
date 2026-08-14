@@ -188,10 +188,81 @@ namespace VertexAutoTradeBinance8.Services
                 if (pnl.HasValue) rec.PnL = pnl.Value;
                 if (roi.HasValue) rec.RoiPercent = roi.Value;
 
+                // На закрытии фиксируем время EXIT (для post-close cooldown)
+                if (status == TradeExecutionStatus.PositionClosedTp ||
+                    status == TradeExecutionStatus.PositionClosedSl ||
+                    status == TradeExecutionStatus.PositionClosedManual)
+                {
+                    rec.Time = time; // close timestamp
+                    _lastCloseUtc[symbol] = time;
+                    _logger.LogInformation(
+                        "[EXEC][{symbol}] CLOSE recorded @ {t:u} → post-close cooldown starts",
+                        symbol, time);
+                }
+
                 SaveInternal(list);
                 ExecutedSignalsChanged?.Invoke();
 
                 _logger.LogInformation("[EXEC][{symbol}] Status updated → {status}", symbol, status);
+            }
+        }
+
+        // In-memory last close (быстрый путь; файл — для рестарта)
+        private readonly Dictionary<string, DateTime> _lastCloseUtc = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// true если по символу было полное закрытие меньше чем cooldownMinutes назад.
+        /// Блокирует повторный вход (в т.ч. тем же направлением) после фиксации профита/убытка.
+        /// </summary>
+        public bool IsInPostCloseCooldown(string symbol, int cooldownMinutes)
+        {
+            if (cooldownMinutes <= 0 || string.IsNullOrWhiteSpace(symbol))
+                return false;
+
+            var now = DateTime.UtcNow;
+            var window = TimeSpan.FromMinutes(cooldownMinutes);
+
+            lock (_lock)
+            {
+                if (_lastCloseUtc.TryGetValue(symbol, out var mem) && now - mem < window)
+                    return true;
+
+                var list = LoadInternal();
+                var lastClose = list
+                    .Where(x =>
+                        string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase) &&
+                        (x.Status == TradeExecutionStatus.PositionClosedTp ||
+                         x.Status == TradeExecutionStatus.PositionClosedSl ||
+                         x.Status == TradeExecutionStatus.PositionClosedManual))
+                    .OrderByDescending(x => x.Time)
+                    .FirstOrDefault();
+
+                if (lastClose == null)
+                    return false;
+
+                _lastCloseUtc[symbol] = lastClose.Time;
+                return now - lastClose.Time < window;
+            }
+        }
+
+        public DateTime? GetLastCloseUtc(string symbol)
+        {
+            lock (_lock)
+            {
+                if (_lastCloseUtc.TryGetValue(symbol, out var mem))
+                    return mem;
+
+                var list = LoadInternal();
+                var lastClose = list
+                    .Where(x =>
+                        string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase) &&
+                        (x.Status == TradeExecutionStatus.PositionClosedTp ||
+                         x.Status == TradeExecutionStatus.PositionClosedSl ||
+                         x.Status == TradeExecutionStatus.PositionClosedManual))
+                    .OrderByDescending(x => x.Time)
+                    .FirstOrDefault();
+
+                return lastClose?.Time;
             }
         }
 

@@ -42,6 +42,8 @@ namespace VertexAutoTradeBinance8
         private readonly AiTimeframeSelectorService _tfSelector;
         private readonly EngineStateBuilder  _engineState;
         private readonly EngineStateSnapshotService  _engineStateSnapshot;
+        private readonly ExecutedSignalService _executedSignals;
+        private readonly Dictionary<string, DateTime> _lastClose = new(StringComparer.OrdinalIgnoreCase);
 
 
         private static readonly KlineInterval[] TFS = {
@@ -83,7 +85,10 @@ namespace VertexAutoTradeBinance8
             AiSelfLearningService learn,
             AiModelSnapshotService snapshot,
             SymbolRegistryService symbols,
-            AiTimeframeSelectorService tfSelector, EngineStateBuilder engineState, EngineStateSnapshotService engineStateSnapshot)
+            AiTimeframeSelectorService tfSelector,
+            EngineStateBuilder engineState,
+            EngineStateSnapshotService engineStateSnapshot,
+            ExecutedSignalService executedSignals)
         {
             _logger = logger;
 
@@ -110,6 +115,7 @@ namespace VertexAutoTradeBinance8
             _tfSelector = tfSelector;
             _engineState = engineState;
             _engineStateSnapshot = engineStateSnapshot;
+            _executedSignals = executedSignals;
             learn.ForceSnapshot();
         }
 
@@ -207,19 +213,57 @@ namespace VertexAutoTradeBinance8
         }
          
 
+        /// <summary>
+        /// Cooldown:
+        ///  1) Post-close 4h (default) — главный фикс: не бить тот же символ сразу после выхода
+        ///  2) Short post-open — анти-дубль ордеров
+        /// </summary>
         private bool InCooldown(string symbol)
         {
-            var cd = _options.CooldownMinutes;
-            if (cd <= 0) return false;
+            var now = DateTime.UtcNow;
 
-            if (!_lastTrade.TryGetValue(symbol, out var last))
-                return false;
+            // --- 1) POST-CLOSE rest (главный баг-фикс) ---
+            int postCloseMin = _options.PostCloseCooldownMinutes > 0
+                ? _options.PostCloseCooldownMinutes
+                : 240;
 
-            return DateTime.UtcNow - last < TimeSpan.FromMinutes(cd);
+            if (_executedSignals.IsInPostCloseCooldown(symbol, postCloseMin))
+            {
+                var last = _executedSignals.GetLastCloseUtc(symbol);
+                var left = last.HasValue
+                    ? postCloseMin - (now - last.Value).TotalMinutes
+                    : postCloseMin;
+                _logger.LogInformation(
+                    "[COOLDOWN][{symbol}] POST-CLOSE rest active (~{left:F0} min left of {total}m) — skip re-entry",
+                    symbol, Math.Max(0, left), postCloseMin);
+                return true;
+            }
+
+            if (_lastClose.TryGetValue(symbol, out var memClose) &&
+                now - memClose < TimeSpan.FromMinutes(postCloseMin))
+            {
+                return true;
+            }
+
+            // --- 2) short cooldown after successful OPEN ---
+            int openCd = _options.CooldownMinutes > 0
+                ? _options.CooldownMinutes
+                : Math.Max(1, _options.CooldownSeconds / 60);
+
+            if (_lastTrade.TryGetValue(symbol, out var lastOpen) &&
+                now - lastOpen < TimeSpan.FromMinutes(openCd))
+            {
+                return true;
+            }
+
+            return false;
         }
 
         private void MarkTrade(string symbol) =>
             _lastTrade[symbol] = DateTime.UtcNow;
+
+        private void MarkClose(string symbol) =>
+            _lastClose[symbol] = DateTime.UtcNow;
 
         // ================================================================
         // MAIN PER-SYMBOL PROCESSOR v6
@@ -266,7 +310,7 @@ namespace VertexAutoTradeBinance8
 
             if (InCooldown(symbol))
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🕒 CD", "Cooldown");
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "🕒 CD", "Rest 4h");
                 return;
             }
 

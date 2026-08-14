@@ -7,6 +7,13 @@ public class TradingOptions
     public double Deposit { get; set; } = 100.0;    // размер депозита для расчёта
     public double MinQuantity { get; set; } = 0.001;
     public int CooldownSeconds { get; set; } = 120;
+
+    /// <summary>
+    /// Отдых символа после ПОЛНОГО закрытия позиции (минуты).
+    /// Защита от re-entry тем же направлением через 15–60 мин, когда тренд уже развернулся.
+    /// По умолчанию 4 часа.
+    /// </summary>
+    public int PostCloseCooldownMinutes { get; set; } = 240;
     public int Leverage { get; set; } = 15;
 
 
@@ -14,7 +21,8 @@ public class TradingOptions
     public decimal MinNotional { get; set; } = 35m;     // минимум позиция в USDT
     public decimal MinRiskReward { get; set; } = 2.0m;   // TP1 ≥ 2 * SL
     public decimal MinNotionalUsd { get; set; } = 30m;
-    public int CooldownMinutes { get; internal set; }
+    /// <summary>Короткий cooldown после УСПЕШНОГО ОТКРЫТИЯ (анти-дубль ордеров). Минуты.</summary>
+    public int CooldownMinutes { get; set; } = 15;
 
     // ---  НОВЫЕ ПОЛЯ ---
 
