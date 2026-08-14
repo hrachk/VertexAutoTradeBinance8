@@ -36,6 +36,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly MarketDataService _marketData;
         private readonly AiMarketRegimeService _regime;
         private readonly ManualPositionHandler _manualHandler;
+        private readonly ExecutedSignalService _executed;
 
         private MarketRegime _regimeNow;
 
@@ -63,7 +64,8 @@ namespace VertexAutoTradeBinance8.Services
             AiSelfLearningService aiLearning,
             MarketDataService marketData,
             AiMarketRegimeService regime,
-            ManualPositionHandler manualHandler)
+            ManualPositionHandler manualHandler,
+            ExecutedSignalService executed)
         {
             _logger = logger;
             _factory = factory;
@@ -73,6 +75,7 @@ namespace VertexAutoTradeBinance8.Services
             _marketData = marketData;
             _regime = regime;
             _manualHandler = manualHandler;
+            _executed = executed;
 
             _regimeNow = MarketRegime.Range;
         }
@@ -355,11 +358,44 @@ namespace VertexAutoTradeBinance8.Services
 
             if (prevQty != 0 && pos.Quantity == 0)
             {
-                decimal exitPrice = pos.MarkPrice;
+                decimal exitPrice = pos.MarkPrice > 0 ? pos.MarkPrice : pos.EntryPrice;
+                if (exitPrice <= 0) exitPrice = prevEntry;
 
                 var sigSide = side == PositionSide.Long
                     ? SignalSide.Buy
                     : SignalSide.Sell;
+
+                decimal absQty = Math.Abs(prevQty);
+                // LONG: profit if exit > entry; SHORT: profit if exit < entry
+                decimal pnl = side == PositionSide.Long
+                    ? (exitPrice - prevEntry) * absQty
+                    : (prevEntry - exitPrice) * absQty;
+                decimal notional = prevEntry * absQty;
+                decimal roi = notional > 0 ? pnl / notional * 100m : 0m;
+
+                var closeStatus = pnl >= 0
+                    ? TradeExecutionStatus.PositionClosedTp
+                    : TradeExecutionStatus.PositionClosedSl;
+
+                try
+                {
+                    _executed.UpdateStatus(
+                        symbol,
+                        DateTime.UtcNow,
+                        closeStatus,
+                        qty: absQty,
+                        notional: notional,
+                        exitPrice: exitPrice,
+                        pnl: pnl,
+                        roi: roi);
+                    _logger.LogInformation(
+                        "[EXEC][{symbol}] CLOSED → status={st} pnl={pnl:F4} roi={roi:F2}% entry={entry} exit={exit}",
+                        symbol, closeStatus, pnl, roi, prevEntry, exitPrice);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[EXEC][{symbol}] failed to write close PnL", symbol);
+                }
 
                 _aiLearning.RecordTrade(
                     symbol,
@@ -370,8 +406,8 @@ namespace VertexAutoTradeBinance8.Services
                 );
 
                 _logger.LogWarning(
-                    "[AI][{symbol}] POSITION CLOSED → saved to ai_learning.json | entry={entry} exit={exit}",
-                    symbol, prevEntry, exitPrice
+                    "[AI][{symbol}] POSITION CLOSED → saved to ai_learning.json | entry={entry} exit={exit} pnl={pnl:F4}",
+                    symbol, prevEntry, exitPrice, pnl
                 );
 
                 return;

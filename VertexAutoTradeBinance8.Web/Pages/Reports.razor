@@ -7,84 +7,426 @@
 <div class="vt-page-title">
     <div>
         <h1>Reports</h1>
-        <p>PnL · winrate · activity breakdown</p>
+        <p>Что бот сделал · открыто / закрыто · PnL · по символам · статусы</p>
     </div>
     <button class="vt-btn" @onclick="Load">↻ Refresh</button>
 </div>
 
-<div class="vt-grid vt-grid-4" style="margin-bottom:14px;">
-    <div class="vt-card tight"><div class="vt-kpi"><span class="label">Trades</span><span class="value">@total</span></div></div>
-    <div class="vt-card tight"><div class="vt-kpi green"><span class="label">Wins</span><span class="value">@wins</span></div></div>
-    <div class="vt-card tight"><div class="vt-kpi red"><span class="label">Losses</span><span class="value">@losses</span></div></div>
-    <div class="vt-card tight"><div class="vt-kpi yellow"><span class="label">Winrate</span><span class="value">@winrate.ToString("0.0")%</span></div></div>
+@if (_error != null)
+{
+    <div class="vt-card" style="margin-bottom:12px;border-color:var(--vt-red);">
+        <div class="vt-hint" style="color:var(--vt-red);">@_error</div>
+    </div>
+}
+
+<!-- KPI row 1: funnel -->
+<div class="vt-kpi-grid" style="margin-bottom:12px;">
+    <div class="vt-kpi">
+        <div class="vt-kpi-label">Всего записей</div>
+        <div class="vt-kpi-value">@_total</div>
+        <div class="vt-kpi-sub">сигналы + ордера + позиции</div>
+    </div>
+    <div class="vt-kpi">
+        <div class="vt-kpi-label">Открыто сейчас</div>
+        <div class="vt-kpi-value" style="color:var(--vt-blue);">@_open</div>
+        <div class="vt-kpi-sub">PositionOpened / OrderCreated</div>
+    </div>
+    <div class="vt-kpi">
+        <div class="vt-kpi-label">Закрыто</div>
+        <div class="vt-kpi-value">@_closedCount</div>
+        <div class="vt-kpi-sub">TP + SL + Manual</div>
+    </div>
+    <div class="vt-kpi">
+        <div class="vt-kpi-label">Ошибки / отмены</div>
+        <div class="vt-kpi-value" style="color:var(--vt-yellow);">@_errors</div>
+        <div class="vt-kpi-sub">PositionError + Cancelled</div>
+    </div>
 </div>
 
-<div class="vt-grid vt-grid-2" style="margin-bottom:14px;">
-    <div class="vt-card tight"><div class="vt-kpi @(pnl>=0?"green":"red")"><span class="label">Realized PnL</span><span class="value">@pnl.ToString("0.####")</span><span class="sub">sum of closed records</span></div></div>
-    <div class="vt-card tight"><div class="vt-kpi"><span class="label">Missed signals</span><span class="value">@missed</span><span class="sub">PriceRunAway / filters</span></div></div>
+<!-- KPI row 2: results -->
+<div class="vt-kpi-grid" style="margin-bottom:12px;">
+    <div class="vt-kpi">
+        <div class="vt-kpi-label">Wins (PnL &gt; 0)</div>
+        <div class="vt-kpi-value score-good">@_wins</div>
+        <div class="vt-kpi-sub">из закрытых с известным PnL</div>
+    </div>
+    <div class="vt-kpi">
+        <div class="vt-kpi-label">Losses (PnL &lt; 0)</div>
+        <div class="vt-kpi-value score-low">@_losses</div>
+        <div class="vt-kpi-sub">из закрытых с известным PnL</div>
+    </div>
+    <div class="vt-kpi">
+        <div class="vt-kpi-label">Winrate</div>
+        <div class="vt-kpi-value @(_winrate>=50?"score-good":_winrate>0?"score-mid":"")">@_winrate.ToString("0.0")%</div>
+        <div class="vt-kpi-sub">@_pnlKnown закрытых с PnL</div>
+    </div>
+    <div class="vt-kpi">
+        <div class="vt-kpi-label">Realized PnL</div>
+        <div class="vt-kpi-value @(_pnl>=0?"score-good":"score-low")">@_pnl.ToString("+0.00;-0.00")</div>
+        <div class="vt-kpi-sub">USDT · сумма закрытых</div>
+    </div>
 </div>
 
-<div class="vt-card">
-    <div class="vt-card-title" style="margin-bottom:12px;">By symbol</div>
+<div class="vt-kpi-grid" style="margin-bottom:14px;grid-template-columns:1fr 1fr;">
+    <div class="vt-kpi">
+        <div class="vt-kpi-label">Missed / blocked</div>
+        <div class="vt-kpi-value">@_missed</div>
+        <div class="vt-kpi-sub">PriceRunAway · filters · min notional</div>
+    </div>
+    <div class="vt-kpi">
+        <div class="vt-kpi-label">Без PnL (ещё не закрыты / старые)</div>
+        <div class="vt-kpi-value">@_noPnl</div>
+        <div class="vt-kpi-sub">после фикса close PnL начнут заполняться</div>
+    </div>
+</div>
+
+@if (_pnlKnown == 0 && _total > 0)
+{
+    <div class="vt-card" style="margin-bottom:14px;border-color:rgba(240,185,11,.35);">
+        <div style="font-size:13px;line-height:1.5;color:var(--vt-text-muted);">
+            <strong style="color:var(--vt-yellow);">Почему Winrate / PnL = 0?</strong><br/>
+            В журнале есть <b>@_total</b> записей (входы), но при закрытии позиции PnL раньше
+            <b>не записывался</b> в <code>executed_signals.json</code> — только в AI learning.
+            Сейчас supervisor пишет PnL при закрытии. Новые закрытия появятся здесь.
+            Строки ниже показывают <b>статусы и активность</b> по тем данным, что уже есть.
+        </div>
+    </div>
+}
+
+<!-- Status breakdown -->
+<div class="vt-card" style="margin-bottom:14px;">
+    <div class="vt-card-title">Воронка статусов</div>
+    <div class="rep-status-grid">
+        @foreach (var s in _statusRows)
+        {
+            <div class="rep-status-item">
+                <div class="rep-status-top">
+                    <span class="rep-pill @s.Css">@s.Label</span>
+                    <span class="mono">@s.Count</span>
+                </div>
+                <div class="ai-bar"><div class="ai-bar-fill" style="width:@(s.Pct)%;background:@s.Color;"></div></div>
+            </div>
+        }
+    </div>
+</div>
+
+<div class="ai-two-col" style="margin-top:0;">
+    <!-- By symbol -->
+    <div class="vt-card">
+        <div class="vt-card-title">По символам</div>
+        <div class="vt-table-wrap">
+            <table class="vt-table">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Всего</th>
+                        <th>Open</th>
+                        <th>Closed</th>
+                        <th>PnL</th>
+                        <th>W/L</th>
+                    </tr>
+                </thead>
+                <tbody>
+                @if (_bySymbol.Count == 0)
+                {
+                    <tr><td colspan="6" class="vt-hint">Нет данных</td></tr>
+                }
+                @foreach (var g in _bySymbol)
+                {
+                    <tr>
+                        <td><span class="sym">@g.Symbol</span></td>
+                        <td class="mono">@g.Count</td>
+                        <td class="mono">@g.Open</td>
+                        <td class="mono">@g.Closed</td>
+                        <td class="mono @(g.Pnl>0?"score-good":g.Pnl<0?"score-low":"")">@g.Pnl.ToString("+0.00;-0.00;0")</td>
+                        <td class="mono">@g.Wins/@g.Losses</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Side / reason -->
+    <div class="vt-card">
+        <div class="vt-card-title">Направление и причины входа</div>
+        <div class="rep-side-row">
+            <div class="rep-side-box">
+                <div class="vt-kpi-label">LONG</div>
+                <div class="vt-kpi-value score-good">@_longs</div>
+            </div>
+            <div class="rep-side-box">
+                <div class="vt-kpi-label">SHORT</div>
+                <div class="vt-kpi-value score-low">@_shorts</div>
+            </div>
+        </div>
+        <div style="margin-top:14px;">
+            @foreach (var r in _reasons.Take(8))
+            {
+                <div class="ai-reason-row" style="margin-bottom:10px;">
+                    <div class="ai-reason-top">
+                        <span class="reason">@(string.IsNullOrWhiteSpace(r.Reason) ? "—" : r.Reason)</span>
+                        <span class="mono">@r.Count</span>
+                    </div>
+                    <div class="ai-bar"><div class="ai-bar-fill" style="width:@(r.Pct)%"></div></div>
+                </div>
+            }
+            @if (_reasons.Count == 0)
+            {
+                <div class="vt-hint">Нет reason tags</div>
+            }
+        </div>
+    </div>
+</div>
+
+<!-- Recent activity -->
+<div class="vt-card" style="margin-top:14px;">
+    <div class="vt-card-title">Последние 25 записей</div>
     <div class="vt-table-wrap">
         <table class="vt-table">
             <thead>
-                <tr><th>Symbol</th><th>Count</th><th>PnL</th><th>Avg ROI %</th></tr>
+                <tr>
+                    <th>Время</th>
+                    <th>Symbol</th>
+                    <th>Side</th>
+                    <th>Entry</th>
+                    <th>Qty</th>
+                    <th>Status</th>
+                    <th>Exit</th>
+                    <th>PnL</th>
+                </tr>
             </thead>
             <tbody>
-                @foreach (var g in bySymbol)
-                {
-                    <tr>
-                        <td class="sym">@g.Symbol</td>
-                        <td>@g.Count</td>
-                        <td class="@(g.Pnl>=0?"pnl-pos":"pnl-neg")">@g.Pnl.ToString("0.####")</td>
-                        <td>@g.AvgRoi.ToString("0.00")</td>
-                    </tr>
-                }
+            @foreach (var x in _recent)
+            {
+                <tr>
+                    <td class="mono">@x.Time.ToLocalTime().ToString("dd.MM HH:mm")</td>
+                    <td><span class="sym">@x.Symbol</span></td>
+                    <td class="@(x.Side==SignalSide.Buy?"score-good":"score-low")">@x.Side</td>
+                    <td class="mono">@Fmt(x.Entry)</td>
+                    <td class="mono">@x.Qty.ToString("0.####")</td>
+                    <td><span class="rep-pill @StatusCss(x.Status)">@ShortStatus(x.Status)</span></td>
+                    <td class="mono">@(x.ExitPrice.HasValue ? Fmt(x.ExitPrice.Value) : "—")</td>
+                    <td class="mono @(x.PnL>0?"score-good":x.PnL<0?"score-low":"")">
+                        @(x.PnL.HasValue ? x.PnL.Value.ToString("+0.00;-0.00") : "—")
+                    </td>
+                </tr>
+            }
             </tbody>
         </table>
     </div>
 </div>
 
+<style>
+.rep-status-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; }
+.rep-status-item { background:var(--vt-bg); border:1px solid var(--vt-border-soft); border-radius:8px; padding:10px 12px; }
+.rep-status-top { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:12px; }
+.rep-pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:10px; font-weight:600; }
+.rep-open { background:rgba(30,144,255,.15); color:#5eb3ff; }
+.rep-ok { background:var(--vt-green-dim); color:var(--vt-green); }
+.rep-bad { background:var(--vt-red-dim); color:var(--vt-red); }
+.rep-warn { background:var(--vt-yellow-dim); color:var(--vt-yellow); }
+.rep-muted { background:rgba(94,102,115,.25); color:var(--vt-text-muted); }
+.rep-side-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.rep-side-box { background:var(--vt-bg); border-radius:8px; padding:12px; border:1px solid var(--vt-border-soft); }
+.score-good { color:var(--vt-green); }
+.score-mid { color:var(--vt-yellow); }
+.score-low { color:var(--vt-red); }
+.mono { font-family:var(--vt-mono); font-size:12px; }
+.sym { font-weight:600; }
+.reason { font-family:var(--vt-mono); font-size:11px; color:var(--vt-text-muted); }
+.ai-bar { height:6px; background:var(--vt-bg); border-radius:4px; overflow:hidden; }
+.ai-bar-fill { height:100%; background:linear-gradient(90deg,var(--vt-green),var(--vt-blue)); border-radius:4px; }
+.ai-two-col { display:grid; grid-template-columns:1.3fr 1fr; gap:14px; }
+@@media (max-width:1100px){ .ai-two-col { grid-template-columns:1fr; } }
+</style>
+
 @code {
-    private int total, wins, losses, missed;
-    private decimal winrate, pnl;
-    private List<SymAgg> bySymbol = new();
+    private int _total, _open, _closedCount, _errors, _wins, _losses, _missed, _noPnl, _pnlKnown, _longs, _shorts;
+    private decimal _winrate, _pnl;
+    private string? _error;
+    private List<StatusRow> _statusRows = new();
+    private List<SymAgg> _bySymbol = new();
+    private List<ReasonAgg> _reasons = new();
+    private List<ExecutedSignalRecord> _recent = new();
 
     protected override void OnInitialized() => Load();
 
     private void Load()
     {
-        var all = ExecutedUi.GetAll();
-        total = all.Count;
-        var closed = all.Where(x => x.PnL.HasValue).ToList();
-        wins = closed.Count(x => x.PnL > 0);
-        losses = closed.Count(x => x.PnL < 0);
-        winrate = closed.Count == 0 ? 0 : (decimal)wins / closed.Count * 100m;
-        pnl = closed.Sum(x => x.PnL ?? 0);
-        try { missed = MissedService.Load().Count; } catch { missed = 0; }
+        try
+        {
+            var all = ExecutedUi.GetAll() ?? new();
+            _total = all.Count;
 
-        bySymbol = all.GroupBy(x => x.Symbol)
-            .Select(g =>
+            _open = all.Count(x =>
+                x.Status is TradeExecutionStatus.PositionOpened
+                    or TradeExecutionStatus.OrderCreated
+                    or TradeExecutionStatus.OrderPartiallyFilled);
+
+            _closedCount = all.Count(IsClosed);
+            _errors = all.Count(x =>
+                x.Status is TradeExecutionStatus.PositionError or TradeExecutionStatus.Cancelled);
+
+            var withPnl = all.Where(x => x.PnL.HasValue).ToList();
+            _pnlKnown = withPnl.Count;
+            _wins = withPnl.Count(x => x.PnL > 0);
+            _losses = withPnl.Count(x => x.PnL < 0);
+            // Also count TP/SL status as W/L when PnL missing
+            if (_pnlKnown == 0)
             {
-                var rois = g.Where(x => x.RoiPercent.HasValue).Select(x => x.RoiPercent!.Value).ToList();
-                return new SymAgg
+                _wins = all.Count(x => x.Status == TradeExecutionStatus.PositionClosedTp);
+                _losses = all.Count(x => x.Status == TradeExecutionStatus.PositionClosedSl);
+                var denom = _wins + _losses;
+                _winrate = denom == 0 ? 0 : (decimal)_wins / denom * 100m;
+            }
+            else
+            {
+                _winrate = _pnlKnown == 0 ? 0 : (decimal)_wins / _pnlKnown * 100m;
+            }
+
+            _pnl = withPnl.Sum(x => x.PnL ?? 0);
+            _noPnl = all.Count(x => IsClosed(x) && !x.PnL.HasValue) +
+                     all.Count(x => !IsClosed(x) && x.Status != TradeExecutionStatus.SignalCreated);
+
+            try { _missed = MissedService.Load().Count; } catch { _missed = 0; }
+
+            _longs = all.Count(x => x.Side == SignalSide.Buy);
+            _shorts = all.Count(x => x.Side == SignalSide.Sell);
+
+            // Status funnel
+            var maxSt = Math.Max(1, all.Count);
+            _statusRows = Enum.GetValues<TradeExecutionStatus>()
+                .Select(st =>
                 {
-                    Symbol = g.Key,
-                    Count = g.Count(),
-                    Pnl = g.Sum(x => x.PnL ?? 0),
-                    AvgRoi = rois.Count == 0 ? 0 : rois.Average()
-                };
-            })
-            .OrderByDescending(x => x.Count)
-            .ToList();
+                    var c = all.Count(x => x.Status == st);
+                    return new StatusRow
+                    {
+                        Label = ShortStatus(st),
+                        Count = c,
+                        Pct = (int)(100.0 * c / maxSt),
+                        Css = StatusCss(st),
+                        Color = StatusColor(st)
+                    };
+                })
+                .Where(x => x.Count > 0)
+                .OrderByDescending(x => x.Count)
+                .ToList();
+
+            _bySymbol = all.GroupBy(x => x.Symbol)
+                .Select(g =>
+                {
+                    var list = g.ToList();
+                    var wp = list.Where(x => x.PnL.HasValue).ToList();
+                    return new SymAgg
+                    {
+                        Symbol = g.Key,
+                        Count = list.Count,
+                        Open = list.Count(x =>
+                            x.Status is TradeExecutionStatus.PositionOpened
+                                or TradeExecutionStatus.OrderCreated
+                                or TradeExecutionStatus.OrderPartiallyFilled),
+                        Closed = list.Count(IsClosed),
+                        Pnl = wp.Sum(x => x.PnL ?? 0),
+                        Wins = wp.Count(x => x.PnL > 0),
+                        Losses = wp.Count(x => x.PnL < 0)
+                    };
+                })
+                .OrderByDescending(x => x.Count)
+                .ToList();
+
+            var reasonGroups = all
+                .Select(x => string.IsNullOrWhiteSpace(x.Reason) ? (x.Tags ?? "—") : x.Reason)
+                .Select(r => r.Length > 40 ? r[..40] + "…" : r)
+                .GroupBy(r => r)
+                .Select(g => new { Reason = g.Key, Count = g.Count() })
+                .OrderByDescending(x => x.Count)
+                .ToList();
+            var rmax = Math.Max(1, reasonGroups.FirstOrDefault()?.Count ?? 1);
+            _reasons = reasonGroups.Select(g => new ReasonAgg
+            {
+                Reason = g.Reason,
+                Count = g.Count,
+                Pct = (int)(100.0 * g.Count / rmax)
+            }).ToList();
+
+            _recent = all.OrderByDescending(x => x.Time).Take(25).ToList();
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
     }
 
+    private static bool IsClosed(ExecutedSignalRecord x) =>
+        x.Status is TradeExecutionStatus.PositionClosedTp
+            or TradeExecutionStatus.PositionClosedSl
+            or TradeExecutionStatus.PositionClosedManual
+        || x.PnL.HasValue;
+
+    private static string ShortStatus(TradeExecutionStatus s) => s switch
+    {
+        TradeExecutionStatus.SignalCreated => "Signal",
+        TradeExecutionStatus.OrderCreated => "Order",
+        TradeExecutionStatus.OrderPartiallyFilled => "Partial",
+        TradeExecutionStatus.PositionOpened => "Open",
+        TradeExecutionStatus.PositionClosedTp => "Closed TP",
+        TradeExecutionStatus.PositionClosedSl => "Closed SL",
+        TradeExecutionStatus.PositionClosedManual => "Closed Manual",
+        TradeExecutionStatus.PositionError => "Error",
+        TradeExecutionStatus.Cancelled => "Cancelled",
+        _ => s.ToString()
+    };
+
+    private static string StatusCss(TradeExecutionStatus s) => s switch
+    {
+        TradeExecutionStatus.PositionOpened or TradeExecutionStatus.OrderCreated
+            or TradeExecutionStatus.OrderPartiallyFilled => "rep-open",
+        TradeExecutionStatus.PositionClosedTp => "rep-ok",
+        TradeExecutionStatus.PositionClosedSl => "rep-bad",
+        TradeExecutionStatus.PositionClosedManual => "rep-warn",
+        TradeExecutionStatus.PositionError or TradeExecutionStatus.Cancelled => "rep-warn",
+        _ => "rep-muted"
+    };
+
+    private static string StatusColor(TradeExecutionStatus s) => s switch
+    {
+        TradeExecutionStatus.PositionClosedTp => "var(--vt-green)",
+        TradeExecutionStatus.PositionClosedSl => "var(--vt-red)",
+        TradeExecutionStatus.PositionOpened => "#1e90ff",
+        _ => "var(--vt-blue)"
+    };
+
+    private static string Fmt(decimal v)
+    {
+        if (v >= 1000) return v.ToString("0.00");
+        if (v >= 1) return v.ToString("0.####");
+        return v.ToString("0.########");
+    }
+
+    private class StatusRow
+    {
+        public string Label { get; set; } = "";
+        public int Count { get; set; }
+        public int Pct { get; set; }
+        public string Css { get; set; } = "";
+        public string Color { get; set; } = "";
+    }
     private class SymAgg
     {
         public string Symbol { get; set; } = "";
         public int Count { get; set; }
+        public int Open { get; set; }
+        public int Closed { get; set; }
         public decimal Pnl { get; set; }
-        public decimal AvgRoi { get; set; }
+        public int Wins { get; set; }
+        public int Losses { get; set; }
+    }
+    private class ReasonAgg
+    {
+        public string Reason { get; set; } = "";
+        public int Count { get; set; }
+        public int Pct { get; set; }
     }
 }
