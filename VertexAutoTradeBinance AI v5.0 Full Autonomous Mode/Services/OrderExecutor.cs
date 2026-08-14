@@ -2381,7 +2381,7 @@ namespace VertexAutoTradeBinance8.Services
             // there are no existing TP/SL and places duplicates.
             try
             {
-                var algoOrders = await _algoOrders.GetOpenAlgoOrders(signal.Symbol);
+                var algoOrders = await _algoOrders.GetOpenAlgoOrdersAsync(signal.Symbol, ct);
                 if (algoOrders != null)
                 {
                     foreach (var ao in algoOrders.Where(a => !isHedge || a.PositionSide == posSide))
