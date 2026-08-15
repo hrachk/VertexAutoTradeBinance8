@@ -98,9 +98,9 @@ public sealed class DemoDcaState
     public List<DemoDcaPurchaseRecord> History { get; set; } = new();
 }
 
-// The full persisted demo account state — one shared account for now
-// (no per-user separation yet, matching the single-client setup this
-// runs on), serialized to a single JSON file.
+// Per-user persisted demo account state.
+// Stored at {EnginesRoot}/client_{userId}/demo-account.json
+// Isolated per registered user — never shared across accounts.
 public sealed class DemoAccountState
 {
     public decimal InitialBalance { get; set; } = 1000m;
