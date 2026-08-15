@@ -70,6 +70,7 @@ builder.Services.AddSingleton<EngineStateService>();
 builder.Services.AddSingleton<TradingSettingsService>();
 
 builder.Services.AddSingleton<ExecutedSignalUiService>();
+builder.Services.AddSingleton<OpenOrdersUiService>();
 builder.Services.AddSingleton<ExecutedSignalsPushService>();
 builder.Services.AddSingleton<ExecutedSignalService>();
 

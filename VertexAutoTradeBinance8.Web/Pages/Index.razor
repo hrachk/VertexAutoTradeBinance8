@@ -13,7 +13,7 @@
         <p>Live overview · engine · risk · recent activity</p>
     </div>
     <div style="display:flex;gap:8px;">
-        <button class="vt-btn" @onclick="Refresh">↻ Refresh</button>
+        <span class="vt-badge ok">auto 5s</span>
         <a class="vt-btn primary" href="settings">⚙ Settings</a>
     </div>
 </div>
@@ -169,10 +169,13 @@
     private string healthText = "Waiting for engine…";
     private List<ExecutedSignalRow> recent = new();
 
+    private System.Threading.Timer? _timer;
+
     protected override void OnInitialized()
     {
         Refresh();
-        _timer = new System.Threading.Timer(_ => InvokeAsync(() => { Refresh(); StateHasChanged(); }),
+        _timer = new System.Threading.Timer(
+            _ => InvokeAsync(() => { Refresh(); StateHasChanged(); }),
             null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
     }
 
@@ -219,7 +222,7 @@
     }
 
     private static string Fmt(decimal v) => v.ToString("0.##");
-    public void Dispose() => _timer?.Dispose();
+    public void Dispose() { try { _timer?.Dispose(); } catch { } }
 
     private class ExecutedSignalRow
     {

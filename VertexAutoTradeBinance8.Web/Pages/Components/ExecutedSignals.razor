@@ -1,78 +1,154 @@
-﻿@page "/executed-signals"
-
-@using VertexAutoTradeBinance8.Web.Services
-@using VertexAutoTradeBinance8.Models
+@page "/executed-signals"
 @using Microsoft.AspNetCore.SignalR.Client
+@using VertexAutoTradeBinance8.Models
+@using VertexAutoTradeBinance8.Web.Services
 @inject ExecutedSignalUiService ExecService
 @inject NavigationManager Nav
+@implements IAsyncDisposable
 
-<div class="missed-container">
-
-    <div class="missed-title">Исполненные сигналы</div>
-    <div class="missed-sub">
-        Все сигналы, по которым были созданы ордера / открыты позиции
+<div class="vt-page-title">
+    <div>
+        <h1>Executed Signals</h1>
+        <p>Ордера и позиции бота · live hub + auto 6s</p>
     </div>
-
-    <!-- === FILTER PANEL === -->
-    <div class="filter-chips">
-        <div class="@ChipClass("ALL")" @onclick="@(() => SetFilter("ALL"))">Все</div>
-        <div class="@ChipClass("OPEN")" @onclick="@(() => SetFilter("OPEN"))">Открытые</div>
-        <div class="@ChipClass("CLOSED")" @onclick="@(() => SetFilter("CLOSED"))">Закрытые</div>
-        <div class="@ChipClass("TP")" @onclick="@(() => SetFilter("TP"))">TP</div>
-        <div class="@ChipClass("SL")" @onclick="@(() => SetFilter("SL"))">SL</div>
-        <div class="@ChipClass("ERR")" @onclick="@(() => SetFilter("ERR"))">Ошибки</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <span class="vt-badge ok">@openCount open</span>
+        <span class="vt-badge @(tpCount>0?"ok":"info")">@tpCount TP</span>
+        <span class="vt-badge @(slCount>0?"warn":"info")">@slCount SL</span>
+        <span class="vt-hint">@all.Count total · @_tick.ToLocalTime().ToString("HH:mm:ss")</span>
     </div>
+</div>
 
-    <div class="missed-cards-grid">
-        @if (filtered == null || filtered.Count == 0)
+<div class="vt-card" style="margin-bottom:14px;">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        @foreach (var f in new[] { "ALL", "OPEN", "CLOSED", "TP", "SL", "ERR" })
         {
-            <div class="empty-state">
-                Пока нет исполненных сигналов для отображения.
-            </div>
-        }
-        else
-        {
-            @foreach (var r in filtered)
-            {
-                <ExecutedSignalCard Record="r" />
-            }
+            <button class="vt-btn @(currentFilter==f?"primary":"")" @onclick="() => SetFilter(f)">@f</button>
         }
     </div>
 </div>
+
+@if (filtered.Count == 0)
+{
+    <div class="vt-card">
+        <div class="vt-empty">
+            <div class="ico">◎</div>
+            <div>Пока нет исполненных сигналов.</div>
+            <div class="vt-hint" style="margin-top:8px;">После первого ENTRY OK записи появятся здесь.</div>
+        </div>
+    </div>
+}
+else
+{
+    <div class="es-grid">
+        @foreach (var r in filtered)
+        {
+            <div class="es-card">
+                <div class="es-head">
+                    <div class="es-sym">@r.Symbol</div>
+                    <div class="es-time">@r.Time.ToLocalTime().ToString("dd.MM HH:mm:ss")</div>
+                </div>
+                <div class="es-pills">
+                    <span class="vt-badge @StatusBadge(r)">@StatusText(r)</span>
+                    <span class="vt-badge @(r.Side == SignalSide.Buy ? "ok" : "warn")">
+                        @(r.Side == SignalSide.Buy ? "LONG" : "SHORT")
+                    </span>
+                </div>
+                <div class="es-prices">
+                    <div><span class="lbl">Entry</span><span class="val">@r.Entry</span></div>
+                    <div><span class="lbl">SL</span><span class="val">@r.StopLoss</span></div>
+                    <div><span class="lbl">TP1</span><span class="val">@(r.TakeProfits?.FirstOrDefault().ToString() ?? "—")</span></div>
+                    <div><span class="lbl">Qty</span><span class="val">@r.Qty</span></div>
+                </div>
+                <div class="es-meta">
+                    <span>Notional @r.Notional.ToString("F2") USDT</span>
+                    <span>Score @r.OpportunityScore/100</span>
+                </div>
+                @if (IsClosed(r))
+                {
+                    <div class="es-pnl @((r.PnL ?? 0) >= 0 ? "pos" : "neg")">
+                        PnL: @((r.PnL ?? 0).ToString("F4")) USDT
+                        @if ((r.ExitPrice ?? 0) > 0) { <span>· exit @r.ExitPrice</span> }
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+
+<style>
+.es-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px; }
+.es-card {
+  background:var(--vt-bg-card); border:1px solid var(--vt-border); border-radius:var(--vt-radius);
+  padding:14px 16px; display:flex; flex-direction:column; gap:10px;
+}
+.es-head { display:flex; justify-content:space-between; align-items:baseline; }
+.es-sym { font-weight:700; font-size:15px; }
+.es-time { font-size:11px; color:var(--vt-text-muted); font-family:var(--vt-mono); }
+.es-pills { display:flex; gap:8px; flex-wrap:wrap; }
+.es-prices { display:grid; grid-template-columns:1fr 1fr; gap:6px 12px; }
+.es-prices .lbl { display:block; font-size:10px; color:var(--vt-text-dim); text-transform:uppercase; }
+.es-prices .val { font-family:var(--vt-mono); font-size:13px; }
+.es-meta { display:flex; justify-content:space-between; font-size:11px; color:var(--vt-text-muted); }
+.es-pnl { font-weight:600; font-size:13px; padding-top:6px; border-top:1px solid var(--vt-border-soft); }
+.es-pnl.pos { color:var(--vt-green); }
+.es-pnl.neg { color:var(--vt-red); }
+</style>
 
 @code {
     private List<ExecutedSignalRecord> all = new();
     private List<ExecutedSignalRecord> filtered = new();
     private string currentFilter = "ALL";
-
     private HubConnection? hubConnection;
+    private CancellationTokenSource? _cts;
+    private DateTime _tick = DateTime.UtcNow;
+
+    private int openCount => all.Count(IsOpen);
+    private int tpCount => all.Count(x => x.Status == TradeExecutionStatus.PositionClosedTp);
+    private int slCount => all.Count(x => x.Status == TradeExecutionStatus.PositionClosedSl);
 
     protected override async Task OnInitializedAsync()
     {
-        all = ExecService.GetAll();
-        ApplyFilter();
-
-        hubConnection = new HubConnectionBuilder()
-            .WithUrl(Nav.ToAbsoluteUri("/hubs/executedSignals"))
-            .WithAutomaticReconnect()
-            .Build();
-
-        hubConnection.On("ExecutedSignalsUpdated", () =>
+        Reload();
+        try
         {
-            all = ExecService.GetAll();
-            ApplyFilter();
-            InvokeAsync(StateHasChanged);
-        });
+            hubConnection = new HubConnectionBuilder()
+                .WithUrl(Nav.ToAbsoluteUri("/hubs/executedSignals"))
+                .WithAutomaticReconnect()
+                .Build();
+            hubConnection.On("ExecutedSignalsUpdated", () =>
+            {
+                Reload();
+                InvokeAsync(StateHasChanged);
+            });
+            await hubConnection.StartAsync();
+        }
+        catch { /* hub optional */ }
 
-        await hubConnection.StartAsync();
+        _cts = new CancellationTokenSource();
+        _ = Loop(_cts.Token);
     }
 
-    public async ValueTask DisposeAsync()
+    private async Task Loop(CancellationToken ct)
     {
-        if (hubConnection != null)
+        while (!ct.IsCancellationRequested)
         {
-            await hubConnection.DisposeAsync();
+            try
+            {
+                await Task.Delay(6000, ct);
+                Reload();
+                _tick = DateTime.UtcNow;
+                await InvokeAsync(StateHasChanged);
+            }
+            catch (OperationCanceledException) { break; }
+            catch { }
         }
+    }
+
+    private void Reload()
+    {
+        all = ExecService.GetAll();
+        ApplyFilter();
     }
 
     private void SetFilter(string key)
@@ -83,48 +159,42 @@
 
     private void ApplyFilter()
     {
-        IEnumerable<ExecutedSignalRecord> q = all;
-
-        switch (currentFilter)
+        filtered = currentFilter switch
         {
-            case "OPEN":
-                q = all.Where(x =>
-                    x.Status == TradeExecutionStatus.OrderCreated ||
-                    x.Status == TradeExecutionStatus.OrderPartiallyFilled ||
-                    x.Status == TradeExecutionStatus.PositionOpened);
-                break;
-
-            case "CLOSED":
-                q = all.Where(x =>
-                    x.Status == TradeExecutionStatus.PositionClosedTp ||
-                    x.Status == TradeExecutionStatus.PositionClosedSl ||
-                    x.Status == TradeExecutionStatus.PositionClosedManual);
-                break;
-
-            case "TP":
-                q = all.Where(x => x.Status == TradeExecutionStatus.PositionClosedTp);
-                break;
-
-            case "SL":
-                q = all.Where(x => x.Status == TradeExecutionStatus.PositionClosedSl);
-                break;
-
-            case "ERR":
-                q = all.Where(x =>
-                    x.Status == TradeExecutionStatus.PositionError ||
-                    x.Status == TradeExecutionStatus.Cancelled);
-                break;
-
-            case "ALL":
-            default:
-                break;
-        }
-
-        filtered = q.ToList();
+            "OPEN" => all.Where(IsOpen).ToList(),
+            "CLOSED" => all.Where(IsClosed).ToList(),
+            "TP" => all.Where(x => x.Status == TradeExecutionStatus.PositionClosedTp).ToList(),
+            "SL" => all.Where(x => x.Status == TradeExecutionStatus.PositionClosedSl).ToList(),
+            "ERR" => all.Where(x => x.Status.ToString().Contains("Error", StringComparison.OrdinalIgnoreCase)
+                                 || x.Status.ToString().Contains("Fail", StringComparison.OrdinalIgnoreCase)).ToList(),
+            _ => all.ToList()
+        };
     }
 
-    private string ChipClass(string key)
+    private static bool IsOpen(ExecutedSignalRecord r) =>
+        r.Status is TradeExecutionStatus.OrderCreated
+            or TradeExecutionStatus.PositionOpened
+            or TradeExecutionStatus.SignalCreated;
+
+    private static bool IsClosed(ExecutedSignalRecord r) =>
+        r.Status is TradeExecutionStatus.PositionClosedTp
+            or TradeExecutionStatus.PositionClosedSl
+            or TradeExecutionStatus.PositionClosedManual;
+
+    private static string StatusText(ExecutedSignalRecord r) => r.Status.ToString();
+    private static string StatusBadge(ExecutedSignalRecord r) => r.Status switch
     {
-        return currentFilter == key ? "chip chip-active" : "chip";
+        TradeExecutionStatus.PositionClosedTp => "ok",
+        TradeExecutionStatus.PositionClosedSl => "warn",
+        TradeExecutionStatus.PositionOpened => "info",
+        TradeExecutionStatus.OrderCreated => "info",
+        _ => ""
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        try { _cts?.Cancel(); _cts?.Dispose(); } catch { }
+        if (hubConnection != null)
+            await hubConnection.DisposeAsync();
     }
 }

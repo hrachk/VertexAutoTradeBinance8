@@ -25,7 +25,8 @@ public class EngineStateService
             if (!File.Exists(FilePath))
                 return null;
 
-            var json = File.ReadAllText(FilePath);
+            var json = SafeFileRead.ReadAllTextShared(FilePath);
+            if (json == null) return null;
 
             var state = JsonSerializer.Deserialize<EngineStateModel>(json, new JsonSerializerOptions
             {

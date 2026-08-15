@@ -1,4 +1,5 @@
 @page "/reports"
+@implements IDisposable
 @using VertexAutoTradeBinance8.Models
 @using VertexAutoTradeBinance8.Web.Services
 @inject ExecutedSignalUiService ExecutedUi
@@ -9,7 +10,7 @@
         <h1>Reports</h1>
         <p>Что бот сделал · открыто / закрыто · PnL · по символам · статусы</p>
     </div>
-    <button class="vt-btn" @onclick="Load">↻ Refresh</button>
+    <span class="vt-badge ok">auto 8s</span>
 </div>
 
 @if (_error != null)
@@ -250,7 +251,14 @@
     private List<ReasonAgg> _reasons = new();
     private List<ExecutedSignalRecord> _recent = new();
 
-    protected override void OnInitialized() => Load();
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        Load();
+        _cts = new CancellationTokenSource();
+        _ = AutoLoop(_cts.Token);
+    }
 
     private void Load()
     {
@@ -428,5 +436,25 @@
         public string Reason { get; set; } = "";
         public int Count { get; set; }
         public int Pct { get; set; }
+    }
+
+    private async Task AutoLoop(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(8000, ct);
+                Load();
+                await InvokeAsync(StateHasChanged);
+            }
+            catch (OperationCanceledException) { break; }
+            catch { }
+        }
+    }
+
+    public void Dispose()
+    {
+        try { _cts?.Cancel(); _cts?.Dispose(); } catch { }
     }
 }

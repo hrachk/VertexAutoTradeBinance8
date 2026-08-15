@@ -34,7 +34,8 @@ namespace VertexAutoTradeBinance8.Web.Services
             if (!File.Exists(FilePath))
                 return null;
 
-            var json = File.ReadAllText(FilePath);
+            var json = SafeFileRead.ReadAllTextShared(FilePath);
+            if (string.IsNullOrWhiteSpace(json)) return null;
             return JsonSerializer.Deserialize<AiLearningSnapshot>(json, JsonOptions);
         }
 

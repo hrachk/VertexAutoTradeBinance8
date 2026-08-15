@@ -1,19 +1,153 @@
 @page "/orders"
+@using VertexAutoTradeBinance8.Web.Services
+@inject OpenOrdersUiService OrdersUi
+@implements IDisposable
 
 <div class="vt-page-title">
     <div>
         <h1>Open Orders</h1>
-        <p>Conditional (Algo) SL/TP + limit orders</p>
+        <p>Live from Binance Futures · auto-refresh 5s</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+        <span class="vt-badge @(string.IsNullOrEmpty(error) ? "ok" : "warn")">
+            @(string.IsNullOrEmpty(error) ? $"● live · {_rows.Count} orders" : "● error")
+        </span>
+        <span class="vt-hint">@(_last.ToLocalTime().ToString("HH:mm:ss"))</span>
     </div>
 </div>
 
-<div class="vt-card">
-    <div class="vt-empty">
-        <div class="ico">≡</div>
-        <div>Live open orders подтягиваются из Binance worker’ом (GetOpenOrders + GetOpenConditionalOrders).</div>
-        <div class="vt-hint" style="margin-top:8px;">Смотри логи [ORDER] / [SUPERVISOR] и раздел Executed Signals для статуса защиты позиции.</div>
-        <div style="margin-top:14px;">
-            <a class="vt-btn primary" href="executed-signals">↗ Executed signals</a>
-        </div>
+@if (!string.IsNullOrEmpty(error))
+{
+    <div class="vt-toast err" style="position:static;margin-bottom:12px;">@error</div>
+}
+
+<div class="vt-card" style="margin-bottom:12px;">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="vt-btn @(filter=="ALL"?"primary":"")" @onclick="() => SetFilter("ALL")">All (@_rows.Count)</button>
+        <button class="vt-btn @(filter=="PROTECT"?"primary":"")" @onclick="() => SetFilter("PROTECT")">SL / TP (@ProtectCount)</button>
+        <button class="vt-btn @(filter=="ORDER"?"primary":"")" @onclick="() => SetFilter("ORDER")">Entry / other (@EntryCount)</button>
     </div>
 </div>
+
+@if (Visible.Count == 0)
+{
+    <div class="vt-card">
+        <div class="vt-empty">
+            <div class="ico">≡</div>
+            <div>Нет открытых ордеров на Futures.</div>
+            <div class="vt-hint" style="margin-top:8px;">Когда бот выставит entry / SL / TP — они появятся здесь автоматически.</div>
+        </div>
+    </div>
+}
+else
+{
+    <div class="vt-card" style="overflow-x:auto;padding:0;">
+        <table class="vt-table" style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead>
+                <tr style="text-align:left;color:var(--vt-text-muted);border-bottom:1px solid var(--vt-border);">
+                    <th style="padding:12px 14px;">Symbol</th>
+                    <th style="padding:12px 14px;">Kind</th>
+                    <th style="padding:12px 14px;">Side</th>
+                    <th style="padding:12px 14px;">Type</th>
+                    <th style="padding:12px 14px;">Price</th>
+                    <th style="padding:12px 14px;">Stop</th>
+                    <th style="padding:12px 14px;">Qty</th>
+                    <th style="padding:12px 14px;">Filled</th>
+                    <th style="padding:12px 14px;">Reduce</th>
+                    <th style="padding:12px 14px;">Status</th>
+                    <th style="padding:12px 14px;">Time</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var o in Visible)
+                {
+                    <tr style="border-bottom:1px solid var(--vt-border-soft);">
+                        <td style="padding:10px 14px;font-weight:600;">@o.Symbol</td>
+                        <td style="padding:10px 14px;">
+                            <span class="vt-badge @(o.Kind=="PROTECT"?"warn":"info")">@o.Kind</span>
+                        </td>
+                        <td style="padding:10px 14px;" class="@(o.Side.Contains("Buy", StringComparison.OrdinalIgnoreCase) ? "text-long" : "text-short")">
+                            @o.Side / @o.PositionSide
+                        </td>
+                        <td style="padding:10px 14px;font-family:var(--vt-mono);font-size:12px;">@o.Type</td>
+                        <td style="padding:10px 14px;font-family:var(--vt-mono);">@Fmt(o.Price)</td>
+                        <td style="padding:10px 14px;font-family:var(--vt-mono);">@Fmt(o.StopPrice)</td>
+                        <td style="padding:10px 14px;font-family:var(--vt-mono);">@o.Quantity</td>
+                        <td style="padding:10px 14px;font-family:var(--vt-mono);">@o.Filled</td>
+                        <td style="padding:10px 14px;">@(o.ReduceOnly ? "yes" : "—")</td>
+                        <td style="padding:10px 14px;">@o.Status</td>
+                        <td style="padding:10px 14px;color:var(--vt-text-muted);">@o.CreateTime.ToLocalTime().ToString("HH:mm:ss")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+<style>
+    .text-long { color: var(--vt-green); }
+    .text-short { color: var(--vt-red); }
+</style>
+
+@code {
+    private List<OpenOrderRow> _rows = new();
+    private string filter = "ALL";
+    private string? error;
+    private DateTime _last = DateTime.MinValue;
+    private CancellationTokenSource? _cts;
+
+    private int ProtectCount => _rows.Count(x => x.Kind == "PROTECT");
+    private int EntryCount => _rows.Count(x => x.Kind != "PROTECT");
+
+    private List<OpenOrderRow> Visible => filter switch
+    {
+        "PROTECT" => _rows.Where(x => x.Kind == "PROTECT").ToList(),
+        "ORDER" => _rows.Where(x => x.Kind != "PROTECT").ToList(),
+        _ => _rows
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        _cts = new CancellationTokenSource();
+        _ = Loop(_cts.Token);
+    }
+
+    private async Task Loop(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(5000, ct);
+                await LoadAsync();
+                await InvokeAsync(StateHasChanged);
+            }
+            catch (OperationCanceledException) { break; }
+            catch { /* keep loop */ }
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _rows = await OrdersUi.GetOpenOrdersAsync();
+            error = OrdersUi.LastError;
+            _last = OrdersUi.LastFetchUtc == DateTime.MinValue ? DateTime.UtcNow : OrdersUi.LastFetchUtc;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+    }
+
+    private void SetFilter(string f) => filter = f;
+
+    private static string Fmt(decimal v) => v <= 0 ? "—" : v.ToString("0.########");
+
+    public void Dispose()
+    {
+        try { _cts?.Cancel(); _cts?.Dispose(); } catch { }
+    }
+}

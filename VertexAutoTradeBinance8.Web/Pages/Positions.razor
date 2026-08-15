@@ -1,4 +1,5 @@
 @page "/positions"
+@implements IDisposable
 @using VertexAutoTradeBinance8.Web.Services
 @inject EngineStateService EngineService
 
@@ -7,7 +8,7 @@
         <h1>Positions</h1>
         <p>Open exposure from engine snapshot · protection status</p>
     </div>
-    <button class="vt-btn" @onclick="() => { }">↻ Refresh</button>
+    <span class="vt-badge ok">auto 5s</span>
 </div>
 
 <div class="vt-card">
@@ -50,6 +51,34 @@
 </div>
 
 @code {
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        state = EngineService.Load();
+        _cts = new CancellationTokenSource();
+        _ = Loop(_cts.Token);
+    }
+
+    private async Task Loop(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(5000, ct);
+                state = EngineService.Load();
+                await InvokeAsync(StateHasChanged);
+            }
+            catch (OperationCanceledException) { break; }
+            catch { }
+        }
+    }
+
+    public void Dispose()
+    {
+        try { _cts?.Cancel(); _cts?.Dispose(); } catch { }
+    }
+
     private Models.EngineStateModel? state;
-    protected override void OnInitialized() => state = EngineService.Load();
 }
