@@ -54,7 +54,7 @@ public class LiquidityGuardService
         decimal lowerWick = Math.Min(last.OpenPrice, last.ClosePrice) - last.LowPrice;
 
         bool volumeSpike = last.Volume > avgVolume * 2.0m;
-        bool tinyVolume = last.Volume < avgVolume * 0.25m;
+        bool tinyVolume = last.Volume < avgVolume * 0.10m; // was 0.25 — too strict for alts quiet bars
 
         bool hugeLowerWick = lowerWick > avgBody * 2.0m && volumeSpike;
         bool hugeUpperWick = upperWick > avgBody * 2.0m && volumeSpike;
