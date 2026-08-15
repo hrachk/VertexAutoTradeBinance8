@@ -215,6 +215,18 @@ public sealed class ClientDbService
             client.BinanceApiKeyEnc    = string.IsNullOrEmpty(apiKey) ? null : AesEncrypt(apiKey);
             client.BinanceApiSecretEnc = string.IsNullOrEmpty(secret) ? null : AesEncrypt(secret);
             client.IsLiveEnabled       = !string.IsNullOrEmpty(apiKey);
+            // Saving real API keys ⇒ default this user to LIVE trading mode.
+            // User can still switch back to DEMO from the header toggle.
+            if (client.IsLiveEnabled)
+            {
+                client.TradingMode = "live";
+                if (client.Plan == "demo") client.Plan = "live";
+            }
+            else
+            {
+                client.TradingMode = "demo";
+                client.Plan = "demo";
+            }
             var idx = all.FindIndex(c => c.Id == clientId);
             if (idx >= 0) all[idx] = client;
             WriteAll(all);
