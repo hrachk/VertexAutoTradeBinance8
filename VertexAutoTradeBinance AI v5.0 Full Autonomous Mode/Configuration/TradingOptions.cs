@@ -97,6 +97,12 @@ public class TradingSessionsOptions
     public int EarlyStartMinutes { get; set; } = 60;
 
     /// <summary>
+    /// Суббота/воскресенье UTC: не открывать новые позиции (weekend chop).
+    /// Supervisor / SL-TP на уже открытых продолжают работать.
+    /// </summary>
+    public bool BlockWeekends { get; set; } = true;
+
+    /// <summary>
     /// Разрешённые сессии. По умолчанию London + NewYork (эффективный блок дня).
     /// Overlap 12:00–16 UTC автоматически внутри объединения окон.
     /// </summary>

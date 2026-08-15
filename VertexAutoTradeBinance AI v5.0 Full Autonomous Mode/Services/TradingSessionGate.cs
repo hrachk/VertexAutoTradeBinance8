@@ -29,6 +29,18 @@ namespace VertexAutoTradeBinance8.Services
             activeSession = null;
 
             var cfg = _options.TradingSessions;
+
+            // Weekend chop: Sat/Sun UTC — no new entries (major cause of SL cascades)
+            if (cfg != null && cfg.BlockWeekends)
+            {
+                var dow = DateTime.UtcNow.DayOfWeek;
+                if (dow == DayOfWeek.Saturday || dow == DayOfWeek.Sunday)
+                {
+                    reason = $"weekend block ({dow} UTC) — observation only";
+                    return false;
+                }
+            }
+
             if (cfg == null || !cfg.Enabled)
             {
                 reason = "sessions filter off";

@@ -110,6 +110,14 @@
                     <input class="vt-input" type="number" min="0" max="180" @bind="dto.EarlyStartMinutes" />
                     <div class="vt-hint">Yerevan UTC+4 → London 07:00 UTC = 11:00 local</div>
                 </div>
+                <div class="vt-field">
+                    <label class="vt-label">Block weekends (Sat/Sun UTC)</label>
+                    <select class="vt-input" @bind="blockWeekendsStr">
+                        <option value="true">Yes — no new entries</option>
+                        <option value="false">No — trade weekends</option>
+                    </select>
+                    <div class="vt-hint">Рекомендуется YES: суббота/воскресенье = chop и частые SL</div>
+                </div>
 
                 <div class="vt-field">
                     <label class="vt-label">London start UTC</label>
@@ -242,6 +250,12 @@
     {
         get => dto.SessionsEnabled ? "true" : "false";
         set => dto.SessionsEnabled = value == "true";
+    }
+
+    private string blockWeekendsStr
+    {
+        get => dto.BlockWeekends ? "true" : "false";
+        set => dto.BlockWeekends = value == "true";
     }
 
     private TradingSettingsDto dto = new();

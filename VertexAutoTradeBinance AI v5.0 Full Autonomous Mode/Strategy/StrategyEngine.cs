@@ -844,22 +844,37 @@ $@"📊 Режим рынка:
                 return null;
             }
 
-            // 3) SoftModeAllowed: можно насильно разрешить через config AllowSoftEntryAlways
+            // 3) SoftModeAllowed — ужесточено (слишком много weekend/chop SL по soft-probe)
+            // Запрет: weekend UTC, высокая vol, "догоняние" экстремального slope
+            bool isWeekendUtc =
+                DateTime.UtcNow.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+
+            decimal absSlope = Math.Abs(smart.TrendSlopePercent);
             bool softModeAllowed =
-                (regime == MarketRegime.StrongUpTrend ||
-                 regime == MarketRegime.StrongDownTrend ||
-                 smart.SmartType == SmartRegimeType.SmartTrend ||
-                 smart.SmartType == SmartRegimeType.SmartStrongTrend)
-                && (smart.Confidence >= 0.40m || fastTrendOverride)
-                && Math.Abs(smart.TrendSlopePercent) >= 0.0045m
-                && smart.VolatilityPercent <= 0.40m
+                !isWeekendUtc
+                && (regime == MarketRegime.StrongUpTrend ||
+                    regime == MarketRegime.StrongDownTrend ||
+                    smart.SmartType == SmartRegimeType.SmartTrend ||
+                    smart.SmartType == SmartRegimeType.SmartStrongTrend)
+                && (smart.Confidence >= 0.55m || fastTrendOverride)   // было 0.40
+                && absSlope >= 0.006m                                 // чуть сильнее тренд
+                && absSlope <= 0.06m                                  // не догонять rocket 10%+
+                && smart.VolatilityPercent > 0m
+                && smart.VolatilityPercent <= 0.08m                   // было 0.40 — шум/wipeout
                 && smart.TrendSlopePercent != 0;
 
-            if (allowSoftEntryAlways)
+            if (isWeekendUtc)
+            {
+                _logger.LogInformation(
+                    "[STRAT][{symbol}] weekend UTC — SOFT entries disabled (chop protection)",
+                    symbol);
+            }
+
+            if (allowSoftEntryAlways && !isWeekendUtc)
             {
                 softModeAllowed = true;
                 _logger.LogInformation(
-                    "🧪 TestMode: AllowSoftEntryAlways=TRUE → мягкие входы по тренду разрешены всегда.");
+                    "🧪 TestMode: AllowSoftEntryAlways=TRUE → мягкие входы по тренду разрешены.");
             }
 
             TradeSignal? baseSignal = null;
