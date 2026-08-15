@@ -436,17 +436,21 @@ namespace VertexAutoTradeBinance8.Strategy
             if (IsTooSmallBody(c, atr))
                 return null;
 
+            // BUGFIX: SmartTrend/SmartStrongTrend раньше ставились и в up, и в down →
+            // side всегда Buy (upTrend ? Buy : Sell). Side только по BaseRegime + slope.
             bool upTrend =
                 smart.BaseRegime == MarketRegime.StrongUpTrend ||
-                smart.SmartType == SmartRegimeType.SmartTrend ||
-                smart.SmartType == SmartRegimeType.SmartStrongTrend ||
-                smart.TrendSlopePercent > 0;
+                (smart.TrendSlopePercent > 0.002m && smart.BaseRegime != MarketRegime.StrongDownTrend);
 
             bool downTrend =
                 smart.BaseRegime == MarketRegime.StrongDownTrend ||
-                smart.SmartType == SmartRegimeType.SmartTrend ||
-                smart.SmartType == SmartRegimeType.SmartStrongTrend ||
-                smart.TrendSlopePercent < 0;
+                (smart.TrendSlopePercent < -0.002m && smart.BaseRegime != MarketRegime.StrongUpTrend);
+
+            if (upTrend && downTrend)
+            {
+                upTrend = smart.TrendSlopePercent >= 0;
+                downTrend = !upTrend;
+            }
 
             if (!upTrend && !downTrend)
                 return null;
@@ -454,12 +458,10 @@ namespace VertexAutoTradeBinance8.Strategy
             var side = upTrend ? SignalSide.Buy : SignalSide.Sell;
 
             decimal entry = c.ClosePrice;
-            // Soft: SL 1.2 ATR (вне шума), TP1 2.5 ATR → RR ≈ 2.08 (проходит minRr)
             decimal sl = upTrend
                 ? entry - atr * 1.2m
                 : entry + atr * 1.2m;
 
-            // RR ≈ 2.4 at SL 1.2 ATR — запас над minRr с AI-bias
             decimal tp1 = upTrend
                 ? entry + atr * 2.9m
                 : entry - atr * 2.9m;

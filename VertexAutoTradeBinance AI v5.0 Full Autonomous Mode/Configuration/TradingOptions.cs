@@ -66,7 +66,14 @@ public class TradingOptions
     /// Торговые сессии: вне окон — только наблюдение/анализ, без новых входов.
     /// </summary>
     public TradingSessionsOptions TradingSessions { get; set; } = new();
+
+    /// <summary>Глобальный выключатель новых входов (UI Settings). Supervisor продолжает работать.</summary>
+    public bool TradingEnabled { get; set; } = true;
+
+    /// <summary>Максимум одновременно открытых позиций (все символы). Default 4.</summary>
+    public int MaxOpenPositions { get; set; } = 4;
 }
+
 
 /// <summary>Окно одной биржевой сессии (время в UTC, HH:mm).</summary>
 public class SessionWindowOptions

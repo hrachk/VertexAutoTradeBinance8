@@ -107,6 +107,37 @@ public class TradingSettingsService
                 dto.BaseRiskPercent = GetDec(trading, "BaseRiskPercent", 1.0m);
                 dto.MinNotional = GetDec(trading, "MinNotional", 10m);
                 dto.MinNotionalGuard = GetDec(trading, "MinNotionalGuard", 30m);
+                dto.TradingEnabled = trading["TradingEnabled"]?.GetValue<bool>() ?? true;
+                dto.MaxOpenPositions = GetInt(trading, "MaxOpenPositions", 4);
+                dto.PostCloseCooldownMinutes = GetInt(trading, "PostCloseCooldownMinutes", 45);
+                dto.SameSideCooldownMinutes = GetInt(trading, "SameSideCooldownMinutes", 240);
+
+                var sessions = trading["TradingSessions"] as JsonObject;
+                if (sessions != null)
+                {
+                    dto.SessionsEnabled = sessions["Enabled"]?.GetValue<bool>() ?? true;
+                    dto.EarlyStartMinutes = GetInt(sessions, "EarlyStartMinutes", 60);
+                    var windows = sessions["Windows"] as JsonArray;
+                    if (windows != null)
+                    {
+                        foreach (var w in windows)
+                        {
+                            var wo = w as JsonObject;
+                            if (wo == null) continue;
+                            var name = wo["Name"]?.ToString() ?? "";
+                            if (name.Equals("London", StringComparison.OrdinalIgnoreCase))
+                            {
+                                dto.LondonStartUtc = wo["StartUtc"]?.ToString() ?? "07:00";
+                                dto.LondonEndUtc = wo["EndUtc"]?.ToString() ?? "16:00";
+                            }
+                            else if (name.Equals("NewYork", StringComparison.OrdinalIgnoreCase))
+                            {
+                                dto.NewYorkStartUtc = wo["StartUtc"]?.ToString() ?? "12:00";
+                                dto.NewYorkEndUtc = wo["EndUtc"]?.ToString() ?? "21:00";
+                            }
+                        }
+                    }
+                }
             }
 
             var auto = root["SymbolSelection"]?["Auto"] as JsonObject;
@@ -192,6 +223,32 @@ public class TradingSettingsService
             trading["BaseRiskPercent"] = dto.BaseRiskPercent;
             trading["MinNotional"] = dto.MinNotional;
             trading["MinNotionalGuard"] = dto.MinNotionalGuard;
+            trading["TradingEnabled"] = dto.TradingEnabled;
+            trading["MaxOpenPositions"] = dto.MaxOpenPositions;
+            trading["PostCloseCooldownMinutes"] = dto.PostCloseCooldownMinutes;
+            trading["SameSideCooldownMinutes"] = dto.SameSideCooldownMinutes;
+
+            var sessions = new JsonObject
+            {
+                ["Enabled"] = dto.SessionsEnabled,
+                ["EarlyStartMinutes"] = dto.EarlyStartMinutes,
+                ["Windows"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["Name"] = "London",
+                        ["StartUtc"] = dto.LondonStartUtc,
+                        ["EndUtc"] = dto.LondonEndUtc
+                    },
+                    new JsonObject
+                    {
+                        ["Name"] = "NewYork",
+                        ["StartUtc"] = dto.NewYorkStartUtc,
+                        ["EndUtc"] = dto.NewYorkEndUtc
+                    }
+                }
+            };
+            trading["TradingSessions"] = sessions;
             root["Trading"] = trading;
 
             var symSel = root["SymbolSelection"] as JsonObject ?? new JsonObject();
@@ -284,4 +341,19 @@ public class TradingSettingsDto
     public string ApiKeyMasked { get; set; } = "••••";
     public bool IsTestNet { get; set; }
     public bool UseFutures { get; set; } = true;
+
+    // Sessions + master switch
+    public bool TradingEnabled { get; set; } = true;
+    public int MaxOpenPositions { get; set; } = 4;
+    public bool SessionsEnabled { get; set; } = true;
+    public int EarlyStartMinutes { get; set; } = 60;
+    public string LondonStartUtc { get; set; } = "07:00";
+    public string LondonEndUtc { get; set; } = "16:00";
+    public string NewYorkStartUtc { get; set; } = "12:00";
+    public string NewYorkEndUtc { get; set; } = "21:00";
+
+    // Cooldowns
+    public int PostCloseCooldownMinutes { get; set; } = 45;
+    public int SameSideCooldownMinutes { get; set; } = 240;
 }
+

@@ -5,7 +5,7 @@
 <div class="vt-page-title">
     <div>
         <h1>Settings</h1>
-        <p>Risk · strategy · symbols · test mode · exchange</p>
+        <p>Risk · sessions · trade ON/OFF · symbols · strategy</p>
     </div>
     <div style="display:flex;gap:8px;">
         <button class="vt-btn" @onclick="Reload">↻ Reload</button>
@@ -23,10 +23,11 @@
 <div class="vt-settings-layout">
     <div class="vt-settings-nav">
         <button class="@(tab==0?"active":"")" @onclick="() => tab=0">Risk & Size</button>
-        <button class="@(tab==1?"active":"")" @onclick="() => tab=1">Symbols</button>
-        <button class="@(tab==2?"active":"")" @onclick="() => tab=2">Strategy</button>
-        <button class="@(tab==3?"active":"")" @onclick="() => tab=3">Take Profit</button>
-        <button class="@(tab==4?"active":"")" @onclick="() => tab=4">Test / Exchange</button>
+        <button class="@(tab==1?"active":"")" @onclick="() => tab=1">Sessions & Trade</button>
+        <button class="@(tab==2?"active":"")" @onclick="() => tab=2">Symbols</button>
+        <button class="@(tab==3?"active":"")" @onclick="() => tab=3">Strategy</button>
+        <button class="@(tab==4?"active":"")" @onclick="() => tab=4">Take Profit</button>
+        <button class="@(tab==5?"active":"")" @onclick="() => tab=5">Test / Exchange</button>
     </div>
 
     <div class="vt-card">
@@ -75,6 +76,71 @@
         }
         else if (tab == 1)
         {
+            <div class="vt-card-title" style="margin-bottom:14px;">Trading control & sessions (UTC)</div>
+            <div class="vt-form-grid">
+                <div class="vt-field" style="grid-column:1/-1;">
+                    <label class="vt-label">Trading master switch</label>
+                    <div style="display:flex;align-items:center;gap:12px;margin-top:6px;flex-wrap:wrap;">
+                        <button type="button" class="vt-btn @(dto.TradingEnabled ? "primary" : "")"
+                                @onclick="() => dto.TradingEnabled = true">● ON</button>
+                        <button type="button" class="vt-btn @(!dto.TradingEnabled ? "primary" : "")"
+                                @onclick="() => dto.TradingEnabled = false">○ OFF</button>
+                        <span class="vt-hint">
+                            @(dto.TradingEnabled
+                                ? "New entries allowed (when session is open)"
+                                : "Analysis only — no new entries. Open positions still managed.")
+                        </span>
+                    </div>
+                </div>
+
+                <div class="vt-field">
+                    <label class="vt-label">Max open positions</label>
+                    <input class="vt-input" type="number" min="1" max="20" @bind="dto.MaxOpenPositions" />
+                    <div class="vt-hint">Hard cap across all symbols (recommended 4)</div>
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Sessions filter</label>
+                    <select class="vt-input" @bind="sessionsEnabledStr">
+                        <option value="true">Enabled</option>
+                        <option value="false">Disabled (24/7)</option>
+                    </select>
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Early start (minutes before open)</label>
+                    <input class="vt-input" type="number" min="0" max="180" @bind="dto.EarlyStartMinutes" />
+                    <div class="vt-hint">Yerevan UTC+4 → London 07:00 UTC = 11:00 local</div>
+                </div>
+
+                <div class="vt-field">
+                    <label class="vt-label">London start UTC</label>
+                    <input class="vt-input" @bind="dto.LondonStartUtc" placeholder="07:00" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">London end UTC</label>
+                    <input class="vt-input" @bind="dto.LondonEndUtc" placeholder="16:00" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">New York start UTC</label>
+                    <input class="vt-input" @bind="dto.NewYorkStartUtc" placeholder="12:00" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">New York end UTC</label>
+                    <input class="vt-input" @bind="dto.NewYorkEndUtc" placeholder="21:00" />
+                </div>
+
+                <div class="vt-field">
+                    <label class="vt-label">Post-close cooldown (min)</label>
+                    <input class="vt-input" type="number" @bind="dto.PostCloseCooldownMinutes" />
+                </div>
+                <div class="vt-field">
+                    <label class="vt-label">Same-side cooldown (min)</label>
+                    <input class="vt-input" type="number" @bind="dto.SameSideCooldownMinutes" />
+                    <div class="vt-hint">240 = 4 hours</div>
+                </div>
+            </div>
+        }
+        else if (tab == 2)
+        {
             <div class="vt-card-title" style="margin-bottom:14px;">Auto symbol selection</div>
             <div class="vt-form-grid">
                 <div class="vt-field">
@@ -95,7 +161,7 @@
                 </div>
             </div>
         }
-        else if (tab == 2)
+        else if (tab == 3)
         {
             <div class="vt-card-title" style="margin-bottom:14px;">Strategy</div>
             <div class="vt-form-grid">
@@ -117,12 +183,12 @@
                 </div>
             </div>
         }
-        else if (tab == 3)
+        else if (tab == 4)
         {
             <div class="vt-card-title" style="margin-bottom:14px;">Take profit (ATR multi)</div>
             <div class="vt-form-grid">
                 <div class="vt-field">
-                    <label class="vt-label">TP mode</label>
+                    <label class="vt-label">Mode</label>
                     <input class="vt-input" @bind="dto.TpMode" />
                 </div>
                 <div class="vt-field">
@@ -172,6 +238,12 @@
 </div>
 
 @code {
+    private string sessionsEnabledStr
+    {
+        get => dto.SessionsEnabled ? "true" : "false";
+        set => dto.SessionsEnabled = value == "true";
+    }
+
     private TradingSettingsDto dto = new();
     private int tab;
     private bool saving;

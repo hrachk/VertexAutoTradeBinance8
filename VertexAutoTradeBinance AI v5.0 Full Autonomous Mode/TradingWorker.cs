@@ -15,7 +15,8 @@ namespace VertexAutoTradeBinance8
         private readonly ILogger<TradingWorker> _logger;
 
         private readonly BinanceOptions _binance;
-        private readonly TradingOptions _options;
+        private readonly IOptionsMonitor<TradingOptions> _optionsMon;
+        private TradingOptions _options => _optionsMon.CurrentValue;
 
         private readonly MarketDataService _market;
         private readonly StrategyEngine _strategy;
@@ -69,7 +70,7 @@ namespace VertexAutoTradeBinance8
         public TradingWorker(
             ILogger<TradingWorker> logger,
             IOptions<BinanceOptions> binance,
-            IOptions<TradingOptions> options,
+            IOptionsMonitor<TradingOptions> options,
             MarketDataService market,
             StrategyEngine strategy,
             RiskManager risk,
@@ -95,7 +96,7 @@ namespace VertexAutoTradeBinance8
             _logger = logger;
 
             _binance = binance.Value;
-            _options = options.Value;
+            _optionsMon = options;
 
             _market = market;
             _strategy = strategy;
@@ -390,6 +391,26 @@ namespace VertexAutoTradeBinance8
 
             // ------------------ 5. SL OPTIMIZATION -------------------
             signal.StopLoss = _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
+
+            // ------------------ 5b. GLOBAL TRADING ON/OFF (UI Settings) ----------
+            if (!_options.TradingEnabled)
+            {
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏸ OFF", "Trading disabled");
+                _logger.LogInformation("[TRADE][{symbol}] TradingEnabled=false — skip entry", symbol);
+                return;
+            }
+
+            // ------------------ 5c. MAX OPEN POSITIONS (default 4) ---------------
+            var openCount = await CountOpenPositionsAsync(ct);
+            var maxOpen = _options.MaxOpenPositions > 0 ? _options.MaxOpenPositions : 4;
+            if (openCount >= maxOpen)
+            {
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⛔ MAX", $"Open {openCount}/{maxOpen}");
+                _logger.LogInformation(
+                    "[TRADE][{symbol}] MaxOpenPositions reached ({n}/{max}) — skip entry",
+                    symbol, openCount, maxOpen);
+                return;
+            }
 
             // ------------------ 6. SESSION GATE (London + NY + early start) ----------
             // Вне сессий: анализ уже прошёл выше; новый вход запрещён. Supervisor снаружи цикла жив.

@@ -11,15 +11,16 @@ namespace VertexAutoTradeBinance8.Services
     public class TradingSessionGate
     {
         private readonly ILogger<TradingSessionGate> _logger;
-        private readonly TradingOptions _options;
+        private readonly IOptionsMonitor<TradingOptions> _optionsMon;
+        private TradingOptions _options => _optionsMon.CurrentValue;
         private DateTime _lastLogUtc = DateTime.MinValue;
 
         public TradingSessionGate(
             ILogger<TradingSessionGate> logger,
-            IOptions<TradingOptions> options)
+            IOptionsMonitor<TradingOptions> options)
         {
             _logger = logger;
-            _options = options.Value;
+            _optionsMon = options;
         }
 
         public bool IsTradingAllowed(out string reason, out string? activeSession)
