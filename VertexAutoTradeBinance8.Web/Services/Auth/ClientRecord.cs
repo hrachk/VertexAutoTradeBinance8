@@ -34,6 +34,9 @@ public sealed class ClientRecord
     [JsonPropertyName("tradingMode")]
     public string TradingMode { get; set; } = "demo";
 
+    /// <summary>Auto-trade DEMO balance on signals while user can stay in LIVE.</summary>
+    public bool ParallelDemoEnabled { get; set; } = false;
+
     [JsonPropertyName("isActive")]
     public bool IsActive { get; set; } = true;
 
