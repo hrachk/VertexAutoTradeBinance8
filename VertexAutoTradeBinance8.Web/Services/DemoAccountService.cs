@@ -282,6 +282,100 @@ public sealed class DemoAccountService
         return (true, "");
     }
 
+
+    /// <summary>
+    /// Open demo position for a specific user without switching the session bind.
+    /// Enables parallel DEMO auto-trade while the user stays in LIVE mode.
+    /// </summary>
+    public (bool ok, string error) OpenMarketPositionForClient(
+        string clientId,
+        string symbol, string side, decimal qty, int leverage,
+        decimal currentPrice, decimal? stopLoss, List<DemoTpLevel>? takeProfits)
+    {
+        if (string.IsNullOrWhiteSpace(clientId))
+            return (false, "clientId required");
+        if (qty <= 0 || currentPrice <= 0)
+            return (false, "Invalid quantity or price");
+
+        lock (_lock)
+        {
+            var clientDir = Path.Combine(_accountsDir, $"client_{clientId}");
+            try { Directory.CreateDirectory(clientDir); } catch { }
+            var path = Path.Combine(clientDir, "demo-account.json");
+
+            DemoAccountState state;
+            try
+            {
+                if (File.Exists(path))
+                {
+                    state = JsonSerializer.Deserialize<DemoAccountState>(File.ReadAllText(path))
+                            ?? new DemoAccountState { InitialBalance = 10_000m, Balance = 10_000m };
+                }
+                else
+                {
+                    state = new DemoAccountState { InitialBalance = 10_000m, Balance = 10_000m };
+                }
+            }
+            catch
+            {
+                state = new DemoAccountState { InitialBalance = 10_000m, Balance = 10_000m };
+            }
+
+            decimal margin = (qty * currentPrice) / Math.Max(1, leverage);
+            if (margin > state.Balance)
+                return (false, $"Insufficient demo balance: need ${margin:F2}, have ${state.Balance:F2}");
+
+            var existing = state.Positions.FirstOrDefault(p => p.Symbol == symbol && p.Side == side);
+            if (existing != null)
+            {
+                decimal totalQty = existing.Qty + qty;
+                existing.EntryPrice = ((existing.EntryPrice * existing.Qty) + (currentPrice * qty)) / totalQty;
+                existing.Qty = totalQty;
+                existing.Margin += margin;
+                existing.Leverage = leverage;
+                if (stopLoss.HasValue && stopLoss.Value > 0) existing.StopLoss = stopLoss;
+                if (takeProfits != null && takeProfits.Count > 0) existing.TakeProfits = takeProfits;
+            }
+            else
+            {
+                state.Balance -= margin;
+                state.Positions.Add(new DemoPosition
+                {
+                    Symbol = symbol,
+                    Side = side,
+                    Qty = qty,
+                    Leverage = leverage,
+                    EntryPrice = currentPrice,
+                    Margin = margin,
+                    StopLoss = stopLoss,
+                    TakeProfits = takeProfits ?? new(),
+                });
+            }
+
+            try
+            {
+                var tmp = path + ".tmp";
+                File.WriteAllText(tmp, JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true }));
+                File.Copy(tmp, path, overwrite: true);
+                try { File.Delete(tmp); } catch { }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[DEMO] OpenForClient save failed {id}", clientId);
+                return (false, "save failed");
+            }
+
+            // Keep session state in sync if this is the bound user
+            if (_clientId == clientId)
+                _state = state;
+
+            _logger.LogInformation("[DEMO-PARALLEL] {id} {side} {symbol} qty={qty} @ {price}",
+                clientId, side, symbol, qty, currentPrice);
+            Updated?.Invoke();
+            return (true, "");
+        }
+    }
+
     public (bool ok, string error) PlacePendingOrder(
         string symbol, string side, DemoOrderType type, decimal triggerPrice, decimal qty, int leverage,
         decimal? stopLoss, List<DemoTpLevel>? takeProfits)
