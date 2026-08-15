@@ -288,7 +288,10 @@ public class TradingSettingsService
             }
 
             File.WriteAllText(_path, root.ToJsonString(Opts));
-            return (true, $"Saved → {_path}. Restart bot worker to apply.");
+
+            // Live switch — bot polls this file every few seconds (no restart)
+            var ctrlMsg = WriteTradingControl(dto.TradingEnabled);
+            return (true, $"Saved → {_path}. Trade switch: {(dto.TradingEnabled ? "ON" : "OFF")}. {ctrlMsg}");
         }
         catch (Exception ex)
         {
@@ -308,6 +311,72 @@ public class TradingSettingsService
             try { return (int)(o[k]?.GetValue<decimal>() ?? d); } catch { return d; }
         }
     }
+
+    /// <summary>
+    /// Same path the bot TradingControlService reads — C:\VertexShared\trading_control.json
+    /// </summary>
+    private string WriteTradingControl(bool enabled)
+    {
+        var paths = new List<string>();
+        try
+        {
+            Directory.CreateDirectory(@"C:\VertexShared");
+            paths.Add(@"C:\VertexShared\trading_control.json");
+        }
+        catch { }
+
+        try
+        {
+            var user = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                "VertexShared");
+            Directory.CreateDirectory(user);
+            paths.Add(Path.Combine(user, "trading_control.json"));
+        }
+        catch { }
+
+        paths.Add(Path.Combine(AppContext.BaseDirectory, "trading_control.json"));
+
+        // Also next to bot appsettings if we know it
+        try
+        {
+            var dir = Path.GetDirectoryName(_path);
+            if (!string.IsNullOrEmpty(dir))
+                paths.Add(Path.Combine(dir, "trading_control.json"));
+        }
+        catch { }
+
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            tradingEnabled = enabled,
+            updatedUtc = DateTime.UtcNow,
+            source = "web-ui"
+        }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+
+        var written = new List<string>();
+        foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var d = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(d)) Directory.CreateDirectory(d);
+                File.WriteAllText(path, payload);
+                written.Add(path);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "WriteTradingControl failed for {path}", path);
+            }
+        }
+
+        if (written.Count == 0)
+            return "WARN: trading_control.json not written — OFF may not apply until restart.";
+
+        _logger.LogInformation("[SETTINGS] trading_control written enabled={en} → {paths}",
+            enabled, string.Join(" | ", written));
+        return $"Live control → {written[0]}";
+    }
+
     private static string Mask(string key)
     {
         if (string.IsNullOrEmpty(key) || key.Length < 8) return "••••";

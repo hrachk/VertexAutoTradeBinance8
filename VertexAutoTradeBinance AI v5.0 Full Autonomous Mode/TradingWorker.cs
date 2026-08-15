@@ -45,6 +45,7 @@ namespace VertexAutoTradeBinance8
         private readonly EngineStateSnapshotService  _engineStateSnapshot;
         private readonly ExecutedSignalService _executedSignals;
         private readonly TradingSessionGate _sessionGate;
+        private readonly TradingControlService _tradeCtrl;
         private readonly Dictionary<string, DateTime> _lastClose = new(StringComparer.OrdinalIgnoreCase);
 
 
@@ -91,7 +92,8 @@ namespace VertexAutoTradeBinance8
             EngineStateBuilder engineState,
             EngineStateSnapshotService engineStateSnapshot,
             ExecutedSignalService executedSignals,
-            TradingSessionGate sessionGate)
+            TradingSessionGate sessionGate,
+            TradingControlService tradeCtrl)
         {
             _logger = logger;
 
@@ -120,6 +122,7 @@ namespace VertexAutoTradeBinance8
             _engineStateSnapshot = engineStateSnapshot;
             _executedSignals = executedSignals;
             _sessionGate = sessionGate;
+            _tradeCtrl = tradeCtrl;
             learn.ForceSnapshot();
         }
 
@@ -392,11 +395,17 @@ namespace VertexAutoTradeBinance8
             // ------------------ 5. SL OPTIMIZATION -------------------
             signal.StopLoss = _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
 
-            // ------------------ 5b. GLOBAL TRADING ON/OFF (UI Settings) ----------
-            if (!_options.TradingEnabled)
+            // ------------------ 5b. GLOBAL TRADING ON/OFF (live control file + appsettings) ----------
+            // Primary: trading_control.json (Web UI writes here — no restart needed)
+            // Fallback: Trading:TradingEnabled in appsettings
+            var liveOn = _tradeCtrl.IsTradingEnabled();
+            var cfgOn = _options.TradingEnabled;
+            if (!liveOn || !cfgOn)
             {
-                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏸ OFF", "Trading disabled");
-                _logger.LogInformation("[TRADE][{symbol}] TradingEnabled=false — skip entry", symbol);
+                ConsoleSymbolTableFormatter.UpdateTf(symbol, tf, "⏸ OFF", liveOn ? "cfg OFF" : "UI OFF");
+                _logger.LogInformation(
+                    "[TRADE][{symbol}] SKIP entry — live={live} cfg={cfg} file={path}",
+                    symbol, liveOn, cfgOn, _tradeCtrl.PathUsed);
                 return;
             }
 

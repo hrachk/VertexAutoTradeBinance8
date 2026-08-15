@@ -54,6 +54,7 @@ public class Program
                 services.AddSingleton<ManualPositionHandler>();
                 services.AddSingleton<ManagedPositionRegistry>();
                 services.AddSingleton<TradingSessionGate>();
+                services.AddSingleton<TradingControlService>();
                 services.AddSingleton<AiLeverageService>();
 
                 services.AddSingleton<AiLiquidityClusterService>();
