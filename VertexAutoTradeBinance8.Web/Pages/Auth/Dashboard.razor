@@ -200,6 +200,18 @@ else
     await Auth.RefreshAsync();
   }
 
+  async Task ToggleParallelDemo()
+  {
+    if (Auth.CurrentClient == null) return;
+    var next = !Auth.CurrentClient.ParallelDemoEnabled;
+    var (ok, err) = await Auth.SetParallelDemoEnabledAsync(next);
+    _modeMsg = ok
+      ? (next
+          ? "✓ Параллельный DEMO ВКЛ — торгуется всегда, независимо от AutoTrade."
+          : "Параллельный DEMO выключен.")
+      : err;
+  }
+
   async Task SwitchToLive()
   {
     _modeMsg = "";
