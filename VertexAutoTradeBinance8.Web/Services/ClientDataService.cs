@@ -4,77 +4,92 @@ namespace VertexAutoTradeBinance8.Web.Services;
 
 /// <summary>
 /// Resolves file paths scoped to the currently logged-in client.
-/// Each client gets their own folder: C:\Vertex\Engines\client_XXX\
-/// Falls back to the global SharedData:Root when no user is logged in
-/// (e.g. engine-side reads, system services).
-/// 
-/// Inject as Scoped so it picks up the per-circuit AuthSessionService.
+/// Layout:
+///   {EnginesRoot}/clients.json              — shared user registry
+///   {EnginesRoot}/client_{id}/              — per-user data root
+///     live_signals.json, executed_signals.json, engine_state.json, ...
+///     demo-account.json, demo-dca-state.json
 /// </summary>
 public sealed class ClientDataService
 {
     private readonly AuthSessionService _auth;
-    private readonly string _globalRoot;
+    private readonly string _enginesRoot; // parent of all client_* folders
 
-    // Known file names (constants to avoid typos across the codebase)
-    public const string LiveSignalsFile    = "live_signals.json";
-    public const string MissedTradesFile   = "missed_trades.json";
-    public const string ExecutedSignals    = "executed_signals.json";
-    public const string KlinesBootstrap    = "klines_bootstrap.json";
-    public const string EngineState        = "engine_state.json";
-    public const string DecisionTraceDir   = "ai-models/decision-trace";
+    public const string LiveSignalsFile  = "live_signals.json";
+    public const string MissedTradesFile = "missed_trades.json";
+    public const string ExecutedSignals  = "executed_signals.json";
+    public const string KlinesBootstrap  = "klines_bootstrap.json";
+    public const string EngineState      = "engine_state.json";
+    public const string DecisionTraceDir = "ai-models/decision-trace";
+    public const string DemoAccountFile  = "demo-account.json";
+    public const string DemoDcaFile      = "demo-dca-state.json";
 
     public ClientDataService(AuthSessionService auth, IConfiguration cfg)
     {
-        _auth       = auth;
-        _globalRoot = cfg["SharedData:Root"] ?? @"C:\Vertex\Engines\client_001";
+        _auth = auth;
+
+        // SharedData:Root historically pointed at client_001.
+        // Engines root = parent of that folder (or explicit SharedData:EnginesRoot).
+        var root = cfg["SharedData:EnginesRoot"];
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            var legacy = cfg["SharedData:Root"] ?? Path.Combine(AppContext.BaseDirectory, "vertex-data", "client_001");
+            root = Path.GetDirectoryName(legacy.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+                   ?? Path.Combine(AppContext.BaseDirectory, "vertex-data");
+        }
+        _enginesRoot = root;
+        try { Directory.CreateDirectory(_enginesRoot); } catch { }
     }
 
-    /// <summary>
-    /// Root folder for the current client.
-    /// Falls back to global root if not authenticated.
-    /// </summary>
-    public string Root =>
-        _auth.IsAuthenticated
-            ? _auth.CurrentClient!.DataFolder
-            : _globalRoot;
+    /// <summary>Parent folder that contains clients.json and all client_* dirs.</summary>
+    public string EnginesRoot => _enginesRoot;
 
-    /// <summary>Resolve a file name to the client-scoped absolute path.</summary>
+    public string ClientId =>
+        _auth.CurrentClient?.Id ?? "anonymous";
+
+    /// <summary>Root folder for the current client.</summary>
+    public string Root
+    {
+        get
+        {
+            var id = ClientId;
+            if (string.IsNullOrEmpty(id) || id == "anonymous")
+                return Path.Combine(_enginesRoot, "anonymous");
+            return Path.Combine(_enginesRoot, $"client_{id}");
+        }
+    }
+
     public string Resolve(string fileName) => Path.Combine(Root, fileName);
-
-    /// <summary>Resolve a sub-directory path inside the client root.</summary>
     public string ResolveDir(string subDir)
     {
-        var dir = Path.Combine(Root, subDir);
-        Directory.CreateDirectory(dir);
-        return dir;
+        var p = Path.Combine(Root, subDir);
+        try { Directory.CreateDirectory(p); } catch { }
+        return p;
     }
 
-    // ── Convenience properties ────────────────────────────────
-    public string LiveSignalsPath    => Resolve(LiveSignalsFile);
-    public string MissedTradesPath   => Resolve(MissedTradesFile);
-    public string ExecutedSignalPath => Resolve(ExecutedSignals);
-    public string KlinesBootstrapPath=> Resolve(KlinesBootstrap);
-    public string DecisionTracePath  => ResolveDir(DecisionTraceDir);
+    public string LiveSignalsPath     => Resolve(LiveSignalsFile);
+    public string MissedTradesPath    => Resolve(MissedTradesFile);
+    public string ExecutedSignalPath  => Resolve(ExecutedSignals);
+    public string KlinesBootstrapPath => Resolve(KlinesBootstrap);
+    public string DecisionTracePath   => ResolveDir(DecisionTraceDir);
+    public string DemoAccountPath     => Resolve(DemoAccountFile);
+    public string DemoDcaPath         => Resolve(DemoDcaFile);
 
-    /// <summary>
-    /// Returns true if the client folder exists and is accessible.
-    /// </summary>
     public bool ClientFolderReady =>
-        Directory.Exists(Root);
+        !string.IsNullOrEmpty(ClientId) && ClientId != "anonymous" && Directory.Exists(Root);
 
-    /// <summary>
-    /// Ensures the client data folder exists (creates if missing).
-    /// </summary>
-    public void EnsureFolder()
+    /// <summary>Creates client_{id} folder structure for a user (call on register / first login).</summary>
+    public void EnsureFolderFor(string clientId)
     {
-        try { Directory.CreateDirectory(Root); }
-        catch { /* ignore — may be read-only in some envs */ }
+        if (string.IsNullOrWhiteSpace(clientId)) return;
+        var root = Path.Combine(_enginesRoot, $"client_{clientId}");
+        try
+        {
+            Directory.CreateDirectory(root);
+            Directory.CreateDirectory(Path.Combine(root, "ai-models", "decision-trace"));
+        }
+        catch { /* non-fatal */ }
     }
 
-    /// <summary>
-    /// Client ID of current session (or "system" if not authenticated).
-    /// Useful for logging.
-    /// </summary>
-    public string ClientId =>
-        _auth.CurrentClient?.Id ?? "system";
+    public void EnsureFolder() => EnsureFolderFor(ClientId);
 }
