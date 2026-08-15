@@ -757,6 +757,13 @@ namespace VertexAutoTradeBinance8
 
 
             // =====================================================
+            // 1.5) LIVE SIGNALS UI — write BEFORE AI gate
+            // So /market always shows strategy candidates even if AI later blocks.
+            // =====================================================
+            try { await _liveSig.AppendAsync(signal, ct); }
+            catch { /* never block pipeline for UI */ }
+
+            // =====================================================
             // 2) COOLDOWN
             // =====================================================
             if (InCooldown(symbol))
