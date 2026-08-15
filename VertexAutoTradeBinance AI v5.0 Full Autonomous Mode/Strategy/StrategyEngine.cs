@@ -858,7 +858,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 _ => (1.8m, 3.6m, 5.6m, 8.4m)
             };
 
-            // ── Regime multiplier for TP (SL unchanged) ─────────────────────
+            // ── Regime multiplier for TP ─────────────────────────────────────
             // Strong trend: momentum carries price further → wider TP targets.
             // Volatile chop: price reverses quickly → take profit fast.
             decimal regimeMult = regime switch
@@ -870,7 +870,7 @@ namespace VertexAutoTradeBinance8.Strategy
                 _ => 1.00m
             };
 
-            // ── Confidence multiplier ────────────────────────────────────────
+            // ── Confidence multiplier (TP) ───────────────────────────────────
             decimal confMult = confidence >= 0.72m ? 1.20m
                              : confidence >= 0.60m ? 1.08m
                              : confidence >= 0.52m ? 1.00m
@@ -879,15 +879,36 @@ namespace VertexAutoTradeBinance8.Strategy
             // ── Super-signal boost ───────────────────────────────────────────
             decimal superMult = isSuperSignal ? 1.20m : 1.00m;
 
+            // ── SL widen for high-conviction setups ──────────────────────────
+            // High-confidence signals are often directionally correct but need
+            // room to survive stop-hunts / noise before the move develops.
+            // Previously SL was static → early stop-out on good signals.
+            // Scale SL with confidence + regime strength (not only TP).
+            decimal slConfMult =
+                confidence >= 0.80m ? 1.45m :
+                confidence >= 0.72m ? 1.30m :
+                confidence >= 0.60m ? 1.15m :
+                1.00m;
+            if (isSuperSignal)
+                slConfMult = Math.Min(slConfMult * 1.15m, 1.70m);
+            decimal slRegimeMult = regime switch
+            {
+                MarketRegime.StrongUpTrend or MarketRegime.StrongDownTrend => 1.15m,
+                MarketRegime.UpTrend or MarketRegime.DownTrend             => 1.08m,
+                MarketRegime.VolatileChop                                   => 0.95m,
+                _ => 1.00m
+            };
+            decimal slFinal = sl * slConfMult * slRegimeMult;
+
             // ── Combined TP boost, clamped ───────────────────────────────────
             decimal tpBoost = Math.Clamp(regimeMult * confMult * superMult, 0.70m, 2.00m);
 
             // 1m in StrongTrend: promote to 5m multipliers (don't scalp a runner)
             if (interval == KlineInterval.OneMinute &&
                 (regime == MarketRegime.StrongUpTrend || regime == MarketRegime.StrongDownTrend))
-                return (sl, 1.4m * tpBoost, 2.2m * tpBoost, 3.4m * tpBoost);
+                return (slFinal, 1.4m * tpBoost, 2.2m * tpBoost, 3.4m * tpBoost);
 
-            return (sl, tp1base * tpBoost, tp2base * tpBoost, tp3base * tpBoost);
+            return (slFinal, tp1base * tpBoost, tp2base * tpBoost, tp3base * tpBoost);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1089,17 +1110,28 @@ namespace VertexAutoTradeBinance8.Strategy
             {
                 decimal atr = s.Atr.Value;
 
+                // Professional min SL distance: give the trade room to breathe.
+                // Pullbacks/structure entries need wider stops than pure breakouts.
                 decimal atrMult = s.Reason switch
                 {
-                    "PULLBACK_EMA21_LONG" or "PULLBACK_EMA21_SHORT" => 1.2m,
-                    "LIQUIDITY_GRAB_CONTINUATION_LONG" or "LIQUIDITY_GRAB_CONTINUATION_SHORT" => 1.4m,
-                    "VOLATILITY_EXPANSION_BREAKOUT_LONG" or "VOLATILITY_EXPANSION_BREAKOUT_SHORT" => 1.6m,
-                    _ => 1.3m
+                    "PULLBACK_EMA21_LONG" or "PULLBACK_EMA21_SHORT" => 1.6m,
+                    "LIQUIDITY_GRAB_CONTINUATION_LONG" or "LIQUIDITY_GRAB_CONTINUATION_SHORT" => 1.6m,
+                    "VOLATILITY_EXPANSION_BREAKOUT_LONG" or "VOLATILITY_EXPANSION_BREAKOUT_SHORT" => 1.8m,
+                    "VOLATILITY_EXPANSION_BREAKOUT_LONG_V2" or "VOLATILITY_EXPANSION_BREAKOUT_SHORT_V2" => 1.8m,
+                    _ => 1.5m
                 };
+
+                // High-confidence / super-signal: add extra buffer so a correct
+                // directional call is not killed by noise before it develops.
+                decimal conf = s.Confidence ?? 0.55m;
+                if (s.IsSuperSignal) atrMult *= 1.15m;
+                else if (conf >= 0.80m) atrMult *= 1.20m;
+                else if (conf >= 0.72m) atrMult *= 1.12m;
 
                 minDist = atr * atrMult;
 
-                decimal hardFloor = s.EntryPrice * 0.005m;
+                // Hard floor 0.6% of entry (was 0.5%) — crypto noise often exceeds 0.4-0.5%.
+                decimal hardFloor = s.EntryPrice * 0.006m;
                 if (minDist < hardFloor)
                     minDist = hardFloor;
             }
@@ -1522,22 +1554,23 @@ namespace VertexAutoTradeBinance8.Strategy
                 // Chase guard: reject if price ran too far above EMA
                 if (entry > ema21 + atr * 1.5m) return null;
 
-                // ── SL: 15-bar structure low + 1.0×ATR buffer ────────────
-                // PROBLEM: 0.5×ATR buffer sits INSIDE the stop-hunt zone.
-                // On 5M, stop hunts reach 0.3-0.5% below structure lows.
-                // 0.5×ATR ≈ 0.15-0.25% → inside hunt zone → always hit.
-                // FIX: 1.0×ATR buffer — outside typical hunt range.
-                int lookbackSl = Math.Min(10, i); // 10 bars = 50min on 5M (cleaner structure)
+                // ── SL: structure low + 1.5×ATR buffer (was 1.0×ATR) ────
+                // Stop-hunts on liquid alts routinely pierce 1.0×ATR below
+                // the swing. High-quality setups need breathing room so the
+                // trade is not stopped out before the move develops.
+                // 1.5×ATR places SL outside typical hunt depth on 5M/15M.
+                int lookbackSl = Math.Min(12, i); // slightly longer structure window
                 decimal swingLow = klines.Skip(i - lookbackSl).Take(lookbackSl + 1)
                     .Min(k => k.LowPrice);
-                decimal slLevel  = swingLow - atr * 1.0m;  // was 0.5×ATR
+                decimal slLevel  = swingLow - atr * 1.5m;  // was 1.0×ATR
 
-                // Fallback: last 2 candle lows + 1.0×ATR (if structure too far)
-                decimal candleSl = Math.Min(c0.LowPrice, c1.LowPrice) - atr * 1.0m;
-                if (entry - slLevel > atr * 3.5m) slLevel = candleSl;
+                // Fallback: last 2 candle lows + 1.5×ATR (if structure too far)
+                decimal candleSl = Math.Min(c0.LowPrice, c1.LowPrice) - atr * 1.5m;
+                if (entry - slLevel > atr * 4.5m) slLevel = candleSl;
 
                 decimal risk = entry - slLevel;
-                if (risk < atr * 0.5m || risk > atr * 3.5m) return null;
+                // Allow up to 4.5×ATR risk so the wider buffer is not rejected
+                if (risk < atr * 0.7m || risk > atr * 4.5m) return null;
 
                 decimal tp1 = entry + atr * tp1Mult;
                 // R:R filter uses 2.2 min to account for real-world slippage
@@ -1626,15 +1659,15 @@ namespace VertexAutoTradeBinance8.Strategy
                 // Chase guard: reject if price ran too far below EMA
                 if (entry < ema21 - atr * 1.5m) return null;
 
-                // SL: structure high + 1.0×ATR buffer (was 0.5×ATR)
-                int lookbackSlShort = Math.Min(10, i);
-                decimal swingHigh = klines.Skip(i - lookbackSlShort).Take(lookbackSlShort + 1)
+                // SL: structure high + 1.5×ATR buffer (was 1.0×ATR) — room vs stop-hunts
+                int lookbackSlS = Math.Min(12, i);
+                decimal swingHigh = klines.Skip(i - lookbackSlS).Take(lookbackSlS + 1)
                     .Max(k => k.HighPrice);
-                decimal slLevel = swingHigh + atr * 1.0m;
-                decimal candleSlShort = Math.Max(c0.HighPrice, c1.HighPrice) + atr * 1.0m;
-                if (slLevel - entry > atr * 3.5m) slLevel = candleSlShort;
+                decimal slLevel = swingHigh + atr * 1.5m;
+                decimal candleSlShort = Math.Max(c0.HighPrice, c1.HighPrice) + atr * 1.5m;
+                if (slLevel - entry > atr * 4.5m) slLevel = candleSlShort;
                 decimal risk = slLevel - entry;
-                if (risk < atr * 0.5m || risk > atr * 3.5m) return null;
+                if (risk < atr * 0.7m || risk > atr * 4.5m) return null;
                 decimal tp1 = entry - atr * tp1Mult;
                 if ((entry - tp1) / risk < 1.5m) return null;
 
