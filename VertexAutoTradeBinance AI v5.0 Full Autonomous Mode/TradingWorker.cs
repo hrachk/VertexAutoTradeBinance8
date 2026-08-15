@@ -486,5 +486,26 @@ namespace VertexAutoTradeBinance8
                 _logger.LogError(ex, "Snapshot save error");
             }
         }
+
+        // ================================================================
+        // COUNT OPEN FUTURES POSITIONS (all symbols)
+        // ================================================================
+        private async Task<int> CountOpenPositionsAsync(CancellationToken ct)
+        {
+            try
+            {
+                using var client = _factory.CreateRestClient();
+                var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
+                if (!res.Success || res.Data == null)
+                    return 0;
+                return res.Data.Count(p => Math.Abs(p.Quantity) > 0);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[TRADE] CountOpenPositions failed — allow entry (fail-open)");
+                return 0;
+            }
+        }
+
     }
 }
