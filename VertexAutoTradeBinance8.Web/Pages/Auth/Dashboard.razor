@@ -191,16 +191,6 @@ else
     _modeMsg = ok ? "✓ Режим LIVE включён — ордера идут на Binance." : err;
   }
 
-  async Task ToggleParallelDemo()
-  {
-    if (Auth.CurrentClient == null) return;
-    var next = !Auth.CurrentClient.ParallelDemoEnabled;
-    var (ok, err) = await Auth.SetParallelDemoEnabledAsync(next);
-    _modeMsg = ok
-      ? (next ? "✓ Параллельный DEMO включён — демо-счёт торгуется вместе с LIVE." : "Параллельный DEMO выключен.")
-      : err;
-  }
-
   async Task SwitchToDemo()
   {
     _modeMsg = "";
