@@ -223,15 +223,23 @@ namespace VertexAutoTradeBinance8.Services
                 if (wr < 0.45m)       microRisk *= 0.80m; // плохой WR → осторожнее
                 else if (wr >= 0.60m) microRisk *= 1.20m; // хороший WR → чуть больше
 
-                // Корректируем на confidence сигнала
-                if (signal.Confidence >= 0.70m) microRisk *= 1.2m;
-                if (signal.Confidence < 0.45m)  microRisk *= 0.8m;
+                // Confidence scaling — high-conviction must size up even on micro accounts.
+                // Wider structural SL otherwise collapses notional = risk/slPct.
+                decimal conf = signal.Confidence ?? 0.55m;
+                if (conf >= 0.85m)      microRisk *= 1.55m;
+                else if (conf >= 0.75m) microRisk *= 1.40m;
+                else if (conf >= 0.65m) microRisk *= 1.25m;
+                else if (conf < 0.45m)  microRisk *= 0.75m;
+
+                if (signal.IsSuperSignal)
+                    microRisk *= 1.20m;
 
                 // Корректируем на SizeMultiplier из стратегии
                 if (signal.SizeMultiplier > 0m)
-                    microRisk *= Math.Clamp(signal.SizeMultiplier, 0.5m, 1.5m);
+                    microRisk *= Math.Clamp(signal.SizeMultiplier, 0.5m, 1.8m);
 
-                microRisk = Math.Clamp(microRisk, 0.015m, 0.045m); // 1.5%-4.5% для малого баланса
+                // Raised ceiling 4.5% → 7% so high-conf micro trades are meaningful
+                microRisk = Math.Clamp(microRisk, 0.015m, 0.07m);
 
                 // Рискуем X% баланса
                 decimal riskBudgetMicro = balance * microRisk;
@@ -542,18 +550,23 @@ namespace VertexAutoTradeBinance8.Services
             // Previously: conf<0.40 → 0.60× penalized signals at 0.33-0.40
             // that had passed all structural gates — unfair double penalty.
             // Now: minimum multiplier 0.75× for signals that cleared MinEntry.
+            // Professional size scaling by confidence.
+            // Wider SL (StrategyEngine) shrinks qty for fixed risk% — so high-conf
+            // must scale risk% up MORE aggressively, otherwise good signals
+            // still enter with untradeably small size.
             decimal confMult =
-                confidence < 0.33m ? 0.55m :   // below minimum — should not reach here
-                confidence < 0.42m ? 0.80m :   // low confidence (cleared new MinEntry)
-                confidence < 0.55m ? 0.95m :   // moderate
-                confidence < 0.65m ? 1.05m :   // normal
-                confidence < 0.72m ? 1.18m :   // good
-                confidence < 0.80m ? 1.30m :   // high
-                1.45m;                          // very high conviction
+                confidence < 0.33m ? 0.55m :
+                confidence < 0.42m ? 0.85m :
+                confidence < 0.55m ? 1.00m :
+                confidence < 0.65m ? 1.15m :
+                confidence < 0.72m ? 1.30m :
+                confidence < 0.80m ? 1.50m :
+                confidence < 0.88m ? 1.70m :
+                1.90m;
 
             // Super-signal bonus: verified confluence of multiple timeframes
             if (signal.IsSuperSignal)
-                confMult = Math.Min(confMult * 1.25m, 1.60m); // cap at 1.60×
+                confMult = Math.Min(confMult * 1.25m, 2.10m); // was 1.60×
 
             // ── REGIME MULTIPLIER ────────────────────────────────────────
             // Strong trend = higher momentum expectancy → size up.
@@ -628,7 +641,7 @@ namespace VertexAutoTradeBinance8.Services
             // notional → $6.7 margin → still meaningful exposure.
             // Ceiling 10%: for very high conviction super-signals. MaxMarginPercent
             // still caps actual exposure downstream, so this is safe.
-            return Math.Clamp(risk, 0.015m, 0.10m); 
+            return Math.Clamp(risk, 0.015m, 0.12m); // high-conf + wider SL needs higher risk% 
         }
     }
 }
