@@ -100,7 +100,7 @@ public class TradingSessionsOptions
     /// Суббота/воскресенье UTC: не открывать новые позиции (weekend chop).
     /// Supervisor / SL-TP на уже открытых продолжают работать.
     /// </summary>
-    public bool BlockWeekends { get; set; } = true;
+    public bool BlockWeekends { get; set; } = false;
 
     /// <summary>
     /// Разрешённые сессии. По умолчанию London + NewYork (эффективный блок дня).

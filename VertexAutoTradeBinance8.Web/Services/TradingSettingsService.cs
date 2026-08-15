@@ -117,7 +117,7 @@ public class TradingSettingsService
                 {
                     dto.SessionsEnabled = sessions["Enabled"]?.GetValue<bool>() ?? true;
                     dto.EarlyStartMinutes = GetInt(sessions, "EarlyStartMinutes", 60);
-                    dto.BlockWeekends = sessions["BlockWeekends"]?.GetValue<bool>() ?? true;
+                    dto.BlockWeekends = sessions["BlockWeekends"]?.GetValue<bool>() ?? false;
                     var windows = sessions["Windows"] as JsonArray;
                     if (windows != null)
                     {
@@ -449,7 +449,7 @@ public class TradingSettingsDto
     public int MaxOpenPositions { get; set; } = 4;
     public bool SessionsEnabled { get; set; } = true;
     public int EarlyStartMinutes { get; set; } = 60;
-    public bool BlockWeekends { get; set; } = true;
+    public bool BlockWeekends { get; set; } = false;
     public string LondonStartUtc { get; set; } = "07:00";
     public string LondonEndUtc { get; set; } = "16:00";
     public string NewYorkStartUtc { get; set; } = "12:00";

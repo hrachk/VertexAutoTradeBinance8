@@ -28,7 +28,7 @@ namespace VertexAutoTradeBinance8.Services
         {
             public bool TradingEnabled { get; set; } = true;
             /// <summary>true = no new entries Sat/Sun UTC.</summary>
-            public bool BlockWeekends { get; set; } = true;
+            public bool BlockWeekends { get; set; } = false; // allow weekend until user enables block in UI
             public DateTime UpdatedUtc { get; set; } = DateTime.UtcNow;
             public string? Source { get; set; }
         }
