@@ -352,6 +352,7 @@
     private bool SidebarCollapsed;
     private string _strategyMode = "Auto";
     private bool _autoTradeEnabled = true;
+    private string? _logMsg;
     private bool _demoModeEnabled;
 
     async Task ToggleDemoModeHeader()
@@ -378,7 +379,13 @@
 
     void OnDemoModeChangedInHeader()
     {
-        _demoModeEnabled = DemoAccount.DemoMode;
+        _demoModeEnabled = Auth.IsAuthenticated ? Auth.IsDemo : DemoAccount.DemoMode;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    void OnAuthChangedForMode()
+    {
+        _demoModeEnabled = Auth.IsAuthenticated ? Auth.IsDemo : true;
         _ = InvokeAsync(StateHasChanged);
     }
 
