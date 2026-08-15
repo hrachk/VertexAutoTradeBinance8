@@ -99,6 +99,61 @@
   string _error = "", _success = "";
   bool _busy;
 
+  DotNetObjectReference<Register>? _dotNet;
+
+  protected override void OnAfterRender(bool firstRender)
+  {
+    if (firstRender)
+      _dotNet = DotNetObjectReference.Create(this);
+  }
+
+  async Task StartGoogle()
+  {
+    _error = "";
+    try { await JS.InvokeVoidAsync("vertexOAuth.startGoogle", _dotNet); }
+    catch { _error = "Google недоступен. Проверьте OAuth:Google:ClientId в appsettings."; }
+  }
+
+  [JSInvokable]
+  public async Task OnGoogleToken(string idToken)
+  {
+    _busy = true; StateHasChanged();
+    try
+    {
+      var info = await OAuth.ValidateGoogleTokenAsync(idToken);
+      if (info == null) { _error = "Google: не удалось проверить токен."; return; }
+      var (ok, error, _) = await Auth.OAuthLoginAsync(info);
+      if (!ok) { _error = error; return; }
+      Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
+    }
+    catch (Exception ex) { _error = ex.Message; }
+    finally { _busy = false; }
+  }
+
+  async Task StartTelegram()
+  {
+    _error = "";
+    try { await JS.InvokeVoidAsync("vertexOAuth.startTelegram", _dotNet); }
+    catch { _error = "Telegram недоступен. Проверьте OAuth:Telegram в appsettings."; }
+  }
+
+  [JSInvokable]
+  public async Task OnTelegramData(Dictionary<string, string> data)
+  {
+    _busy = true; StateHasChanged();
+    try
+    {
+      var info = OAuth.ValidateTelegramLogin(data);
+      if (info == null) { _error = "Telegram: неверная подпись."; return; }
+      var (ok, error, _) = await Auth.OAuthLoginAsync(info);
+      if (!ok) { _error = error; return; }
+      Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
+    }
+    catch (Exception ex) { _error = ex.Message; }
+    finally { _busy = false; }
+  }
+
+
   protected override void OnInitialized()
   {
     if (Auth.IsAuthenticated)
