@@ -34,11 +34,40 @@ namespace VertexAutoTradeBinance8.Services
                 decimal sl    = (decimal)(signal.StopLoss ?? 0m);
                 if (entry <= 0 || sl <= 0) return;
 
-                var tps = signal.TakeProfits as System.Collections.Generic.List<decimal>;
-                if (tps == null || tps.Count == 0) return;
+                List<decimal>? tps = null;
+                try { tps = signal.TakeProfits as System.Collections.Generic.List<decimal>; } catch { }
+                if (tps == null || tps.Count == 0)
+                {
+                    try
+                    {
+                        decimal? single = signal.TakeProfit as decimal?;
+                        if (single.HasValue && single.Value > 0)
+                            tps = new List<decimal> { single.Value };
+                    }
+                    catch { }
+                }
+                if (tps == null || tps.Count == 0)
+                {
+                    // Synthetic TP so UI still shows the candidate
+                    decimal atr = 0m;
+                    try { atr = (decimal)(signal.Atr ?? 0m); } catch { }
+                    if (atr <= 0) atr = entry * 0.01m;
+                    bool isLong = true;
+                    try
+                    {
+                        var sideStr = signal.Side?.ToString() ?? "";
+                        isLong = !sideStr.Contains("Sell", StringComparison.OrdinalIgnoreCase);
+                    }
+                    catch { }
+                    tps = isLong
+                        ? new List<decimal> { entry + atr, entry + atr * 2m, entry + atr * 3m }
+                        : new List<decimal> { entry - atr, entry - atr * 2m, entry - atr * 3m };
+                }
 
-                decimal conf = (decimal)(signal.Confidence ?? 0m);
-                if (conf <= 0) return;
+                decimal conf = 0m;
+                try { conf = (decimal)(signal.Confidence ?? 0m); } catch { }
+                if (conf > 1.5m) conf = conf / 100m;
+                if (conf < 0m) conf = 0m;
 
                 await _lock.WaitAsync(ct);
                 try
@@ -57,7 +86,7 @@ namespace VertexAutoTradeBinance8.Services
                         TakeProfits = tps.ToList(),
                         EntryRangeLow  = signal.EntryRangeLow as decimal?,
                         EntryRangeHigh = signal.EntryRangeHigh as decimal?,
-                        Confidence  = (int)(conf * 100),
+                        Confidence  = (int)Math.Round(conf * 100m),
                         Score       = (int)(((decimal)(signal.AiQuality ?? 0m)) * 100),
                         Reason      = (string)(signal.Reason ?? ""),
                         Atr         = (decimal)(signal.Atr ?? 0m),
