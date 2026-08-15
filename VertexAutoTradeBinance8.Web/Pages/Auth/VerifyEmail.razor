@@ -23,7 +23,19 @@
     <div class="auth-success">✓ @_success</div>
   }
 
-  <!-- 6 separate digit inputs for UX -->
+  @if (!string.IsNullOrEmpty(_shownCode))
+  {
+    <div style="margin:12px 0;padding:12px 14px;border-radius:8px;background:rgba(56,189,248,.08);border:1px solid rgba(56,189,248,.25);color:#7dd3fc;font-size:13px;">
+      <div style="font-weight:700;margin-bottom:4px;">Ваш код подтверждения</div>
+      <div style="font-size:26px;font-weight:900;letter-spacing:8px;font-family:monospace;color:#38bdf8;">@_shownCode</div>
+      <div style="margin-top:6px;opacity:.85;font-size:11px;line-height:1.4;">
+        Письмо не доставлено (SMTP не настроен или ошибка отправки).
+        Введите код выше. Для реальной почты укажите Email:Provider в appsettings.web.json
+        (gmail / mailru / yandex + app-password).
+      </div>
+    </div>
+  }
+
   <div class="code-inputs">
     @for (int i = 0; i < 6; i++)
     {
@@ -39,18 +51,15 @@
     }
   </div>
 
-  <button class="auth-btn" disabled="@(_busy || CodeLength < 6)"
-          @onclick="DoVerify">
+  <button class="auth-btn" disabled="@(_busy || CodeLength < 6)" @onclick="DoVerify">
     @if (_busy) { <span>Проверка…</span> }
     else        { <span>Подтвердить</span> }
   </button>
 
-  <div style="text-align:center;margin-top:4px">
+  <div style="text-align:center;margin-top:8px">
     @if (_resendCooldown > 0)
     {
-      <span style="font-size:12px;color:var(--t2,#6e90b2)">
-        Повторная отправка через @_resendCooldown сек.
-      </span>
+      <span style="font-size:12px;color:#6e90b2">Повторная отправка через @_resendCooldown сек.</span>
     }
     else
     {
@@ -60,151 +69,119 @@
     }
   </div>
 
-  <div class="auth-link" style="margin-top:16px">
+  <div class="auth-link" style="margin-top:16px;display:flex;flex-direction:column;gap:8px;align-items:center;">
+    <a href="/login">Войти через Google / Telegram</a>
     <a href="/register">← Зарегистрироваться заново</a>
   </div>
 </div>
 
 <style>
-.code-inputs {
-  display: flex; gap: 8px; justify-content: center;
-  margin: 20px 0 16px;
-}
+.code-inputs { display:flex; gap:8px; justify-content:center; margin:20px 0 16px; }
 .code-digit {
-  width: 44px; height: 54px; text-align: center;
-  font-size: 24px; font-weight: 900; font-family: monospace;
-  background: #050a12; border: 2px solid #1a2e44;
-  border-radius: 8px; color: #38bdf8; outline: none;
-  transition: border-color .15s; caret-color: transparent;
+  width:44px; height:54px; text-align:center;
+  font-size:24px; font-weight:900; font-family:monospace;
+  background:#050a12; border:2px solid #1a2e44;
+  border-radius:8px; color:#38bdf8; outline:none;
 }
-.code-digit:focus { border-color: #3b82f6; background: #070f1c; }
-.code-digit:disabled { opacity: .5; }
+.code-digit:focus { border-color:#3b82f6; background:#070f1c; }
+.code-digit:disabled { opacity:.5; }
 .auth-resend {
-  background: transparent; border: none; color: #3b82f6;
-  font-size: 12px; cursor: pointer; text-decoration: underline;
-  font-family: inherit;
+  background:transparent; border:none; color:#3b82f6;
+  font-size:12px; cursor:pointer; text-decoration:underline; font-family:inherit;
 }
-.auth-resend:disabled { color: #334e68; cursor: not-allowed; text-decoration: none; }
+.auth-resend:disabled { color:#334e68; cursor:not-allowed; text-decoration:none; }
 </style>
 
 @code {
   [SupplyParameterFromQuery] string? ReturnUrl { get; set; }
+  [SupplyParameterFromQuery(Name = "hint")] string? HintCode { get; set; }
 
-  string[] _digits    = new string[6];
-  string   _error     = "";
-  string   _success   = "";
-  bool     _busy;
-  bool     _resendBusy;
-  int      _resendCooldown = 0;
+  string[] _digits = new string[6];
+  string _error = "", _success = "";
+  string? _shownCode;
+  bool _busy, _resendBusy;
+  int _resendCooldown;
   System.Threading.Timer? _cooldownTimer;
 
   int CodeLength => _digits.Count(d => !string.IsNullOrEmpty(d));
-  string FullCode => string.Join("", _digits);
 
   protected override void OnInitialized()
   {
-    // If not waiting for verification → go to dashboard or login
-    if (!Auth.IsAuthenticated)
+    if (Auth.CurrentClient == null)
     {
-      Nav.NavigateTo("/login", replace: true);
+      Nav.NavigateTo("/register", replace: true);
       return;
     }
-    if (Auth.CurrentClient!.IsEmailVerified)
+    if (Auth.CurrentClient.IsEmailVerified)
     {
       Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
       return;
     }
-  }
-
-  void OnDigitInput(int idx, ChangeEventArgs e)
-  {
-    var raw = e.Value?.ToString() ?? "";
-    // Accept only digits
-    var digit = raw.Length > 0 ? raw[^1].ToString() : "";
-    if (!string.IsNullOrEmpty(digit) && !char.IsDigit(digit[0])) digit = "";
-    _digits[idx] = digit;
-
-    // Auto-advance to next input
-    if (!string.IsNullOrEmpty(digit) && idx < 5)
-      _ = InvokeAsync(async () =>
-      {
-        await Task.Delay(10);
-        await FocusDigit(idx + 1);
-      });
-
-    // Auto-submit when all 6 filled
-    if (CodeLength == 6)
-      _ = InvokeAsync(DoVerify);
-  }
-
-  async Task OnDigitKey(int idx, KeyboardEventArgs e)
-  {
-    if (e.Key == "Backspace" && string.IsNullOrEmpty(_digits[idx]) && idx > 0)
-    {
-      _digits[idx - 1] = "";
-      await FocusDigit(idx - 1);
-    }
-    else if (e.Key == "Enter" && CodeLength == 6)
-      await DoVerify();
-  }
-
-  void OnDigitFocus(int idx)
-  {
-    // Select content on focus so typing replaces it
-  }
-
-  async Task FocusDigit(int idx)
-  {
-    try { await InvokeAsync(StateHasChanged); } catch { }
+    _shownCode = !string.IsNullOrEmpty(HintCode) ? HintCode : Auth.PeekVerificationCode();
   }
 
   async Task DoVerify()
   {
-    _error = ""; _busy = true; StateHasChanged();
+    _error = "";
+    var code = string.Concat(_digits);
+    if (code.Length != 6) { _error = "Введите 6 цифр."; return; }
+    _busy = true;
     try
     {
-      (bool ok, string error) = await Auth.ConfirmEmailAsync(FullCode.Trim());
+      var (ok, err) = await Auth.ConfirmEmailAsync(code);
       if (ok)
       {
-        _success = "Email подтверждён! Переход…";
+        _success = "Email подтверждён!";
         StateHasChanged();
-        await Task.Delay(1000);
+        await Task.Delay(700);
         Nav.NavigateTo(ReturnUrl ?? "/dashboard", replace: true);
       }
-      else
-      {
-        _error  = error;
-        _digits = new string[6]; // clear on error
-      }
+      else _error = err;
     }
-    catch (Exception ex) { _error = $"Ошибка: {ex.Message}"; }
+    catch (Exception ex) { _error = ex.Message; }
     finally { _busy = false; }
   }
 
   async Task DoResend()
   {
-    _resendBusy = true; _error = ""; StateHasChanged();
+    _resendBusy = true; _error = "";
     try
     {
-      var ok = await Auth.ResendVerificationCodeAsync();
-      _success = ok ? "Код отправлен повторно." : "Не удалось отправить. Проверьте email.";
-      _resendCooldown = 60;
-      StartCooldown();
+      var (ok, newCode) = await Auth.ResendVerificationCodeAsync();
+      if (ok)
+      {
+        _success = string.IsNullOrEmpty(newCode)
+          ? "Код отправлен повторно на email."
+          : "Новый код сгенерирован (показан ниже).";
+        if (!string.IsNullOrEmpty(newCode)) _shownCode = newCode;
+        _resendCooldown = 60;
+        _cooldownTimer?.Dispose();
+        _cooldownTimer = new System.Threading.Timer(_ =>
+        {
+          if (_resendCooldown > 0) { _resendCooldown--; InvokeAsync(StateHasChanged); }
+        }, null, 1000, 1000);
+      }
+      else _error = "Не удалось отправить код. Попробуйте снова.";
     }
-    catch { _success = ""; _error = "Ошибка при отправке."; }
+    catch (Exception ex) { _error = ex.Message; }
     finally { _resendBusy = false; }
   }
 
-  void StartCooldown()
+  void OnDigitInput(int idx, ChangeEventArgs e)
   {
-    _cooldownTimer?.Dispose();
-    _cooldownTimer = new System.Threading.Timer(_ =>
-    {
-      if (_resendCooldown > 0) _resendCooldown--;
-      if (_resendCooldown == 0) _cooldownTimer?.Dispose();
-      InvokeAsync(StateHasChanged);
-    }, null, 1000, 1000);
+    var v = e.Value?.ToString() ?? "";
+    _digits[idx] = v.Length > 0 ? v[^1].ToString() : "";
+    if (_digits[idx].Length == 1 && idx < 5)
+      _ = InvokeAsync(async () => { try { await JS.InvokeVoidAsync("eval", $"document.getElementById('digit-{idx+1}')?.focus()"); } catch { } });
   }
+  void OnDigitKey(int idx, KeyboardEventArgs e)
+  {
+    if (e.Key == "Backspace" && string.IsNullOrEmpty(_digits[idx]) && idx > 0)
+      _digits[idx - 1] = "";
+  }
+  void OnDigitFocus(int idx) { }
+
+  [Inject] IJSRuntime JS { get; set; } = default!;
 
   public void Dispose() => _cooldownTimer?.Dispose();
 }
