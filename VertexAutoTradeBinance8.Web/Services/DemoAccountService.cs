@@ -9,8 +9,12 @@ public sealed class DemoAccountService
 {
     private readonly MarketDataLiveState _liveState;
     private readonly ILogger<DemoAccountService> _logger;
-    private readonly string _filePath;
+    private readonly string _accountsDir;
     private readonly object _lock = new();
+
+    private string _clientId = "";
+    private string _filePath = "";
+    private string _dcaStatePath = "";
 
     private DemoAccountState _state = new();
 
@@ -27,7 +31,6 @@ public sealed class DemoAccountService
     // differs (virtual buys here vs a real Binance order there).
     private readonly IOptionsMonitor<VertexAutoTradeBinance8.Configuration.DcaOptions> _dcaOptions;
     private readonly HistoricalDataReaderService _historicalData;
-    private readonly string _dcaStatePath;
     private DemoDcaState _dcaState = new();
     private Timer? _dcaTimer;
 
@@ -47,6 +50,87 @@ public sealed class DemoAccountService
         DemoModeChanged?.Invoke();
     }
 
+    /// <summary>Currently bound client id (empty if none).</summary>
+    public string BoundClientId => _clientId;
+
+    /// <summary>
+    /// Bind demo ledger to a registered user. Loads their isolated
+    /// demo-account.json. Call on login / session restore; Unbind on logout.
+    /// </summary>
+    public void BindClient(string clientId, decimal? preferredInitialBalance = null)
+    {
+        if (string.IsNullOrWhiteSpace(clientId))
+        {
+            UnbindClient();
+            return;
+        }
+
+        lock (_lock)
+        {
+            if (_clientId == clientId && !string.IsNullOrEmpty(_filePath))
+                return; // already bound
+
+            // Persist previous user before switching
+            if (!string.IsNullOrEmpty(_clientId) && !string.IsNullOrEmpty(_filePath))
+            {
+                Save();
+                SaveDcaState();
+            }
+
+            _clientId = clientId;
+            var clientDir = Path.Combine(_accountsDir, $"client_{clientId}");
+            try { Directory.CreateDirectory(clientDir); } catch { }
+
+            _filePath = Path.Combine(clientDir, "demo-account.json");
+            _dcaStatePath = Path.Combine(clientDir, "demo-dca-state.json");
+
+            _state = new DemoAccountState();
+            _dcaState = new DemoDcaState();
+            Load();
+            LoadDcaState();
+
+            // Seed initial balance for brand-new demo ledger
+            if (!File.Exists(_filePath))
+            {
+                var seed = preferredInitialBalance is > 0 ? preferredInitialBalance.Value : 10_000m;
+                _state.InitialBalance = seed;
+                _state.Balance = seed;
+                Save();
+            }
+        }
+
+        _logger.LogInformation("[DEMO] Bound client {id} balance={bal:F2}", clientId, _state.Balance);
+        Updated?.Invoke();
+    }
+
+    public void UnbindClient()
+    {
+        lock (_lock)
+        {
+            if (!string.IsNullOrEmpty(_clientId) && !string.IsNullOrEmpty(_filePath))
+            {
+                Save();
+                SaveDcaState();
+            }
+            _clientId = "";
+            _filePath = "";
+            _dcaStatePath = "";
+            _state = new DemoAccountState();
+            _dcaState = new DemoDcaState();
+        }
+        Updated?.Invoke();
+    }
+
+    private bool EnsureBound()
+    {
+        if (string.IsNullOrEmpty(_clientId) || string.IsNullOrEmpty(_filePath))
+        {
+            _logger.LogWarning("[DEMO] Operation ignored — no client bound (login required)");
+            return false;
+        }
+        return true;
+    }
+
     public DemoAccountService(
         MarketDataLiveState liveState, ILogger<DemoAccountService> logger, IConfiguration cfg,
         IOptionsMonitor<VertexAutoTradeBinance8.Configuration.DcaOptions> dcaOptions,
@@ -57,16 +141,27 @@ public sealed class DemoAccountService
         _dcaOptions = dcaOptions;
         _historicalData = historicalData;
 
-        // Same simple file-based persistence pattern already used
-        // elsewhere in this project (klines_bootstrap.json) — a single
-        // JSON file, not a database, matching the project's existing
-        // scale and conventions.
-        var root = cfg["SharedData:Root"] ?? AppContext.BaseDirectory;
-        _filePath = Path.Combine(root, "demo-account.json");
-        _dcaStatePath = Path.Combine(root, "demo-dca-state.json");
+        // Per-user demo state under engines root:
+        //   {EnginesRoot}/client_{id}/demo-account.json
+        //   {EnginesRoot}/client_{id}/demo-dca-state.json
+        // Shared demo-account.json is NO LONGER used — each registered
+        // user has an isolated virtual balance and positions.
+        var enginesRoot = cfg["SharedData:EnginesRoot"];
+        if (string.IsNullOrWhiteSpace(enginesRoot))
+        {
+            var legacy = cfg["SharedData:Root"] ?? AppContext.BaseDirectory;
+            enginesRoot = Path.GetDirectoryName(legacy.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+                          ?? AppContext.BaseDirectory;
+        }
+        _accountsDir = enginesRoot;
+        try { Directory.CreateDirectory(_accountsDir); } catch { }
 
-        Load();
-        LoadDcaState();
+        // Start unbound — BindClient(userId) loads that user's demo ledger.
+        _clientId = "";
+        _filePath = "";
+        _dcaStatePath = "";
+        _state = new DemoAccountState();
+        _dcaState = new DemoDcaState();
 
         _liveState.PriceTicked += OnPriceTicked;
 
@@ -103,6 +198,7 @@ public sealed class DemoAccountService
 
     public void ResetAccount(decimal newInitialBalance)
     {
+        if (!EnsureBound()) return;
         lock (_lock)
         {
             _state = new DemoAccountState { InitialBalance = newInitialBalance, Balance = newInitialBalance };
@@ -133,6 +229,7 @@ public sealed class DemoAccountService
         string symbol, string side, decimal qty, int leverage,
         decimal currentPrice, decimal? stopLoss, List<DemoTpLevel>? takeProfits)
     {
+        if (!EnsureBound()) return (false, "Войдите в аккаунт для Demo-торговли.");
         if (qty <= 0 || currentPrice <= 0) return (false, "Invalid quantity or price");
 
         lock (_lock)
@@ -189,6 +286,7 @@ public sealed class DemoAccountService
         string symbol, string side, DemoOrderType type, decimal triggerPrice, decimal qty, int leverage,
         decimal? stopLoss, List<DemoTpLevel>? takeProfits)
     {
+        if (!EnsureBound()) return (false, "Войдите в аккаунт для Demo-торговли.");
         if (qty <= 0 || triggerPrice <= 0) return (false, "Invalid quantity or trigger price");
 
         lock (_lock)
@@ -290,6 +388,7 @@ public sealed class DemoAccountService
 
     public (bool ok, string error) ClosePosition(string id, decimal pctToClose = 100m, string reason = "Manual")
     {
+        if (!EnsureBound()) return (false, "Войдите в аккаунт для Demo-торговли.");
         decimal? exitPrice = null;
         lock (_lock)
         {
@@ -575,16 +674,15 @@ public sealed class DemoAccountService
     {
         try
         {
-            if (File.Exists(_dcaStatePath))
-            {
-                var json = File.ReadAllText(_dcaStatePath);
-                var loaded = JsonSerializer.Deserialize<DemoDcaState>(json);
-                if (loaded != null) _dcaState = loaded;
-            }
+            if (string.IsNullOrEmpty(_dcaStatePath) || !File.Exists(_dcaStatePath))
+                return;
+            var json = File.ReadAllText(_dcaStatePath);
+            var loaded = JsonSerializer.Deserialize<DemoDcaState>(json);
+            if (loaded != null) _dcaState = loaded;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[DEMO-DCA] Failed to load demo-dca-state.json — starting fresh");
+            _logger.LogWarning(ex, "[DEMO-DCA] Failed to load {path}", _dcaStatePath);
         }
     }
 
@@ -592,6 +690,9 @@ public sealed class DemoAccountService
     {
         try
         {
+            if (string.IsNullOrEmpty(_dcaStatePath)) return;
+            var dir = Path.GetDirectoryName(_dcaStatePath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             var json = JsonSerializer.Serialize(_dcaState, new JsonSerializerOptions { WriteIndented = true });
             var tmp = _dcaStatePath + ".tmp";
             File.WriteAllText(tmp, json);
@@ -599,7 +700,7 @@ public sealed class DemoAccountService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[DEMO-DCA] Failed to save demo-dca-state.json");
+            _logger.LogWarning(ex, "[DEMO-DCA] Failed to save {path}", _dcaStatePath);
         }
     }
 
@@ -607,16 +708,15 @@ public sealed class DemoAccountService
     {
         try
         {
-            if (File.Exists(_filePath))
-            {
-                var json = File.ReadAllText(_filePath);
-                var loaded = JsonSerializer.Deserialize<DemoAccountState>(json);
-                if (loaded != null) _state = loaded;
-            }
+            if (string.IsNullOrEmpty(_filePath) || !File.Exists(_filePath))
+                return;
+            var json = File.ReadAllText(_filePath);
+            var loaded = JsonSerializer.Deserialize<DemoAccountState>(json);
+            if (loaded != null) _state = loaded;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[DEMO] Failed to load demo-account.json — starting fresh");
+            _logger.LogWarning(ex, "[DEMO] Failed to load {path} — starting fresh", _filePath);
         }
     }
 
@@ -624,6 +724,9 @@ public sealed class DemoAccountService
     {
         try
         {
+            if (string.IsNullOrEmpty(_filePath)) return;
+            var dir = Path.GetDirectoryName(_filePath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             var json = JsonSerializer.Serialize(_state, new JsonSerializerOptions { WriteIndented = true });
             var tmp = _filePath + ".tmp";
             File.WriteAllText(tmp, json);
@@ -631,7 +734,7 @@ public sealed class DemoAccountService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[DEMO] Failed to save demo-account.json");
+            _logger.LogWarning(ex, "[DEMO] Failed to save {path}", _filePath);
         }
     }
 }
