@@ -53,6 +53,7 @@ builder.Services.AddSingleton<WeatherForecastService>();
 // AuthSessionService: scoped — one per Blazor circuit (per browser tab)
 // ClientDataService: scoped — resolves file paths per logged-in client
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Auth.ClientDbService>();
+builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Auth.VerificationCodeCache>();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Auth.EmailService>();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Auth.OAuthService>();
 builder.Services.AddHttpClient("oauth", c => { c.Timeout = TimeSpan.FromSeconds(10); });
