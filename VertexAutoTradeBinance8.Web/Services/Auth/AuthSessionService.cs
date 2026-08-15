@@ -12,19 +12,15 @@ public sealed class AuthSessionService : IAsyncDisposable
     public ClientRecord?  CurrentClient   { get; private set; }
     public bool           IsAuthenticated => CurrentClient != null;
 
-    /// <summary>True when user is in demo mode (virtual balance, no real orders).</summary>
-    public bool           IsDemo          => _demoMode || CurrentClient is null
-                                             || string.Equals(CurrentClient.TradingMode, "demo", StringComparison.OrdinalIgnoreCase)
-                                             || !CurrentClient.IsLiveEnabled;
+    /// <summary>True when virtual demo trading is active (no real Binance orders).</summary>
+    public bool IsDemo => CurrentClient == null || _demoMode || !CurrentClient.IsLiveEnabled;
 
-    /// <summary>True only when user explicitly chose live AND has API keys.</summary>
-    public bool           IsLive          => !_demoMode
-                                             && CurrentClient is { IsLiveEnabled: true }
-                                             && string.Equals(CurrentClient.TradingMode, "live", StringComparison.OrdinalIgnoreCase);
+    /// <summary>True only with API keys + explicit LIVE mode.</summary>
+    public bool IsLive => CurrentClient is { IsLiveEnabled: true } && !_demoMode;
 
-    // Runtime toggle (also persisted on ClientRecord.TradingMode + cookie)
+    // Runtime flag; source of truth after bind = ClientRecord.TradingMode + keys
     private bool _demoMode = true;
-    public  bool DemoMode  => _demoMode;
+    public  bool DemoMode  => IsDemo;
 
     public event Action? OnChange;
 
@@ -66,20 +62,19 @@ public sealed class AuthSessionService : IAsyncDisposable
             _db.EnsureClientDataFolder(client.Id);
             _demo.BindClient(client.Id, client.DemoBalance > 0 ? client.DemoBalance : 10_000m);
 
-            // Restore trading mode from client record (source of truth)
-            var mode = (client.TradingMode ?? "demo").ToLowerInvariant();
-            if (mode == "live" && client.IsLiveEnabled)
-                _demoMode = false;
-            else
-            {
-                _demoMode = true;
-                if (mode != "demo")
-                    client.TradingMode = "demo";
-            }
+            // Source of truth: ClientRecord.TradingMode + IsLiveEnabled.
+            // If user has API keys and TradingMode is live (or was never set but
+            // keys exist and Plan is live) → LIVE. Otherwise DEMO.
+            var mode = (client.TradingMode ?? "").Trim().ToLowerInvariant();
+            bool wantLive = client.IsLiveEnabled && (
+                mode == "live" ||
+                (string.IsNullOrEmpty(mode) && string.Equals(client.Plan, "live", StringComparison.OrdinalIgnoreCase)));
+
+            _demoMode = !wantLive;
             _demo.SetDemoMode(_demoMode);
 
             // Sync LIVE credentials into process-wide store (or clear for demo)
-            _ = SyncLiveCredentialsAsync(client, !_demoMode);
+            _ = SyncLiveCredentialsAsync(client, live: wantLive);
         }
         catch (Exception ex)
         {
@@ -148,9 +143,28 @@ public sealed class AuthSessionService : IAsyncDisposable
                 }
             }
 
-            // Restore demo mode preference
+            // Cookie is secondary. BindDemoForClient already set _demoMode from
+            // ClientRecord.TradingMode + IsLiveEnabled. Only apply cookie if it
+            // is a clear override AND keys allow LIVE.
+            // Cookie values written by SwitchTradingModeAsync: "0"=live, "1"=demo.
             var demoVal = await js.InvokeAsync<string?>("vertexAuth.getCookie", DemoCookie);
-            _demoMode = demoVal != "live";
+            if (CurrentClient != null && CurrentClient.IsLiveEnabled && !string.IsNullOrEmpty(demoVal))
+            {
+                bool cookieWantsLive = demoVal is "0" or "live" or "false";
+                if (cookieWantsLive)
+                {
+                    _demoMode = false;
+                    _demo.SetDemoMode(false);
+                    await SyncLiveCredentialsAsync(CurrentClient, live: true);
+                }
+                else if (demoVal is "1" or "demo" or "true")
+                {
+                    _demoMode = true;
+                    _demo.SetDemoMode(true);
+                    _liveCreds.Deactivate();
+                }
+            }
+            // If no client / no keys — stay in demo (BindDemoForClient already did this)
         }
         catch (Exception ex)
         {
@@ -382,7 +396,7 @@ public sealed class AuthSessionService : IAsyncDisposable
 
         if (_js != null)
         {
-            try { await _js.InvokeVoidAsync("vertexAuth.setCookie", DemoCookie, _demoMode ? "1" : "0", 365); }
+            try { await _js.InvokeVoidAsync("vertexAuth.setCookie", DemoCookie, _demoMode ? "demo" : "live", 365); }
             catch { /* non-fatal */ }
         }
 
