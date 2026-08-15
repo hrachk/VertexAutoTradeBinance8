@@ -150,6 +150,7 @@ public sealed class ClientDbService
             // Create client data folder
             try { Directory.CreateDirectory(client.DataFolder); } catch { }
 
+            EnsureClientDataFolder(client.Id);
             _log.LogInformation("[AUTH] Registered: {Id} {Email}", client.Id, client.Email);
             return (true, "", client);
         }
@@ -248,6 +249,58 @@ public sealed class ClientDbService
             if (idx >= 0) { all[idx].DemoBalance = balance; WriteAll(all); }
         }
         finally { _lock.Release(); }
+    }
+
+    /// <summary>
+    /// Switches user trading mode between "demo" and "live".
+    /// Live requires IsLiveEnabled (API keys saved). Returns error if not allowed.
+    /// </summary>
+    public async Task<(bool ok, string error)> SetTradingModeAsync(string clientId, string mode)
+    {
+        mode = (mode ?? "demo").Trim().ToLowerInvariant();
+        if (mode is not ("demo" or "live"))
+            return (false, "Режим должен быть demo или live.");
+
+        await _lock.WaitAsync();
+        try
+        {
+            var all = ReadAll();
+            var idx = all.FindIndex(c => c.Id == clientId);
+            if (idx < 0) return (false, "Пользователь не найден.");
+
+            var client = all[idx];
+            if (mode == "live" && !client.IsLiveEnabled)
+                return (false, "Сначала подключите Binance API ключи в настройках.");
+
+            client.TradingMode = mode;
+            // Plan stays as subscription label; TradingMode is the runtime switch.
+            if (mode == "live" && client.Plan == "demo")
+                client.Plan = "live";
+            if (mode == "demo" && !client.IsLiveEnabled)
+                client.Plan = "demo";
+
+            all[idx] = client;
+            WriteAll(all);
+            return (true, "");
+        }
+        finally { _lock.Release(); }
+    }
+
+    /// <summary>Creates per-user data directory under engines root.</summary>
+    public void EnsureClientDataFolder(string clientId)
+    {
+        if (string.IsNullOrWhiteSpace(clientId)) return;
+        try
+        {
+            var dir = Path.GetDirectoryName(_filePath) ?? AppContext.BaseDirectory;
+            var clientDir = Path.Combine(dir, $"client_{clientId}");
+            Directory.CreateDirectory(clientDir);
+            Directory.CreateDirectory(Path.Combine(clientDir, "ai-models", "decision-trace"));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "[AUTH] EnsureClientDataFolder failed for {id}", clientId);
+        }
     }
 
     // ── OAuth find-or-create ──────────────────────────────────────────
