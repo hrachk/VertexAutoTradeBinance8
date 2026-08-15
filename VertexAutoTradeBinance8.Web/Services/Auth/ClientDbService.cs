@@ -234,6 +234,32 @@ public sealed class ClientDbService
         finally { _lock.Release(); }
     }
 
+    
+    public async Task<(bool ok, string error)> SetParallelDemoEnabledAsync(string clientId, bool enabled)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var all = ReadAll();
+            var idx = all.FindIndex(c => c.Id == clientId);
+            if (idx < 0) return (false, "Пользователь не найден.");
+            all[idx].ParallelDemoEnabled = enabled;
+            WriteAll(all);
+            return (true, "");
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task<List<ClientRecord>> GetClientsWithParallelDemoAsync()
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            return ReadAll().Where(c => c.ParallelDemoEnabled && c.IsActive).ToList();
+        }
+        finally { _lock.Release(); }
+    }
+
     public async Task<(string key, string secret)> GetBinanceKeysAsync(string clientId)
     {
         await _lock.WaitAsync();
