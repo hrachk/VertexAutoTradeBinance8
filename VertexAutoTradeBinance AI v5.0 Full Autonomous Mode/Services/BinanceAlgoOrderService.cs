@@ -44,8 +44,9 @@ namespace VertexAutoTradeBinance8.Services
     {
         private readonly HttpClient _http;
         private readonly ILogger<BinanceAlgoOrderService> _logger;
-        private readonly string _apiKey;
-        private readonly string _apiSecret;
+        private readonly TradingCredentialStore _creds;
+        private readonly string _fallbackApiKey;
+        private readonly string _fallbackApiSecret;
         private readonly string _baseUrl;
 
         // ── Server time sync ──────────────────────────────────────────────
@@ -79,16 +80,32 @@ namespace VertexAutoTradeBinance8.Services
         private DateTime _algoOrdersCacheExpiry = DateTime.MinValue;
         private static readonly TimeSpan AlgoOrdersCacheTtl = TimeSpan.FromSeconds(20);
 
-        public BinanceAlgoOrderService(IConfiguration cfg, IHttpClientFactory httpFactory, ILogger<BinanceAlgoOrderService> logger)
+        public BinanceAlgoOrderService(
+            IConfiguration cfg,
+            IHttpClientFactory httpFactory,
+            TradingCredentialStore creds,
+            ILogger<BinanceAlgoOrderService> logger)
         {
             _logger = logger;
+            _creds = creds;
 
-            _apiKey = cfg["Binance:ApiKey"] ?? string.Empty;
-            _apiSecret = cfg["Binance:SecretKey"] ?? cfg["Binance:ApiSecret"] ?? string.Empty;
+            // Fallback = single-tenant engine config (used only when no user LIVE session)
+            _fallbackApiKey    = cfg["Binance:ApiKey"] ?? string.Empty;
+            _fallbackApiSecret = cfg["Binance:SecretKey"] ?? cfg["Binance:ApiSecret"] ?? string.Empty;
             _baseUrl = (cfg["Binance:FuturesBaseUrl"] ?? "https://fapi.binance.com").TrimEnd('/');
 
             _http = httpFactory.CreateClient("BinanceAlgoRaw");
             _http.Timeout = TimeSpan.FromSeconds(8);
+        }
+
+        /// <summary>Per-user LIVE keys first, then appsettings fallback.</summary>
+        private bool TryResolveKeys(out string apiKey, out string apiSecret)
+        {
+            if (_creds.TryGet(out _, out apiKey, out apiSecret))
+                return true;
+            apiKey = _fallbackApiKey;
+            apiSecret = _fallbackApiSecret;
+            return !string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(apiSecret);
         }
 
         // ── Timestamp helper ──────────────────────────────────────────────
@@ -175,9 +192,9 @@ namespace VertexAutoTradeBinance8.Services
             CancellationToken ct,
             string? clientAlgoId = null)
         {
-            if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret))
+            if (!TryResolveKeys(out var apiKey, out var apiSecret))
             {
-                _logger.LogError("[ALGO-RAW] Missing Binance:ApiKey / Binance:SecretKey in config");
+                _logger.LogError("[ALGO-RAW] Missing API credentials (no LIVE user keys and no config fallback)");
                 return false;
             }
 
@@ -205,12 +222,12 @@ namespace VertexAutoTradeBinance8.Services
                 q.Add(new("reduceOnly", reduceOnly.Value ? "true" : "false"));
 
             var (query, rawQuery) = BuildQuery(q);
-            var sig = Sign(rawQuery, _apiSecret);
+            var sig = Sign(rawQuery, apiSecret);
 
             var url = $"{_baseUrl}/fapi/v1/algoOrder?{query}&signature={sig}";
 
             using var req = new HttpRequestMessage(HttpMethod.Post, url);
-            req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", _apiKey);
+            req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", apiKey);
 
             try
             {
@@ -244,9 +261,9 @@ namespace VertexAutoTradeBinance8.Services
         public async Task<List<BinanceAlgoOrderInfo>> GetOpenAlgoOrdersAsync(string? symbol, CancellationToken ct)
         {
             var result = new List<BinanceAlgoOrderInfo>();
-            if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret))
+            if (!TryResolveKeys(out var apiKey, out var apiSecret))
             {
-                _logger.LogError("[ALGO-RAW] Missing Binance:ApiKey / Binance:SecretKey in config");
+                _logger.LogError("[ALGO-RAW] Missing API credentials (no LIVE user keys and no config fallback)");
                 return result;
             }
 
@@ -280,11 +297,11 @@ namespace VertexAutoTradeBinance8.Services
                 if (!string.IsNullOrEmpty(symbol)) q.Add(new("symbol", symbol));
 
                 var (query, rawQuery) = BuildQuery(q);
-                var sig = Sign(rawQuery, _apiSecret);
+                var sig = Sign(rawQuery, apiSecret);
                 var url = $"{_baseUrl}/fapi/v1/openAlgoOrders?{query}&signature={sig}";
 
                 using var req = new HttpRequestMessage(HttpMethod.Get, url);
-                req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", _apiKey);
+                req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", apiKey);
 
                 try
                 {
@@ -352,7 +369,7 @@ namespace VertexAutoTradeBinance8.Services
 
         public async Task<bool> CancelAlgoOrderAsync(long algoId, CancellationToken ct)
         {
-            if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret)) return false;
+            if (!TryResolveKeys(out var apiKey, out var apiSecret)) return false;
 
             var ts = await GetBinanceTimestampAsync(ct);
             var q = new List<KeyValuePair<string, string>>
@@ -362,11 +379,11 @@ namespace VertexAutoTradeBinance8.Services
                 new("recvWindow", "5000"),
             };
             var (query, rawQuery) = BuildQuery(q);
-            var sig = Sign(rawQuery, _apiSecret);
+            var sig = Sign(rawQuery, apiSecret);
             var url = $"{_baseUrl}/fapi/v1/algoOrder?{query}&signature={sig}";
 
             using var req = new HttpRequestMessage(HttpMethod.Delete, url);
-            req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", _apiKey);
+            req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", apiKey);
 
             try
             {
