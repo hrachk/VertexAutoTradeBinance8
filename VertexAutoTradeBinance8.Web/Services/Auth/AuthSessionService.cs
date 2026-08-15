@@ -11,10 +11,18 @@ public sealed class AuthSessionService : IAsyncDisposable
 {
     public ClientRecord?  CurrentClient   { get; private set; }
     public bool           IsAuthenticated => CurrentClient != null;
-    public bool           IsDemo          => !_demoMode ? false : true;
-    public bool           IsLive          => CurrentClient is { IsLiveEnabled: true } && !_demoMode;
 
-    // Actual trading mode (set by MainLayout toggle, persisted in cookie)
+    /// <summary>True when user is in demo mode (virtual balance, no real orders).</summary>
+    public bool           IsDemo          => _demoMode || CurrentClient is null
+                                             || string.Equals(CurrentClient.TradingMode, "demo", StringComparison.OrdinalIgnoreCase)
+                                             || !CurrentClient.IsLiveEnabled;
+
+    /// <summary>True only when user explicitly chose live AND has API keys.</summary>
+    public bool           IsLive          => !_demoMode
+                                             && CurrentClient is { IsLiveEnabled: true }
+                                             && string.Equals(CurrentClient.TradingMode, "live", StringComparison.OrdinalIgnoreCase);
+
+    // Runtime toggle (also persisted on ClientRecord.TradingMode + cookie)
     private bool _demoMode = true;
     public  bool DemoMode  => _demoMode;
 
@@ -23,6 +31,7 @@ public sealed class AuthSessionService : IAsyncDisposable
     private readonly ClientDbService      _db;
     private readonly SessionTokenService  _tokens;
     private readonly ILogger<AuthSessionService> _log;
+    private readonly VertexAutoTradeBinance8.Web.Services.DemoAccountService _demo;
     private IJSRuntime? _js;
     private bool        _initialized;
 
@@ -36,12 +45,40 @@ public sealed class AuthSessionService : IAsyncDisposable
         ClientDbService db,
         SessionTokenService tokens,
         EmailService email,
+        VertexAutoTradeBinance8.Web.Services.DemoAccountService demo,
         ILogger<AuthSessionService> log)
     {
         _db     = db;
         _tokens = tokens;
         _email  = email;
+        _demo   = demo;
         _log    = log;
+    }
+
+
+    private void BindDemoForClient(ClientRecord client)
+    {
+        try
+        {
+            _db.EnsureClientDataFolder(client.Id);
+            _demo.BindClient(client.Id, client.DemoBalance > 0 ? client.DemoBalance : 10_000m);
+
+            // Restore trading mode from client record (source of truth)
+            var mode = (client.TradingMode ?? "demo").ToLowerInvariant();
+            if (mode == "live" && client.IsLiveEnabled)
+                _demoMode = false;
+            else
+            {
+                _demoMode = true;
+                if (mode != "demo")
+                    client.TradingMode = "demo";
+            }
+            _demo.SetDemoMode(_demoMode);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "[SESSION] BindDemoForClient failed for {id}", client.Id);
+        }
     }
 
     // ── Initialize: restore from cookie ──────────────────────
@@ -65,6 +102,7 @@ public sealed class AuthSessionService : IAsyncDisposable
                     if (client != null && client.IsActive)
                     {
                         CurrentClient = client;
+                        BindDemoForClient(client);
                         _log.LogInformation("[SESSION] Restored from cookie: {id}", clientId);
                         OnChange?.Invoke();
                     }
@@ -89,6 +127,7 @@ public sealed class AuthSessionService : IAsyncDisposable
         if (!ok || client == null) return (false, error);
 
         CurrentClient = client;
+        BindDemoForClient(client);
         _log.LogInformation("[SESSION] Login: {id}, rememberMe={rm}", client.Id, rememberMe);
 
         // Create persistent token and set cookie
@@ -115,6 +154,7 @@ public sealed class AuthSessionService : IAsyncDisposable
             if (!client.IsActive) return (false, "Аккаунт заблокирован.", false);
 
             CurrentClient = client;
+            BindDemoForClient(client);
 
             var token = await _tokens.CreateAsync(client.Id, rememberMe: true);
             if (_js != null)
@@ -138,6 +178,7 @@ public sealed class AuthSessionService : IAsyncDisposable
         if (!ok || client == null) return (false, error);
 
         CurrentClient = client;
+        BindDemoForClient(client);
         // Don't set session cookie yet — require email verification first
         // (cookie will be set in ConfirmEmailAsync after code is verified)
 
@@ -228,6 +269,8 @@ public sealed class AuthSessionService : IAsyncDisposable
         }
 
         CurrentClient = null;
+        _demoMode = true;
+        try { _demo.UnbindClient(); } catch { }
         OnChange?.Invoke();
     }
 
@@ -235,17 +278,10 @@ public sealed class AuthSessionService : IAsyncDisposable
     public void Logout()
     {
         CurrentClient = null;
+        try { _demo.UnbindClient(); } catch { }
+        _demoMode = true;
         if (_js != null)
             _ = SetCookieAsync(CookieName, "", -1);
-        OnChange?.Invoke();
-    }
-
-    // ── Set demo mode ─────────────────────────────────────────
-    public async Task SetDemoModeAsync(bool demo)
-    {
-        _demoMode = demo;
-        if (_js != null)
-            await SetCookieAsync(DemoCookie, demo ? "demo" : "live", 30);
         OnChange?.Invoke();
     }
 
@@ -254,7 +290,12 @@ public sealed class AuthSessionService : IAsyncDisposable
     {
         if (CurrentClient == null) return;
         var fresh = await _db.FindByIdAsync(CurrentClient.Id);
-        if (fresh != null) { CurrentClient = fresh; OnChange?.Invoke(); }
+        if (fresh != null)
+        {
+            CurrentClient = fresh;
+            BindDemoForClient(fresh);
+            OnChange?.Invoke();
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────
@@ -272,5 +313,44 @@ public sealed class AuthSessionService : IAsyncDisposable
     {
         // Nothing to dispose — JS runtime handles cleanup
     }
+
+    /// <summary>
+    /// Explicit demo ↔ live switch. Live requires saved Binance API keys.
+    /// Persists to ClientRecord.TradingMode and demo mode cookie.
+    /// </summary>
+    public async Task<(bool ok, string error)> SwitchTradingModeAsync(string mode)
+    {
+        if (CurrentClient == null)
+            return (false, "Необходимо войти в аккаунт.");
+
+        mode = (mode ?? "demo").Trim().ToLowerInvariant();
+        var (ok, error) = await _db.SetTradingModeAsync(CurrentClient.Id, mode);
+        if (!ok) return (false, error);
+
+        // Refresh client from disk
+        var refreshed = await _db.FindByIdAsync(CurrentClient.Id);
+        if (refreshed != null)
+            CurrentClient = refreshed;
+
+        _demoMode = mode != "live";
+        _demo.SetDemoMode(_demoMode);
+
+        if (_js != null)
+        {
+            try { await _js.InvokeVoidAsync("vertexAuth.setCookie", DemoCookie, _demoMode ? "1" : "0", 365); }
+            catch { /* non-fatal */ }
+        }
+
+        OnChange?.Invoke();
+        _log.LogInformation("[SESSION] TradingMode → {mode} for {id}", mode, CurrentClient.Id);
+        return (true, "");
+    }
+
+    /// <summary>Legacy toggle used by MainLayout sticky switch.</summary>
+    public async Task SetDemoModeAsync(bool enabled)
+    {
+        await SwitchTradingModeAsync(enabled ? "demo" : "live");
+    }
+
 }
 
