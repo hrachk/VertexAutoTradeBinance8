@@ -155,6 +155,22 @@ else
       </div>
     }
 
+
+    <!-- Parallel DEMO (independent of AutoTrade ON/OFF) -->
+    <div style="margin-top:14px;padding:14px 18px;border-radius:10px;background:rgba(56,189,248,.06);border:1px solid rgba(56,189,248,.22);">
+      <div style="font-weight:700;color:#e2e8f0;margin-bottom:6px;">Параллельный DEMO-счёт</div>
+      <div style="font-size:12px;color:#94a3b8;line-height:1.5;margin-bottom:10px;">
+        Можно быть в <b>LIVE</b> и одновременно разрешить системе торговать виртуальным DEMO-балансом по тем же сигналам.
+        Реальные ордера — на Binance; DEMO — отдельно, без риска.<br/>
+        <span style="color:#38bdf8;">Не зависит от кнопки AutoTrade ON/OFF</span> — при ВКЛ виртуальный счёт торгуется всегда, пока есть сигналы.
+      </div>
+      <button class="dash-btn" style="width:auto;padding:8px 16px;@(c.ParallelDemoEnabled?"background:rgba(14,165,233,.25);border-color:#0ea5e9;":"")"
+              @onclick="ToggleParallelDemo">
+        @(c.ParallelDemoEnabled ? "● Параллельный DEMO ВКЛ" : "○ Включить параллельный DEMO")
+      </button>
+    </div>
+
+
   </div>
 }
 
