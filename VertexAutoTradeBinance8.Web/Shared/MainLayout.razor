@@ -354,9 +354,26 @@
     private bool _autoTradeEnabled = true;
     private bool _demoModeEnabled;
 
-    void ToggleDemoModeHeader()
+    async Task ToggleDemoModeHeader()
     {
-        DemoAccount.SetDemoMode(!DemoAccount.DemoMode);
+        // Unified switch: AuthSession persists TradingMode + activates/clears LIVE keys
+        bool goDemo = !Auth.IsDemo; // currently live → switch to demo
+        if (Auth.IsDemo)
+        {
+            // try go LIVE
+            var (ok, err) = await Auth.SwitchTradingModeAsync("live");
+            if (!ok)
+            {
+                // stay demo — typically missing API keys
+                _logMsg = err;
+            }
+        }
+        else
+        {
+            await Auth.SwitchTradingModeAsync("demo");
+        }
+        _demoModeEnabled = Auth.IsDemo;
+        StateHasChanged();
     }
 
     void OnDemoModeChangedInHeader()
@@ -421,14 +438,17 @@
         }
         catch { }
 
-        _demoModeEnabled = DemoAccount.DemoMode;
+        // Prefer AuthSession (persisted TradingMode) over the in-memory DemoAccount flag
+        _demoModeEnabled = Auth.IsAuthenticated ? Auth.IsDemo : DemoAccount.DemoMode;
         DemoAccount.DemoModeChanged += OnDemoModeChangedInHeader;
+        Auth.OnChange += OnAuthChangedForMode;
     }
 
     public void Dispose()
     { 
         Auth.OnChange -= OnAuthChange;
         DemoAccount.DemoModeChanged -= OnDemoModeChangedInHeader;
+        Auth.OnChange -= OnAuthChangedForMode;
     }
 
 
