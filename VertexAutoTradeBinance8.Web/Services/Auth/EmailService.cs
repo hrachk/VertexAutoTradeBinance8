@@ -103,6 +103,11 @@ public sealed class EmailService
                 _smtp.ProviderName, _smtp.Host, _smtp.Port, _smtp.From);
     }
 
+    /// <summary>True when a real SMTP/API provider is configured (not console-only).</summary>
+    public bool IsConfigured => !_smtp.IsDevMode;
+
+    public bool IsDevMode => _smtp.IsDevMode;
+
     // ── Public API ─────────────────────────────────────────────────
     public Task<bool> SendVerificationCodeAsync(
         string toEmail, string displayName, string code)
