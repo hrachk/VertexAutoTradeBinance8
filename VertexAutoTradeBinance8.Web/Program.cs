@@ -70,6 +70,7 @@ builder.Services.AddSingleton<RealDcaHistoryReader>();
 builder.Services.Configure<DcaOptions>(builder.Configuration.GetSection("Dca"));
 builder.Services.AddSingleton<MarketDataLiveState>();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.DemoAccountService>();
+builder.Services.AddHostedService<VertexAutoTradeBinance8.Web.Services.DemoAutoTradeService>();
 builder.Services.AddSingleton<DecisionMarkersFileService>();
 
 builder.Services.AddSingleton<IAiPulseEngine, AiPulseEngine>();
