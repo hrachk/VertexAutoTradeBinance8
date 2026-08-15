@@ -345,14 +345,18 @@
     _busy = true; StateHasChanged();
     try
     {
-      var (ok, error) = await Auth.RegisterAsync(_email.Trim(), _password, _displayName.Trim());
+      var (ok, error, emailSent, displayCode) = await Auth.RegisterAsync(_email.Trim(), _password, _displayName.Trim());
       if (ok)
       {
-        _success = "Проверь email — отправили код подтверждения.";
+        _success = emailSent
+          ? "Аккаунт создан! Проверь email."
+          : "Аккаунт создан. Код подтверждения на следующем шаге.";
         StateHasChanged();
-        await Task.Delay(1000);
-        Close();
-        Nav.NavigateTo("/verify-email");
+        await Task.Delay(800);
+        var qs = new List<string>();
+        if (!string.IsNullOrEmpty(ReturnUrl)) qs.Add($"returnUrl={Uri.EscapeDataString(ReturnUrl)}");
+        if (!string.IsNullOrEmpty(displayCode)) qs.Add($"hint={Uri.EscapeDataString(displayCode)}");
+        Nav.NavigateTo("/verify-email" + (qs.Count>0?"?"+string.Join("&",qs):""), forceLoad: false);
       }
       else { _error = error; }
     }
