@@ -2,11 +2,23 @@
 @using VertexAutoTradeBinance8.Web.Services.Auth
 @inject AuthSessionService Auth
 @inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject OAuthService OAuth
 @layout VertexAutoTradeBinance8.Web.Shared.AuthLayout
 
 <PageTitle>Vertex AI — Регистрация</PageTitle>
 
 <div class="auth-card">
+<div class="auth-oauth" style="margin:16px 0;display:flex;flex-direction:column;gap:8px;">
+  <button type="button" class="auth-btn" style="background:#fff;color:#111;" @onclick="StartGoogle" disabled="@_busy">
+    🔵 Продолжить с Google
+  </button>
+  <button type="button" class="auth-btn" style="background:#229ED9;color:#fff;" @onclick="StartTelegram" disabled="@_busy">
+    ✈️ Telegram
+  </button>
+  <div style="text-align:center;font-size:12px;color:#6e90b2;margin:4px 0;">или email</div>
+</div>
+
   <div class="auth-logo">VERTEX <span>AI</span></div>
   <div class="auth-title">Создать аккаунт</div>
   <div class="auth-sub">Начни торговать с Demo-режима бесплатно</div>
@@ -114,14 +126,19 @@
 
     try
     {
-      var (ok, error) = await Auth.RegisterAsync(email, pwd, name);
+      var (ok, error, emailSent, displayCode) = await Auth.RegisterAsync(email, pwd, name);
       if (ok)
       {
-        _success = "Аккаунт создан! Проверь email — отправили код подтверждения.";
+        if (emailSent)
+          _success = "Аккаунт создан! Проверь email — отправили код подтверждения.";
+        else
+          _success = "Аккаунт создан. Письмо не ушло (SMTP не настроен) — код покажем на следующем шаге.";
         StateHasChanged();
-        await Task.Delay(1200);
-        // Redirect to email verification page
-        var dest = "/verify-email" + (ReturnUrl != null ? $"?returnUrl={Uri.EscapeDataString(ReturnUrl)}" : "");
+        await Task.Delay(900);
+        var q = new List<string>();
+        if (ReturnUrl != null) q.Add($"returnUrl={Uri.EscapeDataString(ReturnUrl)}");
+        if (!string.IsNullOrEmpty(displayCode)) q.Add($"hint={Uri.EscapeDataString(displayCode)}");
+        var dest = "/verify-email" + (q.Count > 0 ? "?" + string.Join("&", q) : "");
         Nav.NavigateTo(dest, replace: true);
       }
       else
