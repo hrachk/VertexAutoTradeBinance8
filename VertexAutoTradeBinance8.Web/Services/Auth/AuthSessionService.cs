@@ -383,6 +383,17 @@ public sealed class AuthSessionService : IAsyncDisposable
     /// Explicit demo ↔ live switch. Live requires saved Binance API keys.
     /// Persists to ClientRecord.TradingMode and demo mode cookie.
     /// </summary>
+    public async Task<(bool ok, string error)> SetParallelDemoEnabledAsync(bool enabled)
+    {
+        if (CurrentClient == null) return (false, "Не авторизован.");
+        var (ok, err) = await _db.SetParallelDemoEnabledAsync(CurrentClient.Id, enabled);
+        if (!ok) return (false, err);
+        CurrentClient.ParallelDemoEnabled = enabled;
+        OnChange?.Invoke();
+        _log.LogInformation("[SESSION] ParallelDemo={en} for {id}", enabled, CurrentClient.Id);
+        return (true, "");
+    }
+
     public async Task<(bool ok, string error)> SwitchTradingModeAsync(string mode)
     {
         if (CurrentClient == null)
