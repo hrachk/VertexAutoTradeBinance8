@@ -26,6 +26,14 @@ public sealed class ClientRecord
     [JsonPropertyName("plan")]
     public string Plan { get; set; } = "demo";
 
+    /// <summary>
+    /// Active trading mode for this user: "demo" (virtual balance, no real orders)
+    /// or "live" (real Binance keys + real orders). Independent of Plan subscription.
+    /// Default always "demo" until user explicitly switches after connecting API keys.
+    /// </summary>
+    [JsonPropertyName("tradingMode")]
+    public string TradingMode { get; set; } = "demo";
+
     [JsonPropertyName("isActive")]
     public bool IsActive { get; set; } = true;
 
