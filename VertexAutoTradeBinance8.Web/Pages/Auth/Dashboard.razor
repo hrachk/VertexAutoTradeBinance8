@@ -4,6 +4,7 @@
 @inject AuthSessionService Auth
 @inject NavigationManager Nav
 @inject ClientDbService Db
+@inject VertexAutoTradeBinance8.Web.Services.DemoAccountService Demo
 @inject MarketDataLiveState LiveState
 
 <PageTitle>Vertex AI — Дашборд</PageTitle>
@@ -113,6 +114,22 @@ else
         <a href="/market" class="dash-btn dash-btn-primary">📊 Перейти на Market</a>
         <a href="/market/multi" class="dash-btn dash-btn-primary">⊞ Multi-Chart</a>
         <a href="/dashboard/settings" class="dash-btn dash-btn-demo">🔑 Binance API ключи</a>
+        @if (Auth.IsDemo)
+        {
+          <button class="dash-btn" style="background:#0ea5e9;color:#fff;border:none;cursor:pointer"
+                  disabled="@(Auth.CurrentClient?.IsLiveEnabled != true)"
+                  @onclick="SwitchToLive"
+                  title="@(Auth.CurrentClient?.IsLiveEnabled == true ? "Переключить на реальный счёт" : "Сначала сохраните Binance API ключи")">
+            ⚡ Перейти в LIVE
+          </button>
+        }
+        else
+        {
+          <button class="dash-btn dash-btn-demo" style="cursor:pointer;border:none"
+                  @onclick="SwitchToDemo">
+            🎮 Вернуться в DEMO
+          </button>
+        }
         <a href="/statistics" class="dash-btn dash-btn-outline">📈 Статистика</a>
         @if (c.Plan == "demo")
         {
@@ -156,10 +173,28 @@ else
     Nav.NavigateTo("/login");
   }
 
+  string _modeMsg = "";
+
   async Task ResetDemoBalance()
   {
     if (Auth.CurrentClient == null) return;
     await Db.UpdateDemoBalanceAsync(Auth.CurrentClient.Id, 10_000m);
+    // Also reset isolated demo ledger
+    try { Demo.ResetAccount(10_000m); } catch { }
     await Auth.RefreshAsync();
+  }
+
+  async Task SwitchToLive()
+  {
+    _modeMsg = "";
+    var (ok, err) = await Auth.SwitchTradingModeAsync("live");
+    _modeMsg = ok ? "✓ Режим LIVE включён — ордера идут на Binance." : err;
+  }
+
+  async Task SwitchToDemo()
+  {
+    _modeMsg = "";
+    var (ok, err) = await Auth.SwitchTradingModeAsync("demo");
+    _modeMsg = ok ? "✓ Режим DEMO — виртуальный баланс, без реальных ордеров." : err;
   }
 }
