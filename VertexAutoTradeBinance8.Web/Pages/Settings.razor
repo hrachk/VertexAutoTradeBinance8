@@ -112,11 +112,11 @@
                 </div>
                 <div class="vt-field">
                     <label class="vt-label">Block weekends (Sat/Sun UTC)</label>
-                    <select class="vt-input" @bind="blockWeekendsStr">
-                        <option value="true">Yes — no new entries</option>
-                        <option value="false">No — trade weekends</option>
-                    </select>
-                    <div class="vt-hint">Рекомендуется YES: суббота/воскресенье = chop и частые SL</div>
+                    <label class="vt-switch" style="display:flex;align-items:center;gap:10px;margin-top:8px;">
+                        <input type="checkbox" @bind="dto.BlockWeekends" />
+                        <span>@(dto.BlockWeekends ? "YES — no new entries on Sat/Sun" : "NO — trade on weekends")</span>
+                    </label>
+                    <div class="vt-hint">Пишется в C:\VertexShared\trading_control.json (live, без рестарта бота)</div>
                 </div>
 
                 <div class="vt-field">

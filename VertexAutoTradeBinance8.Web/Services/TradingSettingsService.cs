@@ -173,6 +173,8 @@ public class TradingSettingsService
             if (test != null)
                 dto.TestModeEnabled = test["Enabled"]?.GetValue<bool>() ?? false;
 
+            OverlayFromControlFile(dto);
+
             var binance = root["Binance"] as JsonObject;
             if (binance != null)
             {
@@ -289,9 +291,9 @@ public class TradingSettingsService
 
             File.WriteAllText(_path, root.ToJsonString(Opts));
 
-            // Live switch — bot polls this file every few seconds (no restart)
-            var ctrlMsg = WriteTradingControl(dto.TradingEnabled);
-            return (true, $"Saved → {_path}. Trade switch: {(dto.TradingEnabled ? "ON" : "OFF")}. {ctrlMsg}");
+            // Live switches — bot polls trading_control.json (no restart)
+            var ctrlMsg = WriteTradingControl(dto.TradingEnabled, dto.BlockWeekends);
+            return (true, $"Saved → {_path}. Trade={(dto.TradingEnabled ? "ON" : "OFF")} BlockWeekends={dto.BlockWeekends}. {ctrlMsg}");
         }
         catch (Exception ex)
         {
@@ -315,7 +317,7 @@ public class TradingSettingsService
     /// <summary>
     /// Same path the bot TradingControlService reads — C:\VertexShared\trading_control.json
     /// </summary>
-    private string WriteTradingControl(bool enabled)
+    private string WriteTradingControl(bool enabled, bool blockWeekends)
     {
         var paths = new List<string>();
         try
@@ -337,7 +339,6 @@ public class TradingSettingsService
 
         paths.Add(Path.Combine(AppContext.BaseDirectory, "trading_control.json"));
 
-        // Also next to bot appsettings if we know it
         try
         {
             var dir = Path.GetDirectoryName(_path);
@@ -349,6 +350,7 @@ public class TradingSettingsService
         var payload = System.Text.Json.JsonSerializer.Serialize(new
         {
             tradingEnabled = enabled,
+            blockWeekends = blockWeekends,
             updatedUtc = DateTime.UtcNow,
             source = "web-ui"
         }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
@@ -370,11 +372,40 @@ public class TradingSettingsService
         }
 
         if (written.Count == 0)
-            return "WARN: trading_control.json not written — OFF may not apply until restart.";
+            return "WARN: trading_control.json not written.";
 
-        _logger.LogInformation("[SETTINGS] trading_control written enabled={en} → {paths}",
-            enabled, string.Join(" | ", written));
-        return $"Live control → {written[0]}";
+        _logger.LogInformation(
+            "[SETTINGS] trading_control written enabled={en} blockWeekends={bw} → {paths}",
+            enabled, blockWeekends, string.Join(" | ", written));
+        return $"Live control → {written[0]} (BlockWeekends={blockWeekends})";
+    }
+
+
+    private void OverlayFromControlFile(TradingSettingsDto dto)
+    {
+        var candidates = new[]
+        {
+            @"C:\VertexShared\trading_control.json",
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "VertexShared", "trading_control.json"),
+            Path.Combine(AppContext.BaseDirectory, "trading_control.json")
+        };
+        foreach (var path in candidates)
+        {
+            try
+            {
+                if (!File.Exists(path)) continue;
+                using var doc = JsonDocument.Parse(File.ReadAllText(path));
+                var root = doc.RootElement;
+                if (root.TryGetProperty("tradingEnabled", out var te))
+                    dto.TradingEnabled = te.GetBoolean();
+                if (root.TryGetProperty("blockWeekends", out var bw))
+                    dto.BlockWeekends = bw.GetBoolean();
+                _logger.LogInformation("[SETTINGS] Overlay control from {path}: enabled={en} blockWeekends={bw}",
+                    path, dto.TradingEnabled, dto.BlockWeekends);
+                return;
+            }
+            catch { }
+        }
     }
 
     private static string Mask(string key)

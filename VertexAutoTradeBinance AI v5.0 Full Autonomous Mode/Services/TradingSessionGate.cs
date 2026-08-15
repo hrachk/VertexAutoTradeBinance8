@@ -13,14 +13,17 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ILogger<TradingSessionGate> _logger;
         private readonly IOptionsMonitor<TradingOptions> _optionsMon;
         private TradingOptions _options => _optionsMon.CurrentValue;
+        private readonly TradingControlService _tradeCtrl;
         private DateTime _lastLogUtc = DateTime.MinValue;
 
         public TradingSessionGate(
             ILogger<TradingSessionGate> logger,
-            IOptionsMonitor<TradingOptions> options)
+            IOptionsMonitor<TradingOptions> options,
+            TradingControlService tradeCtrl)
         {
             _logger = logger;
             _optionsMon = options;
+            _tradeCtrl = tradeCtrl;
         }
 
         public bool IsTradingAllowed(out string reason, out string? activeSession)
@@ -30,16 +33,17 @@ namespace VertexAutoTradeBinance8.Services
 
             var cfg = _options.TradingSessions;
 
-            // Weekend chop: Sat/Sun UTC — no new entries (major cause of SL cascades)
-            if (cfg != null && cfg.BlockWeekends)
+            // Weekend: live trading_control.json (Web UI) — overrides stale appsettings
+            if (_tradeCtrl.IsBlockWeekends())
             {
                 var dow = DateTime.UtcNow.DayOfWeek;
                 if (dow == DayOfWeek.Saturday || dow == DayOfWeek.Sunday)
                 {
-                    reason = $"weekend block ({dow} UTC) — observation only";
+                    reason = $"weekend block ({dow} UTC) — observation only [live control]";
                     return false;
                 }
             }
+
 
             if (cfg == null || !cfg.Enabled)
             {
