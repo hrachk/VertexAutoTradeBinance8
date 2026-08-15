@@ -69,13 +69,12 @@ public class OpenOrdersUiService
                         PositionSide = o.PositionSide.ToString(),
                         Type = o.Type.ToString(),
                         Status = o.Status.ToString(),
-                        Price = o.Price ?? 0m,
+                        Price = o.Price,
                         StopPrice = o.StopPrice ?? 0m,
-                        Quantity = o.Quantity ?? 0m,
-                        Filled = o.QuantityFilled ?? 0m,
+                        Quantity = o.Quantity,
+                        Filled = o.QuantityFilled,
                         ReduceOnly = o.ReduceOnly,
-                        WorkingType = o.WorkingType?.ToString() ?? "",
-                        // WorkingType optional
+                        WorkingType = o.WorkingType.ToString(),
                         CreateTime = o.CreateTime,
                         Kind = IsProtective(o.Type.ToString()) ? "PROTECT" : "ORDER"
                     });
