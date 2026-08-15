@@ -92,7 +92,7 @@ else
     await Db.SaveBinanceKeysAsync(Auth.CurrentClient!.Id, _apiKey.Trim(), _apiSecret.Trim());
     await Auth.RefreshAsync();
     _apiKey = _apiSecret = ""; // clear from memory
-    _msg = "✓ Ключи сохранены и зашифрованы.";
+    _msg = "✓ Ключи сохранены и зашифрованы. Можно переключить режим в LIVE на Dashboard.";
     _busy = false;
   }
 
