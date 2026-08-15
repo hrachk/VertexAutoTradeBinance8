@@ -12,15 +12,19 @@ public sealed class AuthSessionService : IAsyncDisposable
     public ClientRecord?  CurrentClient   { get; private set; }
     public bool           IsAuthenticated => CurrentClient != null;
 
-    /// <summary>True when virtual demo trading is active (no real Binance orders).</summary>
-    public bool IsDemo => CurrentClient == null || _demoMode || !CurrentClient.IsLiveEnabled;
+    /// <summary>True when user is in demo mode (virtual balance, no real orders).</summary>
+    public bool           IsDemo          => _demoMode || CurrentClient is null
+                                             || string.Equals(CurrentClient.TradingMode, "demo", StringComparison.OrdinalIgnoreCase)
+                                             || !CurrentClient.IsLiveEnabled;
 
-    /// <summary>True only with API keys + explicit LIVE mode.</summary>
-    public bool IsLive => CurrentClient is { IsLiveEnabled: true } && !_demoMode;
+    /// <summary>True only when user explicitly chose live AND has API keys.</summary>
+    public bool           IsLive          => !_demoMode
+                                             && CurrentClient is { IsLiveEnabled: true }
+                                             && string.Equals(CurrentClient.TradingMode, "live", StringComparison.OrdinalIgnoreCase);
 
-    // Runtime flag; source of truth after bind = ClientRecord.TradingMode + keys
+    // Runtime toggle (also persisted on ClientRecord.TradingMode + cookie)
     private bool _demoMode = true;
-    public  bool DemoMode  => IsDemo;
+    public  bool DemoMode  => _demoMode;
 
     public event Action? OnChange;
 
@@ -29,6 +33,7 @@ public sealed class AuthSessionService : IAsyncDisposable
     private readonly ILogger<AuthSessionService> _log;
     private readonly VertexAutoTradeBinance8.Web.Services.DemoAccountService _demo;
     private readonly VertexAutoTradeBinance8.Services.TradingCredentialStore _liveCreds;
+    private readonly VerificationCodeCache _codeCache;
     private IJSRuntime? _js;
     private bool        _initialized;
 
@@ -44,6 +49,7 @@ public sealed class AuthSessionService : IAsyncDisposable
         EmailService email,
         VertexAutoTradeBinance8.Web.Services.DemoAccountService demo,
         VertexAutoTradeBinance8.Services.TradingCredentialStore liveCreds,
+        VerificationCodeCache codeCache,
         ILogger<AuthSessionService> log)
     {
         _db        = db;
@@ -51,6 +57,7 @@ public sealed class AuthSessionService : IAsyncDisposable
         _email     = email;
         _demo      = demo;
         _liveCreds = liveCreds;
+        _codeCache = codeCache;
         _log       = log;
     }
 
@@ -62,19 +69,20 @@ public sealed class AuthSessionService : IAsyncDisposable
             _db.EnsureClientDataFolder(client.Id);
             _demo.BindClient(client.Id, client.DemoBalance > 0 ? client.DemoBalance : 10_000m);
 
-            // Source of truth: ClientRecord.TradingMode + IsLiveEnabled.
-            // If user has API keys and TradingMode is live (or was never set but
-            // keys exist and Plan is live) → LIVE. Otherwise DEMO.
-            var mode = (client.TradingMode ?? "").Trim().ToLowerInvariant();
-            bool wantLive = client.IsLiveEnabled && (
-                mode == "live" ||
-                (string.IsNullOrEmpty(mode) && string.Equals(client.Plan, "live", StringComparison.OrdinalIgnoreCase)));
-
-            _demoMode = !wantLive;
+            // Restore trading mode from client record (source of truth)
+            var mode = (client.TradingMode ?? "demo").ToLowerInvariant();
+            if (mode == "live" && client.IsLiveEnabled)
+                _demoMode = false;
+            else
+            {
+                _demoMode = true;
+                if (mode != "demo")
+                    client.TradingMode = "demo";
+            }
             _demo.SetDemoMode(_demoMode);
 
             // Sync LIVE credentials into process-wide store (or clear for demo)
-            _ = SyncLiveCredentialsAsync(client, live: wantLive);
+            _ = SyncLiveCredentialsAsync(client, !_demoMode);
         }
         catch (Exception ex)
         {
@@ -143,28 +151,9 @@ public sealed class AuthSessionService : IAsyncDisposable
                 }
             }
 
-            // Cookie is secondary. BindDemoForClient already set _demoMode from
-            // ClientRecord.TradingMode + IsLiveEnabled. Only apply cookie if it
-            // is a clear override AND keys allow LIVE.
-            // Cookie values written by SwitchTradingModeAsync: "0"=live, "1"=demo.
+            // Restore demo mode preference
             var demoVal = await js.InvokeAsync<string?>("vertexAuth.getCookie", DemoCookie);
-            if (CurrentClient != null && CurrentClient.IsLiveEnabled && !string.IsNullOrEmpty(demoVal))
-            {
-                bool cookieWantsLive = demoVal is "0" or "live" or "false";
-                if (cookieWantsLive)
-                {
-                    _demoMode = false;
-                    _demo.SetDemoMode(false);
-                    await SyncLiveCredentialsAsync(CurrentClient, live: true);
-                }
-                else if (demoVal is "1" or "demo" or "true")
-                {
-                    _demoMode = true;
-                    _demo.SetDemoMode(true);
-                    _liveCreds.Deactivate();
-                }
-            }
-            // If no client / no keys — stay in demo (BindDemoForClient already did this)
+            _demoMode = demoVal != "live";
         }
         catch (Exception ex)
         {
@@ -224,35 +213,48 @@ public sealed class AuthSessionService : IAsyncDisposable
     }
 
     // ── Register ──────────────────────────────────────────────
-    public async Task<(bool ok, string error)>
+    /// <summary>
+    /// Register with email/password. Returns displayCode when SMTP is not configured
+    /// or delivery failed — UI must show it so the user can still verify (exchange UX).
+    /// </summary>
+    public async Task<(bool ok, string error, bool emailSent, string? displayCode)>
         RegisterAsync(string email, string password, string displayName)
     {
         var (ok, error, client) = await _db.RegisterAsync(email, password, displayName);
-        if (!ok || client == null) return (false, error);
+        if (!ok || client == null) return (false, error, false, null);
 
         CurrentClient = client;
         BindDemoForClient(client);
-        // Don't set session cookie yet — require email verification first
-        // (cookie will be set in ConfirmEmailAsync after code is verified)
+        // Cookie only after email verification (ConfirmEmailAsync)
 
-        // Generate and send verification code
-        _ = Task.Run(async () =>
+        string? displayCode = null;
+        bool emailSent = false;
+        try
         {
-            try
+            var code = await _db.GenerateVerifyCodeAsync(client.Id);
+            if (!string.IsNullOrEmpty(code))
             {
-                var code = await _db.GenerateVerifyCodeAsync(client.Id);
-                if (!string.IsNullOrEmpty(code))
-                    await _email.SendVerificationCodeAsync(client.Email, client.DisplayName, code);
+                _codeCache.Store(client.Id, client.Email, code, TimeSpan.FromMinutes(15));
+                emailSent = await _email.SendVerificationCodeAsync(client.Email, client.DisplayName, code);
+
+                // If SMTP not configured or send failed → surface code in UI (like exchange sandbox)
+                if (!emailSent || _email.IsDevMode || !_email.IsConfigured)
+                    displayCode = code;
             }
-            catch (Exception ex)
-            {
-                _log.LogError(ex, "[SESSION] Failed to send verification email to {email}", client.Email);
-            }
-        });
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "[SESSION] Failed to send verification email to {email}", client.Email);
+            displayCode = _codeCache.Peek(client.Id);
+        }
 
         OnChange?.Invoke();
-        return (true, "");
+        return (true, "", emailSent && _email.IsConfigured, displayCode);
     }
+
+    /// <summary>Plaintext code for verify page (only while TTL valid).</summary>
+    public string? PeekVerificationCode()
+        => CurrentClient == null ? null : _codeCache.Peek(CurrentClient.Id);
 
     // ── Email verification ────────────────────────────────────
     /// <summary>
@@ -282,24 +284,32 @@ public sealed class AuthSessionService : IAsyncDisposable
         });
 
         OnChange?.Invoke();
-        return (true, "");
+        _codeCache.Invalidate(CurrentClient?.Id ?? "");
+            return (true, "");
     }
 
     /// <summary>
     /// Generates a new verification code and re-sends it to the user's email.
     /// Returns true if email was sent (or dev mode — always true).
     /// </summary>
-    public async Task<bool> ResendVerificationCodeAsync()
+    public async Task<(bool ok, string? displayCode)> ResendVerificationCodeAsync()
     {
-        if (CurrentClient == null) return false;
+        if (CurrentClient == null) return (false, null);
         try
         {
             var code = await _db.GenerateVerifyCodeAsync(CurrentClient.Id);
-            if (string.IsNullOrEmpty(code)) return false;
-            return await _email.SendVerificationCodeAsync(
+            if (string.IsNullOrEmpty(code)) return (false, null);
+            _codeCache.Store(CurrentClient.Id, CurrentClient.Email, code, TimeSpan.FromMinutes(15));
+            var sent = await _email.SendVerificationCodeAsync(
                 CurrentClient.Email, CurrentClient.DisplayName, code);
+            string? display = (!sent || _email.IsDevMode || !_email.IsConfigured) ? code : null;
+            return (true, display);
         }
-        catch { return false; }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "[SESSION] Resend verification failed");
+            return (false, _codeCache.Peek(CurrentClient.Id));
+        }
     }
 
     // ── Logout ────────────────────────────────────────────────────
@@ -396,7 +406,7 @@ public sealed class AuthSessionService : IAsyncDisposable
 
         if (_js != null)
         {
-            try { await _js.InvokeVoidAsync("vertexAuth.setCookie", DemoCookie, _demoMode ? "demo" : "live", 365); }
+            try { await _js.InvokeVoidAsync("vertexAuth.setCookie", DemoCookie, _demoMode ? "1" : "0", 365); }
             catch { /* non-fatal */ }
         }
 
