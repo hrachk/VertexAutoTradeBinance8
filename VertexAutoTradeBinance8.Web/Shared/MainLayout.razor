@@ -115,7 +115,7 @@
         <!-- AutoTrade toggle -->
         <button class="vx-chip @(_autoTradeEnabled ? "vx-chip-autoon" : "vx-chip-autooff")"
                 @onclick="ToggleAutoTrade"
-                title="@(_autoTradeEnabled ? "Bot opens real positions automatically. Click to pause." : "Bot is signal-only. Click to resume.")">
+                title="@(_autoTradeEnabled ? "AutoTrade ON: real Binance orders. Parallel DEMO is independent." : "AutoTrade OFF: no real orders. Parallel DEMO still trades if enabled.")">
             <span class="vx-dot @(_autoTradeEnabled ? "vx-dot-grn" : "vx-dot-red")"></span>
             AutoTrade @(_autoTradeEnabled ? "ON" : "OFF")
         </button>
