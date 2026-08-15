@@ -111,19 +111,28 @@ public sealed class BinanceClientFactory
         }
     }
 
+    /// <summary>
+    /// Socket client for market-data streams (klines, book ticker, etc.).
+    /// Public streams do NOT require API keys — so missing credentials must
+    /// not crash host startup (WsKlineSubscriber is constructed at boot).
+    /// When LIVE user keys (or appsettings keys) are present they are attached
+    /// for private user-data streams.
+    /// </summary>
     public BinanceSocketClient CreateSocketClient()
     {
-        if (!ResolveCredentials(out var apiKey, out var apiSecret, out var source))
-            throw new InvalidOperationException("Binance API credentials missing for socket client");
-
         var opt = _options.CurrentValue;
+        var hasCreds = ResolveCredentials(out var apiKey, out var apiSecret, out var source);
+
         _logger.LogInformation(
             "[BINANCE] Creating WS client source={src} Mode={Mode}",
-            source, opt.UseTestnet ? "TESTNET" : "LIVE");
+            hasCreds ? source : "public",
+            opt.UseTestnet ? "TESTNET" : "LIVE");
 
         return new BinanceSocketClient(cfg =>
         {
-            cfg.ApiCredentials = new BinanceCredentials(apiKey, apiSecret);
+            if (hasCreds)
+                cfg.ApiCredentials = new BinanceCredentials(apiKey, apiSecret);
+
             cfg.Environment = opt.UseTestnet
                 ? BinanceEnvironment.Testnet
                 : BinanceEnvironment.Live;
