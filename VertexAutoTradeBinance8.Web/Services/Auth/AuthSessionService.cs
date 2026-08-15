@@ -32,6 +32,7 @@ public sealed class AuthSessionService : IAsyncDisposable
     private readonly SessionTokenService  _tokens;
     private readonly ILogger<AuthSessionService> _log;
     private readonly VertexAutoTradeBinance8.Web.Services.DemoAccountService _demo;
+    private readonly VertexAutoTradeBinance8.Services.TradingCredentialStore _liveCreds;
     private IJSRuntime? _js;
     private bool        _initialized;
 
@@ -46,13 +47,15 @@ public sealed class AuthSessionService : IAsyncDisposable
         SessionTokenService tokens,
         EmailService email,
         VertexAutoTradeBinance8.Web.Services.DemoAccountService demo,
+        VertexAutoTradeBinance8.Services.TradingCredentialStore liveCreds,
         ILogger<AuthSessionService> log)
     {
-        _db     = db;
-        _tokens = tokens;
-        _email  = email;
-        _demo   = demo;
-        _log    = log;
+        _db        = db;
+        _tokens    = tokens;
+        _email     = email;
+        _demo      = demo;
+        _liveCreds = liveCreds;
+        _log       = log;
     }
 
 
@@ -74,10 +77,46 @@ public sealed class AuthSessionService : IAsyncDisposable
                     client.TradingMode = "demo";
             }
             _demo.SetDemoMode(_demoMode);
+
+            // Sync LIVE credentials into process-wide store (or clear for demo)
+            _ = SyncLiveCredentialsAsync(client, !_demoMode);
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "[SESSION] BindDemoForClient failed for {id}", client.Id);
+        }
+    }
+
+    /// <summary>
+    /// Loads decrypted Binance keys for this user into TradingCredentialStore
+    /// when entering LIVE, or clears the store in DEMO so real orders cannot fire.
+    /// </summary>
+    private async Task SyncLiveCredentialsAsync(ClientRecord client, bool live)
+    {
+        try
+        {
+            if (!live || !client.IsLiveEnabled)
+            {
+                _liveCreds.Deactivate();
+                _log.LogInformation("[SESSION] LIVE credentials cleared (demo mode) for {id}", client.Id);
+                return;
+            }
+
+            var (key, secret) = await _db.GetBinanceKeysAsync(client.Id);
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(secret))
+            {
+                _liveCreds.Deactivate();
+                _log.LogWarning("[SESSION] LIVE requested but keys empty for {id} — stayed deactivated", client.Id);
+                return;
+            }
+
+            _liveCreds.ActivateLive(client.Id, key, secret);
+            _log.LogInformation("[SESSION] LIVE credentials active for user {id}", client.Id);
+        }
+        catch (Exception ex)
+        {
+            _liveCreds.Deactivate();
+            _log.LogError(ex, "[SESSION] SyncLiveCredentials failed for {id}", client.Id);
         }
     }
 
@@ -271,6 +310,7 @@ public sealed class AuthSessionService : IAsyncDisposable
         CurrentClient = null;
         _demoMode = true;
         try { _demo.UnbindClient(); } catch { }
+        try { _liveCreds.Deactivate(); } catch { }
         OnChange?.Invoke();
     }
 
@@ -279,6 +319,7 @@ public sealed class AuthSessionService : IAsyncDisposable
     {
         CurrentClient = null;
         try { _demo.UnbindClient(); } catch { }
+        try { _liveCreds.Deactivate(); } catch { }
         _demoMode = true;
         if (_js != null)
             _ = SetCookieAsync(CookieName, "", -1);
@@ -334,6 +375,10 @@ public sealed class AuthSessionService : IAsyncDisposable
 
         _demoMode = mode != "live";
         _demo.SetDemoMode(_demoMode);
+
+        // Critical: activate THIS user's keys for LIVE, or clear for DEMO
+        if (CurrentClient != null)
+            await SyncLiveCredentialsAsync(CurrentClient, live: !_demoMode);
 
         if (_js != null)
         {
