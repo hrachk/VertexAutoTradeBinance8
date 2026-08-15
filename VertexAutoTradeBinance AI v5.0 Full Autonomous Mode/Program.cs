@@ -180,9 +180,16 @@ public class Program
                     services.AddSingleton(sp =>
                         sp.GetRequiredService<IOptions<SignalConfidenceSettings>>().Value);
 
+                    services.AddSingleton<TradingCredentialStore>();
                     services.AddSingleton<BinanceRestClient>(sp =>
                     {
                         var cfg = sp.GetRequiredService<IOptions<BinanceOptions>>().Value;
+                        var store = sp.GetRequiredService<TradingCredentialStore>();
+                        string apiKey = cfg.ApiKey, apiSecret = cfg.SecretKey;
+                        if (store.TryGet(out _, out var uk, out var us))
+                        {
+                            apiKey = uk; apiSecret = us;
+                        }
 
                         return new BinanceRestClient(opt =>
                         {
@@ -190,11 +197,7 @@ public class Program
                                 ? BinanceEnvironment.Testnet
                                 : BinanceEnvironment.Live;
 
-                            // ✅ Binance.Net v12: BinanceCredentials
-                            opt.ApiCredentials = new BinanceCredentials(
-                                cfg.ApiKey,
-                                cfg.SecretKey);
-
+                            opt.ApiCredentials = new BinanceCredentials(apiKey, apiSecret);
                             opt.AutoTimestamp = true;
                             opt.RequestTimeout = TimeSpan.FromSeconds(15);
                         });
