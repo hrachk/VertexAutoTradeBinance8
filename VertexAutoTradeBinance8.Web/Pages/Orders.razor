@@ -23,9 +23,9 @@
 
 <div class="vt-card" style="margin-bottom:12px;">
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
-        <button class="vt-btn @(filter=="ALL"?"primary":"")" @onclick="() => SetFilter("ALL")">All (@_rows.Count)</button>
-        <button class="vt-btn @(filter=="PROTECT"?"primary":"")" @onclick="() => SetFilter("PROTECT")">SL / TP (@ProtectCount)</button>
-        <button class="vt-btn @(filter=="ORDER"?"primary":"")" @onclick="() => SetFilter("ORDER")">Entry / other (@EntryCount)</button>
+        <button class="vt-btn @(filter=="ALL"?"primary":"")" @onclick='() => SetFilter("ALL")'>All (@_rows.Count)</button>
+        <button class="vt-btn @(filter=="PROTECT"?"primary":"")" @onclick='() => SetFilter("PROTECT")'>SL / TP (@ProtectCount)</button>
+        <button class="vt-btn @(filter=="ORDER"?"primary":"")" @onclick='() => SetFilter("ORDER")'>Entry / other (@EntryCount)</button>
     </div>
 </div>
 
