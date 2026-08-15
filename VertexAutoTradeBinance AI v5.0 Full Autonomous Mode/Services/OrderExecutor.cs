@@ -416,7 +416,19 @@ namespace VertexAutoTradeBinance8.Services
         {
             const int maxLoops = 60;           // 60 * 500ms ~ 30s
             const int delayMs = 500;
-            const decimal maxSlipPct = 0.004m; // 0.4% допуск до "улетела цена"
+
+            // Адаптивный slip: 0.4% убивало альты (AKE vol~4%, diff 0.83% → PriceRunAway).
+            // Берём max(0.8%, ATR% * 1.25), cap 3%.
+            decimal atrPct = 0.01m;
+            if (signal.Atr is > 0 && fallbackEntry > 0)
+                atrPct = signal.Atr.Value / fallbackEntry;
+            decimal maxSlipPct = atrPct * 1.25m;
+            if (maxSlipPct < 0.008m) maxSlipPct = 0.008m; // min 0.8%
+            if (maxSlipPct > 0.030m) maxSlipPct = 0.030m; // max 3%
+
+            _logger.LogInformation(
+                "[ORDER][{symbol}] Wait fill: maxSlip={slip:P2} (atr%={atr:P2})",
+                signal.Symbol, maxSlipPct, atrPct);
 
             decimal lastExecuted = 0m;
 
@@ -502,11 +514,12 @@ namespace VertexAutoTradeBinance8.Services
                                 if (posSide == PositionSide.Long)
                                 {
                                     diffPct = (mark - fallbackEntry) / fallbackEntry;
-                                    if (diffPct >= maxSlipPct)
+                                    // adverse only if price ran UP and nothing filled yet
+                                    if (diffPct >= maxSlipPct && executedQty <= 0)
                                     {
                                         _logger.LogWarning(
-                                            "[ORDER][{symbol}] PRICE RUN AWAY (LONG): entry={e}, mark={m}, diff={d:P2}",
-                                            signal.Symbol, fallbackEntry, mark, diffPct);
+                                            "[ORDER][{symbol}] PRICE RUN AWAY (LONG): entry={e}, mark={m}, diff={d:P2}, max={max:P2}",
+                                            signal.Symbol, fallbackEntry, mark, diffPct, maxSlipPct);
 
                                         try
                                         {
@@ -520,11 +533,12 @@ namespace VertexAutoTradeBinance8.Services
                                 else // Short
                                 {
                                     diffPct = (fallbackEntry - mark) / fallbackEntry;
-                                    if (diffPct >= maxSlipPct)
+                                    // adverse for short limit: price ran DOWN and nothing filled
+                                    if (diffPct >= maxSlipPct && executedQty <= 0)
                                     {
                                         _logger.LogWarning(
-                                            "[ORDER][{symbol}] PRICE RUN AWAY (SHORT): entry={e}, mark={m}, diff={d:P2}",
-                                            signal.Symbol, fallbackEntry, mark, diffPct);
+                                            "[ORDER][{symbol}] PRICE RUN AWAY (SHORT): entry={e}, mark={m}, diff={d:P2}, max={max:P2}",
+                                            signal.Symbol, fallbackEntry, mark, diffPct, maxSlipPct);
 
                                         try
                                         {
