@@ -120,6 +120,8 @@ builder.Services.AddSingleton<BinanceTimeService>();
 // ========================================================================
 //  CORE SERVICES (общие для анализа и Dashboard)
 // ========================================================================
+// Per-user LIVE keys (filled by AuthSession when user switches to LIVE)
+builder.Services.AddSingleton<VertexAutoTradeBinance8.Services.TradingCredentialStore>();
 builder.Services.AddSingleton<BinanceClientFactory>();
 builder.Services.AddSingleton<MarketDataKlineBuffer>();
 builder.Services.AddSingleton<WsKlineSubscriber>();
