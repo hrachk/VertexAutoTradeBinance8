@@ -5,8 +5,12 @@ using VertexAutoTradeBinance8.Web.Services.Auth;
 namespace VertexAutoTradeBinance8.Web.Services;
 
 /// <summary>
-/// When ParallelDemoEnabled is on for a user, new Engine signals open paper
-/// positions on their DEMO balance — even while they trade LIVE for real.
+/// When ParallelDemoEnabled is on for a user, new Engine signals ALWAYS open
+/// paper positions on their DEMO balance.
+///
+/// Independent of AutoTrade ON/OFF and of Trading:EnableExecution.
+/// AutoTrade only gates REAL Binance orders in the Engine; this worker
+/// reads live_signals.json and trades the virtual account regardless.
 /// </summary>
 public sealed class DemoAutoTradeService : BackgroundService
 {
@@ -30,7 +34,7 @@ public sealed class DemoAutoTradeService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _log.LogInformation("[DEMO-AUTO] Parallel demo auto-trade worker started");
+        _log.LogInformation("[DEMO-AUTO] Parallel demo worker started (ignores AutoTrade ON/OFF)");
         while (!stoppingToken.IsCancellationRequested)
         {
             try { await TickAsync(stoppingToken); }
