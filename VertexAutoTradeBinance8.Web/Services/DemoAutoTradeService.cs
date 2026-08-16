@@ -45,16 +45,6 @@ public sealed class DemoAutoTradeService : BackgroundService
         }
     }
 
-    private static readonly HashSet<string> DemoAllowlist = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-        "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT",
-        "LTCUSDT", "BCHUSDT", "NEARUSDT", "ATOMUSDT", "UNIUSDT",
-        "AAVEUSDT", "OPUSDT", "ARBUSDT", "SUIUSDT", "TIAUSDT",
-        "INJUSDT", "APTUSDT", "FILUSDT", "RENDERUSDT", "WLDUSDT",
-        "TONUSDT", "TRXUSDT", "XMRUSDT", "ETCUSDT", "SEIUSDT"
-    };
-
     private const int MaxDemoPositions = 3;
 
     private async Task TickAsync(CancellationToken ct)
@@ -71,7 +61,7 @@ public sealed class DemoAutoTradeService : BackgroundService
             .Where(s => s.Time >= cutoff
                         && s.Entry > 0
                         && !string.IsNullOrWhiteSpace(s.Symbol)
-                        && DemoAllowlist.Contains(s.Symbol.Trim().ToUpperInvariant())
+                        && s.Symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase)
                         && (string.IsNullOrEmpty(s.Reason) || s.Reason.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase))
                         && s.Confidence >= 55)
             .OrderByDescending(s => s.Confidence)
