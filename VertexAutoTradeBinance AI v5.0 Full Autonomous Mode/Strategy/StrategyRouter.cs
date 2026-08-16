@@ -8,12 +8,10 @@ using VertexAutoTradeBinance8.Strategy.StrategyCore;
 namespace VertexAutoTradeBinance8.Strategy
 {
     /// <summary>
-    /// Routes strategy signals into TradingWorker.
-    ///
-    /// DEFAULT (Auto / StrategyCoreOnly): ONLY StrategyCore v1 passes.
-    /// Legacy StrategyEngine + MeanReversionEngine remain available via
-    /// TrendOnly / MeanReversionOnly for emergency rollback — they are
-    /// NOT used in Auto anymore (legacy produced deposit-draining noise).
+    /// v1.3 routing:
+    ///   StrategyCoreOnly → CORE only
+    ///   Auto → CORE + legacy trend (no dead silence if CORE quiet)
+    ///   TrendOnly / MeanReversionOnly → explicit legacy
     /// </summary>
     public sealed class StrategyRouter
     {
@@ -47,19 +45,17 @@ namespace VertexAutoTradeBinance8.Strategy
 
         public void BindAll()
         {
-            // Core is always bound — primary engine
             _coreEngine.BindReactive(_marketData);
             _coreEngine.OnSignalGenerated += OnCoreSignal;
 
-            // Legacy still bound only so TrendOnly / MeanReversionOnly rollback works
             _trendEngine.BindReactive(_marketData);
-            _trendEngine.OnSignalGenerated += s => SafeFire(() => HandleLegacyTrendAsync(s));
+            _trendEngine.OnSignalGenerated += OnTrendSignal;
 
             _meanReversionEngine.BindReactive(_marketData);
-            _meanReversionEngine.OnSignalGenerated += s => SafeFire(() => HandleLegacyMeanRevAsync(s));
+            _meanReversionEngine.OnSignalGenerated += OnMeanRevSignal;
 
             _logger.LogInformation(
-                "[ROUTER] Bound Core+Legacy | mode={mode} (Auto/CoreOnly => CORE only)",
+                "[ROUTER] Bound Core+Legacy | mode={mode} (Auto=CORE+Trend)",
                 _modeState.Current);
         }
 
@@ -69,65 +65,53 @@ namespace VertexAutoTradeBinance8.Strategy
             try { _trendEngine.UnbindReactive(); } catch { }
             try { _meanReversionEngine.UnbindReactive(); } catch { }
             _coreEngine.OnSignalGenerated -= OnCoreSignal;
+            _trendEngine.OnSignalGenerated -= OnTrendSignal;
+            _meanReversionEngine.OnSignalGenerated -= OnMeanRevSignal;
         }
 
         private void OnCoreSignal(TradeSignal signal)
         {
             if (signal == null) return;
             var mode = _modeState.Current;
-
-            // Explicit legacy-only modes block CORE
             if (mode == StrategyMode.TrendOnly || mode == StrategyMode.MeanReversionOnly)
             {
-                _logger.LogWarning(
-                    "[ROUTER] Core signal {sym} suppressed — mode={mode}. Switch to Auto/StrategyCoreOnly.",
-                    signal.Symbol, mode);
+                _logger.LogDebug("[ROUTER] CORE suppressed mode={mode}", mode);
                 return;
             }
-
-            // Auto + StrategyCoreOnly (and any future default) → forward
-            _logger.LogInformation(
-                "[ROUTER] CORE → channel {sym} {side} conf={c:F2} mode={mode}",
-                signal.Symbol, signal.Side, signal.Confidence ?? 0m, mode);
+            _logger.LogInformation("[ROUTER] CORE → channel {sym} {side}", signal.Symbol, signal.Side);
             OnSignalGenerated?.Invoke(signal);
         }
 
-        private void SafeFire(Func<Task> action)
+        private void OnTrendSignal(TradeSignal signal)
         {
-            _ = action().ContinueWith(t =>
-            {
-                if (t.Exception != null)
-                    _logger.LogError(t.Exception, "[ROUTER] async error");
-            }, TaskContinuationOptions.OnlyOnFaulted);
-        }
-
-        private Task HandleLegacyTrendAsync(TradeSignal signal)
-        {
+            if (signal == null) return;
             var mode = _modeState.Current;
-            // Legacy trend ONLY when explicitly TrendOnly (rollback)
-            if (mode != StrategyMode.TrendOnly)
+            // Auto: allow trend as fallback so UI/live_signals never go fully dead
+            // StrategyCoreOnly: block trend
+            // TrendOnly: allow
+            if (mode == StrategyMode.StrategyCoreOnly || mode == StrategyMode.MeanReversionOnly)
             {
-                _logger.LogDebug(
-                    "[ROUTER][{sym}] Legacy trend suppressed — mode={mode} (use StrategyCore)",
-                    signal.Symbol, mode);
-                return Task.CompletedTask;
+                _logger.LogDebug("[ROUTER] Trend suppressed mode={mode}", mode);
+                return;
             }
+            _logger.LogInformation("[ROUTER] TREND → channel {sym} {side}", signal.Symbol, signal.Side);
             OnSignalGenerated?.Invoke(signal);
-            return Task.CompletedTask;
         }
 
-        private Task HandleLegacyMeanRevAsync(TradeSignal signal)
+        private void OnMeanRevSignal(TradeSignal signal)
         {
+            if (signal == null) return;
             var mode = _modeState.Current;
-            if (mode != StrategyMode.MeanReversionOnly)
+            if (mode != StrategyMode.MeanReversionOnly && mode != StrategyMode.Auto)
             {
-                _logger.LogDebug(
-                    "[ROUTER][{sym}] Legacy mean-rev suppressed — mode={mode} (use StrategyCore)",
-                    signal.Symbol, mode);
-                return Task.CompletedTask;
+                return;
             }
-            OnSignalGenerated?.Invoke(signal);
-            return Task.CompletedTask;
+            // Auto: also allow mean-rev (optional breadth). Keep for Auto only.
+            if (mode == StrategyMode.Auto || mode == StrategyMode.MeanReversionOnly)
+            {
+                _logger.LogInformation("[ROUTER] MEANREV → channel {sym} {side}", signal.Symbol, signal.Side);
+                OnSignalGenerated?.Invoke(signal);
+            }
         }
     }
 }
