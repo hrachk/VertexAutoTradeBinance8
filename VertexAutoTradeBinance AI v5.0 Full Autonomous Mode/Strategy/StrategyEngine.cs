@@ -845,37 +845,17 @@ $@"📊 Режим рынка:
                 return null;
             }
 
-            // 3) SoftModeAllowed — ужесточено (слишком много weekend/chop SL по soft-probe)
-            // Запрет: weekend UTC, высокая vol, "догоняние" экстремального slope
+            // 3) SOFT ВЫКЛЮЧЕН по умолчанию — главный источник "мусорных" loss.
+            // Включается ТОЛЬКО явно: TestMode + AllowSoftEntryAlways.
             bool isWeekendUtc =
                 DateTime.UtcNow.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
 
-            decimal absSlope = Math.Abs(smart.TrendSlopePercent);
-            bool softModeAllowed =
-                !isWeekendUtc
-                && (regime == MarketRegime.StrongUpTrend ||
-                    regime == MarketRegime.StrongDownTrend ||
-                    smart.SmartType == SmartRegimeType.SmartTrend ||
-                    smart.SmartType == SmartRegimeType.SmartStrongTrend)
-                && (smart.Confidence >= 0.55m || fastTrendOverride)   // было 0.40
-                && absSlope >= 0.006m                                 // чуть сильнее тренд
-                && absSlope <= 0.06m                                  // не догонять rocket 10%+
-                && smart.VolatilityPercent > 0m
-                && smart.VolatilityPercent <= 0.08m                   // было 0.40 — шум/wipeout
-                && smart.TrendSlopePercent != 0;
-
-            if (isWeekendUtc)
-            {
-                _logger.LogInformation(
-                    "[STRAT][{symbol}] weekend UTC — SOFT entries disabled (chop protection)",
-                    symbol);
-            }
-
+            bool softModeAllowed = false;
             if (allowSoftEntryAlways && !isWeekendUtc)
             {
                 softModeAllowed = true;
                 _logger.LogInformation(
-                    "🧪 TestMode: AllowSoftEntryAlways=TRUE → мягкие входы по тренду разрешены.");
+                    "🧪 AllowSoftEntryAlways=TRUE → soft разрешён (не рекомендуется на live).");
             }
 
             TradeSignal? baseSignal = null;
@@ -890,11 +870,21 @@ $@"📊 Режим рынка:
                 regime == MarketRegime.StrongDownTrend ||
                 smart.SmartType == SmartRegimeType.SmartStrongTrend;
 
-            // 4) Базовый сигнал по текущему режиму
-            if (isRangeLikeRegime)
+            // 4) Базовый сигнал — ЖЁСТКИЙ фильтр режимов (winrate)
+            // Chop / слабый range: НЕ торгуем pullback (это был поток loss).
+            bool isChop =
+                regime == MarketRegime.VolatileChop ||
+                smart.SmartType == SmartRegimeType.SmartChop;
+
+            if (isChop)
             {
-                baseSignal = TryLiquidityGrab(symbol, interval, klines)
-                             ?? TryPullbackEma21(symbol, interval, klines);
+                baseSignal = null;
+                _logger.LogInformation("[STRAT][{symbol}] CHOP — no entries", symbol);
+            }
+            else if (isRangeLikeRegime)
+            {
+                // Только liquidity grab, без EMA-pullback в пиле
+                baseSignal = TryLiquidityGrab(symbol, interval, klines);
             }
             else if (isStrongTrendLikeRegime)
             {
@@ -902,7 +892,8 @@ $@"📊 Режим рынка:
             }
             else
             {
-                baseSignal = TryPullbackEma21(symbol, interval, klines);
+                // Слабый/неясный режим — не торгуем
+                baseSignal = null;
             }
 
             // MICRO_SIGNAL — логируется для любого режима, если baseSignal появился
@@ -946,6 +937,40 @@ $@"📊 Режим рынка:
                     LastBlockedByLiquidity = false;
                     CurrentMode = "SoftTrend";
                     baseSignal = soft;
+                }
+            }
+
+            // 4.2) REGIME ALIGNMENT — запрет контртренда (ACE SHORT на StrongUp = гарантированный loss)
+            if (baseSignal != null)
+            {
+                bool longOk =
+                    baseSignal.Side == SignalSide.Buy &&
+                    (regime == MarketRegime.StrongUpTrend ||
+                     (smart.TrendSlopePercent >= 0.008m && regime != MarketRegime.StrongDownTrend));
+
+                bool shortOk =
+                    baseSignal.Side == SignalSide.Sell &&
+                    (regime == MarketRegime.StrongDownTrend ||
+                     (smart.TrendSlopePercent <= -0.008m && regime != MarketRegime.StrongUpTrend));
+
+                if (!longOk && !shortOk)
+                {
+                    _logger.LogInformation(
+                        "[STRAT][{symbol}] REJECT counter-regime: side={side} regime={reg} slope={slope:F2}%",
+                        symbol, baseSignal.Side, regime, smart.TrendSlopePercent);
+                    baseSignal = null;
+                }
+                else if (smart.Confidence < 0.48m && !fastTrendOverride)
+                {
+                    _logger.LogInformation(
+                        "[STRAT][{symbol}] REJECT low conf {c:P0} < 48%",
+                        symbol, smart.Confidence);
+                    baseSignal = null;
+                }
+                else
+                {
+                    // Structure SL: swing extreme last 10 bars + buffer (не только ATR от close)
+                    ApplyStructureStop(baseSignal, klines, GetAtrConfig(interval).slMult);
                 }
             }
 

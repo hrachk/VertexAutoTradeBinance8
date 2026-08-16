@@ -147,7 +147,7 @@ namespace VertexAutoTradeBinance8.Services
             // =======================
             // HARD FLOOR: не ближе 1.6 ATR (crypto M5 noise)
             // =======================
-            decimal hardFloor = atr14 * 1.6m;
+            decimal hardFloor = atr14 * 1.8m;
             decimal distNow = Math.Abs(signal.EntryPrice - newSl);
             if (distNow < hardFloor && atr14 > 0)
             {
