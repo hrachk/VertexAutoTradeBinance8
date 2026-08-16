@@ -161,20 +161,30 @@ namespace VertexAutoTradeBinance8.Services
             // Динамическая настройка TP (под расширенный SL, RR ≈ 1.8–2.2)
             // =======================
             decimal slDist = Math.Abs(signal.EntryPrice - newSl);
-            decimal tpDist = Math.Max(atr14 * 3.2m, slDist * 2.0m); // ≥ ~2.0R при широком SL
-            decimal tp = signal.Side == SignalSide.Buy
-                ? signal.EntryPrice + tpDist
-                : signal.EntryPrice - tpDist;
+            // Ladder 1.5R / 2.5R / 4.0R
+            decimal d1 = Math.Max(atr14 * 2.4m, slDist * 1.5m);
+            decimal d2 = Math.Max(atr14 * 4.0m, slDist * 2.5m);
+            decimal d3 = Math.Max(atr14 * 6.0m, slDist * 4.0m);
 
-            // Записываем TP в сигнал
-            signal.TakeProfit = tp;
-            if (signal.TakeProfits == null)
-                signal.TakeProfits = new List<decimal>();
-            if (signal.TakeProfits.Count == 0)
-                signal.TakeProfits.Add(tp);
+            if (signal.Side == SignalSide.Buy)
+            {
+                signal.TakeProfits = new List<decimal>
+                {
+                    signal.EntryPrice + d1,
+                    signal.EntryPrice + d2,
+                    signal.EntryPrice + d3
+                };
+            }
             else
-                signal.TakeProfits[0] = tp;
-
+            {
+                signal.TakeProfits = new List<decimal>
+                {
+                    signal.EntryPrice - d1,
+                    signal.EntryPrice - d2,
+                    signal.EntryPrice - d3
+                };
+            }
+            signal.TakeProfit = signal.TakeProfits[0];
             signal.StopLoss = newSl;
 
             _logger.LogInformation(

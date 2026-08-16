@@ -200,36 +200,48 @@ namespace VertexAutoTradeBinance8.Services
             // =====================================================================
             decimal atr = signal.Atr ?? 0;
             decimal sl = signal.StopLoss;
-            // TakeProfit (singular) часто null — стратегия кладёт TP в TakeProfits[]
-            decimal tp = signal.TakeProfit
-                ?? (signal.TakeProfits != null && signal.TakeProfits.Count > 0 ? signal.TakeProfits[0] : 0m);
 
-            if (tp <= 0 && atr > 0)
+            var tps = new List<decimal>();
+            if (signal.TakeProfits != null)
             {
-                // fallback: 1.5 * ATR от entry, если стратегия/AI не дали TP
-                tp = signal.Side == SignalSide.Buy
-                    ? signal.EntryPrice + atr * 1.5m
-                    : signal.EntryPrice - atr * 1.5m;
+                foreach (var x in signal.TakeProfits)
+                    if (x > 0) tps.Add(Round(x, tick));
             }
+            if (tps.Count == 0 && signal.TakeProfit is > 0)
+                tps.Add(Round(signal.TakeProfit.Value, tick));
+
+            if (tps.Count == 0 && atr > 0)
+            {
+                decimal slDist = Math.Abs(entryPrice - sl);
+                if (slDist <= 0) slDist = atr * 2.0m;
+                if (signal.Side == SignalSide.Buy)
+                {
+                    tps.Add(Round(entryPrice + slDist * 1.5m, tick));
+                    tps.Add(Round(entryPrice + slDist * 2.5m, tick));
+                    tps.Add(Round(entryPrice + slDist * 4.0m, tick));
+                }
+                else
+                {
+                    tps.Add(Round(entryPrice - slDist * 1.5m, tick));
+                    tps.Add(Round(entryPrice - slDist * 2.5m, tick));
+                    tps.Add(Round(entryPrice - slDist * 4.0m, tick));
+                }
+            }
+            while (tps.Count > 3) tps.RemoveAt(tps.Count - 1);
 
             sl = Round(sl, tick);
-            if (tp > 0)
-                tp = Round(tp, tick);
 
             _logger.LogInformation(
-                "[ORDER][{symbol}] PROTECTION → SL={sl}, TP={tp}, qty={qty}",
-                signal.Symbol, sl, tp, quantity);
+                "[ORDER][{symbol}] PROTECTION → SL={sl}, TPs=[{tps}], qty={qty}",
+                signal.Symbol, sl, string.Join(", ", tps.Select(x => x.ToString("0.########"))), quantity);
 
-            // Ownership ASAP (даже если PlaceConditionalOrder упадёт — supervisor восстановит)
             signal.IsManual = false;
             signal.EntryPrice = entryPrice;
             signal.StopLoss = sl;
-            if (tp > 0)
+            if (tps.Count > 0)
             {
-                signal.TakeProfit = tp;
-                signal.TakeProfits ??= new List<decimal>();
-                if (signal.TakeProfits.Count == 0) signal.TakeProfits.Add(tp);
-                else signal.TakeProfits[0] = tp;
+                signal.TakeProfits = tps.ToList();
+                signal.TakeProfit = tps[0];
             }
             _signalMemory.Save(signal);
             _managed.RegisterFromSignal(signal, entryPrice);
@@ -270,37 +282,57 @@ namespace VertexAutoTradeBinance8.Services
             // =====================================================================
             // 5) CREATE TP via Algo Order API (TAKE_PROFIT_MARKET)
             // =====================================================================
-            if (tp > 0)
+            if (tps.Count > 0)
             {
-                var tpOrder = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
-                    symbol: signal.Symbol,
-                    side: closeSide,
-                    type: ConditionalOrderType.TakeProfitMarket,
-                    quantity: quantity,
-                    triggerPrice: tp,
-                    positionSide: posSide,
-                    workingType: WorkingType.Mark,
-                    timeInForce: TimeInForce.GoodTillCanceled,
-                    ct: ct);
-
-                if (!tpOrder.Success)
+                decimal[] fracs = tps.Count switch
                 {
-                    _logger.LogError("[ORDER][{symbol}] TP CREATE ERROR: {err}",
-                        signal.Symbol, tpOrder.Error);
-                    return OrderResult.Fail("TP_CREATE_ERROR");
-                }
+                    1 => new[] { 1.0m },
+                    2 => new[] { 0.50m, 0.50m },
+                    _ => new[] { 0.40m, 0.30m, 0.30m }
+                };
 
-                _logger.LogInformation("[ORDER][{symbol}] TP OK (algo): trigger={tp}, algoId={id}",
-                    signal.Symbol, tp, tpOrder.Data?.Id);
+                decimal placed = 0m;
+                for (int i = 0; i < tps.Count && i < fracs.Length; i++)
+                {
+                    decimal q = quantity * fracs[i];
+                    if (i == Math.Min(tps.Count, fracs.Length) - 1)
+                        q = quantity - placed;
+                    q = Math.Round(q, 8);
+                    if (q <= 0) continue;
+                    placed += q;
+
+                    var tpOrder = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                        symbol: signal.Symbol,
+                        side: closeSide,
+                        type: ConditionalOrderType.TakeProfitMarket,
+                        quantity: q,
+                        triggerPrice: tps[i],
+                        positionSide: posSide,
+                        workingType: WorkingType.Mark,
+                        timeInForce: TimeInForce.GoodTillCanceled,
+                        ct: ct);
+
+                    if (!tpOrder.Success)
+                    {
+                        _logger.LogError("[ORDER][{symbol}] TP{n} CREATE ERROR: {err}",
+                            signal.Symbol, i + 1, tpOrder.Error);
+                    }
+                    else
+                    {
+                        _logger.LogInformation(
+                            "[ORDER][{symbol}] TP{n} OK (algo): trigger={tp}, qty={q}, algoId={id}",
+                            signal.Symbol, i + 1, tps[i], q, tpOrder.Data?.Id);
+                    }
+                }
             }
             else
             {
-                _logger.LogWarning("[ORDER][{symbol}] TP not set (tp=0) — защищаем только SL", signal.Symbol);
+                _logger.LogWarning("[ORDER][{symbol}] TP not set — защищаем только SL", signal.Symbol);
             }
 
             _logger.LogInformation(
-                "[ORDER][{symbol}] MANAGED OK entry={e} SL={sl} TP={tp}",
-                signal.Symbol, entryPrice, sl, tp);
+                "[ORDER][{symbol}] MANAGED OK entry={e} SL={sl} TPs={n}",
+                signal.Symbol, entryPrice, sl, tps.Count);
 
             return OrderResult.Successs(entryPrice, quantity, entryOrderId);
         }

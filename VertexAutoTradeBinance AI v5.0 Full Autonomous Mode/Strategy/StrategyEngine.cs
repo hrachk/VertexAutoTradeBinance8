@@ -217,13 +217,26 @@ namespace VertexAutoTradeBinance8.Strategy
             decimal slDist = Math.Abs(s.EntryPrice - s.StopLoss);
             if (slDist > 0)
             {
-                decimal tp1 = s.Side == SignalSide.Buy
-                    ? s.EntryPrice + slDist * 2.0m
-                    : s.EntryPrice - slDist * 2.0m;
-                if (s.TakeProfits == null || s.TakeProfits.Count == 0)
-                    s.TakeProfits = new List<decimal> { tp1 };
+                // Fund-style ladder: TP1 1.5R / TP2 2.5R / TP3 4.0R
+                if (s.Side == SignalSide.Buy)
+                {
+                    s.TakeProfits = new List<decimal>
+                    {
+                        s.EntryPrice + slDist * 1.5m,
+                        s.EntryPrice + slDist * 2.5m,
+                        s.EntryPrice + slDist * 4.0m
+                    };
+                }
                 else
-                    s.TakeProfits[0] = tp1;
+                {
+                    s.TakeProfits = new List<decimal>
+                    {
+                        s.EntryPrice - slDist * 1.5m,
+                        s.EntryPrice - slDist * 2.5m,
+                        s.EntryPrice - slDist * 4.0m
+                    };
+                }
+                s.TakeProfit = s.TakeProfits[0];
             }
 
             NormalizeEntryAndSl(s);
