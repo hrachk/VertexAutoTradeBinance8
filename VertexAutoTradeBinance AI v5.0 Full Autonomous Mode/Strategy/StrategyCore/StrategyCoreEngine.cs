@@ -8,18 +8,15 @@ using VertexAutoTradeBinance8.Services.MarketData;
 namespace VertexAutoTradeBinance8.Strategy.StrategyCore;
 
 /// <summary>
-/// StrategyCore v1 — professional minimal engine.
+/// StrategyCore v1.1 — liquid majors only, wider structure SL, less noise.
 ///
-/// Replaces the legacy multi-setup StrategyEngine as the DEFAULT signal source.
-/// Design rules (hard):
-///   1. Only TWO setups: trend pullback, breakout retest
-///   2. Minimum reward:risk = 2.0 (TP1 distance >= 2 × SL distance)
-///   3. SL beyond structure (swing / broken level), never a tight noise stop
-///   4. ATR band filter — skip dead and chaotic symbols
-///   5. Cooldown per symbol — no spam
-///
-/// Reason prefixes: CORE_PULLBACK_* / CORE_BREAKOUT_*
-/// Pipeline treats CORE_ as authoritative (see TradingWorker AI bypass).
+/// Hard rules:
+///   1. Allowlist: BTC/ETH + top liquid alts only (no micro-cap spam)
+///   2. Setups: trend pullback (primary), breakout retest (BTC/ETH only)
+///   3. SL min 1.8×ATR beyond structure + 0.5×ATR buffer
+///   4. R:R ≥ 2.0 on TP1
+///   5. Volume confirmation on entry bar
+///   6. Cooldown 90m per symbol
 /// </summary>
 public sealed class StrategyCoreEngine
 {
@@ -30,44 +27,53 @@ public sealed class StrategyCoreEngine
 
     private readonly ConcurrentDictionary<string, DateTime> _cooldown = new(StringComparer.OrdinalIgnoreCase);
 
-    // Tunables (v1 constants — keep simple, no config maze)
     private const decimal MinRr = 2.0m;
-    private const decimal MinAtrPct = 0.0025m;   // 0.25%
-    private const decimal MaxAtrPct = 0.045m;    // 4.5%
+    private const decimal MinAtrPct = 0.0030m;  // 0.30%
+    private const decimal MaxAtrPct = 0.035m;   // 3.5% — skip crazy alts
+    private const decimal MinSlAtr = 1.80m;     // was 1.15 — too tight
+    private const decimal StructurePadAtr = 0.50m;
     private const int EmaFast = 21;
     private const int EmaSlow = 50;
-    private const int SwingLookback = 12;
+    private const int SwingLookback = 24;      // was 12
     private const int Donchian = 20;
-    private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(45);
+    private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(90);
     private static readonly KlineInterval Tf = KlineInterval.FifteenMinutes;
 
-    public StrategyCoreEngine(ILogger<StrategyCoreEngine> log)
+    /// <summary>Only these symbols may emit CORE signals.</summary>
+    private static readonly HashSet<string> Allowlist = new(StringComparer.OrdinalIgnoreCase)
     {
-        _log = log;
-    }
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+        "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT",
+        "LTCUSDT", "BCHUSDT", "NEARUSDT", "ATOMUSDT", "UNIUSDT",
+        "AAVEUSDT", "OPUSDT", "ARBUSDT", "SUIUSDT", "TIAUSDT",
+        "INJUSDT", "APTUSDT", "FILUSDT", "RENDERUSDT", "WLDUSDT",
+        "TONUSDT", "TRXUSDT", "XMRUSDT", "ETCUSDT", "SEIUSDT"
+    };
+
+    public StrategyCoreEngine(ILogger<StrategyCoreEngine> log) => _log = log;
 
     public void BindReactive(MarketDataFacade marketData)
     {
         UnbindReactive();
         _md = marketData;
         _md.WsClosedKline += OnWsClosed;
-        _log.LogInformation("[CORE] Bound reactive (TF={tf})", Tf);
+        _log.LogInformation("[CORE] v1.1 bound TF={tf} allowlist={n} minSlAtr={sl}",
+            Tf, Allowlist.Count, MinSlAtr);
     }
 
     public void UnbindReactive()
     {
-        if (_md != null)
-        {
-            _md.WsClosedKline -= OnWsClosed;
-            _md = null;
-        }
+        if (_md == null) return;
+        _md.WsClosedKline -= OnWsClosed;
+        _md = null;
     }
 
     private void OnWsClosed(string symbol, KlineInterval interval, BinanceFuturesUsdtKline kline)
     {
         if (interval != Tf) return;
         if (string.IsNullOrWhiteSpace(symbol)) return;
-        _ = EvaluateAsync(symbol);
+        if (!Allowlist.Contains(symbol.Trim().ToUpperInvariant())) return;
+        _ = EvaluateAsync(symbol.Trim().ToUpperInvariant());
     }
 
     private async Task EvaluateAsync(string symbol)
@@ -78,7 +84,7 @@ public sealed class StrategyCoreEngine
             if (InCooldown(symbol)) return;
 
             var klines = await _md.GetKlinesAsync(symbol, Tf, need: 120);
-            if (klines == null || klines.Count < 60) return;
+            if (klines == null || klines.Count < 70) return;
 
             var list = klines.OrderBy(k => k.OpenTime).ToList();
             var atr = Atr(list, 14);
@@ -90,19 +96,20 @@ public sealed class StrategyCoreEngine
             var atrPct = atr / mid;
             if (atrPct < MinAtrPct || atrPct > MaxAtrPct) return;
 
-            // Setup priority: pullback first (higher quality in trends), then breakout
-            var signal = TryPullback(symbol, list, atr) ?? TryBreakoutRetest(symbol, list, atr);
-            if (signal == null) return;
+            // Volume: entry bar must not be dead
+            if (!HasVolumeConfirm(list)) return;
 
-            if (!EnforceMinRr(signal))
-            {
-                _log.LogDebug("[CORE][{sym}] rejected — R:R < {rr}", symbol, MinRr);
-                return;
-            }
+            // Pullback only for all allowlist; breakout only BTC/ETH (cleaner)
+            TradeSignal? signal = TryPullback(symbol, list, atr);
+            if (signal == null && IsBtcEth(symbol))
+                signal = TryBreakoutRetest(symbol, list, atr);
+
+            if (signal == null) return;
+            if (!EnforceMinRr(signal)) return;
 
             _cooldown[symbol] = DateTime.UtcNow;
             _log.LogInformation(
-                "[CORE][{sym}] SIGNAL {side} entry={e:F6} sl={sl:F6} tp1={tp:F6} conf={c:F2} reason={r}",
+                "[CORE][{sym}] SIGNAL {side} e={e:F6} sl={sl:F6} tp1={tp:F6} conf={c:F2} {r}",
                 symbol, signal.Side, signal.EntryPrice, signal.StopLoss,
                 signal.TakeProfits.FirstOrDefault(), signal.Confidence, signal.Reason);
 
@@ -114,10 +121,22 @@ public sealed class StrategyCoreEngine
         }
     }
 
+    private static bool IsBtcEth(string s) =>
+        s.StartsWith("BTC", StringComparison.OrdinalIgnoreCase) ||
+        s.StartsWith("ETH", StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasVolumeConfirm(List<BinanceFuturesUsdtKline> k)
+    {
+        if (k.Count < 25) return false;
+        var avg = k.Skip(k.Count - 21).Take(20).Average(x => x.Volume);
+        if (avg <= 0) return false;
+        // entry bar at least 0.7× average (not a dead print)
+        return k[^1].Volume >= avg * 0.70m;
+    }
+
     private bool InCooldown(string symbol)
         => _cooldown.TryGetValue(symbol, out var t) && DateTime.UtcNow - t < Cooldown;
 
-    // ── Setup 1: Trend pullback to EMA21 in EMA21/50 trend ─────────────
     private TradeSignal? TryPullback(string symbol, List<BinanceFuturesUsdtKline> k, decimal atr)
     {
         var closes = k.Select(x => x.ClosePrice).ToList();
@@ -126,113 +145,106 @@ public sealed class StrategyCoreEngine
         int i = closes.Count - 1;
         if (i < EmaSlow + 5) return null;
 
-        decimal eF = emaF[i], eS = emaS[i], prevF = emaF[i - 1];
+        decimal eF = emaF[i], eS = emaS[i];
         var bar = k[i];
         decimal close = bar.ClosePrice, open = bar.OpenPrice;
         decimal high = bar.HighPrice, low = bar.LowPrice;
 
-        bool upTrend = eF > eS && closes[i - 3] > emaS[i - 3];
-        bool dnTrend = eF < eS && closes[i - 3] < emaS[i - 3];
+        // Stronger trend filter: last 5 closes on correct side of EMA50
+        bool upTrend = eF > eS
+                       && closes[i - 1] > emaS[i - 1]
+                       && closes[i - 3] > emaS[i - 3]
+                       && closes[i - 5] > emaS[i - 5];
+        bool dnTrend = eF < eS
+                       && closes[i - 1] < emaS[i - 1]
+                       && closes[i - 3] < emaS[i - 3]
+                       && closes[i - 5] < emaS[i - 5];
         if (!upTrend && !dnTrend) return null;
 
-        // Touch EMA21 zone (body or wick within 0.35 * ATR of EMA)
-        decimal zone = Math.Max(atr * 0.35m, close * 0.0015m);
-        bool touchLong = low <= eF + zone && close >= eF - zone * 0.5m;
-        bool touchShort = high >= eF - zone && close <= eF + zone * 0.5m;
+        decimal zone = Math.Max(atr * 0.40m, close * 0.0018m);
+        bool touchLong = low <= eF + zone && close >= eF - zone * 0.4m;
+        bool touchShort = high >= eF - zone && close <= eF + zone * 0.4m;
 
-        // Rejection candle
-        bool bullReject = close > open && close > eF && (close - low) >= (high - low) * 0.55m;
-        bool bearReject = close < open && close < eF && (high - close) >= (high - low) * 0.55m;
+        bool bullReject = close > open && close > eF
+                          && (close - low) >= (high - low) * 0.60m;
+        bool bearReject = close < open && close < eF
+                          && (high - close) >= (high - low) * 0.60m;
 
         if (upTrend && touchLong && bullReject)
         {
             decimal swingLow = k.Skip(k.Count - SwingLookback).Min(x => x.LowPrice);
-            decimal sl = Math.Min(swingLow, eS) - atr * 0.25m;
-            // Structure floor: at least 1.15 ATR from entry
-            if (close - sl < atr * 1.15m)
-                sl = close - atr * 1.15m;
+            decimal sl = Math.Min(swingLow, eS) - atr * StructurePadAtr;
+            if (close - sl < atr * MinSlAtr)
+                sl = close - atr * MinSlAtr;
 
             decimal risk = close - sl;
             if (risk <= 0) return null;
-            decimal tp1 = close + risk * MinRr;
-            decimal tp2 = close + risk * (MinRr + 0.8m);
-            decimal tp3 = close + risk * (MinRr + 1.6m);
-
-            return Make(symbol, SignalSide.Buy, close, sl, new[] { tp1, tp2, tp3 }, atr,
-                "CORE_PULLBACK_LONG", confidence: 0.62m);
+            return Make(symbol, SignalSide.Buy, close, sl,
+                new[] { close + risk * MinRr, close + risk * (MinRr + 0.8m), close + risk * (MinRr + 1.6m) },
+                atr, "CORE_PULLBACK_LONG", 0.64m);
         }
 
         if (dnTrend && touchShort && bearReject)
         {
             decimal swingHigh = k.Skip(k.Count - SwingLookback).Max(x => x.HighPrice);
-            decimal sl = Math.Max(swingHigh, eS) + atr * 0.25m;
-            if (sl - close < atr * 1.15m)
-                sl = close + atr * 1.15m;
+            decimal sl = Math.Max(swingHigh, eS) + atr * StructurePadAtr;
+            if (sl - close < atr * MinSlAtr)
+                sl = close + atr * MinSlAtr;
 
             decimal risk = sl - close;
             if (risk <= 0) return null;
-            decimal tp1 = close - risk * MinRr;
-            decimal tp2 = close - risk * (MinRr + 0.8m);
-            decimal tp3 = close - risk * (MinRr + 1.6m);
-
-            return Make(symbol, SignalSide.Sell, close, sl, new[] { tp1, tp2, tp3 }, atr,
-                "CORE_PULLBACK_SHORT", confidence: 0.62m);
+            return Make(symbol, SignalSide.Sell, close, sl,
+                new[] { close - risk * MinRr, close - risk * (MinRr + 0.8m), close - risk * (MinRr + 1.6m) },
+                atr, "CORE_PULLBACK_SHORT", 0.64m);
         }
 
         return null;
     }
 
-    // ── Setup 2: Donchian breakout + retest hold ───────────────────────
     private TradeSignal? TryBreakoutRetest(string symbol, List<BinanceFuturesUsdtKline> k, decimal atr)
     {
         if (k.Count < Donchian + 6) return null;
-        int i = k.Count - 1;
-        // Channel from bars [i-Donchian-1 .. i-2] (exclude last two)
         var window = k.Skip(k.Count - Donchian - 3).Take(Donchian).ToList();
         if (window.Count < Donchian) return null;
         decimal chHigh = window.Max(x => x.HighPrice);
         decimal chLow = window.Min(x => x.LowPrice);
+        var cur = k[^1];
 
-        var prev = k[i - 1];
-        var cur = k[i];
-
-        // Long: broke above within last 3 bars, now retesting (low near chHigh, close back above)
         bool brokeUp = k.Skip(k.Count - 4).Any(x => x.ClosePrice > chHigh);
-        bool retestLong = cur.LowPrice <= chHigh + atr * 0.15m
+        bool retestLong = cur.LowPrice <= chHigh + atr * 0.20m
                           && cur.ClosePrice > chHigh
-                          && cur.ClosePrice > cur.OpenPrice;
+                          && cur.ClosePrice > cur.OpenPrice
+                          && (cur.ClosePrice - cur.LowPrice) >= (cur.HighPrice - cur.LowPrice) * 0.55m;
 
         if (brokeUp && retestLong)
         {
             decimal entry = cur.ClosePrice;
-            decimal sl = chHigh - atr * 0.55m;
-            if (entry - sl < atr * 1.1m) sl = entry - atr * 1.1m;
+            // SL below retest low, not just channel — stop-hunt resistant
+            decimal sl = Math.Min(cur.LowPrice, chHigh) - atr * StructurePadAtr;
+            if (entry - sl < atr * MinSlAtr) sl = entry - atr * MinSlAtr;
             decimal risk = entry - sl;
             if (risk <= 0) return null;
-            decimal tp1 = entry + risk * MinRr;
-            decimal tp2 = entry + risk * (MinRr + 0.7m);
-            decimal tp3 = entry + risk * (MinRr + 1.4m);
-            return Make(symbol, SignalSide.Buy, entry, sl, new[] { tp1, tp2, tp3 }, atr,
-                "CORE_BREAKOUT_LONG", confidence: 0.58m);
+            return Make(symbol, SignalSide.Buy, entry, sl,
+                new[] { entry + risk * MinRr, entry + risk * (MinRr + 0.7m), entry + risk * (MinRr + 1.4m) },
+                atr, "CORE_BREAKOUT_LONG", 0.60m);
         }
 
         bool brokeDn = k.Skip(k.Count - 4).Any(x => x.ClosePrice < chLow);
-        bool retestShort = cur.HighPrice >= chLow - atr * 0.15m
+        bool retestShort = cur.HighPrice >= chLow - atr * 0.20m
                            && cur.ClosePrice < chLow
-                           && cur.ClosePrice < cur.OpenPrice;
+                           && cur.ClosePrice < cur.OpenPrice
+                           && (cur.HighPrice - cur.ClosePrice) >= (cur.HighPrice - cur.LowPrice) * 0.55m;
 
         if (brokeDn && retestShort)
         {
             decimal entry = cur.ClosePrice;
-            decimal sl = chLow + atr * 0.55m;
-            if (sl - entry < atr * 1.1m) sl = entry + atr * 1.1m;
+            decimal sl = Math.Max(cur.HighPrice, chLow) + atr * StructurePadAtr;
+            if (sl - entry < atr * MinSlAtr) sl = entry + atr * MinSlAtr;
             decimal risk = sl - entry;
             if (risk <= 0) return null;
-            decimal tp1 = entry - risk * MinRr;
-            decimal tp2 = entry - risk * (MinRr + 0.7m);
-            decimal tp3 = entry - risk * (MinRr + 1.4m);
-            return Make(symbol, SignalSide.Sell, entry, sl, new[] { tp1, tp2, tp3 }, atr,
-                "CORE_BREAKOUT_SHORT", confidence: 0.58m);
+            return Make(symbol, SignalSide.Sell, entry, sl,
+                new[] { entry - risk * MinRr, entry - risk * (MinRr + 0.7m), entry - risk * (MinRr + 1.4m) },
+                atr, "CORE_BREAKOUT_SHORT", 0.60m);
         }
 
         return null;
@@ -242,14 +254,15 @@ public sealed class StrategyCoreEngine
         string symbol, SignalSide side, decimal entry, decimal sl,
         IEnumerable<decimal> tps, decimal atr, string reason, decimal confidence)
     {
+        var tpList = tps.ToList();
         return new TradeSignal
         {
             Symbol = symbol.ToUpperInvariant(),
             Side = side,
             EntryPrice = entry,
             StopLoss = sl,
-            TakeProfits = tps.ToList(),
-            TakeProfit = tps.First(),
+            TakeProfits = tpList,
+            TakeProfit = tpList.First(),
             Atr = atr,
             Timeframe = Tf.ToString(),
             Time = DateTime.UtcNow,
@@ -265,8 +278,7 @@ public sealed class StrategyCoreEngine
         if (s.TakeProfits == null || s.TakeProfits.Count == 0) return false;
         decimal risk = Math.Abs(s.EntryPrice - s.StopLoss);
         if (risk <= 0) return false;
-        decimal reward = Math.Abs(s.TakeProfits[0] - s.EntryPrice);
-        return reward / risk >= MinRr * 0.98m; // tiny float tolerance
+        return Math.Abs(s.TakeProfits[0] - s.EntryPrice) / risk >= MinRr * 0.98m;
     }
 
     private static decimal Atr(List<BinanceFuturesUsdtKline> k, int period)
@@ -276,11 +288,9 @@ public sealed class StrategyCoreEngine
         for (int i = 1; i < k.Count; i++)
         {
             decimal h = k[i].HighPrice, l = k[i].LowPrice, pc = k[i - 1].ClosePrice;
-            decimal tr = Math.Max(h - l, Math.Max(Math.Abs(h - pc), Math.Abs(l - pc)));
-            trs.Add(tr);
+            trs.Add(Math.Max(h - l, Math.Max(Math.Abs(h - pc), Math.Abs(l - pc))));
         }
-        if (trs.Count < period) return 0;
-        return trs.TakeLast(period).Average();
+        return trs.Count < period ? 0 : trs.TakeLast(period).Average();
     }
 
     private static List<decimal> EmaSeries(List<decimal> src, int period)
