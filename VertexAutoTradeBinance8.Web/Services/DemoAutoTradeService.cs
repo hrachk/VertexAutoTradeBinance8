@@ -45,6 +45,18 @@ public sealed class DemoAutoTradeService : BackgroundService
         }
     }
 
+    private static readonly HashSet<string> DemoAllowlist = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+        "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT",
+        "LTCUSDT", "BCHUSDT", "NEARUSDT", "ATOMUSDT", "UNIUSDT",
+        "AAVEUSDT", "OPUSDT", "ARBUSDT", "SUIUSDT", "TIAUSDT",
+        "INJUSDT", "APTUSDT", "FILUSDT", "RENDERUSDT", "WLDUSDT",
+        "TONUSDT", "TRXUSDT", "XMRUSDT", "ETCUSDT", "SEIUSDT"
+    };
+
+    private const int MaxDemoPositions = 3;
+
     private async Task TickAsync(CancellationToken ct)
     {
         var clients = await _db.GetClientsWithParallelDemoAsync();
@@ -53,23 +65,53 @@ public sealed class DemoAutoTradeService : BackgroundService
         var signals = await _signals.LoadAsync();
         if (signals == null || signals.Count == 0) return;
 
-        var cutoff = DateTime.UtcNow.AddMinutes(-30);
-        foreach (var sig in signals.Where(s => s.Time >= cutoff).Take(40))
-        {
-            if (sig.Entry <= 0 || string.IsNullOrWhiteSpace(sig.Symbol)) continue;
+        var cutoff = DateTime.UtcNow.AddMinutes(-45);
+        // Prefer CORE_ signals, liquid symbols only, highest confidence first
+        var candidates = signals
+            .Where(s => s.Time >= cutoff
+                        && s.Entry > 0
+                        && !string.IsNullOrWhiteSpace(s.Symbol)
+                        && DemoAllowlist.Contains(s.Symbol.Trim().ToUpperInvariant())
+                        && (string.IsNullOrEmpty(s.Reason) || s.Reason.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase))
+                        && s.Confidence >= 55)
+            .OrderByDescending(s => s.Confidence)
+            .ThenByDescending(s => s.Time)
+            .Take(15)
+            .ToList();
 
+        foreach (var sig in candidates)
+        {
             var side = (sig.Side ?? "").Contains("Sell", StringComparison.OrdinalIgnoreCase)
                 ? "SHORT" : "LONG";
-            var keyBase = $"{sig.Symbol}|{side}|{sig.Time:O}|{sig.Entry:F6}";
+            var sym = sig.Symbol.Trim().ToUpperInvariant();
+            var keyBase = $"{sym}|{side}|{sig.Time:O}|{sig.Entry:F6}";
 
             foreach (var client in clients)
             {
                 var key = client.Id + "|" + keyBase;
                 if (!_seen.TryAdd(key, 0)) continue;
 
+                // Cap concurrent demo positions — quality over spam
+                try
+                {
+                    // Peek bound state if same client; otherwise open will still enforce balance
+                    var snap = _demo.BoundClientId == client.Id ? _demo.GetSnapshot() : null;
+                    if (snap != null && snap.Positions.Count >= MaxDemoPositions)
+                    {
+                        _log.LogDebug("[DEMO-AUTO] {user} at max positions ({n})", client.Id, snap.Positions.Count);
+                        continue;
+                    }
+                    if (snap != null && snap.Positions.Any(p =>
+                            string.Equals(p.Symbol, sym, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        continue; // already in this symbol
+                    }
+                }
+                catch { /* non-fatal */ }
+
                 decimal price = sig.Entry;
-                int lev = 10;
-                decimal notional = 50m;
+                int lev = sym is "BTCUSDT" or "ETHUSDT" ? 8 : 5; // lower lev on alts
+                decimal notional = sym is "BTCUSDT" or "ETHUSDT" ? 80m : 40m;
                 decimal qty = notional / Math.Max(price, 0.0000001m);
 
                 List<DemoTpLevel>? tps = null;
@@ -83,20 +125,14 @@ public sealed class DemoAutoTradeService : BackgroundService
                 }
 
                 var (ok, err) = _demo.OpenMarketPositionForClient(
-                    client.Id,
-                    sig.Symbol.ToUpperInvariant(),
-                    side,
-                    qty,
-                    lev,
-                    price,
-                    sig.StopLoss > 0 ? sig.StopLoss : null,
-                    tps);
+                    client.Id, sym, side, qty, lev, price,
+                    sig.StopLoss > 0 ? sig.StopLoss : null, tps);
 
                 if (ok)
-                    _log.LogInformation("[DEMO-AUTO] {user} {side} {sym} @ {px}",
-                        client.Id, side, sig.Symbol, price);
+                    _log.LogInformation("[DEMO-AUTO] {user} {side} {sym} @ {px} lev={lev}",
+                        client.Id, side, sym, price, lev);
                 else
-                    _log.LogDebug("[DEMO-AUTO] {user} skip {sym}: {err}", client.Id, sig.Symbol, err);
+                    _log.LogDebug("[DEMO-AUTO] {user} skip {sym}: {err}", client.Id, sym, err);
             }
         }
 
