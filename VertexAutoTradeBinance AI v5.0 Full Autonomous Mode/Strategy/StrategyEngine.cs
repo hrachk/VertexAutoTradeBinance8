@@ -176,6 +176,59 @@ namespace VertexAutoTradeBinance8.Strategy
         // -------------------------------------------------------------------------------------
         // Нормализация entry/SL — чтобы не было entry == SL и QTY=0
         // -------------------------------------------------------------------------------------
+
+        /// <summary>
+        /// SL за swing high/low (10 баров) + 0.4 ATR, либо ATR-mult — что дальше от entry.
+        /// </summary>
+        private static void ApplyStructureStop(
+            TradeSignal s,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            decimal atrMult)
+        {
+            if (s.EntryPrice <= 0 || klines == null || klines.Count < 12)
+                return;
+
+            int last = klines.Count - 1;
+            decimal atr = s.Atr ?? Atr(klines, 14, last);
+            if (atr <= 0) return;
+
+            int from = Math.Max(0, last - 10);
+            if (s.Side == SignalSide.Buy)
+            {
+                decimal swingLow = decimal.MaxValue;
+                for (int i = from; i <= last; i++)
+                    if (klines[i].LowPrice < swingLow) swingLow = klines[i].LowPrice;
+
+                decimal structSl = swingLow - atr * 0.40m;
+                decimal atrSl = s.EntryPrice - atr * atrMult;
+                s.StopLoss = Math.Min(structSl, atrSl);
+            }
+            else if (s.Side == SignalSide.Sell)
+            {
+                decimal swingHigh = decimal.MinValue;
+                for (int i = from; i <= last; i++)
+                    if (klines[i].HighPrice > swingHigh) swingHigh = klines[i].HighPrice;
+
+                decimal structSl = swingHigh + atr * 0.40m;
+                decimal atrSl = s.EntryPrice + atr * atrMult;
+                s.StopLoss = Math.Max(structSl, atrSl);
+            }
+
+            decimal slDist = Math.Abs(s.EntryPrice - s.StopLoss);
+            if (slDist > 0)
+            {
+                decimal tp1 = s.Side == SignalSide.Buy
+                    ? s.EntryPrice + slDist * 2.0m
+                    : s.EntryPrice - slDist * 2.0m;
+                if (s.TakeProfits == null || s.TakeProfits.Count == 0)
+                    s.TakeProfits = new List<decimal> { tp1 };
+                else
+                    s.TakeProfits[0] = tp1;
+            }
+
+            NormalizeEntryAndSl(s);
+        }
+
         private static void NormalizeEntryAndSl(TradeSignal s)
         {
             if (s.EntryPrice <= 0 || s.StopLoss <= 0)
