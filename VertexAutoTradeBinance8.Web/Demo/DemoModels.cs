@@ -103,8 +103,14 @@ public sealed class DemoDcaState
 // Isolated per registered user — never shared across accounts.
 public sealed class DemoAccountState
 {
-    public decimal InitialBalance { get; set; } = 1000m;
-    public decimal Balance { get; set; } = 1000m; // realized balance - changes permanently on close, can go negative (realistic, not a sandbox that resets PnL)
+    public decimal InitialBalance { get; set; } = 10_000m;
+    /// <summary>
+    /// Wallet balance (Binance-style). Margin is NOT deducted from this field;
+    /// available = Balance - sum(position margins). Equity = Balance + unrealized PnL.
+    /// </summary>
+    public decimal Balance { get; set; } = 10_000m;
+    /// <summary>0 = legacy (margin subtracted from Balance on open); 1 = wallet model.</summary>
+    public int AccountingVersion { get; set; } = 1;
     public List<DemoPosition> Positions { get; set; } = new();
     public List<DemoPendingOrder> PendingOrders { get; set; } = new();
     public List<DemoClosedTrade> History { get; set; } = new();
