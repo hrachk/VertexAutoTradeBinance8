@@ -799,7 +799,10 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
-            if (!ai.Allow)
+            // StrategyCore v1 is authoritative — do not let PE4 veto CORE_ setups.
+            bool isCore = signal.Reason != null &&
+                          signal.Reason.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase);
+            if (!ai.Allow && !isCore)
             {
                 await RejectAsync(
                     signal, symbol, tf,
@@ -808,6 +811,12 @@ namespace VertexAutoTradeBinance8
                     ct,
                     extra: ai.Reason);
                 return;
+            }
+            if (isCore && !ai.Allow)
+            {
+                _logger.LogInformation(
+                    "[PROC][{symbol}] CORE signal kept despite AI_BLOCK ({reason})",
+                    symbol, ai.Reason);
             }
             // =====================================================
             // 3.1) WRITE TO LIVE SIGNALS (AI confirmed, before pipeline blocks)
