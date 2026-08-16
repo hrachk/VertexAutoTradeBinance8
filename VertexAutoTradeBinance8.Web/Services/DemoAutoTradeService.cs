@@ -107,8 +107,7 @@ public sealed class DemoAutoTradeService : BackgroundService
                 decimal equity = 10_000m;
                 try
                 {
-                    if (_demo.BoundClientId == client.Id)
-                        equity = Math.Max(100m, _demo.GetEquity());
+                    equity = Math.Max(100m, _demo.GetEquityForClient(client.Id));
                 }
                 catch { /* keep default */ }
 
