@@ -16,7 +16,14 @@ namespace VertexAutoTradeBinance8.Strategy
         TrendOnly = 1,
 
         /// <summary>Only MeanReversionEngine fires, regardless of regime.</summary>
-        MeanReversionOnly = 2
+        MeanReversionOnly = 2,
+
+        /// <summary>
+        /// StrategyCore v1 only — professional minimal engine (default).
+        /// Legacy trend / mean-reversion engines stay bound but their signals
+        /// are discarded by the router.
+        /// </summary>
+        StrategyCoreOnly = 3
     }
 
     /// <summary>
