@@ -88,3 +88,4 @@ public sealed class HistoricalDataWriterService
             symbol, timeframeLabel, merged.Count, path);
     }
 }
+}
