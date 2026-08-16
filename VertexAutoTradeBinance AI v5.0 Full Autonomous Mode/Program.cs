@@ -317,6 +317,7 @@ public class Program
                     services.Configure<MeanReversionOptions>(
                         ctx.Configuration.GetSection("MeanReversion"));
                     services.AddSingleton<MeanReversionEngine>();
+                    services.AddSingleton<VertexAutoTradeBinance8.Strategy.StrategyCore.StrategyCoreEngine>();
                     services.Configure<SymbolSelectionOptions>(
                         ctx.Configuration.GetSection("SymbolSelection"));
                     services.Configure<PullbackEntryOptions>(
@@ -332,7 +333,7 @@ public class Program
                         var startupMode = ctx.Configuration["StrategyRouting:Mode"];
                         var parsed = Enum.TryParse<StrategyMode>(startupMode, ignoreCase: true, out var m)
                             ? m
-                            : StrategyMode.Auto;
+                            : StrategyMode.StrategyCoreOnly;
                         return new StrategyModeState(parsed);
                     });
                     services.AddSingleton<StrategyRouter>();
