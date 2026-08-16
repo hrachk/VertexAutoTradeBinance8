@@ -100,6 +100,9 @@ namespace VertexAutoTradeBinance8.Services
 
                     await File.WriteAllTextAsync(_filePath,
                         JsonSerializer.Serialize(records), ct);
+                    _logger.LogInformation("[LIVESIG] wrote {sym} {side} conf={c} total={n}",
+                        (string)(signal.Symbol ?? ""), (string)(signal.Side?.ToString() ?? ""),
+                        (int)Math.Round(((decimal)(signal.Confidence ?? 0m)) * 100m), records.Count);
                 }
                 finally { _lock.Release(); }
             }
