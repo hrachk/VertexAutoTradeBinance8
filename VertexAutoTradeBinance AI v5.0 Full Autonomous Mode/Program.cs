@@ -333,7 +333,7 @@ public class Program
                         var startupMode = ctx.Configuration["StrategyRouting:Mode"];
                         var parsed = Enum.TryParse<StrategyMode>(startupMode, ignoreCase: true, out var m)
                             ? m
-                            : StrategyMode.StrategyCoreOnly;
+                            : StrategyMode.Auto;
                         return new StrategyModeState(parsed);
                     });
                     services.AddSingleton<StrategyRouter>();
