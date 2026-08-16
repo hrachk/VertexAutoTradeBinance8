@@ -56,22 +56,21 @@ namespace VertexAutoTradeBinance8.Services
             if (strongTrend)
             {
                 if (ultraLowVol)
-                    return 1.2m;   // было 1.0 — даже в тренде не лезем в шум
+                    return 1.7m;
                 if (lowVol)
-                    return 1.35m;  // было 1.2
+                    return 1.9m;
                 if (highVol)
-                    return 1.7m;   // было 1.5
-                return 1.45m;      // было 1.3
+                    return 2.4m;   // альты 2–5% ATR — не резать шумом
+                return 2.1m;
             }
             else
             {
                 // Range / Squeeze — ещё шире
                 if (ultraLowVol)
-                    return 1.5m;   // было 1.4
+                    return 2.0m;
                 if (highVol)
-                    return 2.0m;   // было 1.8
-
-                return 1.7m;       // было 1.6
+                    return 2.8m;
+                return 2.3m;
             }
         }
 
@@ -146,9 +145,9 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // =======================
-            // HARD FLOOR: никогда не отдаём SL ближе 1.0 ATR (crypto noise floor)
+            // HARD FLOOR: не ближе 1.6 ATR (crypto M5 noise)
             // =======================
-            decimal hardFloor = atr14 * 1.0m;
+            decimal hardFloor = atr14 * 1.6m;
             decimal distNow = Math.Abs(signal.EntryPrice - newSl);
             if (distNow < hardFloor && atr14 > 0)
             {
@@ -162,7 +161,7 @@ namespace VertexAutoTradeBinance8.Services
             // Динамическая настройка TP (под расширенный SL, RR ≈ 1.8–2.2)
             // =======================
             decimal slDist = Math.Abs(signal.EntryPrice - newSl);
-            decimal tpDist = Math.Max(atr14 * 2.5m, slDist * 2.0m); // ≥ ~2.0R, согласовано с RR-фильтром
+            decimal tpDist = Math.Max(atr14 * 3.2m, slDist * 2.0m); // ≥ ~2.0R при широком SL
             decimal tp = signal.Side == SignalSide.Buy
                 ? signal.EntryPrice + tpDist
                 : signal.EntryPrice - tpDist;

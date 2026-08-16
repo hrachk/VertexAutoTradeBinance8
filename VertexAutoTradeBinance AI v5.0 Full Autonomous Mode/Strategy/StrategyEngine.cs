@@ -63,21 +63,21 @@ namespace VertexAutoTradeBinance8.Strategy
         private static (decimal slMult, decimal tp1Mult, decimal tp2Mult, decimal tp3Mult)
             GetAtrConfig(KlineInterval interval)
         {
-            // RISK FIX: SL вне шума + TP согласован с RR-фильтром (TP1/SL ≥ ~2.0R)
-            // Иначе после расширения SL все сигналы умирали на RR_BLOCK.
+            // WINRATE FIX: SL был в noise (1.2–1.3 ATR на M5 альты → почти всегда SL раньше TP).
+            // Цель: SL ≥ ~1.8–2.2 ATR, TP1 ≈ 2.0R от SL.
             return interval switch
             {
-                // SL 1.3 → TP1 2.7 (RR≈2.08), TP2 3.5, TP3 4.5
+                // SL 2.0 ATR → TP1 4.0 (RR=2.0)
                 KlineInterval.OneMinute or KlineInterval.FiveMinutes
-                    => (1.3m, 2.7m, 3.5m, 4.5m),
-                // SL 1.5 → TP1 3.0 (RR=2.0)
-                KlineInterval.FifteenMinutes
-                    => (1.5m, 3.0m, 4.0m, 5.2m),
-                // SL 2.0 → TP1 4.0 (RR=2.0)
-                KlineInterval.OneHour or KlineInterval.FourHour
                     => (2.0m, 4.0m, 5.5m, 7.0m),
-                KlineInterval.OneDay
+                // SL 2.2 → TP1 4.4
+                KlineInterval.FifteenMinutes
+                    => (2.2m, 4.4m, 6.0m, 8.0m),
+                // SL 2.5 → TP1 5.0
+                KlineInterval.OneHour or KlineInterval.FourHour
                     => (2.5m, 5.0m, 7.0m, 9.0m),
+                KlineInterval.OneDay
+                    => (3.0m, 6.0m, 8.5m, 11.0m),
                 _ => (1.3m, 2.7m, 3.5m, 4.5m)
             };
         }
@@ -186,13 +186,13 @@ namespace VertexAutoTradeBinance8.Strategy
 
             if (s.Atr.HasValue && s.Atr.Value > 0)
             {
-                // RISK FIX: минимум 0.8 ATR между entry и SL (было 0.3 — микро-стопы)
-                minDist = s.Atr.Value * 0.80m;
+                // WINRATE: минимум 1.5 ATR (0.8 всё ещё в noise на crypto M5)
+                minDist = s.Atr.Value * 1.50m;
             }
             else
             {
-                // fallback — 0.25% от цены (было 0.1%)
-                minDist = s.EntryPrice * 0.0025m;
+                // fallback — 0.45% от цены
+                minDist = s.EntryPrice * 0.0045m;
             }
 
             if (dist >= minDist)
@@ -458,17 +458,18 @@ namespace VertexAutoTradeBinance8.Strategy
             var side = upTrend ? SignalSide.Buy : SignalSide.Sell;
 
             decimal entry = c.ClosePrice;
+            // Soft: шире SL (1.9 ATR) — иначе probe всегда в noise
             decimal sl = upTrend
-                ? entry - atr * 1.2m
-                : entry + atr * 1.2m;
+                ? entry - atr * 1.9m
+                : entry + atr * 1.9m;
 
             decimal tp1 = upTrend
-                ? entry + atr * 2.9m
-                : entry - atr * 2.9m;
+                ? entry + atr * 3.8m
+                : entry - atr * 3.8m;
 
             decimal tp2 = upTrend
-                ? entry + atr * 4.0m
-                : entry - atr * 4.0m;
+                ? entry + atr * 5.2m
+                : entry - atr * 5.2m;
 
             var s = new TradeSignal
             {
