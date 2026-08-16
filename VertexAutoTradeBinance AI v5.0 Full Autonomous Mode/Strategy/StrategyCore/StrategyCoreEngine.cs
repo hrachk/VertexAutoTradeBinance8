@@ -8,14 +8,14 @@ using VertexAutoTradeBinance8.Services.MarketData;
 namespace VertexAutoTradeBinance8.Strategy.StrategyCore;
 
 /// <summary>
-/// StrategyCore v1.3 — closed-bar evaluation + REST scan.
-/// Fix: v1.2 evaluated the FORMING candle (list[^1]) so setups almost never
-/// confirmed; now uses last CLOSED 15m bar. Auto mode also gets legacy trend
-/// fallback in the router so the pipeline cannot go silent.
+/// StrategyCore v1.4 — no hardcoded symbol allowlist.
+/// Quality = top USDT-M by 24h quote volume (SymbolLiquidityScanner)
+///          + 15m quote-volume floor + ATR band + volume confirm.
 /// </summary>
 public sealed class StrategyCoreEngine
 {
     private readonly ILogger<StrategyCoreEngine> _log;
+    private readonly SymbolLiquidityScanner _liquidity;
     private MarketDataFacade? _md;
     private Timer? _scanTimer;
     private int _scanBusy;
@@ -25,6 +25,11 @@ public sealed class StrategyCoreEngine
     private readonly ConcurrentDictionary<string, DateTime> _cooldown = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, long> _lastSignalBarMs = new(StringComparer.OrdinalIgnoreCase);
 
+    private HashSet<string> _qualitySymbols = new(StringComparer.OrdinalIgnoreCase);
+    private DateTime _qualityAtUtc = DateTime.MinValue;
+    private static readonly TimeSpan QualityTtl = TimeSpan.FromMinutes(10);
+
+    private const decimal MinAvgQuoteVol15m = 80_000m;
     private const decimal MinRr = 1.8m;
     private const decimal MinAtrPct = 0.0020m;
     private const decimal MaxAtrPct = 0.050m;
@@ -34,29 +39,26 @@ public sealed class StrategyCoreEngine
     private const int EmaSlow = 50;
     private const int SwingLookback = 18;
     private const int Donchian = 20;
+    private const int QualityTopN = 40;
     private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(45);
     private static readonly KlineInterval Tf = KlineInterval.FifteenMinutes;
 
-    private static readonly HashSet<string> Allowlist = new(StringComparer.OrdinalIgnoreCase)
+    public StrategyCoreEngine(ILogger<StrategyCoreEngine> log, SymbolLiquidityScanner liquidity)
     {
-        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-        "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT",
-        "LTCUSDT", "BCHUSDT", "NEARUSDT", "ATOMUSDT", "UNIUSDT",
-        "AAVEUSDT", "OPUSDT", "ARBUSDT", "SUIUSDT", "TIAUSDT",
-        "INJUSDT", "APTUSDT", "FILUSDT", "RENDERUSDT", "WLDUSDT",
-        "TONUSDT", "TRXUSDT", "XMRUSDT", "ETCUSDT", "SEIUSDT"
-    };
-
-    public StrategyCoreEngine(ILogger<StrategyCoreEngine> log) => _log = log;
+        _log = log;
+        _liquidity = liquidity;
+    }
 
     public void BindReactive(MarketDataFacade marketData)
     {
         UnbindReactive();
         _md = marketData;
         _md.WsClosedKline += OnWsClosed;
-        _scanTimer = new Timer(_ => { _ = ScanAllowlistSafeAsync(); },
+        _scanTimer = new Timer(_ => { _ = ScanQualitySafeAsync(); },
             null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(45));
-        _log.LogInformation("[CORE] v1.3 bound TF={tf} allowlist={n} CLOSED-bar + REST scan", Tf, Allowlist.Count);
+        _log.LogInformation(
+            "[CORE] v1.4 bound TF={tf} quality=dynamic topN={n} (no hardcoded allowlist)",
+            Tf, QualityTopN);
     }
 
     public void UnbindReactive()
@@ -75,23 +77,45 @@ public sealed class StrategyCoreEngine
         if (interval != Tf) return;
         if (string.IsNullOrWhiteSpace(symbol)) return;
         var sym = symbol.Trim().ToUpperInvariant();
-        if (!Allowlist.Contains(sym)) return;
-        _ = EvaluateAsync(sym);
+        if (!sym.EndsWith("USDT", StringComparison.OrdinalIgnoreCase)) return;
+        _ = EvaluateIfQualityAsync(sym);
     }
 
-    private async Task ScanAllowlistSafeAsync()
+    private async Task EvaluateIfQualityAsync(string symbol)
+    {
+        try
+        {
+            if (!await IsQualitySymbolAsync(symbol).ConfigureAwait(false))
+                return;
+            await EvaluateAsync(symbol).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "[CORE] evaluate {sym} failed", symbol);
+        }
+    }
+
+    private async Task ScanQualitySafeAsync()
     {
         if (Interlocked.Exchange(ref _scanBusy, 1) == 1) return;
         try
         {
             if (_md == null) return;
+            await RefreshQualityUniverseAsync().ConfigureAwait(false);
+
+            var batch = _qualitySymbols.OrderBy(_ => Guid.NewGuid()).Take(12).ToList();
+            if (batch.Count == 0)
+            {
+                batch = new List<string> { "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT" };
+                _log.LogWarning("[CORE][SCAN] quality universe empty — probing majors");
+            }
+
             int evaluated = 0, emitted = 0;
-            var batch = Allowlist.OrderBy(_ => Guid.NewGuid()).Take(12).ToList();
             foreach (var sym in batch)
             {
                 try
                 {
-                    var (ev, em) = await EvaluateAsync(sym);
+                    var (ev, em) = await EvaluateAsync(sym).ConfigureAwait(false);
                     if (ev) evaluated++;
                     if (em) emitted++;
                 }
@@ -99,12 +123,56 @@ public sealed class StrategyCoreEngine
                 {
                     _log.LogDebug(ex, "[CORE] scan {sym} failed", sym);
                 }
-                await Task.Delay(60);
+                await Task.Delay(60).ConfigureAwait(false);
             }
-            _log.LogInformation("[CORE][SCAN] batch={b} evaluated={e} emitted={sig}",
-                batch.Count, evaluated, emitted);
+
+            _log.LogInformation(
+                "[CORE][SCAN] qualityUniverse={u} batch={b} evaluated={e} emitted={sig}",
+                _qualitySymbols.Count, batch.Count, evaluated, emitted);
         }
         finally { Interlocked.Exchange(ref _scanBusy, 0); }
+    }
+
+    private async Task RefreshQualityUniverseAsync()
+    {
+        if ((DateTime.UtcNow - _qualityAtUtc) < QualityTtl && _qualitySymbols.Count > 0)
+            return;
+
+        try
+        {
+            var snaps = await _liquidity.LoadSnapshotsAsync().ConfigureAwait(false);
+            if (snaps == null || snaps.Count == 0) return;
+
+            var top = snaps
+                .Where(s => s != null
+                            && !string.IsNullOrWhiteSpace(s.Symbol)
+                            && s.Symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase)
+                            && s.QuoteVolume24h > 0)
+                .OrderByDescending(s => s.QuoteVolume24h)
+                .Take(QualityTopN)
+                .Select(s => s.Symbol.Trim().ToUpperInvariant())
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            if (top.Count > 0)
+            {
+                _qualitySymbols = top;
+                _qualityAtUtc = DateTime.UtcNow;
+                _log.LogInformation("[CORE] quality universe refreshed n={n} sample={s}",
+                    top.Count, string.Join(",", top.Take(8)));
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "[CORE] liquidity refresh failed — keeping previous universe");
+        }
+    }
+
+    private async Task<bool> IsQualitySymbolAsync(string symbol)
+    {
+        await RefreshQualityUniverseAsync().ConfigureAwait(false);
+        if (_qualitySymbols.Count == 0)
+            return true;
+        return _qualitySymbols.Contains(symbol);
     }
 
     private async Task<(bool evaluated, bool emitted)> EvaluateAsync(string symbol)
@@ -112,30 +180,32 @@ public sealed class StrategyCoreEngine
         if (_md == null) return (false, false);
         if (InCooldown(symbol)) return (false, false);
 
-        var klines = await _md.GetKlinesAsync(symbol, Tf, need: 120);
+        var klines = await _md.GetKlinesAsync(symbol, Tf, need: 120).ConfigureAwait(false);
         if (klines == null || klines.Count < 70) return (false, false);
 
         var list = klines.OrderBy(k => k.OpenTime).ToList();
 
-        // ★ CRITICAL FIX: use last CLOSED bar, not the forming candle
         int closedIdx = list.Count - 1;
         var barOpen = list[closedIdx].OpenTime;
         if (barOpen.Kind == DateTimeKind.Unspecified)
             barOpen = DateTime.SpecifyKind(barOpen, DateTimeKind.Utc);
-        var ageMin = (DateTime.UtcNow - barOpen.ToUniversalTime()).TotalMinutes;
-        if (ageMin < 14.0 && list.Count >= 2)
+        if ((DateTime.UtcNow - barOpen.ToUniversalTime()).TotalMinutes < 14.0 && list.Count >= 2)
             closedIdx = list.Count - 2;
 
         var closed = list[closedIdx];
         long barKey = ToMs(closed.OpenTime);
 
-        // One signal per closed bar
         if (_lastSignalBarMs.TryGetValue(symbol, out var prev) && prev == barKey)
             return (false, false);
 
-        // Slice ending at closed bar for indicators
         var slice = list.Take(closedIdx + 1).ToList();
         if (slice.Count < 70) return (false, false);
+
+        if (!HasQuoteLiquidity(slice))
+        {
+            _lastSignalBarMs[symbol] = barKey;
+            return (true, false);
+        }
 
         var atr = Atr(slice, 14);
         if (atr <= 0) return (false, false);
@@ -145,7 +215,7 @@ public sealed class StrategyCoreEngine
         var atrPct = atr / mid;
         if (atrPct < MinAtrPct || atrPct > MaxAtrPct)
         {
-            _lastSignalBarMs[symbol] = barKey; // don't re-check this bar
+            _lastSignalBarMs[symbol] = barKey;
             return (true, false);
         }
 
@@ -156,7 +226,7 @@ public sealed class StrategyCoreEngine
         }
 
         TradeSignal? signal = TryPullback(symbol, slice, atr);
-        if (signal == null && IsBtcEth(symbol))
+        if (signal == null && IsMajor(symbol))
             signal = TryBreakoutRetest(symbol, slice, atr);
 
         _lastSignalBarMs[symbol] = barKey;
@@ -174,6 +244,14 @@ public sealed class StrategyCoreEngine
         return (true, true);
     }
 
+    private static bool HasQuoteLiquidity(List<BinanceFuturesUsdtKline> k)
+    {
+        if (k.Count < 25) return false;
+        var last20 = k.TakeLast(20).ToList();
+        decimal avgQuote = last20.Average(x => x.Volume * ((x.HighPrice + x.LowPrice) / 2m));
+        return avgQuote >= MinAvgQuoteVol15m;
+    }
+
     private static long ToMs(DateTime dt)
     {
         if (dt.Kind == DateTimeKind.Unspecified)
@@ -181,9 +259,11 @@ public sealed class StrategyCoreEngine
         return new DateTimeOffset(dt.ToUniversalTime()).ToUnixTimeMilliseconds();
     }
 
-    private static bool IsBtcEth(string s) =>
+    private static bool IsMajor(string s) =>
         s.StartsWith("BTC", StringComparison.OrdinalIgnoreCase) ||
-        s.StartsWith("ETH", StringComparison.OrdinalIgnoreCase);
+        s.StartsWith("ETH", StringComparison.OrdinalIgnoreCase) ||
+        s.StartsWith("BNB", StringComparison.OrdinalIgnoreCase) ||
+        s.StartsWith("SOL", StringComparison.OrdinalIgnoreCase);
 
     private static bool HasVolumeConfirm(List<BinanceFuturesUsdtKline> k)
     {
@@ -216,7 +296,6 @@ public sealed class StrategyCoreEngine
         decimal zone = Math.Max(atr * 0.50m, close * 0.0025m);
         bool touchLong = low <= eF + zone && close >= eF - zone * 0.6m;
         bool touchShort = high >= eF - zone && close <= eF + zone * 0.6m;
-
         bool bullReject = close > open && (close - low) >= (high - low) * 0.45m;
         bool bearReject = close < open && (high - close) >= (high - low) * 0.45m;
 
@@ -243,7 +322,6 @@ public sealed class StrategyCoreEngine
                 new[] { close - risk * MinRr, close - risk * (MinRr + 0.8m), close - risk * (MinRr + 1.5m) },
                 atr, "CORE_PULLBACK_SHORT", 0.60m);
         }
-
         return null;
     }
 
@@ -257,10 +335,7 @@ public sealed class StrategyCoreEngine
         var cur = k[^1];
 
         bool brokeUp = k.Skip(k.Count - 4).Any(x => x.ClosePrice > chHigh);
-        bool retestLong = cur.LowPrice <= chHigh + atr * 0.30m
-                          && cur.ClosePrice > chHigh
-                          && cur.ClosePrice > cur.OpenPrice;
-
+        bool retestLong = cur.LowPrice <= chHigh + atr * 0.30m && cur.ClosePrice > chHigh && cur.ClosePrice > cur.OpenPrice;
         if (brokeUp && retestLong)
         {
             decimal entry = cur.ClosePrice;
@@ -274,10 +349,7 @@ public sealed class StrategyCoreEngine
         }
 
         bool brokeDn = k.Skip(k.Count - 4).Any(x => x.ClosePrice < chLow);
-        bool retestShort = cur.HighPrice >= chLow - atr * 0.30m
-                           && cur.ClosePrice < chLow
-                           && cur.ClosePrice < cur.OpenPrice;
-
+        bool retestShort = cur.HighPrice >= chLow - atr * 0.30m && cur.ClosePrice < chLow && cur.ClosePrice < cur.OpenPrice;
         if (brokeDn && retestShort)
         {
             decimal entry = cur.ClosePrice;
@@ -289,7 +361,6 @@ public sealed class StrategyCoreEngine
                 new[] { entry - risk * MinRr, entry - risk * (MinRr + 0.7m), entry - risk * (MinRr + 1.3m) },
                 atr, "CORE_BREAKOUT_SHORT", 0.56m);
         }
-
         return null;
     }
 
