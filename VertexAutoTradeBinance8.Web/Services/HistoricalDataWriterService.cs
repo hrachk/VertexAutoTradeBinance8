@@ -7,9 +7,7 @@ namespace VertexAutoTradeBinance8.Web.Services;
 /// <summary>
 /// Web-side write access to the shared candle archive:
 ///   {SharedData:Root}/datadb/{SYMBOL}/{tf}.json
-///
-/// Same layout as the Engine HistoricalDataStore. Uses atomic tmp→rename
-/// so a crash mid-write never leaves a corrupt file for the reader.
+/// Atomic tmp→rename so a crash mid-write never leaves a corrupt file.
 /// </summary>
 public sealed class HistoricalDataWriterService
 {
@@ -42,7 +40,6 @@ public sealed class HistoricalDataWriterService
         try
         {
             var text = File.ReadAllText(path);
-            // rough count of objects
             int n = 0;
             foreach (var ch in text)
                 if (ch == '{') n++;
@@ -58,7 +55,6 @@ public sealed class HistoricalDataWriterService
         var dir = Path.GetDirectoryName(path)!;
         Directory.CreateDirectory(dir);
 
-        // Merge with existing if present (by OpenTime)
         List<KlineDto> merged = klines.ToList();
         try
         {
