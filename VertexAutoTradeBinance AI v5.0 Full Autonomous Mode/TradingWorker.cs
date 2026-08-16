@@ -496,13 +496,31 @@ namespace VertexAutoTradeBinance8
                 ? _options.StartupSubscriptionCap
                 : 8;
 
+            // 5a) OPEN POSITIONS FIRST — chart history before universe
+            //     (user already has risk on these symbols; empty chart is unacceptable)
+            try
+            {
+                await WarmupOpenPositionsFirstAsync(ct, forceScan: true).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[WORKER] priority position candle warmup failed");
+            }
+
             foreach (var s in _symbols.ActiveSymbols.Take(startupCap))
                 TrackSymbol(s, keepAlive: true);
 
-            // 6) 🔥 HTF WARMUP (CRITICAL)
-            await WarmupHtfAsync(_symbols.ActiveSymbols, ct);
+            // 6) HTF WARMUP — positions already pulled; universe HTF next
+            //    Put position symbols at the front of the HTF list as well.
+            var htfList = (_cachedPositionSymbols ?? Array.Empty<string>())
+                .Concat(_symbols.ActiveSymbols)
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s.Trim().ToUpperInvariant())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            await WarmupHtfAsync(htfList, ct);
 
-            // 7) WARMUP LTF (1m/5m buffers)
+            // 7) WARMUP LTF — again prioritizes any remaining position gaps
             await WarmupMarketDataForTrackedAsync(ct);
 
             // 8) ENABLE HEDGE
@@ -1151,15 +1169,18 @@ namespace VertexAutoTradeBinance8
             return list;
         }
 
-        private async Task<IReadOnlyList<string>> GetPositionSymbolsThrottledAsync(CancellationToken ct)
+        private async Task<IReadOnlyList<string>> GetPositionSymbolsThrottledAsync(
+            CancellationToken ct, bool forceRefresh = false)
         {
-            if ((DateTime.UtcNow - _lastPositionsScanUtc) < TimeSpan.FromSeconds(30))
+            if (!forceRefresh &&
+                (DateTime.UtcNow - _lastPositionsScanUtc) < TimeSpan.FromSeconds(30))
                 return _cachedPositionSymbols;
 
             await _positionsScanLock.WaitAsync(ct);
             try
             {
-                if ((DateTime.UtcNow - _lastPositionsScanUtc) < TimeSpan.FromSeconds(30))
+                if (!forceRefresh &&
+                    (DateTime.UtcNow - _lastPositionsScanUtc) < TimeSpan.FromSeconds(30))
                     return _cachedPositionSymbols;
 
                 _lastPositionsScanUtc = DateTime.UtcNow;
@@ -1192,65 +1213,127 @@ namespace VertexAutoTradeBinance8
             }
         }
 
+        /// <summary>
+        /// Pull full multi-TF history for every open position symbol FIRST.
+        /// Chart/Web must not wait behind universe warmup when a live position
+        /// has no candle buffer yet.
+        /// </summary>
+        private async Task WarmupOpenPositionsFirstAsync(CancellationToken ct, bool forceScan = true)
+        {
+            IReadOnlyList<string> posSymbols;
+            try
+            {
+                posSymbols = await GetPositionSymbolsThrottledAsync(ct, forceRefresh: forceScan)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[BOOT][MD] position scan for priority warmup failed");
+                return;
+            }
+
+            if (posSymbols == null || posSymbols.Count == 0)
+            {
+                _logger.LogInformation("[BOOT][MD] no open positions — skip priority candle pull");
+                return;
+            }
+
+            _logger.LogInformation(
+                "[BOOT][MD] PRIORITY candle history for {n} open position(s): {syms}",
+                posSymbols.Count, string.Join(",", posSymbols));
+
+            foreach (var raw in posSymbols)
+            {
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+                var s = raw.Trim().ToUpperInvariant();
+                TrackSymbol(s, keepAlive: true);
+
+                // Already fully warmed this process lifetime
+                if (_warm.ContainsKey(s)) continue;
+
+                try
+                {
+                    _logger.LogInformation("[BOOT][MD] POSITION-FIRST bootstrap {sym}", s);
+                    // Deep history so Market chart is never empty for live risk
+                    await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneMinute,      300, ct);
+                    await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FiveMinutes,    300, ct);
+                    await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FifteenMinutes, 300, ct);
+                    await _marketDataFacade.GetKlinesAsync(s, KlineInterval.ThirtyMinutes,  200, ct);
+                    await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneHour,        200, ct);
+                    await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FourHour,       120, ct);
+
+                    var extended = _symbols.ActiveSymbols
+                        .Append(s)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                    _marketDataFacade.ApplyUniverse(extended);
+                    _dataDbFeed?.NotifyPosition(s);
+
+                    _warm.TryAdd(s, 0);
+                    _logger.LogInformation("[BOOT][MD] POSITION-FIRST ok {sym}", s);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[BOOT][MD] POSITION-FIRST failed {sym}", s);
+                }
+            }
+        }
+
         private async Task WarmupMarketDataForTrackedAsync(CancellationToken ct)
         {
-            // ── 1. Universe symbols (existing logic) ─────────────────────
-            var toWarm = _tracked.Keys
+            // ── 0. ALWAYS prioritize open positions (missing chart history) ──
+            await WarmupOpenPositionsFirstAsync(ct, forceScan: false).ConfigureAwait(false);
+
+            var posSet = new HashSet<string>(
+                (_cachedPositionSymbols ?? Array.Empty<string>())
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .Select(s => s.Trim().ToUpperInvariant()),
+                StringComparer.OrdinalIgnoreCase);
+
+            // ── 1. Any remaining position symbols still not warm (safety net) ──
+            var positionQueue = posSet
                 .Except(_warm.Keys, StringComparer.OrdinalIgnoreCase)
+                .Take(8)
+                .ToList();
+
+            // ── 2. Universe / tracked symbols AFTER positions ───────────────
+            var universeQueue = _tracked.Keys
+                .Except(_warm.Keys, StringComparer.OrdinalIgnoreCase)
+                .Except(posSet, StringComparer.OrdinalIgnoreCase)
                 .Take(3)
                 .ToList();
 
-            // ── 2. Position symbols NOT in universe ──────────────────────
-            // When user opens a position manually on any coin (e.g. ZECUSDT
-            // that is NOT in the bot's trading universe), that symbol has
-            // no WS subscription → no kline buffer → Web shows empty chart.
-            // We detect such symbols here and emergency-bootstrap them.
-            var positionSymbols = _cachedPositionSymbols ?? new List<string>();
-            var unknownPositionSyms = positionSymbols
-                .Where(s => !string.IsNullOrWhiteSpace(s))
-                .Select(s => s.Trim().ToUpperInvariant())
-                .Except(_warm.Keys, StringComparer.OrdinalIgnoreCase)
-                .Except(toWarm, StringComparer.OrdinalIgnoreCase)
-                .Take(2) // max 2 extra per cycle to avoid REST storm
-                .ToList();
-
-            var allToWarm = toWarm.Concat(unknownPositionSyms).Distinct().ToList();
+            var allToWarm = positionQueue.Concat(universeQueue).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             if (allToWarm.Count == 0) return;
 
             foreach (var s in allToWarm)
             {
-                bool isPositionOnly = unknownPositionSyms.Contains(s, StringComparer.OrdinalIgnoreCase);
+                bool isPosition = posSet.Contains(s);
                 try
                 {
-                    if (isPositionOnly)
+                    if (isPosition)
                     {
-                        // Emergency bootstrap: more bars for chart display
-                        // (300 bars = full default chart view)
-                        _logger.LogInformation(
-                            "[BOOT][MD] Emergency bootstrap for manual position symbol {sym}", s);
-                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneMinute,    300, ct);
-                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FiveMinutes,  300, ct);
+                        _logger.LogInformation("[BOOT][MD] position symbol warmup {sym}", s);
+                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneMinute,      300, ct);
+                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FiveMinutes,    300, ct);
                         await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FifteenMinutes, 300, ct);
-                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneHour,      200, ct);
-                        // Also add to universe so WS stays live
+                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneHour,        200, ct);
                         var extended = _symbols.ActiveSymbols
                             .Append(s)
                             .Distinct(StringComparer.OrdinalIgnoreCase)
                             .ToList();
                         _marketDataFacade.ApplyUniverse(extended);
-                        // Notify DataDbSymbolFeed so history is persisted
                         _dataDbFeed?.NotifyPosition(s);
                     }
                     else
                     {
-                        // Normal universe warmup
-                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneMinute,    20, ct);
-                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FiveMinutes,  20, ct);
+                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.OneMinute,      20, ct);
+                        await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FiveMinutes,    20, ct);
                         await _marketDataFacade.GetKlinesAsync(s, KlineInterval.FifteenMinutes, 20, ct);
                     }
 
                     _warm.TryAdd(s, 0);
-                    _logger.LogInformation("[BOOT][MD] warmup ok {sym} (positionOnly={p})", s, isPositionOnly);
+                    _logger.LogInformation("[BOOT][MD] warmup ok {sym} (position={p})", s, isPosition);
                 }
                 catch (Exception ex)
                 {
