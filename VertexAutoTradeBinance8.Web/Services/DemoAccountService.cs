@@ -194,6 +194,63 @@ public sealed class DemoAccountService
         lock (_lock) { return _lastPrices.TryGetValue(symbol, out var p) ? p : 0m; }
     }
 
+    /// <summary>Margin locked in open positions.</summary>
+    public decimal GetUsedMargin()
+    {
+        lock (_lock) return _state.Positions.Sum(p => p.Margin);
+    }
+
+    /// <summary>Available to open = wallet − used margin.</summary>
+    public decimal GetAvailableBalance()
+    {
+        lock (_lock)
+        {
+            var used = _state.Positions.Sum(p => p.Margin);
+            return Math.Max(0m, _state.Balance - used);
+        }
+    }
+
+    /// <summary>Equity = wallet + unrealized PnL at last known marks.</summary>
+    public decimal GetEquity()
+    {
+        lock (_lock)
+        {
+            decimal uPnL = 0m;
+            foreach (var p in _state.Positions)
+            {
+                var mark = _lastPrices.TryGetValue(p.Symbol, out var px) && px > 0 ? px : p.EntryPrice;
+                var dir = p.Side == "LONG" ? 1m : -1m;
+                uPnL += (mark - p.EntryPrice) * dir * p.Qty;
+            }
+            return _state.Balance + uPnL;
+        }
+    }
+
+    /// <summary>
+    /// Equity for any client id (reads that client's demo-account.json without rebinding session).
+    /// Used by parallel DEMO auto-trade sizing.
+    /// </summary>
+    public decimal GetEquityForClient(string clientId)
+    {
+        if (string.IsNullOrWhiteSpace(clientId)) return 10_000m;
+        if (string.Equals(_clientId, clientId, StringComparison.OrdinalIgnoreCase))
+            return GetEquity();
+
+        try
+        {
+            var path = Path.Combine(_accountsDir, $"client_{clientId}", "demo-account.json");
+            if (!File.Exists(path)) return 10_000m;
+            var state = System.Text.Json.JsonSerializer.Deserialize<DemoAccountState>(File.ReadAllText(path));
+            if (state == null) return 10_000m;
+            // Without live marks, equity ≈ wallet (unrealized ~0)
+            return state.Balance > 0 ? state.Balance : 10_000m;
+        }
+        catch
+        {
+            return 10_000m;
+        }
+    }
+
     // ===================== Account-level actions =====================
 
     public void ResetAccount(decimal newInitialBalance)
