@@ -309,21 +309,30 @@ public sealed class DemoAccountService
                 if (File.Exists(path))
                 {
                     state = JsonSerializer.Deserialize<DemoAccountState>(File.ReadAllText(path))
-                            ?? new DemoAccountState { InitialBalance = 10_000m, Balance = 10_000m };
+                            ?? new DemoAccountState { InitialBalance = 10_000m, Balance = 10_000m, AccountingVersion = 1 };
                 }
                 else
                 {
-                    state = new DemoAccountState { InitialBalance = 10_000m, Balance = 10_000m };
+                    state = new DemoAccountState { InitialBalance = 10_000m, Balance = 10_000m, AccountingVersion = 1 };
                 }
             }
             catch
             {
-                state = new DemoAccountState { InitialBalance = 10_000m, Balance = 10_000m };
+                state = new DemoAccountState { InitialBalance = 10_000m, Balance = 10_000m, AccountingVersion = 1 };
+            }
+
+            // Migrate legacy v0 accounting (margin was burned out of wallet)
+            if (state.AccountingVersion < 1)
+            {
+                decimal locked = state.Positions.Sum(p => p.Margin);
+                if (locked > 0) state.Balance += locked;
+                state.AccountingVersion = 1;
             }
 
             decimal margin = (qty * currentPrice) / Math.Max(1, leverage);
-            if (margin > state.Balance)
-                return (false, $"Insufficient demo balance: need ${margin:F2}, have ${state.Balance:F2}");
+            decimal available = state.Balance - state.Positions.Sum(p => p.Margin);
+            if (margin > available)
+                return (false, $"Insufficient available balance: need ${margin:F2}, available ${available:F2} (wallet ${state.Balance:F2})");
 
             var existing = state.Positions.FirstOrDefault(p => p.Symbol == symbol && p.Side == side);
             if (existing != null)
@@ -338,7 +347,7 @@ public sealed class DemoAccountService
             }
             else
             {
-                state.Balance -= margin;
+                // Wallet model: margin is locked inside the position, not deducted from Balance.
                 state.Positions.Add(new DemoPosition
                 {
                     Symbol = symbol,
@@ -566,10 +575,10 @@ public sealed class DemoAccountService
             foreach (var order in toFill ?? Enumerable.Empty<DemoPendingOrder>())
             {
                 decimal margin = (order.Qty * price) / Math.Max(1, order.Leverage);
-                if (margin > _state.Balance)
+                decimal available = _state.Balance - _state.Positions.Sum(p => p.Margin);
+                if (margin > available)
                 {
-                    // Can't afford it anymore (balance dropped since
-                    // the order was placed) — drop the order rather
+                    // Can't afford it anymore — drop the order rather
                     // than opening a position the demo account can't
                     // actually afford.
                     _state.PendingOrders.Remove(order);
