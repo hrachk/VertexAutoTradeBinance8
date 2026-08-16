@@ -1,7 +1,7 @@
 @page "/missed-trades"
 @using VertexAutoTradeBinance8.Web.Services
 @using VertexAutoTradeBinance8.Web.Models
-@using VertexAutoTradeBinance8.Models
+@using CoreModels = VertexAutoTradeBinance8.Models
 @inject MissedTradeFileService MissedService
 @inject ExecutedSignalUiService ExecService
 @implements IDisposable
@@ -76,7 +76,7 @@ else
                             <div class="vt-hint">@r.Time.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss")</div>
                         </div>
                         <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
-                            <span class="vt-badge @(r.Side==SignalSide.Buy?"ok":"warn")">@(r.Side==SignalSide.Buy?"LONG":"SHORT")</span>
+                            <span class="vt-badge @(r.Side==CoreModels.SignalSide.Buy?"ok":"warn")">@(r.Side==CoreModels.SignalSide.Buy?"LONG":"SHORT")</span>
                             <span class="vt-badge info">@r.Status</span>
                         </div>
                     </div>
@@ -133,7 +133,7 @@ else
     private int tab;
     private string filter = "ALL";
     private List<MissedTradeRecord> _missed = new();
-    private List<ExecutedSignalRecord> _entered = new();
+    private List<CoreModels.ExecutedSignalRecord> _entered = new();
     private CancellationTokenSource? _cts;
     private DateTime _tick = DateTime.UtcNow;
 
@@ -178,12 +178,12 @@ else
         try
         {
             _entered = ExecService.GetAll()
-                .Where(x => x.Status is TradeExecutionStatus.OrderCreated
-                    or TradeExecutionStatus.OrderPartiallyFilled
-                    or TradeExecutionStatus.PositionOpened
-                    or TradeExecutionStatus.PositionClosedTp
-                    or TradeExecutionStatus.PositionClosedSl
-                    or TradeExecutionStatus.PositionClosedManual)
+                .Where(x => x.Status is CoreModels.TradeExecutionStatus.OrderCreated
+                    or CoreModels.TradeExecutionStatus.OrderPartiallyFilled
+                    or CoreModels.TradeExecutionStatus.PositionOpened
+                    or CoreModels.TradeExecutionStatus.PositionClosedTp
+                    or CoreModels.TradeExecutionStatus.PositionClosedSl
+                    or CoreModels.TradeExecutionStatus.PositionClosedManual)
                 .ToList();
         }
         catch { _entered = new(); }
@@ -201,12 +201,12 @@ else
         var s = r.Reason ?? "";
         return s.Length <= 28 ? s : s[..28] + "…";
     }
-    private static string TpAt(ExecutedSignalRecord r, int i)
+    private static string TpAt(CoreModels.ExecutedSignalRecord r, int i)
         => r.TakeProfits != null && r.TakeProfits.Count > i ? r.TakeProfits[i].ToString("0.########") : "—";
-    private static bool IsClosed(ExecutedSignalRecord r) =>
-        r.Status is TradeExecutionStatus.PositionClosedTp
-            or TradeExecutionStatus.PositionClosedSl
-            or TradeExecutionStatus.PositionClosedManual;
+    private static bool IsClosed(CoreModels.ExecutedSignalRecord r) =>
+        r.Status is CoreModels.TradeExecutionStatus.PositionClosedTp
+            or CoreModels.TradeExecutionStatus.PositionClosedSl
+            or CoreModels.TradeExecutionStatus.PositionClosedManual;
     public void Dispose()
     {
         try { _cts?.Cancel(); _cts?.Dispose(); } catch { }

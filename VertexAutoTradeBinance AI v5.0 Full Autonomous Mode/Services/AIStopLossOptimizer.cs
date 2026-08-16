@@ -189,7 +189,7 @@ namespace VertexAutoTradeBinance8.Services
 
             _logger.LogInformation(
                 "AI-SL/TP Updated: Symbol={Symbol}, oldSL={Old:F4}, newSL={New:F4}, TP={Tp:F4}, atr={Atr:F4}, trend={Trend}, dynMult={Mult:F2}, slDistAtr={Dist:F2}",
-                symbol, oldSl, newSl, tp, atr14, decision.Trend, dynMult, atr14 > 0 ? slDist / atr14 : 0m);
+                symbol, oldSl, newSl, signal.TakeProfit ?? 0m, atr14, decision.Trend, dynMult, atr14 > 0 ? slDist / atr14 : 0m);
 
             return newSl;
         }
