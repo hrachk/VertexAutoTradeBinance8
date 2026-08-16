@@ -75,22 +75,21 @@ namespace VertexAutoTradeBinance8.Strategy
         {
             if (signal == null) return;
             var mode = _modeState.Current;
-            // Core passes in Auto and StrategyCoreOnly
-            if (mode is StrategyMode.Auto or StrategyMode.StrategyCoreOnly or StrategyMode.TrendOnly)
+
+            // Explicit legacy-only modes block CORE
+            if (mode == StrategyMode.TrendOnly || mode == StrategyMode.MeanReversionOnly)
             {
-                // In TrendOnly we still prefer not mixing — skip core when TrendOnly
-                if (mode == StrategyMode.TrendOnly)
-                {
-                    _logger.LogDebug("[ROUTER] Core suppressed — mode=TrendOnly");
-                    return;
-                }
-                if (mode == StrategyMode.MeanReversionOnly)
-                {
-                    _logger.LogDebug("[ROUTER] Core suppressed — mode=MeanReversionOnly");
-                    return;
-                }
-                OnSignalGenerated?.Invoke(signal);
+                _logger.LogWarning(
+                    "[ROUTER] Core signal {sym} suppressed — mode={mode}. Switch to Auto/StrategyCoreOnly.",
+                    signal.Symbol, mode);
+                return;
             }
+
+            // Auto + StrategyCoreOnly (and any future default) → forward
+            _logger.LogInformation(
+                "[ROUTER] CORE → channel {sym} {side} conf={c:F2} mode={mode}",
+                signal.Symbol, signal.Side, signal.Confidence ?? 0m, mode);
+            OnSignalGenerated?.Invoke(signal);
         }
 
         private void SafeFire(Func<Task> action)
