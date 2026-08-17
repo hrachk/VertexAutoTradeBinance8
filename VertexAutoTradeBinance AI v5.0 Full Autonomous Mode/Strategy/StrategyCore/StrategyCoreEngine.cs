@@ -29,11 +29,11 @@ public sealed class StrategyCoreEngine
     private DateTime _qualityAtUtc = DateTime.MinValue;
     private static readonly TimeSpan QualityTtl = TimeSpan.FromMinutes(10);
 
-    private const decimal MinAvgQuoteVol15m = 80_000m;
-    private const decimal MinRr = 1.8m;
+    private const decimal MinAvgQuoteVol15m = 5_000m;  // was 80k — too strict for many 15m alts
+    private const decimal MinRr = 1.5m;
     private const decimal MinAtrPct = 0.0020m;
     private const decimal MaxAtrPct = 0.050m;
-    private const decimal MinSlAtr = 1.50m;
+    private const decimal MinSlAtr = 1.30m;
     private const decimal StructurePadAtr = 0.40m;
     private const int EmaFast = 21;
     private const int EmaSlow = 50;
@@ -103,10 +103,15 @@ public sealed class StrategyCoreEngine
             if (_md == null) return;
             await RefreshQualityUniverseAsync().ConfigureAwait(false);
 
-            var batch = _qualitySymbols.OrderBy(_ => Guid.NewGuid()).Take(12).ToList();
+            var majors = new[] { "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT" };
+            var batch = majors
+                .Concat(_qualitySymbols.OrderBy(_ => Guid.NewGuid()))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(15)
+                .ToList();
             if (batch.Count == 0)
             {
-                batch = new List<string> { "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT" };
+                batch = majors.ToList();
                 _log.LogWarning("[CORE][SCAN] quality universe empty — probing majors");
             }
 
@@ -231,8 +236,17 @@ public sealed class StrategyCoreEngine
 
         _lastSignalBarMs[symbol] = barKey;
 
-        if (signal == null) return (true, false);
-        if (!EnforceMinRr(signal)) return (true, false);
+        if (signal == null)
+        {
+            if (IsMajor(symbol))
+                _log.LogDebug("[CORE][{sym}] closed bar — no setup", symbol);
+            return (true, false);
+        }
+        if (!EnforceMinRr(signal))
+        {
+            _log.LogInformation("[CORE][{sym}] setup rejected — R:R < min", symbol);
+            return (true, false);
+        }
 
         _cooldown[symbol] = DateTime.UtcNow;
         _log.LogInformation(
