@@ -1341,8 +1341,8 @@ namespace VertexAutoTradeBinance8.Services
             decimal atr = CalculateAtr(klines);
             if (atr <= 0) atr = entryPrice * 0.005m; // fallback 0.5%
 
-            decimal currentSl = slOrder.StopPrice ?? 0m;
-            if (currentSl <= 0) currentSl = slOrder.Price ?? 0m;
+            decimal currentSl = slOrder.StopPrice;
+            if (currentSl <= 0) currentSl = slOrder.Price;
 
             // =============================================================
             // PRO TRAIL — не micro-trail к цене (главная причина серии SL)
@@ -1860,8 +1860,8 @@ namespace VertexAutoTradeBinance8.Services
             decimal currentSl = 0m;
             if (slOrder != null)
             {
-                decimal sp = slOrder.StopPrice ?? 0m;
-                decimal px = slOrder.Price ?? 0m;
+                decimal sp = slOrder.StopPrice;
+                decimal px = slOrder.Price;
                 currentSl = sp > 0 ? sp : px;
             }
 
