@@ -1235,7 +1235,7 @@ namespace VertexAutoTradeBinance8.Services
             if (qtyTp1 <= 0 || qtyRunner <= 0)
                 return;
 
-            decimal tp1Price = tpOrder.Price > 0 ? tpOrder.Price : (tpOrder.StopPrice ?? 0m);
+            decimal tp1Price = tpOrder.Price > 0 ? tpOrder.Price : (tpOrder.StopPrice);
             if (tp1Price <= 0)
                 return;
 
@@ -1644,7 +1644,7 @@ namespace VertexAutoTradeBinance8.Services
         {
             if (qty <= 0 || newSl <= 0) return;
 
-            decimal oldSl = slOrder.StopPrice ?? slOrder.Price;
+            decimal oldSl = slOrder.StopPrice > 0 ? slOrder.StopPrice : slOrder.Price;
             if (oldSl <= 0) return;
 
             if (side == PositionSide.Long && newSl <= oldSl) return;
