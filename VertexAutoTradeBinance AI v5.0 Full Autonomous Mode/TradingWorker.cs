@@ -727,6 +727,10 @@ namespace VertexAutoTradeBinance8
         {
             var symbol = signal.Symbol.Trim().ToUpperInvariant();
 
+            // ★ UI FIRST — even if later guards reject, Market still sees the candidate
+            try { await _liveSig.AppendAsync(signal, ct); }
+            catch { /* never block */ }
+
             // ─────────────────────────────────────────────────────────────────────
             // GUARD: Side must be Buy or Sell — never None.
             // Decision trace showed 135 Allow=true records with Side=null, meaning
