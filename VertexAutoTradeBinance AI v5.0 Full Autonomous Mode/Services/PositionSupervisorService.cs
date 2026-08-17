@@ -1341,102 +1341,93 @@ namespace VertexAutoTradeBinance8.Services
             decimal atr = CalculateAtr(klines);
             if (atr <= 0) atr = entryPrice * 0.005m; // fallback 0.5%
 
-            decimal currentSl = (decimal)slOrder.StopPrice;
+            decimal currentSl = slOrder.StopPrice ?? 0m;
+            if (currentSl <= 0) currentSl = slOrder.Price ?? 0m;
 
             // =============================================================
-            // BREAK-EVEN LOCK v1
-            // Как только позиция в плюсе — сразу тянем SL на entry.
-            // Цель: не отдавать депозит, если цена развернулась после плюса.
-            // Триггер: прибыль ≥ max(0.20×ATR, 0.12% цены) — фильтр шума.
+            // PRO TRAIL — не micro-trail к цене (главная причина серии SL)
+            // Старое: Max(mark-0.9ATR, ema-0.3ATR, microLow) → SL прилипал к цене.
+            // Новое:
+            //  1) trail только после profit ≥ 2.0 ATR
+            //  2) Chandelier extreme(12) ± 2.2 ATR (за ликвидностью)
+            //  3) Structure swing(15) ± 0.5 ATR
+            //  4) floor: SL не ближе 1.8 ATR к mark
+            //  5) шаг ≥ 0.30 ATR
+            // Ранний BE здесь ОТКЛЮЧЁН (делает Hybrid @ +1.2 ATR + 0.35 buf)
             // =============================================================
-            decimal beBuffer = Math.Max(atr * 0.20m, entryPrice * 0.0012m);
-            bool inProfit = realSide == PositionSide.Long
-                ? mark >= entryPrice + beBuffer
-                : mark <= entryPrice - beBuffer;
 
-            if (inProfit && entryPrice > 0)
-            {
-                // Чуть выше/ниже entry, чтобы покрыть комиссии (~0.04–0.08%)
-                decimal feePad = entryPrice * 0.0004m;
-                decimal beSl = realSide == PositionSide.Long
-                    ? entryPrice + feePad
-                    : entryPrice - feePad;
-
-                bool needBe = realSide == PositionSide.Long
-                    ? currentSl < beSl
-                    : (currentSl <= 0 || currentSl > beSl);
-
-                if (needBe)
-                {
-                    _logger.LogInformation(
-                        "[SUPERVISOR][{symbol}] BREAK-EVEN LOCK → SL {old} → {be} (entry={entry}, mark={mark})",
-                        symbol, currentSl, beSl, entryPrice, mark);
-
-                    await UpdateSLAsync(
-                        client, symbol, realSide, qty,
-                        slOrder, entryPrice, beSl,
-                        signal, ct);
-
-                    // после BE обновляем локальный currentSl для дальнейшего трейла
-                    currentSl = beSl;
-                    // перечитаем algo SL id может смениться — следующий цикл подхватит
-                }
-            }
+            decimal profitAtr = atr > 0 ? Math.Abs(mark - entryPrice) / atr : 0m;
+            bool longSide = realSide == PositionSide.Long;
 
             var contLevel = EvaluateTrendContinuation(realSide, entryPrice, atr, klines);
-
-            // HIGH trend: не трогаем агрессивный trail, но BE уже поставлен выше
-            if (contLevel == TrendContinuationLevel.High)
+            if (contLevel == TrendContinuationLevel.High && profitAtr < 3.0m)
             {
                 _logger.LogInformation(
-                    "[SUPERVISOR] {symbol} {side}: trend continuation HIGH → trailing HOLD (BE already applied if in profit)",
-                    symbol, realSide);
+                    "[SUPERVISOR] {symbol} {side}: HIGH trend + profit {p:F2}ATR < 3 → trail HOLD",
+                    symbol, realSide, profitAtr);
                 return;
             }
 
-            decimal ema21 = CalculateEma(klines, 21);
-            decimal st = SuperTrend(klines, atr);
+            if (profitAtr < 2.0m)
+                return;
 
-            decimal slAtr = realSide == PositionSide.Long
-                ? mark - atr * 0.9m
-                : mark + atr * 0.9m;
+            int n = klines.Count;
+            int from12 = Math.Max(0, n - 12);
+            int from15 = Math.Max(0, n - 15);
 
-            decimal slEma = realSide == PositionSide.Long
-                ? ema21 - atr * 0.3m
-                : ema21 + atr * 0.3m;
-
-            decimal slSt = st;
-
-            var prev = klines[klines.Count - 2];
-
-            bool microUp = last.LowPrice > prev.LowPrice;
-            bool microDn = last.HighPrice < prev.HighPrice;
-
-            decimal slMicro = realSide == PositionSide.Long
-                ? (microUp ? last.LowPrice - atr * 0.2m : last.LowPrice - atr * 0.6m)
-                : (microDn ? last.HighPrice + atr * 0.2m : last.HighPrice + atr * 0.6m);
-
-            decimal targetSl = realSide switch
+            decimal swingHigh12 = decimal.MinValue, swingLow12 = decimal.MaxValue;
+            for (int i2 = from12; i2 < n; i2++)
             {
-                PositionSide.Long => new[] { slAtr, slEma, slSt, slMicro }.Max(),
-                PositionSide.Short => new[] { slAtr, slEma, slSt, slMicro }.Min(),
-                _ => signal.StopLoss
-            };
-
-            // Пол после BE: никогда не опускаем SL ниже entry, если уже были в плюсе
-            if (inProfit)
+                if (klines[i2].HighPrice > swingHigh12) swingHigh12 = klines[i2].HighPrice;
+                if (klines[i2].LowPrice < swingLow12) swingLow12 = klines[i2].LowPrice;
+            }
+            decimal swingHigh15 = decimal.MinValue, swingLow15 = decimal.MaxValue;
+            for (int i2 = from15; i2 < n; i2++)
             {
-                if (realSide == PositionSide.Long)
-                    targetSl = Math.Max(targetSl, entryPrice);
-                else if (realSide == PositionSide.Short)
-                    targetSl = Math.Min(targetSl, entryPrice);
+                if (klines[i2].HighPrice > swingHigh15) swingHigh15 = klines[i2].HighPrice;
+                if (klines[i2].LowPrice < swingLow15) swingLow15 = klines[i2].LowPrice;
             }
 
-            // Тянем SL только в прибыльную сторону (не ослабляем)
-            if (realSide == PositionSide.Long && targetSl <= currentSl)
-                return;
-            if (realSide == PositionSide.Short && currentSl > 0 && targetSl >= currentSl)
-                return;
+            decimal chandelier = longSide
+                ? swingHigh12 - atr * 2.2m
+                : swingLow12 + atr * 2.2m;
+
+            decimal structure = longSide
+                ? swingLow15 - atr * 0.50m
+                : swingHigh15 + atr * 0.50m;
+
+            decimal targetSl = longSide
+                ? Math.Min(chandelier, structure)
+                : Math.Max(chandelier, structure);
+
+            decimal minDist = atr * 1.8m;
+            if (longSide && mark - targetSl < minDist)
+                targetSl = mark - minDist;
+            if (!longSide && targetSl - mark < minDist)
+                targetSl = mark + minDist;
+
+            if (profitAtr >= 1.2m && entryPrice > 0)
+            {
+                if (longSide)
+                    targetSl = Math.Max(targetSl, entryPrice + atr * 0.10m);
+                else
+                    targetSl = Math.Min(targetSl, entryPrice - atr * 0.10m);
+            }
+
+            if (longSide)
+            {
+                if (targetSl <= currentSl) return;
+                if (currentSl > 0 && targetSl - currentSl < atr * 0.30m) return;
+            }
+            else
+            {
+                if (currentSl > 0 && targetSl >= currentSl) return;
+                if (currentSl > 0 && currentSl - targetSl < atr * 0.30m) return;
+            }
+
+            _logger.LogInformation(
+                "[SUPERVISOR][{symbol}][{side}] PRO-TRAIL SL {old} → {neu} (profit={p:F2}ATR, minDist=1.8ATR)",
+                symbol, realSide, currentSl, targetSl, profitAtr);
 
             await UpdateSLAsync(
                 client, symbol, realSide, qty,
@@ -1861,15 +1852,17 @@ namespace VertexAutoTradeBinance8.Services
             var key = HybridPosKey(symbol, side, entry);
             if (_hybridBeDone.ContainsKey(key)) return;
 
-            // BE + небольшой буфер (0.15 ATR), чтобы не выбило на шуме
+            // BE + буфер 0.35 ATR (комиссии + noise; 0.15 было слишком тесно)
             decimal beSl = side == PositionSide.Long
-                ? entry + atr * 0.15m
-                : entry - atr * 0.15m;
+                ? entry + atr * 0.35m
+                : entry - atr * 0.35m;
 
             decimal currentSl = 0m;
             if (slOrder != null)
             {
-                currentSl = slOrder.StopPrice > 0 ? slOrder.StopPrice : slOrder.Price;
+                decimal sp = slOrder.StopPrice ?? 0m;
+                decimal px = slOrder.Price ?? 0m;
+                currentSl = sp > 0 ? sp : px;
             }
 
             // Только улучшаем SL (не ослабляем)
