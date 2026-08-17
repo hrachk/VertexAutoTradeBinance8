@@ -229,6 +229,29 @@ namespace VertexAutoTradeBinance8.Services
             }
             while (tps.Count > 3) tps.RemoveAt(tps.Count - 1);
 
+            // Если пришёл только 1 TP — развернуть в 1.5R/2.5R/4R от SL
+            if (tps.Count == 1 && sl > 0)
+            {
+                decimal baseTp = tps[0];
+                decimal slDist = Math.Abs(entryPrice - sl);
+                if (slDist > 0)
+                {
+                    tps.Clear();
+                    if (signal.Side == SignalSide.Buy)
+                    {
+                        tps.Add(Round(entryPrice + slDist * 1.5m, tick));
+                        tps.Add(Round(entryPrice + slDist * 2.5m, tick));
+                        tps.Add(Round(entryPrice + slDist * 4.0m, tick));
+                    }
+                    else
+                    {
+                        tps.Add(Round(entryPrice - slDist * 1.5m, tick));
+                        tps.Add(Round(entryPrice - slDist * 2.5m, tick));
+                        tps.Add(Round(entryPrice - slDist * 4.0m, tick));
+                    }
+                }
+            }
+
             sl = Round(sl, tick);
 
             _logger.LogInformation(

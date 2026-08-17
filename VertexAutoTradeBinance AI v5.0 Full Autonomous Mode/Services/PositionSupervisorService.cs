@@ -169,31 +169,10 @@ namespace VertexAutoTradeBinance8.Services
 
             if (!hasTp)
             {
-                decimal tp = 0;
-                if (info != null && info.CalculatedTPs.Count > 0) tp = info.CalculatedTPs[0];
-                else if (signal?.TakeProfit is > 0) tp = signal.TakeProfit.Value;
-                else if (signal?.TakeProfits != null && signal.TakeProfits.Count > 0) tp = signal.TakeProfits[0];
-
-                if (tp <= 0)
-                {
-                    try
-                    {
-                        var kl = await _marketData.GetKlines(symbol, KlineInterval.OneMinute, 100);
-                        var atr = _marketData.CalculateAtr(kl, 14);
-                        if (atr > 0)
-                            tp = side == PositionSide.Long ? entry + atr * 2.0m : entry - atr * 2.0m;
-                    }
-                    catch { }
-                }
-
-                if (tp <= 0)
-                    tp = side == PositionSide.Long ? entry * 1.02m : entry * 0.98m;
-
-                tp = Math.Round(tp / tick) * tick;
-                var ok = await PlaceManagedTpAsync(client, symbol, side, qty, tp, ct);
+                var ok = await PlaceThreeTpLadderAsync(client, symbol, side, qty, entry, signal, ct);
                 _managed.MarkRestoreAttempt(symbol, side, ok);
                 if (ok)
-                    _logger.LogWarning("[SUPERVISOR][{symbol}] SMART RESTORE TP @ {tp} (bot-managed)", symbol, tp);
+                    _logger.LogWarning("[SUPERVISOR][{symbol}] SMART RESTORE 3×TP ladder (bot-managed)", symbol);
             }
         }
 
@@ -862,30 +841,17 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-            // 3) HYBRID scale-out (дек-2025 логика поверх биржевых SL/TP)
-            //    EARLY 35% @ +0.9 ATR → BE @ +1.2 ATR → HARVEST кусками
+            // 3) HYBRID scale-out: EARLY + HARVEST only (market partials).
+            //    BE / trailing / runner ОТКЛЮЧЕНЫ — они подтягивали SL к цене → серия SL.
+            //    Биржевой initial SL остаётся фиксированным; 3 TP ladder не трогаем.
             if (klines != null && klines.Count >= 30)
             {
                 await TryHybridEarlyPartialAsync(client, symbol, side, qty, entry, pos, klines, ct);
-                await TryHybridBreakEvenAsync(client, symbol, side, qty, entry, sl, signal, klines, ct);
                 await TryHybridHarvestAsync(client, symbol, side, qty, entry, pos, klines, ct);
             }
 
-            // 4) Trailing + Runner (как было)
-            if (klines != null && klines.Count >= 50)
-            {
-                await ManageRunnerTpAsync(
-                    client, symbol, side, qty, entry,
-                    orders, signal, klines, ct);
-
-                await ManageRunnerTpExtensionAsync(
-                    client, symbol, side, qty, entry,
-                    signal, orders, klines, ct);
-
-                await MultiLayerTrailingAsync(
-                    client, symbol, side, qty, entry,
-                    signal, orders, klines, ct);
-            }
+            // 4) Ensure 3 TP algo orders exist (если supervisor/restore поставил только 1)
+            await EnsureThreeTakeProfitsAsync(client, symbol, side, qty, entry, signal, ct);
         }
 
         // =====================================================================
@@ -974,6 +940,180 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         // EMERGENCY TP (TAKE_PROFIT_MARKET)
         // =====================================================================
+
+        /// <summary>
+        /// Ставит 3 TP (40/30/30) по signal.TakeProfits или R-ladder от entry/SL.
+        /// Не двигает SL.
+        /// </summary>
+        private async Task<bool> PlaceThreeTpLadderAsync(
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            decimal entryPrice,
+            TradeSignal? signal,
+            CancellationToken ct)
+        {
+            if (qty <= 0 || entryPrice <= 0) return false;
+
+            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+            var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
+            var step = filters.step > 0 ? filters.step : 0.001m;
+
+            var tps = new List<decimal>();
+            if (signal?.TakeProfits != null)
+            {
+                foreach (var x in signal.TakeProfits)
+                    if (x > 0) tps.Add(Math.Round(x / tick) * tick);
+            }
+            if (tps.Count == 0 && signal?.TakeProfit is > 0)
+                tps.Add(Math.Round(signal.TakeProfit.Value / tick) * tick);
+
+            if (tps.Count < 3)
+            {
+                decimal slDist = 0m;
+                if (signal != null && signal.StopLoss > 0)
+                    slDist = Math.Abs(entryPrice - signal.StopLoss);
+                if (slDist <= 0)
+                {
+                    try
+                    {
+                        var kl = await _marketData.GetKlines(symbol, KlineInterval.OneMinute, 100);
+                        var atr = _marketData.CalculateAtr(kl, 14);
+                        if (atr > 0) slDist = atr * 2.0m;
+                    }
+                    catch { }
+                }
+                if (slDist <= 0) slDist = entryPrice * 0.02m;
+
+                tps.Clear();
+                if (side == PositionSide.Long)
+                {
+                    tps.Add(Math.Round((entryPrice + slDist * 1.5m) / tick) * tick);
+                    tps.Add(Math.Round((entryPrice + slDist * 2.5m) / tick) * tick);
+                    tps.Add(Math.Round((entryPrice + slDist * 4.0m) / tick) * tick);
+                }
+                else
+                {
+                    tps.Add(Math.Round((entryPrice - slDist * 1.5m) / tick) * tick);
+                    tps.Add(Math.Round((entryPrice - slDist * 2.5m) / tick) * tick);
+                    tps.Add(Math.Round((entryPrice - slDist * 4.0m) / tick) * tick);
+                }
+            }
+            while (tps.Count > 3) tps.RemoveAt(tps.Count - 1);
+            while (tps.Count < 3 && tps.Count > 0)
+            {
+                var last = tps[^1];
+                var stepP = Math.Abs(last - entryPrice) * 0.5m;
+                if (stepP <= 0) stepP = entryPrice * 0.01m;
+                tps.Add(side == PositionSide.Long
+                    ? Math.Round((last + stepP) / tick) * tick
+                    : Math.Round((last - stepP) / tick) * tick);
+            }
+
+            decimal[] fracs = { 0.40m, 0.30m, 0.30m };
+            decimal placed = 0m;
+            int okN = 0;
+            var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+
+            for (int i = 0; i < tps.Count && i < 3; i++)
+            {
+                decimal q = qty * fracs[i];
+                if (i == 2) q = qty - placed;
+                q = Math.Floor(q / step) * step;
+                if (q < filters.minQty) continue;
+                placed += q;
+
+                try
+                {
+                    var res = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
+                        symbol: symbol,
+                        side: closeSide,
+                        type: ConditionalOrderType.TakeProfitMarket,
+                        quantity: q,
+                        triggerPrice: tps[i],
+                        positionSide: side,
+                        workingType: WorkingType.Mark,
+                        timeInForce: TimeInForce.GoodTillCanceled,
+                        ct: ct);
+                    if (res.Success)
+                    {
+                        okN++;
+                        _logger.LogInformation(
+                            "[SUPERVISOR][{symbol}] TP{n} OK trigger={tp} qty={q}",
+                            symbol, i + 1, tps[i], q);
+                    }
+                    else
+                        _logger.LogError("[SUPERVISOR][{symbol}] TP{n} FAIL: {err}", symbol, i + 1, res.Error);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[SUPERVISOR][{symbol}] TP{n} EX", symbol, i + 1);
+                }
+            }
+            return okN > 0;
+        }
+
+        private async Task EnsureThreeTakeProfitsAsync(
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            decimal entry,
+            TradeSignal? signal,
+            CancellationToken ct)
+        {
+            if (qty <= 0) return;
+            int tpCount = 0;
+            try
+            {
+                var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+                var algo = await client.UsdFuturesApi.Trading.GetOpenConditionalOrdersAsync(symbol: symbol, ct: ct);
+                if (algo.Success && algo.Data != null)
+                {
+                    tpCount = algo.Data.Count(o =>
+                        o.Side == closeSide &&
+                        (o.Type == FuturesOrderType.TakeProfitMarket || o.Type == FuturesOrderType.TakeProfit) &&
+                        (o.PositionSide == side || o.PositionSide == PositionSide.Both));
+                }
+                var open = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(symbol, ct: ct);
+                if (open.Success && open.Data != null)
+                {
+                    tpCount += open.Data.Count(o =>
+                        o.Side == closeSide &&
+                        (o.Type == FuturesOrderType.TakeProfitMarket || o.Type == FuturesOrderType.TakeProfit) &&
+                        (o.PositionSide == side || o.PositionSide == PositionSide.Both));
+                }
+            }
+            catch { return; }
+
+            if (tpCount >= 2) return;
+
+            if (tpCount == 1)
+            {
+                try
+                {
+                    var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+                    var algo = await client.UsdFuturesApi.Trading.GetOpenConditionalOrdersAsync(symbol: symbol, ct: ct);
+                    if (algo.Success && algo.Data != null)
+                    {
+                        foreach (var a in algo.Data.Where(o =>
+                            o.Side == closeSide &&
+                            (o.Type == FuturesOrderType.TakeProfitMarket || o.Type == FuturesOrderType.TakeProfit)))
+                        {
+                            await client.UsdFuturesApi.Trading.CancelConditionalOrderAsync(orderId: a.Id, ct: ct);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[SUPERVISOR][{symbol}] cancel single TP before ladder", symbol);
+                }
+            }
+
+            await PlaceThreeTpLadderAsync(client, symbol, side, qty, entry, signal, ct);
+        }
+
         private async Task CreateEmergencyTPAsync(
             BinanceRestClient client,
             string symbol,
@@ -987,71 +1127,8 @@ namespace VertexAutoTradeBinance8.Services
 
             decimal trigger;
 
-            if (signal != null && signal.TakeProfits != null && signal.TakeProfits.Count > 0)
-                trigger = signal.TakeProfits[0];
-            else
-            {
-                try
-                {
-                    var kl = await _marketData.GetKlines(symbol, KlineInterval.OneMinute, 100);
-                    if (kl.Count < 30) return;
-
-                    var atr = _marketData.CalculateAtr(kl, 14);
-                    if (atr <= 0) return;
-
-                    trigger = side == PositionSide.Long
-                        ? entryPrice + atr * 1.5m
-                        : entryPrice - atr * 1.5m;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "[SUPERVISOR] TP ATR calc failed {symbol}", symbol);
-                    return;
-                }
-            }
-
-            var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
-            var tick = filters.tickSize <= 0 ? 0.0001m : filters.tickSize;
-
-            trigger = Math.Round(trigger / tick) * tick;
-
-            // --- VALIDATE TP AGAINST ENTRY ---
-            if (side == PositionSide.Long)
-            {
-                if (trigger <= entryPrice)
-                    trigger = entryPrice + tick * 3;
-            }
-            else
-            {
-                if (trigger >= entryPrice)
-                    trigger = entryPrice - tick * 3;
-            }
-
-            try
-            {
-                var res = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
-                    symbol: symbol,
-                    side: side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy,
-                    type: ConditionalOrderType.TakeProfitMarket,
-                    quantity: qty,
-                    triggerPrice: trigger,
-                    positionSide: side,
-                    workingType: WorkingType.Mark,
-                    timeInForce: TimeInForce.GoodTillCanceled,
-                    ct: ct);
-
-                if (!res.Success)
-                {
-                    _logger.LogError("[SUPERVISOR] ERROR create TP {symbol}: {err}", symbol, res.Error);
-                    return;
-                }
-
-                _logger.LogInformation("[SUPERVISOR] TP CREATED {symbol} tp={tp}", symbol, trigger);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[SUPERVISOR] EX create TP {symbol}", symbol);
-            }
+            // Ставит ladder TP1/TP2/TP3 (не один TP на весь qty)
+            await PlaceThreeTpLadderAsync(client, symbol, side, qty, entryPrice, signal, ct);
         }
 
         // =====================================================================
