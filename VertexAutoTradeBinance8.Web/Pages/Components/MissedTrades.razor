@@ -473,7 +473,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
                         && r.Entry == ls.Entry);
                     if (exists) continue;
 
-                    _all.Add(new MissedTradeRecord
+                    _all.Add(new VertexAutoTradeBinance8.Web.Models.MissedTradeRecord
                     {
                         Event = "SIGNAL",
                         Symbol = ls.Symbol ?? "",
@@ -485,8 +485,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
                         Confidence = ls.Confidence,
                         Score = ls.Score,
                         Reason = string.IsNullOrEmpty(ls.Reason) ? "LIVE_SIGNAL" : ls.Reason,
-                        Atr = ls.Atr,
-                        Note = "from_live_signals",
+                         ATR = ls.Atr 
                     });
                 }
                 _all = _all.OrderByDescending(r => r.Time).ToList();
