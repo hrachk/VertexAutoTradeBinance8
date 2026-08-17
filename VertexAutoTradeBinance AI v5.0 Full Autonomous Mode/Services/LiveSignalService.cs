@@ -23,6 +23,7 @@ namespace VertexAutoTradeBinance8.Services
             var root = cfg["SharedData:Root"] ?? @"C:\Vertex\Engines\client_001";
             _filePath = Path.Combine(root, "live_signals.json");
             _logger = logger;
+            _logger.LogInformation("[LIVESIG] path={path}", _filePath);
         }
 
         public async Task AppendAsync(dynamic signal, CancellationToken ct = default)
