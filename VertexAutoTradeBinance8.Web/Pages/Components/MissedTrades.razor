@@ -3,6 +3,7 @@
 @using VertexAutoTradeBinance8.Web.Models
 @using VertexAutoTradeBinance8.Models
 @inject MissedTradeFileService Svc
+@inject LiveSignalFileService LiveSignalSvc
 @inject VertexAutoTradeBinance8.Web.Services.ClientDataService ClientData
 @using VertexAutoTradeBinance8.Web.Services.Auth
 @inject VertexAutoTradeBinance8.Web.Services.Auth.AuthSessionService Auth
@@ -452,9 +453,48 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
 
     async Task Load()
     {
+        // PRIMARY: missed_trades.json (engine rejects + live_signal mirrors)
         var data = await Svc.LoadFromPathAsync(Svc.GetPathForRoot(ClientData.Root));
         _all = data?.ToList() ?? new();
-        _execFail = _all.Count(r => r.Reason.Contains("Exec") || r.Reason.Contains("EXEC") || r.Reason.Contains("Failed"));
+
+        // ALSO: live_signals.json — same source /market uses as primary
+        // (so page is not empty when only live_signals is populated)
+        try
+        {
+            var live = await LiveSignalSvc.ForRoot(ClientData.Root).LoadAsync();
+            if (live != null && live.Count > 0)
+            {
+                foreach (var ls in live)
+                {
+                    // de-dupe by symbol+time+entry
+                    bool exists = _all.Any(r =>
+                        r.Symbol == ls.Symbol
+                        && Math.Abs((r.Time - ls.Time).TotalSeconds) < 2
+                        && r.Entry == ls.Entry);
+                    if (exists) continue;
+
+                    _all.Add(new MissedTradeRecord
+                    {
+                        Event = "SIGNAL",
+                        Symbol = ls.Symbol ?? "",
+                        Side = ls.Side ?? "",
+                        Time = ls.Time,
+                        Entry = ls.Entry,
+                        StopLoss = ls.StopLoss,
+                        TakeProfits = ls.TakeProfits ?? new(),
+                        Confidence = ls.Confidence,
+                        Score = ls.Score,
+                        Reason = string.IsNullOrEmpty(ls.Reason) ? "LIVE_SIGNAL" : ls.Reason,
+                        Atr = ls.Atr,
+                        Note = "from_live_signals",
+                    });
+                }
+                _all = _all.OrderByDescending(r => r.Time).ToList();
+            }
+        }
+        catch { /* non-fatal */ }
+
+        _execFail = _all.Count(r => (r.Reason ?? "").Contains("Exec") || (r.Reason ?? "").Contains("EXEC") || (r.Reason ?? "").Contains("Failed"));
         Rebuild();
     }
 
