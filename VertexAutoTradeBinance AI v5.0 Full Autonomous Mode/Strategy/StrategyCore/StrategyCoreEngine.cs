@@ -8,17 +8,24 @@ using VertexAutoTradeBinance8.Services.MarketData;
 namespace VertexAutoTradeBinance8.Strategy.StrategyCore;
 
 /// <summary>
-/// StrategyCore v1.4 — no hardcoded symbol allowlist.
-/// Quality = top USDT-M by 24h quote volume (SymbolLiquidityScanner)
-///          + 15m quote-volume floor + ATR band + volume confirm.
+/// StrategyCore v1.5 — resilient signal generation.
+///
+/// Root cause of day-long silence: MarketDataFacade often returns &lt;70 bars
+/// (snapshot-capped / REST backfill disabled) so EvaluateAsync exited early
+/// and never emitted. v1.5:
+///   - direct Binance REST fallback when buffer is thin
+///   - simple trend-follow setup (fires in real trends)
+///   - lower bar minimum, majors always scanned
 /// </summary>
 public sealed class StrategyCoreEngine
 {
     private readonly ILogger<StrategyCoreEngine> _log;
     private readonly SymbolLiquidityScanner _liquidity;
+    private readonly BinanceClientFactory _factory;
     private MarketDataFacade? _md;
     private Timer? _scanTimer;
     private int _scanBusy;
+    private int _zeroEmitStreak;
 
     public event Action<TradeSignal>? OnSignalGenerated;
 
@@ -29,24 +36,29 @@ public sealed class StrategyCoreEngine
     private DateTime _qualityAtUtc = DateTime.MinValue;
     private static readonly TimeSpan QualityTtl = TimeSpan.FromMinutes(10);
 
-    private const decimal MinAvgQuoteVol15m = 5_000m;  // was 80k — too strict for many 15m alts
+    private const decimal MinAvgQuoteVol15m = 3_000m;
     private const decimal MinRr = 1.5m;
-    private const decimal MinAtrPct = 0.0020m;
-    private const decimal MaxAtrPct = 0.050m;
+    private const decimal MinAtrPct = 0.0015m;
+    private const decimal MaxAtrPct = 0.060m;
     private const decimal MinSlAtr = 1.30m;
-    private const decimal StructurePadAtr = 0.40m;
+    private const decimal StructurePadAtr = 0.35m;
     private const int EmaFast = 21;
     private const int EmaSlow = 50;
     private const int SwingLookback = 18;
     private const int Donchian = 20;
     private const int QualityTopN = 40;
-    private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(45);
+    private const int MinBars = 55;
+    private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(30);
     private static readonly KlineInterval Tf = KlineInterval.FifteenMinutes;
 
-    public StrategyCoreEngine(ILogger<StrategyCoreEngine> log, SymbolLiquidityScanner liquidity)
+    public StrategyCoreEngine(
+        ILogger<StrategyCoreEngine> log,
+        SymbolLiquidityScanner liquidity,
+        BinanceClientFactory factory)
     {
         _log = log;
         _liquidity = liquidity;
+        _factory = factory;
     }
 
     public void BindReactive(MarketDataFacade marketData)
@@ -55,10 +67,10 @@ public sealed class StrategyCoreEngine
         _md = marketData;
         _md.WsClosedKline += OnWsClosed;
         _scanTimer = new Timer(_ => { _ = ScanQualitySafeAsync(); },
-            null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(45));
+            null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30));
         _log.LogInformation(
-            "[CORE] v1.4 bound TF={tf} quality=dynamic topN={n} (no hardcoded allowlist)",
-            Tf, QualityTopN);
+            "[CORE] v1.5 bound TF={tf} REST-fallback=ON simple-trend=ON scan=30s",
+            Tf);
     }
 
     public void UnbindReactive()
@@ -91,7 +103,7 @@ public sealed class StrategyCoreEngine
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "[CORE] evaluate {sym} failed", symbol);
+            _log.LogWarning(ex, "[CORE] evaluate {sym} failed", symbol);
         }
     }
 
@@ -100,7 +112,6 @@ public sealed class StrategyCoreEngine
         if (Interlocked.Exchange(ref _scanBusy, 1) == 1) return;
         try
         {
-            if (_md == null) return;
             await RefreshQualityUniverseAsync().ConfigureAwait(false);
 
             var majors = new[] { "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT" };
@@ -109,31 +120,31 @@ public sealed class StrategyCoreEngine
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Take(15)
                 .ToList();
-            if (batch.Count == 0)
-            {
-                batch = majors.ToList();
-                _log.LogWarning("[CORE][SCAN] quality universe empty — probing majors");
-            }
 
-            int evaluated = 0, emitted = 0;
+            int evaluated = 0, emitted = 0, thin = 0;
             foreach (var sym in batch)
             {
                 try
                 {
-                    var (ev, em) = await EvaluateAsync(sym).ConfigureAwait(false);
+                    var (ev, em, reason) = await EvaluateAsync(sym).ConfigureAwait(false);
                     if (ev) evaluated++;
                     if (em) emitted++;
+                    if (reason == "thin_klines") thin++;
                 }
                 catch (Exception ex)
                 {
-                    _log.LogDebug(ex, "[CORE] scan {sym} failed", sym);
+                    _log.LogWarning(ex, "[CORE] scan {sym} failed", sym);
                 }
-                await Task.Delay(60).ConfigureAwait(false);
+                await Task.Delay(50).ConfigureAwait(false);
             }
 
-            _log.LogInformation(
-                "[CORE][SCAN] qualityUniverse={u} batch={b} evaluated={e} emitted={sig}",
-                _qualitySymbols.Count, batch.Count, evaluated, emitted);
+            if (emitted == 0) _zeroEmitStreak++;
+            else _zeroEmitStreak = 0;
+
+            var level = _zeroEmitStreak >= 10 ? LogLevel.Warning : LogLevel.Information;
+            _log.Log(level,
+                "[CORE][SCAN] universe={u} batch={b} evaluated={e} emitted={sig} thin={t} zeroStreak={z}",
+                _qualitySymbols.Count, batch.Count, evaluated, emitted, thin, _zeroEmitStreak);
         }
         finally { Interlocked.Exchange(ref _scanBusy, 0); }
     }
@@ -142,53 +153,50 @@ public sealed class StrategyCoreEngine
     {
         if ((DateTime.UtcNow - _qualityAtUtc) < QualityTtl && _qualitySymbols.Count > 0)
             return;
-
         try
         {
             var snaps = await _liquidity.LoadSnapshotsAsync().ConfigureAwait(false);
             if (snaps == null || snaps.Count == 0) return;
-
             var top = snaps
-                .Where(s => s != null
-                            && !string.IsNullOrWhiteSpace(s.Symbol)
+                .Where(s => s != null && !string.IsNullOrWhiteSpace(s.Symbol)
                             && s.Symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase)
                             && s.QuoteVolume24h > 0)
                 .OrderByDescending(s => s.QuoteVolume24h)
                 .Take(QualityTopN)
                 .Select(s => s.Symbol.Trim().ToUpperInvariant())
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
             if (top.Count > 0)
             {
                 _qualitySymbols = top;
                 _qualityAtUtc = DateTime.UtcNow;
-                _log.LogInformation("[CORE] quality universe refreshed n={n} sample={s}",
-                    top.Count, string.Join(",", top.Take(8)));
+                _log.LogInformation("[CORE] quality universe n={n} sample={s}",
+                    top.Count, string.Join(",", top.Take(6)));
             }
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "[CORE] liquidity refresh failed — keeping previous universe");
+            _log.LogDebug(ex, "[CORE] liquidity refresh failed");
         }
     }
 
     private async Task<bool> IsQualitySymbolAsync(string symbol)
     {
         await RefreshQualityUniverseAsync().ConfigureAwait(false);
-        if (_qualitySymbols.Count == 0)
-            return true;
+        if (_qualitySymbols.Count == 0) return true;
         return _qualitySymbols.Contains(symbol);
     }
 
-    private async Task<(bool evaluated, bool emitted)> EvaluateAsync(string symbol)
+    private async Task<(bool evaluated, bool emitted, string reason)> EvaluateAsync(string symbol)
     {
-        if (_md == null) return (false, false);
-        if (InCooldown(symbol)) return (false, false);
+        if (InCooldown(symbol)) return (false, false, "cooldown");
 
-        var klines = await _md.GetKlinesAsync(symbol, Tf, need: 120).ConfigureAwait(false);
-        if (klines == null || klines.Count < 70) return (false, false);
-
-        var list = klines.OrderBy(k => k.OpenTime).ToList();
+        var list = await LoadKlinesAsync(symbol).ConfigureAwait(false);
+        if (list == null || list.Count < MinBars)
+        {
+            _log.LogWarning("[CORE][{sym}] thin klines n={n} (need {need})",
+                symbol, list?.Count ?? 0, MinBars);
+            return (false, false, "thin_klines");
+        }
 
         int closedIdx = list.Count - 1;
         var barOpen = list[closedIdx].OpenTime;
@@ -199,54 +207,40 @@ public sealed class StrategyCoreEngine
 
         var closed = list[closedIdx];
         long barKey = ToMs(closed.OpenTime);
-
         if (_lastSignalBarMs.TryGetValue(symbol, out var prev) && prev == barKey)
-            return (false, false);
+            return (false, false, "same_bar");
 
         var slice = list.Take(closedIdx + 1).ToList();
-        if (slice.Count < 70) return (false, false);
+        if (slice.Count < MinBars) return (false, false, "thin_slice");
 
-        if (!HasQuoteLiquidity(slice))
+        // Soft liquidity — log but don't hard-block majors
+        if (!HasQuoteLiquidity(slice) && !IsMajor(symbol))
         {
             _lastSignalBarMs[symbol] = barKey;
-            return (true, false);
+            return (true, false, "liquidity");
         }
 
         var atr = Atr(slice, 14);
-        if (atr <= 0) return (false, false);
+        if (atr <= 0) return (false, false, "no_atr");
 
         var mid = (closed.HighPrice + closed.LowPrice) / 2m;
-        if (mid <= 0) return (false, false);
+        if (mid <= 0) return (false, false, "bad_mid");
         var atrPct = atr / mid;
         if (atrPct < MinAtrPct || atrPct > MaxAtrPct)
         {
             _lastSignalBarMs[symbol] = barKey;
-            return (true, false);
+            return (true, false, "atr_band");
         }
 
-        if (!HasVolumeConfirm(slice))
-        {
-            _lastSignalBarMs[symbol] = barKey;
-            return (true, false);
-        }
-
-        TradeSignal? signal = TryPullback(symbol, slice, atr);
-        if (signal == null && IsMajor(symbol))
-            signal = TryBreakoutRetest(symbol, slice, atr);
+        TradeSignal? signal =
+            TryPullback(symbol, slice, atr)
+            ?? (IsMajor(symbol) ? TryBreakoutRetest(symbol, slice, atr) : null)
+            ?? TrySimpleTrend(symbol, slice, atr);
 
         _lastSignalBarMs[symbol] = barKey;
 
-        if (signal == null)
-        {
-            if (IsMajor(symbol))
-                _log.LogDebug("[CORE][{sym}] closed bar — no setup", symbol);
-            return (true, false);
-        }
-        if (!EnforceMinRr(signal))
-        {
-            _log.LogInformation("[CORE][{sym}] setup rejected — R:R < min", symbol);
-            return (true, false);
-        }
+        if (signal == null) return (true, false, "no_setup");
+        if (!EnforceMinRr(signal)) return (true, false, "rr");
 
         _cooldown[symbol] = DateTime.UtcNow;
         _log.LogInformation(
@@ -255,12 +249,117 @@ public sealed class StrategyCoreEngine
             signal.TakeProfits.FirstOrDefault(), signal.Confidence, signal.Reason);
 
         OnSignalGenerated?.Invoke(signal);
-        return (true, true);
+        return (true, true, "ok");
+    }
+
+    /// <summary>Facade first; if thin, direct public REST (bypasses snapshot REST policy).</summary>
+    private async Task<List<BinanceFuturesUsdtKline>?> LoadKlinesAsync(string symbol)
+    {
+        IReadOnlyList<BinanceFuturesUsdtKline>? fromMd = null;
+        try
+        {
+            if (_md != null)
+                fromMd = await _md.GetKlinesAsync(symbol, Tf, need: 120).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "[CORE] facade GetKlines failed {sym}", symbol);
+        }
+
+        if (fromMd != null && fromMd.Count >= MinBars)
+            return fromMd.OrderBy(k => k.OpenTime).ToList();
+
+        // Direct REST fallback — critical for day-long silence when facade returns 20 bars
+        try
+        {
+            using var client = _factory.CreateRestClient();
+            var res = await client.UsdFuturesApi.ExchangeData.GetKlinesAsync(
+                symbol: symbol,
+                interval: Tf,
+                limit: 120).ConfigureAwait(false);
+
+            if (res.Success && res.Data != null && res.Data.Length >= MinBars)
+            {
+                var list = res.Data
+                    .OfType<BinanceFuturesUsdtKline>()
+                    .OrderBy(k => k.OpenTime)
+                    .ToList();
+                if (list.Count < MinBars)
+                {
+                    // Some versions return interface-only wrappers — build from IBinanceKline
+                    list = res.Data.Select(k => new BinanceFuturesUsdtKline
+                    {
+                        OpenTime = k.OpenTime,
+                        OpenPrice = k.OpenPrice,
+                        HighPrice = k.HighPrice,
+                        LowPrice = k.LowPrice,
+                        ClosePrice = k.ClosePrice,
+                        Volume = k.Volume,
+                    }).OrderBy(k => k.OpenTime).ToList();
+                }
+                _log.LogInformation("[CORE][{sym}] REST fallback bars={n}", symbol, list.Count);
+                return list;
+            }
+
+            _log.LogWarning("[CORE][{sym}] REST fallback failed success={s} n={n}",
+                symbol, res.Success, res.Data?.Length ?? 0);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "[CORE][{sym}] REST fallback exception", symbol);
+        }
+
+        return fromMd?.OrderBy(k => k.OpenTime).ToList();
+    }
+
+    /// <summary>Simple trend-follow — fires when price holds above/below EMA stack.</summary>
+    private TradeSignal? TrySimpleTrend(string symbol, List<BinanceFuturesUsdtKline> k, decimal atr)
+    {
+        var closes = k.Select(x => x.ClosePrice).ToList();
+        var emaF = EmaSeries(closes, EmaFast);
+        var emaS = EmaSeries(closes, EmaSlow);
+        int i = closes.Count - 1;
+        if (i < EmaSlow + 3) return null;
+
+        decimal close = closes[i], eF = emaF[i], eS = emaS[i];
+        var bar = k[i];
+
+        // Long: bullish stack + momentum vs 3 bars ago + green close
+        bool longOk = eF > eS
+                      && close > eF
+                      && close > closes[i - 3]
+                      && bar.ClosePrice >= bar.OpenPrice;
+
+        // Short: bearish stack
+        bool shortOk = eF < eS
+                       && close < eF
+                       && close < closes[i - 3]
+                       && bar.ClosePrice <= bar.OpenPrice;
+
+        if (longOk)
+        {
+            decimal sl = close - atr * MinSlAtr;
+            decimal risk = close - sl;
+            return Make(symbol, SignalSide.Buy, close, sl,
+                new[] { close + risk * MinRr, close + risk * (MinRr + 0.7m), close + risk * (MinRr + 1.4m) },
+                atr, "CORE_TREND_LONG", 0.55m);
+        }
+
+        if (shortOk)
+        {
+            decimal sl = close + atr * MinSlAtr;
+            decimal risk = sl - close;
+            return Make(symbol, SignalSide.Sell, close, sl,
+                new[] { close - risk * MinRr, close - risk * (MinRr + 0.7m), close - risk * (MinRr + 1.4m) },
+                atr, "CORE_TREND_SHORT", 0.55m);
+        }
+
+        return null;
     }
 
     private static bool HasQuoteLiquidity(List<BinanceFuturesUsdtKline> k)
     {
-        if (k.Count < 25) return false;
+        if (k.Count < 20) return false;
         var last20 = k.TakeLast(20).ToList();
         decimal avgQuote = last20.Average(x => x.Volume * ((x.HighPrice + x.LowPrice) / 2m));
         return avgQuote >= MinAvgQuoteVol15m;
@@ -278,14 +377,6 @@ public sealed class StrategyCoreEngine
         s.StartsWith("ETH", StringComparison.OrdinalIgnoreCase) ||
         s.StartsWith("BNB", StringComparison.OrdinalIgnoreCase) ||
         s.StartsWith("SOL", StringComparison.OrdinalIgnoreCase);
-
-    private static bool HasVolumeConfirm(List<BinanceFuturesUsdtKline> k)
-    {
-        if (k.Count < 25) return false;
-        var avg = k.Skip(k.Count - 21).Take(20).Average(x => x.Volume);
-        if (avg <= 0) return false;
-        return k[^1].Volume >= avg * 0.50m;
-    }
 
     private bool InCooldown(string symbol)
         => _cooldown.TryGetValue(symbol, out var t) && DateTime.UtcNow - t < Cooldown;
