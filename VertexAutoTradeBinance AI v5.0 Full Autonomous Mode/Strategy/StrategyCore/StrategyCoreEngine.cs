@@ -280,25 +280,19 @@ public sealed class StrategyCoreEngine
 
             if (res.Success && res.Data != null && res.Data.Length >= MinBars)
             {
-                var list = res.Data
-                    .OfType<BinanceFuturesUsdtKline>()
-                    .OrderBy(k => k.OpenTime)
-                    .ToList();
-                if (list.Count < MinBars)
+                var list = new List<BinanceFuturesUsdtKline>(res.Data.Length);
+                foreach (var k in res.Data)
                 {
-                    // Some versions return interface-only wrappers — build from IBinanceKline
-                    list = res.Data.Select(k => new BinanceFuturesUsdtKline
-                    {
-                        OpenTime = k.OpenTime,
-                        OpenPrice = k.OpenPrice,
-                        HighPrice = k.HighPrice,
-                        LowPrice = k.LowPrice,
-                        ClosePrice = k.ClosePrice,
-                        Volume = k.Volume,
-                    }).OrderBy(k => k.OpenTime).ToList();
+                    if (k is BinanceFuturesUsdtKline concrete)
+                        list.Add(concrete);
                 }
-                _log.LogInformation("[CORE][{sym}] REST fallback bars={n}", symbol, list.Count);
-                return list;
+                if (list.Count >= MinBars)
+                {
+                    list = list.OrderBy(x => x.OpenTime).ToList();
+                    _log.LogInformation("[CORE][{sym}] REST fallback bars={n}", symbol, list.Count);
+                    return list;
+                }
+                _log.LogWarning("[CORE][{sym}] REST klines not concrete n={n}", symbol, res.Data.Length);
             }
 
             _log.LogWarning("[CORE][{sym}] REST fallback failed success={s} n={n}",
