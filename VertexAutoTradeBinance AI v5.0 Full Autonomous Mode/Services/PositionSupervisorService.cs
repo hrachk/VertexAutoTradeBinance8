@@ -1156,7 +1156,7 @@ namespace VertexAutoTradeBinance8.Services
                     tpExt -= atr * 0.7m;
             }
 
-            decimal currTp = runnerTp.Price;
+            decimal currTp = Nz(runnerTp.Price);
             if (currTp <= 0)
                 return;
 
@@ -1235,7 +1235,8 @@ namespace VertexAutoTradeBinance8.Services
             if (qtyTp1 <= 0 || qtyRunner <= 0)
                 return;
 
-            decimal tp1Price = tpOrder.Price > 0 ? tpOrder.Price : (tpOrder.StopPrice);
+            decimal tp1Price = Nz(tpOrder.Price);
+            if (tp1Price <= 0) tp1Price = Nz(tpOrder.StopPrice);
             if (tp1Price <= 0)
                 return;
 
@@ -1341,8 +1342,8 @@ namespace VertexAutoTradeBinance8.Services
             decimal atr = CalculateAtr(klines);
             if (atr <= 0) atr = entryPrice * 0.005m; // fallback 0.5%
 
-            decimal currentSl = slOrder.StopPrice;
-            if (currentSl <= 0) currentSl = slOrder.Price;
+            decimal currentSl = Nz(slOrder.StopPrice);
+            if (currentSl <= 0) currentSl = Nz(slOrder.Price);
 
             // =============================================================
             // PRO TRAIL — не micro-trail к цене (главная причина серии SL)
@@ -1583,6 +1584,9 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
+        /// <summary>decimal? → decimal (Binance.Net StopPrice/Price nullable variance).</summary>
+        private static decimal Nz(decimal? v) => v ?? 0m;
+
         private decimal CalculateAtr(IReadOnlyList<BinanceFuturesUsdtKline> kl)
         {
             if (kl.Count < 16) return 0;
@@ -1644,7 +1648,8 @@ namespace VertexAutoTradeBinance8.Services
         {
             if (qty <= 0 || newSl <= 0) return;
 
-            decimal oldSl = slOrder.StopPrice > 0 ? slOrder.StopPrice : slOrder.Price;
+            decimal oldSl = Nz(slOrder.StopPrice);
+            if (oldSl <= 0) oldSl = Nz(slOrder.Price);
             if (oldSl <= 0) return;
 
             if (side == PositionSide.Long && newSl <= oldSl) return;
@@ -1860,8 +1865,8 @@ namespace VertexAutoTradeBinance8.Services
             decimal currentSl = 0m;
             if (slOrder != null)
             {
-                decimal sp = slOrder.StopPrice;
-                decimal px = slOrder.Price;
+                decimal sp = Nz(slOrder.StopPrice);
+                decimal px = Nz(slOrder.Price);
                 currentSl = sp > 0 ? sp : px;
             }
 
