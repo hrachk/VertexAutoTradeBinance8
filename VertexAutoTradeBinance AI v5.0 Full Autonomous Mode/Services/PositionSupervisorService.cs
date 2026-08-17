@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -41,6 +42,12 @@ namespace VertexAutoTradeBinance8.Services
         private readonly TradeSignalMemoryService _signalMemory;
 
         private MarketRegime _regimeNow;
+
+        // === HYBRID v8.2-style (поверх биржевых SL/TP, не ломает restore) ===
+        private readonly ConcurrentDictionary<string, long> _hybridEarlyDone = new();
+        private readonly ConcurrentDictionary<string, long> _hybridBeDone = new();
+        private readonly ConcurrentDictionary<string, long> _hybridRecentPartial = new();
+        private readonly ConcurrentDictionary<string, DateTime> _hybridLastHarvest = new();
 
         // Внутренний уровень вероятности продолжения тренда
         private enum TrendContinuationLevel
@@ -855,7 +862,16 @@ namespace VertexAutoTradeBinance8.Services
                 return;
             }
 
-            // 3) Trailing + Runner
+            // 3) HYBRID scale-out (дек-2025 логика поверх биржевых SL/TP)
+            //    EARLY 35% @ +0.9 ATR → BE @ +1.2 ATR → HARVEST кусками
+            if (klines != null && klines.Count >= 30)
+            {
+                await TryHybridEarlyPartialAsync(client, symbol, side, qty, entry, pos, klines, ct);
+                await TryHybridBreakEvenAsync(client, symbol, side, qty, entry, sl, signal, klines, ct);
+                await TryHybridHarvestAsync(client, symbol, side, qty, entry, pos, klines, ct);
+            }
+
+            // 4) Trailing + Runner (как было)
             if (klines != null && klines.Count >= 50)
             {
                 await ManageRunnerTpAsync(
@@ -1750,6 +1766,215 @@ namespace VertexAutoTradeBinance8.Services
         // =====================================================================
         // MARK PRICE SAFE
         // =====================================================================
+
+        // =====================================================================
+        // HYBRID scale-out (EARLY → BE → HARVEST) — не отключает биржевые SL/TP
+        // =====================================================================
+
+        private static string HybridPosKey(string symbol, PositionSide side, decimal entry)
+            => $"{symbol}|{side}|{entry:F8}";
+
+        private async Task TryHybridEarlyPartialAsync(
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            decimal entry,
+            BinancePositionDetailsUsdt pos,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            CancellationToken ct)
+        {
+            if (qty <= 0 || entry <= 0 || klines.Count < 20)
+                return;
+
+            decimal atr = CalculateAtr(klines);
+            if (atr <= 0) return;
+
+            decimal mark = pos.MarkPrice > 0 ? pos.MarkPrice : klines[^1].ClosePrice;
+            bool reached = side == PositionSide.Long
+                ? mark >= entry + atr * 0.90m
+                : mark <= entry - atr * 0.90m;
+            if (!reached) return;
+
+            var key = HybridPosKey(symbol, side, entry);
+            if (_hybridEarlyDone.ContainsKey(key)) return;
+
+            decimal closeQty = Math.Round(qty * 0.35m, 8);
+            try
+            {
+                var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+                var step = filters.step > 0 ? filters.step : 0.001m;
+                closeQty = Math.Floor(closeQty / step) * step;
+                if (closeQty < filters.minQty) return;
+                if (closeQty >= qty) closeQty = Math.Floor((qty * 0.35m) / step) * step;
+                if (closeQty <= 0 || closeQty >= qty) return;
+            }
+            catch { /* best effort */ }
+
+            var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+            var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: symbol,
+                side: closeSide,
+                type: FuturesOrderType.Market,
+                quantity: closeQty,
+                positionSide: side,
+                ct: ct);
+
+            if (!res.Success)
+            {
+                _logger.LogWarning("[HYBRID-EARLY][{symbol}][{side}] FAIL: {err}", symbol, side, res.Error);
+                return;
+            }
+
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            _hybridEarlyDone[key] = now;
+            _hybridRecentPartial[$"{symbol}|{side}"] = now;
+
+            _logger.LogInformation(
+                "[HYBRID-EARLY][{symbol}][{side}] +0.9ATR partial {closed}/{total} mark={mark} entry={entry}",
+                symbol, side, closeQty, qty, mark, entry);
+        }
+
+        private async Task TryHybridBreakEvenAsync(
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            decimal entry,
+            BinanceUsdFuturesOrder? slOrder,
+            TradeSignal? signal,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            CancellationToken ct)
+        {
+            if (qty <= 0 || entry <= 0 || klines.Count < 20)
+                return;
+
+            decimal atr = CalculateAtr(klines);
+            if (atr <= 0) return;
+
+            decimal mark = await GetMarkPriceSafeAsync(client, symbol, entry, ct);
+            bool reached = side == PositionSide.Long
+                ? mark >= entry + atr * 1.20m
+                : mark <= entry - atr * 1.20m;
+            if (!reached) return;
+
+            var key = HybridPosKey(symbol, side, entry);
+            if (_hybridBeDone.ContainsKey(key)) return;
+
+            // BE + небольшой буфер (0.15 ATR), чтобы не выбило на шуме
+            decimal beSl = side == PositionSide.Long
+                ? entry + atr * 0.15m
+                : entry - atr * 0.15m;
+
+            decimal currentSl = 0m;
+            if (slOrder != null)
+            {
+                currentSl = slOrder.StopPrice > 0 ? slOrder.StopPrice : slOrder.Price;
+            }
+
+            // Только улучшаем SL (не ослабляем)
+            if (side == PositionSide.Long && currentSl > 0 && currentSl >= beSl)
+            {
+                _hybridBeDone[key] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                return;
+            }
+            if (side == PositionSide.Short && currentSl > 0 && currentSl <= beSl)
+            {
+                _hybridBeDone[key] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                return;
+            }
+
+            await UpdateSLAsync(client, symbol, side, qty, slOrder, entry, beSl, signal, ct);
+            _hybridBeDone[key] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            _logger.LogInformation(
+                "[HYBRID-BE][{symbol}][{side}] SL → BE+buf {be} (entry={entry}, mark={mark}, +1.2ATR)",
+                symbol, side, beSl, entry, mark);
+        }
+
+        private async Task TryHybridHarvestAsync(
+            BinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            decimal qty,
+            decimal entry,
+            BinancePositionDetailsUsdt pos,
+            IReadOnlyList<BinanceFuturesUsdtKline> klines,
+            CancellationToken ct)
+        {
+            if (qty <= 0 || entry <= 0)
+                return;
+
+            // Не harvest сразу после EARLY (sync lag)
+            if (_hybridRecentPartial.TryGetValue($"{symbol}|{side}", out var ts))
+            {
+                if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - ts < 8000)
+                    return;
+            }
+
+            if (_hybridLastHarvest.TryGetValue($"{symbol}|{side}", out var lastH)
+                && DateTime.UtcNow - lastH < TimeSpan.FromMinutes(6))
+                return;
+
+            // PnL from mark (portable across Binance.Net property names)
+            decimal mark0 = pos.MarkPrice > 0 ? pos.MarkPrice : entry;
+            decimal uPnl = side == PositionSide.Long
+                ? (mark0 - entry) * qty
+                : (entry - mark0) * qty;
+
+            // Минимум $0.30 unrealized, иначе шум
+            if (uPnl < 0.30m)
+                return;
+
+            decimal atr = CalculateAtr(klines);
+            if (atr <= 0) return;
+
+            decimal mark = pos.MarkPrice > 0 ? pos.MarkPrice : entry;
+            decimal rr = Math.Abs(mark - entry) / atr;
+            if (rr < 1.0m)
+                return; // harvest только после ≥1R
+
+            // Чем сильнее edge (RR), тем меньше кусок — оставляем runner
+            decimal harvestPct =
+                rr >= 2.5m ? 0.18m :
+                rr >= 1.6m ? 0.28m :
+                0.40m;
+
+            decimal closeQty = qty * harvestPct;
+            try
+            {
+                var filters = await _symbolInfo.GetFuturesFiltersAsync(symbol);
+                var step = filters.step > 0 ? filters.step : 0.001m;
+                closeQty = Math.Floor(closeQty / step) * step;
+                if (closeQty < filters.minQty) return;
+                if (closeQty >= qty) return; // не full-close harvest'ом
+            }
+            catch { return; }
+
+            var closeSide = side == PositionSide.Long ? OrderSide.Sell : OrderSide.Buy;
+            var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: symbol,
+                side: closeSide,
+                type: FuturesOrderType.Market,
+                quantity: closeQty,
+                positionSide: side,
+                ct: ct);
+
+            if (!res.Success)
+            {
+                _logger.LogWarning("[HYBRID-HARVEST][{symbol}][{side}] FAIL: {err}", symbol, side, res.Error);
+                return;
+            }
+
+            _hybridLastHarvest[$"{symbol}|{side}"] = DateTime.UtcNow;
+            _hybridRecentPartial[$"{symbol}|{side}"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            _logger.LogInformation(
+                "[HYBRID-HARVEST][{symbol}][{side}] close={q}/{total} uPnl={pnl:F2} rr={rr:F2} pct={pct:P0}",
+                symbol, side, closeQty, qty, uPnl, rr, harvestPct);
+        }
+
+
         private static async Task<decimal> GetMarkPriceSafeAsync(
             BinanceRestClient client,
             string symbol,
