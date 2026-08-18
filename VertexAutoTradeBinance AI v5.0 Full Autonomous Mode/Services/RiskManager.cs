@@ -21,7 +21,6 @@ namespace VertexAutoTradeBinance8.Services
         private static readonly string MissedTradesPath = Path.Combine(
             Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
             "missed_trades.json");
-    
 
         public decimal LastBalanceUsdt { get; private set; }
 
@@ -42,6 +41,35 @@ namespace VertexAutoTradeBinance8.Services
             _marketRegimeService = marketRegimeService;
             _smartRegime = smartRegime;
             _simulator = simulator;
+
+            EnsureMissedTradesFile();
+        }
+
+        /// <summary>
+        /// Create empty missed_trades.json next to .exe if it does not exist.
+        /// </summary>
+        private void EnsureMissedTradesFile()
+        {
+            try
+            {
+                var dir = Path.GetDirectoryName(MissedTradesPath);
+                if (!string.IsNullOrWhiteSpace(dir) && !Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+
+                if (!File.Exists(MissedTradesPath))
+                {
+                    File.WriteAllText(MissedTradesPath, "[]");
+                    _logger.LogInformation("[RISK] missed_trades.json created → {Path}", MissedTradesPath);
+                }
+                else
+                {
+                    _logger.LogInformation("[RISK] missed_trades.json ready → {Path}", MissedTradesPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[RISK] Failed to ensure missed_trades.json at {Path}", MissedTradesPath);
+            }
         }
 
         // ====================================================================
@@ -461,6 +489,8 @@ namespace VertexAutoTradeBinance8.Services
         {
             try
             {
+                EnsureMissedTradesFile();
+
                 var record = new
                 {
                     symbol = symbol,
@@ -495,7 +525,10 @@ namespace VertexAutoTradeBinance8.Services
                 if (File.Exists(MissedTradesPath))
                 {
                     var json = File.ReadAllText(MissedTradesPath);
-                    list = JsonSerializer.Deserialize<List<object>>(json) ?? new();
+                    if (string.IsNullOrWhiteSpace(json))
+                        list = new();
+                    else
+                        list = JsonSerializer.Deserialize<List<object>>(json) ?? new();
                 }
                 else list = new();
 
@@ -504,7 +537,10 @@ namespace VertexAutoTradeBinance8.Services
                 File.WriteAllText(MissedTradesPath,
                     JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true }));
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[RISK] Failed to write missed_trades.json → {Path}", MissedTradesPath);
+            }
         }
 
 

@@ -35,13 +35,13 @@ namespace VertexAutoTradeBinance8.Services
 
             _backupPath = _path + ".bak";
 
-            EnsureDirectoryExists();
+            EnsureFileExists();
         }
 
         // ===============================================================
-        // Создание директории, если её нет
+        // Создать папку и пустой engine_state.json, если нет
         // ===============================================================
-        private void EnsureDirectoryExists()
+        private void EnsureFileExists()
         {
             try
             {
@@ -51,10 +51,22 @@ namespace VertexAutoTradeBinance8.Services
                     Directory.CreateDirectory(dir);
                     _logger.LogInformation("[ENGINE STATE] Created directory: {dir}", dir);
                 }
+
+                if (!File.Exists(_path))
+                {
+                    // minimal valid empty state so UI / readers never see missing file
+                    var empty = JsonSerializer.Serialize(new EngineState(), _jsonOptions);
+                    File.WriteAllText(_path, empty);
+                    _logger.LogInformation("[ENGINE STATE] engine_state.json created → {path}", _path);
+                }
+                else
+                {
+                    _logger.LogInformation("[ENGINE STATE] engine_state.json ready → {path}", _path);
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[ENGINE STATE] Failed to ensure directory exists");
+                _logger.LogError(ex, "[ENGINE STATE] Failed to ensure engine_state.json exists at {path}", _path);
             }
         }
 

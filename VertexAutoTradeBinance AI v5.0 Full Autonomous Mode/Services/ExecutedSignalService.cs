@@ -54,12 +54,16 @@ namespace VertexAutoTradeBinance8.Services
                 if (!File.Exists(FilePath))
                 {
                     File.WriteAllText(FilePath, "[]");
-                    _logger.LogInformation("[EXEC] executed_signals.json created");
+                    _logger.LogInformation("[EXEC] executed_signals.json created → {Path}", FilePath);
+                }
+                else
+                {
+                    _logger.LogInformation("[EXEC] executed_signals.json ready → {Path}", FilePath);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[EXEC] Failed to ensure executed_signals.json exists");
+                _logger.LogError(ex, "[EXEC] Failed to ensure executed_signals.json exists at {Path}", FilePath);
             }
         }
 
