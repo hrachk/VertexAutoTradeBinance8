@@ -2,6 +2,7 @@
 // AI Snapshot Service
 // ================================================================
 using System.Text.Json;
+using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Services;
 
 public class AiModelSnapshotService
@@ -12,12 +13,13 @@ public class AiModelSnapshotService
     public AiModelSnapshotService(ILogger<AiModelSnapshotService> logger)
     {
         _logger = logger;
-        _folder = Path.Combine(AppContext.BaseDirectory, "ai-models");
+        // Shared with Web UI: C:\VertexShared\ai-models
+        _folder = SharedDataPaths.AiModelsFolder;
 
         try
         {
-            if (!Directory.Exists(_folder))
-                Directory.CreateDirectory(_folder);
+            SharedDataPaths.EnsureDirectories();
+            _logger.LogInformation("🤖 AI-СНАПШОТ: folder → {Folder}", _folder);
         }
         catch (Exception ex)
         {

@@ -17,10 +17,8 @@ namespace VertexAutoTradeBinance8.Services
         private readonly SmartRegimeService _smartRegime;
         private readonly SimulatedTradeService _simulator;
 
-         // After Publish: always next to the .exe
-        private static readonly string MissedTradesPath = Path.Combine(
-            Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
-            "missed_trades.json");
+         // Shared between bot and Web UI: C:\VertexShared\missed_trades.json
+        private static readonly string MissedTradesPath = SharedDataPaths.MissedTradesJson;
 
         public decimal LastBalanceUsdt { get; private set; }
 

@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
+using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -9,6 +10,7 @@ namespace VertexAutoTradeBinance8.Services
     ///  - пишет/читает executed_signals.json
     ///  - используется Engine / OrderExecutor / PositionSupervisor
     ///  - UI читает файл и рисует карточки
+    ///  - общий путь: C:\VertexShared\executed_signals.json
     /// </summary>
     public class ExecutedSignalService
     {
@@ -16,10 +18,8 @@ namespace VertexAutoTradeBinance8.Services
         private readonly object _lock = new();
         public static event Action? ExecutedSignalsChanged;
 
-        // After Publish: always next to the .exe (not temp extract dir of single-file)
-        private static readonly string FilePath = Path.Combine(
-            Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
-            "executed_signals.json");
+        // Shared between bot and Web UI
+        private static readonly string FilePath = SharedDataPaths.ExecutedSignalsJson;
 
         private readonly JsonSerializerOptions _jsonOptions = new()
         {

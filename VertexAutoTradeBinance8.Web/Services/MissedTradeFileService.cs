@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Web.Models;
 
 namespace VertexAutoTradeBinance8.Web.Services
@@ -16,11 +17,8 @@ namespace VertexAutoTradeBinance8.Web.Services
 
         public MissedTradeFileService(IWebHostEnvironment env)
         {
-          // After Publish: always next to the .exe / process
-          _filePath = Path.Combine(
-              Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
-              "missed_trades.json");
-
+          // Same file the bot writes: C:\VertexShared\missed_trades.json
+          _filePath = SharedDataPaths.MissedTradesJson;
         }
         public async Task<List<MissedTradeRecord>> LoadAsync()
         {

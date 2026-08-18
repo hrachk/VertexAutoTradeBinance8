@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Web.Models;
@@ -20,12 +21,12 @@ namespace VertexAutoTradeBinance8.Web.Services
 
         public AiLearningFileService(IWebHostEnvironment env, ILogger<AiLearningFileService> logger)
         {
-            // путь к файлу ai-models/ai_learning.json
-            FilePath = Path.Combine(AppContext.BaseDirectory, "ai-models","ai_learning.json");
+            // Same file the bot writes: C:\VertexShared\ai-models\ai_learning.json
+            FilePath = SharedDataPaths.AiLearningJson;
            
             _env = env;
             _logger = logger;
-          
+            _logger.LogInformation("[AI-LEARN-WEB] Using path → {Path}", FilePath);
         }
 
         public AiLearningSnapshot? LoadSnapshot()

@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 
 namespace VertexAutoTradeBinance8.Services
@@ -38,11 +39,10 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ILogger<AiSelfLearningService> _logger;
         private readonly object _lock = new();
 
-        private static readonly string FilePath =
-      Path.Combine(AppContext.BaseDirectory, "ai-models","ai_learning.json");
+        // Shared with Web UI: C:\VertexShared\ai-models\ai_learning.json
+        private static readonly string FilePath = SharedDataPaths.AiLearningJson;
 
-        private static readonly string BackupPath =
-            Path.Combine(AppContext.BaseDirectory, "ai-models","ai_learning_backup.json");
+        private static readonly string BackupPath = SharedDataPaths.AiLearningBackupJson;
 
         // Снимок статистики каждые N минут (для trade-based / signal-based)
         private DateTime _lastSnapshot = DateTime.MinValue;
@@ -157,10 +157,7 @@ namespace VertexAutoTradeBinance8.Services
 
         private List<MissedTradeRecord> LoadMissedTradesFromFile()
         {
-            // After Publish: always next to the .exe (same as RiskManager)
-            var path = Path.Combine(
-                Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
-                "missed_trades.json");
+            var path = SharedDataPaths.MissedTradesJson;
 
             if (!File.Exists(path))
                 return new List<MissedTradeRecord>();

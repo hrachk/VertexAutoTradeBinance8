@@ -29,20 +29,11 @@ namespace VertexAutoTradeBinance8.Services
         {
             _logger = logger;
 
-            // Prefer shared path from config so UI (EngineState:Path) and bot write the SAME file.
-            // Example: C:\VertexShared\engine_state.json
-            // Fallback: next to the .exe after Publish.
+            // Config SnapshotPath if set, otherwise shared C:\VertexShared\engine_state.json
             var configured = options?.Value?.SnapshotPath;
-            if (!string.IsNullOrWhiteSpace(configured))
-            {
-                _path = configured!;
-            }
-            else
-            {
-                _path = Path.Combine(
-                    Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
-                    "engine_state.json");
-            }
+            _path = !string.IsNullOrWhiteSpace(configured)
+                ? configured!
+                : SharedDataPaths.EngineStateJson;
 
             _backupPath = _path + ".bak";
 
