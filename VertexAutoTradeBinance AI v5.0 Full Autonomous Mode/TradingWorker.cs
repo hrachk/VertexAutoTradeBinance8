@@ -130,15 +130,24 @@ namespace VertexAutoTradeBinance8
             {
                 await RunQuantRealtimeTick(ct);
 
+                var active = _symbols.ActiveSymbols?.ToList() ?? new List<string>();
+                if (active.Count == 0)
+                {
+                    _logger.LogWarning("[WORKER] ActiveSymbols is EMPTY — no analysis this tick");
+                }
+
                 var anySymbolProcessed = false;
 
-                foreach (var symbol in _symbols.ActiveSymbols)
+                foreach (var symbol in active)
                 {
                     var m1 = await _market.GetMarketSnapshot(symbol, KlineInterval.OneMinute, ct);
                     var m5 = await _market.GetMarketSnapshot(symbol, KlineInterval.FiveMinutes, ct);
 
                     if (m1 == null || m5 == null)
+                    {
+                        _logger.LogDebug("[WORKER] {Symbol}: no market snapshot m1/m5 — skip", symbol);
                         continue;
+                    }
 
                     var decision = _tfSelector.SelectTF(m1, m5);
 
@@ -153,29 +162,29 @@ namespace VertexAutoTradeBinance8
                     if (finalTf == null)
                         continue;
 
-                    // --- 1) Обработка сигнала
+                    // --- 1) Обработка сигнала (ORIGINAL chain — unchanged)
                     await ProcessSymbol(symbol, finalTf.Value, ct);
 
-                    // --- 2) SUPERVISOR (ставит SL/TP на ВСЕ открытые позиции)
+                    // --- 2) SUPERVISOR
                     await _supervisor.SuperviseAsync(symbol, null, ct);
 
-                    // --- 3) Engine state (UI) — shared path C:\VertexShared\engine_state.json
+                    // --- 3) Engine state for UI (current symbol being analyzed)
                     var engineState = _engineState.Build(symbol, finalTf.Value.ToString());
+                    engineState.Status = "Running";
                     _engineStateSnapshot.Save(engineState);
                     anySymbolProcessed = true;
 
                     await Task.Delay(25, ct);
                 }
 
-                // Heartbeat: even if no market data / no symbols processed, keep UI alive
+                // Soft heartbeat only if nothing was processed — do NOT invent fake Mode that looks like a broken engine
                 if (!anySymbolProcessed)
                 {
-                    var heartbeat = _engineState.Build(
-                        _symbols.ActiveSymbols.FirstOrDefault() ?? "—",
-                        "—");
-                    heartbeat.Status = "Running";
-                    heartbeat.Mode = "WaitingMarketData";
-                    _engineStateSnapshot.Save(heartbeat);
+                    _engineStateSnapshot.State.Status = "Running";
+                    _engineStateSnapshot.State.LastUpdate = DateTime.UtcNow;
+                    if (string.IsNullOrWhiteSpace(_engineStateSnapshot.State.Mode))
+                        _engineStateSnapshot.State.Mode = "WaitingMarketData";
+                    _engineStateSnapshot.PersistLiveState();
                 }
 
                 await PeriodicSnapshot(ct);

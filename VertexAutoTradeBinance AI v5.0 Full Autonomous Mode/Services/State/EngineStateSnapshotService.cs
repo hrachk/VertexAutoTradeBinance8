@@ -74,16 +74,49 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // ===============================================================
-        // Основной метод записи снапшота
+        // Apply UI snapshot fields onto LIVE State (do NOT wipe Symbols)
+        // then persist the live State. Supervisor/exposure use State.Symbols.
         // ===============================================================
-        public void Save(EngineState state)
+        public void Save(EngineState snapshot)
         {
             try
             {
-                // 1 — сериализация
-                var json = JsonSerializer.Serialize(state, _jsonOptions);
+                // Merge "current symbol analysis" into the shared live state
+                State.Status = string.IsNullOrWhiteSpace(snapshot.Status) ? "Running" : snapshot.Status;
+                State.Mode = snapshot.Mode;
+                State.BalanceUsdt = snapshot.BalanceUsdt;
+                State.Symbol = snapshot.Symbol;
+                State.Timeframe = snapshot.Timeframe;
+                State.MarketRegime = snapshot.MarketRegime;
+                State.SmartRegime = snapshot.SmartRegime;
+                State.Slope = snapshot.Slope;
+                State.Volatility = snapshot.Volatility;
+                State.Confidence = snapshot.Confidence;
+                State.LiquidityDanger = snapshot.LiquidityDanger;
+                State.LiquidityReason = snapshot.LiquidityReason;
+                State.SoftEntry = snapshot.SoftEntry;
+                State.BlockedByLiquidity = snapshot.BlockedByLiquidity;
+                State.LastUpdate = snapshot.LastUpdate != default ? snapshot.LastUpdate : DateTime.UtcNow;
 
-                // 2 — резервная копия
+                if (snapshot.EquityUsd != 0) State.EquityUsd = snapshot.EquityUsd;
+                if (snapshot.UsedMarginUsd != 0) State.UsedMarginUsd = snapshot.UsedMarginUsd;
+
+                // Keep SymbolState entries from supervisor; never replace the dictionary
+                PersistLiveState();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[ENGINE STATE] Snapshot SAVE ERROR");
+            }
+        }
+
+        /// <summary>Write current live State to disk (atomic).</summary>
+        public void PersistLiveState()
+        {
+            try
+            {
+                var json = JsonSerializer.Serialize(State, _jsonOptions);
+
                 try
                 {
                     if (File.Exists(_path))
@@ -94,14 +127,13 @@ namespace VertexAutoTradeBinance8.Services
                     _logger.LogWarning(backupEx, "[ENGINE STATE] Backup failed, continuing...");
                 }
 
-                // 3 — запись основного файла
-                File.WriteAllText(_path, json);
-
-                _logger.LogInformation("[ENGINE STATE] Snapshot saved → {path}", _path);
+                var tmp = _path + ".tmp";
+                File.WriteAllText(tmp, json);
+                File.Move(tmp, _path, overwrite: true);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[ENGINE STATE] Snapshot SAVE ERROR");
+                _logger.LogError(ex, "[ENGINE STATE] PersistLiveState ERROR → {path}", _path);
             }
         }
 
