@@ -130,6 +130,8 @@ namespace VertexAutoTradeBinance8
             {
                 await RunQuantRealtimeTick(ct);
 
+                var anySymbolProcessed = false;
+
                 foreach (var symbol in _symbols.ActiveSymbols)
                 {
                     var m1 = await _market.GetMarketSnapshot(symbol, KlineInterval.OneMinute, ct);
@@ -149,7 +151,7 @@ namespace VertexAutoTradeBinance8
                     };
 
                     if (finalTf == null)
-                        continue; 
+                        continue;
 
                     // --- 1) Обработка сигнала
                     await ProcessSymbol(symbol, finalTf.Value, ct);
@@ -157,13 +159,24 @@ namespace VertexAutoTradeBinance8
                     // --- 2) SUPERVISOR (ставит SL/TP на ВСЕ открытые позиции)
                     await _supervisor.SuperviseAsync(symbol, null, ct);
 
-                    // --- 3) Engine state (UI)
+                    // --- 3) Engine state (UI) — shared path C:\VertexShared\engine_state.json
                     var engineState = _engineState.Build(symbol, finalTf.Value.ToString());
                     _engineStateSnapshot.Save(engineState);
+                    anySymbolProcessed = true;
 
                     await Task.Delay(25, ct);
                 }
 
+                // Heartbeat: even if no market data / no symbols processed, keep UI alive
+                if (!anySymbolProcessed)
+                {
+                    var heartbeat = _engineState.Build(
+                        _symbols.ActiveSymbols.FirstOrDefault() ?? "—",
+                        "—");
+                    heartbeat.Status = "Running";
+                    heartbeat.Mode = "WaitingMarketData";
+                    _engineStateSnapshot.Save(heartbeat);
+                }
 
                 await PeriodicSnapshot(ct);
                 await Task.Delay(80, ct);

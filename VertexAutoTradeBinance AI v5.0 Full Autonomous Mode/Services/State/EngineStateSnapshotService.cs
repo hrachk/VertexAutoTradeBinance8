@@ -28,13 +28,25 @@ namespace VertexAutoTradeBinance8.Services
      IOptions<EngineStateSettings> options)
         {
             _logger = logger;
-            // After Publish: always next to the .exe (ignore optional SnapshotPath for consistency)
-            _path = Path.Combine(
-                Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
-                "engine_state.json");
+
+            // Prefer shared path from config so UI (EngineState:Path) and bot write the SAME file.
+            // Example: C:\VertexShared\engine_state.json
+            // Fallback: next to the .exe after Publish.
+            var configured = options?.Value?.SnapshotPath;
+            if (!string.IsNullOrWhiteSpace(configured))
+            {
+                _path = configured!;
+            }
+            else
+            {
+                _path = Path.Combine(
+                    Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
+                    "engine_state.json");
+            }
 
             _backupPath = _path + ".bak";
 
+            _logger.LogInformation("[ENGINE STATE] Using path → {path}", _path);
             EnsureFileExists();
         }
 
