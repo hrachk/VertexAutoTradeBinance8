@@ -98,28 +98,31 @@ namespace VertexAutoTradeBinance8.Services
         {
             var key = Key(symbol, tf);
 
-            // 1) гарантируем WS подписку
+            // 1) ensure WS subscription (live updates)
             await EnsureWsSubscribed(symbol, tf, ct);
 
-            // 2) пробуем WS snapshot
+            // 2) try buffer first
             var ws = _buf.GetLast(symbol, tf, need);
-
-            if (IsInWarmup(symbol, tf))
+            if (ws.Count >= need)
             {
-                _logger.LogDebug(
-                    "[MD][WARMUP] block analysis {Symbol} {Timeframe} bars={Bars}/{Need}",
-                    symbol, tf, ws.Count, need);
-
-                return ws;
+                return ws.Count > need
+                    ? ws.Skip(ws.Count - need).Take(need).ToList()
+                    : ws;
             }
 
+            // 3) NOT enough bars → REST backfill ALWAYS allowed
+            //    BUG FIX: previously IsInWarmup() returned early and BLOCKED REST,
+            //    so GetMarketSnapshot always got <50 bars → skipNoSnapshot forever
+            //    (1m warm = 20 closed bars ~20min; 5m warm = ~100min without REST!)
             var restLock = GetRestLock(key);
             if (!await restLock.WaitAsync(0, ct))
-                return ws; // backfill уже выполняется в другом потоке
+            {
+                // another thread is backfilling — return what we have
+                return _buf.GetLast(symbol, tf, need);
+            }
 
             try
             {
-                // повторная проверка WS после входа в lock
                 ws = _buf.GetLast(symbol, tf, need);
                 if (ws.Count >= need)
                 {
@@ -128,21 +131,19 @@ namespace VertexAutoTradeBinance8.Services
                         : ws;
                 }
 
-                // 4) REST fallback (rate-limited)
                 if (!CanUseRest(key))
                 {
-                    _logger.LogWarning(
-                        "[MD][REST-SKIP] cooldown active {Symbol} {Timeframe}",
-                        symbol, tf);
-
+                    _logger.LogDebug(
+                        "[MD][REST-SKIP] cooldown {Symbol} {Timeframe} have={Have}/{Need}",
+                        symbol, tf, ws.Count, need);
                     return ws;
                 }
 
                 _lastRestFetchUtc[key] = DateTime.UtcNow;
 
-                _logger.LogWarning(
-                    "[MD][REST-BACKFILL] {Symbol} {Timeframe} need={Need} have={Have}",
-                    symbol, tf, need, ws.Count);
+                _logger.LogInformation(
+                    "[MD][REST-BACKFILL] {Symbol} {Timeframe} need={Need} have={Have} warmup={Warm}",
+                    symbol, tf, need, ws.Count, IsInWarmup(symbol, tf));
 
                 using var client = _factory.CreateRestClient();
 
@@ -182,7 +183,11 @@ namespace VertexAutoTradeBinance8.Services
                     _buf.Upsert(symbol, tf, candle);
                 }
 
-                return _buf.GetLast(symbol, tf, need);
+                var filled = _buf.GetLast(symbol, tf, need);
+                _logger.LogInformation(
+                    "[MD][REST-OK] {Symbol} {Timeframe} bars={Bars}",
+                    symbol, tf, filled.Count);
+                return filled;
             }
             finally
             {
