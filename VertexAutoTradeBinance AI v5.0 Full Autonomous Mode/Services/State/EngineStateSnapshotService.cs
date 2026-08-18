@@ -28,8 +28,7 @@ namespace VertexAutoTradeBinance8.Services
      IOptions<EngineStateSettings> options)
         {
             _logger = logger;
-            _path = options.Value.SnapshotPath
-                ?? Path.Combine(AppContext.BaseDirectory, "engine_state.json");
+            _path =   Path.Combine(AppContext.BaseDirectory, "engine_state.json");
 
             _backupPath = _path + ".bak";
 
