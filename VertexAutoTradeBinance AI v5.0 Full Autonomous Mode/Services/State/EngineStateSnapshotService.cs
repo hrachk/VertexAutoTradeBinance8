@@ -23,6 +23,14 @@ namespace VertexAutoTradeBinance8.Services
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         };
 
+        // Disk I/O throttle: in-memory State always updates; file max ~1/sec
+        // (was writing on EVERY symbol every tick → blocked worker + more kline timeouts)
+        private readonly object _ioLock = new();
+        private DateTime _lastPersistUtc = DateTime.MinValue;
+        private DateTime _lastBackupUtc = DateTime.MinValue;
+        private static readonly TimeSpan PersistInterval = TimeSpan.FromSeconds(1.5);
+        private static readonly TimeSpan BackupInterval = TimeSpan.FromSeconds(30);
+
         public EngineStateSnapshotService(
      ILogger<EngineStateSnapshotService> logger,
      IOptions<EngineStateSettings> options)
@@ -101,8 +109,9 @@ namespace VertexAutoTradeBinance8.Services
                 if (snapshot.EquityUsd != 0) State.EquityUsd = snapshot.EquityUsd;
                 if (snapshot.UsedMarginUsd != 0) State.UsedMarginUsd = snapshot.UsedMarginUsd;
 
-                // Keep SymbolState entries from supervisor; never replace the dictionary
-                PersistLiveState();
+                // Keep SymbolState entries from supervisor; never replace the dictionary.
+                // Memory always up to date; disk throttled so worker is not blocked.
+                PersistLiveState(force: false);
             }
             catch (Exception ex)
             {
@@ -110,30 +119,67 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
-        /// <summary>Write current live State to disk (atomic).</summary>
-        public void PersistLiveState()
+        /// <summary>
+        /// Write live State to disk (atomic). Throttled unless force=true.
+        /// </summary>
+        public void PersistLiveState(bool force = false)
         {
-            try
+            lock (_ioLock)
             {
-                var json = JsonSerializer.Serialize(State, _jsonOptions);
+                var now = DateTime.UtcNow;
+                if (!force && now - _lastPersistUtc < PersistInterval)
+                    return;
 
                 try
                 {
-                    if (File.Exists(_path))
-                        File.Copy(_path, _backupPath, overwrite: true);
-                }
-                catch (Exception backupEx)
-                {
-                    _logger.LogWarning(backupEx, "[ENGINE STATE] Backup failed, continuing...");
-                }
+                    // Serialize UI fields only (skip ConcurrentDictionary Symbols — supervisor keeps them in RAM)
+                    var dto = new EngineState
+                    {
+                        Status = State.Status,
+                        Mode = State.Mode,
+                        BalanceUsdt = State.BalanceUsdt,
+                        Symbol = State.Symbol,
+                        Timeframe = State.Timeframe,
+                        MarketRegime = State.MarketRegime,
+                        SmartRegime = State.SmartRegime,
+                        Slope = State.Slope,
+                        Volatility = State.Volatility,
+                        Confidence = State.Confidence,
+                        LiquidityDanger = State.LiquidityDanger,
+                        LiquidityReason = State.LiquidityReason,
+                        SoftEntry = State.SoftEntry,
+                        BlockedByLiquidity = State.BlockedByLiquidity,
+                        LastUpdate = State.LastUpdate,
+                        EquityUsd = State.EquityUsd,
+                        UsedMarginUsd = State.UsedMarginUsd,
+                        Symbols = new System.Collections.Concurrent.ConcurrentDictionary<string, SymbolState>()
+                    };
 
-                var tmp = _path + ".tmp";
-                File.WriteAllText(tmp, json);
-                File.Move(tmp, _path, overwrite: true);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[ENGINE STATE] PersistLiveState ERROR → {path}", _path);
+                    var json = JsonSerializer.Serialize(dto, _jsonOptions);
+
+                    if (force || now - _lastBackupUtc >= BackupInterval)
+                    {
+                        try
+                        {
+                            if (File.Exists(_path))
+                                File.Copy(_path, _backupPath, overwrite: true);
+                            _lastBackupUtc = now;
+                        }
+                        catch (Exception backupEx)
+                        {
+                            _logger.LogWarning(backupEx, "[ENGINE STATE] Backup failed, continuing...");
+                        }
+                    }
+
+                    var tmp = _path + ".tmp";
+                    File.WriteAllText(tmp, json);
+                    File.Move(tmp, _path, overwrite: true);
+                    _lastPersistUtc = now;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[ENGINE STATE] PersistLiveState ERROR → {path}", _path);
+                }
             }
         }
 
