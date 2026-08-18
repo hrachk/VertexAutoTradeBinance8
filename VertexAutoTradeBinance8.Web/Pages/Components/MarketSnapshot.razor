@@ -3779,24 +3779,51 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         try
         {
             var fresh = await Service.LoadAsync();
-            if (fresh == null || fresh.Count == 0) return;
-            Series = MergeWithLive(Series, fresh);
+            // Never skip signal panel refresh when candle series is empty
+            if (fresh != null && fresh.Count > 0)
+                Series = MergeWithLive(Series, fresh);
 
-            // Load recent signals (last 24h, not blocked by exchange)
+            // Load recent signals for sig-panel (live_signals + missed_trades)
             try
             {
-                // ── PRIMARY: live_signals.json (written by Engine after AI confirmation) ──
-                // This file contains EVERY signal that passed PE4 (AI score >= 0.20)
-                // with Entry/SL/TP populated — regardless of whether AutoTrade opened it.
-                // This is the correct source for /market signal cards.
-                // Use client-scoped path so each user sees ONLY their own signals
-                var liveSigs = await LiveSignalSvc.ForRoot(ClientData.Root).LoadAsync();
+                var roots = new List<string>();
+                if (!string.IsNullOrWhiteSpace(ClientData?.Root))
+                    roots.Add(ClientData.Root);
+                try
+                {
+                    var shared = AppConfig["SharedData:Root"];
+                    if (!string.IsNullOrWhiteSpace(shared)
+                        && !roots.Any(r => string.Equals(r, shared, StringComparison.OrdinalIgnoreCase)))
+                        roots.Add(shared!);
+                }
+                catch { }
+                if (roots.Count == 0)
+                    roots.Add(AppContext.BaseDirectory);
+
                 var cutoffLive = DateTime.UtcNow.AddHours(-SignalLookbackHours);
+
+                // ── PRIMARY: live_signals.json from all roots ──
+                var liveSigs = new List<LiveSignalDto>();
+                foreach (var root in roots)
+                {
+                    try
+                    {
+                        var batch = await LiveSignalSvc.ForRoot(root).LoadAsync();
+                        if (batch != null && batch.Count > 0)
+                            liveSigs.AddRange(batch);
+                    }
+                    catch { }
+                }
+                liveSigs = liveSigs
+                    .GroupBy(s => $"{s.Symbol}|{s.Time:O}|{s.Entry}")
+                    .Select(g => g.First())
+                    .ToList();
+
                 _signals = liveSigs
                     .Where(s => s.Entry > 0 && s.StopLoss > 0
                                 && s.TakeProfits != null && s.TakeProfits.Count > 0
                                 && s.Time >= cutoffLive
-                                && s.Confidence > 0
+                                && s.Confidence >= 0
                                 && !_expiredSignals.ContainsKey($"{s.Symbol}:{s.Side}:{s.Entry}"))
                     .GroupBy(s => s.Symbol)
                     .Select(g => g.OrderByDescending(s => s.Time).First())
@@ -3820,9 +3847,18 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     })
                     .ToList();
 
-                // ── FALLBACK: missed_trades.json (legacy, if live_signals empty) ──
-                // Also always load for archive section below.
-                var allSigs = await SignalSvc.LoadFromPathAsync(SignalSvc.GetPathForRoot(ClientData.Root));
+                // ── FALLBACK: missed_trades.json if live panel still empty ──
+                var allSigs = new List<MissedTradeRecord>();
+                foreach (var root in roots)
+                {
+                    try
+                    {
+                        var batch = await SignalSvc.LoadFromPathAsync(SignalSvc.GetPathForRoot(root));
+                        if (batch != null && batch.Count > 0)
+                            allSigs.AddRange(batch);
+                    }
+                    catch { }
+                }
                 if (_signals.Count == 0)
                 {
                     _signals = allSigs
@@ -3830,17 +3866,15 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                                     && s.Time >= cutoffLive
                                     && !_expiredSignals.ContainsKey(SignalKey(s))
                                     && !GetSignalTtl(s).IsExpired
-                                    && (s.Confidence / 100m) >= ConfidenceResolver.Resolve(s.Symbol).MinEntry
-                                    && s.Score > 0
                                     && s.TakeProfits != null && s.TakeProfits.Count > 0
-                                    && !s.Reason.Contains("BLOCK")
-                                    && !s.Reason.Contains("COOLDOWN")
-                                    && !s.Reason.Contains("ZERO")
-                                    && !s.Reason.Contains("FAILED"))
+                                    && !(s.Reason ?? "").Contains("BLOCK")
+                                    && !(s.Reason ?? "").Contains("COOLDOWN")
+                                    && !(s.Reason ?? "").Contains("ZERO")
+                                    && !(s.Reason ?? "").Contains("FAILED"))
                         .GroupBy(s => s.Symbol)
                         .Select(g => g.OrderByDescending(s => s.Time).First())
                         .OrderByDescending(s => s.Time)
-                        .Take(12)
+                        .Take(20)
                         .ToList();
                 }
 
