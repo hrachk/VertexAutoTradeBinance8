@@ -16,8 +16,10 @@ namespace VertexAutoTradeBinance8.Web.Services
 
         public MissedTradeFileService(IWebHostEnvironment env)
         {
-          //_filePath = @"C:\Users\karap\source\repos\VertexAutoTradeBinance8\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\missed_trades.json";
-          _filePath = Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
+          // After Publish: always next to the .exe / process
+          _filePath = Path.Combine(
+              Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
+              "missed_trades.json");
 
         }
         public async Task<List<MissedTradeRecord>> LoadAsync()

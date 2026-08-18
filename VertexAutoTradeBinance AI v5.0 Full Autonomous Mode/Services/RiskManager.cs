@@ -17,8 +17,10 @@ namespace VertexAutoTradeBinance8.Services
         private readonly SmartRegimeService _smartRegime;
         private readonly SimulatedTradeService _simulator;
 
-         private static readonly string MissedTradesPath =  Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
-       // private static readonly string  MissedTradesPath = @"C:\Users\karap\source\repos\VertexAutoTradeBinance8\VertexAutoTradeBinance AI v5.0 Full Autonomous Mode\bin\Debug\net8.0\missed_trades.json";
+         // After Publish: always next to the .exe
+        private static readonly string MissedTradesPath = Path.Combine(
+            Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
+            "missed_trades.json");
     
 
         public decimal LastBalanceUsdt { get; private set; }

@@ -28,7 +28,10 @@ namespace VertexAutoTradeBinance8.Services
      IOptions<EngineStateSettings> options)
         {
             _logger = logger;
-            _path =   Path.Combine(AppContext.BaseDirectory, "engine_state.json");
+            // After Publish: always next to the .exe (ignore optional SnapshotPath for consistency)
+            _path = Path.Combine(
+                Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
+                "engine_state.json");
 
             _backupPath = _path + ".bak";
 

@@ -157,7 +157,10 @@ namespace VertexAutoTradeBinance8.Services
 
         private List<MissedTradeRecord> LoadMissedTradesFromFile()
         {
-            var path = Path.Combine(AppContext.BaseDirectory, "missed_trades.json");
+            // After Publish: always next to the .exe (same as RiskManager)
+            var path = Path.Combine(
+                Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
+                "missed_trades.json");
 
             if (!File.Exists(path))
                 return new List<MissedTradeRecord>();
