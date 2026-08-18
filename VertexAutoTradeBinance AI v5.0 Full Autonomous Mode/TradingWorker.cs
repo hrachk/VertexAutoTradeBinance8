@@ -137,6 +137,8 @@ namespace VertexAutoTradeBinance8
                 }
 
                 var anySymbolProcessed = false;
+                var skipNoSnapshot = 0;
+                var skipTfNone = 0;
 
                 foreach (var symbol in active)
                 {
@@ -145,7 +147,7 @@ namespace VertexAutoTradeBinance8
 
                     if (m1 == null || m5 == null)
                     {
-                        _logger.LogDebug("[WORKER] {Symbol}: no market snapshot m1/m5 — skip", symbol);
+                        skipNoSnapshot++;
                         continue;
                     }
 
@@ -160,15 +162,18 @@ namespace VertexAutoTradeBinance8
                     };
 
                     if (finalTf == null)
+                    {
+                        skipTfNone++;
                         continue;
+                    }
 
-                    // --- 1) Обработка сигнала (ORIGINAL chain — unchanged)
+                    // --- 1) SIGNAL PIPELINE starts here (GenerateSignal inside ProcessSymbol)
                     await ProcessSymbol(symbol, finalTf.Value, ct);
 
                     // --- 2) SUPERVISOR
                     await _supervisor.SuperviseAsync(symbol, null, ct);
 
-                    // --- 3) Engine state for UI (current symbol being analyzed)
+                    // --- 3) Engine state for UI
                     var engineState = _engineState.Build(symbol, finalTf.Value.ToString());
                     engineState.Status = "Running";
                     _engineStateSnapshot.Save(engineState);
@@ -177,14 +182,24 @@ namespace VertexAutoTradeBinance8
                     await Task.Delay(25, ct);
                 }
 
-                // Soft heartbeat only if nothing was processed — do NOT invent fake Mode that looks like a broken engine
+                // One summary line per loop — so you see WHY signals are not generating
                 if (!anySymbolProcessed)
                 {
+                    _logger.LogWarning(
+                        "[WORKER] No ProcessSymbol this tick | active={Active} skipNoSnapshot(m1/m5)={NoSnap} skipTfNone={TfNone}. Signals start only after m1+m5 ready AND SelectTF≠None",
+                        active.Count, skipNoSnapshot, skipTfNone);
+
                     _engineStateSnapshot.State.Status = "Running";
                     _engineStateSnapshot.State.LastUpdate = DateTime.UtcNow;
                     if (string.IsNullOrWhiteSpace(_engineStateSnapshot.State.Mode))
                         _engineStateSnapshot.State.Mode = "WaitingMarketData";
                     _engineStateSnapshot.PersistLiveState();
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "[WORKER] Processed {Ok} symbols | skipped snapshot={NoSnap} tfNone={TfNone}",
+                        active.Count - skipNoSnapshot - skipTfNone, skipNoSnapshot, skipTfNone);
                 }
 
                 await PeriodicSnapshot(ct);

@@ -36,11 +36,17 @@ public class AiModelSnapshotService
     {
         try
         {
-            if ((state.Symbols == null || state.Symbols.Count == 0)
-                && (state.MarketStates == null || state.MarketStates.Count == 0)
-                && (state.Trades == null || state.Trades.Count == 0))
+            var symCount = state.Symbols?.Count ?? 0;
+            var stateCount = state.MarketStates?.Count ?? 0;
+            var tradeCount = state.Trades?.Count ?? 0;
+
+            // Only market-states, no trades/stats → not useful for learning file spam
+            if (symCount == 0 && tradeCount == 0)
             {
-                _logger.LogWarning("🤖 AI-МОДЕЛЬ: снапшот пуст → skip");
+                if (stateCount == 0)
+                    _logger.LogDebug("🤖 AI-МОДЕЛЬ: снапшот пуст → skip");
+                else
+                    _logger.LogDebug("🤖 AI-МОДЕЛЬ: only MarketStates={States}, no trade stats → skip disk write", stateCount);
                 return;
             }
 
@@ -56,15 +62,8 @@ public class AiModelSnapshotService
             File.Move(tempPath, path, overwrite: true);
 
             _logger.LogInformation(
-                "\n🤖 AI-МОДЕЛЬ: снапшот сохранён\n" +
-                "• Файл:      {Path}\n" +
-                "• Symbols:   {Symbols}\n" +
-                "• States:    {States}\n" +
-                "• Trades:    {Trades}\n",
-                path,
-                state.Symbols?.Count ?? 0,
-                state.MarketStates?.Count ?? 0,
-                state.Trades?.Count ?? 0);
+                "🤖 AI-МОДЕЛЬ: snapshot saved {Path} | Symbols={Symbols} States={States} Trades={Trades}",
+                path, symCount, stateCount, tradeCount);
         }
         catch (Exception ex)
         {
