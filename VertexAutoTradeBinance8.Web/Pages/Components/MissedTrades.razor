@@ -1,9 +1,10 @@
 @page "/missed-trades"
 @using VertexAutoTradeBinance8.Web.Services
 @using VertexAutoTradeBinance8.Web.Models
-@using VertexAutoTradeBinance8.Models
+@using MissedRec = VertexAutoTradeBinance8.Web.Models.MissedTradeRecord
 @inject MissedTradeFileService Svc
 @inject LiveSignalFileService LiveSignalSvc
+@inject IConfiguration AppConfig
 @inject VertexAutoTradeBinance8.Web.Services.ClientDataService ClientData
 @using VertexAutoTradeBinance8.Web.Services.Auth
 @inject VertexAutoTradeBinance8.Web.Services.Auth.AuthSessionService Auth
@@ -433,8 +434,8 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
     record ReasonG(string Reason, int Count);
     record FDef(string Key, string Label, int N);
 
-    List<VertexAutoTradeBinance8.Web.Models.MissedTradeRecord> _all      = new();
-    List<VertexAutoTradeBinance8.Web.Models.MissedTradeRecord> _filtered = new();
+    List<MissedRec> _all      = new();
+    List<MissedRec> _filtered = new();
     List<SymG>    _bySymbol = new();
     List<ReasonG> _byReason = new();
     List<FDef>    _filters  = new();
@@ -453,15 +454,49 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
 
     async Task Load()
     {
+        // Resolve root: client folder first, then SharedData:Root (engine writes here)
+        var root = ClientData?.Root;
+        if (string.IsNullOrWhiteSpace(root))
+            root = AppConfig["SharedData:Root"];
+        if (string.IsNullOrWhiteSpace(root))
+            root = AppContext.BaseDirectory;
+
         // PRIMARY: missed_trades.json (engine rejects + live_signal mirrors)
-        var data = await Svc.LoadFromPathAsync(Svc.GetPathForRoot(ClientData.Root));
+        var data = await Svc.LoadFromPathAsync(Svc.GetPathForRoot(root));
         _all = data?.ToList() ?? new();
+
+        // If client path empty, also try global SharedData missed_trades
+        try
+        {
+            var shared = AppConfig["SharedData:Root"];
+            if (!string.IsNullOrWhiteSpace(shared)
+                && !string.Equals(shared, root, StringComparison.OrdinalIgnoreCase))
+            {
+                var extra = await Svc.LoadFromPathAsync(Svc.GetPathForRoot(shared));
+                if (extra != null)
+                {
+                    foreach (var r in extra)
+                    {
+                        if (!_all.Any(x => x.Symbol == r.Symbol && x.Time == r.Time && x.Entry == r.Entry))
+                            _all.Add(r);
+                    }
+                }
+            }
+        }
+        catch { }
 
         // ALSO: live_signals.json — same source /market uses as primary
         // (so page is not empty when only live_signals is populated)
         try
         {
-            var live = await LiveSignalSvc.ForRoot(ClientData.Root).LoadAsync();
+            var live = await LiveSignalSvc.ForRoot(root!).LoadAsync();
+            // Also try SharedData root for live_signals if different
+            if ((live == null || live.Count == 0) && !string.IsNullOrWhiteSpace(AppConfig["SharedData:Root"]))
+            {
+                var sharedLive = await LiveSignalSvc.ForRoot(AppConfig["SharedData:Root"]!).LoadAsync();
+                if (sharedLive != null && sharedLive.Count > 0) live = sharedLive;
+            }
+
             if (live != null && live.Count > 0)
             {
                 foreach (var ls in live)
@@ -473,7 +508,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
                         && r.Entry == ls.Entry);
                     if (exists) continue;
 
-                    _all.Add(new VertexAutoTradeBinance8.Web.Models.MissedTradeRecord
+                    _all.Add(new MissedRec
                     {
                         Event = "SIGNAL",
                         Symbol = ls.Symbol ?? "",
@@ -555,13 +590,13 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
     void OnSort(ChangeEventArgs e) { _sort = e.Value?.ToString() ?? "time"; Refilter(); }
     void ClearSearch() { _q = string.Empty; _symFilter = string.Empty; Refilter(); }
     void ToggleSym(string s) { _symFilter = _symFilter == s ? string.Empty : s; _fKey = "ALL"; Refilter(); }
-    void Toggle(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r)
+    void Toggle(MissedRec r)
     {
         var id = SigId(r);
         _selId = _selId == id ? string.Empty : id;
     }
 
-    string SigId(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r)
+    string SigId(MissedRec r)
         => $"{r.Symbol}_{r.Time:yyyyMMddHHmmssfff}";
 
     string FP(decimal v)
@@ -635,7 +670,7 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
         _ => r.Length > 20 ? r[..20] + "…" : r
     };
 
-    string Hint(VertexAutoTradeBinance8.Web.Models.MissedTradeRecord r)
+    string Hint(MissedRec r)
     {
         var sb = new System.Text.StringBuilder();
         if      (r.Confidence >= 80) sb.Append("Strong signal setup. ");
