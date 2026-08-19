@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using System.Collections.Concurrent;
 using VertexAutoTradeBinance8.Web.Demo;
 using VertexAutoTradeBinance8.Web.Services.Auth;
@@ -18,18 +19,25 @@ public sealed class DemoAutoTradeService : BackgroundService
     private readonly DemoAccountService _demo;
     private readonly ClientDbService _db;
     private readonly ILogger<DemoAutoTradeService> _log;
+    private readonly IConfiguration _cfg;
     private readonly ConcurrentDictionary<string, byte> _seen = new();
+    private DateTime _startedUtc = DateTime.UtcNow;
+    private readonly string _seenFilePath;
 
     public DemoAutoTradeService(
         LiveSignalFileService signals,
         DemoAccountService demo,
         ClientDbService db,
-        ILogger<DemoAutoTradeService> log)
+        ILogger<DemoAutoTradeService> log,
+        IConfiguration cfg)
     {
         _signals = signals;
         _demo = demo;
         _db = db;
         _log = log;
+        _cfg = cfg;
+        var root = cfg["SharedData:Root"] ?? AppContext.BaseDirectory;
+        _seenFilePath = Path.Combine(root, "demo-auto-seen.json");
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
