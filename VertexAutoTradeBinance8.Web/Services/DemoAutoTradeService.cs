@@ -45,7 +45,7 @@ public sealed class DemoAutoTradeService : BackgroundService
         }
     }
 
-    private const int MaxDemoPositions = 3;
+    private const int MaxDemoPositions = 5; // aligned with LIVE max open
 
     private async Task TickAsync(CancellationToken ct)
     {
