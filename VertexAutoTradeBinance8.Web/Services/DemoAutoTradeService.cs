@@ -145,11 +145,15 @@ public sealed class DemoAutoTradeService : BackgroundService
                     sig.StopLoss > 0 ? sig.StopLoss : null, tps);
 
                 if (ok)
+                {
                     SaveSeenKeys();
                     _log.LogInformation("[DEMO-AUTO] {user} {side} {sym} @ {px} lev={lev}",
                         client.Id, side, sym, price, lev);
+                }
                 else
+                {
                     _log.LogDebug("[DEMO-AUTO] {user} skip {sym}: {err}", client.Id, sym, err);
+                }
             }
         }
 
