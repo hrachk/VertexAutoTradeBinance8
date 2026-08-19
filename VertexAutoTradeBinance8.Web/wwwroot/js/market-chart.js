@@ -139,10 +139,47 @@
                 s.candleSeries.setMarkers([]);
                 return;
             }
-            // Only markers whose time exists on a bar (LWC requirement)
-            const times = new Set((s.candleSeries.data() || []).map(b => b.time));
-            const filtered = s.tradeMarkers.filter(m => times.has(m.time));
+            // Prefer lastKlinesRaw times (always in seconds); data() can be empty mid-update
+            let timeList = [];
+            if (s.lastKlinesRaw && s.lastKlinesRaw.length) {
+                timeList = s.lastKlinesRaw.map(k => Math.floor(Number(k.openTime) / 1000));
+            } else {
+                const data = s.candleSeries.data() || [];
+                timeList = data.map(b => typeof b.time === 'number' ? b.time : (b.time && b.time.timestamp) || 0);
+            }
+            const times = timeList.filter(t => t > 0).sort((a, b) => a - b);
+            if (!times.length) return;
+
+            const snap = (t) => {
+                let x = Number(t);
+                if (!Number.isFinite(x) || x <= 0) return null;
+                if (x > 1e12) x = Math.floor(x / 1000); // ms → s
+                // exact match
+                if (times.includes(x)) return x;
+                // nearest bar within 2 hours
+                let best = times[0], bestD = Math.abs(times[0] - x);
+                for (let i = 1; i < times.length; i++) {
+                    const d = Math.abs(times[i] - x);
+                    if (d < bestD) { bestD = d; best = times[i]; }
+                }
+                return bestD <= 7200 ? best : null;
+            };
+
+            const filtered = [];
+            for (const m of s.tradeMarkers) {
+                const st = snap(m.time);
+                if (st == null) continue;
+                filtered.push({
+                    time: st,
+                    position: m.position || 'belowBar',
+                    color: m.color || '#22c55e',
+                    shape: m.shape || 'circle',
+                    text: m.text || ''
+                });
+            }
             s.candleSeries.setMarkers(filtered);
+            if (filtered.length)
+                console.debug('[VERTEX] trade markers applied', filtered.length);
         } catch (e) {
             console.warn('[VERTEX] applyTradeMarkers', e);
         }
