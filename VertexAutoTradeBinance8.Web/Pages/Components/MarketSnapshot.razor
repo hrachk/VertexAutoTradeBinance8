@@ -671,6 +671,12 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6M9 8h6M17 16h6" stroke-linecap="round" stroke-linejoin="round"/></svg>
                     TP/SL
                 </button>
+                <button class="mk-tpsl-btn @(_showTradeMarkers ? "mk-tpsl-btn-on" : "")"
+                        @onclick="ToggleTradeMarkersAsync"
+                        title="Show entry/exit marks on candles (trade history)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M5 10l7-7 7 7M5 14l7 7 7-7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    IN/OUT
+                </button>
             </div>
             <div class="mk-tpsl-overlay">
                 </div>
@@ -2036,7 +2042,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .mk-chart-container-wrap:not(.mk-chart-maximized)::after{content:'';position:absolute;right:2px;bottom:2px;width:14px;height:14px;background:repeating-linear-gradient(135deg,var(--dim) 0 1.5px,transparent 1.5px 4px);opacity:.5;pointer-events:none;}
 
 .mk-tpsl-overlay{position:absolute;top:56px;left:8px;z-index:5;pointer-events:none;display:flex;align-items:center;gap:8px;}
-.mk-tpsl-btn-wrapper{position:absolute;top:8px;right:46px;z-index:9;user-select:none;touch-action:none;display:flex;align-items:center;gap:0;background:rgba(8,13,26,.92);border:1px solid var(--bdr2);border-radius:7px;overflow:hidden;backdrop-filter:blur(8px);box-shadow:0 2px 12px rgba(0,0,0,.4);cursor:grab;pointer-events:auto;}.mk-tpsl-btn-wrapper:active{cursor:grabbing;}.mk-tpsl-drag-grip{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:2px;width:14px;padding:5px 3px;border-right:1px solid var(--bdr);opacity:.4;}.mk-tpsl-drag-grip span{display:block;width:8px;height:1.5px;background:var(--t1);border-radius:1px;}.mk-tpsl-btn{pointer-events:auto;display:flex;align-items:center;gap:6px;background:transparent;border:none;color:var(--dim);padding:5px 10px;font-size:11.5px;font-weight:600;cursor:pointer;transition:color .15s,background .15s;}
+.mk-tpsl-btn-wrapper{display:flex;flex-direction:column;gap:4px;position:absolute;top:8px;right:46px;z-index:9;user-select:none;touch-action:none;display:flex;align-items:center;gap:0;background:rgba(8,13,26,.92);border:1px solid var(--bdr2);border-radius:7px;overflow:hidden;backdrop-filter:blur(8px);box-shadow:0 2px 12px rgba(0,0,0,.4);cursor:grab;pointer-events:auto;}.mk-tpsl-btn-wrapper:active{cursor:grabbing;}.mk-tpsl-drag-grip{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:2px;width:14px;padding:5px 3px;border-right:1px solid var(--bdr);opacity:.4;}.mk-tpsl-drag-grip span{display:block;width:8px;height:1.5px;background:var(--t1);border-radius:1px;}.mk-tpsl-btn{pointer-events:auto;display:flex;align-items:center;gap:6px;background:transparent;border:none;color:var(--dim);padding:5px 10px;font-size:11.5px;font-weight:600;cursor:pointer;transition:color .15s,background .15s;}
 .mk-tpsl-btn svg{width:13px;height:13px;}
 
 /* DRAWING TOOLS TOOLBAR */
@@ -4845,6 +4851,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
                 _dotNetRef ??= DotNetObjectReference.Create(this);
                 try { await JS.InvokeVoidAsync("marketChart.bindInfiniteHistory", $"chartContainer-{_chartInstanceId}", _dotNetRef); } catch { }
+                try { await PushTradeMarkersAsync(); } catch { }
             }
             else if (allKeysCount > 0)
             {
