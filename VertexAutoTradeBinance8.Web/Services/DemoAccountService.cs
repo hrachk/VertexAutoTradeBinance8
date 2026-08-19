@@ -272,6 +272,42 @@ public sealed class DemoAccountService
         }
     }
 
+    public int GetOpenPositionCountForClient(string clientId)
+    {
+        if (string.Equals(_clientId, clientId, StringComparison.OrdinalIgnoreCase))
+        {
+            lock (_lock) return _state.Positions.Count;
+        }
+        try
+        {
+            var path = Path.Combine(_accountsDir, $"client_{clientId}", "demo-account.json");
+            if (!File.Exists(path)) return 0;
+            var state = System.Text.Json.JsonSerializer.Deserialize<DemoAccountState>(File.ReadAllText(path));
+            return state?.Positions?.Count ?? 0;
+        }
+        catch { return 0; }
+    }
+
+    public bool HasOpenSymbolForClient(string clientId, string symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol)) return false;
+        if (string.Equals(_clientId, clientId, StringComparison.OrdinalIgnoreCase))
+        {
+            lock (_lock)
+                return _state.Positions.Any(p =>
+                    string.Equals(p.Symbol, symbol, StringComparison.OrdinalIgnoreCase));
+        }
+        try
+        {
+            var path = Path.Combine(_accountsDir, $"client_{clientId}", "demo-account.json");
+            if (!File.Exists(path)) return false;
+            var state = System.Text.Json.JsonSerializer.Deserialize<DemoAccountState>(File.ReadAllText(path));
+            return state?.Positions?.Any(p =>
+                       string.Equals(p.Symbol, symbol, StringComparison.OrdinalIgnoreCase)) == true;
+        }
+        catch { return false; }
+    }
+
     // ===================== Account-level actions =====================
 
     public void ResetAccount(decimal newInitialBalance)
