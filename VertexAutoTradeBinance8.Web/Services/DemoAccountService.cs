@@ -386,6 +386,7 @@ public sealed class DemoAccountService
                 Symbol = symbol, Side = side, Qty = qty, Leverage = leverage,
                 EntryPrice = currentPrice, Margin = margin,
                 StopLoss = stopLoss, TakeProfits = takeProfits ?? new(),
+                OpenedAtUtc = DateTime.UtcNow,
             };
             _state.Positions.Add(pos);
             Save();
@@ -470,6 +471,7 @@ public sealed class DemoAccountService
                     Leverage = leverage,
                     EntryPrice = currentPrice,
                     Margin = margin,
+                    OpenedAtUtc = DateTime.UtcNow,
                     StopLoss = stopLoss,
                     TakeProfits = takeProfits ?? new(),
                 });
