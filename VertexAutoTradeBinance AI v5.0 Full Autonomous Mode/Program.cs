@@ -136,6 +136,8 @@ public class Program
                 {
                     // ===== ТВОЙ СУЩЕСТВУЮЩИЙ DI — БЕЗ ИЗМЕНЕНИЙ =====
                     services.Configure<BinanceOptions>(ctx.Configuration.GetSection("Binance"));
+                    services.Configure<BybitOptions>(ctx.Configuration.GetSection("Bybit"));
+                    services.Configure<ExchangeRuntimeOptions>(ctx.Configuration.GetSection("Exchanges"));
 
                     services.Configure<TradingOptions>(
                       ctx.Configuration.GetSection("Trading")); // TRUE default
@@ -230,6 +232,8 @@ public class Program
 
                     // ===== BASE / MARKET =====
                     services.AddSingleton<BinanceClientFactory>();
+                    services.AddSingleton<BybitClientFactory>();
+                    services.AddSingleton<ExchangeExecutionRouter>();
                     services.AddSingleton<MarketDataKlineBuffer>();
                     services.AddSingleton<KlineBufferPersistence>();
                     services.AddSingleton<RealtimePriceService>();
