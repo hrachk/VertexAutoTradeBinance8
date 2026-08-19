@@ -8,9 +8,9 @@ using VertexAutoTradeBinance8.Strategy.StrategyCore;
 namespace VertexAutoTradeBinance8.Strategy
 {
     /// <summary>
-    /// Routes strategy signals. Also writes live_signals.json DIRECTLY so the
-    /// Market UI cannot go dark if TradingWorker is slow/blocked.
-    /// Auto = CORE + Trend (+ MeanRev).
+    /// LIVE = DEMO policy: only CORE_* signals enter the execution channel.
+    /// Trend/MeanRev stay bound for diagnostics but are NOT forwarded
+    /// (no illusions — same filter as Parallel DEMO).
     /// </summary>
     public sealed class StrategyRouter
     {
@@ -50,14 +50,15 @@ namespace VertexAutoTradeBinance8.Strategy
             _coreEngine.BindReactive(_marketData);
             _coreEngine.OnSignalGenerated += OnCoreSignal;
 
+            // Legacy engines remain bound so their internal state stays warm,
+            // but signals are NOT forwarded to LIVE/DEMO execution.
             _trendEngine.BindReactive(_marketData);
             _trendEngine.OnSignalGenerated += OnTrendSignal;
-
             _meanReversionEngine.BindReactive(_marketData);
             _meanReversionEngine.OnSignalGenerated += OnMeanRevSignal;
 
             _logger.LogInformation(
-                "[ROUTER] Bound Core+Legacy | mode={mode} | live_signals write=direct",
+                "[ROUTER] CORE-only execution (LIVE=DEMO) | mode={mode}",
                 _modeState.Current);
         }
 
@@ -74,22 +75,14 @@ namespace VertexAutoTradeBinance8.Strategy
         private void Forward(TradeSignal signal, string source)
         {
             if (signal == null) return;
-
-            // 1) UI file FIRST — independent of worker channel / AI / cooldown
-            try
-            {
-                _ = _liveSig.AppendAsync(signal, CancellationToken.None);
-            }
+            try { _ = _liveSig.AppendAsync(signal, CancellationToken.None); }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "[ROUTER] live_signals write failed ({src})", source);
             }
-
             _logger.LogInformation(
                 "[ROUTER] {src} → channel+file {sym} {side} conf={c:F2}",
                 source, signal.Symbol, signal.Side, signal.Confidence ?? 0m);
-
-            // 2) Worker pipeline (execution / demo downstream)
             OnSignalGenerated?.Invoke(signal);
         }
 
@@ -107,23 +100,13 @@ namespace VertexAutoTradeBinance8.Strategy
 
         private void OnTrendSignal(TradeSignal signal)
         {
-            if (signal == null) return;
-            var mode = _modeState.Current;
-            if (mode == StrategyMode.StrategyCoreOnly || mode == StrategyMode.MeanReversionOnly)
-            {
-                _logger.LogDebug("[ROUTER] Trend suppressed mode={mode}", mode);
-                return;
-            }
-            Forward(signal, "TREND");
+            // LIVE=DEMO: never execute/write legacy trend as trade signal
+            _logger.LogDebug("[ROUTER] TREND ignored (CORE-only policy) {sym}", signal?.Symbol);
         }
 
         private void OnMeanRevSignal(TradeSignal signal)
         {
-            if (signal == null) return;
-            var mode = _modeState.Current;
-            if (mode != StrategyMode.MeanReversionOnly && mode != StrategyMode.Auto)
-                return;
-            Forward(signal, "MEANREV");
+            _logger.LogDebug("[ROUTER] MEANREV ignored (CORE-only policy) {sym}", signal?.Symbol);
         }
     }
 }
