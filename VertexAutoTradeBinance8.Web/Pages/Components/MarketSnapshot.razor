@@ -7441,6 +7441,7 @@ sealed class RealTradeRow
                 catch { }
             }
             _realHistory = results.OrderByDescending(t => t.Time).Take(100).ToList();
+            try { await PushTradeMarkersAsync(); } catch { }
         }
         finally { _realHistoryLoading = false; StateHasChanged(); }
     }
