@@ -3,29 +3,36 @@ using System;
 namespace VertexAutoTradeBinance8.Services;
 
 /// <summary>
-/// Process-wide active LIVE trading credentials for the current user.
-///
-/// Source of truth for order placement:
-///   1. ActivateLive(clientId, apiKey, apiSecret) — user switched to LIVE
-///   2. Fallback: appsettings Binance:ApiKey/SecretKey (single-tenant engine)
-///
-/// Demo mode MUST call Deactivate() so no real orders can leak onto
-/// another user's keys or the shared config keys by accident.
+/// Process-wide LIVE credentials.
+/// Binance and Bybit are independent so Dual mode can hold both.
+/// Demo mode MUST call Deactivate() / DeactivateBybit() as appropriate.
 /// </summary>
 public sealed class TradingCredentialStore
 {
     private readonly object _gate = new();
+
+    // Binance
     private string? _clientId;
     private string? _apiKey;
     private string? _apiSecret;
     private bool _active;
 
-    /// <summary>Raised when active credentials change (factory must drop cached clients).</summary>
+    // Bybit
+    private string? _bybitClientId;
+    private string? _bybitKey;
+    private string? _bybitSecret;
+    private bool _bybitActive;
+
     public event Action? Changed;
 
     public bool IsLiveActive
     {
         get { lock (_gate) return _active && !string.IsNullOrWhiteSpace(_apiKey) && !string.IsNullOrWhiteSpace(_apiSecret); }
+    }
+
+    public bool IsBybitLiveActive
+    {
+        get { lock (_gate) return _bybitActive && !string.IsNullOrWhiteSpace(_bybitKey) && !string.IsNullOrWhiteSpace(_bybitSecret); }
     }
 
     public string? ActiveClientId
@@ -50,6 +57,23 @@ public sealed class TradingCredentialStore
         Changed?.Invoke();
     }
 
+    public void ActivateBybit(string clientId, string apiKey, string apiSecret)
+    {
+        if (string.IsNullOrWhiteSpace(clientId))
+            throw new ArgumentException("clientId required", nameof(clientId));
+        if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(apiSecret))
+            throw new ArgumentException("apiKey/apiSecret required");
+
+        lock (_gate)
+        {
+            _bybitClientId = clientId.Trim();
+            _bybitKey      = apiKey.Trim();
+            _bybitSecret   = apiSecret.Trim();
+            _bybitActive   = true;
+        }
+        Changed?.Invoke();
+    }
+
     public void Deactivate()
     {
         bool wasActive;
@@ -64,7 +88,20 @@ public sealed class TradingCredentialStore
         if (wasActive) Changed?.Invoke();
     }
 
-    /// <summary>Returns true when LIVE user keys are active.</summary>
+    public void DeactivateBybit()
+    {
+        bool wasActive;
+        lock (_gate)
+        {
+            wasActive      = _bybitActive;
+            _bybitActive   = false;
+            _bybitClientId = null;
+            _bybitKey      = null;
+            _bybitSecret   = null;
+        }
+        if (wasActive) Changed?.Invoke();
+    }
+
     public bool TryGet(out string clientId, out string apiKey, out string apiSecret)
     {
         lock (_gate)
@@ -74,6 +111,22 @@ public sealed class TradingCredentialStore
                 clientId  = _clientId ?? "";
                 apiKey    = _apiKey!;
                 apiSecret = _apiSecret!;
+                return true;
+            }
+        }
+        clientId = apiKey = apiSecret = "";
+        return false;
+    }
+
+    public bool TryGetBybit(out string clientId, out string apiKey, out string apiSecret)
+    {
+        lock (_gate)
+        {
+            if (_bybitActive && !string.IsNullOrWhiteSpace(_bybitKey) && !string.IsNullOrWhiteSpace(_bybitSecret))
+            {
+                clientId  = _bybitClientId ?? "";
+                apiKey    = _bybitKey!;
+                apiSecret = _bybitSecret!;
                 return true;
             }
         }
