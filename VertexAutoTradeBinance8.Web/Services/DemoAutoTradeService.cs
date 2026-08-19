@@ -34,7 +34,11 @@ public sealed class DemoAutoTradeService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _log.LogInformation("[DEMO-AUTO] Parallel demo worker started (ignores AutoTrade ON/OFF)");
+        _startedUtc = DateTime.UtcNow;
+        LoadSeenKeys();
+        _log.LogInformation(
+            "[DEMO-AUTO] started at {t:o} — only NEW signals after start; seen={n} (no revive closed positions)",
+            _startedUtc, _seen.Count);
         while (!stoppingToken.IsCancellationRequested)
         {
             try { await TickAsync(stoppingToken); }
@@ -57,8 +61,13 @@ public sealed class DemoAutoTradeService : BackgroundService
 
         var cutoff = DateTime.UtcNow.AddMinutes(-45);
         // Prefer CORE_ signals, liquid symbols only, highest confidence first
+        // LIVE-like: never re-open from stale signals after restart.
+        // Signal must be at/after worker start (with small clock skew grace).
+        var notBefore = _startedUtc.AddMinutes(-1);
+
         var candidates = signals
             .Where(s => s.Time >= cutoff
+                        && s.Time >= notBefore
                         && s.Entry > 0
                         && !string.IsNullOrWhiteSpace(s.Symbol)
                         && s.Symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase)
@@ -81,18 +90,16 @@ public sealed class DemoAutoTradeService : BackgroundService
                 var key = client.Id + "|" + keyBase;
                 if (!_seen.TryAdd(key, 0)) continue;
 
-                // Cap concurrent demo positions — quality over spam
+                // Cap concurrent demo positions — always from disk/ledger (not only bound session)
                 try
                 {
-                    // Peek bound state if same client; otherwise open will still enforce balance
-                    var snap = _demo.BoundClientId == client.Id ? _demo.GetSnapshot() : null;
-                    if (snap != null && snap.Positions.Count >= MaxDemoPositions)
+                    int openN = _demo.GetOpenPositionCountForClient(client.Id);
+                    if (openN >= MaxDemoPositions)
                     {
-                        _log.LogDebug("[DEMO-AUTO] {user} at max positions ({n})", client.Id, snap.Positions.Count);
+                        _log.LogDebug("[DEMO-AUTO] {user} at max positions ({n})", client.Id, openN);
                         continue;
                     }
-                    if (snap != null && snap.Positions.Any(p =>
-                            string.Equals(p.Symbol, sym, StringComparison.OrdinalIgnoreCase)))
+                    if (_demo.HasOpenSymbolForClient(client.Id, sym))
                     {
                         continue; // already in this symbol
                     }
@@ -138,6 +145,7 @@ public sealed class DemoAutoTradeService : BackgroundService
                     sig.StopLoss > 0 ? sig.StopLoss : null, tps);
 
                 if (ok)
+                    SaveSeenKeys();
                     _log.LogInformation("[DEMO-AUTO] {user} {side} {sym} @ {px} lev={lev}",
                         client.Id, side, sym, price, lev);
                 else
@@ -151,4 +159,39 @@ public sealed class DemoAutoTradeService : BackgroundService
                 _seen.TryRemove(k, out _);
         }
     }
+    private void LoadSeenKeys()
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(_seenFilePath) || !File.Exists(_seenFilePath)) return;
+            var json = File.ReadAllText(_seenFilePath);
+            var list = System.Text.Json.JsonSerializer.Deserialize<List<string>>(json);
+            if (list == null) return;
+            foreach (var k in list.TakeLast(500))
+                _seen.TryAdd(k, 0);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "[DEMO-AUTO] load seen keys failed");
+        }
+    }
+
+    private void SaveSeenKeys()
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(_seenFilePath)) return;
+            var dir = Path.GetDirectoryName(_seenFilePath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            var list = _seen.Keys.TakeLast(500).ToList();
+            var tmp = _seenFilePath + ".tmp";
+            File.WriteAllText(tmp, System.Text.Json.JsonSerializer.Serialize(list));
+            File.Move(tmp, _seenFilePath, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "[DEMO-AUTO] save seen keys failed");
+        }
+    }
+
 }
