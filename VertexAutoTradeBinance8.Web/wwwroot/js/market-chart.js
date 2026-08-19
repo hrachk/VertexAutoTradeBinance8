@@ -2156,6 +2156,9 @@
             if (!s) return;
             s.tradeMarkers = Array.isArray(markers) ? markers : [];
             applyTradeMarkers(s);
+            // Second pass after layout — setData may race markers
+            requestAnimationFrame(() => applyTradeMarkers(s));
+            setTimeout(() => applyTradeMarkers(s), 120);
         },
         setTradeMarkersVisible(containerId, visible) {
             const s = sessions.get(containerId);
@@ -2207,10 +2210,12 @@
         bindSlTpCallbacks(containerId, dotNetRef) {
             const s = sessions.get(containerId);
             if (!s) return;
-            s.onSlChanged    = (price, origPrice) => dotNetRef.invokeMethodAsync('OnSlDragged', price, origPrice || price);
-            s.onTpChanged    = (price, origPrice) => dotNetRef.invokeMethodAsync('OnTpDragged', price, origPrice || price);
-            s.onTpChangedAt  = (index, price, origPrice) => dotNetRef.invokeMethodAsync('OnTpDraggedAt', index, price, origPrice || price);
+            // origPrice: use 0 when undefined so C# does not treat "new level" as no-op
+            s.onSlChanged    = (price, origPrice) => dotNetRef.invokeMethodAsync('OnSlDragged', price, (origPrice === undefined || origPrice === null) ? 0 : origPrice);
+            s.onTpChanged    = (price, origPrice) => dotNetRef.invokeMethodAsync('OnTpDragged', price, (origPrice === undefined || origPrice === null) ? 0 : origPrice);
+            s.onTpChangedAt  = (index, price, origPrice) => dotNetRef.invokeMethodAsync('OnTpDraggedAt', index, price, (origPrice === undefined || origPrice === null) ? 0 : origPrice);
             s.onNewTpRequested = (price) => dotNetRef.invokeMethodAsync('OnNewTpRequested', price);
+            s.onNewSlRequested = (price) => dotNetRef.invokeMethodAsync('OnNewSlRequested', price);
             s.onNewTpRequestedWithPercent = (price, pct) => dotNetRef.invokeMethodAsync('OnNewTpRequestedWithPercent', price, pct);
             s.onCancelProtectiveLevel = (kind, index) => dotNetRef.invokeMethodAsync('OnCancelProtectiveLevel', kind, index);
             s.onLimitOrderRequested = (side, price, qty) => dotNetRef.invokeMethodAsync('OnLimitOrderRequested', side, price, qty);
