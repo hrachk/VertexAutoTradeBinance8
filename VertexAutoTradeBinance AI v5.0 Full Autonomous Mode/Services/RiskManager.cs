@@ -216,7 +216,7 @@ namespace VertexAutoTradeBinance8.Services
                 // Базовый риск 2% баланса
                 // Progressive base risk: scales with balance
                 // $50-100: 2.0%, $100-150: 2.5%, $150+: falls into normal path
-                decimal microRisk = balance < 100m ? 0.020m : 0.025m;
+                decimal microRisk = balance < 100m ? 0.025m : 0.032m; // +slight size bump
 
                 // Корректируем на win rate AI
                 var wr = _ai.GetWinRate(signal.Side);
