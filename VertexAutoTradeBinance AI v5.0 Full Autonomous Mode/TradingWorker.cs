@@ -821,23 +821,23 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
-            // StrategyCore v1 is authoritative — do not let PE4 veto CORE_ setups.
+            // LIVE = DEMO: only CORE_* may execute. Everything else is UI-only noise.
             bool isCore = signal.Reason != null &&
                           signal.Reason.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase);
-            if (!ai.Allow && !isCore)
+            if (!isCore)
             {
                 await RejectAsync(
                     signal, symbol, tf,
-                    "AI",
-                    "AI_BLOCK",
+                    "POLICY",
+                    "NON_CORE_BLOCKED",
                     ct,
-                    extra: ai.Reason);
+                    extra: "LIVE executes CORE only (same as Parallel DEMO)");
                 return;
             }
-            if (isCore && !ai.Allow)
+            if (!ai.Allow)
             {
                 _logger.LogInformation(
-                    "[PROC][{symbol}] CORE signal kept despite AI_BLOCK ({reason})",
+                    "[PROC][{symbol}] CORE kept despite AI_BLOCK ({reason})",
                     symbol, ai.Reason);
             }
             // =====================================================
@@ -902,6 +902,28 @@ namespace VertexAutoTradeBinance8
                     "RISK_MULT_ZERO",
                     ct);
                 return;
+            }
+
+            // =====================================================
+            // 4.5) MAX OPEN POSITIONS (LIVE = DEMO: max 5)
+            // =====================================================
+            try
+            {
+                int openN = await _supervisor.GetActivePositionsCountAsync(ct).ConfigureAwait(false);
+                const int MaxLivePositions = 5;
+                if (openN >= MaxLivePositions)
+                {
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "RISK",
+                        $"MAX_POSITIONS:{openN}>={MaxLivePositions}",
+                        ct);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[PROC] position-count check failed — continuing");
             }
 
             // =====================================================
@@ -1030,16 +1052,20 @@ namespace VertexAutoTradeBinance8
                 return;
             }
             // =====================================================
-            // 7) SL / TP OPTIMIZATION
+            // 7) SL / TP — CORE keeps signal levels (1:1 with DEMO)
             // =====================================================
             try
             {
-                var klines = await _marketDataFacade
-                    .GetKlinesAsync(symbol, tf, 120, ct)
-                    .ConfigureAwait(false);
+                // Do NOT rewrite CORE SL/TP via optimizer — DEMO uses signal as-is.
+                if (!isCore)
+                {
+                    var klines = await _marketDataFacade
+                        .GetKlinesAsync(symbol, tf, 120, ct)
+                        .ConfigureAwait(false);
 
-                signal.StopLoss =
-                    _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
+                    signal.StopLoss =
+                        _slOpt.OptimizeSlAndTp(symbol, klines, signal, ai);
+                }
 
                 await _cleaner
                     .CleanupOutdatedOrdersAsync(symbol, signal, ct)
