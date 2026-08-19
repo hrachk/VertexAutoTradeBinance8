@@ -100,19 +100,27 @@ public sealed class DemoAutoTradeService : BackgroundService
                 catch { /* non-fatal */ }
 
                 decimal price = sig.Entry;
-                int lev = sym is "BTCUSDT" or "ETHUSDT" ? 10 : 5;
+                // Majors: BTC/ETH/BNB/SOL — 10% of Available as pure margin; others 8%.
+                // Notional = margin × leverage (pleчо учитывается).
+                bool major = sym is "BTCUSDT" or "ETHUSDT" or "BNBUSDT" or "SOLUSDT";
+                int lev = major ? 10 : 5;
 
-                // Size from REAL demo wallet (~$10k).
-                // Bumped risk: ~4–5% of equity as notional (was 2–3%) — larger margin/volume per entry.
-                decimal equity = 10_000m;
+                decimal available = 10_000m;
                 try
                 {
-                    equity = Math.Max(100m, _demo.GetEquityForClient(client.Id));
+                    available = Math.Max(50m, _demo.GetAvailableForClient(client.Id));
                 }
                 catch { /* keep default */ }
 
-                decimal riskFrac = sym is "BTCUSDT" or "ETHUSDT" ? 0.05m : 0.035m; // 5% majors / 3.5% alts
-                decimal notional = Math.Clamp(equity * riskFrac, 80m, equity * 0.18m);
+                decimal marginFrac = major ? 0.10m : 0.08m;
+                decimal margin = available * marginFrac;
+                decimal notional = margin * lev;
+                // Cap: never use more than 95% of available as margin
+                if (margin > available * 0.95m)
+                {
+                    margin = available * 0.95m;
+                    notional = margin * lev;
+                }
                 decimal qty = notional / Math.Max(price, 0.0000001m);
 
                 List<DemoTpLevel>? tps = null;
