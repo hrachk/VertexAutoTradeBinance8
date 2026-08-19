@@ -141,6 +141,63 @@ namespace VertexAutoTradeBinance8.Services
                 return 0;
             }
 
+            // =============================================================
+            // CORE / LIVE=DEMO sizing: pure margin from Available (balance)
+            //   majors (BTC/ETH/BNB/SOL): 10% of available as margin
+            //   others:                    8% of available as margin
+            //   notional = margin × leverage
+            // =============================================================
+            {
+                string symU = (signal.Symbol ?? "").Trim().ToUpperInvariant();
+                bool major = symU is "BTCUSDT" or "ETHUSDT" or "BNBUSDT" or "SOLUSDT"
+                             || symU.StartsWith("BTC") || symU.StartsWith("ETH");
+                bool isCore = !string.IsNullOrEmpty(signal.Reason)
+                              && signal.Reason.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase);
+
+                // Apply to CORE always; also as default policy for consistency with DEMO
+                if (isCore || true)
+                {
+                    decimal marginFrac = major ? 0.10m : 0.08m;
+                    decimal margin = balance * marginFrac;
+                    if (margin > balance * 0.95m) margin = balance * 0.95m;
+                    decimal notional = margin * leverage;
+
+                    decimal minNotional = 5m;
+                    if (notional < minNotional)
+                    {
+                        LastRejectReason = $"MARGIN_NOTIONAL_TOO_SMALL ntn={notional:F2}";
+                        return 0;
+                    }
+
+                    decimal qty = notional / entry;
+                    if (step > 0)
+                        qty = Math.Floor(qty / step) * step;
+                    if (qty < minQty)
+                    {
+                        LastRejectReason = $"QTY_BELOW_MIN qty={qty} min={minQty}";
+                        return 0;
+                    }
+
+                    _logger.LogInformation(
+                        "[RISK] MARGIN-SIZE {sym} available={bal:F2} marginFrac={mf:P0} margin={m:F2} lev={lev}x notional={n:F2} qty={q}",
+                        signal.Symbol, balance, marginFrac, margin, leverage, notional, qty);
+
+                    if (_liqRisk != null)
+                    {
+                        var liqCheck = _liqRisk.CheckPreTrade(signal, qty, balance, leverage);
+                        if (!liqCheck.IsAllowed)
+                        {
+                            LastRejectReason = $"LIQ_RISK_BLOCKED: {liqCheck.BlockReason}";
+                            return 0;
+                        }
+                        if (liqCheck.SafeQty < qty && liqCheck.SafeQty > 0)
+                            qty = Math.Floor(liqCheck.SafeQty / step) * step;
+                    }
+
+                    return qty;
+                }
+            }
+
             // -----------------------------
             // STOP % и базовый риск
             // -----------------------------
