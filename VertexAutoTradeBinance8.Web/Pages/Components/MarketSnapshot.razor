@@ -7257,7 +7257,127 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         }
     }
 
-    sealed class RealTradeRow
+    
+    // ── Trade history markers on chart candles ─────────────────────────
+    bool _showTradeMarkers = true;
+
+    int ActiveTfMinutes()
+    {
+        var tf = (_activeTf ?? "").ToLowerInvariant();
+        if (tf.Contains("1m") || tf == "oneminute") return 1;
+        if (tf.Contains("3m")) return 3;
+        if (tf.Contains("5m") || tf == "fiveminutes") return 5;
+        if (tf.Contains("15m") || tf == "fifteenminutes") return 15;
+        if (tf.Contains("30m")) return 30;
+        if (tf.Contains("1h") || tf == "onehour") return 60;
+        if (tf.Contains("4h")) return 240;
+        if (tf.Contains("1d") || tf == "oneday") return 1440;
+        return 15;
+    }
+
+    static long SnapBarUnix(DateTime utc, int tfMinutes)
+    {
+        if (utc.Kind == DateTimeKind.Unspecified)
+            utc = DateTime.SpecifyKind(utc, DateTimeKind.Utc);
+        var sec = new DateTimeOffset(utc.ToUniversalTime()).ToUnixTimeSeconds();
+        long step = Math.Max(60, tfMinutes * 60L);
+        return sec - (sec % step);
+    }
+
+    async Task ToggleTradeMarkersAsync()
+    {
+        _showTradeMarkers = !_showTradeMarkers;
+        try
+        {
+            await JS.InvokeVoidAsync("marketChart.setTradeMarkersVisible",
+                $"chartContainer-{_chartInstanceId}", _showTradeMarkers);
+        }
+        catch { }
+        if (_showTradeMarkers)
+            await PushTradeMarkersAsync();
+        else
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("marketChart.clearTradeMarkers",
+                    $"chartContainer-{_chartInstanceId}");
+            }
+            catch { }
+        }
+        StateHasChanged();
+    }
+
+    async Task PushTradeMarkersAsync()
+    {
+        if (string.IsNullOrEmpty(_activeSym) || string.IsNullOrEmpty(_chartInstanceId))
+            return;
+
+        var cid = $"chartContainer-{_chartInstanceId}";
+        if (!_showTradeMarkers)
+        {
+            try { await JS.InvokeVoidAsync("marketChart.clearTradeMarkers", cid); } catch { }
+            return;
+        }
+
+        int tfMin = ActiveTfMinutes();
+        var markers = new List<object>();
+
+        try
+        {
+            if (_demoMode && _demoSnapshot?.History != null)
+            {
+                foreach (var h in _demoSnapshot.History
+                    .Where(x => string.Equals(x.Symbol, _activeSym, StringComparison.OrdinalIgnoreCase))
+                    .Take(40))
+                {
+                    bool isLong = string.Equals(h.Side, "LONG", StringComparison.OrdinalIgnoreCase)
+                                  || string.Equals(h.Side, "BUY", StringComparison.OrdinalIgnoreCase);
+                    long tIn = SnapBarUnix(h.OpenedAtUtc, tfMin);
+                    long tOut = SnapBarUnix(h.ClosedAtUtc, tfMin);
+                    markers.Add(new {
+                        time = tIn,
+                        position = isLong ? "belowBar" : "aboveBar",
+                        color = isLong ? "#22c55e" : "#ef4444",
+                        shape = isLong ? "arrowUp" : "arrowDown",
+                        text = "IN"
+                    });
+                    markers.Add(new {
+                        time = tOut,
+                        position = isLong ? "aboveBar" : "belowBar",
+                        color = h.RealizedPnl >= 0 ? "#22c55e" : "#f97316",
+                        shape = isLong ? "arrowDown" : "arrowUp",
+                        text = "OUT"
+                    });
+                }
+            }
+            else if (!_demoMode && _realHistory != null)
+            {
+                foreach (var h in _realHistory
+                    .Where(x => string.Equals(x.Symbol, _activeSym, StringComparison.OrdinalIgnoreCase))
+                    .Take(50))
+                {
+                    bool buy = string.Equals(h.Side, "BUY", StringComparison.OrdinalIgnoreCase);
+                    long tm = SnapBarUnix(h.Time, tfMin);
+                    markers.Add(new {
+                        time = tm,
+                        position = buy ? "belowBar" : "aboveBar",
+                        color = buy ? "#22c55e" : "#ef4444",
+                        shape = buy ? "arrowUp" : "arrowDown",
+                        text = buy ? "B" : "S"
+                    });
+                }
+            }
+        }
+        catch { }
+
+        try
+        {
+            await JS.InvokeVoidAsync("marketChart.setTradeMarkers", cid, markers);
+        }
+        catch { }
+    }
+
+sealed class RealTradeRow
     {
         public string Symbol = "";
         public string Side = "";
