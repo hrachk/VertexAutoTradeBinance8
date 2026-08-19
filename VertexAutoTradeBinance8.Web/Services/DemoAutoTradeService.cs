@@ -102,8 +102,8 @@ public sealed class DemoAutoTradeService : BackgroundService
                 decimal price = sig.Entry;
                 int lev = sym is "BTCUSDT" or "ETHUSDT" ? 10 : 5;
 
-                // Size from REAL demo wallet (~$10k), not a fixed $40 toy notional.
-                // Target ~2.5% of equity as position notional (feels like a real small account risk).
+                // Size from REAL demo wallet (~$10k).
+                // Bumped risk: ~4–5% of equity as notional (was 2–3%) — larger margin/volume per entry.
                 decimal equity = 10_000m;
                 try
                 {
@@ -111,8 +111,8 @@ public sealed class DemoAutoTradeService : BackgroundService
                 }
                 catch { /* keep default */ }
 
-                decimal riskFrac = sym is "BTCUSDT" or "ETHUSDT" ? 0.03m : 0.02m; // 2–3% of equity
-                decimal notional = Math.Clamp(equity * riskFrac, 50m, equity * 0.12m);
+                decimal riskFrac = sym is "BTCUSDT" or "ETHUSDT" ? 0.05m : 0.035m; // 5% majors / 3.5% alts
+                decimal notional = Math.Clamp(equity * riskFrac, 80m, equity * 0.18m);
                 decimal qty = notional / Math.Max(price, 0.0000001m);
 
                 List<DemoTpLevel>? tps = null;
