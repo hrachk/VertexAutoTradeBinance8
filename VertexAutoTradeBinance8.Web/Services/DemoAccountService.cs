@@ -242,8 +242,29 @@ public sealed class DemoAccountService
             if (!File.Exists(path)) return 10_000m;
             var state = System.Text.Json.JsonSerializer.Deserialize<DemoAccountState>(File.ReadAllText(path));
             if (state == null) return 10_000m;
-            // Without live marks, equity ≈ wallet (unrealized ~0)
             return state.Balance > 0 ? state.Balance : 10_000m;
+        }
+        catch
+        {
+            return 10_000m;
+        }
+    }
+
+    /// <summary>Available margin capacity = wallet − locked margin (per client).</summary>
+    public decimal GetAvailableForClient(string clientId)
+    {
+        if (string.IsNullOrWhiteSpace(clientId)) return 10_000m;
+        if (string.Equals(_clientId, clientId, StringComparison.OrdinalIgnoreCase))
+            return GetAvailableBalance();
+
+        try
+        {
+            var path = Path.Combine(_accountsDir, $"client_{clientId}", "demo-account.json");
+            if (!File.Exists(path)) return 10_000m;
+            var state = System.Text.Json.JsonSerializer.Deserialize<DemoAccountState>(File.ReadAllText(path));
+            if (state == null) return 10_000m;
+            var used = state.Positions?.Sum(p => p.Margin) ?? 0m;
+            return Math.Max(0m, (state.Balance > 0 ? state.Balance : 10_000m) - used);
         }
         catch
         {
