@@ -5607,8 +5607,20 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
         if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
         _orderError = string.Empty;  // clear previous error before each drag
+        // originalPrice==0 means NEW SL from entry drag (not a move of existing line)
         await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: true,
-            newPrice: price, originalPrice: originalPrice > 0 ? originalPrice : price);
+            newPrice: price, originalPrice: originalPrice);
+    }
+
+    /// <summary>New SL created by dragging from entry toward loss side (exchange-style).</summary>
+    [JSInvokable]
+    public async Task OnNewSlRequested(decimal price)
+    {
+        _tpSlDragFreezeUntil = DateTime.UtcNow.AddSeconds(12);
+        if (_selectedPosition == null || price <= 0 || _slTpDragBusy) return;
+        _orderError = string.Empty;
+        await ReplaceProtectiveOrderAsync(_selectedPosition, isStopLoss: true,
+            newPrice: price, originalPrice: 0);
     }
 
     [JSInvokable]
@@ -7335,14 +7347,14 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     long tIn = SnapBarUnix(h.OpenedAtUtc, tfMin);
                     long tOut = SnapBarUnix(h.ClosedAtUtc, tfMin);
                     markers.Add(new {
-                        time = tIn,
+                        time = (int)tIn,
                         position = isLong ? "belowBar" : "aboveBar",
                         color = isLong ? "#22c55e" : "#ef4444",
                         shape = isLong ? "arrowUp" : "arrowDown",
                         text = "IN"
                     });
                     markers.Add(new {
-                        time = tOut,
+                        time = (int)tOut,
                         position = isLong ? "aboveBar" : "belowBar",
                         color = h.RealizedPnl >= 0 ? "#22c55e" : "#f97316",
                         shape = isLong ? "arrowDown" : "arrowUp",
@@ -7359,7 +7371,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     bool buy = string.Equals(h.Side, "BUY", StringComparison.OrdinalIgnoreCase);
                     long tm = SnapBarUnix(h.Time, tfMin);
                     markers.Add(new {
-                        time = tm,
+                        time = (int)tm,
                         position = buy ? "belowBar" : "aboveBar",
                         color = buy ? "#22c55e" : "#ef4444",
                         shape = buy ? "arrowUp" : "arrowDown",
