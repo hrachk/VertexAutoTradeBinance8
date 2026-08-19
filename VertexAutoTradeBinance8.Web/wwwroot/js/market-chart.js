@@ -132,6 +132,22 @@
         return out;
     }
 
+    function applyTradeMarkers(s) {
+        if (!s || !s.candleSeries) return;
+        try {
+            if (!s.showTradeMarkers || !s.tradeMarkers || !s.tradeMarkers.length) {
+                s.candleSeries.setMarkers([]);
+                return;
+            }
+            // Only markers whose time exists on a bar (LWC requirement)
+            const times = new Set((s.candleSeries.data() || []).map(b => b.time));
+            const filtered = s.tradeMarkers.filter(m => times.has(m.time));
+            s.candleSeries.setMarkers(filtered);
+        } catch (e) {
+            console.warn('[VERTEX] applyTradeMarkers', e);
+        }
+    }
+
     window.marketChart = {
         // Saves the chart's current visible range (which bars are on
         // screen, at what zoom level) to sessionStorage, keyed by
@@ -355,6 +371,7 @@
                 // to create a TP/SL that doesn't exist yet, not just
                 // to move one that already does.
                 entryLine: null, slLine: null, tpLines: [], liqLine: null, beLine: null,
+                tradeMarkers: [], showTradeMarkers: true,
                 draggingLine: null, draggingLineKind: null, draggingLineIdx: null,
                 entryPrice: 0, side: 'LONG', qty: 0,
                 onSlChanged: null, onTpChanged: null,
@@ -987,6 +1004,7 @@
             const rsiVals = rsi(closes, 14);
 
             s.candleSeries.setData(candles);
+                    applyTradeMarkers(s);
             s.ema21Series.setData(candles.map((c, i) => ({ time: c.time, value: ema21[i] })).filter(d => d.value != null));
             s.ema55Series.setData(candles.map((c, i) => ({ time: c.time, value: ema55[i] })).filter(d => d.value != null));
             s.volumeSeries.setData(klines.map(k => toVolume(k, 'rgba(34,197,94,0.28)', 'rgba(239,68,68,0.28)')));
@@ -1012,6 +1030,7 @@
                 s.historyExhausted = false;
                 s.lastSeriesEarliestTime = newEarliestTime;
             }
+            applyTradeMarkers(s);
         },
 
         updateLastBar(containerId, k) {
@@ -2091,6 +2110,27 @@
                 };
                 s.chart.timeScale().subscribeVisibleLogicalRangeChange(s.pnlRangeSub);
             }
+        },
+
+
+        // ── Trade history markers on candles (entry/exit) ──────────────
+        setTradeMarkers(containerId, markers) {
+            const s = sessions.get(containerId);
+            if (!s) return;
+            s.tradeMarkers = Array.isArray(markers) ? markers : [];
+            applyTradeMarkers(s);
+        },
+        setTradeMarkersVisible(containerId, visible) {
+            const s = sessions.get(containerId);
+            if (!s) return;
+            s.showTradeMarkers = !!visible;
+            applyTradeMarkers(s);
+        },
+        clearTradeMarkers(containerId) {
+            const s = sessions.get(containerId);
+            if (!s) return;
+            s.tradeMarkers = [];
+            try { s.candleSeries && s.candleSeries.setMarkers([]); } catch (e) {}
         },
 
         hidePositionLines(containerId) {
