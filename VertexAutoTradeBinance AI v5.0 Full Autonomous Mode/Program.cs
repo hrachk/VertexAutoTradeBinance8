@@ -22,7 +22,7 @@ using VertexAutoTradeBinance8.Strategy;
 using VertexAutoTradeBinance8.Strategy.MeanReversion;
 using static VertexAutoTradeBinance8.Services.OrderExecutor;
 // остальные using как у тебя
-
+//V-10
 namespace VertexAutoTradeBinance8;
 
 public class Program
