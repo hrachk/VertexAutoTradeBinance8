@@ -37,7 +37,7 @@ public sealed class StrategyCoreEngine
     private static readonly TimeSpan QualityTtl = TimeSpan.FromMinutes(10);
 
     private const decimal MinAvgQuoteVol15m = 3_000m;
-    private const decimal MinRr = 1.5m;
+    private const decimal MinRr = 1.35m; // TP1 slightly closer
     private const decimal MinAtrPct = 0.0015m;
     private const decimal MaxAtrPct = 0.060m;
     private const decimal MinSlAtr = 1.30m;
@@ -335,7 +335,7 @@ public sealed class StrategyCoreEngine
             decimal sl = close - atr * MinSlAtr;
             decimal risk = close - sl;
             return Make(symbol, SignalSide.Buy, close, sl,
-                new[] { close + risk * MinRr, close + risk * (MinRr + 0.7m), close + risk * (MinRr + 1.4m) },
+                new[] { close + risk * MinRr, close + risk * (MinRr + 0.45m), close + risk * (MinRr + 0.85m) },
                 atr, "CORE_TREND_LONG", 0.55m);
         }
 
@@ -344,7 +344,7 @@ public sealed class StrategyCoreEngine
             decimal sl = close + atr * MinSlAtr;
             decimal risk = sl - close;
             return Make(symbol, SignalSide.Sell, close, sl,
-                new[] { close - risk * MinRr, close - risk * (MinRr + 0.7m), close - risk * (MinRr + 1.4m) },
+                new[] { close - risk * MinRr, close - risk * (MinRr + 0.45m), close - risk * (MinRr + 0.85m) },
                 atr, "CORE_TREND_SHORT", 0.55m);
         }
 
@@ -406,7 +406,7 @@ public sealed class StrategyCoreEngine
             decimal risk = close - sl;
             if (risk <= 0) return null;
             return Make(symbol, SignalSide.Buy, close, sl,
-                new[] { close + risk * MinRr, close + risk * (MinRr + 0.8m), close + risk * (MinRr + 1.5m) },
+                new[] { close + risk * MinRr, close + risk * (MinRr + 0.45m), close + risk * (MinRr + 0.85m) },
                 atr, "CORE_PULLBACK_LONG", 0.60m);
         }
 
@@ -418,7 +418,7 @@ public sealed class StrategyCoreEngine
             decimal risk = sl - close;
             if (risk <= 0) return null;
             return Make(symbol, SignalSide.Sell, close, sl,
-                new[] { close - risk * MinRr, close - risk * (MinRr + 0.8m), close - risk * (MinRr + 1.5m) },
+                new[] { close - risk * MinRr, close - risk * (MinRr + 0.45m), close - risk * (MinRr + 0.85m) },
                 atr, "CORE_PULLBACK_SHORT", 0.60m);
         }
         return null;
@@ -443,7 +443,7 @@ public sealed class StrategyCoreEngine
             decimal risk = entry - sl;
             if (risk <= 0) return null;
             return Make(symbol, SignalSide.Buy, entry, sl,
-                new[] { entry + risk * MinRr, entry + risk * (MinRr + 0.7m), entry + risk * (MinRr + 1.3m) },
+                new[] { entry + risk * MinRr, entry + risk * (MinRr + 0.45m), entry + risk * (MinRr + 0.85m) },
                 atr, "CORE_BREAKOUT_LONG", 0.56m);
         }
 
@@ -457,7 +457,7 @@ public sealed class StrategyCoreEngine
             decimal risk = sl - entry;
             if (risk <= 0) return null;
             return Make(symbol, SignalSide.Sell, entry, sl,
-                new[] { entry - risk * MinRr, entry - risk * (MinRr + 0.7m), entry - risk * (MinRr + 1.3m) },
+                new[] { entry - risk * MinRr, entry - risk * (MinRr + 0.45m), entry - risk * (MinRr + 0.85m) },
                 atr, "CORE_BREAKOUT_SHORT", 0.56m);
         }
         return null;
