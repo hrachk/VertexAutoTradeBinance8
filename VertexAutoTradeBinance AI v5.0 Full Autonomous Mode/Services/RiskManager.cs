@@ -162,39 +162,39 @@ namespace VertexAutoTradeBinance8.Services
                     if (margin > balance * 0.95m) margin = balance * 0.95m;
                     decimal notional = margin * leverage;
 
-                    decimal minNotional = 5m;
-                    if (notional < minNotional)
+                    const decimal marginMinNotional = 5m;
+                    if (notional < marginMinNotional)
                     {
                         LastRejectReason = $"MARGIN_NOTIONAL_TOO_SMALL ntn={notional:F2}";
                         return 0;
                     }
 
-                    decimal qty = notional / entry;
+                    decimal marginQty = notional / entry;
                     if (step > 0)
-                        qty = Math.Floor(qty / step) * step;
-                    if (qty < minQty)
+                        marginQty = Math.Floor(marginQty / step) * step;
+                    if (marginQty < minQty)
                     {
-                        LastRejectReason = $"QTY_BELOW_MIN qty={qty} min={minQty}";
+                        LastRejectReason = $"QTY_BELOW_MIN qty={marginQty} min={minQty}";
                         return 0;
                     }
 
                     _logger.LogInformation(
                         "[RISK] MARGIN-SIZE {sym} available={bal:F2} marginFrac={mf:P0} margin={m:F2} lev={lev}x notional={n:F2} qty={q}",
-                        signal.Symbol, balance, marginFrac, margin, leverage, notional, qty);
+                        signal.Symbol, balance, marginFrac, margin, leverage, notional, marginQty);
 
                     if (_liqRisk != null)
                     {
-                        var liqCheck = _liqRisk.CheckPreTrade(signal, qty, balance, leverage);
+                        var liqCheck = _liqRisk.CheckPreTrade(signal, marginQty, balance, leverage);
                         if (!liqCheck.IsAllowed)
                         {
                             LastRejectReason = $"LIQ_RISK_BLOCKED: {liqCheck.BlockReason}";
                             return 0;
                         }
-                        if (liqCheck.SafeQty < qty && liqCheck.SafeQty > 0)
-                            qty = Math.Floor(liqCheck.SafeQty / step) * step;
+                        if (liqCheck.SafeQty < marginQty && liqCheck.SafeQty > 0)
+                            marginQty = Math.Floor(liqCheck.SafeQty / step) * step;
                     }
 
-                    return qty;
+                    return marginQty;
                 }
             }
 
