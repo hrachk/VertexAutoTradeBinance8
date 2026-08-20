@@ -813,6 +813,12 @@
                     Orders
                     <span class="mk-oo-count">@(_demoMode ? _demoSnapshot.PendingOrders.Count : _openOrders.Count)</span>
                 </button>
+                <button class="mk-oo-tab @(_ooActiveTab == "bybit-orders" ? "mk-oo-tab-on" : "")"
+                        @onclick="ShowBybitOrdersTab"
+                        title="Bybit open orders">
+                    Bybit Orders
+                    <span class="mk-oo-count">@_bybitOpenOrders.Count</span>
+                </button>
                 <button class="mk-oo-tab @(_ooActiveTab == "history" ? "mk-oo-tab-on" : "")"
                         @onclick="ShowHistoryTab">
                     History
@@ -1120,7 +1126,7 @@
                     </div>
                 }
             }
-            else
+            else if (_ooActiveTab == "orders")
             {
                 @if (_demoMode)
                 {
@@ -7257,12 +7263,15 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     }
 
     List<OpenOrderRow> _openOrders = new();
+    List<OpenOrderRow> _bybitOpenOrders = new();
+    bool _bybitOrdersLoadAttempted;
     string _lastAlgoOrdersDebug = "";
     string _ooActiveTab = "positions";
     string _ordSubTab   = "algo";  // default to Algo tab (TP/SL orders most relevant)
 
     void ShowPositionsTab() { _ooActiveTab = "positions"; _ = SaveSelectionState(); }
     void ShowOrdersTab() { _ooActiveTab = "orders"; _ = SaveSelectionState(); }
+    void ShowBybitOrdersTab() { _ooActiveTab = "bybit-orders"; _ = SaveSelectionState(); }
 
     void ShowHistoryTab()
     {
@@ -7642,32 +7651,36 @@ sealed class RealTradeRow
                 .OrderBy(o => o.Symbol)
                 .ToList();
 
-            // Bybit open orders
+            // Bybit open orders → separate list (own tab)
+            _bybitOrdersLoadAttempted = true;
             try
             {
                 if (BybitAccount.IsEnabled)
                 {
                     using var bCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
                     var bOrders = await BybitAccount.GetOpenOrdersAsync(bCts.Token);
-                    foreach (var bo in bOrders)
+                    _bybitOpenOrders = bOrders.Select(bo => new OpenOrderRow
                     {
-                        _openOrders.Add(new OpenOrderRow
-                        {
-                            OrderId = bo.OrderId,
-                            Symbol = bo.Symbol,
-                            Side = bo.Side.ToUpperInvariant(),
-                            Type = bo.Type,
-                            Price = bo.Price,
-                            Qty = bo.Qty,
-                            ReduceOnly = bo.ReduceOnly,
-                            IsAlgo = bo.IsAlgo,
-                            Exchange = "Bybit"
-                        });
-                    }
-                    _openOrders = _openOrders.OrderBy(o => o.Symbol).ToList();
+                        OrderId = bo.OrderId,
+                        Symbol = bo.Symbol,
+                        Side = bo.Side.ToUpperInvariant(),
+                        Type = bo.Type,
+                        Price = bo.Price,
+                        Qty = bo.Qty,
+                        ReduceOnly = bo.ReduceOnly,
+                        IsAlgo = bo.IsAlgo,
+                        Exchange = "Bybit"
+                    }).OrderBy(o => o.Symbol).ToList();
+                }
+                else
+                {
+                    _bybitOpenOrders = new();
                 }
             }
-            catch { }
+            catch
+            {
+                _bybitOpenOrders = new();
+            }
 
             await InvokeAsync(StateHasChanged);
         }
