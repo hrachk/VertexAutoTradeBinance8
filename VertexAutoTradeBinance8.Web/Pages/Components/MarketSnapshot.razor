@@ -1283,6 +1283,59 @@
                 }
                 }
             }
+            else if (_ooActiveTab == "bybit-orders")
+            {
+                @if (_demoMode)
+                {
+                    <div class="mk-oo-empty">Bybit orders are LIVE-only (switch off DEMO)</div>
+                }
+                else if (!_bybitOrdersLoadAttempted && _bybitOpenOrders.Count == 0)
+                {
+                    <div class="mk-oo-empty">Loading Bybit orders…</div>
+                }
+                else if (_bybitOpenOrders.Count == 0)
+                {
+                    <div class="mk-oo-empty">No open Bybit orders</div>
+                }
+                else
+                {
+                    <div class="mk-oo-scroll">
+                        <div class="mk-pos-toolbar">
+                            <label class="mk-pos-filter-cb">
+                                <input type="checkbox" @bind="_posFilterCurrentSym" /> Only <strong>@_activeSym</strong>
+                            </label>
+                            <span class="mk-ex-badge mk-ex-bybit">BYBIT</span>
+                        </div>
+                        <table class="mk-oo-tbl">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th><th>Side</th><th>Type</th>
+                                    <th>Price</th><th>Qty</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @{
+                                    var bybitShow = _posFilterCurrentSym && !string.IsNullOrEmpty(_activeSym)
+                                        ? _bybitOpenOrders.Where(o => o.Symbol == _activeSym).ToList()
+                                        : _bybitOpenOrders;
+                                }
+                                @foreach (var o in bybitShow)
+                                {
+                                    <tr>
+                                        <td class="mk-oo-sym">
+                                            <span class="mk-ex-badge mk-ex-bybit">BY</span>@o.Symbol
+                                        </td>
+                                        <td class="@(o.Side.Contains("BUY", StringComparison.OrdinalIgnoreCase) ? "up" : "dn")">@o.Side</td>
+                                        <td class="mk-dim" style="font-size:11px">@o.Type @(o.ReduceOnly ? "(R)" : "")</td>
+                                        <td class="mk-mono">@FmtP(o.Price)</td>
+                                        <td class="mk-mono">@o.Qty.ToString("G8")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            }
         </div>
 
         </div> <!-- end mk-main-col -->
