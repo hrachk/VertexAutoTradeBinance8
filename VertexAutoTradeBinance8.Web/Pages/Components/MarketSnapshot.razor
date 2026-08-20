@@ -996,6 +996,7 @@
                                     <tr class="mk-pos-row @(PosIdentityEquals(_selectedPosition, pos) ? "mk-pos-row-sel" : "") @(PosIdentityEquals(_selectingPosition, pos) ? "mk-pos-row-loading" : "")"
                                         @onclick="() => SelectPosition(pos)">
                                         <td class="mk-oo-sym">
+                                            <span class="mk-ex-badge mk-ex-@(pos.Exchange?.ToLowerInvariant() ?? "binance")" title="@pos.Exchange">@(pos.Exchange == "Bybit" ? "BY" : pos.Exchange == "Demo" ? "DM" : "BN")</span>
                                             @pos.Symbol
                                             @if (recentDcaSymbols.Contains(pos.Symbol))
                                             {
@@ -1141,7 +1142,7 @@
                                     @foreach (var o in _demoSnapshot.PendingOrders)
                                     {
                                         <tr>
-                                            <td class="mk-oo-sym">@o.Symbol</td>
+                                            <td class="mk-oo-sym"><span class="mk-ex-badge mk-ex-@((o.Exchange ?? "Binance").ToLowerInvariant())">@(o.Exchange == "Bybit" ? "BY" : "BN")</span>@o.Symbol</td>
                                             <td class="@(o.Side == "LONG" ? "up" : "dn")">@o.Side</td>
                                             <td class="mk-dim">@(o.Type == DemoOrderType.Limit ? "LIMIT" : "STOP_MARKET")</td>
                                             <td class="mk-mono">@FmtP(o.TriggerPrice)</td>
@@ -1208,7 +1209,7 @@
                                 {
                                     bool isEditing = _editingOrderId == o.OrderId.ToString();
                                     <tr class="mk-oo-row-clickable @(isEditing ? "mk-oo-editing" : "")" @onclick="() => PickSym(o.Symbol)">
-                                        <td class="mk-oo-sym">@o.Symbol</td>
+                                        <td class="mk-oo-sym"><span class="mk-ex-badge mk-ex-@((o.Exchange ?? "Binance").ToLowerInvariant())">@(o.Exchange == "Bybit" ? "BY" : "BN")</span>@o.Symbol</td>
                                         <td class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</td>
                                         <td class="mk-dim" style="font-size:11px">@o.Type @(o.ReduceOnly ? "(R)" : "")</td>
                                         @* ── Price cell ── *@
@@ -2511,6 +2512,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .mk-pos-spin{display:inline-block;margin-left:6px;color:var(--acc);animation:mkPosSpin .8s linear infinite;font-size:11px;}
 .mk-dca-badge{margin-left:5px;font-size:9px;font-weight:800;letter-spacing:.5px;padding:1px 5px;border-radius:3px;background:rgba(139,92,246,.12);color:#c4b5fd;border:1px solid rgba(139,92,246,.25);vertical-align:middle;}
 @@keyframes mkPosSpin{to{transform:rotate(360deg);}}
+.mk-ex-badge{display:inline-block;font-size:9px;font-weight:800;letter-spacing:.5px;padding:1px 4px;border-radius:3px;margin-right:4px;vertical-align:middle;line-height:1.2;}
+.mk-ex-binance{background:rgba(240,185,11,.15);color:#f0b90b;border:1px solid rgba(240,185,11,.35);}
+.mk-ex-bybit{background:rgba(247,147,26,.15);color:#f7931a;border:1px solid rgba(247,147,26,.4);}
+.mk-ex-demo{background:rgba(96,165,250,.12);color:#60a5fa;border:1px solid rgba(96,165,250,.3);}
 .mk-oo-sym{font-family:var(--mono);font-weight:800;color:#e2eaf6;font-size:13px;}
 .mk-liq{color:#ef4444;}
 .mk-oo-cancel{background:none;border:1px solid var(--bdr);color:var(--dim);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;line-height:1;white-space:nowrap;flex-shrink:0;}
@@ -7620,6 +7625,7 @@ sealed class RealTradeRow
                     Qty        = o.Quantity,
                     Filled     = o.QuantityFilled,
                     ReduceOnly = o.ReduceOnly,
+                    Exchange   = "Binance",
                 })
                 .ToList();
 
@@ -7630,10 +7636,38 @@ sealed class RealTradeRow
 
             _openOrders = regularOrders
                 .Concat(algoOrders)
+                .Select(o => { if (string.IsNullOrEmpty(o.Exchange)) o.Exchange = "Binance"; return o; })
                 .GroupBy(o => o.OrderId)
                 .Select(g => g.First())
                 .OrderBy(o => o.Symbol)
                 .ToList();
+
+            // Bybit open orders
+            try
+            {
+                if (BybitAccount.IsEnabled)
+                {
+                    using var bCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                    var bOrders = await BybitAccount.GetOpenOrdersAsync(bCts.Token);
+                    foreach (var bo in bOrders)
+                    {
+                        _openOrders.Add(new OpenOrderRow
+                        {
+                            OrderId = bo.OrderId,
+                            Symbol = bo.Symbol,
+                            Side = bo.Side.ToUpperInvariant(),
+                            Type = bo.Type,
+                            Price = bo.Price,
+                            Qty = bo.Qty,
+                            ReduceOnly = bo.ReduceOnly,
+                            IsAlgo = bo.IsAlgo,
+                            Exchange = "Bybit"
+                        });
+                    }
+                    _openOrders = _openOrders.OrderBy(o => o.Symbol).ToList();
+                }
+            }
+            catch { }
 
             await InvokeAsync(StateHasChanged);
         }
