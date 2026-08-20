@@ -132,6 +132,51 @@ public sealed class BybitAccountReadService
     }
 }
 
+
+    public async Task<List<BybitHistoryDto>> GetClosedHistoryAsync(CancellationToken ct = default)
+    {
+        var list = new List<BybitHistoryDto>();
+        if (!IsEnabled) return list;
+
+        try
+        {
+            var client = _factory.TryCreateRestClient();
+            if (client == null) return list;
+
+            // Closed PnL (linear USDT)
+            var res = await client.V5Api.Trading.GetClosedProfitLossAsync(
+                Category.Linear,
+                limit: 50,
+                ct: ct).ConfigureAwait(false);
+
+            if (!res.Success || res.Data?.List == null)
+            {
+                _log.LogDebug("[BYBIT-UI] GetClosedProfitLoss failed: {err}", res.Error?.Message);
+                return list;
+            }
+
+            foreach (var x in res.Data.List)
+            {
+                var side = x.Side?.ToString() ?? "";
+                if (string.IsNullOrEmpty(side) && x.Qty < 0) side = "Sell";
+                list.Add(new BybitHistoryDto(
+                    Symbol: (x.Symbol ?? "").ToUpperInvariant(),
+                    Side: side,
+                    Qty: Math.Abs(x.Qty),
+                    AvgEntryPrice: x.AvgEntryPrice,
+                    AvgExitPrice: x.AvgExitPrice,
+                    RealizedPnl: x.ClosedPnl,
+                    ClosedTimeUtc: x.UpdatedTime == default ? DateTime.UtcNow : x.UpdatedTime.UtcDateTime));
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "[BYBIT-UI] GetClosedHistory failed");
+        }
+
+        return list.OrderByDescending(h => h.ClosedTimeUtc).ToList();
+    }
+
 public sealed record BybitPositionDto(
     string Symbol, string Side, int Leverage, decimal Qty,
     decimal EntryPrice, decimal MarkPrice, decimal LiqPrice,
@@ -140,3 +185,8 @@ public sealed record BybitPositionDto(
 public sealed record BybitOrderDto(
     long OrderId, string Symbol, string Side, string Type,
     decimal Price, decimal Qty, bool ReduceOnly, bool IsAlgo);
+
+public sealed record BybitHistoryDto(
+    string Symbol, string Side, decimal Qty,
+    decimal AvgEntryPrice, decimal AvgExitPrice,
+    decimal RealizedPnl, DateTime ClosedTimeUtc);
