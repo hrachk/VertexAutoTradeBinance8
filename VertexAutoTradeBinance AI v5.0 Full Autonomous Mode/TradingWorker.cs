@@ -51,6 +51,8 @@ namespace VertexAutoTradeBinance8
         private readonly StrategyRouter _strategyRouter;
         private readonly RiskManager _risk;
         private readonly OrderExecutor _executor;
+        private readonly BybitOrderExecutor _bybitExecutor;
+        private readonly ExchangeExecutionRouter _exchangeRouter;
         private readonly VertexAutoTradeBinance8.Services.HistoricalData.DataDbSymbolFeed? _dataDbFeed;
         private readonly BinanceClientFactory _factory;
         private readonly LiquidityGuardService _liq;
@@ -138,6 +140,8 @@ namespace VertexAutoTradeBinance8
             StrategyRouter strategyRouter,
             RiskManager risk,
             OrderExecutor executor,
+            BybitOrderExecutor bybitExecutor,
+            ExchangeExecutionRouter exchangeRouter,
             BinanceClientFactory factory,
             LiquidityGuardService liq,
             OrderCleanerService cleaner,
@@ -171,6 +175,8 @@ namespace VertexAutoTradeBinance8
             _strategyRouter = strategyRouter;
             _risk = risk;
             _executor   = executor;
+            _bybitExecutor = bybitExecutor;
+            _exchangeRouter = exchangeRouter;
             _dataDbFeed = dataDbFeed;
             _tradeState = tradeState ?? new TradeStateManager();
             _factory = factory;
@@ -1095,18 +1101,62 @@ namespace VertexAutoTradeBinance8
 
             var leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
             _dataDbFeed?.NotifyExecution(signal.Symbol);
-            var result = await _executor.ExecuteAsync(signal, qty, ct, leverage);
 
+            // ── Multi-exchange (phase-2): Binance and/or Bybit ──────────
+            _exchangeRouter.LogRouting(signal);
+            bool wantBinance = _exchangeRouter.ShouldExecuteOnBinance();
+            bool wantBybit   = _exchangeRouter.ShouldExecuteOnBybit();
 
+            OrderResult? binanceResult = null;
+            OrderResult? bybitResult = null;
 
-            if (!result.Success)
+            if (wantBinance)
             {
+                binanceResult = await _executor.ExecuteAsync(signal, qty, ct, leverage);
+                if (!binanceResult.Success)
+                    _logger.LogWarning("[EXEC] Binance failed {sym}: {err}", symbol, binanceResult.Error);
+            }
+
+            if (wantBybit)
+            {
+                try
+                {
+                    bybitResult = await _bybitExecutor.ExecuteAsync(signal, qty, leverage, ct);
+                    if (!bybitResult.Success)
+                        _logger.LogWarning("[EXEC] Bybit failed {sym}: {err}", symbol, bybitResult.Error);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[EXEC] Bybit exception {sym}", symbol);
+                    bybitResult = new OrderResult { Success = false, Error = ex.Message };
+                }
+            }
+
+            bool ok =
+                (wantBinance && binanceResult?.Success == true)
+                || (wantBybit && bybitResult?.Success == true);
+
+            // Nothing enabled → treat as config error
+            if (!wantBinance && !wantBybit)
+            {
+                await RejectAsync(signal, symbol, tf, "EXEC", "NO_EXCHANGE_ENABLED", ct);
+                return;
+            }
+
+            if (!ok)
+            {
+                var err = string.Join(" | ",
+                    new[]
+                    {
+                        wantBinance ? $"Binance:{binanceResult?.Error}" : null,
+                        wantBybit ? $"Bybit:{bybitResult?.Error}" : null
+                    }.Where(x => x != null));
                 await RejectAsync(
                     signal, symbol, tf,
                     "EXEC",
                     "EXECUTION_FAILED",
                     ct,
-                    extra: result.Error);
+                    extra: err);
                 return;
             }
 
