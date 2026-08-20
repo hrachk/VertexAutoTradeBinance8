@@ -7441,6 +7441,53 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     void ShowBybitPositionsTab() { _ooActiveTab = "bybit-positions"; _ = SaveSelectionState(); _ = EnsureBybitDataAsync(); }
     void ShowBybitHistoryTab() { _ooActiveTab = "bybit-history"; _ = SaveSelectionState(); _ = EnsureBybitDataAsync(); }
 
+    async Task EnsureBybitDataAsync()
+    {
+        if (_demoMode) return;
+        await LoadBybitAccountDataAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    async Task LoadBybitAccountDataAsync()
+    {
+        _bybitDataLoadAttempted = true;
+        if (_demoMode || !BybitAccount.IsEnabled)
+        {
+            _bybitPositions = new();
+            _bybitHistory = new();
+            return;
+        }
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var posTask = BybitAccount.GetOpenPositionsAsync(cts.Token);
+            var histTask = BybitAccount.GetClosedHistoryAsync(cts.Token);
+            await Task.WhenAll(posTask, histTask);
+            var pos = await posTask;
+            _bybitPositions = pos.Select(bp => new ActivePositionInfo
+            {
+                Symbol = bp.Symbol,
+                Side = bp.Side,
+                Exchange = "Bybit",
+                Leverage = bp.Leverage,
+                Size = bp.Qty * bp.EntryPrice,
+                Qty = bp.Qty,
+                EntryPrice = bp.EntryPrice,
+                MarkPrice = bp.MarkPrice,
+                LiqPrice = bp.LiqPrice,
+                Margin = bp.Margin,
+                Pnl = bp.Pnl,
+                Roi = bp.Roi
+            }).OrderByDescending(p => Math.Abs(p.Pnl)).ToList();
+            _bybitHistory = await histTask;
+        }
+        catch
+        {
+            /* keep last known */
+        }
+    }
+
+
     void ShowHistoryTab()
     {
         _ooActiveTab = "history";
