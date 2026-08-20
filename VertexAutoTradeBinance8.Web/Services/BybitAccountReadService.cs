@@ -1,3 +1,4 @@
+using System.Reflection;
 using Bybit.Net.Enums;
 using Microsoft.Extensions.Options;
 using VertexAutoTradeBinance8.Configuration;
@@ -7,6 +8,7 @@ namespace VertexAutoTradeBinance8.Web.Services;
 
 /// <summary>
 /// Read-only Bybit linear positions, open orders, closed PnL for /market UI tabs.
+/// Property access is defensive — Bybit.Net field names vary by package version.
 /// </summary>
 public sealed class BybitAccountReadService
 {
@@ -49,29 +51,34 @@ public sealed class BybitAccountReadService
 
             foreach (var p in res.Data.List)
             {
-                var qty = p.Quantity;
+                var qty = Dec(p, "Quantity", "Size", "ClosedSize");
                 if (qty == 0) continue;
 
-                var side = string.Equals(p.Side?.ToString(), "Sell", StringComparison.OrdinalIgnoreCase)
-                           || qty < 0
+                var sideStr = Str(p, "Side");
+                var side = sideStr.Contains("Sell", StringComparison.OrdinalIgnoreCase) || qty < 0
                     ? "SHORT" : "LONG";
                 qty = Math.Abs(qty);
-                var entry = p.AveragePrice > 0 ? p.AveragePrice : p.MarkPrice;
-                var mark = p.MarkPrice > 0 ? p.MarkPrice : entry;
-                var lev = (int)Math.Max(1, p.Leverage);
+                var entry = Dec(p, "AveragePrice", "AvgPrice", "EntryPrice");
+                var mark = Dec(p, "MarkPrice");
+                if (entry <= 0) entry = mark;
+                if (mark <= 0) mark = entry;
+                var lev = (int)Math.Max(1m, Dec(p, "Leverage"));
+                if (lev < 1) lev = 1;
                 var size = qty * entry;
-                var margin = lev > 0 ? size / lev : size;
-                var pnl = p.UnrealizedPnl;
+                var margin = Dec(p, "PositionBalance", "PositionIM", "PositionMargin");
+                if (margin <= 0 && lev > 0) margin = size / lev;
+                var pnl = Dec(p, "UnrealizedPnl", "UnrealisedPnl");
+                var liq = Dec(p, "LiquidationPrice", "LiqPrice");
                 var roi = margin > 0 ? pnl / margin : 0m;
 
                 list.Add(new BybitPositionDto(
-                    Symbol: (p.Symbol ?? "").ToUpperInvariant(),
+                    Symbol: Str(p, "Symbol").ToUpperInvariant(),
                     Side: side,
                     Leverage: lev,
                     Qty: qty,
                     EntryPrice: entry,
                     MarkPrice: mark,
-                    LiqPrice: p.LiquidationPrice,
+                    LiqPrice: liq,
                     Margin: margin,
                     Pnl: pnl,
                     Roi: roi));
@@ -95,10 +102,10 @@ public sealed class BybitAccountReadService
             var client = _factory.TryCreateRestClient();
             if (client == null) return list;
 
+            // Minimal overload — avoid openOnly bool vs int? mismatch across Bybit.Net versions
             var res = await client.V5Api.Trading.GetOrdersAsync(
-                Category.Linear,
+                category: Category.Linear,
                 settleAsset: "USDT",
-                openOnly: true,
                 limit: 50,
                 ct: ct).ConfigureAwait(false);
 
@@ -110,15 +117,33 @@ public sealed class BybitAccountReadService
 
             foreach (var o in res.Data.List)
             {
+                // Prefer open / new / partially filled
+                var status = Str(o, "Status", "OrderStatus").ToLowerInvariant();
+                if (status.Length > 0
+                    && status is not ("new" or "partiallyfilled" or "untriggered" or "created" or "active"))
+                {
+                    // still include reduce-only conditional if status empty/unknown
+                    if (status is "filled" or "cancelled" or "canceled" or "rejected" or "deactivated")
+                        continue;
+                }
+
+                var orderIdStr = Str(o, "OrderId");
+                long.TryParse(orderIdStr, out var orderId);
+                var price = Dec(o, "Price");
+                if (price <= 0) price = Dec(o, "TriggerPrice", "StopLoss", "TakeProfit");
+                var stopType = Str(o, "StopOrderType");
+
                 list.Add(new BybitOrderDto(
-                    OrderId: long.TryParse(o.OrderId, out var id) ? id : 0,
-                    Symbol: (o.Symbol ?? "").ToUpperInvariant(),
-                    Side: o.Side?.ToString() ?? "",
-                    Type: o.OrderType?.ToString() ?? o.StopOrderType?.ToString() ?? "ORDER",
-                    Price: o.Price > 0 ? o.Price : (o.TriggerPrice > 0 ? o.TriggerPrice : 0),
-                    Qty: o.Quantity,
-                    ReduceOnly: o.ReduceOnly,
-                    IsAlgo: !string.IsNullOrEmpty(o.StopOrderType?.ToString())));
+                    OrderId: orderId,
+                    Symbol: Str(o, "Symbol").ToUpperInvariant(),
+                    Side: Str(o, "Side"),
+                    Type: Str(o, "OrderType", "Type").Length > 0
+                        ? Str(o, "OrderType", "Type")
+                        : (stopType.Length > 0 ? stopType : "ORDER"),
+                    Price: price,
+                    Qty: Math.Abs(Dec(o, "Quantity", "Qty", "Size")),
+                    ReduceOnly: Bool(o, "ReduceOnly"),
+                    IsAlgo: stopType.Length > 0));
             }
         }
         catch (Exception ex)
@@ -152,17 +177,14 @@ public sealed class BybitAccountReadService
 
             foreach (var x in res.Data.List)
             {
-                var side = x.Side?.ToString() ?? "";
                 list.Add(new BybitHistoryDto(
-                    Symbol: (x.Symbol ?? "").ToUpperInvariant(),
-                    Side: side,
-                    Qty: Math.Abs(x.Qty),
-                    AvgEntryPrice: x.AvgEntryPrice,
-                    AvgExitPrice: x.AvgExitPrice,
-                    RealizedPnl: x.ClosedPnl,
-                    ClosedTimeUtc: x.UpdatedTime == default
-                        ? DateTime.UtcNow
-                        : x.UpdatedTime.UtcDateTime));
+                    Symbol: Str(x, "Symbol").ToUpperInvariant(),
+                    Side: Str(x, "Side"),
+                    Qty: Math.Abs(Dec(x, "ClosedSize", "Qty", "Quantity", "Size")),
+                    AvgEntryPrice: Dec(x, "AvgEntryPrice", "EntryPrice", "AvgEntry"),
+                    AvgExitPrice: Dec(x, "AvgExitPrice", "ExitPrice", "AvgExit", "OrderPrice"),
+                    RealizedPnl: Dec(x, "ClosedPnl", "ClosedPnL", "RealisedPnl", "RealizedPnl"),
+                    ClosedTimeUtc: Time(x, "UpdatedTime", "CreatedTime", "ExecTime", "OpenTime")));
             }
         }
         catch (Exception ex)
@@ -171,6 +193,86 @@ public sealed class BybitAccountReadService
         }
 
         return list.OrderByDescending(h => h.ClosedTimeUtc).ToList();
+    }
+
+    // ── reflection helpers (Bybit.Net property names differ by version) ──
+    static object? Prop(object obj, string name)
+    {
+        var p = obj.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+        return p?.GetValue(obj);
+    }
+
+    static string Str(object obj, params string[] names)
+    {
+        foreach (var n in names)
+        {
+            var v = Prop(obj, n);
+            if (v == null) continue;
+            var s = v.ToString();
+            if (!string.IsNullOrWhiteSpace(s)) return s!;
+        }
+        return "";
+    }
+
+    static decimal Dec(object obj, params string[] names)
+    {
+        foreach (var n in names)
+        {
+            var v = Prop(obj, n);
+            if (v == null) continue;
+            try
+            {
+                if (v is decimal d) return d;
+                if (v is double db) return (decimal)db;
+                if (v is float f) return (decimal)f;
+                if (v is int i) return i;
+                if (v is long l) return l;
+                if (v is string s && decimal.TryParse(s, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+                    return parsed;
+                // Nullable<T>
+                var t = v.GetType();
+                if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(Nullable<>))
+                {
+                    if (v != null) return Convert.ToDecimal(v);
+                }
+                return Convert.ToDecimal(v);
+            }
+            catch { /* try next name */ }
+        }
+        return 0m;
+    }
+
+    static bool Bool(object obj, params string[] names)
+    {
+        foreach (var n in names)
+        {
+            var v = Prop(obj, n);
+            if (v is bool b) return b;
+        }
+        return false;
+    }
+
+    static DateTime Time(object obj, params string[] names)
+    {
+        foreach (var n in names)
+        {
+            var v = Prop(obj, n);
+            if (v == null) continue;
+            try
+            {
+                if (v is DateTime dt) return DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+                if (v is DateTimeOffset dto) return dto.UtcDateTime;
+                if (v is long ms)
+                {
+                    if (ms > 1_000_000_000_000) // ms
+                        return DateTimeOffset.FromUnixTimeMilliseconds(ms).UtcDateTime;
+                    return DateTimeOffset.FromUnixTimeSeconds(ms).UtcDateTime;
+                }
+            }
+            catch { }
+        }
+        return DateTime.UtcNow;
     }
 }
 
