@@ -808,6 +808,12 @@
                     Positions
                     <span class="mk-oo-count">@DisplayedPositions.Count</span>
                 </button>
+                <button class="mk-oo-tab @(_ooActiveTab == "bybit-positions" ? "mk-oo-tab-on" : "")"
+                        @onclick="ShowBybitPositionsTab"
+                        title="Bybit open positions">
+                    Bybit Positions
+                    <span class="mk-oo-count">@_bybitPositions.Count</span>
+                </button>
                 <button class="mk-oo-tab @(_ooActiveTab == "orders" ? "mk-oo-tab-on" : "")"
                         @onclick="ShowOrdersTab">
                     Orders
@@ -823,6 +829,12 @@
                         @onclick="ShowHistoryTab">
                     History
                     <span class="mk-oo-count">@(_demoMode ? _demoSnapshot.History.Count : _realHistory.Count)</span>
+                </button>
+                <button class="mk-oo-tab @(_ooActiveTab == "bybit-history" ? "mk-oo-tab-on" : "")"
+                        @onclick="ShowBybitHistoryTab"
+                        title="Bybit closed PnL history">
+                    Bybit History
+                    <span class="mk-oo-count">@_bybitHistory.Count</span>
                 </button>
                 <span class="mk-oo-mode-badge @(_demoMode ? "mk-oo-mode-demo" : "mk-oo-mode-live")">
                     @(_demoMode ? "DEMO" : "LIVE")
@@ -1335,6 +1347,101 @@
                         </table>
                     </div>
                 }
+
+            else if (_ooActiveTab == "bybit-positions")
+            {
+                @if (_demoMode)
+                {
+                    <div class="mk-oo-empty">Bybit positions are LIVE-only</div>
+                }
+                else if (!_bybitDataLoadAttempted && _bybitPositions.Count == 0)
+                {
+                    <div class="mk-oo-empty">Loading Bybit positions…</div>
+                }
+                else if (_bybitPositions.Count == 0)
+                {
+                    <div class="mk-oo-empty">No open Bybit positions</div>
+                }
+                else
+                {
+                    <div class="mk-oo-scroll">
+                        <div class="mk-pos-toolbar">
+                            <span class="mk-ex-badge mk-ex-bybit">BYBIT</span>
+                        </div>
+                        <table class="mk-pos-table">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th><th>Side</th><th>Lev</th>
+                                    <th>Entry</th><th>Mark</th><th>Qty</th>
+                                    <th>Margin</th><th>PnL</th><th>ROI</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var pos in _bybitPositions)
+                                {
+                                    <tr>
+                                        <td class="mk-oo-sym"><span class="mk-ex-badge mk-ex-bybit">BY</span>@pos.Symbol</td>
+                                        <td class="@(pos.Side == "LONG" ? "up" : "dn")">@pos.Side</td>
+                                        <td class="mk-mono">@pos.Leverage×</td>
+                                        <td class="mk-mono">@FmtP(pos.EntryPrice)</td>
+                                        <td class="mk-mono">@FmtP(pos.MarkPrice)</td>
+                                        <td class="mk-mono">@pos.Qty.ToString("G8")</td>
+                                        <td class="mk-mono">@pos.Margin.ToString("F2")</td>
+                                        <td class="mk-mono @(pos.Pnl >= 0 ? "up" : "dn")">@(pos.Pnl >= 0 ? "+" : "")@pos.Pnl.ToString("F2")</td>
+                                        <td class="mk-mono @(pos.Roi >= 0 ? "up" : "dn")">@((pos.Roi * 100).ToString("F1"))%</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            }
+            else if (_ooActiveTab == "bybit-history")
+            {
+                @if (_demoMode)
+                {
+                    <div class="mk-oo-empty">Bybit history is LIVE-only</div>
+                }
+                else if (!_bybitDataLoadAttempted && _bybitHistory.Count == 0)
+                {
+                    <div class="mk-oo-empty">Loading Bybit history…</div>
+                }
+                else if (_bybitHistory.Count == 0)
+                {
+                    <div class="mk-oo-empty">No Bybit closed history</div>
+                }
+                else
+                {
+                    <div class="mk-oo-scroll">
+                        <div class="mk-pos-toolbar">
+                            <span class="mk-ex-badge mk-ex-bybit">BYBIT</span>
+                        </div>
+                        <table class="mk-pos-table">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th><th>Side</th><th>Qty</th>
+                                    <th>Entry</th><th>Exit</th><th>PnL</th><th>Closed</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var h in _bybitHistory)
+                                {
+                                    <tr>
+                                        <td class="mk-oo-sym"><span class="mk-ex-badge mk-ex-bybit">BY</span>@h.Symbol</td>
+                                        <td>@h.Side</td>
+                                        <td class="mk-mono">@h.Qty.ToString("G8")</td>
+                                        <td class="mk-mono">@FmtP(h.AvgEntryPrice)</td>
+                                        <td class="mk-mono">@FmtP(h.AvgExitPrice)</td>
+                                        <td class="mk-mono @(h.RealizedPnl >= 0 ? "up" : "dn")">@(h.RealizedPnl >= 0 ? "+" : "")@h.RealizedPnl.ToString("F2")</td>
+                                        <td class="mk-dim">@h.ClosedTimeUtc.ToLocalTime().ToString("MM/dd HH:mm")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            }
+
             }
         </div>
 
@@ -6805,6 +6912,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 .OrderByDescending(p => Math.Abs(p.Pnl))
                 .ToList();
 
+            // Bybit positions + history → separate lists (own tabs)
+            await LoadBybitAccountDataAsync();
+
             // ── TASK 2 FIX: Preload klines for position symbols ───────────
             // klines_bootstrap.json only contains symbols in the Engine's
             // universe. Manually opened positions on symbols outside the
@@ -7317,7 +7427,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     List<OpenOrderRow> _openOrders = new();
     List<OpenOrderRow> _bybitOpenOrders = new();
+    List<ActivePositionInfo> _bybitPositions = new();
+    List<BybitHistoryDto> _bybitHistory = new();
     bool _bybitOrdersLoadAttempted;
+    bool _bybitDataLoadAttempted;
     string _lastAlgoOrdersDebug = "";
     string _ooActiveTab = "positions";
     string _ordSubTab   = "algo";  // default to Algo tab (TP/SL orders most relevant)
@@ -7325,6 +7438,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     void ShowPositionsTab() { _ooActiveTab = "positions"; _ = SaveSelectionState(); }
     void ShowOrdersTab() { _ooActiveTab = "orders"; _ = SaveSelectionState(); }
     void ShowBybitOrdersTab() { _ooActiveTab = "bybit-orders"; _ = SaveSelectionState(); }
+    void ShowBybitPositionsTab() { _ooActiveTab = "bybit-positions"; _ = SaveSelectionState(); _ = EnsureBybitDataAsync(); }
+    void ShowBybitHistoryTab() { _ooActiveTab = "bybit-history"; _ = SaveSelectionState(); _ = EnsureBybitDataAsync(); }
 
     void ShowHistoryTab()
     {
