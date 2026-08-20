@@ -80,7 +80,7 @@ public sealed class BybitClientFactory
             var useTestnet = _options.CurrentValue.UseTestnet;
             var client = new BybitRestClient(opts =>
             {
-                opts.ApiCredentials = new ApiCredentials(apiKey, apiSecret);
+                opts.ApiCredentials = new SimpleApiCredentials(apiKey, apiSecret);
                 if (useTestnet)
                     opts.Environment = Bybit.Net.BybitEnvironment.Testnet;
             });
