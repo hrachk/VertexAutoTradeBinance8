@@ -300,6 +300,7 @@ public class Program
                     services.AddSingleton<RiskManager>();          // ← теперь SymbolInfoService уже есть
                     services.AddSingleton<BinanceAlgoOrderService>();
                     services.AddSingleton<OrderExecutor>();
+                    services.AddSingleton<BybitOrderExecutor>();
                     services.AddSingleton<OrderCleanerService>();
                     services.AddSingleton<PnLMonitorService>();
 
