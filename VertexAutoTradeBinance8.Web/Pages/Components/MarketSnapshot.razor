@@ -14,7 +14,7 @@
 @inject MissedTradeFileService SignalSvc
 @inject LiveSignalFileService LiveSignalSvc
 @inject BinanceClientFactory Factory
-@inject BybitAccountReadService BybitAccount
+@inject VertexAutoTradeBinance8.Web.Services.BybitAccountReadService BybitAccount
 @inject VertexAutoTradeBinance8.Services.BinanceAlgoOrderService AlgoOrders
 @inject VertexAutoTradeBinance8.Web.Services.BinanceTimeService BinanceTime
 @inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoAccount
@@ -810,8 +810,7 @@
                     <span class="mk-oo-count">@DisplayedPositions.Count</span>
                 </button>
                 <button class="mk-oo-tab @(_ooActiveTab == "bybit-positions" ? "mk-oo-tab-on" : "")"
-                        @onclick="ShowBybitPositionsTab"
-                        title="Bybit open positions">
+                        @onclick="ShowBybitPositionsTab">
                     Bybit Positions
                     <span class="mk-oo-count">@_bybitPositions.Count</span>
                 </button>
@@ -821,8 +820,7 @@
                     <span class="mk-oo-count">@(_demoMode ? _demoSnapshot.PendingOrders.Count : _openOrders.Count)</span>
                 </button>
                 <button class="mk-oo-tab @(_ooActiveTab == "bybit-orders" ? "mk-oo-tab-on" : "")"
-                        @onclick="ShowBybitOrdersTab"
-                        title="Bybit open orders">
+                        @onclick="ShowBybitOrdersTab">
                     Bybit Orders
                     <span class="mk-oo-count">@_bybitOpenOrders.Count</span>
                 </button>
@@ -832,8 +830,7 @@
                     <span class="mk-oo-count">@(_demoMode ? _demoSnapshot.History.Count : _realHistory.Count)</span>
                 </button>
                 <button class="mk-oo-tab @(_ooActiveTab == "bybit-history" ? "mk-oo-tab-on" : "")"
-                        @onclick="ShowBybitHistoryTab"
-                        title="Bybit closed PnL history">
+                        @onclick="ShowBybitHistoryTab">
                     Bybit History
                     <span class="mk-oo-count">@_bybitHistory.Count</span>
                 </button>
@@ -1015,7 +1012,6 @@
                                     <tr class="mk-pos-row @(PosIdentityEquals(_selectedPosition, pos) ? "mk-pos-row-sel" : "") @(PosIdentityEquals(_selectingPosition, pos) ? "mk-pos-row-loading" : "")"
                                         @onclick="() => SelectPosition(pos)">
                                         <td class="mk-oo-sym">
-                                            <span class="mk-ex-badge mk-ex-@(pos.Exchange?.ToLowerInvariant() ?? "binance")" title="@pos.Exchange">@(pos.Exchange == "Bybit" ? "BY" : pos.Exchange == "Demo" ? "DM" : "BN")</span>
                                             @pos.Symbol
                                             @if (recentDcaSymbols.Contains(pos.Symbol))
                                             {
@@ -1139,7 +1135,7 @@
                     </div>
                 }
             }
-            else if (_ooActiveTab == "orders")
+            else
             {
                 @if (_demoMode)
                 {
@@ -1161,7 +1157,7 @@
                                     @foreach (var o in _demoSnapshot.PendingOrders)
                                     {
                                         <tr>
-                                            <td class="mk-oo-sym"><span class="mk-ex-badge mk-ex-demo">DM</span>@o.Symbol</td>
+                                            <td class="mk-oo-sym">@o.Symbol</td>
                                             <td class="@(o.Side == "LONG" ? "up" : "dn")">@o.Side</td>
                                             <td class="mk-dim">@(o.Type == DemoOrderType.Limit ? "LIMIT" : "STOP_MARKET")</td>
                                             <td class="mk-mono">@FmtP(o.TriggerPrice)</td>
@@ -1228,7 +1224,7 @@
                                 {
                                     bool isEditing = _editingOrderId == o.OrderId.ToString();
                                     <tr class="mk-oo-row-clickable @(isEditing ? "mk-oo-editing" : "")" @onclick="() => PickSym(o.Symbol)">
-                                        <td class="mk-oo-sym"><span class="mk-ex-badge mk-ex-binance">BN</span>@o.Symbol</td>
+                                        <td class="mk-oo-sym">@o.Symbol</td>
                                         <td class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</td>
                                         <td class="mk-dim" style="font-size:11px">@o.Type @(o.ReduceOnly ? "(R)" : "")</td>
                                         @* ── Price cell ── *@
@@ -1296,68 +1292,13 @@
                 }
                 }
             }
-            else if (_ooActiveTab == "bybit-orders")
-            {
-                @if (_demoMode)
-                {
-                    <div class="mk-oo-empty">Bybit orders are LIVE-only (switch off DEMO)</div>
-                }
-                else if (!_bybitOrdersLoadAttempted && _bybitOpenOrders.Count == 0)
-                {
-                    <div class="mk-oo-empty">Loading Bybit orders…</div>
-                }
-                else if (_bybitOpenOrders.Count == 0)
-                {
-                    <div class="mk-oo-empty">No open Bybit orders</div>
-                }
-                else
-                {
-                    <div class="mk-oo-scroll">
-                        <div class="mk-pos-toolbar">
-                            <label class="mk-pos-filter-cb">
-                                <input type="checkbox" @bind="_posFilterCurrentSym" /> Only <strong>@_activeSym</strong>
-                            </label>
-                            <span class="mk-ex-badge mk-ex-bybit">BYBIT</span>
-                        </div>
-                        <table class="mk-oo-tbl">
-                            <thead>
-                                <tr>
-                                    <th>Symbol</th><th>Side</th><th>Type</th>
-                                    <th>Price</th><th>Qty</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                @{
-                                    var bybitShow = _posFilterCurrentSym && !string.IsNullOrEmpty(_activeSym)
-                                        ? _bybitOpenOrders.Where(o => o.Symbol == _activeSym).ToList()
-                                        : _bybitOpenOrders;
-                                }
-                                @foreach (var o in bybitShow)
-                                {
-                                    <tr>
-                                        <td class="mk-oo-sym">
-                                            <span class="mk-ex-badge mk-ex-bybit">BY</span>@o.Symbol
-                                        </td>
-                                        <td class="@(o.Side.Contains("BUY", StringComparison.OrdinalIgnoreCase) ? "up" : "dn")">@o.Side</td>
-                                        <td class="mk-dim" style="font-size:11px">@o.Type @(o.ReduceOnly ? "(R)" : "")</td>
-                                        <td class="mk-mono">@FmtP(o.Price)</td>
-                                        <td class="mk-mono">@o.Qty.ToString("G8")</td>
-                                    </tr>
-                                }
-                            </tbody>
-                        </table>
-                    </div>
-                }
 
+            @* ── Bybit-only tabs (independent @if — do not chain onto Binance if/else) ── *@
             @if (_ooActiveTab == "bybit-positions")
             {
                 @if (_demoMode)
                 {
                     <div class="mk-oo-empty">Bybit positions are LIVE-only</div>
-                }
-                else if (!_bybitDataLoadAttempted && _bybitPositions.Count == 0)
-                {
-                    <div class="mk-oo-empty">Loading Bybit positions…</div>
                 }
                 else if (_bybitPositions.Count == 0)
                 {
@@ -1366,15 +1307,12 @@
                 else
                 {
                     <div class="mk-oo-scroll">
-                        <div class="mk-pos-toolbar">
-                            <span class="mk-ex-badge mk-ex-bybit">BYBIT</span>
-                        </div>
                         <table class="mk-pos-table">
                             <thead>
                                 <tr>
                                     <th>Symbol</th><th>Side</th><th>Lev</th>
                                     <th>Entry</th><th>Mark</th><th>Qty</th>
-                                    <th>Margin</th><th>PnL</th><th>ROI</th>
+                                    <th>PnL</th><th>ROI</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -1387,9 +1325,44 @@
                                         <td class="mk-mono">@FmtP(pos.EntryPrice)</td>
                                         <td class="mk-mono">@FmtP(pos.MarkPrice)</td>
                                         <td class="mk-mono">@pos.Qty.ToString("G8")</td>
-                                        <td class="mk-mono">@pos.Margin.ToString("F2")</td>
                                         <td class="mk-mono @(pos.Pnl >= 0 ? "up" : "dn")">@(pos.Pnl >= 0 ? "+" : "")@pos.Pnl.ToString("F2")</td>
                                         <td class="mk-mono @(pos.Roi >= 0 ? "up" : "dn")">@((pos.Roi * 100).ToString("F1"))%</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            }
+            @if (_ooActiveTab == "bybit-orders")
+            {
+                @if (_demoMode)
+                {
+                    <div class="mk-oo-empty">Bybit orders are LIVE-only</div>
+                }
+                else if (_bybitOpenOrders.Count == 0)
+                {
+                    <div class="mk-oo-empty">No open Bybit orders</div>
+                }
+                else
+                {
+                    <div class="mk-oo-scroll">
+                        <table class="mk-oo-tbl">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th><th>Side</th><th>Type</th>
+                                    <th>Price</th><th>Qty</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var o in _bybitOpenOrders)
+                                {
+                                    <tr>
+                                        <td class="mk-oo-sym"><span class="mk-ex-badge mk-ex-bybit">BY</span>@o.Symbol</td>
+                                        <td class="@(o.Side.Contains("BUY", StringComparison.OrdinalIgnoreCase) ? "up" : "dn")">@o.Side</td>
+                                        <td class="mk-dim" style="font-size:11px">@o.Type</td>
+                                        <td class="mk-mono">@FmtP(o.Price)</td>
+                                        <td class="mk-mono">@o.Qty.ToString("G8")</td>
                                     </tr>
                                 }
                             </tbody>
@@ -1403,10 +1376,6 @@
                 {
                     <div class="mk-oo-empty">Bybit history is LIVE-only</div>
                 }
-                else if (!_bybitDataLoadAttempted && _bybitHistory.Count == 0)
-                {
-                    <div class="mk-oo-empty">Loading Bybit history…</div>
-                }
                 else if (_bybitHistory.Count == 0)
                 {
                     <div class="mk-oo-empty">No Bybit closed history</div>
@@ -1414,9 +1383,6 @@
                 else
                 {
                     <div class="mk-oo-scroll">
-                        <div class="mk-pos-toolbar">
-                            <span class="mk-ex-badge mk-ex-bybit">BYBIT</span>
-                        </div>
                         <table class="mk-pos-table">
                             <thead>
                                 <tr>
@@ -1442,6 +1408,7 @@
                     </div>
                 }
             }
+
         </div>
 
         </div> <!-- end mk-main-col -->
@@ -6911,9 +6878,6 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 .OrderByDescending(p => Math.Abs(p.Pnl))
                 .ToList();
 
-            // Bybit positions + history → separate lists (own tabs)
-            await LoadBybitAccountDataAsync();
-
             // ── TASK 2 FIX: Preload klines for position symbols ───────────
             // klines_bootstrap.json only contains symbols in the Engine's
             // universe. Manually opened positions on symbols outside the
@@ -7422,72 +7386,18 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Filled;
         public bool ReduceOnly;
         public bool IsAlgo;
-        /// <summary>Binance | Bybit</summary>
-        public string Exchange = "Binance";
     }
 
     List<OpenOrderRow> _openOrders = new();
     List<OpenOrderRow> _bybitOpenOrders = new();
     List<ActivePositionInfo> _bybitPositions = new();
-    List<BybitHistoryDto> _bybitHistory = new();
-    bool _bybitOrdersLoadAttempted;
-    bool _bybitDataLoadAttempted;
+    List<VertexAutoTradeBinance8.Web.Services.BybitHistoryDto> _bybitHistory = new();
     string _lastAlgoOrdersDebug = "";
     string _ooActiveTab = "positions";
     string _ordSubTab   = "algo";  // default to Algo tab (TP/SL orders most relevant)
 
     void ShowPositionsTab() { _ooActiveTab = "positions"; _ = SaveSelectionState(); }
     void ShowOrdersTab() { _ooActiveTab = "orders"; _ = SaveSelectionState(); }
-    void ShowBybitOrdersTab() { _ooActiveTab = "bybit-orders"; _ = SaveSelectionState(); }
-    void ShowBybitPositionsTab() { _ooActiveTab = "bybit-positions"; _ = SaveSelectionState(); _ = EnsureBybitDataAsync(); }
-    void ShowBybitHistoryTab() { _ooActiveTab = "bybit-history"; _ = SaveSelectionState(); _ = EnsureBybitDataAsync(); }
-
-    async Task EnsureBybitDataAsync()
-    {
-        if (_demoMode) return;
-        await LoadBybitAccountDataAsync();
-        await InvokeAsync(StateHasChanged);
-    }
-
-    async Task LoadBybitAccountDataAsync()
-    {
-        _bybitDataLoadAttempted = true;
-        if (_demoMode || !BybitAccount.IsEnabled)
-        {
-            _bybitPositions = new();
-            _bybitHistory = new();
-            return;
-        }
-        try
-        {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var posTask = BybitAccount.GetOpenPositionsAsync(cts.Token);
-            var histTask = BybitAccount.GetClosedHistoryAsync(cts.Token);
-            await Task.WhenAll(posTask, histTask);
-            var pos = await posTask;
-            _bybitPositions = pos.Select(bp => new ActivePositionInfo
-            {
-                Symbol = bp.Symbol,
-                Side = bp.Side,
-                Exchange = "Bybit",
-                Leverage = bp.Leverage,
-                Size = bp.Qty * bp.EntryPrice,
-                Qty = bp.Qty,
-                EntryPrice = bp.EntryPrice,
-                MarkPrice = bp.MarkPrice,
-                LiqPrice = bp.LiqPrice,
-                Margin = bp.Margin,
-                Pnl = bp.Pnl,
-                Roi = bp.Roi
-            }).OrderByDescending(p => Math.Abs(p.Pnl)).ToList();
-            _bybitHistory = await histTask;
-        }
-        catch
-        {
-            /* keep last known */
-        }
-    }
-
 
     void ShowHistoryTab()
     {
@@ -7850,7 +7760,6 @@ sealed class RealTradeRow
                     Qty        = o.Quantity,
                     Filled     = o.QuantityFilled,
                     ReduceOnly = o.ReduceOnly,
-                    Exchange   = "Binance",
                 })
                 .ToList();
 
@@ -7861,42 +7770,10 @@ sealed class RealTradeRow
 
             _openOrders = regularOrders
                 .Concat(algoOrders)
-                .Select(o => { if (string.IsNullOrEmpty(o.Exchange)) o.Exchange = "Binance"; return o; })
                 .GroupBy(o => o.OrderId)
                 .Select(g => g.First())
                 .OrderBy(o => o.Symbol)
                 .ToList();
-
-            // Bybit open orders → separate list (own tab)
-            _bybitOrdersLoadAttempted = true;
-            try
-            {
-                if (BybitAccount.IsEnabled)
-                {
-                    using var bCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-                    var bOrders = await BybitAccount.GetOpenOrdersAsync(bCts.Token);
-                    _bybitOpenOrders = bOrders.Select(bo => new OpenOrderRow
-                    {
-                        OrderId = bo.OrderId,
-                        Symbol = bo.Symbol,
-                        Side = bo.Side.ToUpperInvariant(),
-                        Type = bo.Type,
-                        Price = bo.Price,
-                        Qty = bo.Qty,
-                        ReduceOnly = bo.ReduceOnly,
-                        IsAlgo = bo.IsAlgo,
-                        Exchange = "Bybit"
-                    }).OrderBy(o => o.Symbol).ToList();
-                }
-                else
-                {
-                    _bybitOpenOrders = new();
-                }
-            }
-            catch
-            {
-                _bybitOpenOrders = new();
-            }
 
             await InvokeAsync(StateHasChanged);
         }
@@ -8952,8 +8829,6 @@ sealed class RealTradeRow
         public string Id = ""; // empty for real positions (Symbol+Side used as identity there); demo positions carry their real DemoPosition.Id
         public string Symbol = "";
         public string Side = "";
-        /// <summary>Binance | Bybit | Demo</summary>
-        public string Exchange = "Binance";
         public int Leverage;
         public decimal Size;
         public decimal Qty;
