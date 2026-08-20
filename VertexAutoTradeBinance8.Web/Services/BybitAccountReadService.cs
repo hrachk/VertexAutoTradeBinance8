@@ -6,8 +6,7 @@ using VertexAutoTradeBinance8.Services;
 namespace VertexAutoTradeBinance8.Web.Services;
 
 /// <summary>
-/// Read-only Bybit linear positions & open orders for /market UI.
-/// Does not place orders — execution stays in Engine BybitOrderExecutor.
+/// Read-only Bybit linear positions, open orders, closed PnL for /market UI tabs.
 /// </summary>
 public sealed class BybitAccountReadService
 {
@@ -37,7 +36,6 @@ public sealed class BybitAccountReadService
             var client = _factory.TryCreateRestClient();
             if (client == null) return list;
 
-            // V5 linear positions (USDT settle)
             var res = await client.V5Api.Trading.GetPositionsAsync(
                 Category.Linear,
                 settleAsset: "USDT",
@@ -130,8 +128,6 @@ public sealed class BybitAccountReadService
 
         return list;
     }
-}
-
 
     public async Task<List<BybitHistoryDto>> GetClosedHistoryAsync(CancellationToken ct = default)
     {
@@ -143,7 +139,6 @@ public sealed class BybitAccountReadService
             var client = _factory.TryCreateRestClient();
             if (client == null) return list;
 
-            // Closed PnL (linear USDT)
             var res = await client.V5Api.Trading.GetClosedProfitLossAsync(
                 Category.Linear,
                 limit: 50,
@@ -158,7 +153,6 @@ public sealed class BybitAccountReadService
             foreach (var x in res.Data.List)
             {
                 var side = x.Side?.ToString() ?? "";
-                if (string.IsNullOrEmpty(side) && x.Qty < 0) side = "Sell";
                 list.Add(new BybitHistoryDto(
                     Symbol: (x.Symbol ?? "").ToUpperInvariant(),
                     Side: side,
@@ -166,7 +160,9 @@ public sealed class BybitAccountReadService
                     AvgEntryPrice: x.AvgEntryPrice,
                     AvgExitPrice: x.AvgExitPrice,
                     RealizedPnl: x.ClosedPnl,
-                    ClosedTimeUtc: x.UpdatedTime == default ? DateTime.UtcNow : x.UpdatedTime.UtcDateTime));
+                    ClosedTimeUtc: x.UpdatedTime == default
+                        ? DateTime.UtcNow
+                        : x.UpdatedTime.UtcDateTime));
             }
         }
         catch (Exception ex)
@@ -176,6 +172,7 @@ public sealed class BybitAccountReadService
 
         return list.OrderByDescending(h => h.ClosedTimeUtc).ToList();
     }
+}
 
 public sealed record BybitPositionDto(
     string Symbol, string Side, int Leverage, decimal Qty,
