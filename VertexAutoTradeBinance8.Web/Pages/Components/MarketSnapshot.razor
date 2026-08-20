@@ -14,6 +14,7 @@
 @inject MissedTradeFileService SignalSvc
 @inject LiveSignalFileService LiveSignalSvc
 @inject BinanceClientFactory Factory
+@inject BybitAccountReadService BybitAccount
 @inject VertexAutoTradeBinance8.Services.BinanceAlgoOrderService AlgoOrders
 @inject VertexAutoTradeBinance8.Web.Services.BinanceTimeService BinanceTime
 @inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoAccount
@@ -1160,7 +1161,7 @@
                                     @foreach (var o in _demoSnapshot.PendingOrders)
                                     {
                                         <tr>
-                                            <td class="mk-oo-sym"><span class="mk-ex-badge mk-ex-@((o.Exchange ?? "Binance").ToLowerInvariant())">@(o.Exchange == "Bybit" ? "BY" : "BN")</span>@o.Symbol</td>
+                                            <td class="mk-oo-sym"><span class="mk-ex-badge mk-ex-demo">DM</span>@o.Symbol</td>
                                             <td class="@(o.Side == "LONG" ? "up" : "dn")">@o.Side</td>
                                             <td class="mk-dim">@(o.Type == DemoOrderType.Limit ? "LIMIT" : "STOP_MARKET")</td>
                                             <td class="mk-mono">@FmtP(o.TriggerPrice)</td>
@@ -1227,7 +1228,7 @@
                                 {
                                     bool isEditing = _editingOrderId == o.OrderId.ToString();
                                     <tr class="mk-oo-row-clickable @(isEditing ? "mk-oo-editing" : "")" @onclick="() => PickSym(o.Symbol)">
-                                        <td class="mk-oo-sym"><span class="mk-ex-badge mk-ex-@((o.Exchange ?? "Binance").ToLowerInvariant())">@(o.Exchange == "Bybit" ? "BY" : "BN")</span>@o.Symbol</td>
+                                        <td class="mk-oo-sym"><span class="mk-ex-badge mk-ex-demo">DM</span>@o.Symbol</td>
                                         <td class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</td>
                                         <td class="mk-dim" style="font-size:11px">@o.Type @(o.ReduceOnly ? "(R)" : "")</td>
                                         @* ── Price cell ── *@
@@ -1348,7 +1349,7 @@
                     </div>
                 }
 
-            else if (_ooActiveTab == "bybit-positions")
+            @if (_ooActiveTab == "bybit-positions")
             {
                 @if (_demoMode)
                 {
@@ -1396,7 +1397,7 @@
                     </div>
                 }
             }
-            else if (_ooActiveTab == "bybit-history")
+            @if (_ooActiveTab == "bybit-history")
             {
                 @if (_demoMode)
                 {
@@ -1440,8 +1441,6 @@
                         </table>
                     </div>
                 }
-            }
-
             }
         </div>
 
@@ -7423,6 +7422,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         public decimal Filled;
         public bool ReduceOnly;
         public bool IsAlgo;
+        /// <summary>Binance | Bybit</summary>
+        public string Exchange = "Binance";
     }
 
     List<OpenOrderRow> _openOrders = new();
@@ -8951,6 +8952,8 @@ sealed class RealTradeRow
         public string Id = ""; // empty for real positions (Symbol+Side used as identity there); demo positions carry their real DemoPosition.Id
         public string Symbol = "";
         public string Side = "";
+        /// <summary>Binance | Bybit | Demo</summary>
+        public string Exchange = "Binance";
         public int Leverage;
         public decimal Size;
         public decimal Qty;
