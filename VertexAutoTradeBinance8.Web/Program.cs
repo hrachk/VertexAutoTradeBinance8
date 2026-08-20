@@ -97,6 +97,10 @@ builder.Services.Configure<EngineConfigRoot>(
 
 builder.Services.Configure<VertexAutoTradeBinance8.Configuration.BinanceOptions>(
     builder.Configuration.GetSection("Binance"));
+builder.Services.Configure<VertexAutoTradeBinance8.Configuration.BybitOptions>(
+    builder.Configuration.GetSection("Bybit"));
+builder.Services.Configure<VertexAutoTradeBinance8.Configuration.ExchangeRuntimeOptions>(
+    builder.Configuration.GetSection("Exchanges"));
 
 // Needed so the Market page can determine, per symbol, whether a
 // displayed signal's confidence is actually above the real entry
@@ -128,6 +132,8 @@ builder.Services.AddSingleton<BinanceTimeService>();
 // Per-user LIVE keys (filled by AuthSession when user switches to LIVE)
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Services.TradingCredentialStore>();
 builder.Services.AddSingleton<BinanceClientFactory>();
+builder.Services.AddSingleton<BybitClientFactory>();
+builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.BybitAccountReadService>();
 builder.Services.AddSingleton<MarketDataKlineBuffer>();
 builder.Services.AddSingleton<WsKlineSubscriber>();
 builder.Services.AddSingleton<MarketDataFacade>();
