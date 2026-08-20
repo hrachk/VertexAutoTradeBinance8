@@ -1228,7 +1228,7 @@
                                 {
                                     bool isEditing = _editingOrderId == o.OrderId.ToString();
                                     <tr class="mk-oo-row-clickable @(isEditing ? "mk-oo-editing" : "")" @onclick="() => PickSym(o.Symbol)">
-                                        <td class="mk-oo-sym"><span class="mk-ex-badge mk-ex-demo">DM</span>@o.Symbol</td>
+                                        <td class="mk-oo-sym"><span class="mk-ex-badge mk-ex-binance">BN</span>@o.Symbol</td>
                                         <td class="@(o.Side == "BUY" ? "up" : "dn")">@o.Side</td>
                                         <td class="mk-dim" style="font-size:11px">@o.Type @(o.ReduceOnly ? "(R)" : "")</td>
                                         @* ── Price cell ── *@
