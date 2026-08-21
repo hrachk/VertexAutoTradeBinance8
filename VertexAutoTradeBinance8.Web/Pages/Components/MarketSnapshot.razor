@@ -817,7 +817,7 @@
                 <button class="mk-oo-tab @(_ooActiveTab == "orders" ? "mk-oo-tab-on" : "")"
                         @onclick="ShowOrdersTab">
                     Orders
-                    <span class="mk-oo-count">@(_demoMode ? _demoSnapshot.PendingOrders.Count : _openOrders.Count)</span>
+                    <span class="mk-oo-count">@(_demoMode ? BuildDemoOrderRows().Count : _openOrders.Count)</span>
                 </button>
                 <button class="mk-oo-tab @(_ooActiveTab == "bybit-orders" ? "mk-oo-tab-on" : "")"
                         @onclick="ShowBybitOrdersTab">
@@ -1135,13 +1135,16 @@
                     </div>
                 }
             }
-            else
+            else if (_ooActiveTab == "orders")
             {
                 @if (_demoMode)
                 {
-                    @if (_demoSnapshot.PendingOrders.Count == 0)
+                    @{
+                        var demoOrdRows = BuildDemoOrderRows();
+                    }
+                    @if (demoOrdRows.Count == 0)
                     {
-                        <div class="mk-oo-empty">No open demo orders</div>
+                        <div class="mk-oo-empty">No open demo orders (pending + TP/SL)</div>
                     }
                     else
                     {
@@ -1154,19 +1157,20 @@
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    @foreach (var o in _demoSnapshot.PendingOrders)
+                                    @foreach (var o in demoOrdRows)
                                     {
                                         <tr>
                                             <td class="mk-oo-sym">@o.Symbol</td>
-                                            <td class="@(o.Side == "LONG" ? "up" : "dn")">@o.Side</td>
-                                            <td class="mk-dim">@(o.Type == DemoOrderType.Limit ? "LIMIT" : "STOP_MARKET")</td>
-                                            <td class="mk-mono">@FmtP(o.TriggerPrice)</td>
+                                            <td class="@(o.Side == "LONG" || o.Side == "BUY" ? "up" : "dn")">@o.Side</td>
+                                            <td class="mk-dim">@o.Type</td>
+                                            <td class="mk-mono">@FmtP(o.Price)</td>
                                             <td class="mk-mono">@o.Qty.ToString("G8")</td>
-                                            <td class="mk-dim">@o.Leverage×</td>
+                                            <td class="mk-dim">—</td>
                                             <td>
-                                                <button class="mk-oo-cancel" @onclick="() => CancelDemoPendingOrder(o.Id)">
-                                                    Cancel
-                                                </button>
+                                                @if (!string.IsNullOrEmpty(o.PositionSide) && o.PositionSide.StartsWith("PEND:"))
+                                                {
+                                                    <button class="mk-oo-cancel" @onclick="() => CancelDemoPendingOrder(o.PositionSide.Substring(5))">Cancel</button>
+                                                }
                                             </td>
                                         </tr>
                                     }
@@ -5902,9 +5906,23 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         if (_demoMode)
         {
             decimal price = RoundPrice(newPrice);
-            DemoAccount.UpdatePositionProtectiveLevel(pos.Id, isStopLoss, price, tpIndex);
+            var id = pos.Id;
+            if (string.IsNullOrEmpty(id))
+            {
+                var match = _demoSnapshot.Positions.FirstOrDefault(p =>
+                    p.Symbol == pos.Symbol && p.Side == pos.Side);
+                id = match?.Id ?? "";
+            }
+            if (string.IsNullOrEmpty(id))
+            {
+                _orderError = "Demo position id missing — select position from list first.";
+                await RefreshPositionLines();
+                return;
+            }
+            DemoAccount.UpdatePositionProtectiveLevel(id, isStopLoss, price, tpIndex);
             RefreshDemoSnapshot();
             await RefreshPositionLines();
+            StateHasChanged();
             return;
         }
 
@@ -7399,7 +7417,68 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     string _ordSubTab   = "algo";  // default to Algo tab (TP/SL orders most relevant)
 
     void ShowPositionsTab() { _ooActiveTab = "positions"; _ = SaveSelectionState(); }
-    void ShowOrdersTab() { _ooActiveTab = "orders"; _ = SaveSelectionState(); }
+    void ShowOrdersTab() { _ooActiveTab = "orders"; _ = SaveSelectionState(); if (!_demoMode) _ = LoadOpenOrdersAsync(); }
+
+    /// <summary>
+    /// Demo Orders tab rows = pending limits + protective SL/TP on DemoPosition.
+    /// </summary>
+    List<OpenOrderRow> BuildDemoOrderRows()
+    {
+        var rows = new List<OpenOrderRow>();
+        foreach (var o in _demoSnapshot.PendingOrders)
+        {
+            rows.Add(new OpenOrderRow
+            {
+                OrderId = 0,
+                Symbol = o.Symbol,
+                Side = o.Side,
+                PositionSide = "PEND:" + o.Id,
+                Type = o.Type == DemoOrderType.Limit ? "LIMIT" : "STOP_MARKET",
+                Price = o.TriggerPrice,
+                Qty = o.Qty,
+                ReduceOnly = false,
+                IsAlgo = false,
+            });
+        }
+        foreach (var p in _demoSnapshot.Positions)
+        {
+            if (p.StopLoss.HasValue && p.StopLoss.Value > 0)
+            {
+                rows.Add(new OpenOrderRow
+                {
+                    OrderId = 0,
+                    Symbol = p.Symbol,
+                    Side = p.Side == "LONG" ? "SELL" : "BUY",
+                    PositionSide = p.Side,
+                    Type = "STOP_MARKET",
+                    Price = p.StopLoss.Value,
+                    Qty = p.Qty,
+                    ReduceOnly = true,
+                    IsAlgo = true,
+                });
+            }
+            if (p.TakeProfits != null)
+            {
+                foreach (var tp in p.TakeProfits.Where(x => x.Price > 0))
+                {
+                    rows.Add(new OpenOrderRow
+                    {
+                        OrderId = 0,
+                        Symbol = p.Symbol,
+                        Side = p.Side == "LONG" ? "SELL" : "BUY",
+                        PositionSide = p.Side,
+                        Type = "TAKE_PROFIT",
+                        Price = tp.Price,
+                        Qty = p.Qty * (tp.Pct > 0 ? tp.Pct / 100m : 1m),
+                        ReduceOnly = true,
+                        IsAlgo = true,
+                    });
+                }
+            }
+        }
+        return rows.OrderBy(r => r.Symbol).ThenBy(r => r.Type).ToList();
+    }
+
 
     void ShowBybitPositionsTab()
     {
@@ -7786,7 +7865,7 @@ sealed class RealTradeRow
 
                 result.Add(new OpenOrderRow
                 {
-                    OrderId    = GetLong("algoId"),
+                    OrderId    = GetLong("algoId") != 0 ? GetLong("algoId") : GetLong("orderId"),
                     Symbol     = GetStr("symbol"),
                     Side       = GetStr("side").ToUpperInvariant(),
                     PositionSide = GetStr("positionSide").ToUpperInvariant(),
@@ -7813,49 +7892,58 @@ sealed class RealTradeRow
     {
         try
         {
+            var regularOrders = new List<OpenOrderRow>();
             var client = Factory.TryCreateRestClient();
-            if (client == null) return;
-
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-            var res = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(ct: cts.Token);
-            if (!res.Success || res.Data == null) return;
-
-            var regularOrders = res.Data
-                .Select(o => new OpenOrderRow
+            if (client != null)
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                var res = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(ct: cts.Token);
+                if (res.Success && res.Data != null)
                 {
-                    OrderId    = o.Id,
-                    Symbol     = o.Symbol,
-                    Side       = o.Side.ToString().ToUpperInvariant(),
-                    PositionSide = o.PositionSide.ToString().ToUpperInvariant() ?? "",
-                    Type       = o.Type.ToString(),
-                    // Conditional orders (STOP_MARKET / TAKE_PROFIT_MARKET,
-                    // the ones our own TP/SL drag feature creates) store
-                    // their trigger price in StopPrice — Price is 0 for
-                    // these since they execute at market once triggered.
-                    // Same fallback the Engine's own OrderCleanerService.cs
-                    // already uses.
-                    Price      = o.StopPrice.HasValue && o.StopPrice.Value > 0 ? o.StopPrice.Value : o.Price,
-                    Qty        = o.Quantity,
-                    Filled     = o.QuantityFilled,
-                    ReduceOnly = o.ReduceOnly,
-                })
-                .ToList();
+                    regularOrders = res.Data
+                        .Select(o => new OpenOrderRow
+                        {
+                            OrderId    = o.Id,
+                            Symbol     = o.Symbol,
+                            Side       = o.Side.ToString().ToUpperInvariant(),
+                            PositionSide = o.PositionSide.ToString().ToUpperInvariant() ?? "",
+                            Type       = o.Type.ToString(),
+                            Price      = o.StopPrice.HasValue && o.StopPrice.Value > 0 ? o.StopPrice.Value : o.Price,
+                            Qty        = o.Quantity,
+                            Filled     = o.QuantityFilled,
+                            ReduceOnly = o.ReduceOnly,
+                            IsAlgo     = false,
+                        })
+                        .ToList();
+                }
+                else
+                {
+                    _lastAlgoOrdersDebug = $"regular GetOpenOrders failed: {res.Error?.Message}";
+                }
+            }
+            else
+            {
+                _lastAlgoOrdersDebug = "Binance client null — cannot load regular orders";
+            }
 
-            // Algo (conditional) orders live in a completely separate
-            // Binance service since Dec 2025 — fetched via dedicated
-            // raw HTTP call, see LoadAlgoOpenOrdersRawAsync above.
+            // Algo (conditional TP/SL) — always attempt even if regular failed
             var algoOrders = await LoadAlgoOpenOrdersRawAsync();
 
+            // Composite key: OrderId alone collapses all algo rows when algoId parse fails (0)
             _openOrders = regularOrders
                 .Concat(algoOrders)
-                .GroupBy(o => o.OrderId)
+                .GroupBy(o => $"{o.IsAlgo}|{o.OrderId}|{o.Symbol}|{o.Type}|{o.Price}|{o.Side}")
                 .Select(g => g.First())
                 .OrderBy(o => o.Symbol)
+                .ThenBy(o => o.Type)
                 .ToList();
 
             await InvokeAsync(StateHasChanged);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            _lastAlgoOrdersDebug = $"LoadOpenOrdersAsync: {ex.Message}";
+        }
     }
 
     // Per direct report of "garbage" leftover conditional orders on
