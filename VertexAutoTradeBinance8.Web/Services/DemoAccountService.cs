@@ -385,7 +385,7 @@ public sealed class DemoAccountService
 
             var pos = new DemoPosition
             {
-                Symbol = symbol, Side = side, Qty = qty, InitialQty = qty, InitialQty = qty, Leverage = leverage,
+                Symbol = symbol, Side = side, Qty = qty, InitialQty = qty, Leverage = leverage,
                 EntryPrice = currentPrice, Margin = margin,
                 StopLoss = stopLoss, TakeProfits = takeProfits ?? new(),
                 OpenedAtUtc = DateTime.UtcNow,
@@ -750,7 +750,7 @@ public sealed class DemoAccountService
                 {
                     _state.Positions.Add(new DemoPosition
                     {
-                        Symbol = order.Symbol, Side = order.Side, Qty = order.Qty, Leverage = order.Leverage,
+                        Symbol = order.Symbol, Side = order.Side, Qty = order.Qty, InitialQty = order.Qty, Leverage = order.Leverage,
                         EntryPrice = price, Margin = margin, StopLoss = order.StopLoss, TakeProfits = order.TakeProfits,
                     });
                 }
