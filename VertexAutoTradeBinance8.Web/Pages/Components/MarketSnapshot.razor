@@ -243,19 +243,22 @@
                                 <span class="sc-new-dot" title="New signal — not yet viewed"></span>
                             }
     
-                            <!-- COMPACT (always visible): symbol, side, time, pin button -->
+                            @* Pin — absolute top-right on card (not inside flex row — was clipped) *@
+                            <button type="button"
+                                    class="sc-pin-btn @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-pin-btn-on" : "")"
+                                    title="@(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "Unpin" : "Pin — keep expanded")"
+                                    @onclick="() => TogglePinSignal(sig)"
+                                    @onclick:stopPropagation="true">
+                                @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "PIN✓" : "PIN")
+                            </button>
+
+                            <!-- COMPACT (always visible): symbol, side, conf -->
                             <div class="sc-top">
                                 <span class="sc-side @(sigIsBuy ? "sc-side-b" : "sc-side-s")">
                                     @(sigIsBuy ? "▲ LONG" : "▼ SHORT")
                                 </span>
                                 <span class="sc-sym">@sig.Symbol.Replace("USDT","")<span class="sc-usdt">USDT</span></span>
                                 <span class="sc-conf-pct" style="color:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")">@conf%</span>
-                                @* Pin button — right-aligned, always visible *@
-                                <button class="sc-pin-btn @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-pin-btn-on" : "")"
-                                        title="@(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "Unpin" : "Pin (keep expanded)")"
-                                        @onclick="() => TogglePinSignal(sig)" @onclick:stopPropagation="true">
-                                    📌
-                                </button>
                             </div>
                             <!-- Meta row: TF + RR + confidence % -->
                             <div class="sc-meta">
@@ -2312,6 +2315,47 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
 .sc-threshold-badge{font-size:9.5px;font-weight:700;color:#eab308;background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.3);border-radius:5px;padding:2px 7px;margin-bottom:6px;display:inline-block;cursor:help;}
 .sc-top{display:flex;align-items:center;gap:6px;margin-bottom:5px;}
+/* === PIN BUTTON (must win over all prior rules) === */
+.sig-card{position:relative!important;overflow:visible!important;}
+.sig-card .sc-pin-btn{
+  position:absolute!important;
+  top:8px!important;
+  right:8px!important;
+  z-index:50!important;
+  display:inline-flex!important;
+  align-items:center;
+  justify-content:center;
+  height:22px!important;
+  min-width:36px!important;
+  padding:0 8px!important;
+  margin:0!important;
+  font-size:10px!important;
+  font-weight:800!important;
+  letter-spacing:.4px!important;
+  line-height:1!important;
+  color:#e2e8f0!important;
+  background:#1e293b!important;
+  border:1px solid #64748b!important;
+  border-radius:5px!important;
+  cursor:pointer!important;
+  opacity:1!important;
+  visibility:visible!important;
+  pointer-events:auto!important;
+  box-shadow:0 2px 6px rgba(0,0,0,.4);
+}
+.sig-card .sc-pin-btn:hover{
+  background:#2563eb!important;
+  border-color:#60a5fa!important;
+  color:#fff!important;
+}
+.sig-card .sc-pin-btn.sc-pin-btn-on{
+  background:#1d4ed8!important;
+  border-color:#93c5fd!important;
+  color:#fff!important;
+}
+.sig-card .sc-top{padding-right:44px!important;}
+.sig-card .sc-new-dot{right:48px!important;}
+
 /* sc-sym-wrap removed — sym is inline with side badge */
 .sc-sym{font-family:var(--mono);font-size:14px;font-weight:800;color:var(--txt);}
 .sc-usdt{font-size:9px;color:var(--dim2);margin-left:1px;}
@@ -2348,13 +2392,13 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-card.sc-pinned.sc-removing{opacity:1!important;animation:none!important;}
 .sig-card.sc-pinned .sc-expand,
 .sig-card.sc-pinned .sc-expand-pinned{display:block!important;position:static!important;}
-.sc-pin-btn{margin-left:auto;background:transparent;border:1px solid transparent;border-radius:4px;cursor:pointer;font-size:12px;padding:2px 5px;opacity:.55;transition:opacity .15s,background .15s;}
-.sc-pin-btn:hover{opacity:1;background:rgba(59,130,246,.12);}
-.sc-pin-btn-on{opacity:1;border-color:rgba(59,130,246,.4);background:rgba(59,130,246,.15);}
 
-.sc-pin-btn{background:none;border:none;font-size:11px;opacity:.6;cursor:pointer;padding:0 2px;line-height:1;margin-left:auto;flex-shrink:0;}
-.sc-pin-btn:hover{opacity:.8;}
-.sc-pin-btn.sc-pin-btn-on{opacity:1;}
+
+
+
+
+
+.sc-pin-btn
 .sc-expand{display:none;}
 .sc-expand-pinned{display:block!important;position:static!important;margin:8px -14px -10px;padding:10px 14px;border-top:1px solid var(--bdr);}
 .sc-float-overlay{position:fixed;display:none;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;box-shadow:0 12px 28px rgba(0,0,0,.45);z-index:200;width:260px;pointer-events:none;}
