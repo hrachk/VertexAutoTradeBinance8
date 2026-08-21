@@ -2156,7 +2156,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
 /* CHARTS */
 .mk-charts-area{background:var(--bg2);padding:16px 20px;border-bottom:1px solid var(--bdr);position:relative;}
-.mk-body-grid{display:grid;grid-template-columns:240px 1fr;gap:16px;align-items:start;}
+.mk-body-grid{display:grid;grid-template-columns:240px 1fr;gap:16px;align-items:stretch;}
 .mk-body-grid-with-panel{grid-template-columns:240px 1fr 360px;}
 @@media(max-width:1300px){.mk-body-grid{grid-template-columns:1fr;}.mk-body-grid-with-panel{grid-template-columns:1fr;}}
 .mk-main-col{min-width:0;display:flex;flex-direction:column;gap:16px;}
@@ -2277,9 +2277,9 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
 /* SIGNAL PANEL */
 /* .mk-sticky-top removed — signals now in left panel */
-.sig-panel{background:var(--bg1);border-bottom:1px solid var(--bdr);padding:0;overflow:hidden;flex:1;min-height:180px;max-height:48%;display:flex;flex-direction:column;min-width:0;width:100%;}
+.sig-panel{background:var(--bg1);border-bottom:1px solid var(--bdr);padding:0;overflow:hidden;flex:0 0 auto;height:32vh;max-height:260px;min-height:140px;display:flex;flex-direction:column;min-width:0;width:100%;}
 /* sig-panel .sig-cards override consolidated into base .sig-cards rule */
-.sig-panel .sig-cards{flex:1;min-height:0;min-width:0;width:100%;padding:6px;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;-ms-overflow-style:none;}
+.sig-panel .sig-cards{flex:1 1 auto;min-height:0!important;min-width:0;width:100%;height:100%;padding:6px;overflow-y:auto!important;overflow-x:hidden;scrollbar-width:none!important;-ms-overflow-style:none;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;}
 .sig-panel .sig-card{min-width:0;width:100%!important;max-width:100%!important;box-sizing:border-box;flex-shrink:0;}
 .sig-panel .sig-panel-head{padding:8px 10px 4px;flex-shrink:0;}
 .sig-panel .sig-panel-right{flex-wrap:wrap;gap:4px;padding:4px 10px;flex-shrink:0;}
@@ -2294,7 +2294,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-hidden-toggle:hover{border-color:var(--acc);}
 .sig-hidden-toggle.sig-hidden-toggle-on{background:var(--cyan-d);border-color:var(--cyan-b);color:var(--cyan);}
 .sig-hidden-count{background:var(--bg2);border-radius:8px;padding:0 6px;font-size:10px;}
-.sig-cards{display:flex;flex-direction:column;gap:6px;overflow-y:auto;overflow-x:hidden;padding:6px;scrollbar-width:none;-ms-overflow-style:none;flex:1;min-height:0;min-width:0;width:100%;box-sizing:border-box;}
+.sig-cards{display:flex;flex-direction:column;gap:6px;overflow-y:auto!important;overflow-x:hidden;padding:6px;scrollbar-width:none!important;-ms-overflow-style:none;flex:1 1 auto;min-height:0!important;min-width:0;width:100%;box-sizing:border-box;overscroll-behavior:contain;}
 .sig-cards::-webkit-scrollbar,.sig-panel .sig-cards::-webkit-scrollbar{display:none;width:0;height:0;}
 
 /* Signal card */
@@ -2608,8 +2608,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .ord-position-close-btn:hover:not(:disabled){background:rgba(239,68,68,.18);box-shadow:0 4px 14px rgba(239,68,68,.25);}
 .ord-position-close-btn:disabled{opacity:.5;cursor:not-allowed;}
 
-.mk-side-tbl{display:flex;flex-direction:column;background:var(--bg2);border-right:1px solid var(--bdr);overflow:hidden;height:100%;}
-.mk-side-instruments{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;flex:0 0 auto;max-height:50vh;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;border-bottom:1px solid var(--bdr);background:var(--bg1);}
+.mk-side-tbl{display:flex;flex-direction:column;background:var(--bg2);border-right:1px solid var(--bdr);overflow:hidden;height:calc(100vh - 110px);max-height:calc(100vh - 110px);min-height:0;}
+.mk-side-instruments{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow:hidden;border-bottom:none;background:var(--bg1);}
 .mk-side-tbl::-webkit-scrollbar{display:none;}
 .mk-side-tbl-title{font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--dim);font-weight:700;padding:10px 14px 8px;flex-shrink:0;}
 
