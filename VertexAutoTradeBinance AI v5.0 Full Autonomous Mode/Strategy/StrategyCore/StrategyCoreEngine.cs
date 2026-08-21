@@ -37,7 +37,16 @@ public sealed class StrategyCoreEngine
     private static readonly TimeSpan QualityTtl = TimeSpan.FromMinutes(10);
 
     private const decimal MinAvgQuoteVol15m = 3_000m;
-    private const decimal MinRr = 1.35m; // TP1 slightly closer
+    // Professional mid-range R ladder (prop-desk style):
+    // TP1 ≈ 1.2R — high hit-rate scale-out (past 1R to cover fees)
+    // TP2 ≈ 1.7R — primary target
+    // TP3 ≈ 2.4R — trend extension / runner
+    // Soft ATR caps prevent "forever" targets on quiet pairs and
+    // prevent micro-TPs on explosive ATR prints.
+    private const decimal Tp1Rr = 1.20m;
+    private const decimal Tp2Rr = 1.70m;
+    private const decimal Tp3Rr = 2.40m;
+    private const decimal MinRr = Tp1Rr; // EnforceMinRr uses TP1
     private const decimal MinAtrPct = 0.0015m;
     private const decimal MaxAtrPct = 0.060m;
     private const decimal MinSlAtr = 1.30m;
@@ -335,7 +344,7 @@ public sealed class StrategyCoreEngine
             decimal sl = close - atr * MinSlAtr;
             decimal risk = close - sl;
             return Make(symbol, SignalSide.Buy, close, sl,
-                new[] { close + risk * MinRr, close + risk * (MinRr + 0.45m), close + risk * (MinRr + 0.85m) },
+                BuildTpLadder(isLong: true, entry: close, risk: risk, atr: atr),
                 atr, "CORE_TREND_LONG", 0.55m);
         }
 
@@ -344,7 +353,7 @@ public sealed class StrategyCoreEngine
             decimal sl = close + atr * MinSlAtr;
             decimal risk = sl - close;
             return Make(symbol, SignalSide.Sell, close, sl,
-                new[] { close - risk * MinRr, close - risk * (MinRr + 0.45m), close - risk * (MinRr + 0.85m) },
+                BuildTpLadder(isLong: false, entry: close, risk: risk, atr: atr),
                 atr, "CORE_TREND_SHORT", 0.55m);
         }
 
@@ -406,7 +415,7 @@ public sealed class StrategyCoreEngine
             decimal risk = close - sl;
             if (risk <= 0) return null;
             return Make(symbol, SignalSide.Buy, close, sl,
-                new[] { close + risk * MinRr, close + risk * (MinRr + 0.45m), close + risk * (MinRr + 0.85m) },
+                BuildTpLadder(isLong: true, entry: close, risk: risk, atr: atr),
                 atr, "CORE_PULLBACK_LONG", 0.60m);
         }
 
@@ -418,7 +427,7 @@ public sealed class StrategyCoreEngine
             decimal risk = sl - close;
             if (risk <= 0) return null;
             return Make(symbol, SignalSide.Sell, close, sl,
-                new[] { close - risk * MinRr, close - risk * (MinRr + 0.45m), close - risk * (MinRr + 0.85m) },
+                BuildTpLadder(isLong: false, entry: close, risk: risk, atr: atr),
                 atr, "CORE_PULLBACK_SHORT", 0.60m);
         }
         return null;
@@ -443,7 +452,7 @@ public sealed class StrategyCoreEngine
             decimal risk = entry - sl;
             if (risk <= 0) return null;
             return Make(symbol, SignalSide.Buy, entry, sl,
-                new[] { entry + risk * MinRr, entry + risk * (MinRr + 0.45m), entry + risk * (MinRr + 0.85m) },
+                BuildTpLadder(isLong: true, entry: entry, risk: risk, atr: atr),
                 atr, "CORE_BREAKOUT_LONG", 0.56m);
         }
 
@@ -457,7 +466,7 @@ public sealed class StrategyCoreEngine
             decimal risk = sl - entry;
             if (risk <= 0) return null;
             return Make(symbol, SignalSide.Sell, entry, sl,
-                new[] { entry - risk * MinRr, entry - risk * (MinRr + 0.45m), entry - risk * (MinRr + 0.85m) },
+                BuildTpLadder(isLong: false, entry: entry, risk: risk, atr: atr),
                 atr, "CORE_BREAKOUT_SHORT", 0.56m);
         }
         return null;
@@ -484,6 +493,38 @@ public sealed class StrategyCoreEngine
             AiQuality = confidence,
             IsSuperSignal = confidence >= 0.68m
         };
+    }
+
+
+    /// <summary>
+    /// Golden-middle TP ladder used by discretionary / prop-style desks.
+    /// R-multiples first, then soft ATR ceilings so targets stay reachable
+    /// within a realistic swing (not "days to TP1" on low-vol alts, not
+    /// micro-scalp on high-vol names).
+    /// </summary>
+    private static decimal[] BuildTpLadder(bool isLong, decimal entry, decimal risk, decimal atr)
+    {
+        if (risk <= 0) risk = Math.Max(atr * 0.5m, entry * 0.003m);
+        if (atr <= 0) atr = risk;
+
+        // R legs
+        decimal d1 = risk * Tp1Rr;
+        decimal d2 = risk * Tp2Rr;
+        decimal d3 = risk * Tp3Rr;
+
+        // Soft ATR ceilings (professional band)
+        d1 = Math.Min(d1, atr * 1.55m);
+        d2 = Math.Min(d2, atr * 2.35m);
+        d3 = Math.Min(d3, atr * 3.20m);
+
+        // Floors: never tighter than ~1R / progressive stack
+        d1 = Math.Max(d1, risk * 1.00m);
+        d2 = Math.Max(d2, d1 * 1.30m);
+        d3 = Math.Max(d3, d2 * 1.25m);
+
+        if (isLong)
+            return new[] { entry + d1, entry + d2, entry + d3 };
+        return new[] { entry - d1, entry - d2, entry - d3 };
     }
 
     private static bool EnforceMinRr(TradeSignal s)
