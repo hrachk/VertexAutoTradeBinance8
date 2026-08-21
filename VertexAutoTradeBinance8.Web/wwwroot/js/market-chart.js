@@ -132,11 +132,30 @@
         return out;
     }
 
-    function applyTradeMarkers(s) {
+        function applyTradeMarkers(s) {
         if (!s || !s.candleSeries) return;
         try {
+            // Lightweight Charts v5: series.setMarkers removed.
+            // Use createSeriesMarkers primitive and keep a handle on the session.
+            const ensureMarkers = (markers) => {
+                if (typeof LightweightCharts.createSeriesMarkers === 'function') {
+                    if (!s.seriesMarkers) {
+                        s.seriesMarkers = LightweightCharts.createSeriesMarkers(s.candleSeries, markers || []);
+                    } else {
+                        s.seriesMarkers.setMarkers(markers || []);
+                    }
+                    return true;
+                }
+                // Fallback for older builds that still expose setMarkers on series
+                if (s.candleSeries && typeof s.candleSeries.setMarkers === 'function') {
+                    s.candleSeries.setMarkers(markers || []);
+                    return true;
+                }
+                return false;
+            };
+
             if (!s.showTradeMarkers || !s.tradeMarkers || !s.tradeMarkers.length) {
-                s.candleSeries.setMarkers([]);
+                ensureMarkers([]);
                 return;
             }
             // Prefer lastKlinesRaw times (always in seconds); data() can be empty mid-update
@@ -177,13 +196,17 @@
                     text: m.text || ''
                 });
             }
-            s.candleSeries.setMarkers(filtered);
+            if (!ensureMarkers(filtered)) {
+                console.warn('[VERTEX] applyTradeMarkers: no markers API available');
+                return;
+            }
             if (filtered.length)
                 console.debug('[VERTEX] trade markers applied', filtered.length);
         } catch (e) {
             console.warn('[VERTEX] applyTradeMarkers', e);
         }
     }
+
 
     window.marketChart = {
         // Saves the chart's current visible range (which bars are on
