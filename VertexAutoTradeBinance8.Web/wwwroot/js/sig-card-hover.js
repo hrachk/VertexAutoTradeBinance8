@@ -22,6 +22,7 @@
     }
 
     function showFor(cardEl) {
+        return; // click-only expand — hover disabled
         const ov = ensureOverlay();
         if (!ov || !cardEl) return;
 
