@@ -251,10 +251,10 @@
                                 <span class="sc-sym">@sig.Symbol.Replace("USDT","")<span class="sc-usdt">USDT</span></span>
                                 <span class="sc-conf-pct" style="color:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")">@conf%</span>
                                 @* Pin button — right-aligned, always visible *@
-                                <button type="button" class="sc-pin-btn @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-pin-btn-on" : "")"
-                                        title="@(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "Unpin — collapse" : "Pin — keep fully expanded")"
+                                <button class="sc-pin-btn @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-pin-btn-on" : "")"
+                                        title="@(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "Unpin" : "Pin (keep expanded)")"
                                         @onclick="() => TogglePinSignal(sig)" @onclick:stopPropagation="true">
-                                    @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "📍" : "📌")
+                                    📌
                                 </button>
                             </div>
                             <!-- Meta row: TF + RR + confidence % -->
@@ -2168,7 +2168,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     top:8px;
     z-index:50;
 }
-.mk-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px;}
+.mk-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px;position:relative;z-index:20;overflow:visible!important;}
 
 .mk-chart-maximize{flex-shrink:0;width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;color:var(--dim);cursor:pointer;transition:all .15s;}
 .mk-chart-maximize:hover{color:var(--txt);border-color:var(--acc);}
@@ -2189,14 +2189,20 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
 .mk-tpsl-btn:hover{color:var(--txt);border-color:var(--acc);}
 .mk-tpsl-btn-on{background:rgba(59,130,246,0.15);border-color:var(--acc);color:var(--acc);}
-.mk-chart-maximized{position:fixed;inset:0;z-index:2100;height:auto;max-height:none;resize:none;background:var(--bg);display:flex;flex-direction:column;padding:6px 10px;}
+.mk-chart-maximized{position:fixed;inset:0;z-index:2100;height:auto;max-height:none;resize:none;background:var(--bg);display:flex;flex-direction:column;padding:6px 10px;overflow:visible!important;}
+/* Chart canvas must sit BELOW the max-bar so symbol dropdown is not covered */
+.mk-chart-maximized > .mk-max-bar{position:relative;z-index:30!important;overflow:visible!important;flex-shrink:0;}
+.mk-chart-maximized > [id^="chartContainer"],
+.mk-chart-maximized > .tv-lightweight-charts,
+.mk-chart-maximized > div[style*="height"]{position:relative;z-index:1!important;}
+
 
 .mk-max-bar{display:flex;align-items:center;justify-content:flex-end;gap:14px;padding:8px 12px;height:52px;flex-shrink:0;}
-.mk-max-sym-wrap{position:relative;z-index:10050;}
+.mk-max-sym-wrap{position:relative;z-index:40!important;overflow:visible!important;}
 .mk-max-sym{font-family:var(--mono);font-size:16px;font-weight:700;display:flex;align-items:baseline;gap:6px;background:transparent;border:1px solid transparent;border-radius:6px;padding:4px 10px;color:var(--txt1);cursor:pointer;transition:all .15s;}
 .mk-max-sym:hover{background:rgba(56,189,248,0.08);border-color:rgba(56,189,248,0.25);}
 .mk-max-sym-caret{width:13px;height:13px;align-self:center;color:var(--dim);}
-.mk-max-sym-dropdown{position:absolute;top:calc(100% + 4px);left:0;width:280px;max-height:min(380px,70vh);background:var(--bg1);border:1px solid var(--bdr);border-radius:10px;z-index:10060;box-shadow:0 12px 40px rgba(0,0,0,0.65);overflow:hidden;isolation:isolate;}
+.mk-max-sym-dropdown{position:absolute;top:calc(100% + 4px);left:0;width:280px;max-height:min(420px,75vh);background:var(--bg1);border:1px solid var(--bdr);border-radius:10px;z-index:50!important;box-shadow:0 16px 48px rgba(0,0,0,0.75);overflow:auto;pointer-events:auto;}
 .mk-max-sym-search{background:var(--bg3);border:none;border-bottom:1px solid var(--bdr);padding:10px 12px;color:var(--txt);font-size:13px;outline:none;}
 .mk-max-sym-search::placeholder{color:var(--dim);}
 .mk-max-sym-list{overflow-y:auto;max-height:290px;scrollbar-width:none;}
@@ -2299,47 +2305,13 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-card:hover{border-color:var(--acc);box-shadow:0 4px 16px rgba(0,0,0,.25);}
 .sc-active{border-color:var(--acc)!important;background:rgba(59,130,246,.08)!important;}
 .sc-below-threshold{opacity:.7;}
+/* Unpinned cards: a bit taller so more info peeks; pinned keeps compact+expand */
+.sig-card:not(.sc-pinned){min-height:118px;}
+.sig-card:not(.sc-pinned) .sc-meta{margin-top:2px;}
+.sig-card:not(.sc-pinned) .sc-warn-strip{margin-top:4px;}
+
 .sc-threshold-badge{font-size:9.5px;font-weight:700;color:#eab308;background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.3);border-radius:5px;padding:2px 7px;margin-bottom:6px;display:inline-block;cursor:help;}
 .sc-top{display:flex;align-items:center;gap:6px;margin-bottom:5px;}
-/* Pin button — always visible top-right on signal cards */
-.sig-card{position:relative;}
-.sc-pin-btn{
-  position:absolute!important;
-  top:6px!important;
-  right:6px!important;
-  z-index:20!important;
-  margin:0!important;
-  display:inline-flex!important;
-  align-items:center;
-  justify-content:center;
-  min-width:28px;
-  min-height:26px;
-  padding:2px 6px!important;
-  font-size:14px!important;
-  line-height:1!important;
-  opacity:1!important;
-  color:#e2e8f0!important;
-  background:rgba(15,23,42,.92)!important;
-  border:1px solid rgba(148,163,184,.45)!important;
-  border-radius:6px!important;
-  cursor:pointer;
-  box-shadow:0 2px 8px rgba(0,0,0,.35);
-  flex-shrink:0;
-}
-.sc-pin-btn:hover{
-  opacity:1!important;
-  border-color:rgba(59,130,246,.7)!important;
-  background:rgba(30,58,138,.85)!important;
-}
-.sc-pin-btn-on,.sc-pin-btn.sc-pin-btn-on{
-  opacity:1!important;
-  color:#93c5fd!important;
-  border-color:rgba(59,130,246,.85)!important;
-  background:rgba(37,99,235,.35)!important;
-}
-.sc-new-dot{right:38px!important;} /* room for pin */
-.sc-top{padding-right:34px;} /* don't collide with absolute pin */
-
 /* sc-sym-wrap removed — sym is inline with side badge */
 .sc-sym{font-family:var(--mono);font-size:14px;font-weight:800;color:var(--txt);}
 .sc-usdt{font-size:9px;color:var(--dim2);margin-left:1px;}
@@ -2376,13 +2348,13 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-card.sc-pinned.sc-removing{opacity:1!important;animation:none!important;}
 .sig-card.sc-pinned .sc-expand,
 .sig-card.sc-pinned .sc-expand-pinned{display:block!important;position:static!important;}
+.sc-pin-btn{margin-left:auto;background:transparent;border:1px solid transparent;border-radius:4px;cursor:pointer;font-size:12px;padding:2px 5px;opacity:.55;transition:opacity .15s,background .15s;}
+.sc-pin-btn:hover{opacity:1;background:rgba(59,130,246,.12);}
+.sc-pin-btn-on{opacity:1;border-color:rgba(59,130,246,.4);background:rgba(59,130,246,.15);}
 
-
-
-
-
-
-.sc-pin-btn
+.sc-pin-btn{background:none;border:none;font-size:11px;opacity:.6;cursor:pointer;padding:0 2px;line-height:1;margin-left:auto;flex-shrink:0;}
+.sc-pin-btn:hover{opacity:.8;}
+.sc-pin-btn.sc-pin-btn-on{opacity:1;}
 .sc-expand{display:none;}
 .sc-expand-pinned{display:block!important;position:static!important;margin:8px -14px -10px;padding:10px 14px;border-top:1px solid var(--bdr);}
 .sc-float-overlay{position:fixed;display:none;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;box-shadow:0 12px 28px rgba(0,0,0,.45);z-index:200;width:260px;pointer-events:none;}
@@ -2425,7 +2397,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sc-ttl-label{font-size:9px;white-space:nowrap;color:var(--dim);flex-shrink:0;}
 
 /* Fade-out when expiring */
-.sig-card{background:var(--bg3);border:1px solid var(--bdr);border-radius:8px;padding:10px 12px;position:relative;cursor:pointer;overflow:visible;transition:border-color .12s,box-shadow .12s;}
+.sig-card{background:var(--bg3);border:1px solid var(--bdr);border-radius:8px;padding:10px 12px;position:relative;cursor:pointer;overflow:hidden;transition:border-color .12s,box-shadow .12s;}
 .sc-fading{opacity:.35;}
 .sig-card.sc-removing{opacity:0!important;max-width:0!important;padding-left:0!important;padding-right:0!important;margin:0!important;overflow:hidden;border-width:0;}
 
