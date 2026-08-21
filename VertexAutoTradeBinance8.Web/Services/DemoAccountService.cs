@@ -366,6 +366,8 @@ public sealed class DemoAccountService
                 decimal totalQty = existing.Qty + qty;
                 existing.EntryPrice = ((existing.EntryPrice * existing.Qty) + (currentPrice * qty)) / totalQty;
                 existing.Qty = totalQty;
+                if (existing.InitialQty <= 0) existing.InitialQty = totalQty;
+                else existing.InitialQty += qty; // scale TP basis with adds
                 existing.Margin += margin;
                 existing.Leverage = leverage; // last-set leverage wins, matching how the real exchange treats leverage as a symbol-level setting, not per-fill
                 // SL/TP on an add-to-position stay as whatever the
@@ -383,7 +385,7 @@ public sealed class DemoAccountService
 
             var pos = new DemoPosition
             {
-                Symbol = symbol, Side = side, Qty = qty, Leverage = leverage,
+                Symbol = symbol, Side = side, Qty = qty, InitialQty = qty, InitialQty = qty, Leverage = leverage,
                 EntryPrice = currentPrice, Margin = margin,
                 StopLoss = stopLoss, TakeProfits = takeProfits ?? new(),
                 OpenedAtUtc = DateTime.UtcNow,
@@ -455,6 +457,8 @@ public sealed class DemoAccountService
                 decimal totalQty = existing.Qty + qty;
                 existing.EntryPrice = ((existing.EntryPrice * existing.Qty) + (currentPrice * qty)) / totalQty;
                 existing.Qty = totalQty;
+                if (existing.InitialQty <= 0) existing.InitialQty = totalQty;
+                else existing.InitialQty += qty; // scale TP basis with adds
                 existing.Margin += margin;
                 existing.Leverage = leverage;
                 if (stopLoss.HasValue && stopLoss.Value > 0) existing.StopLoss = stopLoss;
@@ -467,7 +471,7 @@ public sealed class DemoAccountService
                 {
                     Symbol = symbol,
                     Side = side,
-                    Qty = qty,
+                    Qty = qty, InitialQty = qty,
                     Leverage = leverage,
                     EntryPrice = currentPrice,
                     Margin = margin,
@@ -513,7 +517,7 @@ public sealed class DemoAccountService
             _state.PendingOrders.Add(new DemoPendingOrder
             {
                 Symbol = symbol, Side = side, Type = type, TriggerPrice = triggerPrice,
-                Qty = qty, Leverage = leverage, StopLoss = stopLoss, TakeProfits = takeProfits ?? new(),
+                Qty = qty, InitialQty = qty, Leverage = leverage, StopLoss = stopLoss, TakeProfits = takeProfits ?? new(),
             });
             Save();
         }
@@ -642,7 +646,7 @@ public sealed class DemoAccountService
             Qty = closeQty, RealizedPnl = realizedPnl, CloseReason = reason, OpenedAtUtc = pos.OpenedAtUtc,
         });
 
-        if (pctToClose >= 100m || closeQty >= pos.Qty)
+        if (pctToClose >= 100m || closeQty >= pos.Qty * 0.999m)
         {
             _state.Positions.Remove(pos);
         }
@@ -653,6 +657,23 @@ public sealed class DemoAccountService
             decimal remainingFraction = (pos.Qty - closeQty) / pos.Qty;
             pos.Margin *= remainingFraction;
             pos.Qty -= closeQty;
+
+            // Dust / residual after ladder TPs — never leave a ghost position
+            decimal basis = pos.InitialQty > 0 ? pos.InitialQty : (pos.Qty + closeQty);
+            bool dustQty = basis > 0 && pos.Qty <= basis * 0.005m; // ≤0.5% of original
+            bool dustNotional = pos.Qty * exitPrice < 1m; // < $1 notional
+            if (dustQty || dustNotional)
+            {
+                decimal dustPnl = (exitPrice - pos.EntryPrice) * dir * pos.Qty;
+                _state.Balance += dustPnl;
+                _state.History.Add(new DemoClosedTrade
+                {
+                    Symbol = pos.Symbol, Side = pos.Side, EntryPrice = pos.EntryPrice, ExitPrice = exitPrice,
+                    Qty = pos.Qty, RealizedPnl = dustPnl, CloseReason = reason + " (flat residual)",
+                    OpenedAtUtc = pos.OpenedAtUtc,
+                });
+                _state.Positions.Remove(pos);
+            }
         }
 
         _logger.LogInformation(
@@ -718,6 +739,8 @@ public sealed class DemoAccountService
                     decimal totalQty = existingPos.Qty + order.Qty;
                     existingPos.EntryPrice = ((existingPos.EntryPrice * existingPos.Qty) + (price * order.Qty)) / totalQty;
                     existingPos.Qty = totalQty;
+                    if (existingPos.InitialQty <= 0) existingPos.InitialQty = totalQty;
+                    else existingPos.InitialQty += order.Qty;
                     existingPos.Margin += margin;
                     existingPos.Leverage = order.Leverage;
                     if (order.StopLoss.HasValue && order.StopLoss.Value > 0) existingPos.StopLoss = order.StopLoss;
@@ -756,8 +779,27 @@ public sealed class DemoAccountService
                     bool tpHit = isLong ? price >= tp.Price : price <= tp.Price;
                     if (tpHit)
                     {
-                        (toClose ??= new()).Add((pos, tp.Pct, $"TP {fmtPrice(tp.Price)}"));
-                        pos.TakeProfits.Remove(tp); // this level is consumed — don't trigger it again
+                        pos.TakeProfits.Remove(tp); // consume level first
+                        bool isLastTp = !pos.TakeProfits.Any(t => t.Price > 0);
+                        // DemoTpLevel.Pct = % of ORIGINAL qty. Convert to % of CURRENT qty.
+                        // Last TP always flattens the remainder (no leftover "ghost" position).
+                        decimal pctOfCurrent;
+                        if (isLastTp)
+                        {
+                            pctOfCurrent = 100m;
+                        }
+                        else
+                        {
+                            decimal basis = pos.InitialQty > 0 ? pos.InitialQty : pos.Qty;
+                            decimal desiredClose = basis * (tp.Pct > 0 ? tp.Pct : 33.34m) / 100m;
+                            if (desiredClose <= 0 || pos.Qty <= 0)
+                                pctOfCurrent = 100m;
+                            else
+                                pctOfCurrent = Math.Clamp(desiredClose / pos.Qty * 100m, 1m, 100m);
+                        }
+                        (toClose ??= new()).Add((pos, pctOfCurrent, isLastTp
+                            ? $"TP3/final {fmtPrice(tp.Price)}"
+                            : $"TP {fmtPrice(tp.Price)}"));
                     }
                 }
             }
