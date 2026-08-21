@@ -236,7 +236,7 @@
     
                         <div class="sig-card @(sigIsBuy ? "sc-buy" : "sc-sell") @(isActive ? "sc-active" : "") @((belowThreshold || lowRr) ? "sc-below-threshold" : "") @(isRemoving ? "sc-removing" : ttl.IsExpiring ? "sc-fading" : "") @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-pinned" : "")"
                              @key="SignalKey(sig)"
-                             @onclick="() => SelectSignal(sig)">
+                             @onclick="() => OnSignalCardClick(sig)">
     
                             @if (!_seenSignalKeys.Contains(SignalKey(sig)))
                             {
@@ -2305,10 +2305,41 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-card:hover{border-color:var(--acc);box-shadow:0 4px 16px rgba(0,0,0,.25);}
 .sc-active{border-color:var(--acc)!important;background:rgba(59,130,246,.08)!important;}
 .sc-below-threshold{opacity:.7;}
-/* Unpinned cards: a bit taller so more info peeks; pinned keeps compact+expand */
-.sig-card:not(.sc-pinned){min-height:118px;}
-.sig-card:not(.sc-pinned) .sc-meta{margin-top:2px;}
-.sig-card:not(.sc-pinned) .sc-warn-strip{margin-top:4px;}
+/* Compact signal row 37px; click → sc-pinned expands full details */
+.sig-card:not(.sc-pinned){
+  height:37px!important;
+  min-height:37px!important;
+  max-height:37px!important;
+  padding:0 10px!important;
+  overflow:hidden!important;
+  display:flex!important;
+  align-items:center!important;
+  box-sizing:border-box;
+}
+.sig-card:not(.sc-pinned) .sc-top{
+  margin:0!important;
+  width:100%;
+  gap:5px;
+  align-items:center;
+}
+.sig-card:not(.sc-pinned) .sc-meta,
+.sig-card:not(.sc-pinned) .sc-conf-wrap,
+.sig-card:not(.sc-pinned) .sc-warn-strip,
+.sig-card:not(.sc-pinned) .sc-expand,
+.sig-card:not(.sc-pinned) .sc-threshold-badge,
+.sig-card:not(.sc-pinned) .sc-pin-btn{display:none!important;}
+.sig-card:not(.sc-pinned) .sc-side{font-size:9px;padding:1px 5px;}
+.sig-card:not(.sc-pinned) .sc-sym{font-size:12px;}
+.sig-card:not(.sc-pinned) .sc-conf-pct{font-size:11px;}
+.sig-card.sc-pinned{
+  height:auto!important;
+  min-height:unset!important;
+  max-height:none!important;
+  padding:10px 12px!important;
+  display:block!important;
+}
+.sig-card.sc-pinned .sc-expand,
+.sig-card.sc-pinned .sc-expand-pinned{display:block!important;}
 
 .sc-threshold-badge{font-size:9.5px;font-weight:700;color:#eab308;background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.3);border-radius:5px;padding:2px 7px;margin-bottom:6px;display:inline-block;cursor:help;}
 .sc-top{display:flex;align-items:center;gap:6px;margin-bottom:5px;}
@@ -5172,12 +5203,30 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     List<MissedTradeRecord> _signals = new();
 
+    void OnSignalCardClick(MissedTradeRecord sig)
+    {
+        // Compact 37px → click expands (pinned) + marks active;
+        // second click collapses back to 37px only.
+        var key = SignalKey(sig);
+        _seenSignalKeys.Add(key);
+        if (_pinnedSignalKeys.Contains(key))
+        {
+            _pinnedSignalKeys.Remove(key);
+            if (_activeSignal == sig) _activeSignal = null;
+        }
+        else
+        {
+            _pinnedSignalKeys.Add(key);
+            _activeSignal = sig;
+        }
+        StateHasChanged();
+    }
+
     void TogglePinSignal(MissedTradeRecord sig)
     {
         var key = SignalKey(sig);
         if (!_pinnedSignalKeys.Remove(key))
             _pinnedSignalKeys.Add(key);
-        // Pinned cards stay fully expanded (all entry/SL/TP info visible)
         StateHasChanged();
     }
 
