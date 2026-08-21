@@ -2398,7 +2398,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .share-modal-btn-secondary{background:var(--bg3);color:var(--dim);}
 .share-modal-btn-primary{background:var(--acc);color:#fff;border-color:var(--acc);}
 .share-modal-btn-primary:hover{opacity:.9;}
-.sc-float-overlay.sc-show{display:block;}
+.sc-float-overlay.sc-show{display:none!important;} /* hover expand off — click only */
 
 .sc-prices-row{display:flex;align-items:center;gap:14px;margin-bottom:6px;}
 .sc-prices-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;margin-bottom:6px;padding:6px 8px;background:rgba(255,255,255,.02);border-radius:5px;border:1px solid var(--bdr);}
@@ -5205,20 +5205,29 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
     void OnSignalCardClick(MissedTradeRecord sig)
     {
-        // Compact 37px → click expands (pinned) + marks active;
-        // second click collapses back to 37px only.
+        // Compact 37px row:
+        //  • first click  → expand (pin) + original SelectSignal (chart + Manual Trade)
+        //  • second click → collapse card only (keep chart/symbol as-is)
         var key = SignalKey(sig);
         _seenSignalKeys.Add(key);
+
         if (_pinnedSignalKeys.Contains(key))
         {
             _pinnedSignalKeys.Remove(key);
-            if (_activeSignal == sig) _activeSignal = null;
+            // collapse UI only — do not clear Manual Trade / chart
+            StateHasChanged();
+            return;
         }
-        else
-        {
-            _pinnedSignalKeys.Add(key);
-            _activeSignal = sig;
-        }
+
+        _pinnedSignalKeys.Add(key);
+
+        // SelectSignal toggles off when already active — force ON path
+        if (_activeSignal == sig)
+            _activeSignal = null;
+        SelectSignal(sig);
+
+        // Ensure still pinned after SelectSignal
+        _pinnedSignalKeys.Add(key);
         StateHasChanged();
     }
 
