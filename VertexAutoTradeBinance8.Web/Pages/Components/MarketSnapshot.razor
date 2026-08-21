@@ -1139,10 +1139,8 @@
             {
                 @if (_demoMode)
                 {
-                    @{
-                        var demoOrdRows = BuildDemoOrderRows();
-                    }
-                    @if (demoOrdRows.Count == 0)
+                    var demoOrdRows = BuildDemoOrderRows();
+                    if (demoOrdRows.Count == 0)
                     {
                         <div class="mk-oo-empty">No open demo orders (pending + TP/SL)</div>
                     }
