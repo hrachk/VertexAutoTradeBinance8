@@ -7,6 +7,8 @@ public sealed class DemoPosition
     public string Side { get; set; } = ""; // "LONG" or "SHORT"
     public int Leverage { get; set; }
     public decimal Qty { get; set; }
+    /// <summary>Qty at open (and after adds). TP.Pct is percent of this, not of remaining.</summary>
+    public decimal InitialQty { get; set; }
     public decimal EntryPrice { get; set; }
     public decimal Margin { get; set; }
     public DateTime OpenedAtUtc { get; set; } = DateTime.UtcNow;
@@ -63,6 +65,8 @@ public sealed class DemoPendingOrder
     public DemoOrderType Type { get; set; }
     public decimal TriggerPrice { get; set; }
     public decimal Qty { get; set; }
+    /// <summary>Qty at open (and after adds). TP.Pct is percent of this, not of remaining.</summary>
+    public decimal InitialQty { get; set; }
     public int Leverage { get; set; }
     public decimal? StopLoss { get; set; }
     public List<DemoTpLevel> TakeProfits { get; set; } = new();
@@ -76,6 +80,8 @@ public sealed class DemoClosedTrade
     public decimal EntryPrice { get; set; }
     public decimal ExitPrice { get; set; }
     public decimal Qty { get; set; }
+    /// <summary>Qty at open (and after adds). TP.Pct is percent of this, not of remaining.</summary>
+    public decimal InitialQty { get; set; }
     public decimal RealizedPnl { get; set; }
     public string CloseReason { get; set; } = ""; // "SL" / "TP1" / "Manual" / etc
     public DateTime OpenedAtUtc { get; set; }
@@ -88,6 +94,8 @@ public sealed class DemoDcaPurchaseRecord
     public DateTime TimeUtc { get; set; }
     public decimal Price { get; set; }
     public decimal Qty { get; set; }
+    /// <summary>Qty at open (and after adds). TP.Pct is percent of this, not of remaining.</summary>
+    public decimal InitialQty { get; set; }
     public decimal UsdtSpent { get; set; }
     public bool DipBonusApplied { get; set; }
 }
