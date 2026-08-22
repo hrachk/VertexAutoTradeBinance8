@@ -1,3 +1,4 @@
+using Bybit.Net;
 using Bybit.Net.Clients;
 using CryptoExchange.Net.Authentication;
 using Microsoft.Extensions.Options;
@@ -80,10 +81,22 @@ public sealed class BybitClientFactory
             var useTestnet = _options.CurrentValue.UseTestnet;
             var client = new BybitRestClient(opts =>
             {
-                opts.ApiCredentials = new SimpleApiCredentials(apiKey, apiSecret);
                 if (useTestnet)
                     opts.Environment = Bybit.Net.BybitEnvironment.Testnet;
             });
+            // Use Reflection to dynamically create credentials for maximum compatibility across versions
+            var credentialsType = AppDomain.CurrentDomain.GetAssemblies()
+                .SelectMany(s => s.GetTypes())
+                .FirstOrDefault(p => p.Name == "BybitApiCredentials" && typeof(ApiCredentials).IsAssignableFrom(p)) 
+                ?? AppDomain.CurrentDomain.GetAssemblies()
+                .SelectMany(s => s.GetTypes())
+                .FirstOrDefault(p => p.Name == "ApiCredentials" && p.Namespace == "CryptoExchange.Net.Authentication" && !p.IsAbstract);
+
+            if (credentialsType != null)
+            {
+                var credentials = Activator.CreateInstance(credentialsType, apiKey, apiSecret);
+                client.SetApiCredentials((ApiCredentials)credentials);
+            }
 
             _cachedRest = client;
             _cachedKeyFingerprint = fp;
