@@ -243,19 +243,29 @@
                                 <span class="sc-new-dot" title="New signal — not yet viewed"></span>
                             }
     
-                            <!-- COMPACT (always visible): symbol, side, time, pin button -->
+                            <!-- COMPACT header: always visible (collapsed + expanded) -->
                             <div class="sc-top">
                                 <span class="sc-side @(sigIsBuy ? "sc-side-b" : "sc-side-s")">
                                     @(sigIsBuy ? "▲ LONG" : "▼ SHORT")
                                 </span>
                                 <span class="sc-sym">@sig.Symbol.Replace("USDT","")<span class="sc-usdt">USDT</span></span>
                                 <span class="sc-conf-pct" style="color:@(conf>=60?"var(--grn)":conf>=45?"var(--yel)":"var(--red)")">@conf%</span>
-                                @* Pin button — right-aligned, always visible *@
                                 <button class="sc-pin-btn @(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "sc-pin-btn-on" : "")"
                                         title="@(_pinnedSignalKeys.Contains(SignalKey(sig)) ? "Unpin" : "Pin (keep expanded)")"
                                         @onclick="() => TogglePinSignal(sig)" @onclick:stopPropagation="true">
                                     📌
                                 </button>
+                            </div>
+                            @* Medium compact row — only meaningful when card is collapsed *@
+                            <div class="sc-compact-sub">
+                                <span class="sc-csub-rr @(lowRr ? "sc-csub-weak" : "")">R:R <b>@rr.ToString("F1")</b></span>
+                                <span class="sc-csub-sep">·</span>
+                                <span class="sc-csub-e">E <b class="mono">@FmtP(sig.Entry)</b></span>
+                                @if (belowThreshold || lowRr)
+                                {
+                                    <span class="sc-csub-warn" title="@(lowRr ? $"Weak R/R {rr:F1}x" : "Below threshold")">⚠</span>
+                                }
+                                <span class="sc-csub-ago">@FmtAgo(sig.Time)</span>
                             </div>
                             <!-- Meta row: TF + RR + confidence % -->
                             <div class="sc-meta">
@@ -2305,22 +2315,37 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-card:hover{border-color:var(--acc);box-shadow:0 4px 16px rgba(0,0,0,.25);}
 .sc-active{border-color:var(--acc)!important;background:rgba(59,130,246,.08)!important;}
 .sc-below-threshold{opacity:.7;}
-/* Compact signal row 37px; click → sc-pinned expands full details */
+/* Medium compact card ~54px: side/sym/conf + R:R · Entry · ⚠ · age */
 .sig-card:not(.sc-pinned){
-  height:37px!important;
-  min-height:37px!important;
-  max-height:37px!important;
-  padding:0 10px!important;
+  height:54px!important;
+  min-height:54px!important;
+  max-height:54px!important;
+  padding:5px 10px!important;
   overflow:hidden!important;
   display:flex!important;
-  align-items:center!important;
+  flex-direction:column!important;
+  justify-content:center!important;
+  align-items:stretch!important;
   box-sizing:border-box;
+  gap:2px;
 }
 .sig-card:not(.sc-pinned) .sc-top{
   margin:0!important;
   width:100%;
   gap:5px;
   align-items:center;
+  flex-shrink:0;
+}
+.sig-card:not(.sc-pinned) .sc-compact-sub{
+  display:flex!important;
+  align-items:center;
+  gap:5px;
+  width:100%;
+  min-width:0;
+  font-size:10px;
+  color:var(--dim);
+  line-height:1.2;
+  flex-shrink:0;
 }
 .sig-card:not(.sc-pinned) .sc-meta,
 .sig-card:not(.sc-pinned) .sc-conf-wrap,
@@ -2330,7 +2355,14 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .sig-card:not(.sc-pinned) .sc-pin-btn{display:none!important;}
 .sig-card:not(.sc-pinned) .sc-side{font-size:9px;padding:1px 5px;}
 .sig-card:not(.sc-pinned) .sc-sym{font-size:12px;}
-.sig-card:not(.sc-pinned) .sc-conf-pct{font-size:11px;}
+.sig-card:not(.sc-pinned) .sc-conf-pct{font-size:11px;margin-left:auto;}
+.sc-compact-sub{display:none;} /* hidden when expanded — full meta/expand takes over */
+.sig-card.sc-pinned .sc-compact-sub{display:none!important;}
+.sc-csub-rr b,.sc-csub-e b{font-weight:700;color:var(--txt2);}
+.sc-csub-weak b{color:#eab308!important;}
+.sc-csub-warn{color:#eab308;font-size:11px;flex-shrink:0;}
+.sc-csub-ago{margin-left:auto;font-size:9.5px;color:var(--dim);white-space:nowrap;flex-shrink:0;}
+.sc-csub-sep{opacity:.4;}
 .sig-card.sc-pinned{
   height:auto!important;
   min-height:unset!important;
