@@ -1,4 +1,4 @@
-﻿@page "/"
+@page "/"
 @using Microsoft.AspNetCore.Components.Web
 @namespace VertexAutoTradeBinance8.Web.Pages
 @addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
@@ -8,7 +8,19 @@
 <html lang="en">
 <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#0c1220" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="Vertex AutoTrade — Binance Futures autonomous trading" />
+    <!-- iOS PWA -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Vertex" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="format-detection" content="telephone=no" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/images/vertexailogo.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/images/vertexailogo.png" />
     <base href="~/" />
     <link rel="stylesheet" href="css/bootstrap/bootstrap.min.css" />
     <link href="/css/site.css" rel="stylesheet" />
@@ -92,6 +104,28 @@
     <script src="_framework/blazor.server.js"></script>
 
     <script src="/js/ai-pulse-v2.js"></script>
+    <style>
+      /* iOS PWA safe areas */
+      html, body { min-height: 100%; min-height: -webkit-fill-available; }
+      body {
+        padding-top: env(safe-area-inset-top);
+        padding-left: env(safe-area-inset-left);
+        padding-right: env(safe-area-inset-right);
+        padding-bottom: env(safe-area-inset-bottom);
+        background: #070b12;
+        overscroll-behavior-y: none;
+      }
+    </style>
+    <script>
+      // Register PWA service worker (static assets only; Blazor Server needs network)
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js').catch(function (e) {
+            console.warn('[PWA] SW register failed', e);
+          });
+        });
+      }
+    </script>
 </body>
 </html>
 
