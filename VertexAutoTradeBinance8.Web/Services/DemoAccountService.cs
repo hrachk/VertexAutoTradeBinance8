@@ -611,9 +611,9 @@ public sealed class DemoAccountService
     }
 
     // ===================== Closing positions =====================
-
-        public (bool ok, string error) ClosePosition(string id, decimal pctToClose = 100m, string reason = "Manual")
+    public (bool ok, string error) ClosePosition(string id, decimal pctToClose = 100m, string reason = "Manual")
     {
+        if (!EnsureBound()) return (false, "Войдите в аккаунт для Demo-торговли.");
         lock (_lock)
         {
             var pos = _state.Positions.FirstOrDefault(p => p.Id == id);
@@ -634,7 +634,6 @@ public sealed class DemoAccountService
     }
 
     /// <summary>Live tick if known; otherwise entry (or any case-insensitive match).</summary>
-
     private void SeedMarksFromPositions()
     {
         foreach (var p in _state.Positions)
