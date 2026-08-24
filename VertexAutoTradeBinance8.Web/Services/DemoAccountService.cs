@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.Extensions.Options;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Web.Demo;
@@ -35,6 +35,9 @@ public sealed class DemoAccountService
     private Timer? _dcaTimer;
 
     public event Action? Updated;
+
+    // Trade journal hook (set from Program / DI host) â€” does not replace demo-account.json
+    public static Action<string /*clientId*/, DemoPosition, decimal /*exit*/, decimal /*closeQty*/, decimal /*pnl*/, string /*reason*/>? TradeJournalHook { get; set; }
 
     // Demo mode is shared, global state (not local to any one page's
     // component) so the always-visible sticky header in MainLayout can
@@ -668,7 +671,13 @@ public sealed class DemoAccountService
         decimal realizedPnl = (exitPrice - pos.EntryPrice) * dir * closeQty;
 
         _state.Balance += realizedPnl;
-        _state.History.Add(new DemoClosedTrade
+                try
+        {
+            if (!string.IsNullOrEmpty(_clientId))
+                TradeJournalHook?.Invoke(_clientId, pos, exitPrice, closeQty, realizedPnl, reason);
+        }
+        catch { /* never break demo close */ }
+_state.History.Add(new DemoClosedTrade
         {
             Symbol = pos.Symbol, Side = pos.Side, EntryPrice = pos.EntryPrice, ExitPrice = exitPrice,
             Qty = closeQty, RealizedPnl = realizedPnl, CloseReason = reason, OpenedAtUtc = pos.OpenedAtUtc,
@@ -694,7 +703,13 @@ public sealed class DemoAccountService
             {
                 decimal dustPnl = (exitPrice - pos.EntryPrice) * dir * pos.Qty;
                 _state.Balance += dustPnl;
-                _state.History.Add(new DemoClosedTrade
+                        try
+        {
+            if (!string.IsNullOrEmpty(_clientId))
+                TradeJournalHook?.Invoke(_clientId, pos, exitPrice, closeQty, realizedPnl, reason);
+        }
+        catch { /* never break demo close */ }
+_state.History.Add(new DemoClosedTrade
                 {
                     Symbol = pos.Symbol, Side = pos.Side, EntryPrice = pos.EntryPrice, ExitPrice = exitPrice,
                     Qty = pos.Qty, RealizedPnl = dustPnl, CloseReason = reason + " (flat residual)",
@@ -1027,3 +1042,4 @@ public sealed class DemoAccountService
         }
     }
 }
+

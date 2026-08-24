@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
 using System.Collections.Concurrent;
 using VertexAutoTradeBinance8.Web.Demo;
 using VertexAutoTradeBinance8.Web.Services.Auth;
@@ -20,6 +20,7 @@ public sealed class DemoAutoTradeService : BackgroundService
     private readonly ClientDbService _db;
     private readonly ILogger<DemoAutoTradeService> _log;
     private readonly IConfiguration _cfg;
+    private readonly VertexAutoTradeBinance8.Services.Learning.TradeJournalService? _journal;
     private readonly ConcurrentDictionary<string, byte> _seen = new();
     private DateTime _startedUtc = DateTime.UtcNow;
     private readonly string _seenFilePath;
@@ -29,13 +30,15 @@ public sealed class DemoAutoTradeService : BackgroundService
         DemoAccountService demo,
         ClientDbService db,
         ILogger<DemoAutoTradeService> log,
-        IConfiguration cfg)
+        IConfiguration cfg,
+        VertexAutoTradeBinance8.Services.Learning.TradeJournalService? journal = null)
     {
         _signals = signals;
         _demo = demo;
         _db = db;
         _log = log;
         _cfg = cfg;
+        _journal = journal;
         var root = cfg["SharedData:Root"] ?? AppContext.BaseDirectory;
         _seenFilePath = Path.Combine(root, "demo-auto-seen.json");
     }
@@ -136,6 +139,9 @@ public sealed class DemoAutoTradeService : BackgroundService
                     margin = available * 0.95m;
                     notional = margin * lev;
                 }
+                var adj = _journal?.GetAdjustments(client.Id, sym) ?? new VertexAutoTradeBinance8.Services.Learning.SymbolAdjustments();
+                notional *= adj.SizeMult;
+                lev = Math.Max(1, (int)Math.Round(lev * adj.LevMult));
                 decimal qty = notional / Math.Max(price, 0.0000001m);
 
                 List<DemoTpLevel>? tps = null;
@@ -207,3 +213,4 @@ public sealed class DemoAutoTradeService : BackgroundService
     }
 
 }
+

@@ -46,6 +46,7 @@ if (builder.Environment.IsDevelopment())
 // Add services to the container.
 builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
+builder.Services.AddSingleton<VertexAutoTradeBinance8.Services.Learning.TradeJournalService>();
 builder.Services.AddSingleton<WeatherForecastService>();
 
 // ── Client Auth (JSON-based, no DB) ──────────────────────────
@@ -239,6 +240,38 @@ ExecutedSignalService.ExecutedSignalsChanged += async () =>
     await hub.Clients.All.SendAsync("ExecutedSignalsUpdated");
 };
 
+
+// Wire Demo closes -> trade-journal.json (per client; demo-account.json unchanged)
+try
+{
+    var journal = app.Services.GetRequiredService<VertexAutoTradeBinance8.Services.Learning.TradeJournalService>();
+    VertexAutoTradeBinance8.Web.Services.DemoAccountService.TradeJournalHook = (clientId, pos, exit, closeQty, pnl, reason) =>
+    {
+        journal.Append(new VertexAutoTradeBinance8.Services.Learning.TradeJournalEntry
+        {
+            ClientId = clientId,
+            Source = "Demo",
+            Symbol = pos.Symbol,
+            Side = pos.Side,
+            EntryPrice = pos.EntryPrice,
+            ExitPrice = exit,
+            Qty = closeQty,
+            Leverage = pos.Leverage,
+            StopLoss = pos.StopLoss,
+            TakeProfits = pos.TakeProfits?.Select(t => t.Price).ToList() ?? new(),
+            RealizedPnl = pnl,
+            CloseReason = reason,
+            OpenedAtUtc = pos.OpenedAtUtc,
+            ClosedAtUtc = DateTime.UtcNow
+        });
+    };
+}
+catch (Exception ex)
+{
+    Console.WriteLine("[JOURNAL] wire failed: " + ex.Message);
+}
 app.Run();
+
+
 
 
