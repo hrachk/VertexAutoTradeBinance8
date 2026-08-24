@@ -88,6 +88,7 @@ public sealed class DemoAccountService
             _dcaState = new DemoDcaState();
             Load();
             LoadDcaState();
+            SeedMarksFromPositions();
 
             // Seed initial balance for brand-new demo ledger
             if (!File.Exists(_filePath))
@@ -218,7 +219,7 @@ public sealed class DemoAccountService
             decimal uPnL = 0m;
             foreach (var p in _state.Positions)
             {
-                var mark = _lastPrices.TryGetValue(p.Symbol, out var px) && px > 0 ? px : p.EntryPrice;
+                var mark = ResolveMarkPrice(p.Symbol, p.EntryPrice);
                 var dir = p.Side == "LONG" ? 1m : -1m;
                 uPnL += (mark - p.EntryPrice) * dir * p.Qty;
             }
@@ -377,6 +378,7 @@ public sealed class DemoAccountService
                 if (stopLoss.HasValue && stopLoss.Value > 0) existing.StopLoss = stopLoss;
                 if (takeProfits != null && takeProfits.Count > 0) existing.TakeProfits = takeProfits;
                 Save();
+                _lastPrices[symbol] = currentPrice;
                 _logger.LogInformation("[DEMO] Added {side} {symbol} qty={qty} @ {price} — merged into existing position, new avg entry {entry}",
                     side, symbol, qty, currentPrice, existing.EntryPrice);
                 Updated?.Invoke();
@@ -394,6 +396,7 @@ public sealed class DemoAccountService
             Save();
         }
 
+        _lastPrices[symbol] = currentPrice;
         _logger.LogInformation("[DEMO] Opened {side} {symbol} qty={qty} @ {price}", side, symbol, qty, currentPrice);
         Updated?.Invoke();
         return (true, "");
@@ -609,23 +612,49 @@ public sealed class DemoAccountService
 
     // ===================== Closing positions =====================
 
-    public (bool ok, string error) ClosePosition(string id, decimal pctToClose = 100m, string reason = "Manual")
+        public (bool ok, string error) ClosePosition(string id, decimal pctToClose = 100m, string reason = "Manual")
     {
-        if (!EnsureBound()) return (false, "Войдите в аккаунт для Demo-торговли.");
-        decimal? exitPrice = null;
         lock (_lock)
         {
             var pos = _state.Positions.FirstOrDefault(p => p.Id == id);
-            if (pos == null) return (false, "Position not found");
-            if (!_lastPrices.TryGetValue(pos.Symbol, out var price) || price <= 0)
-                return (false, "No live price available for this symbol yet");
-            exitPrice = price;
+            if (pos == null)
+                return (false, "Position not found");
+
+            // Prefer live mark; if symbol is not in the WS universe (thin alt),
+            // fall back to entry so the user can always flatten a stuck demo row.
+            decimal price = ResolveMarkPrice(pos.Symbol, pos.EntryPrice);
+            if (price <= 0)
+                return (false, "No price available to close this position");
 
             ClosePositionInternal(pos, pctToClose, price, reason);
             Save();
         }
         Updated?.Invoke();
         return (true, "");
+    }
+
+    /// <summary>Live tick if known; otherwise entry (or any case-insensitive match).</summary>
+
+    private void SeedMarksFromPositions()
+    {
+        foreach (var p in _state.Positions)
+        {
+            if (string.IsNullOrEmpty(p.Symbol) || p.EntryPrice <= 0) continue;
+            if (!_lastPrices.ContainsKey(p.Symbol) || _lastPrices[p.Symbol] <= 0)
+                _lastPrices[p.Symbol] = p.EntryPrice;
+        }
+    }
+
+    private decimal ResolveMarkPrice(string symbol, decimal fallbackEntry)
+    {
+        if (string.IsNullOrWhiteSpace(symbol)) return fallbackEntry;
+        if (_lastPrices.TryGetValue(symbol, out var p) && p > 0) return p;
+        foreach (var kv in _lastPrices)
+        {
+            if (string.Equals(kv.Key, symbol, StringComparison.OrdinalIgnoreCase) && kv.Value > 0)
+                return kv.Value;
+        }
+        return fallbackEntry > 0 ? fallbackEntry : 0m;
     }
 
     // Closes (fully or partially) and books the realized PnL — caller
