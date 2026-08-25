@@ -449,8 +449,8 @@ public class Program
 // Live trade journal: same trade-journal.json as Demo (per SharedData client)
 try
 {
-    var journal = app.Services.GetRequiredService<VertexAutoTradeBinance8.Services.Learning.TradeJournalService>();
-    var liveClientId = app.Configuration["Client:Id"] ?? "client_001";
+    var journal = host.Services.GetRequiredService<VertexAutoTradeBinance8.Services.Learning.TradeJournalService>();
+    var liveClientId = host.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>()["Client:Id"] ?? "client_001";
     VertexAutoTradeBinance8.Services.AiSelfLearningService.LiveTradeJournalHook =
         (symbol, side, entry, exit, pnlPct, reason) =>
         {
