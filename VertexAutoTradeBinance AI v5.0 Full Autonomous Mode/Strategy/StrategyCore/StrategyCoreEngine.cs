@@ -3,6 +3,8 @@ using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
+using VertexAutoTradeBinance8.Services.Learning;
+using Microsoft.Extensions.Configuration;
 using VertexAutoTradeBinance8.Services.MarketData;
 
 namespace VertexAutoTradeBinance8.Strategy.StrategyCore;
@@ -22,6 +24,8 @@ public sealed class StrategyCoreEngine
     private readonly ILogger<StrategyCoreEngine> _log;
     private readonly SymbolLiquidityScanner _liquidity;
     private readonly BinanceClientFactory _factory;
+    private readonly TradeJournalService? _journal;
+    private readonly string _clientId;
     private MarketDataFacade? _md;
     private Timer? _scanTimer;
     private int _scanBusy;
@@ -63,11 +67,15 @@ public sealed class StrategyCoreEngine
     public StrategyCoreEngine(
         ILogger<StrategyCoreEngine> log,
         SymbolLiquidityScanner liquidity,
-        BinanceClientFactory factory)
+        BinanceClientFactory factory,
+        TradeJournalService? journal = null,
+        IConfiguration? cfg = null)
     {
         _log = log;
         _liquidity = liquidity;
         _factory = factory;
+        _journal = journal;
+        _clientId = cfg?["Client:Id"] ?? "client_001";
     }
 
     public void BindReactive(MarketDataFacade marketData)
@@ -477,6 +485,36 @@ public sealed class StrategyCoreEngine
         IEnumerable<decimal> tps, decimal atr, string reason, decimal confidence)
     {
         var tpList = tps.ToList();
+
+        // Trade-memory feedback (per client): after SL → wider SL / closer TP / softer conf;
+        // after wins → hold or slight ease (never more aggressive).
+        try
+        {
+            var adj = _journal?.GetAdjustments(_clientId, symbol);
+            if (adj != null && (adj.SlPadAtr != 0 || adj.TpScale != 1m || adj.ConfMult != 1m))
+            {
+                bool isLong = side == SignalSide.Buy;
+                if (adj.SlPadAtr > 0 && atr > 0)
+                {
+                    if (isLong) sl -= atr * adj.SlPadAtr;
+                    else sl += atr * adj.SlPadAtr;
+                }
+                if (adj.TpScale > 0 && adj.TpScale < 1m && tpList.Count > 0)
+                {
+                    for (int ti = 0; ti < tpList.Count; ti++)
+                    {
+                        decimal dist = tpList[ti] - entry;
+                        tpList[ti] = entry + dist * adj.TpScale;
+                    }
+                }
+                confidence = Math.Max(0.05m, confidence * adj.ConfMult);
+                _log.LogInformation(
+                    "[CORE-MEM] {sym} {note} sizeMult={sm:F2} slPad={sp:F2} tpScale={ts:F2} confMult={cm:F2}",
+                    symbol, adj.Note, adj.SizeMult, adj.SlPadAtr, adj.TpScale, adj.ConfMult);
+            }
+        }
+        catch { /* never block signal emit */ }
+
         return new TradeSignal
         {
             Symbol = symbol.ToUpperInvariant(),
@@ -484,7 +522,7 @@ public sealed class StrategyCoreEngine
             EntryPrice = entry,
             StopLoss = sl,
             TakeProfits = tpList,
-            TakeProfit = tpList.First(),
+            TakeProfit = tpList.Count > 0 ? tpList.First() : entry,
             Atr = atr,
             Timeframe = "FifteenMinutes",
             Time = DateTime.UtcNow,
