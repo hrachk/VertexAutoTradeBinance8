@@ -282,6 +282,7 @@ public class Program
 
                     // ===== AI / CORE =====
                     services.AddSingleton<AiSelfLearningService>();
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.Learning.TradeJournalService>();
 
                     services.AddSingleton<AiMarketRegimeService>();
                     services.AddSingleton<Lazy<MarketDataService>>(sp => new Lazy<MarketDataService>(() => sp.GetRequiredService<MarketDataService>()));
