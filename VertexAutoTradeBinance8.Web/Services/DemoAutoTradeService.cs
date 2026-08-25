@@ -154,9 +154,22 @@ public sealed class DemoAutoTradeService : BackgroundService
                     }).ToList();
                 }
 
+                decimal? slUse = sig.StopLoss > 0 ? sig.StopLoss : null;
+                if (slUse.HasValue && adj.SlPadAtr > 0)
+                {
+                    decimal riskSl = Math.Abs(price - slUse.Value);
+                    decimal pad = riskSl * (adj.SlPadAtr / 1.5m);
+                    bool lng = side.Equals("LONG", StringComparison.OrdinalIgnoreCase);
+                    slUse = lng ? slUse.Value - pad : slUse.Value + pad;
+                }
+                if (tps != null && adj.TpScale > 0m && adj.TpScale < 0.999m)
+                {
+                    foreach (var t in tps)
+                        t.Price = price + (t.Price - price) * adj.TpScale;
+                }
                 var (ok, err) = _demo.OpenMarketPositionForClient(
                     client.Id, sym, side, qty, lev, price,
-                    sig.StopLoss > 0 ? sig.StopLoss : null, tps);
+                    slUse, tps);
 
                 if (ok)
                 {
