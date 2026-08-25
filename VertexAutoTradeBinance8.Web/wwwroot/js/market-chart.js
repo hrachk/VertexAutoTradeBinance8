@@ -208,6 +208,108 @@
     }
 
 
+    // ── Market structure: swing highs/lows → zigzag + tip markers ──
+    // Fractal swings: pivot high/low with `left`/`right` bars confirmation.
+    function computeStructureSwings(candles, left, right) {
+        left = left || 3;
+        right = right || 3;
+        if (!candles || candles.length < left + right + 3) return [];
+        const swings = [];
+        for (let i = left; i < candles.length - right; i++) {
+            const hi = candles[i].high, lo = candles[i].low;
+            let isHigh = true, isLow = true;
+            for (let j = i - left; j <= i + right; j++) {
+                if (j === i) continue;
+                if (candles[j].high >= hi) isHigh = false;
+                if (candles[j].low <= lo) isLow = false;
+            }
+            if (isHigh) swings.push({ time: candles[i].time, price: hi, kind: 'H', index: i });
+            else if (isLow) swings.push({ time: candles[i].time, price: lo, kind: 'L', index: i });
+        }
+        // Alternate H/L — keep dominant extremes
+        if (swings.length < 2) return swings;
+        const filtered = [swings[0]];
+        for (let i = 1; i < swings.length; i++) {
+            const prev = filtered[filtered.length - 1];
+            const cur = swings[i];
+            if (cur.kind === prev.kind) {
+                if (cur.kind === 'H' && cur.price >= prev.price) filtered[filtered.length - 1] = cur;
+                else if (cur.kind === 'L' && cur.price <= prev.price) filtered[filtered.length - 1] = cur;
+            } else {
+                filtered.push(cur);
+            }
+        }
+        // Label HH/HL/LH/LL
+        for (let i = 0; i < filtered.length; i++) {
+            if (i < 2) { filtered[i].label = filtered[i].kind; continue; }
+            const prevSame = [...filtered.slice(0, i)].reverse().find(s => s.kind === filtered[i].kind);
+            if (!prevSame) { filtered[i].label = filtered[i].kind; continue; }
+            if (filtered[i].kind === 'H')
+                filtered[i].label = filtered[i].price > prevSame.price ? 'HH' : 'LH';
+            else
+                filtered[i].label = filtered[i].price < prevSame.price ? 'LL' : 'HL';
+        }
+        // Structure break vs last opposite swing using last close
+        if (candles.length && filtered.length >= 2) {
+            const lastClose = candles[candles.length - 1].close;
+            const last = filtered[filtered.length - 1];
+            const prev = filtered[filtered.length - 2];
+            // BOS: close beyond last swing high in up move / low in down
+            if (last.kind === 'H' && lastClose > last.price) last.break = 'BOS↑';
+            if (last.kind === 'L' && lastClose < last.price) last.break = 'BOS↓';
+            if (prev.kind === 'H' && last.kind === 'L' && lastClose > prev.price) last.break = 'CHOCH↑';
+            if (prev.kind === 'L' && last.kind === 'H' && lastClose < prev.price) last.break = 'CHOCH↓';
+        }
+        return filtered;
+    }
+
+    function applyStructure(s) {
+        if (!s || !s.structureSeries) return;
+        try {
+            if (!s.showStructure || !s.lastCandles || s.lastCandles.length < 10) {
+                s.structureSeries.setData([]);
+                if (s.structureMarkers && typeof s.structureMarkers.setMarkers === 'function')
+                    s.structureMarkers.setMarkers([]);
+                return;
+            }
+            const swings = computeStructureSwings(s.lastCandles, 3, 3);
+            s.structureSwings = swings;
+            const lineData = swings.map(sw => ({ time: sw.time, value: sw.price }));
+            s.structureSeries.setData(lineData);
+
+            const markers = swings.map(sw => {
+                const isHigh = sw.kind === 'H';
+                const broken = !!sw.break;
+                return {
+                    time: sw.time,
+                    position: isHigh ? 'aboveBar' : 'belowBar',
+                    color: broken ? '#f59e0b' : (isHigh ? '#22d3ee' : '#a78bfa'),
+                    shape: isHigh ? 'arrowDown' : 'arrowUp',
+                    text: (sw.label || sw.kind) + (sw.break ? ' ' + sw.break : '')
+                };
+            });
+            if (typeof LightweightCharts.createSeriesMarkers === 'function') {
+                if (!s.structureMarkers) {
+                    s.structureMarkers = LightweightCharts.createSeriesMarkers(s.candleSeries, markers);
+                } else {
+                    // Prefer dedicated markers on structure line series to not clash with trade markers
+                    try {
+                        if (!s.structureLineMarkers) {
+                            s.structureLineMarkers = LightweightCharts.createSeriesMarkers(s.structureSeries, markers);
+                        } else {
+                            s.structureLineMarkers.setMarkers(markers);
+                        }
+                    } catch (e) {
+                        s.structureMarkers.setMarkers(markers);
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[VERTEX] applyStructure', e);
+        }
+    }
+
+
     window.marketChart = {
         // Saves the chart's current visible range (which bars are on
         // screen, at what zoom level) to sessionStorage, keyed by
@@ -2183,6 +2285,20 @@
             requestAnimationFrame(() => applyTradeMarkers(s));
             setTimeout(() => applyTradeMarkers(s), 120);
         },
+        
+        setStructureVisible(containerId, visible) {
+            const s = sessions.get(containerId);
+            if (!s) return;
+            s.showStructure = !!visible;
+            applyStructure(s);
+        },
+        toggleStructure(containerId) {
+            const s = sessions.get(containerId);
+            if (!s) return false;
+            s.showStructure = !s.showStructure;
+            applyStructure(s);
+            return s.showStructure;
+        },
         setTradeMarkersVisible(containerId, visible) {
             const s = sessions.get(containerId);
             if (!s) return;
@@ -2324,6 +2440,8 @@
                     const rsiVals = rsi(closes, 14);
 
                     s.candleSeries.setData(candles);
+                    s.lastCandles = candles;
+                    applyStructure(s);
                     s.ema21Series.setData(candles.map((c, i) => ({ time: c.time, value: ema21[i] })).filter(d => d.value != null));
                     s.ema55Series.setData(candles.map((c, i) => ({ time: c.time, value: ema55[i] })).filter(d => d.value != null));
                     s.volumeSeries.setData(combined.map(k => toVolume(k, 'rgba(34,197,94,0.28)', 'rgba(239,68,68,0.28)')));
