@@ -268,47 +268,82 @@
         if (!s.structureSeries) {
             try {
                 s.structureSeries = s.chart.addSeries(LightweightCharts.LineSeries, {
-                    color: 'rgba(34,211,238,0.85)', lineWidth: 1.5,
+                    color: 'rgba(34,211,238,0.72)', lineWidth: 1,
                     priceLineVisible: false, lastValueVisible: false,
-                    crosshairMarkerVisible: true,
+                    crosshairMarkerVisible: false,
                 }, 0);
             } catch (e) { console.warn('[VERTEX] structure series', e); return; }
+        } else {
+            try { s.structureSeries.applyOptions({ lineWidth: 1, color: 'rgba(34,211,238,0.72)' }); } catch (e) {}
         }
         try {
             if (!s.showStructure || !s.lastCandles || s.lastCandles.length < 10) {
                 s.structureSeries.setData([]);
-                if (s.structureMarkers && typeof s.structureMarkers.setMarkers === 'function')
-                    s.structureMarkers.setMarkers([]);
+                if (s.structureLineMarkers && typeof s.structureLineMarkers.setMarkers === 'function')
+                    s.structureLineMarkers.setMarkers([]);
                 return;
             }
-            const swings = computeStructureSwings(s.lastCandles, 3, 3);
+            const candles = s.lastCandles;
+            const swings = computeStructureSwings(candles, 3, 3);
+
+            // Live forming tip: until the bar is confirmed (right=3),
+            // extend zigzag to the current candle extreme opposite to last swing.
+            // Moves with ticks; snaps on close when a new confirmed swing appears.
+            if (swings.length >= 1 && candles.length > 0) {
+                const last = candles[candles.length - 1];
+                const prev = swings[swings.length - 1];
+                let formPrice = null, formKind = null;
+                if (prev.kind === 'L') {
+                    // after a low, structure climbs — track forming high
+                    if (last.high >= prev.price) { formPrice = last.high; formKind = 'H'; }
+                } else {
+                    if (last.low <= prev.price) { formPrice = last.low; formKind = 'L'; }
+                }
+                // only if last swing is not already on this same bar time
+                if (formPrice != null && prev.time !== last.time) {
+                    swings.push({
+                        time: last.time,
+                        price: formPrice,
+                        kind: formKind,
+                        label: '~',
+                        forming: true,
+                        index: candles.length - 1
+                    });
+                } else if (formPrice != null && prev.time === last.time) {
+                    // same bar still forming — move the tip
+                    prev.price = formPrice;
+                    prev.forming = true;
+                    prev.label = prev.label || '~';
+                }
+            }
+
             s.structureSwings = swings;
             const lineData = swings.map(sw => ({ time: sw.time, value: sw.price }));
             s.structureSeries.setData(lineData);
 
-            const markers = swings.map(sw => {
+            // Markers only on confirmed swings (not the live "~" tip — reduces flicker)
+            const markers = swings.filter(sw => !sw.forming).map(sw => {
                 const isHigh = sw.kind === 'H';
                 const broken = !!sw.break;
                 return {
                     time: sw.time,
                     position: isHigh ? 'aboveBar' : 'belowBar',
                     color: broken ? '#f59e0b' : (isHigh ? '#22d3ee' : '#a78bfa'),
-                    shape: isHigh ? 'arrowDown' : 'arrowUp',
+                    shape: 'circle',
                     text: (sw.label || sw.kind) + (sw.break ? ' ' + sw.break : '')
                 };
             });
             if (typeof LightweightCharts.createSeriesMarkers === 'function') {
-                if (!s.structureMarkers) {
-                    s.structureMarkers = LightweightCharts.createSeriesMarkers(s.candleSeries, markers);
-                } else {
-                    // Prefer dedicated markers on structure line series to not clash with trade markers
-                    try {
-                        if (!s.structureLineMarkers) {
-                            s.structureLineMarkers = LightweightCharts.createSeriesMarkers(s.structureSeries, markers);
-                        } else {
-                            s.structureLineMarkers.setMarkers(markers);
-                        }
-                    } catch (e) {
+                try {
+                    if (!s.structureLineMarkers) {
+                        s.structureLineMarkers = LightweightCharts.createSeriesMarkers(s.structureSeries, markers);
+                    } else {
+                        s.structureLineMarkers.setMarkers(markers);
+                    }
+                } catch (e) {
+                    if (!s.structureMarkers) {
+                        s.structureMarkers = LightweightCharts.createSeriesMarkers(s.candleSeries, markers);
+                    } else {
                         s.structureMarkers.setMarkers(markers);
                     }
                 }
@@ -411,7 +446,7 @@
                 color: colors.ema55, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
             }, 0);
             const structureSeries = chart.addSeries(LightweightCharts.LineSeries, {
-                color: 'rgba(34,211,238,0.85)', lineWidth: 1.5,
+                color: 'rgba(34,211,238,0.75)', lineWidth: 1,
                 priceLineVisible: false, lastValueVisible: false,
                 crosshairMarkerVisible: true,
             }, 0);
@@ -1214,8 +1249,25 @@
         updateLastBar(containerId, k) {
             const s = sessions.get(containerId);
             if (!s) return;
-            s.candleSeries.update(toCandle(k));
+            const candle = toCandle(k);
+            s.candleSeries.update(candle);
             s.volumeSeries.update(toVolume(k, 'rgba(34,197,94,0.28)', 'rgba(239,68,68,0.28)'));
+            // Keep structure candles in sync so zigzag tip can move on forming bar
+            if (!s.lastCandles) s.lastCandles = [];
+            if (s.lastCandles.length === 0) {
+                s.lastCandles.push(candle);
+            } else {
+                const last = s.lastCandles[s.lastCandles.length - 1];
+                if (last.time === candle.time) s.lastCandles[s.lastCandles.length - 1] = candle;
+                else s.lastCandles.push(candle);
+            }
+            if (s.showStructure) {
+                const now = Date.now();
+                if (!s._structureTickAt || now - s._structureTickAt > 200) {
+                    s._structureTickAt = now;
+                    applyStructure(s);
+                }
+            }
 
             // Keep the raw-kline lookups in sync with this incremental
             // update too — without this, the tooltip/lazy-load logic
