@@ -770,8 +770,13 @@
                 <div class="mk-acct-value mono">$@_demoSnapshot.Balance.ToString("F2")</div>
             </div>
             <div class="mk-acct-item">
-                <div class="mk-acct-label">Realized PnL (demo)</div>
-                @{ var demoRealized = _demoSnapshot.History.Sum(t => t.RealizedPnl); }
+                <div class="mk-acct-label">Realized PnL (today)</div>
+                @{
+                    var todayLocal = DateTime.Now.Date;
+                    var demoRealized = _demoSnapshot.History
+                        .Where(t => t.ClosedAtUtc.ToLocalTime().Date == todayLocal)
+                        .Sum(t => t.RealizedPnl);
+                }
                 <div class="mk-acct-value mono @(demoRealized >= 0 ? "up" : "dn")">
                     @(demoRealized >= 0 ? "+" : "")@demoRealized.ToString("F2")
                 </div>
@@ -8389,13 +8394,26 @@ sealed class RealTradeRow
         _manualTps[idx].Pct = Math.Clamp(v, 1m, 100m);
     }
 
+    decimal GetOrderAvailableBalance()
+    {
+        if (_demoMode)
+        {
+            // Free margin on demo ledger (wallet − locked margins)
+            decimal locked = 0m;
+            try { locked = _demoSnapshot.Positions?.Sum(p => p.Margin) ?? 0m; } catch { }
+            return Math.Max(0m, _demoSnapshot.Balance - locked);
+        }
+        return _acctAvailableBalance > 0 ? _acctAvailableBalance : _acctWalletBalance;
+    }
+
     decimal CalcMaxQty()
     {
-        // Max qty = (available × leverage) / price
+        // Max qty = (available × leverage) / price — Demo uses demo free margin
         decimal price = _orderPrice > 0 ? _orderPrice
             : Series.FirstOrDefault(s => s.Symbol == _activeSym)?.Klines.LastOrDefault()?.Close ?? 0m;
         if (price <= 0 || _orderLeverage <= 0) return 0;
-        decimal maxNotional = _acctAvailableBalance * _orderLeverage;
+        decimal available = GetOrderAvailableBalance();
+        decimal maxNotional = available * _orderLeverage;
         decimal maxQty = maxNotional / price;
         if (_symStep > 0) maxQty = Math.Floor(maxQty / _symStep) * _symStep;
         return maxQty;
