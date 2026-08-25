@@ -1,3 +1,5 @@
+using VertexAutoTradeBinance8.Services.Learning;
+using Microsoft.Extensions.Configuration;
 using Binance.Net.Enums;
 using CryptoExchange.Net;
 using VertexAutoTradeBinance8.Configuration;
@@ -17,6 +19,8 @@ namespace VertexAutoTradeBinance8.Services
         private readonly TradingOptionsResolver _tradingResolver;
         private readonly AiSelfLearningService _ai;
         private readonly LiquidationRiskEngine _liqRisk;
+        private readonly TradeJournalService? _journal;
+        private readonly string _clientId;
 
         public string? LastRejectReason { get; private set; }
         public decimal LastBalanceUsdt { get; private set; }
@@ -31,7 +35,9 @@ namespace VertexAutoTradeBinance8.Services
             SmartRegimeService smartRegime,
             TradingOptionsResolver tradingResolver,
             AiSelfLearningService ai,
-            LiquidationRiskEngine liqRisk
+            LiquidationRiskEngine liqRisk,
+            TradeJournalService? journal = null,
+            IConfiguration? cfg = null
         )
         {
             _logger = logger;
@@ -42,6 +48,8 @@ namespace VertexAutoTradeBinance8.Services
             _marketRegimeService = marketRegimeService;
             _smartRegime = smartRegime;
             _tradingResolver = tradingResolver;
+            _journal = journal;
+            _clientId = cfg?["Client:Id"] ?? "client_001";
             _ai = ai;
             _liqRisk = liqRisk;
         }
@@ -194,6 +202,19 @@ namespace VertexAutoTradeBinance8.Services
                             marginQty = Math.Floor(liqCheck.SafeQty / step) * step;
                     }
 
+                    // Trade-memory size feedback (never increases above base)
+                    try
+                    {
+                        var adj = _journal?.GetAdjustments(_clientId, signal.Symbol);
+                        if (adj != null && adj.SizeMult > 0 && adj.SizeMult < 1m)
+                        {
+                            marginQty = Math.Floor(marginQty * adj.SizeMult / step) * step;
+                            if (marginQty < minQty) marginQty = minQty;
+                            _logger.LogInformation("[RISK-MEM] {sym} size×{sm:F2} ({note})",
+                                signal.Symbol, adj.SizeMult, adj.Note);
+                        }
+                    }
+                    catch { }
                     return marginQty;
                 }
             }
