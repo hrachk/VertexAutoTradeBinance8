@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.Json;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Strategy;
@@ -30,6 +30,9 @@ namespace VertexAutoTradeBinance8.Services
     }
     public class AiSelfLearningService
     {
+        /// <summary>Optional: unified trade-journal.json sink (Demo+Live). Wired from Program.</summary>
+        public static Action<string, string, decimal, decimal, decimal, string>? LiveTradeJournalHook { get; set; }
+
         private DateTime? _lastImportedTradeCloseUtc;
         public DateTime? LastImportedTradeCloseUtc => _lastImportedTradeCloseUtc;
         public event Action<MarketState>? MarketStateCreated;
@@ -499,6 +502,19 @@ namespace VertexAutoTradeBinance8.Services
                     PnlPct = pnlPct,    // дублирование допустимо
                     Time = DateTime.UtcNow
                 });
+
+                try
+                {
+                    // Mirror into per-client trade-journal.json (Source=Live)
+                    LiveTradeJournalHook?.Invoke(
+                        symbol,
+                        side == SignalSide.Buy ? "LONG" : "SHORT",
+                        entry,
+                        exit,
+                        pnlPct,
+                        pnlPct >= 0 ? "TP/Win" : "SL/Loss");
+                }
+                catch { /* never break learning */ }
 
                 if (_tradeHistory.Count > 5000)
                     _tradeHistory.RemoveRange(0, 2500);
