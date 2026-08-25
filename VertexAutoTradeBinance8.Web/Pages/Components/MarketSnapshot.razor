@@ -1477,8 +1477,8 @@
                     <span class="ord-balance-l">Available</span>
                     @if (_demoMode)
                     {
-                        <span class="ord-balance-v mono">$@_demoSnapshot.Balance.ToString("F2")</span>
-                        <span class="ord-balance-sub mk-dim">Demo account</span>
+                        <span class="ord-balance-v mono">$@GetOrderAvailableBalance().ToString("F2")</span>
+                        <span class="ord-balance-sub mk-dim">Demo available</span>
                     }
                     else
                     {
@@ -1541,11 +1541,14 @@
                         </div>
                     }
 
-                    <!-- Available Balance -->
+                    @if (!_demoMode)
+                    {
+                    <!-- Available Balance (Live only — Demo already shown above) -->
                     <div class="ord-avail-bal">
                         <span class="ord-avail-label">Available</span>
                         <span class="ord-avail-value mono">@_acctAvailableBalance.ToString("F2") USDT</span>
                     </div>
+                    }
 
                     <!-- Quantity + notional hint -->
                     <div class="ord-row">
