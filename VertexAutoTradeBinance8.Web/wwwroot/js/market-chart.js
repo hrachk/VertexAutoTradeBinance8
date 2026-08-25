@@ -264,7 +264,16 @@
     }
 
     function applyStructure(s) {
-        if (!s || !s.structureSeries) return;
+        if (!s || !s.candleSeries || !s.chart) return;
+        if (!s.structureSeries) {
+            try {
+                s.structureSeries = s.chart.addSeries(LightweightCharts.LineSeries, {
+                    color: 'rgba(34,211,238,0.85)', lineWidth: 1.5,
+                    priceLineVisible: false, lastValueVisible: false,
+                    crosshairMarkerVisible: true,
+                }, 0);
+            } catch (e) { console.warn('[VERTEX] structure series', e); return; }
+        }
         try {
             if (!s.showStructure || !s.lastCandles || s.lastCandles.length < 10) {
                 s.structureSeries.setData([]);
@@ -401,6 +410,11 @@
             const ema55Series = chart.addSeries(LightweightCharts.LineSeries, {
                 color: colors.ema55, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
             }, 0);
+            const structureSeries = chart.addSeries(LightweightCharts.LineSeries, {
+                color: 'rgba(34,211,238,0.85)', lineWidth: 1.5,
+                priceLineVisible: false, lastValueVisible: false,
+                crosshairMarkerVisible: true,
+            }, 0);
 
             const volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
                 priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false,
@@ -518,7 +532,7 @@
             });
 
             const session = {
-                chart, candleSeries, ema21Series, ema55Series,
+                chart, candleSeries, ema21Series, ema55Series, structureSeries,
                 volumeSeries, rsiSeries, rsiObLine, rsiOsLine,
                 priceLine: null, onPricePicked: null, tooltipEl: tooltip,
                 // Bybit-style draggable position lines (entry/SL/TP).
@@ -533,7 +547,7 @@
                 // to create a TP/SL that doesn't exist yet, not just
                 // to move one that already does.
                 entryLine: null, slLine: null, tpLines: [], liqLine: null, beLine: null,
-                tradeMarkers: [], showTradeMarkers: true,
+                tradeMarkers: [], showTradeMarkers: true, showStructure: false, structureSwings: [], lastCandles: [],
                 draggingLine: null, draggingLineKind: null, draggingLineIdx: null,
                 entryPrice: 0, side: 'LONG', qty: 0,
                 onSlChanged: null, onTpChanged: null,
@@ -1166,6 +1180,8 @@
             const rsiVals = rsi(closes, 14);
 
             s.candleSeries.setData(candles);
+            s.lastCandles = candles;
+            applyStructure(s);
                     applyTradeMarkers(s);
             s.ema21Series.setData(candles.map((c, i) => ({ time: c.time, value: ema21[i] })).filter(d => d.value != null));
             s.ema55Series.setData(candles.map((c, i) => ({ time: c.time, value: ema55[i] })).filter(d => d.value != null));
