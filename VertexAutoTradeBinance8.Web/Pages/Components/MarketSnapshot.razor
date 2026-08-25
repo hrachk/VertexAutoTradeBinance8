@@ -7716,6 +7716,18 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         return sec - (sec % step);
     }
 
+
+    async Task ToggleStructureAsync()
+    {
+        _showStructure = !_showStructure;
+        try
+        {
+            await JS.InvokeVoidAsync("marketChart.setStructureVisible",
+                $"chartContainer-{_chartInstanceId}", _showStructure);
+        }
+        catch { }
+    }
+
     async Task ToggleTradeMarkersAsync()
     {
         _showTradeMarkers = !_showTradeMarkers;
