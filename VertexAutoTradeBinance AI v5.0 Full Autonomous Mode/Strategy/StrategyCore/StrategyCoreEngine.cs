@@ -480,7 +480,7 @@ public sealed class StrategyCoreEngine
         return null;
     }
 
-    private static TradeSignal Make(
+    private TradeSignal Make(
         string symbol, SignalSide side, decimal entry, decimal sl,
         IEnumerable<decimal> tps, decimal atr, string reason, decimal confidence)
     {
