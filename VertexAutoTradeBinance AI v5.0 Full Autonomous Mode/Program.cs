@@ -1,4 +1,4 @@
-﻿using Binance.Net;
+using Binance.Net;
 using Binance.Net.Clients;
 using CryptoExchange.Net.Authentication;
 using Microsoft.Extensions.Options;
@@ -444,7 +444,39 @@ public class Program
             // =====================================================
             // 3️⃣ RUN
             // =====================================================
-            await host.RunAsync();
+            
+// Live trade journal: same trade-journal.json as Demo (per SharedData client)
+try
+{
+    var journal = app.Services.GetRequiredService<VertexAutoTradeBinance8.Services.Learning.TradeJournalService>();
+    var liveClientId = app.Configuration["Client:Id"] ?? "client_001";
+    VertexAutoTradeBinance8.Services.AiSelfLearningService.LiveTradeJournalHook =
+        (symbol, side, entry, exit, pnlPct, reason) =>
+        {
+            journal.Append(new VertexAutoTradeBinance8.Services.Learning.TradeJournalEntry
+            {
+                ClientId = liveClientId,
+                Source = "Live",
+                Symbol = symbol,
+                Side = side,
+                EntryPrice = entry,
+                ExitPrice = exit,
+                Qty = 0,
+                Leverage = 0,
+                RealizedPnl = pnlPct,
+                RealizedR = pnlPct,
+                CloseReason = reason,
+                OpenedAtUtc = DateTime.UtcNow,
+                ClosedAtUtc = DateTime.UtcNow
+            });
+        };
+}
+catch (Exception ex)
+{
+    Console.WriteLine("[JOURNAL-LIVE] wire failed: " + ex.Message);
+}
+
+await host.RunAsync();
         }
         catch (Exception ex)
         {
