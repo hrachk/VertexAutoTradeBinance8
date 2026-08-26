@@ -507,32 +507,24 @@ namespace VertexAutoTradeBinance8.Services
                 // DCA: 3.0×ATR — only move BE after significant move
                 // Signal: 1.3×ATR — standard short-term threshold
                 // =========================
-                // ── PROFESSIONAL BE TRIGGER ──────────────────────────────────
-                // Move SL to BE only after the 2nd TP has been filled.
-                // Detection: track peak qty at position open, check current.
-                // Typical TP allocation (50%/30%/20%):
-                //   After TP1: qty ≈ 50% of peak (dropped ~50%)
-                //   After TP2: qty ≈ 20% of peak (dropped ~80%) ← BE trigger
-                // For DCA: only trigger after roi > 3×ATR AND qty < 50% peak.
-                // For signal trades: trigger after qty < 40% of peak.
-                //
-                // Peak qty tracking: we use _beLevel as a proxy —
-                // on first visit record peak qty in _lastSl[key+"_peak"].
+                // ── PROFESSIONAL BE / LOCK TRIGGER ───────────────────────────
+                // Policy (GIBRID-11V):
+                //   TP1 filled → move SL to break-even (entry ± fee buffer)
+                //   TP2 filled → move SL slightly into profit (lock)
+                // Detection via remaining qty vs peak (50/30/20 ladder):
+                //   After TP1: qty ≈ 50% peak → tp1Fired (qty < 70% peak)
+                //   After TP2: qty ≈ 20% peak → tp2Fired (qty < 30% peak)
                 var peakKey = keyProbe + "_peak";
                 if (!_lastSl.ContainsKey(peakKey) || _lastSl[peakKey] < qty)
-                    _lastSl[peakKey] = qty; // update peak on first call or size-up
+                    _lastSl[peakKey] = qty;
                 decimal peakQty = _lastSl[peakKey];
 
                 decimal BE_TRIGGER = ATR * (isDcaPos ? 3.0m : 1.3m);
 
-                // ── Which phase? ─────────────────────────────────────────
-                // tp1Fired: true when at least 30% of position was closed
-                // 0.70 threshold catches TP1 even with 35/30/20 allocation
-                // (35% closed → qty = 65% → 0.65 < 0.70 → tp1Fired=true)
                 bool tp1Fired = peakQty > 0 && qty < peakQty * 0.70m;
                 bool tp2Fired = peakQty > 0 && qty < peakQty * 0.30m;
 
-                // Phase 0: nothing fired → DO NOT touch SL at all
+                // Phase 0: no TP yet → do not touch SL
                 if (!tp1Fired && !skipSoftFilters)
                 {
                     _logger.LogDebug(
@@ -541,130 +533,48 @@ namespace VertexAutoTradeBinance8.Services
                     return;
                 }
 
-                bool beConditionMet;
-                if (tp2Fired || skipSoftFilters || (isDcaPos && roi >= BE_TRIGGER))
+                // desiredStage: 1 = BE after TP1, 2 = profit-lock after TP2
+                bool lockProfit = tp2Fired || skipSoftFilters || (isDcaPos && roi >= BE_TRIGGER);
+                int desiredStage = lockProfit ? 2 : 1;
+                int prevStage = _beLevel.GetOrAdd(keyProbe, 0);
+
+                // =========================
+                // CALC TARGET SL PRICE
+                // =========================
+                const decimal BE_BUFFER = 0.0010m; // 0.10% — fees + tiny cushion (TP1 → BE)
+                decimal newSl;
+                if (desiredStage >= 2)
                 {
-                    // Phase 2: TP2 fired → BE immediately, no retest needed
-                    beConditionMet = true;
+                    // TP2 → чуть в плюс: max(0.25×ATR, 0.25% of entry)
+                    decimal lockDist = Math.Max(ATR > 0 ? ATR * 0.25m : 0m, entry * 0.0025m);
+                    if (lockDist <= 0) lockDist = entry * 0.0025m;
+                    newSl = side == PositionSide.Long
+                        ? entry + lockDist
+                        : entry - lockDist;
                     _logger.LogInformation(
-                        "[SUPERVISOR][{sym}][{side}] Phase 2 — TP2 fired → BE now",
-                        symbol, side);
+                        "[SUPERVISOR][{sym}][{side}] Phase 2 — TP2 → SL lock +{d:F6} from entry → {sl:F6}",
+                        symbol, side, lockDist, newSl);
                 }
                 else
                 {
-                    // Phase 1: TP1 fired — two-tier BE logic:
-                    //
-                    // 1a. DANGER (price pulling back toward entry):
-                    //     If price drops below entry + 0.5×ATR (LONG) or
-                    //     rises above entry - 0.5×ATR (SHORT) → move to BE
-                    //     IMMEDIATELY for protection. TP1 hit but losing ground.
-                    //
-                    // 1b. TREND CONTINUING (price still above TP1 zone):
-                    //     If price > entry + 1.5×ATR AND EMA21 intact →
-                    //     move to BE as confirmation (trade is running well).
-                    //
-                    // 1c. NEUTRAL (between 0.5× and 1.5×ATR): wait, let breathe.
-                    //     Don't touch SL — normal post-TP1 consolidation.
-
-                    decimal ema21 = klines1m != null && klines1m.Count >= 21
-                        ? klines1m.Skip(klines1m.Count - 21).Average(k => (decimal)k.ClosePrice)
-                        : 0m;
-
-                    // Distance from entry in ATR units
-                    decimal distFromEntry = side == PositionSide.Long
-                        ? mark - entry   // positive = profitable
-                        : entry - mark;  // positive = profitable
-
-                    bool inDangerZone = distFromEntry < ATR * 0.5m;  // price nearly back at entry
-                    bool trendConfirmed = distFromEntry > ATR * 1.5m  // still above TP1 area
-                        && (ema21 <= 0m || (
-                            side == PositionSide.Long
-                                ? mark > ema21 * 0.998m
-                                : mark < ema21 * 1.002m));
-
-                    if (inDangerZone)
-                    {
-                        // 1a: Price pulling back fast — protect immediately
-                        beConditionMet = true;
-                        _logger.LogInformation(
-                            "[SUPERVISOR][{sym}][{side}] Phase 1a — TP1 fired + DANGER " +
-                            "(dist={d:F4} < 0.5×ATR={a:F4}) → BE now for protection",
-                            symbol, side, distFromEntry, ATR * 0.5m);
-                    }
-                    else if (trendConfirmed)
-                    {
-                        // 1b: Trend still running — move BE to lock in
-                        beConditionMet = true;
-                        _logger.LogInformation(
-                            "[SUPERVISOR][{sym}][{side}] Phase 1b — TP1 fired + trend " +
-                            "continuing (dist={d:F4} > 1.5×ATR={a:F4}) → BE confirmed",
-                            symbol, side, distFromEntry, ATR * 1.5m);
-                    }
-                    else
-                    {
-                        // 1c: Neutral zone — let position breathe
-                        beConditionMet = false;
-                        _logger.LogDebug(
-                            "[SUPERVISOR][{sym}][{side}] Phase 1c — TP1 fired, " +
-                            "neutral zone (dist={d:F4}, 0.5×ATR={lo:F4}, 1.5×ATR={hi:F4}) — wait",
-                            symbol, side, distFromEntry, ATR * 0.5m, ATR * 1.5m);
-                        return;
-                    }
+                    // TP1 → break-even
+                    newSl = side == PositionSide.Long
+                        ? entry * (1m + BE_BUFFER)
+                        : entry * (1m - BE_BUFFER);
+                    _logger.LogInformation(
+                        "[SUPERVISOR][{sym}][{side}] Phase 1 — TP1 → BE (entry±0.10%) → {sl:F6}",
+                        symbol, side, newSl);
                 }
-
-                if (!beConditionMet) return;
-
-                // =========================
-                // LEVEL CONTROL (анти-спам)
-                // =========================
-                int level = (int)((roi - BE_TRIGGER) / STEP) + 1;
-                int prevLevel = _beLevel.GetOrAdd(keyProbe, 0);
-                if (level <= prevLevel) return;  // не дергаем повторно
-                _beLevel[keyProbe] = level;
-
-                // =========================
-                // PARTIAL CLOSE (раз в уровень)
-                // Gated on SupervisorManageTP — when false, the user
-                // manages their own TP/close orders and we must not
-                // interfere by triggering partial closes from here.
-                // =========================
-                if (!skipSoftFilters && _tradingOptions.CurrentValue.SupervisorManageTP)
-                {
-                    int partialLevel = (int)(roi / PARTIAL_STEP);
-                    int prevPartial = (int)_beStage.GetOrAdd(keyProbe, BeStage.None);
-
-                    if (partialLevel > prevPartial && partialLevel >= 1)
-                    {
-                        _beStage[keyProbe] = (BeStage)partialLevel;
-                        decimal closeQty = Math.Round(qty * PARTIAL_SIZE, 8);
-                        closeQty = Math.Min(closeQty, Math.Round(qty * 0.9m, 8));
-
-                        if (closeQty > 0)
-                        {
-                            await ClosePartialAsync(client, symbol, side, closeQty, pos, ct);
-                            qty -= closeQty;
-                        }
-                    }
-                }
-
-                // =========================
-                // CALC BE PRICE
-                // =========================
-                // BE = entry + small buffer covering taker fees (0.08% each side)
-                // This is NOT a trailing SL — it moves ONCE to protect the position.
-                // After this move, Supervisor never touches SL again for this position.
-                const decimal BE_BUFFER = 0.0010m; // 0.10% — covers fees + tiny cushion
-                decimal newSl = side == PositionSide.Long
-                    ? entry * (1m + BE_BUFFER)   // LONG: SL slightly above entry
-                    : entry * (1m - BE_BUFFER);  // SHORT: SL slightly below entry
 
                 // =========================
                 // TRAILING SL — after BE is placed, trail SL behind price
                 // =========================
                 var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                if (_beMoved.TryGetValue(keyProbe, out var lastMove) && lastMove > 0)
+                // If target stage already reached → only trail; else fall through to place/upgrade SL
+                if (_beMoved.TryGetValue(keyProbe, out var lastMove) && lastMove > 0
+                    && desiredStage <= prevStage)
                 {
-                    // BE already moved — run trailing SL.
+                    // Stage already applied — run trailing SL.
                     // Trail at 1.5×ATR below mark (Long) or above (Short).
                     // Ratchet: only move in profit direction, never widen.
                     if (ATR > 0 && mark > 0)
@@ -740,10 +650,11 @@ namespace VertexAutoTradeBinance8.Services
                 // =========================
                 _lastSl[keyProbe] = newSl;
                 _beMoved[keyProbe] = now;
+                _beLevel[keyProbe] = desiredStage;
 
                 _logger.LogInformation(
-                    "[SL MOVE][{symbol}][{side}] → {sl} lvl={lvl} roi={roi:P2}",
-                    symbol, side, newSl, level, roi);
+                    "[SL MOVE][{symbol}][{side}] → {sl} stage={stg} roi={roi:P2}",
+                    symbol, side, newSl, desiredStage, roi);
             }
 
             // запуск для обеих сторон
