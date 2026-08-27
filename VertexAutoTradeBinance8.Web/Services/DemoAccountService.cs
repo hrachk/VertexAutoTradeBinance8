@@ -732,7 +732,7 @@ _state.History.Add(new DemoClosedTrade
         if (string.IsNullOrWhiteSpace(setup)) return;
         try
         {
-            var path = ClientFilePath(clientId);
+            var path = Path.Combine(_accountsDir, $"client_{clientId}", "demo-account.json");
             lock (_lock)
             {
                 DemoAccountState state;
