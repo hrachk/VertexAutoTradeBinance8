@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration;
 using System.Collections.Concurrent;
 using VertexAutoTradeBinance8.Web.Demo;
 using VertexAutoTradeBinance8.Web.Services.Auth;
@@ -174,6 +174,7 @@ public sealed class DemoAutoTradeService : BackgroundService
                 if (ok)
                 {
                     SaveSeenKeys();
+                                        try { _demo.SetPositionSetupForClient(client.Id, sym, sig.Reason ?? ""); } catch { }
                     _log.LogInformation("[DEMO-AUTO] {user} {side} {sym} @ {px} lev={lev}",
                         client.Id, side, sym, price, lev);
                 }
