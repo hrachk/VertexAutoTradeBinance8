@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using Microsoft.Extensions.Options;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Web.Demo;
@@ -726,6 +726,40 @@ _state.History.Add(new DemoClosedTrade
 
     // ===================== Live price monitoring =====================
 
+
+    public void SetPositionSetupForClient(string clientId, string symbol, string setup)
+    {
+        if (string.IsNullOrWhiteSpace(setup)) return;
+        try
+        {
+            var path = ClientFilePath(clientId);
+            lock (_lock)
+            {
+                DemoAccountState state;
+                if (_clientId == clientId)
+                    state = _state;
+                else
+                {
+                    if (!File.Exists(path)) return;
+                    state = System.Text.Json.JsonSerializer.Deserialize<DemoAccountState>(File.ReadAllText(path)) ?? new();
+                }
+                var pos = state.Positions.LastOrDefault(p =>
+                    p.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase) && p.Qty > 0);
+                if (pos == null) return;
+                pos.Setup = setup;
+                if (_clientId == clientId)
+                    Save();
+                else
+                {
+                    var dir = Path.GetDirectoryName(path);
+                    if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                    File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(state, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                }
+            }
+        }
+        catch { }
+    }
+
     private void OnPriceTicked(string symbol, decimal price)
     {
         if (price <= 0) return;
@@ -806,6 +840,15 @@ _state.History.Add(new DemoClosedTrade
             foreach (var pos in _state.Positions.Where(p => p.Symbol == symbol).ToList())
             {
                 bool isLong = pos.Side == "LONG";
+
+                // Track MFE/MAE for learning (absolute favorable / adverse excursion)
+                {
+                    decimal dir = isLong ? 1m : -1m;
+                    decimal fav = (price - pos.EntryPrice) * dir;
+                    decimal adv = (pos.EntryPrice - price) * dir;
+                    if (fav > pos.MaxFavorable) pos.MaxFavorable = fav;
+                    if (adv > pos.MaxAdverse) pos.MaxAdverse = adv;
+                }
 
                 if (pos.StopLoss.HasValue && pos.StopLoss.Value > 0)
                 {
