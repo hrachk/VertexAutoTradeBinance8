@@ -267,6 +267,9 @@ public sealed class StrategyCoreEngine
             symbol, signal.Side, signal.EntryPrice, signal.StopLoss,
             signal.TakeProfits.FirstOrDefault(), signal.Confidence, signal.Reason);
 
+        if (signal.Reason != null && signal.Reason.StartsWith("SOFT_SKIP_", StringComparison.OrdinalIgnoreCase))
+            return (true, false, "soft_skip_setup");
+
         OnSignalGenerated?.Invoke(signal);
         return (true, true, "ok");
     }
@@ -482,13 +485,12 @@ public sealed class StrategyCoreEngine
         return null;
     }
 
-    private TradeSignal? Make(
+    private TradeSignal Make(
         string symbol, SignalSide side, decimal entry, decimal sl,
         IEnumerable<decimal> tps, decimal atr, string reason, decimal confidence,
         List<BinanceFuturesUsdtKline>? klines = null)
     {
         klines ??= _lastKlinesForMake;
-    {
         var tpList = tps.ToList();
 
         // Soft-skip only a repeatedly failed SETUP (not the whole symbol). Conf never cut.
@@ -499,7 +501,19 @@ public sealed class StrategyCoreEngine
             {
                 _log.LogInformation("[CORE-MEM] soft-skip setup {setup} on {sym} (history MFE/SL — conf untouched)",
                     reason, symbol);
-                return null!; // EvaluateAsync must treat null as no emit
+                return new TradeSignal
+                {
+                    Symbol = symbol.ToUpperInvariant(),
+                    Side = side,
+                    EntryPrice = entry,
+                    StopLoss = sl,
+                    TakeProfits = tpList,
+                    Reason = "SOFT_SKIP_" + reason,
+                    Confidence = 0m,
+                    AiQuality = 0m,
+                    Time = DateTime.UtcNow,
+                    Timeframe = "FifteenMinutes"
+                };
             }
         }
         catch { }
