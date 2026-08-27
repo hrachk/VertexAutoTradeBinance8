@@ -1,4 +1,4 @@
-﻿namespace VertexAutoTradeBinance8.Services.Learning;
+namespace VertexAutoTradeBinance8.Services.Learning;
 
 public sealed class TradeJournalEntry
 {
@@ -19,6 +19,15 @@ public sealed class TradeJournalEntry
     public decimal SignalConf { get; set; }
     public DateTime OpenedAtUtc { get; set; }
     public DateTime ClosedAtUtc { get; set; } = DateTime.UtcNow;
+
+    /// <summary>CORE setup that opened the trade, e.g. CORE_TREND_LONG.</summary>
+    public string Setup { get; set; } = "";
+
+    /// <summary>Max favorable excursion in price units (best mark vs entry while open).</summary>
+    public decimal Mfe { get; set; }
+
+    /// <summary>Max adverse excursion in price units (worst mark vs entry while open).</summary>
+    public decimal Mae { get; set; }
 }
 
 public sealed class TradeJournalFile
@@ -38,6 +47,15 @@ public sealed class SymbolAdjustments
     public int RecentStops { get; set; }
     public int RecentWins { get; set; }
     public string Note { get; set; } = "";
+
+    /// <summary>Prefer SL beyond recent swing structure (not ATR-only pad).</summary>
+    public bool PreferStructureSl { get; set; }
+
+    /// <summary>
+    /// Setups with repeated pure-SL and low MFE — soft-skip on next emit only for these reasons.
+    /// Conf of the symbol is NOT cut; other setups still fire.
+    /// </summary>
+    public List<string> SoftSkipSetups { get; set; } = new();
 }
 
 public sealed class SymbolMemoryFile
