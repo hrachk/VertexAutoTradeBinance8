@@ -851,8 +851,30 @@ _state.History.Add(new DemoClosedTrade
             {
                 if (_state.Positions.Contains(pos)) // might already be gone if a prior iteration fully closed it
                 {
+                    bool isTp = reason.StartsWith("TP", StringComparison.OrdinalIgnoreCase)
+                                && !reason.StartsWith("TP3/final", StringComparison.OrdinalIgnoreCase);
                     ClosePositionInternal(pos, pct, price, reason);
                     changed = true;
+
+                    // Live-aligned: after first TP (partial), move SL to break-even (+ fee buffer).
+                    if (isTp && _state.Positions.Contains(pos) && pos.Qty > 0)
+                    {
+                        bool isLong = pos.Side is "LONG" or "BUY";
+                        decimal entry = pos.EntryPrice;
+                        const decimal beBuf = 0.0010m; // 0.10% covers fees
+                        decimal beSl = isLong ? entry * (1m + beBuf) : entry * (1m - beBuf);
+                        decimal curSl = pos.StopLoss ?? 0m;
+                        bool improve = isLong
+                            ? beSl > curSl
+                            : (curSl <= 0m || beSl < curSl);
+                        if (improve)
+                        {
+                            pos.StopLoss = beSl;
+                            _logger.LogInformation(
+                                "[DEMO-BE] {sym} after TP1 → SL to BE {sl} (entry={e})",
+                                pos.Symbol, beSl, entry);
+                        }
+                    }
                 }
             }
 
