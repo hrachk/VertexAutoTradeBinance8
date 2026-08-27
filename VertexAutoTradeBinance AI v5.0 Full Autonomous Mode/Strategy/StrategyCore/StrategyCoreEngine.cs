@@ -63,6 +63,7 @@ public sealed class StrategyCoreEngine
     private const int MinBars = 55;
     private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(30);
     private static readonly KlineInterval Tf = KlineInterval.FifteenMinutes;
+    private List<BinanceFuturesUsdtKline>? _lastKlinesForMake;
 
     public StrategyCoreEngine(
         ILogger<StrategyCoreEngine> log,
@@ -208,6 +209,7 @@ public sealed class StrategyCoreEngine
         if (InCooldown(symbol)) return (false, false, "cooldown");
 
         var list = await LoadKlinesAsync(symbol).ConfigureAwait(false);
+        _lastKlinesForMake = list;
         if (list == null || list.Count < MinBars)
         {
             _log.LogWarning("[CORE][{sym}] thin klines n={n} (need {need})",
@@ -480,17 +482,33 @@ public sealed class StrategyCoreEngine
         return null;
     }
 
-    private TradeSignal Make(
+    private TradeSignal? Make(
         string symbol, SignalSide side, decimal entry, decimal sl,
-        IEnumerable<decimal> tps, decimal atr, string reason, decimal confidence)
+        IEnumerable<decimal> tps, decimal atr, string reason, decimal confidence,
+        List<BinanceFuturesUsdtKline>? klines = null)
+    {
+        klines ??= _lastKlinesForMake;
     {
         var tpList = tps.ToList();
 
-        // Trade-memory: after SL on THIS symbol → smarter SL/TP only. NEVER cut confidence.
+        // Soft-skip only a repeatedly failed SETUP (not the whole symbol). Conf never cut.
+        try
+        {
+            if (_journal != null && !string.IsNullOrWhiteSpace(reason)
+                && _journal.ShouldSoftSkipSetup(_clientId, symbol, reason))
+            {
+                _log.LogInformation("[CORE-MEM] soft-skip setup {setup} on {sym} (history MFE/SL — conf untouched)",
+                    reason, symbol);
+                return null!; // EvaluateAsync must treat null as no emit
+            }
+        }
+        catch { }
+
+        // Trade-memory: smarter SL/TP + optional structure-based SL. NEVER cut confidence.
         try
         {
             var adj = _journal?.GetAdjustments(_clientId, symbol);
-            if (adj != null && (adj.SlPadAtr > 0 || (adj.TpScale > 0 && adj.TpScale < 1m)))
+            if (adj != null && (adj.SlPadAtr > 0 || (adj.TpScale > 0 && adj.TpScale < 1m) || adj.PreferStructureSl))
             {
                 bool isLong = side == SignalSide.Buy;
                 decimal riskBefore = Math.Abs(entry - sl);
@@ -498,6 +516,24 @@ public sealed class StrategyCoreEngine
                 {
                     if (isLong) sl -= atr * adj.SlPadAtr;
                     else sl += atr * adj.SlPadAtr;
+                }
+                // Structure SL: beyond recent swing high/low + small buffer (when history asks)
+                if (adj.PreferStructureSl && klines != null && klines.Count >= 10)
+                {
+                    int look = Math.Min(SwingLookback, klines.Count);
+                    var window = klines.Skip(klines.Count - look).ToList();
+                    if (isLong)
+                    {
+                        decimal swingLow = window.Min(x => x.LowPrice);
+                        decimal structSl = swingLow - atr * 0.25m;
+                        if (structSl < sl) sl = structSl; // farther from entry
+                    }
+                    else
+                    {
+                        decimal swingHigh = window.Max(x => x.HighPrice);
+                        decimal structSl = swingHigh + atr * 0.25m;
+                        if (structSl > sl) sl = structSl;
+                    }
                 }
                 decimal riskAfter = Math.Abs(entry - sl);
                 if (tpList.Count > 0)
@@ -512,8 +548,8 @@ public sealed class StrategyCoreEngine
                     }
                 }
                 _log.LogInformation(
-                    "[CORE-MEM] {sym} {note} slPadAtr={sp:F2} tpScale={ts:F2} conf untouched={cf:F2}",
-                    symbol, adj.Note, adj.SlPadAtr, adj.TpScale, confidence);
+                    "[CORE-MEM] {sym} {note} slPadAtr={sp:F2} tpScale={ts:F2} struct={st} conf untouched={cf:F2}",
+                    symbol, adj.Note, adj.SlPadAtr, adj.TpScale, adj.PreferStructureSl, confidence);
             }
         }
         catch { /* never block signal emit */ }
