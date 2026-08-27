@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.SignalR;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.MarketData;
 using VertexAutoTradeBinance8.Services;
@@ -262,7 +262,10 @@ try
             RealizedPnl = pnl,
             CloseReason = reason,
             OpenedAtUtc = pos.OpenedAtUtc,
-            ClosedAtUtc = DateTime.UtcNow
+            ClosedAtUtc = DateTime.UtcNow,
+            Setup = pos.Setup ?? "",
+            Mfe = pos.MaxFavorable,
+            Mae = pos.MaxAdverse
         });
     };
 }
