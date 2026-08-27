@@ -486,34 +486,38 @@ public sealed class StrategyCoreEngine
     {
         var tpList = tps.ToList();
 
-        // Trade-memory feedback (per client): after SL → wider SL / closer TP / softer conf;
-        // after wins → hold or slight ease (never more aggressive).
+        // Trade-memory: after SL on THIS symbol → smarter SL/TP only. NEVER cut confidence.
         try
         {
             var adj = _journal?.GetAdjustments(_clientId, symbol);
-            if (adj != null && (adj.SlPadAtr != 0 || adj.TpScale != 1m || adj.ConfMult != 1m))
+            if (adj != null && (adj.SlPadAtr > 0 || (adj.TpScale > 0 && adj.TpScale < 1m)))
             {
                 bool isLong = side == SignalSide.Buy;
+                decimal riskBefore = Math.Abs(entry - sl);
                 if (adj.SlPadAtr > 0 && atr > 0)
                 {
                     if (isLong) sl -= atr * adj.SlPadAtr;
                     else sl += atr * adj.SlPadAtr;
                 }
-                if (adj.TpScale > 0 && adj.TpScale < 1m && tpList.Count > 0)
+                decimal riskAfter = Math.Abs(entry - sl);
+                if (tpList.Count > 0)
                 {
+                    decimal scale = (adj.TpScale > 0 && adj.TpScale < 1m) ? adj.TpScale : 1m;
+                    if (riskBefore > 0 && riskAfter > riskBefore && adj.TpScale > 0 && adj.TpScale < 1m)
+                        scale = Math.Min(1.15m, adj.TpScale * (riskAfter / riskBefore));
                     for (int ti = 0; ti < tpList.Count; ti++)
                     {
                         decimal dist = tpList[ti] - entry;
-                        tpList[ti] = entry + dist * adj.TpScale;
+                        tpList[ti] = entry + dist * scale;
                     }
                 }
-                confidence = Math.Max(0.05m, confidence * adj.ConfMult);
                 _log.LogInformation(
-                    "[CORE-MEM] {sym} {note} sizeMult={sm:F2} slPad={sp:F2} tpScale={ts:F2} confMult={cm:F2}",
-                    symbol, adj.Note, adj.SizeMult, adj.SlPadAtr, adj.TpScale, adj.ConfMult);
+                    "[CORE-MEM] {sym} {note} slPadAtr={sp:F2} tpScale={ts:F2} conf untouched={cf:F2}",
+                    symbol, adj.Note, adj.SlPadAtr, adj.TpScale, confidence);
             }
         }
         catch { /* never block signal emit */ }
+
 
         return new TradeSignal
         {
