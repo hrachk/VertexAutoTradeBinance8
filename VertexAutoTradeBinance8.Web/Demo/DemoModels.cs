@@ -13,6 +13,13 @@ public sealed class DemoPosition
     public decimal Margin { get; set; }
     public DateTime OpenedAtUtc { get; set; } = DateTime.UtcNow;
 
+    /// <summary>CORE setup at open, e.g. CORE_TREND_LONG — for journal learning.</summary>
+    public string Setup { get; set; } = "";
+    /// <summary>Best favorable price move from entry (absolute) while position open.</summary>
+    public decimal MaxFavorable { get; set; }
+    /// <summary>Worst adverse price move from entry (absolute) while position open.</summary>
+    public decimal MaxAdverse { get; set; }
+
     // Embedded protective levels — unlike the real exchange, demo SL/TP
     // aren't separate algo orders; they're monitored directly against
     // this position by DemoEngineService on every live price tick.
