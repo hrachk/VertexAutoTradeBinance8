@@ -70,6 +70,16 @@ public sealed class TradeJournalService
         return new SymbolAdjustments { Symbol = symbol };
     }
 
+    /// <summary>True if this CORE setup should be soft-skipped (repeated failure, low MFE).</summary>
+    public bool ShouldSoftSkipSetup(string clientId, string symbol, string setup)
+    {
+        if (string.IsNullOrWhiteSpace(setup)) return false;
+        var adj = GetAdjustments(clientId, symbol);
+        if (adj.SoftSkipSetups == null || adj.SoftSkipSetups.Count == 0) return false;
+        return adj.SoftSkipSetups.Any(s =>
+            string.Equals(s, setup, StringComparison.OrdinalIgnoreCase));
+    }
+
     public void RebuildMemory(string clientId)
     {
         try
@@ -90,9 +100,6 @@ public sealed class TradeJournalService
         }
     }
 
-    /// <summary>
-    /// After SL on THIS symbol: wider SL + closer TPs next time. NEVER cuts confidence.
-    /// </summary>
     private static SymbolAdjustments Compute(string symbol, List<TradeJournalEntry> trades)
     {
         var valid = new List<TradeJournalEntry>();
@@ -125,6 +132,8 @@ public sealed class TradeJournalService
 
         var missScores = new List<decimal>();
         var tightSlScores = new List<decimal>();
+        var mfeRatios = new List<decimal>(); // MFE / risk — high means almost reached TP before dying
+
         foreach (var t in valid)
         {
             bool isSl = t.CloseReason.IndexOf("SL", StringComparison.OrdinalIgnoreCase) >= 0 || t.RealizedPnl < 0;
@@ -139,12 +148,15 @@ public sealed class TradeJournalService
             decimal move = Math.Abs(t.EntryPrice - t.ExitPrice);
             tightSlScores.Add(Math.Min(2m, move / risk));
 
+            if (t.Mfe > 0 && risk > 0)
+                mfeRatios.Add(t.Mfe / risk);
+
             decimal tp1Dist = 0m;
             if (t.TakeProfits != null && t.TakeProfits.Count > 0)
                 tp1Dist = Math.Abs(t.TakeProfits[0] - t.EntryPrice);
             if (tp1Dist > 0)
             {
-                decimal prog = move / tp1Dist;
+                decimal prog = t.Mfe > 0 ? t.Mfe / tp1Dist : move / tp1Dist;
                 if (prog < 0m) prog = 0m;
                 if (prog > 1m) prog = 1m;
                 missScores.Add(1m - prog);
@@ -154,10 +166,37 @@ public sealed class TradeJournalService
 
         decimal avgMiss = missScores.Count > 0 ? missScores.Average() : 0m;
         decimal avgTight = tightSlScores.Count > 0 ? tightSlScores.Average() : 1m;
+        decimal avgMfeR = mfeRatios.Count > 0 ? mfeRatios.Average() : 0m;
         decimal stopRate = (decimal)stops / valid.Count;
 
         decimal sizeMult = 1m, slPad = 0m, tpScale = 1m, confMult = 1m, levMult = 1m;
+        bool preferStruct = false;
         string note = "neutral";
+        var softSkip = new List<string>();
+
+        // Soft-skip only setups that repeatedly died with low MFE (never approached TP)
+        foreach (var sg in valid.GroupBy(x => string.IsNullOrWhiteSpace(x.Setup) ? "_" : x.Setup, StringComparer.OrdinalIgnoreCase))
+        {
+            if (sg.Key == "_" || sg.Count() < 3) continue;
+            int sStops = sg.Count(t => t.CloseReason.IndexOf("SL", StringComparison.OrdinalIgnoreCase) >= 0 || t.RealizedPnl < 0);
+            if (sStops < 3) continue;
+            decimal sRate = (decimal)sStops / sg.Count();
+            var lowMfe = sg.Where(t => t.Mfe > 0 || t.CloseReason.IndexOf("SL", StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+            decimal avgSetupMfeR = 0m;
+            int n = 0;
+            foreach (var t in sg)
+            {
+                decimal risk = t.StopLoss.HasValue && t.StopLoss.Value > 0
+                    ? Math.Abs(t.EntryPrice - t.StopLoss.Value)
+                    : Math.Abs(t.EntryPrice - t.ExitPrice);
+                if (risk <= 0) continue;
+                if (t.Mfe > 0) { avgSetupMfeR += t.Mfe / risk; n++; }
+            }
+            if (n > 0) avgSetupMfeR /= n;
+            // Failed setup: high stop rate AND never got far in favor (MFE < 0.5R average)
+            if (sRate >= 0.70m && (n == 0 || avgSetupMfeR < 0.50m))
+                softSkip.Add(sg.Key);
+        }
 
         if (consecutiveStops >= 1 || stops >= 2 || stopRate >= 0.45m)
         {
@@ -167,13 +206,23 @@ public sealed class TradeJournalService
                 : 0.22m;
             if (avgMiss >= 0.55m) padBase += 0.10m;
             if (avgTight >= 0.85m && avgTight <= 1.25m) padBase += 0.08m;
+            // Died with almost no favorable move → stop was too tight / wrong side of structure
+            if (avgMfeR < 0.35m && consecutiveStops >= 1) { padBase += 0.12m; preferStruct = true; }
             if (padBase > 0.75m) padBase = 0.75m;
             slPad = padBase;
+            preferStruct = preferStruct || consecutiveStops >= 2;
 
             tpScale = avgMiss >= 0.60m ? 0.85m
                 : avgMiss >= 0.40m ? 0.90m
                 : consecutiveStops >= 2 ? 0.92m
                 : 0.95m;
+            // If MFE was high (almost TP) then reverse to SL → don't pull TP as hard; widen SL more
+            if (avgMfeR >= 0.80m)
+            {
+                tpScale = Math.Max(tpScale, 0.95m);
+                slPad = Math.Min(0.75m, slPad + 0.10m);
+                preferStruct = true;
+            }
 
             sizeMult = consecutiveStops >= 3 ? 0.80m
                 : consecutiveStops == 2 ? 0.90m
@@ -181,8 +230,10 @@ public sealed class TradeJournalService
                 : 0.95m;
             levMult = consecutiveStops >= 3 ? 0.90m : 1.0m;
 
-            note = "smart SL/TP after SL history stopsInRow=" + consecutiveStops
-                + " missTp=" + avgMiss.ToString("F2") + " (conf untouched)";
+            note = "smart SL/TP mfeR=" + avgMfeR.ToString("F2")
+                + " missTp=" + avgMiss.ToString("F2")
+                + " softSkip=" + softSkip.Count
+                + " (conf untouched)";
         }
         else if (wins >= 2 && stops == 0)
         {
@@ -201,7 +252,9 @@ public sealed class TradeJournalService
             RecentTrades = valid.Count,
             RecentStops = stops,
             RecentWins = wins,
-            Note = note
+            Note = note,
+            PreferStructureSl = preferStruct,
+            SoftSkipSetups = softSkip
         };
     }
 
