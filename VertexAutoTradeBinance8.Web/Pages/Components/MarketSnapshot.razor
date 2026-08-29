@@ -7835,10 +7835,19 @@ sealed class RealTradeRow
         public string Symbol = "";
         public string Side = "";
         public decimal Price;
+        public decimal EntryPrice;
         public decimal Qty;
         public decimal RealizedPnl;
         public decimal Fee;
         public DateTime Time;
+        public string Source = "Live";
+        public string CloseReason = "";
+        public string Setup = "";
+        public decimal? StopLoss;
+        public string TakeProfitsText = "";
+        public decimal Mfe;
+        public decimal Mae;
+        public int Leverage;
     }
 
     List<RealTradeRow> _realHistory = new();
@@ -7861,9 +7870,14 @@ sealed class RealTradeRow
         try
         {
             // Primary: unified trade-journal.json (Live closes written by Engine — Demo-parity fields)
-            var clientId = ClientData?.CurrentClientId
-                ?? AppConfig?["Client:Id"]
-                ?? "client_001";
+            var clientId = AppConfig?["Client:Id"] ?? "client_001";
+            try
+            {
+                // Prefer bound demo/session client folder when available
+                var bound = DemoAccount?.GetType().GetProperty("BoundClientId")?.GetValue(DemoAccount) as string;
+                if (!string.IsNullOrWhiteSpace(bound)) clientId = bound!;
+            }
+            catch { }
             var fromJournal = TradeJournal.LoadRecent(clientId, sourceFilter: "Live", max: 150);
             if (fromJournal.Count == 0)
             {
