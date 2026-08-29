@@ -16,8 +16,13 @@ public sealed class TradeJournalService
     public TradeJournalService(IConfiguration cfg, ILogger<TradeJournalService> log)
     {
         _log = log;
-        _enginesRoot = cfg["SharedData:Root"]
-            ?? Path.Combine(AppContext.BaseDirectory, "engines");
+        // Same root as DemoAccountService (per-client ledgers live here)
+        var enginesRoot = cfg["SharedData:EnginesRoot"];
+        if (string.IsNullOrWhiteSpace(enginesRoot))
+            enginesRoot = cfg["SharedData:Root"];
+        if (string.IsNullOrWhiteSpace(enginesRoot))
+            enginesRoot = Path.Combine(AppContext.BaseDirectory, "engines");
+        _enginesRoot = enginesRoot;
         _windowDays = Math.Clamp(cfg.GetValue("TradeMemory:WindowDays", 30), 7, 90);
     }
 
@@ -82,6 +87,26 @@ public sealed class TradeJournalService
 
 
     /// <summary>Recent journal rows for UI (Demo and/or Live). Newest first.</summary>
+
+    /// <summary>Load from one or more client folder name variants (001 / client_001).</summary>
+    public List<TradeJournalEntry> LoadRecentMany(IEnumerable<string> clientIds, string? sourceFilter = null, int max = 150)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var all = new List<TradeJournalEntry>();
+        foreach (var id in clientIds.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (var e in LoadRecent(id, sourceFilter, max))
+            {
+                var key = e.Id;
+                if (string.IsNullOrEmpty(key))
+                    key = $"{e.Symbol}|{e.Side}|{e.ClosedAtUtc:o}|{e.EntryPrice}|{e.ExitPrice}|{e.Qty}";
+                if (!seen.Add(key)) continue;
+                all.Add(e);
+            }
+        }
+        return all.OrderByDescending(e => e.ClosedAtUtc).Take(Math.Clamp(max, 1, 500)).ToList();
+    }
+
     public List<TradeJournalEntry> LoadRecent(string clientId, string? sourceFilter = null, int max = 150)
     {
         try
