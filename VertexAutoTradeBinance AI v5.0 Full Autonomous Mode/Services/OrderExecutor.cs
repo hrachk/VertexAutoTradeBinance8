@@ -2533,7 +2533,8 @@ namespace VertexAutoTradeBinance8.Services
                         type:         FuturesOrderType.TakeProfitMarket,
                         stopPrice:    tpPrice,
                         quantity:     tpQty,
-                        reduceOnly:   true,
+                        // Hedge + positionSide Long/Short: Binance -1106 if reduceOnly sent
+                        reduceOnly:   isHedge ? null : true,
                         positionSide: isHedge ? posSide : null,
                         workingType:  WorkingType.Mark,
                         selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
@@ -2558,7 +2559,7 @@ namespace VertexAutoTradeBinance8.Services
                         type:         FuturesOrderType.TakeProfitMarket,
                         stopPrice:    tpPrice,
                         quantity:     tpQty,
-                        reduceOnly:   true,
+                        reduceOnly:   isHedge ? null : true,
                         positionSide: isHedge ? posSide : null,
                         workingType:  WorkingType.Contract,
                         ct: ct);
@@ -2682,7 +2683,7 @@ namespace VertexAutoTradeBinance8.Services
                         type:         FuturesOrderType.StopMarket,
                         stopPrice:    slPrice,
                         quantity:     slQty,
-                        reduceOnly:   true,
+                        reduceOnly:   isHedge ? null : true,
                         positionSide: isHedge ? posSide : null,
                         workingType:  WorkingType.Contract,
                         ct: ct);
