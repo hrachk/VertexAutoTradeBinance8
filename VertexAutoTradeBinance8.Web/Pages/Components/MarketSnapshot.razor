@@ -3297,12 +3297,22 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // form carrying over between the two accounts.
         _activeSignal = null;
         _selectedPosition = null;
+        _lastTpSlSnapshot = ""; // prevent Live order snapshot from driving Demo chart
         _manualSlPrice = 0;
         _noProtectionConfirmed = false;
         _manualTps.Clear();
         _orderError = "";
         _orderSuccess = "";
         RefreshDemoSnapshot();
+        try { _ = JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}"); } catch { }
+        // Auto-select open position for active symbol in the NEW mode so Demo SL/TP redraw
+        if (!string.IsNullOrEmpty(_activeSym))
+        {
+            var restore = DisplayedPositions.FirstOrDefault(p =>
+                p.Symbol.Equals(_activeSym, StringComparison.OrdinalIgnoreCase));
+            if (restore != null)
+                _ = SelectPosition(restore);
+        }
         StateHasChanged();
         _ = SaveSelectionState();
     }
@@ -3999,14 +4009,32 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                     // (which DOES change this set), just without the
                     // wasted work on every tick where nothing changed.
                     var pos = _selectedPosition;
-                    bool MatchesThisPos(OpenOrderRow o) =>
-                        o.Symbol == pos.Symbol &&
-                        (string.IsNullOrEmpty(o.PositionSide) || o.PositionSide == "BOTH" || o.PositionSide == pos.Side) &&
-                        (o.Type.Contains("STOP") || o.Type.Contains("TAKE_PROFIT"));
-                    var currentTpSlSnapshot = string.Join("|", _openOrders
-                        .Where(MatchesThisPos)
-                        .OrderBy(o => o.OrderId)
-                        .Select(o => $"{o.OrderId}:{o.Price}"));
+                    // DEMO protective levels live on DemoPosition — NEVER use Live _openOrders
+                    // or closing a Live position on the same symbol will wipe Demo chart SL/TP.
+                    string currentTpSlSnapshot;
+                    if (_demoMode)
+                    {
+                        var dp = _demoSnapshot.Positions.FirstOrDefault(p =>
+                            (!string.IsNullOrEmpty(pos.Id) && p.Id == pos.Id)
+                            || (p.Symbol == pos.Symbol && p.Side == pos.Side));
+                        currentTpSlSnapshot = dp == null
+                            ? ""
+                            : string.Join("|",
+                                (dp.TakeProfits ?? new()).OrderBy(t => pos.Side == "LONG" ? t.Price : -t.Price)
+                                    .Select((t, i) => $"tp{i}:{t.Price}")
+                                    .Append($"sl:{dp.StopLoss ?? 0m}"));
+                    }
+                    else
+                    {
+                        bool MatchesThisPos(OpenOrderRow o) =>
+                            o.Symbol == pos.Symbol &&
+                            (string.IsNullOrEmpty(o.PositionSide) || o.PositionSide == "BOTH" || o.PositionSide == pos.Side) &&
+                            (o.Type.Contains("STOP") || o.Type.Contains("TAKE_PROFIT"));
+                        currentTpSlSnapshot = string.Join("|", _openOrders
+                            .Where(MatchesThisPos)
+                            .OrderBy(o => o.OrderId)
+                            .Select(o => $"{o.OrderId}:{o.Price}"));
+                    }
                     // Skip redraw during drag-freeze window:
                     // user just dragged a line, old order was cancelled,
                     // new order not yet confirmed — snapshot diff would
@@ -6777,9 +6805,20 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // Read the protective levels from the live DemoPosition instead.
         if (_demoMode)
         {
-            var demoPos = _demoSnapshot.Positions.FirstOrDefault(p => p.Id == pos.Id);
-            decimal sl_demo = demoPos?.StopLoss ?? 0m;
-            decimal[] tps_demo = demoPos?.TakeProfits
+            // Match by Id first, then Symbol+Side — Live ActivePositionInfo.Id must never
+            // be used to blank Demo SL/TP when the same symbol is open on both accounts.
+            var demoPos = _demoSnapshot.Positions.FirstOrDefault(p =>
+                !string.IsNullOrEmpty(pos.Id) && p.Id == pos.Id)
+                ?? _demoSnapshot.Positions.FirstOrDefault(p =>
+                    p.Symbol == pos.Symbol && p.Side == pos.Side);
+            if (demoPos == null)
+            {
+                // No demo position for this selection — hide lines, do not touch Demo ledger
+                try { await JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}"); } catch { }
+                return;
+            }
+            decimal sl_demo = demoPos.StopLoss ?? 0m;
+            decimal[] tps_demo = demoPos.TakeProfits
                 .OrderBy(t => pos.Side == "LONG" ? t.Price : -t.Price)
                 .Select(t => t.Price)
                 .ToArray() ?? Array.Empty<decimal>();
@@ -7416,7 +7455,13 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 positionSide: isHedge ? posSide : null,
                 ct: cts.Token);
 
-            if (PosIdentityEquals(_selectedPosition, pos)) _selectedPosition = null;
+            if (PosIdentityEquals(_selectedPosition, pos))
+            {
+                _selectedPosition = null;
+                _lastTpSlSnapshot = "";
+                // Live close must NOT clear DemoPosition SL/TP — only hide Live chart lines
+                try { await JS.InvokeVoidAsync("marketChart.hidePositionLines", $"chartContainer-{_chartInstanceId}"); } catch { }
+            }
             OpenShareCard(pos.Symbol, pos.Side, pos.Leverage, pos.Roi * 100m, pos.Pnl, pos.EntryPrice, pos.MarkPrice, isOpen: false);
             // Verify-and-retry instead of a single fetch: Binance's REST
             // view can still show the position for a few hundred ms.
