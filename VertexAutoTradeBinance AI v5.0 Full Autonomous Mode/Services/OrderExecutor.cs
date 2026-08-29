@@ -195,7 +195,7 @@ namespace VertexAutoTradeBinance8.Services
             SmartRegimeService smartRegime,
             LiquidityGuardService liquidityGuard, AiSelfLearningService ai, RiskManager risk,
             MarketDataFacade marketDataFacade,
-            IOptionsMonitor<TradingSettings> tradingSettings, 
+            IOptionsMonitor<TradingSettings> tradingSettings,
             AiLiquidityClusterService liquidityClusterService,
             EntryTracker entryTracker,
             CooldownGuard cooldown,
@@ -222,8 +222,8 @@ namespace VertexAutoTradeBinance8.Services
             _cooldown = cooldown;
             _tradingOptions = tradingOptions;
             _accountState = accountState;
-            _algoOrders  = algoOrders;
-            _pushClient  = pushClient;
+            _algoOrders = algoOrders;
+            _pushClient = pushClient;
         }
 
         /// <summary>
@@ -315,8 +315,8 @@ namespace VertexAutoTradeBinance8.Services
 
             int passThreshold =
                 (isStrongTrend || hasImpulseFlag) ? 30 :
-                isChop   ? 65 :
-                isRange  ? 55 :
+                isChop ? 65 :
+                isRange ? 55 :
                            45;  // normal Trend
 
             int score = 0;
@@ -341,9 +341,9 @@ namespace VertexAutoTradeBinance8.Services
             if (k1m.Count >= 10)
             {
                 var closes1m = k1m.Select(c => c.ClosePrice).ToArray();
-                var ema9     = ComputeEma(closes1m, 9);
+                var ema9 = ComputeEma(closes1m, 9);
                 decimal slopeRaw = ema9.Length >= 6 ? ema9[^1] - ema9[^6] : 0m;
-                decimal atrRef   = signal?.Atr ?? (last.HighPrice - last.LowPrice);
+                decimal atrRef = signal?.Atr ?? (last.HighPrice - last.LowPrice);
                 if (atrRef <= 0) atrRef = last.ClosePrice * 0.001m;
                 // Normalise slope by ATR so it's comparable across price levels
                 decimal slopeNorm = atrRef > 0 ? slopeRaw / atrRef : 0m;
@@ -361,22 +361,22 @@ namespace VertexAutoTradeBinance8.Services
 
             // ── 3. BODY QUALITY (20 pts) ──────────────────────────────────────
             decimal lastRange = last.HighPrice - last.LowPrice;
-            decimal lastBody  = Math.Abs(last.ClosePrice - last.OpenPrice);
-            bool solidBody    = lastRange > 0 && (lastBody / lastRange) >= 0.40m;
+            decimal lastBody = Math.Abs(last.ClosePrice - last.OpenPrice);
+            bool solidBody = lastRange > 0 && (lastBody / lastRange) >= 0.40m;
             if (solidBody) score += 20;
             else if (lastRange > 0 && (lastBody / lastRange) >= 0.25m)
                 score += 10; // partial body
 
             // ── 4. TAKER PRESSURE (20 pts) ────────────────────────────────────
             int pressureBars = Math.Min(5, k1m.Count);
-            decimal buyVol   = 0m, totalVol = 0m;
+            decimal buyVol = 0m, totalVol = 0m;
             for (int i = k1m.Count - pressureBars; i < k1m.Count; i++)
             {
-                buyVol   += k1m[i].TakerBuyBaseVolume;
+                buyVol += k1m[i].TakerBuyBaseVolume;
                 totalVol += k1m[i].Volume;
             }
             decimal pressure = totalVol > 0 ? (buyVol - (totalVol - buyVol)) / totalVol : 0m;
-            bool pressureOk  = isBuy ? pressure > 0.05m : pressure < -0.05m;
+            bool pressureOk = isBuy ? pressure > 0.05m : pressure < -0.05m;
             if (pressureOk)
             {
                 decimal pStrength = Math.Clamp(Math.Abs(pressure) * 3m, 0m, 1m); // scale 0.05→1 maps to 0→20
@@ -625,18 +625,18 @@ namespace VertexAutoTradeBinance8.Services
             if (existingEntries == 1 && sameSidePosition != null)
             {
                 decimal avgEntry = sameSidePosition.EntryPrice;
-                decimal atr      = signal.Atr ?? lastPrice * 0.001m;
-                bool    isLong   = signal.Side == SignalSide.Buy;
+                decimal atr = signal.Atr ?? lastPrice * 0.001m;
+                bool isLong = signal.Side == SignalSide.Buy;
 
                 decimal minRetrace = atr * 0.8m;
                 decimal maxRetrace = atr * 2.0m;
 
                 bool retracedEnough =
-                    isLong  ? lastPrice <= avgEntry - minRetrace
+                    isLong ? lastPrice <= avgEntry - minRetrace
                             : lastPrice >= avgEntry + minRetrace;
 
                 bool catchingKnife =
-                    isLong  ? lastPrice <= avgEntry - maxRetrace
+                    isLong ? lastPrice <= avgEntry - maxRetrace
                             : lastPrice >= avgEntry + maxRetrace;
 
                 if (catchingKnife)
@@ -972,7 +972,7 @@ namespace VertexAutoTradeBinance8.Services
             // =============================================================
             // LAST PRICE (SAFE, RATE-LIMIT AWARE)
             // =============================================================
-          
+
             if (lastPrice <= 0)
             {
                 lastPrice = entryPrice; // fallback safety
@@ -986,9 +986,9 @@ namespace VertexAutoTradeBinance8.Services
                 if (px.Success && px.Data != null && px.Data.Price > 0)
                     lastPrice = px.Data.Price;
             }
-            catch { /* fallback */ } 
+            catch { /* fallback */ }
 
-          
+
             // =============================================================
             // LIQUIDITY GUARD (FAIL-SAFE)
             // =============================================================
@@ -1017,7 +1017,7 @@ namespace VertexAutoTradeBinance8.Services
 
             try
             {
-                liquidityResult =  _liquidityGuard.Analyze(
+                liquidityResult = _liquidityGuard.Analyze(
                     signal.Symbol,
                     KlineInterval.OneMinute,
                     signalKlines,
@@ -1084,7 +1084,7 @@ namespace VertexAutoTradeBinance8.Services
                     liquiditySafe;
             }
 
-           
+
             if (hasImpulse && !signal.IsSuperSignal)
             {
                 _logger.LogWarning(
@@ -1108,7 +1108,7 @@ namespace VertexAutoTradeBinance8.Services
             quantity = Math.Floor(quantity / step) * step;
             // затем проверка minQty / minNotional один раз
             quantity = Math.Max(quantity, minQty);
-              notional = quantity * entryPrice;
+            notional = quantity * entryPrice;
 
             if (notional < minNotional)
             {
@@ -1167,7 +1167,7 @@ namespace VertexAutoTradeBinance8.Services
                 tags: $"Regime={smart.BaseRegime}");
 
             var execTime = execRec.Time;
-             
+
             // =============================================================
             // HARD BLOCK: LIQUIDITY
             // =============================================================
@@ -1329,10 +1329,10 @@ namespace VertexAutoTradeBinance8.Services
 
 
 
-                    decimal buyThreshold  = isToxicSymbol ? 0.43m : 0.35m;  // было 0.40 — слишком жёстко
+                    decimal buyThreshold = isToxicSymbol ? 0.43m : 0.35m;  // было 0.40 — слишком жёстко
                     decimal sellThreshold = isToxicSymbol ? 0.57m : 0.65m;  // было 0.60
 
-                    if (signal.Side == SignalSide.Buy  && imbalance < buyThreshold)
+                    if (signal.Side == SignalSide.Buy && imbalance < buyThreshold)
                         imbalanceBlock = true;
 
                     if (signal.Side == SignalSide.Sell && imbalance > sellThreshold)
@@ -1342,7 +1342,7 @@ namespace VertexAutoTradeBinance8.Services
                     // imbalance 0.20-0.35 может быть нормальным для быстрого движения
                     bool trendOverride =
                         (signal.IsSuperSignal || signal.Confidence >= 0.70m) &&
-                        ((signal.Side == SignalSide.Buy  && imbalance >= 0.22m) ||
+                        ((signal.Side == SignalSide.Buy && imbalance >= 0.22m) ||
                          (signal.Side == SignalSide.Sell && imbalance <= 0.78m));
 
                     if (imbalanceBlock && trendOverride)
@@ -1375,7 +1375,7 @@ namespace VertexAutoTradeBinance8.Services
 
                             return OrderResult.Fail("ORDERBOOK_IMBALANCE");
                         }
-                           
+
                     }
                 }
             }
@@ -1406,7 +1406,7 @@ namespace VertexAutoTradeBinance8.Services
                 return OrderResult.Fail(failReason);
             }
 
-          
+
 
             // блокируем вход
             if (!signal.IsSuperSignal && spreadPct > maxSpread)
@@ -1448,7 +1448,7 @@ namespace VertexAutoTradeBinance8.Services
             // =====================================================
 
             // spread proxy через tick
-           
+
             bool spreadOk = spreadPct <= maxSpread;
 
             bool silentTrendJoin =
@@ -1540,7 +1540,7 @@ namespace VertexAutoTradeBinance8.Services
             decimal? orderPrice = entryType == FuturesOrderType.Market ? null : aggrLimitPrice;
             TimeInForce? tif = entryType == FuturesOrderType.Market ? null : TimeInForce.GoodTillCanceled;
 
-      
+
 
             // =====================================================
             // LOG
@@ -1692,16 +1692,16 @@ namespace VertexAutoTradeBinance8.Services
                 return OrderResult.Fail("EXECUTION_DISABLED");
             }
             var entryRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                symbol:                  signal.Symbol,
-                side:                    side,
-                type:                    entryType,
-                quantity:                quantity,
-                price:                   orderPrice,
-                positionSide:            isHedge ? posSide : null,
-                timeInForce:             tif,
-                reduceOnly:              null,
+                symbol: signal.Symbol,
+                side: side,
+                type: entryType,
+                quantity: quantity,
+                price: orderPrice,
+                positionSide: isHedge ? posSide : null,
+                timeInForce: tif,
+                reduceOnly: null,
                 selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
-                ct:                      ct);
+                ct: ct);
 
             _logger.LogInformation(
                 "[ENTRY][{symbol}] PlaceOrder type={type} side={side} qty={qty} price={price} hedge={h} → {ok}",
@@ -1776,8 +1776,8 @@ namespace VertexAutoTradeBinance8.Services
             if (!entryRes.Success || entryRes.Data == null)
             {
                 var errCode = entryRes.Error?.Code;
-                var errMsg  = entryRes.Error?.Message ?? "no_error_object";
-                var note    = $"code={errCode}; msg={errMsg}";
+                var errMsg = entryRes.Error?.Message ?? "no_error_object";
+                var note = $"code={errCode}; msg={errMsg}";
 
                 // Переводим коды Binance в читаемые причины
                 failReason = errCode switch
@@ -1933,7 +1933,7 @@ namespace VertexAutoTradeBinance8.Services
                 // position might appear just after timeout
                 // ========================================================
 
-                var posRecheck = await client.UsdFuturesApi.Account.GetPositionInformationAsync(signal.Symbol, ct:ct);
+                var posRecheck = await client.UsdFuturesApi.Account.GetPositionInformationAsync(signal.Symbol, ct: ct);
 
                 if (posRecheck.Success && posRecheck.Data != null)
                 {
@@ -2059,7 +2059,7 @@ namespace VertexAutoTradeBinance8.Services
                 // STRUCTURE BREAK GUARD
                 // ========================================================
 
-             
+
 
                 decimal structureThreshold =
                     atr > 0
@@ -2070,7 +2070,7 @@ namespace VertexAutoTradeBinance8.Services
                 else
                     structureBroken = lastNow > entryPrice + structureThreshold;
 
-                
+
 
                 if (structureBroken)
                 {
@@ -2292,7 +2292,7 @@ namespace VertexAutoTradeBinance8.Services
         private static bool IsImpulse(
          IReadOnlyList<BinanceFuturesUsdtKline> klines,
          decimal atr,
-         decimal minBodyAtr = 0.8m)  
+         decimal minBodyAtr = 0.8m)
         {
             if (klines == null || klines.Count < 2 || atr <= 0)
                 return false;
@@ -2421,7 +2421,7 @@ namespace VertexAutoTradeBinance8.Services
             {
                 var newTps = signal.TakeProfits
                     .Select(tp => tick > 0 ? Math.Round(tp / tick) * tick : tp).ToList();
-                bool countMatch  = existingTps.Count == newTps.Count;
+                bool countMatch = existingTps.Count == newTps.Count;
                 bool levelsMatch = countMatch && existingTps.Zip(newTps, (ex, nw) =>
                     nw == 0 || Math.Abs(((ex.StopPrice ?? 0m) - nw) / nw) < 0.003m).All(x => x);
 
@@ -2447,7 +2447,7 @@ namespace VertexAutoTradeBinance8.Services
                     : existingSlList.OrderBy(o => o.StopPrice ?? 0m).First();
                 decimal slNew = tick > 0 ? Math.Round(signal.StopLoss / tick) * tick : signal.StopLoss;
                 bool nearlyIdentical = Math.Abs(((bestSl.StopPrice ?? 0m) - slNew) / Math.Max(slNew, 0.0001m)) < 0.003m;
-                bool existingBetter  = isLong ? (bestSl.StopPrice ?? 0m) > slNew : (bestSl.StopPrice ?? 0m) < slNew;
+                bool existingBetter = isLong ? (bestSl.StopPrice ?? 0m) > slNew : (bestSl.StopPrice ?? 0m) < slNew;
 
                 if (nearlyIdentical || existingBetter)
                 {
@@ -2526,8 +2526,69 @@ namespace VertexAutoTradeBinance8.Services
                         "[TP_PLACE][{symbol}] level={level} price={tp} qty={qty} mark={mark} entry={entry}",
                         signal.Symbol, i + 1, tpPrice, tpQty, markPrice, entryPrice);
 
-                    // Binance: TAKE_PROFIT_MARKET on classic REST → -4120 (use Algo Order API).
-                    var tpAlgoOk = await _algoOrders.PlaceConditionalAsync(
+                    // Попытка 1: WorkingType.Mark
+                    var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol: signal.Symbol,
+                        side: tpSide,
+                        type: FuturesOrderType.TakeProfitMarket,
+                        stopPrice: tpPrice,
+                        quantity: tpQty,
+                        reduceOnly: true,
+                        positionSide: isHedge ? posSide : null,
+                        workingType: WorkingType.Mark,
+                        selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
+                        ct: ct);
+
+                    if (res.Success)
+                    {
+                        _logger.LogInformation(
+                            "[TP_PLACED][{symbol}] level={level} orderId={id} price={tp} qty={qty} (Mark)",
+                            signal.Symbol, i + 1, res.Data?.Id, tpPrice, tpQty);
+                        continue;
+                    }
+
+                    _logger.LogWarning(
+                        "[TP_FAIL_MARK][{symbol}] level={level} code={code} msg={msg} → retry Contract",
+                        signal.Symbol, i + 1, res.Error?.Code, res.Error?.Message);
+
+                    // Попытка 2: WorkingType.Contract
+                    var res2 = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol: signal.Symbol,
+                        side: tpSide,
+                        type: FuturesOrderType.TakeProfitMarket,
+                        stopPrice: tpPrice,
+                        quantity: tpQty,
+                        reduceOnly: true,
+                        positionSide: isHedge ? posSide : null,
+                        workingType: WorkingType.Contract,
+                        ct: ct);
+
+                    if (res2.Success)
+                    {
+                        _logger.LogInformation(
+                            "[TP_PLACED_CONTRACT][{symbol}] level={level} orderId={id} price={tp} qty={qty}",
+                            signal.Symbol, i + 1, res2.Data?.Id, tpPrice, tpQty);
+                        continue;
+                    }
+
+                    _logger.LogError(
+                        "[TP_FAIL_FINAL][{symbol}] level={level} code={code} msg={msg} → trying ALGO endpoint",
+                        signal.Symbol, i + 1, res2.Error?.Code, res2.Error?.Message);
+
+                    // CRITICAL FIX: both attempts above use the regular
+                    // PlaceOrderAsync endpoint, which Binance's mandatory
+                    // Dec 9 2025 migration moved ALL conditional orders
+                    // (STOP_MARKET/TAKE_PROFIT_MARKET) away from — this
+                    // endpoint now rejects them outright (-4120), meaning both
+                    // attempts above were failing every single time before
+                    // this fix, with no path to actually succeed. This is the
+                    // exact reason the at-entry TP was never actually visible
+                    // on the exchange ("decided this, but never saw it work").
+                    // Falls back to the dedicated Algo Order endpoint, same
+                    // mechanism PositionSupervisorService already uses
+                    // successfully for its own emergency SL/TP and BE-move
+                    // placement.
+                    var algoOk = await _algoOrders.PlaceConditionalAsync(
                         symbol: signal.Symbol,
                         side: tpSide,
                         positionSide: posSide,
@@ -2538,47 +2599,17 @@ namespace VertexAutoTradeBinance8.Services
                         reduceOnly: isHedge ? null : true,
                         ct: ct);
 
-                    if (tpAlgoOk)
+                    if (algoOk)
                     {
                         _logger.LogInformation(
-                            "[TP_PLACED_ALGO][{symbol}] level={level} price={tp} qty={qty}",
+                            "[TP_PLACED_ALGO][{symbol}] level={level} price={tp} qty={qty} (via Algo Order endpoint)",
                             signal.Symbol, i + 1, tpPrice, tpQty);
-                        continue;
-                    }
-
-                    _logger.LogWarning(
-                        "[TP_ALGO_FAIL][{symbol}] level={level} → classic fallback",
-                        signal.Symbol, i + 1);
-
-                    var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                        symbol:       signal.Symbol,
-                        side:         tpSide,
-                        type:         FuturesOrderType.TakeProfitMarket,
-                        stopPrice:    tpPrice,
-                        quantity:     tpQty,
-                        reduceOnly:   isHedge ? null : true,
-                        positionSide: isHedge ? posSide : null,
-                        workingType:  WorkingType.Mark,
-                        selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
-                        ct: ct);
-
-                    if (res.Success)
-                    {
-                        _logger.LogInformation(
-                            "[TP_PLACED][{symbol}] level={level} orderId={id} price={tp} qty={qty} (Mark)",
-                            signal.Symbol, i + 1, res.Data?.Id, tpPrice, tpQty);
-                    }
-                    else if (res.Error?.Code == -4120)
-                    {
-                        _logger.LogDebug(
-                            "[TP_CLASSIC_SKIP][{symbol}] level={level} -4120 (Algo required)",
-                            signal.Symbol, i + 1);
                     }
                     else
                     {
-                        _logger.LogWarning(
-                            "[TP_FAIL][{symbol}] level={level} code={code} msg={msg}",
-                            signal.Symbol, i + 1, res.Error?.Code, res.Error?.Message);
+                        _logger.LogError(
+                            "[TP_FAIL_ALGO][{symbol}] level={level} Algo endpoint also failed — Supervisor will place emergency TP",
+                            signal.Symbol, i + 1);
                     }
                 }
             }
@@ -2619,59 +2650,81 @@ namespace VertexAutoTradeBinance8.Services
                     "[SL_PLACE][{symbol}] price={sl} qty={qty} mark={mark} entry={entry}",
                     signal.Symbol, slPrice, slQty, markPrice, entryPrice);
 
-                // Binance: STOP_MARKET on classic REST → -4120. Algo first.
-                var slAlgoOk = await _algoOrders.PlaceConditionalAsync(
+                // Попытка 1: WorkingType.Mark
+                var slRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: signal.Symbol,
                     side: slSide,
-                    positionSide: posSide,
-                    type: "STOP_MARKET",
+                    type: FuturesOrderType.StopMarket,
+                    stopPrice: slPrice,
                     quantity: slQty,
-                    triggerPrice: slPrice,
-                    workingType: "MARK_PRICE",
-                    reduceOnly: isHedge ? null : true,
+                    reduceOnly: true,
+                    positionSide: isHedge ? posSide : null,
+                    workingType: WorkingType.Mark,
+                    selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                     ct: ct);
 
-                if (slAlgoOk)
+                if (slRes.Success)
                 {
                     _logger.LogInformation(
-                        "[SL_PLACED_ALGO][{symbol}] price={sl} qty={qty}",
-                        signal.Symbol, slPrice, slQty);
+                        "[SL_PLACED][{symbol}] orderId={id} price={sl} qty={qty} (Mark)",
+                        signal.Symbol, slRes.Data?.Id, slPrice, slQty);
                 }
                 else
                 {
                     _logger.LogWarning(
-                        "[SL_ALGO_FAIL][{symbol}] → classic fallback",
-                        signal.Symbol);
+                        "[SL_FAIL_MARK][{symbol}] code={code} msg={msg} → retry Contract",
+                        signal.Symbol, slRes.Error?.Code, slRes.Error?.Message);
 
-                    var slRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                        symbol:       signal.Symbol,
-                        side:         slSide,
-                        type:         FuturesOrderType.StopMarket,
-                        stopPrice:    slPrice,
-                        quantity:     slQty,
-                        reduceOnly:   isHedge ? null : true,
+                    // Попытка 2: WorkingType.Contract
+                    var slRes2 = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol: signal.Symbol,
+                        side: slSide,
+                        type: FuturesOrderType.StopMarket,
+                        stopPrice: slPrice,
+                        quantity: slQty,
+                        reduceOnly: true,
                         positionSide: isHedge ? posSide : null,
-                        workingType:  WorkingType.Mark,
-                        selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
+                        workingType: WorkingType.Contract,
                         ct: ct);
 
-                    if (slRes.Success)
+                    if (slRes2.Success)
                     {
                         _logger.LogInformation(
-                            "[SL_PLACED][{symbol}] orderId={id} price={sl} qty={qty} (Mark)",
-                            signal.Symbol, slRes.Data?.Id, slPrice, slQty);
-                    }
-                    else if (slRes.Error?.Code == -4120)
-                    {
-                        _logger.LogDebug(
-                            "[SL_CLASSIC_SKIP][{symbol}] -4120 (Algo required)",
-                            signal.Symbol);
+                            "[SL_PLACED_CONTRACT][{symbol}] orderId={id} price={sl} qty={qty}",
+                            signal.Symbol, slRes2.Data?.Id, slPrice, slQty);
                     }
                     else
                     {
-                        _logger.LogWarning(
-                            "[SL_FAIL][{symbol}] code={code} msg={msg}",
-                            signal.Symbol, slRes.Error?.Code, slRes.Error?.Message);
+                        _logger.LogError(
+                            "[SL_FAIL_FINAL][{symbol}] code={code} msg={msg} → trying ALGO endpoint",
+                            signal.Symbol, slRes2.Error?.Code, slRes2.Error?.Message);
+
+                        // Same Binance Dec 2025 migration reasoning as the TP
+                        // fallback above — STOP_MARKET also requires the Algo
+                        // Order endpoint now, not the regular order endpoint.
+                        var slAlgoOk = await _algoOrders.PlaceConditionalAsync(
+                            symbol: signal.Symbol,
+                            side: slSide,
+                            positionSide: posSide,
+                            type: "STOP_MARKET",
+                            quantity: slQty,
+                            triggerPrice: slPrice,
+                            workingType: "MARK_PRICE",
+                            reduceOnly: isHedge ? null : true,
+                            ct: ct);
+
+                        if (slAlgoOk)
+                        {
+                            _logger.LogInformation(
+                                "[SL_PLACED_ALGO][{symbol}] price={sl} qty={qty} (via Algo Order endpoint)",
+                                signal.Symbol, slPrice, slQty);
+                        }
+                        else
+                        {
+                            _logger.LogError(
+                                "[SL_FAIL_ALGO][{symbol}] Algo endpoint also failed — Supervisor will place emergency SL",
+                                signal.Symbol);
+                        }
                     }
                 }
             }
@@ -2915,7 +2968,7 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
-     
+
     }
 }
 
