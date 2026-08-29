@@ -1,4 +1,4 @@
-﻿/* =========================================================
+/* =========================================================
    MARKET PAGE ROOT
    ========================================================= */
 .market-root {
@@ -139,3 +139,95 @@
 }
 .mk-pos-close-btn:hover{background:rgba(255,68,102,.18);}
 .mk-pos-close-btn:disabled{opacity:.4;cursor:not-allowed;}
+
+
+/* ── History filters bar ───────────────────────────────── */
+.mk-hist-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.mk-hist-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.mk-hist-bar-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.45);
+}
+.mk-hist-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.7);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  cursor: pointer;
+  user-select: none;
+}
+.mk-hist-chip.on {
+  color: #7dd3fc;
+  border-color: rgba(125,211,252,0.35);
+  background: rgba(56,189,248,0.08);
+}
+.mk-hist-chip input { accent-color: #38bdf8; }
+.mk-hist-bar-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+.mk-hist-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 88px;
+}
+.mk-hist-field-grow { flex: 1 1 140px; min-width: 120px; }
+.mk-hist-label {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.38);
+}
+.mk-hist-input {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(0,0,0,0.25);
+  color: rgba(255,255,255,0.9);
+  font-size: 12px;
+  outline: none;
+}
+.mk-hist-input:focus {
+  border-color: rgba(56,189,248,0.45);
+  box-shadow: 0 0 0 2px rgba(56,189,248,0.12);
+}
+.mk-hist-clear {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: transparent;
+  color: rgba(255,255,255,0.65);
+  font-size: 12px;
+  cursor: pointer;
+}
+.mk-hist-clear:hover {
+  background: rgba(255,255,255,0.06);
+  color: #fff;
+}
