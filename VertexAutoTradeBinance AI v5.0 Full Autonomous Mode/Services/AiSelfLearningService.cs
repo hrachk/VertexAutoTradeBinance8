@@ -31,7 +31,7 @@ namespace VertexAutoTradeBinance8.Services
     public class AiSelfLearningService
     {
         /// <summary>Optional: unified trade-journal.json sink (Demo+Live). Wired from Program.</summary>
-        public static Action<string, string, decimal, decimal, decimal, string>? LiveTradeJournalHook { get; set; }
+        public static Action<VertexAutoTradeBinance8.Services.Learning.TradeJournalEntry>? LiveTradeJournalHook { get; set; }
 
         private DateTime? _lastImportedTradeCloseUtc;
         public DateTime? LastImportedTradeCloseUtc => _lastImportedTradeCloseUtc;
@@ -461,7 +461,18 @@ namespace VertexAutoTradeBinance8.Services
             SignalSide side,
             decimal entry,
             decimal exit,
-            MarketRegime regime)
+            MarketRegime regime,
+            decimal qty = 0m,
+            int leverage = 0,
+            decimal? stopLoss = null,
+            System.Collections.Generic.List<decimal>? takeProfits = null,
+            string? setup = null,
+            decimal mfe = 0m,
+            decimal mae = 0m,
+            decimal realizedPnlUsdt = 0m,
+            string? closeReason = null,
+            DateTime? openedAtUtc = null,
+            bool mirrorToJournal = true)
         {
             if (entry <= 0 || exit <= 0)
                 return;
@@ -478,10 +489,22 @@ namespace VertexAutoTradeBinance8.Services
             // Pnl теперь = процент, а не price delta
             decimal pnl = pnlPct;
 
+            // USDT PnL when qty known
+            if (realizedPnlUsdt == 0m && qty > 0m)
+            {
+                realizedPnlUsdt = side == SignalSide.Buy
+                    ? (exit - entry) * qty
+                    : (entry - exit) * qty;
+            }
+
+            string reason = closeReason;
+            if (string.IsNullOrWhiteSpace(reason))
+                reason = pnlPct >= 0 ? "TP/Win" : "SL/Loss";
+
             // ===========================
             // 1) Idempotency guard
             // ===========================
-            var tradeKey = $"{symbol}|{side}|{entry}|{exit}";
+            var tradeKey = $"{symbol}|{side}|{entry:F8}|{exit:F8}|{qty:F6}|{reason}";
 
             lock (_lock)
             {
@@ -505,14 +528,30 @@ namespace VertexAutoTradeBinance8.Services
 
                 try
                 {
-                    // Mirror into per-client trade-journal.json (Source=Live)
-                    LiveTradeJournalHook?.Invoke(
-                        symbol,
-                        side == SignalSide.Buy ? "LONG" : "SHORT",
-                        entry,
-                        exit,
-                        pnlPct,
-                        pnlPct >= 0 ? "TP/Win" : "SL/Loss");
+                    if (mirrorToJournal)
+                    {
+                        // Full mirror into trade-journal.json (same schema as Demo)
+                        LiveTradeJournalHook?.Invoke(new VertexAutoTradeBinance8.Services.Learning.TradeJournalEntry
+                        {
+                            Source = "Live",
+                            Symbol = symbol,
+                            Side = side == SignalSide.Buy ? "LONG" : "SHORT",
+                            EntryPrice = entry,
+                            ExitPrice = exit,
+                            Qty = qty,
+                            Leverage = leverage,
+                            StopLoss = stopLoss,
+                            TakeProfits = takeProfits ?? new System.Collections.Generic.List<decimal>(),
+                            RealizedPnl = realizedPnlUsdt != 0m ? realizedPnlUsdt : pnlPct,
+                            RealizedR = pnlPct,
+                            CloseReason = reason,
+                            Setup = setup ?? "",
+                            Mfe = mfe,
+                            Mae = mae,
+                            OpenedAtUtc = openedAtUtc ?? DateTime.UtcNow,
+                            ClosedAtUtc = DateTime.UtcNow
+                        });
+                    }
                 }
                 catch { /* never break learning */ }
 
