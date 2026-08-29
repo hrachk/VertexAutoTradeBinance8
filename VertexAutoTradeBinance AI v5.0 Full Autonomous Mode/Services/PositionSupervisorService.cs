@@ -881,7 +881,27 @@ namespace VertexAutoTradeBinance8.Services
 
                     var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
 
-                    _aiLearning.RecordTrade(symbol, sigSide, prevEntry, exitPrice, _regimeNow);
+                    {
+                        bool isStopLoss0 =
+                            side == PositionSide.Long
+                                ? exitPrice < prevEntry
+                                : exitPrice > prevEntry;
+                        decimal q = Math.Abs(prevQty);
+                        decimal pnlU = side == PositionSide.Long
+                            ? (exitPrice - prevEntry) * q
+                            : (prevEntry - exitPrice) * q;
+                        var tps = signal?.TakeProfits?.ToList()
+                                  ?? (signal?.TakeProfit is decimal tp0 && tp0 > 0 ? new List<decimal> { tp0 } : null);
+                        _aiLearning.RecordTrade(
+                            symbol, sigSide, prevEntry, exitPrice, _regimeNow,
+                            qty: q,
+                            stopLoss: signal?.StopLoss > 0 ? signal.StopLoss : null,
+                            takeProfits: tps,
+                            setup: signal?.Reason,
+                            realizedPnlUsdt: pnlU,
+                            closeReason: isStopLoss0 ? "SL" : "TP/close",
+                            mirrorToJournal: true);
+                    }
 
                     _logger.LogWarning(
                         "[AI][{symbol}] POSITION CLOSED entry={entry} exit={exit}",
@@ -1571,13 +1591,17 @@ namespace VertexAutoTradeBinance8.Services
 
                     _accountState.AddRealizedPnl(realizedPnl);
 
-                    // AI learning остаётся как есть
+                    // Full Live → trade-journal.json (same fields as Demo)
                     _aiLearning.RecordTrade(
                         symbol,
                         side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell,
                         entry: prevEntry,
                         exit: exitPrice,
-                        regime: _regimeNow);
+                        regime: _regimeNow,
+                        qty: qty,
+                        realizedPnlUsdt: realizedPnl,
+                        closeReason: realizedPnl < 0 ? "SL" : "TP/close",
+                        mirrorToJournal: true);
 
                     _logger.LogWarning(
                         "[CLOSE][{symbol}][{side}] qty={qty} entry={entry} exit={exit} pnl={pnl}",
@@ -3301,7 +3325,8 @@ namespace VertexAutoTradeBinance8.Services
                     var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
 
                     _manualHandler.RegisterStop(symbol);
-                    _aiLearning.RecordTrade(symbol, sigSide, entry, newSl, _regimeNow);
+                    // SL move is not a closed trade — do not mirror to trade-journal
+                    _aiLearning.RecordTrade(symbol, sigSide, entry, newSl, _regimeNow, mirrorToJournal: false);
                 }
             }
             catch { }
