@@ -934,8 +934,17 @@
                         <table class="mk-pos-table">
                             <thead>
                                 <tr>
-                                    <th>Symbol</th><th>Side</th><th>Price</th><th>Qty</th>
-                                    <th>PnL</th><th>Fee</th><th>Closed</th><th></th>
+                                    <th>Symbol</th>
+                                    <th>Side</th>
+                                    <th>Entry</th>
+                                    <th>Exit</th>
+                                    <th>Qty</th>
+                                    <th>SL</th>
+                                    <th>TPs</th>
+                                    <th>Reason</th>
+                                    <th>PnL</th>
+                                    <th>Closed</th>
+                                    <th></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -945,10 +954,19 @@
                                     <tr>
                                         <td>@t.Symbol.Replace("USDT","")</td>
                                         <td class="@(t.Side is "BUY" or "LONG" ? "up" : "dn")">@t.Side</td>
-                                        <td class="mk-mono" title="entry → exit">@FmtP(t.EntryPrice > 0 ? t.EntryPrice : t.Price)→@FmtP(t.Price)</td>
+                                        <td class="mk-mono">@FmtP(t.EntryPrice > 0 ? t.EntryPrice : t.Price)</td>
+                                        <td class="mk-mono">@FmtP(t.Price)</td>
                                         <td class="mk-mono">@t.Qty.ToString("G8")</td>
-                                        <td class="mk-mono @(t.RealizedPnl >= 0 ? "up" : "dn")" title="@t.CloseReason @t.Setup">@(t.RealizedPnl >= 0 ? "+" : "")@t.RealizedPnl.ToString("F2")</td>
-                                        <td class="mk-dim">@t.Fee.ToString("F4")</td>
+                                        <td class="mk-mono">@(t.StopLoss is decimal sl && sl > 0 ? FmtP(sl) : "—")</td>
+                                        <td class="mk-dim" style="max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="@t.TakeProfitsText">@(string.IsNullOrEmpty(t.TakeProfitsText) ? "—" : t.TakeProfitsText)</td>
+                                        <td class="mk-dim" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="@((t.Setup ?? "") + " / " + (t.CloseReason ?? ""))">
+                                            @(string.IsNullOrEmpty(t.Setup) ? (t.CloseReason ?? "—") : t.Setup)
+                                            @if (!string.IsNullOrEmpty(t.Setup) && !string.IsNullOrEmpty(t.CloseReason))
+                                            {
+                                                <span class="mk-dim"> · @t.CloseReason</span>
+                                            }
+                                        </td>
+                                        <td class="mk-mono @(t.RealizedPnl >= 0 ? "up" : "dn")">@(t.RealizedPnl >= 0 ? "+" : "")@t.RealizedPnl.ToString("F2")</td>
                                         <td class="mk-dim">@t.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
                                         <td>
                                             <button class="mk-oo-cancel" @onclick="@(() => OpenShareCardFromRealHistory(t))">Share</button>
