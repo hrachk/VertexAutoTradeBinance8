@@ -3410,19 +3410,15 @@ namespace VertexAutoTradeBinance8.Services
             {
                 _logger = logger;
 
-                _apiKey = cfg["Binance:ApiKey"] ?? string.Empty;
-                // CRITICAL FIX: appsettings.json's real field name is
-                // "SecretKey" (confirmed directly), not "ApiSecret" —
-                // this was reading a key that doesn't exist, meaning
-                // _apiSecret was empty the entire time and every
-                // algo-order call (including this session's BE-move/
-                // cleanup fixes) was silently failing the credentials
-                // check before ever reaching the network.
-                _apiSecret = cfg["Binance:SecretKey"] ?? cfg["Binance:ApiSecret"] ?? string.Empty;
+                // Trim — paste/newline in appsettings → Binance -1022 INVALID_SIGNATURE
+                _apiKey = (cfg["Binance:ApiKey"] ?? string.Empty).Trim();
+                // appsettings field is SecretKey (not ApiSecret)
+                _apiSecret = (cfg["Binance:SecretKey"] ?? cfg["Binance:ApiSecret"] ?? string.Empty).Trim();
                 _baseUrl = (cfg["Binance:FuturesBaseUrl"] ?? "https://fapi.binance.com").TrimEnd('/');
 
                 _http = httpFactory.CreateClient("BinanceAlgoRaw");
-                _http.Timeout = TimeSpan.FromSeconds(8);
+                // 8s was too aggressive on slow/VPN links → TaskCanceledException noise
+                _http.Timeout = TimeSpan.FromSeconds(30);
             }
             private async Task<long> GetBinanceTimestampAsync(CancellationToken ct)
             {
@@ -3490,7 +3486,7 @@ namespace VertexAutoTradeBinance8.Services
                     new("side",        side == OrderSide.Buy ? "BUY" : "SELL"),
                     new("type",        type),
                     new("timestamp",   ts.ToString(CultureInfo.InvariantCulture)),
-                    new("recvWindow",  "5000"),
+                    new("recvWindow",  "10000"),
                     new("workingType", workingType),
                     new("triggerPrice", D(triggerPrice)),
                     new("positionSide", positionSide.ToString().ToUpperInvariant()),
@@ -3593,7 +3589,7 @@ namespace VertexAutoTradeBinance8.Services
                 var q = new List<KeyValuePair<string, string>>
                 {
                     new("timestamp",  ts.ToString(CultureInfo.InvariantCulture)),
-                    new("recvWindow", "5000"),
+                    new("recvWindow", "10000"),
                 };
                 if (!string.IsNullOrEmpty(symbol)) q.Add(new("symbol", symbol));
 
@@ -3669,7 +3665,7 @@ namespace VertexAutoTradeBinance8.Services
                 {
                     new("algoId",     algoId.ToString(CultureInfo.InvariantCulture)),
                     new("timestamp",  ts.ToString(CultureInfo.InvariantCulture)),
-                    new("recvWindow", "5000"),
+                    new("recvWindow", "10000"),
                 };
                 var (query, rawQuery) = BuildQuery(q);
                 var sig = Sign(rawQuery, _apiSecret);
@@ -3702,26 +3698,26 @@ namespace VertexAutoTradeBinance8.Services
             // =====================================================
             private static (string encoded, string raw) BuildQuery(IEnumerable<KeyValuePair<string, string>> q)
             {
+                // Alphabetical key order + same totalParams as signed (Binance -1022 fix)
+                var ordered = q
+                    .Where(kv => kv.Key != null && kv.Value != null)
+                    .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+                    .ToList();
+
                 var encoded = new StringBuilder();
                 var raw = new StringBuilder();
-
-                foreach (var kv in q)
+                foreach (var kv in ordered)
                 {
                     if (encoded.Length > 0) { encoded.Append('&'); raw.Append('&'); }
-
-                    // raw — без encoding, используется для подписи
                     raw.Append(kv.Key).Append('=').Append(kv.Value);
-
-                    // encoded — для URL
                     encoded.Append(Uri.EscapeDataString(kv.Key))
                            .Append('=')
                            .Append(Uri.EscapeDataString(kv.Value));
                 }
-
                 return (encoded.ToString(), raw.ToString());
             }
 
-            private static string Sign(string rawQueryString, string secret)
+private static string Sign(string rawQueryString, string secret)
             {
                 using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
                 var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(rawQueryString));
