@@ -864,31 +864,49 @@
 
             @if (_ooActiveTab == "history")
             {
-                <div class="mk-pos-toolbar mk-hist-filters" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
-                    <label class="mk-pos-filter-cb">
-                        <input type="checkbox" @bind="_posFilterCurrentSym" /> Only <strong>@(_activeSym ?? "—")</strong>
-                    </label>
-                    <input class="mk-input" style="width:100px;max-width:28vw" placeholder="Symbol"
-                           @bind="_histFilterSymbol" @bind:event="oninput" />
-                    <select class="mk-input" style="width:90px" @bind="_histFilterSide">
-                        <option value="">Side: All</option>
-                        <option value="LONG">LONG</option>
-                        <option value="SHORT">SHORT</option>
-                    </select>
-                    <select class="mk-input" style="width:95px" @bind="_histFilterPnl">
-                        <option value="">PnL: All</option>
-                        <option value="win">Wins</option>
-                        <option value="loss">Losses</option>
-                    </select>
-                    <label class="mk-dim" style="font-size:11px">From
-                        <input type="date" class="mk-input" style="width:128px" @bind="_histFilterFrom" />
-                    </label>
-                    <label class="mk-dim" style="font-size:11px">To
-                        <input type="date" class="mk-input" style="width:128px" @bind="_histFilterTo" />
-                    </label>
-                    <input class="mk-input" style="width:110px;max-width:30vw" placeholder="Reason contains"
-                           @bind="_histFilterReason" @bind:event="oninput" />
-                    <button type="button" class="mk-oo-cancel" @onclick="ClearHistoryFilters">Clear</button>
+                <div class="mk-hist-bar">
+                    <div class="mk-hist-bar-left">
+                        <span class="mk-hist-bar-title">Filters</span>
+                        <label class="mk-hist-chip @(_posFilterCurrentSym ? "on" : "")">
+                            <input type="checkbox" @bind="_posFilterCurrentSym" />
+                            <span>Chart symbol</span>
+                        </label>
+                    </div>
+                    <div class="mk-hist-bar-fields">
+                        <div class="mk-hist-field">
+                            <span class="mk-hist-label">Symbol</span>
+                            <input class="mk-hist-input" placeholder="e.g. AKE" @bind="_histFilterSymbol" @bind:event="oninput" />
+                        </div>
+                        <div class="mk-hist-field">
+                            <span class="mk-hist-label">Side</span>
+                            <select class="mk-hist-input" @bind="_histFilterSide">
+                                <option value="">All</option>
+                                <option value="LONG">LONG</option>
+                                <option value="SHORT">SHORT</option>
+                            </select>
+                        </div>
+                        <div class="mk-hist-field">
+                            <span class="mk-hist-label">PnL</span>
+                            <select class="mk-hist-input" @bind="_histFilterPnl">
+                                <option value="">All</option>
+                                <option value="win">Wins</option>
+                                <option value="loss">Losses</option>
+                            </select>
+                        </div>
+                        <div class="mk-hist-field">
+                            <span class="mk-hist-label">From</span>
+                            <input type="date" class="mk-hist-input" @bind="_histFilterFrom" />
+                        </div>
+                        <div class="mk-hist-field">
+                            <span class="mk-hist-label">To</span>
+                            <input type="date" class="mk-hist-input" @bind="_histFilterTo" />
+                        </div>
+                        <div class="mk-hist-field mk-hist-field-grow">
+                            <span class="mk-hist-label">Reason</span>
+                            <input class="mk-hist-input" placeholder="TP, SL, CORE…" @bind="_histFilterReason" @bind:event="oninput" />
+                        </div>
+                        <button type="button" class="mk-hist-clear" @onclick="ClearHistoryFilters" title="Reset filters">Clear</button>
+                    </div>
                 </div>
                 @if (_demoMode)
                 {
@@ -944,8 +962,9 @@
                     else if (_realHistory.Count == 0)
                     {
                         <div class="mk-oo-empty">
-                            No closed trade history loaded yet.
-                            <button class="mk-oo-cancel" @onclick="LoadRealHistoryAsync">Load</button>
+                            No journal trades found for this client folder yet.
+                            <div class="mk-dim" style="margin-top:6px;font-size:12px">Live closes appear after Engine writes trade-journal.json</div>
+                            <button class="mk-oo-cancel" style="margin-top:8px" @onclick="LoadRealHistoryAsync">Refresh</button>
                         </div>
                     }
                     else
@@ -7989,54 +8008,61 @@ sealed class RealTradeRow
         StateHasChanged();
         try
         {
-            // Primary: unified trade-journal.json (Live closes written by Engine — Demo-parity fields)
-            var clientId = !string.IsNullOrWhiteSpace(DemoAccount.BoundClientId)
-                ? DemoAccount.BoundClientId
-                : (AppConfig?["Client:Id"] ?? "client_001");
-            var fromJournal = TradeJournal.LoadRecent(clientId, sourceFilter: "Live", max: 150);
-            if (fromJournal.Count == 0)
-            {
-                // Also show mixed if Live-only empty (optional Demo+Live for operator)
-                fromJournal = TradeJournal.LoadRecent(clientId, sourceFilter: null, max: 150)
-                    .Where(e => string.Equals(e.Source, "Live", StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-            }
+            var ids = new List<string>();
+            if (!string.IsNullOrWhiteSpace(DemoAccount.BoundClientId))
+                ids.Add(DemoAccount.BoundClientId);
+            var cfgId = AppConfig?["Client:Id"];
+            if (!string.IsNullOrWhiteSpace(cfgId)) ids.Add(cfgId!);
+            ids.Add("client_001");
+            ids.Add("001");
 
-            // Hide legacy Live junk (Qty=0, percent-as-pnl, entry≈exit with ~0)
+            // Prefer Live rows; if none, show any journal rows (Demo+Live) so History is never falsely empty
+            var fromJournal = TradeJournal.LoadRecentMany(ids, sourceFilter: "Live", max: 200);
+            if (fromJournal.Count == 0)
+                fromJournal = TradeJournal.LoadRecentMany(ids, sourceFilter: null, max: 200);
+
             _realHistory = fromJournal
                 .Where(e =>
                 {
+                    // Keep real fills; drop only pure phantom % rows
                     if (e.Qty > 0m) return true;
-                    if (Math.Abs(e.RealizedPnl) >= 0.50m) return true; // real USDT pnl
-                    // drop phantom % rows and zero-qty noise
+                    if (Math.Abs(e.RealizedPnl) >= 0.01m && e.EntryPrice > 0 && e.ExitPrice > 0
+                        && Math.Abs(e.EntryPrice - e.ExitPrice) > 0) return true;
                     return false;
                 })
                 .Select(e => new RealTradeRow
-            {
-                Symbol = e.Symbol,
-                Side = e.Side,
-                EntryPrice = e.EntryPrice,
-                Price = e.ExitPrice,
-                Qty = e.Qty,
-                RealizedPnl = e.RealizedPnl,
-                Fee = 0m,
-                Time = e.ClosedAtUtc,
-                Source = e.Source,
-                CloseReason = string.IsNullOrEmpty(e.Setup)
-                    ? (e.CloseReason ?? "")
-                    : (string.IsNullOrEmpty(e.CloseReason) ? e.Setup : e.Setup + " · " + e.CloseReason),
-                Setup = e.Setup ?? "",
-                StopLoss = e.StopLoss,
-                TakeProfitsText = e.TakeProfits != null && e.TakeProfits.Count > 0
-                    ? string.Join(" / ", e.TakeProfits.Select(p => p.ToString("G8")))
-                    : "",
-                Mfe = e.Mfe,
-                Mae = e.Mae,
-                Leverage = e.Leverage
-            }).ToList();
+                {
+                    Symbol = e.Symbol,
+                    Side = e.Side,
+                    EntryPrice = e.EntryPrice,
+                    Price = e.ExitPrice,
+                    Qty = e.Qty,
+                    RealizedPnl = e.RealizedPnl,
+                    Fee = 0m,
+                    Time = e.ClosedAtUtc == default ? e.OpenedAtUtc : e.ClosedAtUtc,
+                    Source = string.IsNullOrEmpty(e.Source) ? "Live" : e.Source,
+                    CloseReason = string.IsNullOrEmpty(e.Setup)
+                        ? (e.CloseReason ?? "")
+                        : (string.IsNullOrEmpty(e.CloseReason) ? e.Setup : e.Setup + " · " + e.CloseReason),
+                    Setup = e.Setup ?? "",
+                    StopLoss = e.StopLoss,
+                    TakeProfitsText = e.TakeProfits != null && e.TakeProfits.Count > 0
+                        ? string.Join(" / ", e.TakeProfits.Select(p => p.ToString("G8")))
+                        : "",
+                    Mfe = e.Mfe,
+                    Mae = e.Mae,
+                    Leverage = e.Leverage
+                }).ToList();
         }
-        catch { _realHistory = new(); }
-        finally { _realHistoryLoading = false; StateHasChanged(); }
+        catch
+        {
+            _realHistory = new();
+        }
+        finally
+        {
+            _realHistoryLoading = false;
+            StateHasChanged();
+        }
     }
 
     void OpenShareCardFromRealHistory(RealTradeRow t)
