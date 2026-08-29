@@ -864,10 +864,31 @@
 
             @if (_ooActiveTab == "history")
             {
-                <div class="mk-pos-toolbar">
+                <div class="mk-pos-toolbar mk-hist-filters" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
                     <label class="mk-pos-filter-cb">
-                        <input type="checkbox" @bind="_posFilterCurrentSym" /> Only <strong>@_activeSym</strong>
+                        <input type="checkbox" @bind="_posFilterCurrentSym" /> Only <strong>@(_activeSym ?? "—")</strong>
                     </label>
+                    <input class="mk-input" style="width:100px;max-width:28vw" placeholder="Symbol"
+                           @bind="_histFilterSymbol" @bind:event="oninput" />
+                    <select class="mk-input" style="width:90px" @bind="_histFilterSide">
+                        <option value="">Side: All</option>
+                        <option value="LONG">LONG</option>
+                        <option value="SHORT">SHORT</option>
+                    </select>
+                    <select class="mk-input" style="width:95px" @bind="_histFilterPnl">
+                        <option value="">PnL: All</option>
+                        <option value="win">Wins</option>
+                        <option value="loss">Losses</option>
+                    </select>
+                    <label class="mk-dim" style="font-size:11px">From
+                        <input type="date" class="mk-input" style="width:128px" @bind="_histFilterFrom" />
+                    </label>
+                    <label class="mk-dim" style="font-size:11px">To
+                        <input type="date" class="mk-input" style="width:128px" @bind="_histFilterTo" />
+                    </label>
+                    <input class="mk-input" style="width:110px;max-width:30vw" placeholder="Reason contains"
+                           @bind="_histFilterReason" @bind:event="oninput" />
+                    <button type="button" class="mk-oo-cancel" @onclick="ClearHistoryFilters">Clear</button>
                 </div>
                 @if (_demoMode)
                 {
@@ -890,9 +911,7 @@
                         ? _demoSnapshot.History.Where(t => t.Symbol == _activeSym).ToList()
                         : (IEnumerable<object>)_demoSnapshot.History;
                 }
-                @foreach (var t in _demoSnapshot.History
-                    .Where(t => !_posFilterCurrentSym || string.IsNullOrEmpty(_activeSym) || t.Symbol == _activeSym)
-                    .OrderByDescending(t => t.ClosedAtUtc))
+                @foreach (var t in FilteredDemoHistory())
                                 {
                                     <tr>
                                         <td>@t.Symbol.Replace("USDT","")</td>
@@ -948,8 +967,7 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                @foreach (var t in _realHistory
-                                    .Where(t => !_posFilterCurrentSym || string.IsNullOrEmpty(_activeSym) || t.Symbol == _activeSym))
+                                @foreach (var t in FilteredLiveHistory())
                                 {
                                     <tr>
                                         <td>@t.Symbol.Replace("USDT","")</td>
@@ -5368,6 +5386,90 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     bool _posSortAsc = false;
     // Filter: show only positions matching the active chart symbol
     bool _posFilterCurrentSym = false;
+    string _histFilterSymbol = "";
+    string _histFilterSide = "";
+    string _histFilterPnl = "";
+    string _histFilterReason = "";
+    DateTime? _histFilterFrom;
+    DateTime? _histFilterTo;
+
+    void ClearHistoryFilters()
+    {
+        _posFilterCurrentSym = false;
+        _histFilterSymbol = "";
+        _histFilterSide = "";
+        _histFilterPnl = "";
+        _histFilterReason = "";
+        _histFilterFrom = null;
+        _histFilterTo = null;
+    }
+
+    bool HistPassSymbol(string symbol)
+    {
+        if (_posFilterCurrentSym && !string.IsNullOrEmpty(_activeSym))
+        {
+            if (!string.Equals(symbol, _activeSym, StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+        if (string.IsNullOrWhiteSpace(_histFilterSymbol)) return true;
+        var q = _histFilterSymbol.Trim();
+        return symbol.Contains(q, StringComparison.OrdinalIgnoreCase)
+            || symbol.Replace("USDT", "", StringComparison.OrdinalIgnoreCase).Contains(q, StringComparison.OrdinalIgnoreCase);
+    }
+
+    bool HistPassSide(string side)
+    {
+        if (string.IsNullOrEmpty(_histFilterSide)) return true;
+        var s = (side ?? "").ToUpperInvariant();
+        if (_histFilterSide == "LONG") return s is "LONG" or "BUY";
+        if (_histFilterSide == "SHORT") return s is "SHORT" or "SELL";
+        return true;
+    }
+
+    bool HistPassPnl(decimal pnl)
+    {
+        if (string.IsNullOrEmpty(_histFilterPnl)) return true;
+        if (_histFilterPnl == "win") return pnl > 0;
+        if (_histFilterPnl == "loss") return pnl < 0;
+        return true;
+    }
+
+    bool HistPassDate(DateTime closedUtc)
+    {
+        var local = closedUtc.Kind == DateTimeKind.Utc ? closedUtc.ToLocalTime() : closedUtc;
+        if (_histFilterFrom is DateTime f && local.Date < f.Date) return false;
+        if (_histFilterTo is DateTime t && local.Date > t.Date) return false;
+        return true;
+    }
+
+    bool HistPassReason(string reason)
+    {
+        if (string.IsNullOrWhiteSpace(_histFilterReason)) return true;
+        return (reason ?? "").Contains(_histFilterReason.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    IEnumerable<DemoClosedTrade> FilteredDemoHistory()
+    {
+        return _demoSnapshot.History
+            .Where(t => HistPassSymbol(t.Symbol)
+                && HistPassSide(t.Side)
+                && HistPassPnl(t.RealizedPnl)
+                && HistPassDate(t.ClosedAtUtc)
+                && HistPassReason(t.CloseReason ?? ""))
+            .OrderByDescending(t => t.ClosedAtUtc);
+    }
+
+    IEnumerable<RealTradeRow> FilteredLiveHistory()
+    {
+        return _realHistory
+            .Where(t => HistPassSymbol(t.Symbol)
+                && HistPassSide(t.Side)
+                && HistPassPnl(t.RealizedPnl)
+                && HistPassDate(t.Time)
+                && HistPassReason((t.CloseReason ?? "") + " " + (t.Setup ?? "")))
+            .OrderByDescending(t => t.Time);
+    }
+
     bool _lastPositionsFetchOk; // see CleanupOrphanedProtectiveOrdersAsync — never treat an empty _allPositions as ground truth unless this is true
 
     // Returns the right positions list for display depending on mode -
