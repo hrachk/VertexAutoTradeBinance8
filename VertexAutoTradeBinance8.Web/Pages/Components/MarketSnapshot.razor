@@ -7900,7 +7900,16 @@ sealed class RealTradeRow
                     .ToList();
             }
 
-            _realHistory = fromJournal.Select(e => new RealTradeRow
+            // Hide legacy Live junk (Qty=0, percent-as-pnl, entry≈exit with ~0)
+            _realHistory = fromJournal
+                .Where(e =>
+                {
+                    if (e.Qty > 0m) return true;
+                    if (Math.Abs(e.RealizedPnl) >= 0.50m) return true; // real USDT pnl
+                    // drop phantom % rows and zero-qty noise
+                    return false;
+                })
+                .Select(e => new RealTradeRow
             {
                 Symbol = e.Symbol,
                 Side = e.Side,
@@ -7911,7 +7920,9 @@ sealed class RealTradeRow
                 Fee = 0m,
                 Time = e.ClosedAtUtc,
                 Source = e.Source,
-                CloseReason = e.CloseReason ?? "",
+                CloseReason = string.IsNullOrEmpty(e.Setup)
+                    ? (e.CloseReason ?? "")
+                    : (string.IsNullOrEmpty(e.CloseReason) ? e.Setup : e.Setup + " · " + e.CloseReason),
                 Setup = e.Setup ?? "",
                 StopLoss = e.StopLoss,
                 TakeProfitsText = e.TakeProfits != null && e.TakeProfits.Count > 0
