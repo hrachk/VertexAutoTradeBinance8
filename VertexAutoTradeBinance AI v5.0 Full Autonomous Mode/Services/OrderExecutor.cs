@@ -2526,69 +2526,8 @@ namespace VertexAutoTradeBinance8.Services
                         "[TP_PLACE][{symbol}] level={level} price={tp} qty={qty} mark={mark} entry={entry}",
                         signal.Symbol, i + 1, tpPrice, tpQty, markPrice, entryPrice);
 
-                    // Попытка 1: WorkingType.Mark
-                    var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                        symbol: signal.Symbol,
-                        side: tpSide,
-                        type: FuturesOrderType.TakeProfitMarket,
-                        stopPrice: tpPrice,
-                        quantity: tpQty,
-                        reduceOnly: true,
-                        positionSide: isHedge ? posSide : null,
-                        workingType: WorkingType.Mark,
-                        selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
-                        ct: ct);
-
-                    if (res.Success)
-                    {
-                        _logger.LogInformation(
-                            "[TP_PLACED][{symbol}] level={level} orderId={id} price={tp} qty={qty} (Mark)",
-                            signal.Symbol, i + 1, res.Data?.Id, tpPrice, tpQty);
-                        continue;
-                    }
-
-                    _logger.LogWarning(
-                        "[TP_FAIL_MARK][{symbol}] level={level} code={code} msg={msg} → retry Contract",
-                        signal.Symbol, i + 1, res.Error?.Code, res.Error?.Message);
-
-                    // Попытка 2: WorkingType.Contract
-                    var res2 = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                        symbol: signal.Symbol,
-                        side: tpSide,
-                        type: FuturesOrderType.TakeProfitMarket,
-                        stopPrice: tpPrice,
-                        quantity: tpQty,
-                        reduceOnly: true,
-                        positionSide: isHedge ? posSide : null,
-                        workingType: WorkingType.Contract,
-                        ct: ct);
-
-                    if (res2.Success)
-                    {
-                        _logger.LogInformation(
-                            "[TP_PLACED_CONTRACT][{symbol}] level={level} orderId={id} price={tp} qty={qty}",
-                            signal.Symbol, i + 1, res2.Data?.Id, tpPrice, tpQty);
-                        continue;
-                    }
-
-                    _logger.LogError(
-                        "[TP_FAIL_FINAL][{symbol}] level={level} code={code} msg={msg} → trying ALGO endpoint",
-                        signal.Symbol, i + 1, res2.Error?.Code, res2.Error?.Message);
-
-                    // CRITICAL FIX: both attempts above use the regular
-                    // PlaceOrderAsync endpoint, which Binance's mandatory
-                    // Dec 9 2025 migration moved ALL conditional orders
-                    // (STOP_MARKET/TAKE_PROFIT_MARKET) away from — this
-                    // endpoint now rejects them outright (-4120), meaning both
-                    // attempts above were failing every single time before
-                    // this fix, with no path to actually succeed. This is the
-                    // exact reason the at-entry TP was never actually visible
-                    // on the exchange ("decided this, but never saw it work").
-                    // Falls back to the dedicated Algo Order endpoint, same
-                    // mechanism PositionSupervisorService already uses
-                    // successfully for its own emergency SL/TP and BE-move
-                    // placement.
-                    var algoOk = await _algoOrders.PlaceConditionalAsync(
+                    // Hedge: never send reduceOnly (-1106). Classic TAKE_PROFIT_MARKET → -4120 → Algo first.
+                    var tpAlgoOk = await _algoOrders.PlaceConditionalAsync(
                         symbol: signal.Symbol,
                         side: tpSide,
                         positionSide: posSide,
@@ -2596,25 +2535,38 @@ namespace VertexAutoTradeBinance8.Services
                         quantity: tpQty,
                         triggerPrice: tpPrice,
                         workingType: "MARK_PRICE",
-                        reduceOnly: isHedge ? null : true,
+                        reduceOnly: null,
                         ct: ct);
 
-                    if (algoOk)
+                    if (tpAlgoOk)
                     {
                         _logger.LogInformation(
-                            "[TP_PLACED_ALGO][{symbol}] level={level} price={tp} qty={qty} (via Algo Order endpoint)",
+                            "[TP_PLACED_ALGO][{symbol}] level={level} price={tp} qty={qty}",
                             signal.Symbol, i + 1, tpPrice, tpQty);
+                        continue;
                     }
+
+                    _logger.LogWarning("[TP_ALGO_FAIL][{symbol}] level={level} → classic fallback", signal.Symbol, i + 1);
+                    var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                        symbol: signal.Symbol,
+                        side: tpSide,
+                        type: FuturesOrderType.TakeProfitMarket,
+                        stopPrice: tpPrice,
+                        quantity: tpQty,
+                        reduceOnly: isHedge ? null : true,
+                        positionSide: isHedge ? posSide : null,
+                        workingType: WorkingType.Mark,
+                        selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
+                        ct: ct);
+                    if (res.Success)
+                        _logger.LogInformation("[TP_PLACED][{symbol}] level={level} orderId={id}", signal.Symbol, i + 1, res.Data?.Id);
+                    else if (res.Error?.Code is -4120 or -1106)
+                        _logger.LogDebug("[TP_CLASSIC_SKIP][{symbol}] level={level} code={c}", signal.Symbol, i + 1, res.Error?.Code);
                     else
-                    {
-                        _logger.LogError(
-                            "[TP_FAIL_ALGO][{symbol}] level={level} Algo endpoint also failed — Supervisor will place emergency TP",
-                            signal.Symbol, i + 1);
-                    }
+                        _logger.LogWarning("[TP_FAIL][{symbol}] level={level} code={c} msg={m}", signal.Symbol, i + 1, res.Error?.Code, res.Error?.Message);
                 }
             }
 
-            // =================================================================
             // STOP LOSS — per direct, explicit request: this was NEVER placed
             // at all before this fix. The FULL position quantity (not split
             // like the TPs above) — a stop loss protects the entire remaining
@@ -2650,82 +2602,43 @@ namespace VertexAutoTradeBinance8.Services
                     "[SL_PLACE][{symbol}] price={sl} qty={qty} mark={mark} entry={entry}",
                     signal.Symbol, slPrice, slQty, markPrice, entryPrice);
 
-                // Попытка 1: WorkingType.Mark
-                var slRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                var slAlgoOk = await _algoOrders.PlaceConditionalAsync(
                     symbol: signal.Symbol,
                     side: slSide,
-                    type: FuturesOrderType.StopMarket,
-                    stopPrice: slPrice,
+                    positionSide: posSide,
+                    type: "STOP_MARKET",
                     quantity: slQty,
-                    reduceOnly: true,
-                    positionSide: isHedge ? posSide : null,
-                    workingType: WorkingType.Mark,
-                    selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
+                    triggerPrice: slPrice,
+                    workingType: "MARK_PRICE",
+                    reduceOnly: null,
                     ct: ct);
 
-                if (slRes.Success)
+                if (slAlgoOk)
                 {
                     _logger.LogInformation(
-                        "[SL_PLACED][{symbol}] orderId={id} price={sl} qty={qty} (Mark)",
-                        signal.Symbol, slRes.Data?.Id, slPrice, slQty);
+                        "[SL_PLACED_ALGO][{symbol}] price={sl} qty={qty}",
+                        signal.Symbol, slPrice, slQty);
                 }
                 else
                 {
-                    _logger.LogWarning(
-                        "[SL_FAIL_MARK][{symbol}] code={code} msg={msg} → retry Contract",
-                        signal.Symbol, slRes.Error?.Code, slRes.Error?.Message);
-
-                    // Попытка 2: WorkingType.Contract
-                    var slRes2 = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    _logger.LogWarning("[SL_ALGO_FAIL][{symbol}] → classic fallback", signal.Symbol);
+                    var slRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                         symbol: signal.Symbol,
                         side: slSide,
                         type: FuturesOrderType.StopMarket,
                         stopPrice: slPrice,
                         quantity: slQty,
-                        reduceOnly: true,
+                        reduceOnly: isHedge ? null : true,
                         positionSide: isHedge ? posSide : null,
-                        workingType: WorkingType.Contract,
+                        workingType: WorkingType.Mark,
+                        selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
                         ct: ct);
-
-                    if (slRes2.Success)
-                    {
-                        _logger.LogInformation(
-                            "[SL_PLACED_CONTRACT][{symbol}] orderId={id} price={sl} qty={qty}",
-                            signal.Symbol, slRes2.Data?.Id, slPrice, slQty);
-                    }
+                    if (slRes.Success)
+                        _logger.LogInformation("[SL_PLACED][{symbol}] orderId={id}", signal.Symbol, slRes.Data?.Id);
+                    else if (slRes.Error?.Code is -4120 or -1106)
+                        _logger.LogDebug("[SL_CLASSIC_SKIP][{symbol}] code={c}", signal.Symbol, slRes.Error?.Code);
                     else
-                    {
-                        _logger.LogError(
-                            "[SL_FAIL_FINAL][{symbol}] code={code} msg={msg} → trying ALGO endpoint",
-                            signal.Symbol, slRes2.Error?.Code, slRes2.Error?.Message);
-
-                        // Same Binance Dec 2025 migration reasoning as the TP
-                        // fallback above — STOP_MARKET also requires the Algo
-                        // Order endpoint now, not the regular order endpoint.
-                        var slAlgoOk = await _algoOrders.PlaceConditionalAsync(
-                            symbol: signal.Symbol,
-                            side: slSide,
-                            positionSide: posSide,
-                            type: "STOP_MARKET",
-                            quantity: slQty,
-                            triggerPrice: slPrice,
-                            workingType: "MARK_PRICE",
-                            reduceOnly: isHedge ? null : true,
-                            ct: ct);
-
-                        if (slAlgoOk)
-                        {
-                            _logger.LogInformation(
-                                "[SL_PLACED_ALGO][{symbol}] price={sl} qty={qty} (via Algo Order endpoint)",
-                                signal.Symbol, slPrice, slQty);
-                        }
-                        else
-                        {
-                            _logger.LogError(
-                                "[SL_FAIL_ALGO][{symbol}] Algo endpoint also failed — Supervisor will place emergency SL",
-                                signal.Symbol);
-                        }
-                    }
+                        _logger.LogWarning("[SL_FAIL][{symbol}] code={c} msg={m}", signal.Symbol, slRes.Error?.Code, slRes.Error?.Message);
                 }
             }
             else
