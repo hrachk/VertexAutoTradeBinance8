@@ -452,24 +452,11 @@ try
     var journal = host.Services.GetRequiredService<VertexAutoTradeBinance8.Services.Learning.TradeJournalService>();
     var liveClientId = host.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>()["Client:Id"] ?? "client_001";
     VertexAutoTradeBinance8.Services.AiSelfLearningService.LiveTradeJournalHook =
-        (symbol, side, entry, exit, pnlPct, reason) =>
+        (entry) =>
         {
-            journal.Append(new VertexAutoTradeBinance8.Services.Learning.TradeJournalEntry
-            {
-                ClientId = liveClientId,
-                Source = "Live",
-                Symbol = symbol,
-                Side = side,
-                EntryPrice = entry,
-                ExitPrice = exit,
-                Qty = 0,
-                Leverage = 0,
-                RealizedPnl = pnlPct,
-                RealizedR = pnlPct,
-                CloseReason = reason,
-                OpenedAtUtc = DateTime.UtcNow,
-                ClosedAtUtc = DateTime.UtcNow
-            });
+            entry.ClientId = liveClientId;
+            if (string.IsNullOrWhiteSpace(entry.Source)) entry.Source = "Live";
+            journal.Append(entry);
         };
 }
 catch (Exception ex)
