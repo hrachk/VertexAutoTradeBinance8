@@ -101,10 +101,16 @@ namespace VertexAutoTradeBinance8.Services
         /// <summary>Per-user LIVE keys first, then appsettings fallback.</summary>
         private bool TryResolveKeys(out string apiKey, out string apiSecret)
         {
+            // Trim — trailing newline/space in appsettings or UI paste → Binance -1022 INVALID_SIGNATURE
             if (_creds.TryGet(out _, out apiKey, out apiSecret))
-                return true;
-            apiKey = _fallbackApiKey;
-            apiSecret = _fallbackApiSecret;
+            {
+                apiKey = (apiKey ?? "").Trim();
+                apiSecret = (apiSecret ?? "").Trim();
+                if (!string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(apiSecret))
+                    return true;
+            }
+            apiKey = (_fallbackApiKey ?? "").Trim();
+            apiSecret = (_fallbackApiSecret ?? "").Trim();
             return !string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(apiSecret);
         }
 
@@ -208,7 +214,7 @@ namespace VertexAutoTradeBinance8.Services
                 new("side",        side == OrderSide.Buy ? "BUY" : "SELL"),
                 new("type",        type),
                 new("timestamp",   ts.ToString(CultureInfo.InvariantCulture)),
-                new("recvWindow",  "5000"),
+                new("recvWindow",  "10000"),
                 new("workingType", workingType),
                 new("triggerPrice", D(triggerPrice)),
                 new("positionSide", positionSide.ToString().ToUpperInvariant()),
@@ -292,7 +298,7 @@ namespace VertexAutoTradeBinance8.Services
                 var q = new List<KeyValuePair<string, string>>
                 {
                     new("timestamp",  ts.ToString(CultureInfo.InvariantCulture)),
-                    new("recvWindow", "5000"),
+                    new("recvWindow", "10000"),
                 };
                 if (!string.IsNullOrEmpty(symbol)) q.Add(new("symbol", symbol));
 
@@ -317,7 +323,12 @@ namespace VertexAutoTradeBinance8.Services
                         }
                         else
                         {
-                            _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
+                            if (body.Contains("-1022"))
+                                _logger.LogError(
+                                    "[ALGO-RAW] GetOpenAlgoOrders -1022 INVALID_SIGNATURE — check API Key/Secret pair (trim whitespace), Futures permission, HMAC key type. body={body}",
+                                    body);
+                            else
+                                _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
                         }
                         return result;
                     }
@@ -376,7 +387,7 @@ namespace VertexAutoTradeBinance8.Services
             {
                 new("algoId",     algoId.ToString(CultureInfo.InvariantCulture)),
                 new("timestamp",  ts.ToString(CultureInfo.InvariantCulture)),
-                new("recvWindow", "5000"),
+                new("recvWindow", "10000"),
             };
             var (query, rawQuery) = BuildQuery(q);
             var sig = Sign(rawQuery, apiSecret);
@@ -404,27 +415,44 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
-        private static (string encoded, string raw) BuildQuery(IEnumerable<KeyValuePair<string, string>> q)
+        /// <summary>
+        /// Binance totalParams = query string WITHOUT signature.
+        /// Sort keys alphabetically (stable across place/list/cancel) and sign the
+        /// exact same string that is placed in the URL (values unescaped for HMAC —
+        /// symbols/timestamps need no encoding; EscapeDataString would still match).
+        /// </summary>
+        private static (string queryForUrl, string totalParams) BuildQuery(IEnumerable<KeyValuePair<string, string>> q)
         {
-            var encoded = new StringBuilder();
-            var raw = new StringBuilder();
+            var ordered = q
+                .Where(kv => kv.Key != null && kv.Value != null)
+                .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+                .ToList();
 
-            foreach (var kv in q)
+            var total = new StringBuilder();
+            foreach (var kv in ordered)
             {
-                if (encoded.Length > 0) { encoded.Append('&'); raw.Append('&'); }
-                raw.Append(kv.Key).Append('=').Append(kv.Value);
-                encoded.Append(Uri.EscapeDataString(kv.Key))
-                       .Append('=')
-                       .Append(Uri.EscapeDataString(kv.Value));
+                if (total.Length > 0) total.Append('&');
+                // totalParams: plain key=value (Binance HMAC input)
+                total.Append(kv.Key).Append('=').Append(kv.Value);
             }
 
-            return (encoded.ToString(), raw.ToString());
+            // URL query: same order; encode values that need it (safe for A-Z0-9)
+            var url = new StringBuilder();
+            foreach (var kv in ordered)
+            {
+                if (url.Length > 0) url.Append('&');
+                url.Append(Uri.EscapeDataString(kv.Key))
+                   .Append('=')
+                   .Append(Uri.EscapeDataString(kv.Value));
+            }
+
+            return (url.ToString(), total.ToString());
         }
 
-        private static string Sign(string rawQueryString, string secret)
+        private static string Sign(string totalParams, string secret)
         {
             using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-            var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(rawQueryString));
+            var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(totalParams));
             var sb = new StringBuilder(hash.Length * 2);
             foreach (var b in hash) sb.Append(b.ToString("x2"));
             return sb.ToString();
