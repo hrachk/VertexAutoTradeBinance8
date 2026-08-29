@@ -18,6 +18,7 @@
 @inject VertexAutoTradeBinance8.Services.BinanceAlgoOrderService AlgoOrders
 @inject VertexAutoTradeBinance8.Web.Services.BinanceTimeService BinanceTime
 @inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoAccount
+@inject VertexAutoTradeBinance8.Services.Learning.TradeJournalService TradeJournal
 @inject VertexAutoTradeBinance8.Web.Services.ClientDataService ClientData
 @using VertexAutoTradeBinance8.Web.Services.Auth
 @inject AuthSessionService Auth
@@ -7859,42 +7860,42 @@ sealed class RealTradeRow
         StateHasChanged();
         try
         {
-            var client = Factory.TryCreateRestClient();
-            if (client == null) return;
-
-            // Combine: open positions + active symbol + recently visible symbols
-            // Previously only queried symbols with open positions — if no positions
-            // were open, history was always empty. Now also includes the active
-            // symbol and up to 10 symbols from the visible ticker list.
-            var symbols = _allPositions.Select(p => p.Symbol)
-                .Concat(string.IsNullOrEmpty(_activeSym) ? Array.Empty<string>() : new[] { _activeSym })
-                .Concat(Series.Take(15).Select(m => m.Symbol))
-                .Distinct().Take(20).ToList();
-
-            var results = new List<RealTradeRow>();
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            foreach (var sym in symbols)
+            // Primary: unified trade-journal.json (Live closes written by Engine — Demo-parity fields)
+            var clientId = ClientData?.CurrentClientId
+                ?? AppConfig?["Client:Id"]
+                ?? "client_001";
+            var fromJournal = TradeJournal.LoadRecent(clientId, sourceFilter: "Live", max: 150);
+            if (fromJournal.Count == 0)
             {
-                try
-                {
-                    var r = await client.UsdFuturesApi.Trading.GetUserTradesAsync(sym, limit: 20, ct: cts.Token);
-                    if (!r.Success || r.Data == null) continue;
-                    foreach (var t in r.Data)
-                    {
-                        if (t.RealizedPnl == 0) continue; // skip entry fills, only closing trades
-                        results.Add(new RealTradeRow
-                        {
-                            Symbol = t.Symbol, Side = t.Buyer ? "BUY" : "SELL",
-                            Price = t.Price, Qty = t.Quantity, RealizedPnl = t.RealizedPnl,
-                            Fee = t.Fee, Time = t.Timestamp,
-                        });
-                    }
-                }
-                catch { }
+                // Also show mixed if Live-only empty (optional Demo+Live for operator)
+                fromJournal = TradeJournal.LoadRecent(clientId, sourceFilter: null, max: 150)
+                    .Where(e => string.Equals(e.Source, "Live", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
             }
-            _realHistory = results.OrderByDescending(t => t.Time).Take(100).ToList();
-            try { await PushTradeMarkersAsync(); } catch { }
+
+            _realHistory = fromJournal.Select(e => new RealTradeRow
+            {
+                Symbol = e.Symbol,
+                Side = e.Side,
+                EntryPrice = e.EntryPrice,
+                Price = e.ExitPrice,
+                Qty = e.Qty,
+                RealizedPnl = e.RealizedPnl,
+                Fee = 0m,
+                Time = e.ClosedAtUtc,
+                Source = e.Source,
+                CloseReason = e.CloseReason ?? "",
+                Setup = e.Setup ?? "",
+                StopLoss = e.StopLoss,
+                TakeProfitsText = e.TakeProfits != null && e.TakeProfits.Count > 0
+                    ? string.Join(" / ", e.TakeProfits.Select(p => p.ToString("G8")))
+                    : "",
+                Mfe = e.Mfe,
+                Mae = e.Mae,
+                Leverage = e.Leverage
+            }).ToList();
         }
+        catch { _realHistory = new(); }
         finally { _realHistoryLoading = false; StateHasChanged(); }
     }
 
