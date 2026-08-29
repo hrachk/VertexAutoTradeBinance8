@@ -2658,7 +2658,7 @@ namespace VertexAutoTradeBinance8.Services
                     type:         FuturesOrderType.StopMarket,
                     stopPrice:    slPrice,
                     quantity:     slQty,
-                    reduceOnly:   true,
+                    reduceOnly:   isHedge ? null : true,
                     positionSide: isHedge ? posSide : null,
                     workingType:  WorkingType.Mark,
                     selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
