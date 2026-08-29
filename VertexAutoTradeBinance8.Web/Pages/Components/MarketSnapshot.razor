@@ -944,10 +944,10 @@
                                 {
                                     <tr>
                                         <td>@t.Symbol.Replace("USDT","")</td>
-                                        <td class="@(t.Side == "BUY" ? "up" : "dn")">@t.Side</td>
-                                        <td class="mk-mono">@FmtP(t.Price)</td>
+                                        <td class="@(t.Side is "BUY" or "LONG" ? "up" : "dn")">@t.Side</td>
+                                        <td class="mk-mono" title="entry → exit">@FmtP(t.EntryPrice > 0 ? t.EntryPrice : t.Price)→@FmtP(t.Price)</td>
                                         <td class="mk-mono">@t.Qty.ToString("G8")</td>
-                                        <td class="mk-mono @(t.RealizedPnl >= 0 ? "up" : "dn")">@(t.RealizedPnl >= 0 ? "+" : "")@t.RealizedPnl.ToString("F2")</td>
+                                        <td class="mk-mono @(t.RealizedPnl >= 0 ? "up" : "dn")" title="@t.CloseReason @t.Setup">@(t.RealizedPnl >= 0 ? "+" : "")@t.RealizedPnl.ToString("F2")</td>
                                         <td class="mk-dim">@t.Fee.ToString("F4")</td>
                                         <td class="mk-dim">@t.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
                                         <td>
@@ -7871,13 +7871,6 @@ sealed class RealTradeRow
         {
             // Primary: unified trade-journal.json (Live closes written by Engine — Demo-parity fields)
             var clientId = AppConfig?["Client:Id"] ?? "client_001";
-            try
-            {
-                // Prefer bound demo/session client folder when available
-                var bound = DemoAccount?.GetType().GetProperty("BoundClientId")?.GetValue(DemoAccount) as string;
-                if (!string.IsNullOrWhiteSpace(bound)) clientId = bound!;
-            }
-            catch { }
             var fromJournal = TradeJournal.LoadRecent(clientId, sourceFilter: "Live", max: 150);
             if (fromJournal.Count == 0)
             {
