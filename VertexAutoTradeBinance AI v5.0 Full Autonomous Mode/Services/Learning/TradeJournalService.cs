@@ -16,8 +16,12 @@ public sealed class TradeJournalService
     public TradeJournalService(IConfiguration cfg, ILogger<TradeJournalService> log)
     {
         _log = log;
-        _enginesRoot = cfg["SharedData:Root"]
-            ?? Path.Combine(AppContext.BaseDirectory, "engines");
+        var enginesRoot = cfg["SharedData:EnginesRoot"];
+        if (string.IsNullOrWhiteSpace(enginesRoot))
+            enginesRoot = cfg["SharedData:Root"];
+        if (string.IsNullOrWhiteSpace(enginesRoot))
+            enginesRoot = Path.Combine(AppContext.BaseDirectory, "engines");
+        _enginesRoot = enginesRoot;
         _windowDays = Math.Clamp(cfg.GetValue("TradeMemory:WindowDays", 30), 7, 90);
     }
 
