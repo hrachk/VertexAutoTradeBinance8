@@ -528,7 +528,9 @@ namespace VertexAutoTradeBinance8.Services
 
                 try
                 {
-                    if (mirrorToJournal)
+                    // Do not pollute journal with phantom closes (old path / SL-move noise)
+                    bool journalWorthy = qty > 0m || Math.Abs(realizedPnlUsdt) >= 0.01m;
+                    if (mirrorToJournal && journalWorthy)
                     {
                         // Full mirror into trade-journal.json (same schema as Demo)
                         LiveTradeJournalHook?.Invoke(new VertexAutoTradeBinance8.Services.Learning.TradeJournalEntry
