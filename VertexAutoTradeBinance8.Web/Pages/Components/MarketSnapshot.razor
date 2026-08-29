@@ -7870,7 +7870,9 @@ sealed class RealTradeRow
         try
         {
             // Primary: unified trade-journal.json (Live closes written by Engine — Demo-parity fields)
-            var clientId = AppConfig?["Client:Id"] ?? "client_001";
+            var clientId = !string.IsNullOrWhiteSpace(DemoAccount.BoundClientId)
+                ? DemoAccount.BoundClientId
+                : (AppConfig?["Client:Id"] ?? "client_001");
             var fromJournal = TradeJournal.LoadRecent(clientId, sourceFilter: "Live", max: 150);
             if (fromJournal.Count == 0)
             {
