@@ -80,6 +80,21 @@ public sealed class TradeJournalService
             string.Equals(s, setup, StringComparison.OrdinalIgnoreCase));
     }
 
+
+    /// <summary>Recent journal rows for UI (Demo and/or Live). Newest first.</summary>
+    public List<TradeJournalEntry> LoadRecent(string clientId, string? sourceFilter = null, int max = 150)
+    {
+        try
+        {
+            var file = LoadJournal(JournalPath(clientId));
+            IEnumerable<TradeJournalEntry> q = file.Entries;
+            if (!string.IsNullOrWhiteSpace(sourceFilter))
+                q = q.Where(e => string.Equals(e.Source, sourceFilter, StringComparison.OrdinalIgnoreCase));
+            return q.OrderByDescending(e => e.ClosedAtUtc).Take(Math.Clamp(max, 1, 500)).ToList();
+        }
+        catch { return new List<TradeJournalEntry>(); }
+    }
+
     public void RebuildMemory(string clientId)
     {
         try
