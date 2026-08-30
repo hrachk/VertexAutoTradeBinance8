@@ -342,7 +342,7 @@ namespace VertexAutoTradeBinance8.Services
             if (_isDca)
                 _logger.LogDebug("[SUPERVISOR][{symbol}] DCA position detected — using wide TP/SL/BE multipliers", symbol);
 
-            using var client = _factory.CreateRestClient();
+            var client = _factory.CreateRestClient(); // cached — do not dispose
 
             // 0) MANUAL SIGNAL INJECTION
             if (lastSignal == null)
@@ -3672,16 +3672,38 @@ private async Task<long> GetBinanceTimestampAsync(CancellationToken ct)
                     {
                         foreach (var o in res.Data)
                         {
+                            long algoId = 0;
+                            try {
+                                var p = o.GetType().GetProperty("AlgoId") ?? o.GetType().GetProperty("Id");
+                                var v = p?.GetValue(o);
+                                if (v is long l) algoId = l;
+                                else if (v != null) long.TryParse(v.ToString(), out algoId);
+                            } catch { }
+                            decimal trig = 0m;
+                            try {
+                                var p = o.GetType().GetProperty("TriggerPrice") ?? o.GetType().GetProperty("StopPrice");
+                                var v = p?.GetValue(o);
+                                if (v is decimal d) trig = d;
+                                else if (v != null) decimal.TryParse(v.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out trig);
+                            } catch { }
+                            decimal qty = 0m;
+                            try {
+                                var p = o.GetType().GetProperty("Quantity");
+                                var v = p?.GetValue(o);
+                                if (v is decimal d) qty = d;
+                                else if (v != null) decimal.TryParse(v.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out qty);
+                            } catch { }
+
                             result.Add(new BinanceAlgoOrderInfo
                             {
-                                AlgoId = o.Id,
+                                AlgoId = algoId,
                                 ClientAlgoId = o.ClientOrderId,
                                 Symbol = o.Symbol ?? "",
                                 Side = o.Side,
                                 PositionSide = o.PositionSide ?? PositionSide.Both,
                                 OrderType = o.Type.ToString(),
-                                TriggerPrice = o.StopPrice ?? o.ActivatePrice ?? 0m,
-                                Quantity = o.Quantity ?? 0m,
+                                TriggerPrice = trig,
+                                Quantity = qty,
                             });
                         }
                     }
