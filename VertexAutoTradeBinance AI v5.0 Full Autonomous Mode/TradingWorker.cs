@@ -868,13 +868,16 @@ namespace VertexAutoTradeBinance8
             {
                 // MinExecute gate: signal.Confidence is set by PredictiveEngineV4.
                 // Signals below MinExecute are written to UI (watch-only) but not traded.
+                // LIVE = DEMO gate: conf ≥ 55% (file stores 55, signal is 0..1 or 0..100)
                 var confCfg = _confSettings.CurrentValue;
                 decimal minExec = symbol.StartsWith("BTC", StringComparison.OrdinalIgnoreCase)
-                                    ? (confCfg.BTC?.MinExecute ?? 0.50m)
+                                    ? (confCfg.BTC?.MinExecute ?? 0.55m)
                     : symbol.StartsWith("ETH", StringComparison.OrdinalIgnoreCase)
-                                    ? (confCfg.ETH?.MinExecute ?? 0.50m)
+                                    ? (confCfg.ETH?.MinExecute ?? 0.55m)
                                     : confCfg.Default?.MinExecute ?? 0.55m;
-                double sigConf = (double)(signal.Confidence ?? 0m); /*/ 100.0;*/ // Confidence is decimal? 0-100
+                if (minExec < 0.55m) minExec = 0.55m; // never looser than Demo
+                double sigConf = (double)(signal.Confidence ?? 0m);
+                if (sigConf > 1.5) sigConf /= 100.0; // normalize percent → 0..1
                 if (sigConf < (double)minExec)
                 {
                     await RejectAsync(signal, symbol, tf, "CONF", "WATCH_ONLY",
