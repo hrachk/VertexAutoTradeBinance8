@@ -149,6 +149,7 @@ namespace VertexAutoTradeBinance8.Services
             IOptionsMonitor<TradingSettings> tradingSettings,
             IOptionsMonitor<TradingOptions> tradingOptions,
             IOptionsMonitor<DcaOptions> dcaOptions,
+            TradingCredentialStore? liveCreds = null,
             MarketDataPushClient? push = null)
         {
             _logger = logger;
@@ -161,7 +162,7 @@ namespace VertexAutoTradeBinance8.Services
 
             _regimeNow = MarketRegime.Range;
 
-            _algoRaw = new BinanceAlgoOrderRaw(cfg, httpFactory, _logger);
+            _algoRaw = new BinanceAlgoOrderRaw(cfg, httpFactory, _logger, liveCreds);
             _liquidityGuard = liquidityGuard;
             _dispatcher = dispatcher;
             _stateSvc = stateSvc;
@@ -796,6 +797,30 @@ namespace VertexAutoTradeBinance8.Services
 
             await Task.Delay(130, ct); // небольшая задержка для безопасности
 
+            // BE stop must NOT be already through the market ("Order would immediately trigger").
+            // Long STOP triggers when mark <= trigger → need mark > trigger.
+            // Short STOP triggers when mark >= trigger → need mark < trigger.
+            decimal mark = pos.MarkPrice > 0 ? pos.MarkPrice : (pos.EntryPrice > 0 ? pos.EntryPrice : entryPrice);
+            decimal tick = filters.tickSize > 0 ? filters.tickSize : 0m;
+            decimal beTrigger = entryPrice;
+            // tiny buffer past pure BE so fees/noise don't instant-fill
+            if (tick > 0)
+                beTrigger = side == PositionSide.Long
+                    ? entryPrice - tick
+                    : entryPrice + tick;
+            beTrigger = RoundPrice(beTrigger, pricePrecision);
+
+            bool wouldTrigger = side == PositionSide.Long
+                ? mark <= beTrigger
+                : mark >= beTrigger;
+            if (wouldTrigger)
+            {
+                _logger.LogWarning(
+                    "[BE MOVE][{symbol}][{side}] skip — BE trigger {be} would fire now (mark={mark}, entry={entry})",
+                    symbol, side, beTrigger, mark, entryPrice);
+                return;
+            }
+
             var clientOrderId = $"{BE_PREFIX}{symbol}_{side}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
 
             var result = await client.UsdFuturesApi.Trading.PlaceConditionalOrderAsync(
@@ -804,7 +829,7 @@ namespace VertexAutoTradeBinance8.Services
                 type: ConditionalOrderType.StopMarket,
                 quantity: qty,
                 positionSide: side,
-                triggerPrice: entryPrice,
+                triggerPrice: beTrigger,
                 workingType: WorkingType.Mark,
                 clientOrderId: clientOrderId,
                 priceProtect: true,
@@ -3406,15 +3431,27 @@ namespace VertexAutoTradeBinance8.Services
             private DateTime  _cacheExpiry = DateTime.MinValue;
             private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(20);
 
-            public BinanceAlgoOrderRaw(IConfiguration cfg, IHttpClientFactory httpFactory, ILogger logger)
+            public BinanceAlgoOrderRaw(IConfiguration cfg, IHttpClientFactory httpFactory, ILogger logger, TradingCredentialStore? liveCreds = null)
             {
                 _logger = logger;
 
-                // Trim — paste/newline in appsettings → Binance -1022 INVALID_SIGNATURE
-                _apiKey = (cfg["Binance:ApiKey"] ?? string.Empty).Trim();
-                // appsettings field is SecretKey (not ApiSecret)
-                _apiSecret = (cfg["Binance:SecretKey"] ?? cfg["Binance:ApiSecret"] ?? string.Empty).Trim();
+                // Prefer LIVE per-user keys (same as REST client), then appsettings fallback.
+                // Mismatch here was a primary cause of -1022 on GetOpenAlgoOrders.
+                string? liveKey = null, liveSec = null;
+                if (liveCreds != null && liveCreds.TryGet(out _, out liveKey, out liveSec)
+                    && !string.IsNullOrWhiteSpace(liveKey) && !string.IsNullOrWhiteSpace(liveSec))
+                {
+                    _apiKey = liveKey.Trim();
+                    _apiSecret = liveSec.Trim();
+                }
+                else
+                {
+                    _apiKey = (cfg["Binance:ApiKey"] ?? string.Empty).Trim();
+                    _apiSecret = (cfg["Binance:SecretKey"] ?? cfg["Binance:ApiSecret"] ?? string.Empty).Trim();
+                }
                 _baseUrl = (cfg["Binance:FuturesBaseUrl"] ?? "https://fapi.binance.com").TrimEnd('/');
+                if (string.IsNullOrEmpty(_apiSecret))
+                    logger.LogError("[ALGO-RAW] API secret is EMPTY — all signed algo calls will return -1022");
 
                 _http = httpFactory.CreateClient("BinanceAlgoRaw");
                 // 8s was too aggressive on slow/VPN links → TaskCanceledException noise
