@@ -162,7 +162,7 @@ namespace VertexAutoTradeBinance8.Services
 
             _regimeNow = MarketRegime.Range;
 
-            _algoRaw = new BinanceAlgoOrderRaw(cfg, httpFactory, _logger, liveCreds);
+            _algoRaw = new BinanceAlgoOrderRaw(cfg, httpFactory, _logger, liveCreds, _factory);
             _liquidityGuard = liquidityGuard;
             _dispatcher = dispatcher;
             _stateSvc = stateSvc;
@@ -3412,6 +3412,7 @@ namespace VertexAutoTradeBinance8.Services
             private readonly ILogger _logger;
             private readonly IConfiguration _cfg;
             private readonly TradingCredentialStore _liveCreds;
+            private readonly BinanceClientFactory? _factory;
             private string _apiKey = "";
             private string _apiSecret = "";
             private readonly string _baseUrl;
@@ -3434,11 +3435,12 @@ namespace VertexAutoTradeBinance8.Services
             private DateTime  _cacheExpiry = DateTime.MinValue;
             private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(20);
 
-                        public BinanceAlgoOrderRaw(IConfiguration cfg, IHttpClientFactory httpFactory, ILogger logger, TradingCredentialStore liveCreds)
+                        public BinanceAlgoOrderRaw(IConfiguration cfg, IHttpClientFactory httpFactory, ILogger logger, TradingCredentialStore liveCreds, BinanceClientFactory? factory = null)
             {
                 _logger = logger;
                 _cfg = cfg;
                 _liveCreds = liveCreds ?? throw new ArgumentNullException(nameof(liveCreds));
+                _factory = factory;
                 _baseUrl = (cfg["Binance:FuturesBaseUrl"] ?? "https://fapi.binance.com").TrimEnd('/');
                 _http = httpFactory.CreateClient("BinanceAlgoRaw");
                 _http.Timeout = TimeSpan.FromSeconds(30);
@@ -3451,7 +3453,14 @@ namespace VertexAutoTradeBinance8.Services
             /// </summary>
             private bool RefreshCredentials()
             {
-                if (_liveCreds.TryGet(out _, out var k, out var s)
+                // CRITICAL: same keys as REST (BinanceClientFactory), otherwise -1022
+                if (_factory != null && _factory.TryGetCredentials(out var k, out var s))
+                {
+                    _apiKey = k;
+                    _apiSecret = s;
+                    return true;
+                }
+                if (_liveCreds != null && _liveCreds.TryGet(out _, out k, out s)
                     && !string.IsNullOrWhiteSpace(k) && !string.IsNullOrWhiteSpace(s))
                 {
                     _apiKey = k.Trim();
@@ -3739,31 +3748,23 @@ private async Task<long> GetBinanceTimestampAsync(CancellationToken ct)
             // BuildQuery: строим query string для URL (percent-encoded)
             // Sign: подписываем RAW строку ДО encoding — требование Binance с декабря 2025
             // =====================================================
-            private static (string encoded, string raw) BuildQuery(IEnumerable<KeyValuePair<string, string>> q)
+            
+            private static (string queryForUrl, string totalParams) BuildQuery(IEnumerable<KeyValuePair<string, string>> q)
             {
-                // Alphabetical key order + same totalParams as signed (Binance -1022 fix)
-                var ordered = q
-                    .Where(kv => kv.Key != null && kv.Value != null)
-                    .OrderBy(kv => kv.Key, StringComparer.Ordinal)
-                    .ToList();
-
-                var encoded = new StringBuilder();
-                var raw = new StringBuilder();
-                foreach (var kv in ordered)
+                var parts = new List<string>();
+                foreach (var kv in q)
                 {
-                    if (encoded.Length > 0) { encoded.Append('&'); raw.Append('&'); }
-                    raw.Append(kv.Key).Append('=').Append(kv.Value);
-                    encoded.Append(Uri.EscapeDataString(kv.Key))
-                           .Append('=')
-                           .Append(Uri.EscapeDataString(kv.Value));
+                    if (string.IsNullOrEmpty(kv.Key) || kv.Value == null) continue;
+                    parts.Add(kv.Key + "=" + kv.Value);
                 }
-                return (encoded.ToString(), raw.ToString());
+                var totalParams = string.Join("&", parts);
+                return (totalParams, totalParams);
             }
 
-private static string Sign(string rawQueryString, string secret)
+            private static string Sign(string totalParams, string secret)
             {
                 using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-                var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(rawQueryString));
+                var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(totalParams));
                 var sb = new StringBuilder(hash.Length * 2);
                 foreach (var b in hash) sb.Append(b.ToString("x2"));
                 return sb.ToString();
