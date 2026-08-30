@@ -74,38 +74,35 @@ namespace VertexAutoTradeBinance8.Services
         /// Call this from TradingWorker BEFORE GetPropDeskQtyFinal so both
         /// qty calculation and ExecuteAsync use the same leverage value.
         /// </summary>
+        
+        /// <summary>LIVE = DEMO leverage: majors 10x, others 5x. No AI mult.</summary>
+        public static decimal GetDemoParityLeverage(string? symbol)
+        {
+            var s = (symbol ?? "").Trim().ToUpperInvariant();
+            bool major = s is "BTCUSDT" or "ETHUSDT" or "BNBUSDT" or "SOLUSDT"
+                         || s.StartsWith("BTC", StringComparison.Ordinal)
+                         || s.StartsWith("ETH", StringComparison.Ordinal)
+                         || s.StartsWith("BNB", StringComparison.Ordinal)
+                         || s.StartsWith("SOL", StringComparison.Ordinal);
+            return major ? 10m : 5m;
+        }
+
+        public static bool IsMajorSymbol(string? symbol)
+        {
+            return GetDemoParityLeverage(symbol) >= 10m;
+        }
+
         public decimal GetEffectiveLeverage(
             string symbol,
             Binance.Net.Enums.KlineInterval tf,
             IReadOnlyList<Binance.Net.Interfaces.IBinanceKline> klines,
             TradingOptions trading)
         {
-            decimal configLev = trading.Leverage > 0 ? (decimal)trading.Leverage : 10m;
-
-            decimal aiMult = 1.0m;
-            try
-            {
-                if (klines?.Count >= 30)
-                {
-                    var castKlines = klines
-                        .OfType<Binance.Net.Objects.Models.Futures.BinanceFuturesUsdtKline>()
-                        .ToList();
-                    if (castKlines.Count >= 30)
-                        aiMult = _aiLeverage.Calculate(symbol, tf, castKlines);
-                }
-            }
-            catch { /* non-critical — use 1.0x */ }
-
-            // AI can only reduce leverage, never increase above config ceiling
-            decimal effective = Math.Clamp(
-                configLev * aiMult,
-                configLev * 0.70m,   // floor: 70% of config (raised from 40% — 19x×0.4=7.6x was too low)
-                configLev * 1.00m);  // ceil:  never above config value
-
+            // LIVE = DEMO: fixed 5x / 10x majors — ignore config AI leverage mult
+            decimal effective = GetDemoParityLeverage(symbol);
             _logger.LogInformation(
-                "[LEV][{sym}] config={cfg}x aiMult={mult:F2} → effective={eff:F1}x",
-                symbol, configLev, aiMult, effective);
-
+                "[LEV][{sym}] DEMO-PARITY effective={eff:F0}x (config AI leverage disabled for 1:1)",
+                symbol, effective);
             return effective;
         }
 
@@ -138,11 +135,10 @@ namespace VertexAutoTradeBinance8.Services
                 return 0;
             }
 
-            // Use passed effectiveLeverage (config × AI mult) if provided,
-            // otherwise fall back to config value directly.
+            // LIVE = DEMO parity: always 5x / 10x majors unless caller passed explicit > 0
             decimal leverage = effectiveLeverage > 0
                 ? effectiveLeverage
-                : (trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m));
+                : GetDemoParityLeverage(signal.Symbol);
             if (leverage <= 0)
             {
                 LastRejectReason = "Invalid leverage";
