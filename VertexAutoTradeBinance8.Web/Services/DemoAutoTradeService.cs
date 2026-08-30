@@ -70,10 +70,12 @@ public sealed class DemoAutoTradeService : BackgroundService
         var signals = await _signals.LoadAsync();
         if (signals == null || signals.Count == 0) return;
 
-        var cutoff = DateTime.UtcNow.AddMinutes(-45);
-        // Prefer CORE_ signals, liquid symbols only, highest confidence first
-        // LIVE-like: never re-open from stale signals after restart.
-        // Signal must be at/after worker start (with small clock skew grace).
+        // CRITICAL (SKR 0.01399 case): old code used 45 min window + conf-first sort,
+        // so Demo could open on a signal generated long ago while price already moved.
+        // Each JSON row has its own Time — we only trade the NEWEST CORE signal per
+        // symbol+side, and only if it is still fresh (few minutes, not 45).
+        const int maxSignalAgeMinutes = 5;
+        var cutoff = DateTime.UtcNow.AddMinutes(-maxSignalAgeMinutes);
         var notBefore = _startedUtc.AddMinutes(-1);
 
         var candidates = signals
@@ -84,8 +86,14 @@ public sealed class DemoAutoTradeService : BackgroundService
                         && s.Symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase)
                         && (string.IsNullOrEmpty(s.Reason) || s.Reason.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase))
                         && s.Confidence >= 55)
-            .OrderByDescending(s => s.Confidence)
-            .ThenByDescending(s => s.Time)
+            // Newest first — never prefer an older row with same conf
+            .OrderByDescending(s => s.Time)
+            .ThenByDescending(s => s.Confidence)
+            // One signal per symbol+side: the freshest only
+            .GroupBy(s => (
+                Symbol: (s.Symbol ?? "").Trim().ToUpperInvariant(),
+                Side: (s.Side ?? "").Contains("Sell", StringComparison.OrdinalIgnoreCase) ? "SHORT" : "LONG"))
+            .Select(g => g.First())
             .Take(15)
             .ToList();
 
