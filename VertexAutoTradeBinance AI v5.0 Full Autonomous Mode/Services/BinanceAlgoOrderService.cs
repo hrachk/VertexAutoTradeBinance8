@@ -415,38 +415,24 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
+        
         /// <summary>
-        /// Binance totalParams = query string WITHOUT signature.
-        /// Sort keys alphabetically (stable across place/list/cancel) and sign the
-        /// exact same string that is placed in the URL (values unescaped for HMAC —
-        /// symbols/timestamps need no encoding; EscapeDataString would still match).
+        /// Binance HMAC totalParams = query string EXACTLY as sent (minus signature).
+        /// Do NOT alphabetically re-order — official examples use insertion order.
+        /// Sign the same string appended to the URL.
         /// </summary>
         private static (string queryForUrl, string totalParams) BuildQuery(IEnumerable<KeyValuePair<string, string>> q)
         {
-            var ordered = q
-                .Where(kv => kv.Key != null && kv.Value != null)
-                .OrderBy(kv => kv.Key, StringComparer.Ordinal)
-                .ToList();
-
-            var total = new StringBuilder();
-            foreach (var kv in ordered)
+            var parts = new List<string>();
+            foreach (var kv in q)
             {
-                if (total.Length > 0) total.Append('&');
-                // totalParams: plain key=value (Binance HMAC input)
-                total.Append(kv.Key).Append('=').Append(kv.Value);
+                if (string.IsNullOrEmpty(kv.Key) || kv.Value == null) continue;
+                // Values for openAlgoOrders are alnum — no encoding difference
+                parts.Add(kv.Key + "=" + kv.Value);
             }
-
-            // URL query: same order; encode values that need it (safe for A-Z0-9)
-            var url = new StringBuilder();
-            foreach (var kv in ordered)
-            {
-                if (url.Length > 0) url.Append('&');
-                url.Append(Uri.EscapeDataString(kv.Key))
-                   .Append('=')
-                   .Append(Uri.EscapeDataString(kv.Value));
-            }
-
-            return (url.ToString(), total.ToString());
+            var totalParams = string.Join("&", parts);
+            // URL uses identical totalParams (no EscapeDataString on numbers/symbols)
+            return (totalParams, totalParams);
         }
 
         private static string Sign(string totalParams, string secret)
