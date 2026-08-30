@@ -12,9 +12,26 @@
 @inject RealDcaHistoryReader RealDcaHistory
 @inject IOptionsMonitor<DcaOptions> DcaOpts
 @inject IJSRuntime JS
+@inject IConfiguration Cfg
+@inject TradingCredentialStore LiveCreds
 @implements IDisposable
 
 <PageTitle>Vertex AI — Statistics</PageTitle>
+
+<style>
+.st-wallet-row { display:flex; gap:12px; margin:0 0 14px; flex-wrap:wrap; }
+.st-wallet-card { min-width:260px; flex:1; max-width:420px; border-radius:12px; padding:12px 14px;
+  border:1px solid rgba(255,255,255,.08); background:rgba(15,23,42,.65); }
+.st-wallet-demo { border-color:rgba(251,146,60,.35); }
+.st-wallet-live { border-color:rgba(52,211,153,.35); }
+.st-wallet-tag { font-size:11px; font-weight:700; letter-spacing:.04em; margin-bottom:8px; opacity:.9; }
+.st-wallet-demo .st-wallet-tag { color:#fb923c; }
+.st-wallet-live .st-wallet-tag { color:#34d399; }
+.st-wallet-line { display:flex; justify-content:space-between; gap:12px; font-size:13px; margin:4px 0; }
+.st-wallet-line span { opacity:.65; }
+.st-wallet-hint { margin-top:8px; font-size:11px; opacity:.5; }
+</style>
+
 
 <div class="st-root">
 
@@ -53,6 +70,31 @@
             <input class="st-date-input" type="date" @bind="_dateTo"   @bind:after="LoadData" title="To" />
         </div>
     </div>
+</div>
+
+
+<!-- ══ WALLET BY MODE (Live ≠ Demo) ════════════════════════════════ -->
+<div class="st-wallet-row">
+    @if (_demoMode)
+    {
+        <div class="st-wallet-card st-wallet-demo">
+            <div class="st-wallet-tag">DEMO WALLET</div>
+            <div class="st-wallet-line"><span>Balance</span><b class="mono">$@_demoBal.ToString("F2")</b></div>
+            <div class="st-wallet-line"><span>Equity</span><b class="mono">$@_demoEquity.ToString("F2")</b></div>
+            <div class="st-wallet-line"><span>Open</span><b class="mono">@_demoOpenN</b></div>
+            <div class="st-wallet-hint">Источник: demo-account.json · симуляция</div>
+        </div>
+    }
+    else
+    {
+        <div class="st-wallet-card st-wallet-live">
+            <div class="st-wallet-tag">LIVE WALLET (Binance)</div>
+            <div class="st-wallet-line"><span>Wallet</span><b class="mono">$@_liveWallet.ToString("F2")</b></div>
+            <div class="st-wallet-line"><span>Available</span><b class="mono">$@_liveAvail.ToString("F2")</b></div>
+            <div class="st-wallet-line"><span>Unrealized</span><b class="mono @(_liveUnreal >= 0 ? "st-up" : "st-dn")">@(_liveUnreal >= 0 ? "+" : "")@_liveUnreal.ToString("F2")</b></div>
+            <div class="st-wallet-hint">Источник: Binance Futures API · реальный счёт</div>
+        </div>
+    }
 </div>
 
 @if (_loading)
@@ -1139,6 +1181,9 @@ else if (_activeTab == "dca")
 @code {
     bool _loading = true;
     bool _demoMode = false;
+    decimal _demoBal, _demoEquity, _liveWallet, _liveAvail, _liveUnreal;
+    int _demoOpenN;
+
     string _range = "30D";
     string _activeTab = "trading";
     DateTime _dateFrom = DateTime.Today.AddDays(-30);
@@ -1249,6 +1294,7 @@ else if (_activeTab == "dca")
         StateHasChanged();
         try
         {
+            await RefreshWalletsAsync();
             if (_activeTab == "trading")
             {
                 _trades = _demoMode ? await LoadDemoTrades() : await LoadLiveTrades();
