@@ -45,6 +45,17 @@ public sealed class BinanceClientFactory
         _logger.LogInformation("[BINANCE] Client cache invalidated (credentials changed)");
     }
 
+    public bool TryGetCredentials(out string apiKey, out string apiSecret)
+    {
+        var ok = ResolveCredentials(out apiKey, out apiSecret, out _);
+        if (ok)
+        {
+            apiKey = (apiKey ?? "").Trim();
+            apiSecret = (apiSecret ?? "").Trim();
+        }
+        return ok && !string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(apiSecret);
+    }
+
     private bool ResolveCredentials(out string apiKey, out string apiSecret, out string source)
     {
         if (_creds.TryGet(out var clientId, out apiKey, out apiSecret))
