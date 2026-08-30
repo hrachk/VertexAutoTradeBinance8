@@ -3417,6 +3417,7 @@ namespace VertexAutoTradeBinance8.Services
             private string _apiSecret = "";
             private readonly string _baseUrl;
             private DateTime _lastSigFailLog = DateTime.MinValue;
+            private DateTime _algoListDisabledUntil = DateTime.MinValue;
 
             // ── Server-time sync (fixes -1021 "timestamp ahead" errors) ──────
             // Binance rejects signed requests when local clock differs from
