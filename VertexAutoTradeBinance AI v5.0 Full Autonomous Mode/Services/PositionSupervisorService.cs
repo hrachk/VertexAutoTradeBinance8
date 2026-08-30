@@ -149,7 +149,7 @@ namespace VertexAutoTradeBinance8.Services
             IOptionsMonitor<TradingSettings> tradingSettings,
             IOptionsMonitor<TradingOptions> tradingOptions,
             IOptionsMonitor<DcaOptions> dcaOptions,
-            TradingCredentialStore? liveCreds = null,
+            TradingCredentialStore liveCreds,
             MarketDataPushClient? push = null)
         {
             _logger = logger;
@@ -3410,9 +3410,12 @@ namespace VertexAutoTradeBinance8.Services
         {
             private readonly HttpClient _http;
             private readonly ILogger _logger;
-            private readonly string _apiKey;
-            private readonly string _apiSecret;
+            private readonly IConfiguration _cfg;
+            private readonly TradingCredentialStore _liveCreds;
+            private string _apiKey = "";
+            private string _apiSecret = "";
             private readonly string _baseUrl;
+            private DateTime _lastSigFailLog = DateTime.MinValue;
 
             // ── Server-time sync (fixes -1021 "timestamp ahead" errors) ──────
             // Binance rejects signed requests when local clock differs from
@@ -3431,33 +3434,36 @@ namespace VertexAutoTradeBinance8.Services
             private DateTime  _cacheExpiry = DateTime.MinValue;
             private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(20);
 
-            public BinanceAlgoOrderRaw(IConfiguration cfg, IHttpClientFactory httpFactory, ILogger logger, TradingCredentialStore? liveCreds = null)
+                        public BinanceAlgoOrderRaw(IConfiguration cfg, IHttpClientFactory httpFactory, ILogger logger, TradingCredentialStore liveCreds)
             {
                 _logger = logger;
-
-                // Prefer LIVE per-user keys (same as REST client), then appsettings fallback.
-                // Mismatch here was a primary cause of -1022 on GetOpenAlgoOrders.
-                string? liveKey = null, liveSec = null;
-                if (liveCreds != null && liveCreds.TryGet(out _, out liveKey, out liveSec)
-                    && !string.IsNullOrWhiteSpace(liveKey) && !string.IsNullOrWhiteSpace(liveSec))
-                {
-                    _apiKey = liveKey.Trim();
-                    _apiSecret = liveSec.Trim();
-                }
-                else
-                {
-                    _apiKey = (cfg["Binance:ApiKey"] ?? string.Empty).Trim();
-                    _apiSecret = (cfg["Binance:SecretKey"] ?? cfg["Binance:ApiSecret"] ?? string.Empty).Trim();
-                }
+                _cfg = cfg;
+                _liveCreds = liveCreds ?? throw new ArgumentNullException(nameof(liveCreds));
                 _baseUrl = (cfg["Binance:FuturesBaseUrl"] ?? "https://fapi.binance.com").TrimEnd('/');
-                if (string.IsNullOrEmpty(_apiSecret))
-                    logger.LogError("[ALGO-RAW] API secret is EMPTY — all signed algo calls will return -1022");
-
                 _http = httpFactory.CreateClient("BinanceAlgoRaw");
-                // 8s was too aggressive on slow/VPN links → TaskCanceledException noise
                 _http.Timeout = TimeSpan.FromSeconds(30);
+                RefreshCredentials();
             }
-            private async Task<long> GetBinanceTimestampAsync(CancellationToken ct)
+
+            /// <summary>
+            /// Same order as BinanceClientFactory: Live store first, then appsettings.
+            /// MUST run before every signed call — Live keys often activate after host start.
+            /// </summary>
+            private bool RefreshCredentials()
+            {
+                if (_liveCreds.TryGet(out _, out var k, out var s)
+                    && !string.IsNullOrWhiteSpace(k) && !string.IsNullOrWhiteSpace(s))
+                {
+                    _apiKey = k.Trim();
+                    _apiSecret = s.Trim();
+                    return true;
+                }
+                _apiKey = (_cfg["Binance:ApiKey"] ?? "").Trim();
+                _apiSecret = (_cfg["Binance:SecretKey"] ?? _cfg["Binance:ApiSecret"] ?? "").Trim();
+                return !string.IsNullOrWhiteSpace(_apiKey) && !string.IsNullOrWhiteSpace(_apiSecret);
+            }
+
+private async Task<long> GetBinanceTimestampAsync(CancellationToken ct)
             {
                 // Fast path
                 if (DateTime.UtcNow - _lastTimeSync < TimeSyncInterval)
@@ -3507,9 +3513,9 @@ namespace VertexAutoTradeBinance8.Services
                 CancellationToken ct,
                 string? clientAlgoId = null)
             {
-                if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret))
+                if (!RefreshCredentials())
                 {
-                    _logger.LogError("[ALGO-RAW] Missing Binance:ApiKey / Binance:ApiSecret in config");
+                    _logger.LogError("[ALGO-RAW] Missing credentials (Live store inactive and Binance:ApiKey/SecretKey empty)");
                     return false;
                 }
 
@@ -3604,9 +3610,9 @@ namespace VertexAutoTradeBinance8.Services
             public async Task<List<BinanceAlgoOrderInfo>> GetOpenAlgoOrdersAsync(string? symbol, CancellationToken ct)
             {
                 var result = new List<BinanceAlgoOrderInfo>();
-                if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret))
+                if (!RefreshCredentials())
                 {
-                    _logger.LogError("[ALGO-RAW] Missing Binance:ApiKey / Binance:ApiSecret in config");
+                    _logger.LogError("[ALGO-RAW] Missing credentials (Live store inactive and Binance:ApiKey/SecretKey empty)");
                     return result;
                 }
 
