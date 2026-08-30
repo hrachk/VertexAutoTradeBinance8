@@ -3620,21 +3620,14 @@ private async Task<long> GetBinanceTimestampAsync(CancellationToken ct)
             // has the exact same blind spot).
             public async Task<List<BinanceAlgoOrderInfo>> GetOpenAlgoOrdersAsync(string? symbol, CancellationToken ct)
             {
+                // FUNDAMENTAL FIX for -1022:
+                // Never hand-roll HMAC. Binance.Net signs the same way as all working REST calls
+                // (PlaceConditionalOrderAsync, balances, etc.). Custom Sign() was the root cause
+                // even when keyLen=secLen=64 (keys present but totalParams/signature mismatch).
                 var result = new List<BinanceAlgoOrderInfo>();
 
-                // Soft-disable after repeated -1022 (bad keys / Ed25519 / wrong secret)
                 if (_algoListDisabledUntil > DateTime.UtcNow)
                     return result;
-
-                if (!RefreshCredentials())
-                {
-                    if (DateTime.UtcNow - _lastSigFailLog > TimeSpan.FromMinutes(5))
-                    {
-                        _lastSigFailLog = DateTime.UtcNow;
-                        _logger.LogWarning("[ALGO-RAW] GetOpenAlgoOrders: no credentials from Factory/Live/appsettings");
-                    }
-                    return result;
-                }
 
                 var now = DateTime.UtcNow;
                 if (_cachedOrders != null && _cacheSymbol == symbol && now < _cacheExpiry)
@@ -3647,93 +3640,67 @@ private async Task<long> GetBinanceTimestampAsync(CancellationToken ct)
                     if (_cachedOrders != null && _cacheSymbol == symbol && now < _cacheExpiry)
                         return _cachedOrders;
 
-                    // USD-M conditional TP/SL list — NOT sapi/v1/algo (that is TWAP/VP on api.binance.com)
-                    // Docs: GET https://fapi.binance.com/fapi/v1/openAlgoOrders
-                    var ts = await GetBinanceTimestampAsync(ct);
-                    // Insertion order as in Binance official HMAC examples (do not alpha-sort)
-                    var paramList = new List<KeyValuePair<string, string>>();
-                    if (!string.IsNullOrEmpty(symbol))
-                        paramList.Add(new("symbol", symbol));
-                    paramList.Add(new("recvWindow", "60000"));
-                    paramList.Add(new("timestamp", ts.ToString(CultureInfo.InvariantCulture)));
-
-                    var totalParams = string.Join("&", paramList.Select(kv => kv.Key + "=" + kv.Value));
-                    var signature = Sign(totalParams, _apiSecret);
-                    var url = $"{_baseUrl}/fapi/v1/openAlgoOrders?{totalParams}&signature={signature}";
-
-                    using var req = new HttpRequestMessage(HttpMethod.Get, url);
-                    req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", _apiKey);
-
-                    using var resp = await _http.SendAsync(req, ct);
-                    var body = await resp.Content.ReadAsStringAsync(ct);
-
-                    if (!resp.IsSuccessStatusCode)
+                    if (_factory == null)
                     {
-                        if (body.Contains("-1021"))
-                        {
-                            _lastTimeSync = DateTime.MinValue;
-                            _logger.LogWarning("[ALGO-RAW] -1021 clock drift on openAlgoOrders — will re-sync");
-                        }
-                        else if (body.Contains("-1022"))
-                        {
-                            _algoListDisabledUntil = DateTime.UtcNow.AddMinutes(30);
-                            if (DateTime.UtcNow - _lastSigFailLog > TimeSpan.FromMinutes(5))
-                            {
-                                _lastSigFailLog = DateTime.UtcNow;
-                                _logger.LogError(
-                                    "[ALGO-RAW] openAlgoOrders -1022 INVALID_SIGNATURE. " +
-                                    "Endpoint is fapi/v1/openAlgoOrders (conditional TP/SL), NOT sapi future-algo TWAP. " +
-                                    "Check: API secret matches key, key is HMAC (not Ed25519), Futures enabled. " +
-                                    "keyLen={kl} secLen={sl}. Listing disabled 30m to stop log spam. body={body}",
-                                    _apiKey.Length, _apiSecret.Length, body);
-                            }
-                        }
-                        else
-                            _logger.LogWarning("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
+                        _logger.LogWarning("[ALGO-RAW] GetOpenAlgoOrders: BinanceClientFactory is null");
                         return result;
                     }
 
-                    using var doc = JsonDocument.Parse(body);
-                    if (doc.RootElement.ValueKind != JsonValueKind.Array) return result;
+                    using var client = _factory.CreateRestClient();
+                    var res = await client.UsdFuturesApi.Trading.GetOpenConditionalOrdersAsync(
+                        symbol: string.IsNullOrEmpty(symbol) ? null : symbol,
+                        ct: ct);
 
-                    foreach (var o in doc.RootElement.EnumerateArray())
+                    if (!res.Success)
                     {
-                        decimal GetDec(string name) =>
-                            o.TryGetProperty(name, out var v) && decimal.TryParse(v.GetString(), CultureInfo.InvariantCulture, out var d) ? d : 0m;
-                        string GetStr(string name) => o.TryGetProperty(name, out var v) ? (v.GetString() ?? "") : "";
-                        long GetLong(string name) =>
-                            o.TryGetProperty(name, out var v)
-                                ? (v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var l) ? l
-                                   : long.TryParse(v.GetString(), out var l2) ? l2 : 0L)
-                                : 0L;
-
-                        result.Add(new BinanceAlgoOrderInfo
+                        var err = res.Error?.ToString() ?? "unknown";
+                        if (err.Contains("-1022", StringComparison.Ordinal) || err.Contains("Signature", StringComparison.OrdinalIgnoreCase))
                         {
-                            AlgoId = GetLong("algoId"),
-                            ClientAlgoId = o.TryGetProperty("clientAlgoId", out var c) ? c.GetString() : null,
-                            Symbol = GetStr("symbol"),
-                            Side = GetStr("side").Equals("BUY", StringComparison.OrdinalIgnoreCase) ? OrderSide.Buy : OrderSide.Sell,
-                            PositionSide = Enum.TryParse<PositionSide>(GetStr("positionSide"), true, out var ps) ? ps : PositionSide.Both,
-                            OrderType = GetStr("orderType"),
-                            TriggerPrice = GetDec("triggerPrice"),
-                            Quantity = GetDec("quantity"),
-                        });
+                            _algoListDisabledUntil = DateTime.UtcNow.AddMinutes(15);
+                            if (DateTime.UtcNow - _lastSigFailLog > TimeSpan.FromMinutes(5))
+                            {
+                                _lastSigFailLog = DateTime.UtcNow;
+                                _logger.LogError("[ALGO-RAW] GetOpenConditionalOrders failed (auth): {err}", err);
+                            }
+                        }
+                        else
+                            _logger.LogWarning("[ALGO-RAW] GetOpenConditionalOrders: {err}", err);
+                        return result;
+                    }
+
+                    if (res.Data != null)
+                    {
+                        foreach (var o in res.Data)
+                        {
+                            result.Add(new BinanceAlgoOrderInfo
+                            {
+                                AlgoId = o.Id,
+                                ClientAlgoId = o.ClientOrderId,
+                                Symbol = o.Symbol ?? "",
+                                Side = o.Side,
+                                PositionSide = o.PositionSide ?? PositionSide.Both,
+                                OrderType = o.Type.ToString(),
+                                TriggerPrice = o.StopPrice ?? o.ActivatePrice ?? 0m,
+                                Quantity = o.Quantity ?? 0m,
+                            });
+                        }
                     }
 
                     _cachedOrders = result;
                     _cacheSymbol = symbol;
                     _cacheExpiry = DateTime.UtcNow.AddSeconds(20);
+                    return result;
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "[ALGO-RAW] GetOpenAlgoOrdersAsync {symbol}", symbol);
+                    // Method missing on older Binance.Net → soft fail
+                    _logger.LogWarning(ex, "[ALGO-RAW] GetOpenConditionalOrdersAsync unavailable or failed for {sym}", symbol);
+                    return result;
                 }
                 finally
                 {
                     try { _cacheLock.Release(); } catch { }
                 }
-
-                return result;
             }
 
             
