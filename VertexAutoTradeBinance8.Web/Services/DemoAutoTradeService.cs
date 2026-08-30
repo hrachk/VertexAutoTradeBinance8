@@ -117,7 +117,34 @@ public sealed class DemoAutoTradeService : BackgroundService
                 }
                 catch { /* non-fatal */ }
 
-                decimal price = sig.Entry;
+                // MARKET FILL (like Live): never open at stale signal.Entry alone.
+                // Bug: SKR LONG opened @ 0.01399 while market ~0.01332 → instant SL.
+                decimal signalEntry = sig.Entry;
+                decimal marketPx = 0m;
+                try { marketPx = _demo.GetLastPrice(sym); } catch { /* ignore */ }
+
+                decimal price;
+                if (marketPx > 0)
+                {
+                    // Max deviation from signal entry (stale / wrong tick)
+                    const decimal maxDev = 0.005m; // 0.5%
+                    decimal dev = signalEntry > 0
+                        ? Math.Abs(marketPx - signalEntry) / signalEntry
+                        : 0m;
+                    if (dev > maxDev)
+                    {
+                        _log.LogWarning(
+                            "[DEMO-AUTO] skip {sym} {side}: market {m} vs signal entry {e} dev={d:P2} > {max:P2} (stale/wrong entry)",
+                            sym, side, marketPx, signalEntry, dev, maxDev);
+                        continue;
+                    }
+                    price = marketPx;
+                }
+                else
+                {
+                    price = signalEntry;
+                }
+
                 // Majors: BTC/ETH/BNB/SOL — 10% of Available as pure margin; others 8%.
                 // Notional = margin × leverage (pleчо учитывается).
                 bool major = sym is "BTCUSDT" or "ETHUSDT" or "BNBUSDT" or "SOLUSDT";
@@ -167,6 +194,21 @@ public sealed class DemoAutoTradeService : BackgroundService
                     foreach (var t in tps)
                         t.Price = price + (t.Price - price) * adj.TpScale;
                 }
+                // Instant-SL guard: LONG with SL >= fill or SHORT with SL <= fill → skip
+                if (slUse.HasValue && slUse.Value > 0)
+                {
+                    bool instantSl = side == "LONG"
+                        ? slUse.Value >= price
+                        : slUse.Value <= price;
+                    if (instantSl)
+                    {
+                        _log.LogWarning(
+                            "[DEMO-AUTO] skip {sym} {side}: SL {sl} would trigger immediately at fill {px}",
+                            sym, side, slUse.Value, price);
+                        continue;
+                    }
+                }
+
                 var (ok, err) = _demo.OpenMarketPositionForClient(
                     client.Id, sym, side, qty, lev, price,
                     slUse, tps);
