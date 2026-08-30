@@ -1040,13 +1040,16 @@ namespace VertexAutoTradeBinance8
                 return;
             }
 
+            // LIVE = DEMO: same leverage for sizing and exchange
+            var leverageParity = RiskManager.GetDemoParityLeverage(symbol);
             var qty = _risk.GetPropDeskQtyFinal(
                 signal,
                 balance,
                 step,
                 minQty,
                 riskMult,
-                trading);
+                trading,
+                effectiveLeverage: leverageParity);
 
             if (qty <= 0)
             {
@@ -1099,7 +1102,8 @@ namespace VertexAutoTradeBinance8
                 signal.EntryPrice = realtimePrice;
             }
 
-            var leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
+            var leverage = RiskManager.GetDemoParityLeverage(symbol);
+            _logger.LogInformation("[EXEC][{sym}] DEMO-PARITY leverage={lev}x", symbol, leverage);
             _dataDbFeed?.NotifyExecution(signal.Symbol);
 
             // ── Multi-exchange (phase-2): Binance and/or Bybit ──────────
