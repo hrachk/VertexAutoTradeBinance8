@@ -3701,7 +3701,7 @@ private async Task<long> GetBinanceTimestampAsync(CancellationToken ct)
 
             public async Task<bool> CancelAlgoOrderAsync(long algoId, CancellationToken ct)
             {
-                if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret)) return false;
+                if (!RefreshCredentials()) return false;
 
                 var ts = await GetBinanceTimestampAsync(ct);
                 var q = new List<KeyValuePair<string, string>>
