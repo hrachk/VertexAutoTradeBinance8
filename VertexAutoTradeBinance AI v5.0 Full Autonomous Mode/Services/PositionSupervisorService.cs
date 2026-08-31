@@ -3700,7 +3700,7 @@ private async Task<long> GetBinanceTimestampAsync(CancellationToken ct)
                                 ClientAlgoId = o.ClientOrderId,
                                 Symbol = o.Symbol ?? "",
                                 Side = o.Side,
-                                PositionSide = o.PositionSide ?? PositionSide.Both,
+                                PositionSide = (PositionSide?)o.PositionSide ?? PositionSide.Both,
                                 OrderType = o.Type.ToString(),
                                 TriggerPrice = trig,
                                 Quantity = qty,
