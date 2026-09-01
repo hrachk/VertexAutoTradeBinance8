@@ -1,5 +1,5 @@
 ﻿namespace VertexAutoTradeBinance8.Web.Models;
-
+ 
 public sealed record KlineDto(
     long OpenTime,
     decimal Open,
