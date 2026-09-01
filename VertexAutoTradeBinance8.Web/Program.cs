@@ -16,11 +16,50 @@ var builder = WebApplication.CreateBuilder(args);
 // ===============================
 // Конфиги (правильная версия)
 // ===============================
-builder.Configuration
-    .SetBasePath(builder.Environment.ContentRootPath)
-    .AddJsonFile("appsettings.web.json", optional: false, reloadOnChange: true)         // основной конфиг Web
-    .AddJsonFile($"appsettings.web.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true) // Dev/Staging/Prod
-    .AddEnvironmentVariables();
+// ContentRoot can be forced to C:\Vertex\Engines\client_XXX by the Windows service /
+// working directory — appsettings.web.json lives next to the Web binaries / project.
+// Resolve the directory that actually contains the file; never crash on missing path.
+{
+    static string? FindWebSettingsDir(params string?[] candidates)
+    {
+        foreach (var c in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(c)) continue;
+            try
+            {
+                var p = Path.GetFullPath(c);
+                if (File.Exists(Path.Combine(p, "appsettings.web.json")))
+                    return p;
+            }
+            catch { /* ignore bad paths */ }
+        }
+        return null;
+    }
+
+    var cfgDir =
+        FindWebSettingsDir(
+            builder.Environment.ContentRootPath,
+            AppContext.BaseDirectory,
+            Directory.GetCurrentDirectory(),
+            Path.Combine(AppContext.BaseDirectory, ".."),
+            Path.Combine(AppContext.BaseDirectory, "..", ".."))
+        ?? AppContext.BaseDirectory;
+
+    builder.Configuration
+        .SetBasePath(cfgDir)
+        // optional:true — if still missing, app can start; log path below after build
+        .AddJsonFile("appsettings.web.json", optional: true, reloadOnChange: true)
+        .AddJsonFile($"appsettings.web.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true)
+        .AddEnvironmentVariables();
+
+    // Fallback: also merge from BaseDirectory if cfgDir differed and both exist
+    var baseSettings = Path.Combine(AppContext.BaseDirectory, "appsettings.web.json");
+    if (!string.Equals(Path.GetFullPath(cfgDir), Path.GetFullPath(AppContext.BaseDirectory), StringComparison.OrdinalIgnoreCase)
+        && File.Exists(baseSettings))
+    {
+        builder.Configuration.AddJsonFile(baseSettings, optional: true, reloadOnChange: true);
+    }
+}
 
 // Adds the SAME shared runtime-override file the Engine itself loads
 // (and RuntimeConfigService writes to) — needed so settings like Dca
