@@ -1312,6 +1312,58 @@ else if (_activeTab == "dca")
         finally { _loading = false; StateHasChanged(); }
     }
 
+
+    async Task RefreshWalletsAsync()
+    {
+        // DEMO wallet — local ledger only
+        try
+        {
+            var snap = DemoAccount.GetSnapshot();
+            _demoBal = snap.Balance;
+            _demoOpenN = snap.Positions?.Count ?? 0;
+            decimal u = 0m;
+            try
+            {
+                foreach (var p in snap.Positions ?? new())
+                {
+                    decimal mark = 0m;
+                    try { mark = DemoAccount.GetLastPrice(p.Symbol); } catch { }
+                    if (mark <= 0) mark = p.EntryPrice;
+                    var dir = (p.Side ?? "").Contains("SHORT", StringComparison.OrdinalIgnoreCase) ? -1m : 1m;
+                    u += (mark - p.EntryPrice) * dir * p.Qty;
+                }
+            }
+            catch { }
+            _demoEquity = _demoBal + u;
+        }
+        catch
+        {
+            _demoBal = _demoEquity = 0;
+            _demoOpenN = 0;
+        }
+
+        // LIVE wallet — Binance Futures when Live tab selected
+        if (!_demoMode)
+        {
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+                var client = Factory.TryCreateRestClient();
+                if (client != null)
+                {
+                    var acc = await client.UsdFuturesApi.Account.GetAccountInfoV3Async(ct: cts.Token);
+                    if (acc.Success && acc.Data != null)
+                    {
+                        _liveWallet = acc.Data.TotalWalletBalance;
+                        _liveAvail = acc.Data.AvailableBalance;
+                        _liveUnreal = acc.Data.TotalUnrealizedProfit;
+                    }
+                }
+            }
+            catch { /* keep last values */ }
+        }
+    }
+
     Task<List<TradeRow>> LoadDemoTrades()
     {
         var rows = DemoAccount.GetSnapshot().History
