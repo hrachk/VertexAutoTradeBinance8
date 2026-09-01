@@ -74,7 +74,7 @@ public sealed class DemoAutoTradeService : BackgroundService
         // so Demo could open on a signal generated long ago while price already moved.
         // Each JSON row has its own Time — we only trade the NEWEST CORE signal per
         // symbol+side, and only if it is still fresh (few minutes, not 45).
-        const int maxSignalAgeMinutes = 5;
+        const int maxSignalAgeMinutes = 15;
         var cutoff = DateTime.UtcNow.AddMinutes(-maxSignalAgeMinutes);
         var notBefore = _startedUtc.AddMinutes(-1);
 
@@ -135,7 +135,7 @@ public sealed class DemoAutoTradeService : BackgroundService
                 if (marketPx > 0)
                 {
                     // Max deviation from signal entry (stale / wrong tick)
-                    const decimal maxDev = 0.005m; // 0.5%
+                    const decimal maxDev = 0.015m; // 1.5% — still blocks SKR-class 5% gaps
                     decimal dev = signalEntry > 0
                         ? Math.Abs(marketPx - signalEntry) / signalEntry
                         : 0m;
