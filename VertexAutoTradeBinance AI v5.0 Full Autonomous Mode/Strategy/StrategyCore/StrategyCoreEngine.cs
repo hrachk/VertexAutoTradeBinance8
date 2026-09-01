@@ -38,7 +38,7 @@ public sealed class StrategyCoreEngine
 
     private HashSet<string> _qualitySymbols = new(StringComparer.OrdinalIgnoreCase);
     private DateTime _qualityAtUtc = DateTime.MinValue;
-    private static readonly TimeSpan QualityTtl = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan QualityTtl = TimeSpan.FromMinutes(6);
 
     private const decimal MinAvgQuoteVol15m = 3_000m;
     // Professional mid-range R ladder (prop-desk style):
@@ -53,15 +53,15 @@ public sealed class StrategyCoreEngine
     private const decimal MinRr = Tp1Rr; // EnforceMinRr uses TP1
     private const decimal MinAtrPct = 0.0015m;
     private const decimal MaxAtrPct = 0.060m;
-    private const decimal MinSlAtr = 1.30m;
-    private const decimal StructurePadAtr = 0.35m;
+    private const decimal MinSlAtr = 1.60m;
+    private const decimal StructurePadAtr = 0.45m;
     private const int EmaFast = 21;
     private const int EmaSlow = 50;
     private const int SwingLookback = 18;
     private const int Donchian = 20;
-    private const int QualityTopN = 40;
+    private const int QualityTopN = 60;
     private const int MinBars = 55;
-    private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(12);
     private static readonly KlineInterval Tf = KlineInterval.FifteenMinutes;
     private List<BinanceFuturesUsdtKline>? _lastKlinesForMake;
 
@@ -136,7 +136,7 @@ public sealed class StrategyCoreEngine
             var batch = majors
                 .Concat(_qualitySymbols.OrderBy(_ => Guid.NewGuid()))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(15)
+                .Take(30)
                 .ToList();
 
             int evaluated = 0, emitted = 0, thin = 0;
@@ -496,24 +496,14 @@ public sealed class StrategyCoreEngine
         // Soft-skip only a repeatedly failed SETUP (not the whole symbol). Conf never cut.
         try
         {
+            // Soft-skip must NOT block the trade (user: learn via smarter SL/TP, never conf=0 ban).
+            // History still drives SlPad/TpScale below — setup is allowed to fire.
             if (_journal != null && !string.IsNullOrWhiteSpace(reason)
                 && _journal.ShouldSoftSkipSetup(_clientId, symbol, reason))
             {
-                _log.LogInformation("[CORE-MEM] soft-skip setup {setup} on {sym} (history MFE/SL — conf untouched)",
+                _log.LogInformation(
+                    "[CORE-MEM] setup {setup} on {sym} had weak history — keep signal, adjust SL/TP only (no conf cut)",
                     reason, symbol);
-                return new TradeSignal
-                {
-                    Symbol = symbol.ToUpperInvariant(),
-                    Side = side,
-                    EntryPrice = entry,
-                    StopLoss = sl,
-                    TakeProfits = tpList,
-                    Reason = "SOFT_SKIP_" + reason,
-                    Confidence = 0m,
-                    AiQuality = 0m,
-                    Time = DateTime.UtcNow,
-                    Timeframe = "FifteenMinutes"
-                };
             }
         }
         catch { }
