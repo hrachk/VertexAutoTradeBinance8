@@ -40,7 +40,7 @@ public sealed class StrategyCoreEngine
     private DateTime _qualityAtUtc = DateTime.MinValue;
     private static readonly TimeSpan QualityTtl = TimeSpan.FromMinutes(6);
 
-    private const decimal MinAvgQuoteVol15m = 3_000m;
+    private const decimal MinAvgQuoteVol15m = 1_500m;
     // Professional mid-range R ladder (prop-desk style):
     // TP1 ≈ 1.2R — high hit-rate scale-out (past 1R to cover fees)
     // TP2 ≈ 1.7R — primary target
@@ -60,8 +60,8 @@ public sealed class StrategyCoreEngine
     private const int SwingLookback = 18;
     private const int Donchian = 20;
     private const int QualityTopN = 60;
-    private const int MinBars = 55;
-    private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(12);
+    private const int MinBars = 45;
+    private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(8);
     private static readonly KlineInterval Tf = KlineInterval.FifteenMinutes;
     private List<BinanceFuturesUsdtKline>? _lastKlinesForMake;
 
@@ -136,7 +136,7 @@ public sealed class StrategyCoreEngine
             var batch = majors
                 .Concat(_qualitySymbols.OrderBy(_ => Guid.NewGuid()))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(30)
+                .Take(40)
                 .ToList();
 
             int evaluated = 0, emitted = 0, thin = 0;
@@ -338,14 +338,14 @@ public sealed class StrategyCoreEngine
         decimal close = closes[i], eF = emaF[i], eS = emaS[i];
         var bar = k[i];
 
-        // Long/Short: EMA stack + momentum vs 3 bars ago (candle color optional — more valid emits)
+        // Long/Short: EMA stack + price on correct side of fast EMA (momentum soft)
         bool longOk = eF > eS
                       && close > eF
-                      && close > closes[i - 3];
+                      && close >= closes[i - 2];
 
         bool shortOk = eF < eS
                        && close < eF
-                       && close < closes[i - 3];
+                       && close <= closes[i - 2];
 
         if (longOk)
         {
