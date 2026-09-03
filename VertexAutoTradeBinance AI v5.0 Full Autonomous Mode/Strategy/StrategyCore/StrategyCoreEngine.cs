@@ -235,7 +235,7 @@ public sealed class StrategyCoreEngine
         // Soft liquidity — log but don't hard-block majors
         if (!HasQuoteLiquidity(slice) && !IsMajor(symbol))
         {
-            _lastSignalBarMs[symbol] = barKey;
+            // Do NOT burn the bar — volume may recover intra-bar; majors already exempt
             return (true, false, "liquidity");
         }
 
@@ -247,7 +247,6 @@ public sealed class StrategyCoreEngine
         var atrPct = atr / mid;
         if (atrPct < MinAtrPct || atrPct > MaxAtrPct)
         {
-            _lastSignalBarMs[symbol] = barKey;
             return (true, false, "atr_band");
         }
 
@@ -256,11 +255,13 @@ public sealed class StrategyCoreEngine
             ?? (IsMajor(symbol) ? TryBreakoutRetest(symbol, slice, atr) : null)
             ?? TrySimpleTrend(symbol, slice, atr);
 
-        _lastSignalBarMs[symbol] = barKey;
-
+        // CRITICAL: only lock the bar after a real signal. Burning the bar on
+        // no_setup made each symbol evaluable ONCE per 15m candle — if setup
+        // appeared later in the bar, it was permanently skipped until next TF.
         if (signal == null) return (true, false, "no_setup");
         if (!EnforceMinRr(signal)) return (true, false, "rr");
 
+        _lastSignalBarMs[symbol] = barKey;
         _cooldown[symbol] = DateTime.UtcNow;
         _log.LogInformation(
             "[CORE][{sym}] SIGNAL {side} e={e:F6} sl={sl:F6} tp1={tp:F6} conf={c:F2} {r}",
@@ -338,14 +339,9 @@ public sealed class StrategyCoreEngine
         decimal close = closes[i], eF = emaF[i], eS = emaS[i];
         var bar = k[i];
 
-        // Long/Short: EMA stack + price on correct side of fast EMA (momentum soft)
-        bool longOk = eF > eS
-                      && close > eF
-                      && close >= closes[i - 2];
-
-        bool shortOk = eF < eS
-                       && close < eF
-                       && close <= closes[i - 2];
+        // Long/Short: EMA stack + close on correct side of slow EMA (flow restoration)
+        bool longOk = eF > eS && close > eS;
+        bool shortOk = eF < eS && close < eS;
 
         if (longOk)
         {
