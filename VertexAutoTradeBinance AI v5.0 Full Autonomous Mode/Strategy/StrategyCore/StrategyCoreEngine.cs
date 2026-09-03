@@ -76,7 +76,7 @@ public sealed class StrategyCoreEngine
         _liquidity = liquidity;
         _factory = factory;
         _journal = journal;
-        _clientId = cfg?["Client:Id"] ?? "client_001";
+        _clientId = cfg != null ? VertexAutoTradeBinance8.Services.Learning.TradeJournalService.ResolveClientId(cfg) : "client_001";
     }
 
     public void BindReactive(MarketDataFacade marketData)
