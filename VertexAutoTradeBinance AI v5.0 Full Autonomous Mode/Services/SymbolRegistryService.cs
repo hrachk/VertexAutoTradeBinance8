@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Threading;
 using VertexAutoTradeBinance8.Models;
 
@@ -356,15 +356,20 @@ public class SymbolRegistryService
         if (btcDumpSqueezeActive)
         {
             _logger.LogWarning(
-                "[SYMBOL-REGISTRY] BTC dump/squeeze filter ACTIVE: BTC 24h change={chg:F2}% (dump<={dump:F1}%, squeeze>={squeeze:F1}%) — pausing new Auto-selected entries this cycle, Pinned symbols unaffected",
+                "[SYMBOL-REGISTRY] BTC dump/squeeze filter ACTIVE: BTC 24h change={chg:F2}% (dump<={dump:F1}%, squeeze>={squeeze:F1}%) — NOTE only (universe NOT cleared) — raise BtcSqueezeThreshold if noisy",
                 btcChangeSigned, dumpThreshold, squeezeThreshold);
         }
 
         // ============================================================
         // TRADABLE FILTER (AI / REGIME)
         // ============================================================
-        var tradable = btcDumpSqueezeActive
-            ? new List<SymbolMarketSnapshot>() // Auto-scanner paused; Pinned symbols (added below via pinnedCfg/pinnedPos) still flow through untouched
+                // BTC dump/squeeze: WARN only — do NOT zero the auto universe.
+        // User config BtcSqueezeThreshold=2% was killing all Auto symbols on mild BTC moves
+        // (log: TRACKED total=2, PROC NOT_IN_ACTIVE_*). Pinned-only is not a viable bot.
+        var tradable = snapshots
+                .Where(s => !string.IsNullOrWhiteSpace(s.Symbol))
+                .Where(s => _marketRegime.IsTradable(s.Symbol))
+                .ToList() Pinned symbols (added below via pinnedCfg/pinnedPos) still flow through untouched
             : snapshots
                 .Where(s => !string.IsNullOrWhiteSpace(s.Symbol))
                 .Where(s => _marketRegime.IsTradable(s.Symbol))
@@ -437,11 +442,23 @@ public class SymbolRegistryService
         // ============================================================
         // SNAPSHOT
         // ============================================================
+        // Pinned must always be tradeable both sides (NOT_IN_ACTIVE_* was rejecting BTC/ETH)
+        var longActive = longs.Where(all.Contains).ToList();
+        var shortActive = shorts.Where(all.Contains).ToList();
+        foreach (var p in pinnedCfg.Concat(pinnedPos).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (all.Contains(p, StringComparer.OrdinalIgnoreCase))
+            {
+                if (!longActive.Contains(p, StringComparer.OrdinalIgnoreCase)) longActive.Add(p);
+                if (!shortActive.Contains(p, StringComparer.OrdinalIgnoreCase)) shortActive.Add(p);
+            }
+        }
+
         return new UniverseSnapshot(
             DateTime.UtcNow,
             all,
-            longs.Where(all.Contains).ToList(),
-            shorts.Where(all.Contains).ToList(),
+            longActive,
+            shortActive,
             pinnedCfg,
             pinnedPos,
             totalCap,
