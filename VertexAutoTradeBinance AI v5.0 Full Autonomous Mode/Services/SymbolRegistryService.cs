@@ -366,11 +366,8 @@ public class SymbolRegistryService
                 // BTC dump/squeeze: WARN only — do NOT zero the auto universe.
         // User config BtcSqueezeThreshold=2% was killing all Auto symbols on mild BTC moves
         // (log: TRACKED total=2, PROC NOT_IN_ACTIVE_*). Pinned-only is not a viable bot.
+        // BTC dump/squeeze: WARN only — never zero Auto universe (threshold 2% was lethal)
         var tradable = snapshots
-                .Where(s => !string.IsNullOrWhiteSpace(s.Symbol))
-                .Where(s => _marketRegime.IsTradable(s.Symbol))
-                .ToList() Pinned symbols (added below via pinnedCfg/pinnedPos) still flow through untouched
-            : snapshots
                 .Where(s => !string.IsNullOrWhiteSpace(s.Symbol))
                 .Where(s => _marketRegime.IsTradable(s.Symbol))
                 .ToList();
