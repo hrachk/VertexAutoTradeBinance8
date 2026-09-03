@@ -60,12 +60,26 @@ public sealed class DemoAutoTradeService : BackgroundService
         }
     }
 
+    
+    /// <summary>LiveSignal writes 0–100; in-memory fraction 0–1 also accepted.</summary>
+    private static decimal NormConf(decimal c)
+    {
+        if (c > 0m && c <= 1.5m) return c * 100m;
+        return c;
+    }
+
     private const int MaxDemoPositions = 5; // aligned with LIVE max open
 
     private async Task TickAsync(CancellationToken ct)
     {
         var clients = await _db.GetClientsWithParallelDemoAsync();
-        if (clients.Count == 0) return;
+        if (clients.Count == 0)
+        {
+            // Silent return was the #1 reason "Demo never opens" with Parallel DEMO off.
+            if (DateTime.UtcNow.Second < 12)
+                _log.LogWarning("[DEMO-AUTO] 0 clients with Parallel DEMO=ON — turn it on in Dashboard");
+            return;
+        }
 
         var signals = await _signals.LoadAsync();
         if (signals == null || signals.Count == 0) return;
@@ -85,7 +99,7 @@ public sealed class DemoAutoTradeService : BackgroundService
                         && !string.IsNullOrWhiteSpace(s.Symbol)
                         && s.Symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase)
                         && (string.IsNullOrEmpty(s.Reason) || s.Reason.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase))
-                        && s.Confidence >= 55)
+                        && NormConf(s.Confidence) >= 55)
             // Newest first — never prefer an older row with same conf
             .OrderByDescending(s => s.Time)
             .ThenByDescending(s => s.Confidence)
