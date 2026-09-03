@@ -190,6 +190,16 @@ public sealed class StrategyCoreEngine
                 _log.LogInformation("[CORE] quality universe n={n} sample={s}",
                     top.Count, string.Join(",", top.Take(6)));
             }
+            else if (_qualitySymbols.Count == 0)
+            {
+                _qualitySymbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT",
+                    "DOGEUSDT","ADAUSDT","AVAXUSDT","LINKUSDT","DOTUSDT"
+                };
+                _qualityAtUtc = DateTime.UtcNow;
+                _log.LogWarning("[CORE] quality empty — major fallback n={n}", _qualitySymbols.Count);
+            }
         }
         catch (Exception ex)
         {
