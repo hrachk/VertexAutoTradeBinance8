@@ -174,7 +174,20 @@ public sealed class StrategyCoreEngine
         try
         {
             var snaps = await _liquidity.LoadSnapshotsAsync().ConfigureAwait(false);
-            if (snaps == null || snaps.Count == 0) return;
+            if (snaps == null || snaps.Count == 0)
+            {
+                _log.LogWarning("[CORE] LoadSnapshots returned empty");
+                if (_qualitySymbols.Count == 0)
+                {
+                    _qualitySymbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT",
+                        "DOGEUSDT","ADAUSDT","AVAXUSDT","LINKUSDT","DOTUSDT"
+                    };
+                    _qualityAtUtc = DateTime.UtcNow;
+                }
+                return;
+            }
             var top = snaps
                 .Where(s => s != null && !string.IsNullOrWhiteSpace(s.Symbol)
                             && s.Symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase)
@@ -203,7 +216,16 @@ public sealed class StrategyCoreEngine
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "[CORE] liquidity refresh failed");
+            _log.LogWarning(ex, "[CORE] liquidity refresh failed — will use major fallback if empty");
+            if (_qualitySymbols.Count == 0)
+            {
+                _qualitySymbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT",
+                    "DOGEUSDT","ADAUSDT","AVAXUSDT","LINKUSDT","DOTUSDT"
+                };
+                _qualityAtUtc = DateTime.UtcNow;
+            }
         }
     }
 
