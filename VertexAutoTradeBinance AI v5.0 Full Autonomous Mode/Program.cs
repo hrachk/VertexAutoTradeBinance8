@@ -450,7 +450,8 @@ public class Program
 try
 {
     var journal = host.Services.GetRequiredService<VertexAutoTradeBinance8.Services.Learning.TradeJournalService>();
-    var liveClientId = host.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>()["Client:Id"] ?? "client_001";
+    var cfgJ = host.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>();
+    var liveClientId = VertexAutoTradeBinance8.Services.Learning.TradeJournalService.ResolveClientId(cfgJ);
     VertexAutoTradeBinance8.Services.AiSelfLearningService.LiveTradeJournalHook =
         (entry) =>
         {
