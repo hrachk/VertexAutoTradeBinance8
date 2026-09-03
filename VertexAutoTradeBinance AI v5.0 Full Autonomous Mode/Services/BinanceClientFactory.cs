@@ -129,6 +129,25 @@ public sealed class BinanceClientFactory
     /// When LIVE user keys (or appsettings keys) are present they are attached
     /// for private user-data streams.
     /// </summary>
+    
+    /// <summary>
+    /// Public market-data REST client (tickers, klines, exchangeInfo).
+    /// Does NOT require API keys — SymbolLiquidityScanner must use this so
+    /// quality universe still fills when LIVE keys are missing/invalid.
+    /// </summary>
+    public BinanceRestClient CreatePublicRestClient()
+    {
+        var opt = _options.CurrentValue;
+        return new BinanceRestClient(cfg =>
+        {
+            cfg.Environment = opt.UseTestnet
+                ? BinanceEnvironment.Testnet
+                : BinanceEnvironment.Live;
+            cfg.AutoTimestamp = true;
+            // no ApiCredentials — public endpoints only
+        });
+    }
+
     public BinanceSocketClient CreateSocketClient()
     {
         var opt = _options.CurrentValue;
