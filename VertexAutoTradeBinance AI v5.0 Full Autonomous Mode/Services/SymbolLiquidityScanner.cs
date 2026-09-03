@@ -1,4 +1,4 @@
-﻿using VertexAutoTradeBinance8.Models;
+using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 
 public sealed class SymbolLiquidityScanner
@@ -45,7 +45,7 @@ public sealed class SymbolLiquidityScanner
                 (DateTime.UtcNow - _cachedAtUtc).TotalSeconds < ttlSec)
                 return _cache;
 
-            using var client = _factory.CreateRestClient();
+            using var client = _factory.CreatePublicRestClient(); // public tickers — no API key required
 
             // =====================================================
             // Rate limit guard: GetTickersAsync weight=40
@@ -161,7 +161,23 @@ public sealed class SymbolLiquidityScanner
                 return _cache;
             }
 
-            throw new InvalidOperationException("SymbolLiquidityScanner: no market data available at all");
+            // Never leave CORE with zero universe for a full day — hard majors fallback
+            _logger.LogError("[SYMBOL] no market data — returning hardcoded majors fallback");
+            _cache = new List<SymbolMarketSnapshot>
+            {
+                new() { Symbol = "BTCUSDT", QuoteVolume24h = 1e9m, LastPrice = 1m },
+                new() { Symbol = "ETHUSDT", QuoteVolume24h = 5e8m, LastPrice = 1m },
+                new() { Symbol = "SOLUSDT", QuoteVolume24h = 2e8m, LastPrice = 1m },
+                new() { Symbol = "BNBUSDT", QuoteVolume24h = 1e8m, LastPrice = 1m },
+                new() { Symbol = "XRPUSDT", QuoteVolume24h = 1e8m, LastPrice = 1m },
+                new() { Symbol = "DOGEUSDT", QuoteVolume24h = 8e7m, LastPrice = 1m },
+                new() { Symbol = "ADAUSDT", QuoteVolume24h = 7e7m, LastPrice = 1m },
+                new() { Symbol = "AVAXUSDT", QuoteVolume24h = 6e7m, LastPrice = 1m },
+                new() { Symbol = "LINKUSDT", QuoteVolume24h = 5e7m, LastPrice = 1m },
+                new() { Symbol = "DOTUSDT", QuoteVolume24h = 4e7m, LastPrice = 1m },
+            };
+            _cachedAtUtc = DateTime.UtcNow;
+            return _cache;
         }
         finally
         {
