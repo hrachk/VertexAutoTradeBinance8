@@ -140,6 +140,7 @@ public sealed class StrategyCoreEngine
                 .ToList();
 
             int evaluated = 0, emitted = 0, thin = 0;
+            var reasons = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (var sym in batch)
             {
                 try
@@ -148,10 +149,13 @@ public sealed class StrategyCoreEngine
                     if (ev) evaluated++;
                     if (em) emitted++;
                     if (reason == "thin_klines") thin++;
+                    var rk = string.IsNullOrEmpty(reason) ? "?" : reason;
+                    reasons[rk] = reasons.TryGetValue(rk, out var rc) ? rc + 1 : 1;
                 }
                 catch (Exception ex)
                 {
                     _log.LogWarning(ex, "[CORE] scan {sym} failed", sym);
+                    reasons["exception"] = reasons.TryGetValue("exception", out var rc) ? rc + 1 : 1;
                 }
                 await Task.Delay(50).ConfigureAwait(false);
             }
@@ -161,8 +165,9 @@ public sealed class StrategyCoreEngine
 
             var level = _zeroEmitStreak >= 10 ? LogLevel.Warning : LogLevel.Information;
             _log.Log(level,
-                "[CORE][SCAN] universe={u} batch={b} evaluated={e} emitted={sig} thin={t} zeroStreak={z}",
-                _qualitySymbols.Count, batch.Count, evaluated, emitted, thin, _zeroEmitStreak);
+                "[CORE][SCAN] universe={u} batch={b} evaluated={e} emitted={sig} thin={t} zeroStreak={z} reasons={r}",
+                _qualitySymbols.Count, batch.Count, evaluated, emitted, thin, _zeroEmitStreak,
+                string.Join(",", reasons.OrderByDescending(kv => kv.Value).Select(kv => kv.Key + ":" + kv.Value)));
         }
         finally { Interlocked.Exchange(ref _scanBusy, 0); }
     }
