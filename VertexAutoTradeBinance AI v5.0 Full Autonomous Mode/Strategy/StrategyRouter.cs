@@ -89,12 +89,10 @@ namespace VertexAutoTradeBinance8.Strategy
         private void OnCoreSignal(TradeSignal signal)
         {
             if (signal == null) return;
-            var mode = _modeState.Current;
-            if (mode == StrategyMode.TrendOnly || mode == StrategyMode.MeanReversionOnly)
-            {
-                _logger.LogDebug("[ROUTER] CORE suppressed mode={mode}", mode);
-                return;
-            }
+            // CRITICAL: CORE is the ONLY execution source (LIVE=DEMO).
+            // Legacy mode TrendOnly/MeanReversionOnly must NOT silence CORE —
+            // those modes only applied to old engines which we already ignore.
+            // Suppressing CORE here = zero signals, zero entries.
             Forward(signal, "CORE");
         }
 
