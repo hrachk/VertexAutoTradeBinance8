@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
@@ -27,20 +28,52 @@ public sealed class TradeJournalService
 
     private static object LockFor(string id) => Locks.GetOrAdd(id, _ => new object());
 
-    private string ClientDir(string clientId)
+    public static string NormalizeClientId(string? clientId)
     {
-        var id = (clientId ?? "").Trim();
-        if (id.StartsWith("client_", StringComparison.OrdinalIgnoreCase))
-            return Path.Combine(_enginesRoot, id);
-        return Path.Combine(_enginesRoot, "client_" + id);
+        var id = (clientId ?? "").Trim().TrimStart('/', '\\');
+        if (string.IsNullOrEmpty(id)) return "client_001";
+        if (id.Contains('/') || id.Contains('\\'))
+        {
+            var parts = id.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+            id = parts.Length > 0 ? parts[^1] : id;
+        }
+        if (!id.StartsWith("client_", StringComparison.OrdinalIgnoreCase))
+            id = "client_" + id;
+        return id;
     }
+
+    public static string ResolveClientId(Microsoft.Extensions.Configuration.IConfiguration cfg)
+    {
+        var fromCfg = cfg["Client:Id"];
+        if (!string.IsNullOrWhiteSpace(fromCfg))
+            return NormalizeClientId(fromCfg);
+        foreach (var key in new[] { "SharedData:Root", "SharedData:EnginesRoot" })
+        {
+            var root = cfg[key];
+            if (string.IsNullOrWhiteSpace(root)) continue;
+            try
+            {
+                var name = new DirectoryInfo(root.TrimEnd('/', '\\')).Name;
+                if (!string.IsNullOrWhiteSpace(name))
+                    return NormalizeClientId(name);
+            }
+            catch { }
+        }
+        return "client_001";
+    }
+
+    private string ClientDir(string clientId)
+        => Path.Combine(_enginesRoot, NormalizeClientId(clientId));
 
     private string JournalPath(string clientId) => Path.Combine(ClientDir(clientId), "trade-journal.json");
     private string MemoryPath(string clientId) => Path.Combine(ClientDir(clientId), "symbol-memory.json");
 
     public void Append(TradeJournalEntry e)
     {
-        if (string.IsNullOrWhiteSpace(e.ClientId) || string.IsNullOrWhiteSpace(e.Symbol)) return;
+        if (e == null || string.IsNullOrWhiteSpace(e.Symbol)) return;
+        e.ClientId = NormalizeClientId(e.ClientId);
+        e.Symbol = e.Symbol.Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(e.Source)) e.Source = "Demo";
         try
         {
             Directory.CreateDirectory(ClientDir(e.ClientId));
@@ -54,6 +87,9 @@ public sealed class TradeJournalService
                 File.WriteAllText(path, JsonSerializer.Serialize(file, JsonOpt));
             }
             RebuildMemory(e.ClientId);
+            _log.LogInformation(
+                "[JOURNAL] +{src} {sym} {side} pnl={pnl:F2} setup={setup} qty={qty} → {path} (n≈memory rebuild)",
+                e.Source, e.Symbol, e.Side, e.RealizedPnl, e.Setup, e.Qty, path);
         }
         catch (Exception ex)
         {
@@ -103,6 +139,7 @@ public sealed class TradeJournalService
     {
         try
         {
+            clientId = NormalizeClientId(clientId);
             var journal = LoadJournal(JournalPath(clientId));
             var cutoff = DateTime.UtcNow.AddDays(-_windowDays);
             var recent = journal.Entries.Where(x => x.ClosedAtUtc >= cutoff).ToList();
@@ -125,8 +162,9 @@ public sealed class TradeJournalService
         foreach (var t in trades)
         {
             if (t.EntryPrice <= 0 || t.ExitPrice <= 0) continue;
+            // Accept real closes: qty>0 OR meaningful pnl (some live mirrors omit qty)
             if (t.Qty <= 0 && Math.Abs(t.RealizedPnl) < 0.01m) continue;
-            if (t.Qty <= 0 && (t.ClosedAtUtc - t.OpenedAtUtc).TotalSeconds < 2) continue;
+            if (t.Qty <= 0 && t.OpenedAtUtc != default && (t.ClosedAtUtc - t.OpenedAtUtc).TotalSeconds < 1) continue;
             valid.Add(t);
         }
 
