@@ -28,20 +28,52 @@ public sealed class TradeJournalService
 
     private static object LockFor(string id) => Locks.GetOrAdd(id, _ => new object());
 
-    private string ClientDir(string clientId)
+    public static string NormalizeClientId(string? clientId)
     {
-        var id = (clientId ?? "").Trim();
-        if (id.StartsWith("client_", StringComparison.OrdinalIgnoreCase))
-            return Path.Combine(_enginesRoot, id);
-        return Path.Combine(_enginesRoot, "client_" + id);
+        var id = (clientId ?? "").Trim().TrimStart('/', '\\');
+        if (string.IsNullOrEmpty(id)) return "client_001";
+        if (id.Contains('/') || id.Contains('\\'))
+        {
+            var parts = id.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+            id = parts.Length > 0 ? parts[^1] : id;
+        }
+        if (!id.StartsWith("client_", StringComparison.OrdinalIgnoreCase))
+            id = "client_" + id;
+        return id;
     }
+
+    public static string ResolveClientId(Microsoft.Extensions.Configuration.IConfiguration cfg)
+    {
+        var fromCfg = cfg["Client:Id"];
+        if (!string.IsNullOrWhiteSpace(fromCfg))
+            return NormalizeClientId(fromCfg);
+        foreach (var key in new[] { "SharedData:Root", "SharedData:EnginesRoot" })
+        {
+            var root = cfg[key];
+            if (string.IsNullOrWhiteSpace(root)) continue;
+            try
+            {
+                var name = new DirectoryInfo(root.TrimEnd('/', '\\')).Name;
+                if (!string.IsNullOrWhiteSpace(name))
+                    return NormalizeClientId(name);
+            }
+            catch { }
+        }
+        return "client_001";
+    }
+
+    private string ClientDir(string clientId)
+        => Path.Combine(_enginesRoot, NormalizeClientId(clientId));
 
     private string JournalPath(string clientId) => Path.Combine(ClientDir(clientId), "trade-journal.json");
     private string MemoryPath(string clientId) => Path.Combine(ClientDir(clientId), "symbol-memory.json");
 
     public void Append(TradeJournalEntry e)
     {
-        if (string.IsNullOrWhiteSpace(e.ClientId) || string.IsNullOrWhiteSpace(e.Symbol)) return;
+        if (e == null || string.IsNullOrWhiteSpace(e.Symbol)) return;
+        e.ClientId = NormalizeClientId(e.ClientId);
+        e.Symbol = e.Symbol.Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(e.Source)) e.Source = "Demo";
         try
         {
             Directory.CreateDirectory(ClientDir(e.ClientId));
