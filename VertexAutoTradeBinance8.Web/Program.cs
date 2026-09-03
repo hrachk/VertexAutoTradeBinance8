@@ -288,7 +288,7 @@ try
     {
         journal.Append(new VertexAutoTradeBinance8.Services.Learning.TradeJournalEntry
         {
-            ClientId = clientId,
+            ClientId = VertexAutoTradeBinance8.Services.Learning.TradeJournalService.NormalizeClientId(clientId),
             Source = "Demo",
             Symbol = pos.Symbol,
             Side = pos.Side,
