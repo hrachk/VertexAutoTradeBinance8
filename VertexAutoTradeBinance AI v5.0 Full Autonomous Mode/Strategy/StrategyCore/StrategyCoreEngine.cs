@@ -267,9 +267,7 @@ public sealed class StrategyCoreEngine
             symbol, signal.Side, signal.EntryPrice, signal.StopLoss,
             signal.TakeProfits.FirstOrDefault(), signal.Confidence, signal.Reason);
 
-        if (signal.Reason != null && signal.Reason.StartsWith("SOFT_SKIP_", StringComparison.OrdinalIgnoreCase))
-            return (true, false, "soft_skip_setup");
-
+        // Soft-skip must never suppress emit (memory only adjusts SL/TP in Make).
         OnSignalGenerated?.Invoke(signal);
         return (true, true, "ok");
     }
@@ -340,17 +338,14 @@ public sealed class StrategyCoreEngine
         decimal close = closes[i], eF = emaF[i], eS = emaS[i];
         var bar = k[i];
 
-        // Long: bullish stack + momentum vs 3 bars ago + green close
+        // Long/Short: EMA stack + momentum vs 3 bars ago (candle color optional — more valid emits)
         bool longOk = eF > eS
                       && close > eF
-                      && close > closes[i - 3]
-                      && bar.ClosePrice >= bar.OpenPrice;
+                      && close > closes[i - 3];
 
-        // Short: bearish stack
         bool shortOk = eF < eS
                        && close < eF
-                       && close < closes[i - 3]
-                       && bar.ClosePrice <= bar.OpenPrice;
+                       && close < closes[i - 3];
 
         if (longOk)
         {
