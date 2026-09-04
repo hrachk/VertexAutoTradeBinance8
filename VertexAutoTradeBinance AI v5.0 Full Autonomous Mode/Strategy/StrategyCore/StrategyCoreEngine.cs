@@ -51,7 +51,7 @@ public sealed class StrategyCoreEngine
     private const decimal Tp2Rr = 1.70m;
     private const decimal Tp3Rr = 2.40m;
     private const decimal MinRr = Tp1Rr; // EnforceMinRr uses TP1
-    private const decimal MinAtrPct = 0.0015m;
+    private const decimal MinAtrPct = 0.0008m;
     private const decimal MaxAtrPct = 0.060m;
     private const decimal MinSlAtr = 1.60m;
     private const decimal StructurePadAtr = 0.45m;
@@ -60,7 +60,7 @@ public sealed class StrategyCoreEngine
     private const int SwingLookback = 18;
     private const int Donchian = 20;
     private const int QualityTopN = 60;
-    private const int MinBars = 45;
+    private const int MinBars = 60; // must be > EmaSlow(50)+5 or TrySimpleTrend/Pullback always null
     private static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(8);
     private static readonly KlineInterval Tf = KlineInterval.FifteenMinutes;
     private List<BinanceFuturesUsdtKline>? _lastKlinesForMake;
@@ -368,15 +368,18 @@ public sealed class StrategyCoreEngine
     private TradeSignal? TrySimpleTrend(string symbol, List<BinanceFuturesUsdtKline> k, decimal atr)
     {
         var closes = k.Select(x => x.ClosePrice).ToList();
-        var emaF = EmaSeries(closes, EmaFast);
-        var emaS = EmaSeries(closes, EmaSlow);
         int i = closes.Count - 1;
-        if (i < EmaSlow + 3) return null;
+        // Adaptive EMA periods: never require more bars than we have (MinBars=45 broke EMA50 path → emitted=0 forever)
+        int fast = Math.Min(EmaFast, Math.Max(8, closes.Count / 4));
+        int slow = Math.Min(EmaSlow, Math.Max(fast + 5, closes.Count / 2));
+        if (i < slow + 2) return null;
 
+        var emaF = EmaSeries(closes, fast);
+        var emaS = EmaSeries(closes, slow);
         decimal close = closes[i], eF = emaF[i], eS = emaS[i];
         var bar = k[i];
 
-        // Long/Short: EMA stack + close on correct side of slow EMA (flow restoration)
+        // Long/Short: EMA stack + close on correct side of slow EMA
         bool longOk = eF > eS && close > eS;
         bool shortOk = eF < eS && close < eS;
 
