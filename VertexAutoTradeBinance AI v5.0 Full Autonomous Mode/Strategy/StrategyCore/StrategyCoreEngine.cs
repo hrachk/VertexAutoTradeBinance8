@@ -1,11 +1,9 @@
-using System.Collections.Concurrent;
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
+using System.Collections.Concurrent;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Services.Learning;
-using Microsoft.Extensions.Configuration;
-using VertexAutoTradeBinance8.Services.MarketData;
 
 namespace VertexAutoTradeBinance8.Strategy.StrategyCore;
 
