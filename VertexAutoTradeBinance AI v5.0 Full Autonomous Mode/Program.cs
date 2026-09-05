@@ -410,6 +410,13 @@ public class Program
 
                     services.AddSingleton<LiquidityGuardService>();
 
+                    // =====================================================
+                    // SmartFlowGuard — Live microstructure layer (additive)
+                    // Book / tape-proxy / funding. Fail-open. CORE unchanged.
+                    // =====================================================
+                    services.Configure<VertexAutoTradeBinance8.Configuration.SmartFlowOptions>(
+                        ctx.Configuration.GetSection("SmartFlow"));
+                    services.AddSingleton<SmartFlowGuardService>();
 
                     services.Configure<EngineStateSettings>(ctx.Configuration.GetSection("EngineState"));
 

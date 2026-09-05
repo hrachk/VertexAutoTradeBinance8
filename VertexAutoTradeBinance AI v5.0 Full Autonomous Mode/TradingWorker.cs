@@ -56,6 +56,7 @@ namespace VertexAutoTradeBinance8
         private readonly VertexAutoTradeBinance8.Services.HistoricalData.DataDbSymbolFeed? _dataDbFeed;
         private readonly BinanceClientFactory _factory;
         private readonly LiquidityGuardService _liq;
+        private readonly SmartFlowGuardService _smartFlow;
         private readonly OrderCleanerService _cleaner;
         private readonly PredictiveEngineV4ConfirmationService _predict;
         private readonly IOptionsMonitor<VertexAutoTradeBinance8.Configuration.SignalConfidenceSettings> _confSettings;
@@ -162,6 +163,7 @@ namespace VertexAutoTradeBinance8
             , RealtimePriceService price, SymbolInfoService symbolInfo,
             FundingRateService fundingRate,
             RealtimeMomentumDetector momentum,
+            SmartFlowGuardService smartFlow,
             IOptionsMonitor<VertexAutoTradeBinance8.Configuration.SignalConfidenceSettings> confSettings,
             VertexAutoTradeBinance8.Services.HistoricalData.DataDbSymbolFeed? dataDbFeed = null,
             TradeStateManager tradeState = null)
@@ -197,6 +199,7 @@ namespace VertexAutoTradeBinance8
             _marketContext = marketContext;
             _fundingRate = fundingRate;
             _momentum    = momentum;
+            _smartFlow   = smartFlow;
 
             learn.ForceSnapshot();
             _sim = sim;
@@ -966,6 +969,59 @@ namespace VertexAutoTradeBinance8
                     $"LIQUIDITY_{liq.Reason}",
                     ct);
                 return;
+            }
+
+            // =====================================================
+            // 5.5) SMART FLOW GUARD (Live microstructure — additive)
+            // Structure signal already passed; this only blocks / cuts size
+            // or WIDENS SL. Fail-open. Does not change CORE generation.
+            // =====================================================
+            try
+            {
+                IReadOnlyList<BinanceFuturesUsdtKline>? flowKlines = null;
+                try
+                {
+                    flowKlines = await _marketDataFacade
+                        .GetKlinesAsync(symbol, tf, 40, ct)
+                        .ConfigureAwait(false);
+                }
+                catch { /* soft */ }
+
+                var flow = await _smartFlow.EvaluateAsync(signal, flowKlines, ct).ConfigureAwait(false);
+
+                signal.LiquidityScore = flow.Score;
+                signal.LiquidityDetails = flow.Details;
+
+                if (flow.Block)
+                {
+                    await RejectAsync(
+                        signal, symbol, tf,
+                        "SMARTFLOW",
+                        flow.Reason,
+                        ct,
+                        extra: flow.Details);
+                    return;
+                }
+
+                if (flow.SizeMult > 0m && flow.SizeMult < 1m)
+                {
+                    // RiskManager already honors SizeMultiplier in GetPropDeskQtyFinal
+                    signal.SizeMultiplier = Math.Clamp(
+                        signal.SizeMultiplier * flow.SizeMult, 0.40m, 1.0m);
+                }
+
+                // Only WIDEN stop (never tighten) — safe vs CORE 1:1 policy
+                if (flow.WiderStopLoss is decimal wsl && wsl > 0)
+                {
+                    if (signal.Side == SignalSide.Buy && wsl < signal.StopLoss)
+                        signal.StopLoss = wsl;
+                    else if (signal.Side == SignalSide.Sell && wsl > signal.StopLoss)
+                        signal.StopLoss = wsl;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[SMARTFLOW] skipped for {sym}", symbol);
             }
 
             var trading = _resolver.Resolve(symbol);
