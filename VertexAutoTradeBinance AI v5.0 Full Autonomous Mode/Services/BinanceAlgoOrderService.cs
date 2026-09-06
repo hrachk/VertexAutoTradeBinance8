@@ -90,21 +90,33 @@ namespace VertexAutoTradeBinance8.Services
             _creds = creds;
 
             // Fallback = single-tenant engine config (used only when no user LIVE session)
-            _fallbackApiKey    = cfg["Binance:ApiKey"] ?? string.Empty;
-            _fallbackApiSecret = cfg["Binance:SecretKey"] ?? cfg["Binance:ApiSecret"] ?? string.Empty;
+            _fallbackApiKey    = (cfg["Binance:ApiKey"] ?? string.Empty).Trim();
+            _fallbackApiSecret = (cfg["Binance:SecretKey"] ?? cfg["Binance:ApiSecret"] ?? string.Empty).Trim();
             _baseUrl = (cfg["Binance:FuturesBaseUrl"] ?? "https://fapi.binance.com").TrimEnd('/');
 
             _http = httpFactory.CreateClient("BinanceAlgoRaw");
             _http.Timeout = TimeSpan.FromSeconds(8);
+
+            // Startup fingerprint — помогает диагностировать -1022 без раскрытия секрета
+            var keyPreview    = _fallbackApiKey.Length > 8    ? _fallbackApiKey[..8]    + "..." : "(empty)";
+            var secretPreview = _fallbackApiSecret.Length > 4 ? _fallbackApiSecret[..4] + "..." : "(empty)";
+            _logger.LogInformation(
+                "[ALGO-RAW] Fallback credentials loaded: apiKey={key} secret={secret} (TradingCredentialStore LIVE will override per-request)",
+                keyPreview, secretPreview);
         }
 
         /// <summary>Per-user LIVE keys first, then appsettings fallback.</summary>
         private bool TryResolveKeys(out string apiKey, out string apiSecret)
         {
             if (_creds.TryGet(out _, out apiKey, out apiSecret))
+            {
+                // Trim на случай если ActivateLive был вызван с пробелами
+                apiKey    = apiKey.Trim();
+                apiSecret = apiSecret.Trim();
                 return true;
-            apiKey = _fallbackApiKey;
-            apiSecret = _fallbackApiSecret;
+            }
+            apiKey    = _fallbackApiKey;    // уже Trim() из конструктора
+            apiSecret = _fallbackApiSecret; // уже Trim() из конструктора
             return !string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(apiSecret);
         }
 
@@ -242,6 +254,16 @@ namespace VertexAutoTradeBinance8.Services
                         _lastTimeSync = DateTime.MinValue;
                         _logger.LogWarning("[ALGO-RAW] -1021 on PlaceConditional — clock drift detected, will re-sync on next call");
                     }
+                    else if (body.Contains("-1022"))
+                    {
+                        var usesLive = _creds.TryGet(out _, out var dbgKey, out _);
+                        var src      = usesLive ? "CredentialStore(LIVE)" : "appsettings(fallback)";
+                        var fp       = (usesLive ? dbgKey : _fallbackApiKey) is { Length: > 8 } k ? k[..8] + "..." : "(empty)";
+                        _logger.LogError(
+                            "[ALGO-RAW] -1022 PlaceConditional — invalid signature. Source={src} apiKey={fp}. " +
+                            "Check API Secret in config has no extra whitespace.",
+                            src, fp);
+                    }
                     _logger.LogError("[ALGO-RAW] HTTP {code} body={body}", (int)resp.StatusCode, body);
                     return false;
                 }
@@ -315,10 +337,25 @@ namespace VertexAutoTradeBinance8.Services
                             _lastTimeSync = DateTime.MinValue;
                             _logger.LogWarning("[ALGO-RAW] -1021 on GetOpenAlgoOrders — clock drift detected, offset will be re-synced on next call. Current offset={off}ms", _timeOffsetMs);
                         }
+                        // -1022 signature invalid — almost always wrong API secret.
+                        // Log key fingerprint to aid diagnosis, do NOT cache so next
+                        // call retries immediately (caching would hide the problem for 20s).
+                        else if (body.Contains("-1022"))
+                        {
+                            var usesLive = _creds.TryGet(out _, out var dbgKey, out _);
+                            var src      = usesLive ? "CredentialStore(LIVE)" : "appsettings(fallback)";
+                            var fp       = (usesLive ? dbgKey : _fallbackApiKey) is { Length: > 8 } k ? k[..8] + "..." : "(empty)";
+                            _logger.LogError(
+                                "[ALGO-RAW] -1022 GetOpenAlgoOrders — invalid signature. Source={src} apiKey={fp}. " +
+                                "Check that the API Secret in config exactly matches the Binance key (no extra spaces/newlines). " +
+                                "Result NOT cached — will retry on next call.",
+                                src, fp);
+                        }
                         else
                         {
                             _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
                         }
+                        // Do NOT update cache on error — allows immediate retry on next supervisor tick
                         return result;
                     }
 
@@ -391,7 +428,19 @@ namespace VertexAutoTradeBinance8.Services
                 if (!resp.IsSuccessStatusCode)
                 {
                     var body = await resp.Content.ReadAsStringAsync(ct);
-                    if (body.Contains("-1021")) _lastTimeSync = DateTime.MinValue;
+                    if (body.Contains("-1021"))
+                    {
+                        _lastTimeSync = DateTime.MinValue;
+                    }
+                    else if (body.Contains("-1022"))
+                    {
+                        var usesLive = _creds.TryGet(out _, out var dbgKey, out _);
+                        var src      = usesLive ? "CredentialStore(LIVE)" : "appsettings(fallback)";
+                        var fp       = (usesLive ? dbgKey : _fallbackApiKey) is { Length: > 8 } k ? k[..8] + "..." : "(empty)";
+                        _logger.LogError(
+                            "[ALGO-RAW] -1022 CancelAlgoOrder — invalid signature. Source={src} apiKey={fp}.",
+                            src, fp);
+                    }
                     _logger.LogWarning("[ALGO-RAW] CancelAlgoOrder HTTP {code} body={body}", (int)resp.StatusCode, body);
                     return false;
                 }
