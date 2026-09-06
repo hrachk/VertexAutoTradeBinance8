@@ -942,10 +942,7 @@
                 }
                 else if (_demoMode)
                 {
-                    @{
-                        var demoRows = FilteredDemoHistory.ToList();
-                    }
-                    @if (demoRows.Count == 0)
+                    @if (!FilteredDemoHistory.Any())
                     {
                         <div class="mk-oo-empty">No closed demo trades in selected time range</div>
                     }
@@ -959,7 +956,7 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                @foreach (var t in demoRows)
+                                @foreach (var t in FilteredDemoHistory)
                                 {
                                     <tr>
                                         <td>@t.Symbol.Replace("USDT","")</td>
@@ -985,45 +982,41 @@
                     {
                         <div class="mk-oo-empty">Loading exchange history…</div>
                     }
+                    else if (!FilteredRealHistory.Any())
+                    {
+                        <div class="mk-oo-empty">
+                            No exchange trades in selected time range
+                            <button class="mk-oo-cancel" @onclick="LoadRealHistoryAsync">Load</button>
+                        </div>
+                    }
                     else
                     {
-                        var realRows = FilteredRealHistory.ToList();
-                        if (realRows.Count == 0)
-                        {
-                            <div class="mk-oo-empty">
-                                No exchange trades in selected time range
-                                <button class="mk-oo-cancel" @onclick="LoadRealHistoryAsync">Load</button>
-                            </div>
-                        }
-                        else
-                        {
-                            <table class="mk-pos-table">
-                                <thead>
+                        <table class="mk-pos-table">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th><th>Side</th><th>Price</th><th>Qty</th>
+                                    <th>PnL</th><th>Fee</th><th>Time</th><th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var t in FilteredRealHistory)
+                                {
                                     <tr>
-                                        <th>Symbol</th><th>Side</th><th>Price</th><th>Qty</th>
-                                        <th>PnL</th><th>Fee</th><th>Time</th><th></th>
+                                        <td>@t.Symbol.Replace("USDT","")</td>
+                                        <td class="@(t.Side == "BUY" ? "up" : "dn")">@t.Side</td>
+                                        <td class="mk-mono">@FmtP(t.Price)</td>
+                                        <td class="mk-mono">@t.Qty.ToString("G8")</td>
+                                        <td class="mk-mono @(t.RealizedPnl >= 0 ? "up" : "dn")">@(t.RealizedPnl >= 0 ? "+" : "")@t.RealizedPnl.ToString("F2")</td>
+                                        <td class="mk-dim">@t.Fee.ToString("F4")</td>
+                                        <td class="mk-dim">@t.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
+                                        <td>
+                                            <button class="mk-oo-cancel" @onclick="@(() => OpenShareCardFromRealHistory(t))">Share</button>
+                                        </td>
                                     </tr>
-                                </thead>
-                                <tbody>
-                                    @foreach (var t in realRows)
-                                    {
-                                        <tr>
-                                            <td>@t.Symbol.Replace("USDT","")</td>
-                                            <td class="@(t.Side == "BUY" ? "up" : "dn")">@t.Side</td>
-                                            <td class="mk-mono">@FmtP(t.Price)</td>
-                                            <td class="mk-mono">@t.Qty.ToString("G8")</td>
-                                            <td class="mk-mono @(t.RealizedPnl >= 0 ? "up" : "dn")">@(t.RealizedPnl >= 0 ? "+" : "")@t.RealizedPnl.ToString("F2")</td>
-                                            <td class="mk-dim">@t.Fee.ToString("F4")</td>
-                                            <td class="mk-dim">@t.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
-                                            <td>
-                                                <button class="mk-oo-cancel" @onclick="@(() => OpenShareCardFromRealHistory(t))">Share</button>
-                                            </td>
-                                        </tr>
-                                    }
-                                </tbody>
-                            </table>
-                            <button class="mk-oo-cancel" style="margin-top:8px" @onclick="LoadRealHistoryAsync">Refresh</button>
-                        }
+                                }
+                            </tbody>
+                        </table>
+                        <button class="mk-oo-cancel" style="margin-top:8px" @onclick="LoadRealHistoryAsync">Refresh</button>
                     }
                 }
             }
