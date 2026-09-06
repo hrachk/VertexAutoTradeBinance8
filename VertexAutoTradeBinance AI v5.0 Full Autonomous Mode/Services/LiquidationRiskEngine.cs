@@ -358,7 +358,7 @@ namespace VertexAutoTradeBinance8.Services
         {
             try
             {
-                var client = _factory.GetClient();
+                var client = _factory.CreateRestClient();
                 var open = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(
                     pos.Symbol, ct: ct);
 
