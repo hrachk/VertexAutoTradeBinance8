@@ -284,15 +284,34 @@ namespace VertexAutoTradeBinance8.Services
                         break;
 
                     case LiqRiskLevel.Critical:
-                        // Критично — частично закрываем позицию немедленно
-                        decimal reduceQty = Math.Round(pos.Qty * 0.25m, 8); // закрываем 50%
-                        if (reduceQty > 0)
+                        // Если рабочий SL стоит МЕЖДУ mark и liquidation — он спасёт
+                        // раньше ликвидации. Emergency reduce тогда вреден (режет
+                        // позицию зря, как на HYPE). Режем только если SL нет
+                        // или SL не защищает (за liq / с той же стороны что mark).
                         {
-                            _logger.LogError(
-                                "[LIQ-RISK] CRITICAL {symbol} {side} buffer={buf:P2} < {thresh:P0} → EMERGENCY REDUCE 50%",
-                                pos.Symbol, pos.Side, liqBuffer, LIQBUFFER_CRITICAL);
+                            var slPrice = await TryGetProtectiveStopAsync(pos, ct);
+                            bool isLong = pos.Side == PositionSide.Long;
+                            bool slProtects = SlProtectsBeforeLiquidation(
+                                isLong, mark, liqPrice, slPrice);
 
-                            await EmergencyReduceAsync(pos, reduceQty, ct);
+                            if (slProtects)
+                            {
+                                _logger.LogWarning(
+                                    "[LIQ-RISK] CRITICAL {symbol} {side} buffer={buf:P2} but SL={sl:F6} protects before liq={liq:F6} → skip emergency reduce",
+                                    pos.Symbol, pos.Side, liqBuffer, slPrice!.Value, liqPrice);
+                                break;
+                            }
+
+                            decimal reduceQty = Math.Round(pos.Qty * 0.25m, 8);
+                            if (reduceQty > 0)
+                            {
+                                _logger.LogError(
+                                    "[LIQ-RISK] CRITICAL {symbol} {side} buffer={buf:P2} < {thresh:P0} SL={sl} → EMERGENCY REDUCE 25%",
+                                    pos.Symbol, pos.Side, liqBuffer, LIQBUFFER_CRITICAL,
+                                    slPrice.HasValue ? slPrice.Value.ToString("F6") : "none");
+
+                                await EmergencyReduceAsync(pos, reduceQty, ct);
+                            }
                         }
                         break;
                 }
@@ -308,6 +327,88 @@ namespace VertexAutoTradeBinance8.Services
             _stepSizeCache = new(StringComparer.OrdinalIgnoreCase);
 
         private static readonly TimeSpan EmergencyCooldown = TimeSpan.FromSeconds(60);
+
+
+        /// <summary>
+        /// Long: SL must be above liq (price falls: mark → SL → liq).
+        /// Short: SL must be below liq (price rises: mark → SL → liq).
+        /// </summary>
+        private static bool SlProtectsBeforeLiquidation(
+            bool isLong, decimal mark, decimal liq, decimal? sl)
+        {
+            if (sl == null || sl.Value <= 0 || liq <= 0 || mark <= 0)
+                return false;
+
+            decimal s = sl.Value;
+            if (isLong)
+            {
+                // Falling market: need mark > SL > liq (with tiny epsilon)
+                return s < mark && s > liq * 1.0001m;
+            }
+            // Rising market: mark < SL < liq
+            return s > mark && s < liq * 0.9999m;
+        }
+
+        /// <summary>
+        /// Best-effort stop price from open STOP / STOP_MARKET / TAKE_PROFIT
+        /// reduce-only orders on the position. Null if none found.
+        /// </summary>
+        private async Task<decimal?> TryGetProtectiveStopAsync(
+            LivePositionState pos, CancellationToken ct)
+        {
+            try
+            {
+                var client = _factory.GetClient();
+                var open = await client.UsdFuturesApi.Trading.GetOpenOrdersAsync(
+                    pos.Symbol, ct: ct);
+
+                if (!open.Success || open.Data == null)
+                    return null;
+
+                bool isLong = pos.Side == PositionSide.Long;
+                // Close side for long = Sell stop; for short = Buy stop
+                var closeSide = isLong
+                    ? Binance.Net.Enums.OrderSide.Sell
+                    : Binance.Net.Enums.OrderSide.Buy;
+
+                decimal? best = null;
+                foreach (var o in open.Data)
+                {
+                    if (o.PositionSide != pos.Side && o.PositionSide != PositionSide.Both)
+                        continue;
+                    if (o.Side != closeSide)
+                        continue;
+
+                    var typeName = o.Type.ToString();
+                    bool isStop =
+                        typeName.Contains("Stop", StringComparison.OrdinalIgnoreCase)
+                        || typeName.Contains("STOP", StringComparison.OrdinalIgnoreCase);
+                    if (!isStop)
+                        continue;
+
+                    decimal trigger = o.StopPrice ?? 0m;
+                    if (trigger <= 0)
+                        trigger = o.Price;
+                    if (trigger <= 0)
+                        continue;
+
+                    // Prefer stop closest to mark but still protective direction
+                    if (best == null)
+                        best = trigger;
+                    else if (isLong && trigger > best.Value)
+                        best = trigger; // higher SL is safer for long (farther from liq)
+                    else if (!isLong && trigger < best.Value)
+                        best = trigger;
+                }
+
+                return best;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[LIQ-RISK] TryGetProtectiveStop failed {sym}", pos.Symbol);
+                return null;
+            }
+        }
 
         private async Task EmergencyReduceAsync(
             LivePositionState pos,
