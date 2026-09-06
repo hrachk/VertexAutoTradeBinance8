@@ -43,7 +43,6 @@ namespace VertexAutoTradeBinance8
     {
         private readonly ILogger<TradingWorker> _logger;
         private readonly TradingOptions _options;
-        private readonly IOptionsMonitor<TradingSessionsOptions> _sessions;
         private readonly TradingOptionsResolver _resolver;
 
         private readonly MarketDataService _market;
@@ -136,7 +135,6 @@ namespace VertexAutoTradeBinance8
         public TradingWorker(
             ILogger<TradingWorker> logger,
             IOptions<TradingOptions> options,
-            IOptionsMonitor<TradingSessionsOptions> sessions,
             MarketDataService market,
             MarketDataFacade marketDataFacade,
             StrategyEngine strategy,
@@ -172,7 +170,6 @@ namespace VertexAutoTradeBinance8
         {
             _logger = logger;
             _options = options.Value;
-            _sessions = sessions;
 
             _market = market;
             _marketDataFacade = marketDataFacade;
@@ -806,19 +803,6 @@ namespace VertexAutoTradeBinance8
                     signal, symbol, tf,
                     "COOLDOWN",
                     "COOLDOWN_ACTIVE",
-                    ct);
-                return;
-            }
-
-            // =====================================================
-            // 2.5) TRADING SESSIONS (UTC windows — Yerevan schedule)
-            // =====================================================
-            if (!IsInTradingSession(out var sessionWhy))
-            {
-                await RejectAsync(
-                    signal, symbol, tf,
-                    "SESSION",
-                    sessionWhy,
                     ct);
                 return;
             }
@@ -1588,72 +1572,6 @@ namespace VertexAutoTradeBinance8
         // cooldown gate entirely for every symbol.
         // Now uses _resolver.Resolve(symbol).CooldownSeconds so BTC/ETH
         // get their per-symbol 120s and everything else gets the 90s default.
-
-        /// <summary>
-        /// TradingSessions windows are UTC. Overnight windows (StartUtc > EndUtc) supported.
-        /// Yerevan UTC+4: 03:00-11:45 → 23:00-07:45 UTC; 15:30-01:00 → 11:30-21:00 UTC.
-        /// </summary>
-        private bool IsInTradingSession(out string reason)
-        {
-            reason = "SESSION_OK";
-            var opt = _sessions?.CurrentValue;
-            if (opt == null || !opt.Enabled)
-                return true;
-            if (opt.Windows == null || opt.Windows.Count == 0)
-                return true;
-
-            var now = DateTime.UtcNow;
-            if (opt.BlockWeekends &&
-                (now.DayOfWeek == DayOfWeek.Saturday || now.DayOfWeek == DayOfWeek.Sunday))
-            {
-                reason = "SESSION_WEEKEND";
-                return false;
-            }
-
-            var tod = now.TimeOfDay;
-            foreach (var w in opt.Windows)
-            {
-                if (w == null) continue;
-                if (!TryParseHm(w.StartUtc, out var start) || !TryParseHm(w.EndUtc, out var end))
-                    continue;
-
-                if (opt.EarlyStartMinutes > 0)
-                {
-                    start = start - TimeSpan.FromMinutes(opt.EarlyStartMinutes);
-                    if (start < TimeSpan.Zero)
-                        start = start + TimeSpan.FromHours(24);
-                }
-
-                bool inside;
-                if (start <= end)
-                    inside = tod >= start && tod < end;
-                else
-                    // overnight: e.g. 23:00 → 07:45
-                    inside = tod >= start || tod < end;
-
-                if (inside)
-                {
-                    reason = $"SESSION_{w.Name ?? "OK"}";
-                    return true;
-                }
-            }
-
-            reason = "SESSION_CLOSED";
-            return false;
-        }
-
-        private static bool TryParseHm(string? s, out TimeSpan ts)
-        {
-            ts = default;
-            if (string.IsNullOrWhiteSpace(s)) return false;
-            // HH:mm or HH:mm:ss
-            if (TimeSpan.TryParseExact(s.Trim(),
-                    new[] { @"hh\:mm", @"h\:mm", @"hh\:mm\:ss", @"h\:mm\:ss" },
-                    null, out ts))
-                return true;
-            return TimeSpan.TryParse(s, out ts);
-        }
-
         private bool InCooldown(string symbol)
         {
             var trading = _resolver.Resolve(symbol);
