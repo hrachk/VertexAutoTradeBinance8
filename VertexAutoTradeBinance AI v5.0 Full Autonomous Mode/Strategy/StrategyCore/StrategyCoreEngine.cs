@@ -8,7 +8,7 @@ using VertexAutoTradeBinance8.Services.Learning;
 namespace VertexAutoTradeBinance8.Strategy.StrategyCore;
 
 /// <summary>
-/// StrategyCore v1.5 — resilient signal generation.
+/// StrategyCore v1.6 — structure-first SL (HH/HL invalidation). No ATR-only stops.
 ///
 /// Root cause of day-long silence: MarketDataFacade often returns &lt;70 bars
 /// (snapshot-capped / REST backfill disabled) so EvaluateAsync exited early
@@ -45,17 +45,22 @@ public sealed class StrategyCoreEngine
     // TP3 ≈ 2.4R — trend extension / runner
     // Soft ATR caps prevent "forever" targets on quiet pairs and
     // prevent micro-TPs on explosive ATR prints.
-    private const decimal Tp1Rr = 1.20m;
-    private const decimal Tp2Rr = 1.70m;
-    private const decimal Tp3Rr = 2.40m;
-    private const decimal MinRr = Tp1Rr; // EnforceMinRr uses TP1
+    // Professional R ladder (structure risk first — like discretionary desks)
+    private const decimal Tp1Rr = 1.00m;
+    private const decimal Tp2Rr = 2.00m;
+    private const decimal Tp3Rr = 3.00m;
+    private const decimal MinRr = Tp1Rr;
     private const decimal MinAtrPct = 0.0015m;
     private const decimal MaxAtrPct = 0.060m;
-    private const decimal MinSlAtr = 1.30m;
-    private const decimal StructurePadAtr = 0.35m;
+    // ATR is ONLY a clamp / pad — never the sole SL formula
+    private const decimal MinRiskAtr = 0.80m;   // skip if structural risk tighter than this
+    private const decimal MaxRiskAtr = 3.50m;   // skip if SL is absurdly far
+    private const decimal StructurePadAtr = 0.20m; // small buffer beyond swing
+    private const decimal MaxExtensionAtr = 2.20m; // no late chase past structure
     private const int EmaFast = 21;
     private const int EmaSlow = 50;
-    private const int SwingLookback = 18;
+    private const int SwingLookback = 40; // wider window for real swings
+    private const int PivotWing = 2;      // fractal pivot L/R bars
     private const int Donchian = 20;
     private const int QualityTopN = 40;
     private const int MinBars = 55;
@@ -84,7 +89,7 @@ public sealed class StrategyCoreEngine
         _scanTimer = new Timer(_ => { _ = ScanQualitySafeAsync(); },
             null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30));
         _log.LogInformation(
-            "[CORE] v1.5 bound TF={tf} REST-fallback=ON simple-trend=ON scan=30s",
+            "[CORE] v1.6 bound TF={tf} REST-fallback=ON structure-SL=ON (no ATR-only stop) scan=30s",
             Tf);
     }
 
@@ -322,45 +327,62 @@ public sealed class StrategyCoreEngine
     }
 
     /// <summary>Simple trend-follow — fires when price holds above/below EMA stack.</summary>
+    /// <summary>
+    /// Structure-first trend continuation. NO "SL = close ± k*ATR".
+    /// Long only in HH/HL; short only in LH/LL. SL = swing invalidation ± pad.
+    /// </summary>
     private TradeSignal? TrySimpleTrend(string symbol, List<BinanceFuturesUsdtKline> k, decimal atr)
     {
+        if (k.Count < EmaSlow + 10) return null;
+
         var closes = k.Select(x => x.ClosePrice).ToList();
         var emaF = EmaSeries(closes, EmaFast);
         var emaS = EmaSeries(closes, EmaSlow);
         int i = closes.Count - 1;
-        if (i < EmaSlow + 3) return null;
-
         decimal close = closes[i], eF = emaF[i], eS = emaS[i];
         var bar = k[i];
 
-        // Long: bullish stack + momentum vs 3 bars ago + green close
-        bool longOk = eF > eS
-                      && close > eF
-                      && close > closes[i - 3]
-                      && bar.ClosePrice >= bar.OpenPrice;
+        var struct_ = ReadStructure(k);
+        if (struct_ == null) return null;
 
-        // Short: bearish stack
-        bool shortOk = eF < eS
-                       && close < eF
-                       && close < closes[i - 3]
-                       && bar.ClosePrice <= bar.OpenPrice;
-
-        if (longOk)
+        // ── LONG: bullish structure only ──────────────────────────
+        if (struct_.IsBullish
+            && eF > eS
+            && close > eS
+            && bar.ClosePrice >= bar.OpenPrice)
         {
-            decimal sl = close - atr * MinSlAtr;
+            decimal swingLow = struct_.LastSwingLow;
+            // Must still be "defended" — price not already through invalidation
+            if (close <= swingLow) return null;
+
+            decimal sl = swingLow - atr * StructurePadAtr;
             decimal risk = close - sl;
+            if (!RiskOk(risk, atr)) return null;
+            // Late chase: entry too far above protective low → skip
+            if ((close - swingLow) > atr * MaxExtensionAtr) return null;
+
             return Make(symbol, SignalSide.Buy, close, sl,
                 BuildTpLadder(isLong: true, entry: close, risk: risk, atr: atr),
-                atr, "CORE_TREND_LONG", 0.55m);
+                atr, "CORE_STRUCT_LONG", 0.58m);
         }
 
-        if (shortOk)
+        // ── SHORT: bearish structure only ─────────────────────────
+        if (struct_.IsBearish
+            && eF < eS
+            && close < eS
+            && bar.ClosePrice <= bar.OpenPrice)
         {
-            decimal sl = close + atr * MinSlAtr;
+            decimal swingHigh = struct_.LastSwingHigh;
+            if (close >= swingHigh) return null;
+
+            decimal sl = swingHigh + atr * StructurePadAtr;
             decimal risk = sl - close;
+            if (!RiskOk(risk, atr)) return null;
+            if ((swingHigh - close) > atr * MaxExtensionAtr) return null;
+
             return Make(symbol, SignalSide.Sell, close, sl,
                 BuildTpLadder(isLong: false, entry: close, risk: risk, atr: atr),
-                atr, "CORE_TREND_SHORT", 0.55m);
+                atr, "CORE_STRUCT_SHORT", 0.58m);
         }
 
         return null;
@@ -403,9 +425,15 @@ public sealed class StrategyCoreEngine
         decimal close = bar.ClosePrice, open = bar.OpenPrice;
         decimal high = bar.HighPrice, low = bar.LowPrice;
 
+        var struct_ = ReadStructure(k);
+
         bool upTrend = eF > eS && closes[i - 1] > emaS[i - 1] && closes[i - 3] > emaS[i - 3];
         bool dnTrend = eF < eS && closes[i - 1] < emaS[i - 1] && closes[i - 3] < emaS[i - 3];
         if (!upTrend && !dnTrend) return null;
+
+        // Structure filter: do not fade a broken market
+        if (upTrend && struct_ != null && struct_.IsBearish) return null;
+        if (dnTrend && struct_ != null && struct_.IsBullish) return null;
 
         decimal zone = Math.Max(atr * 0.50m, close * 0.0025m);
         bool touchLong = low <= eF + zone && close >= eF - zone * 0.6m;
@@ -415,26 +443,33 @@ public sealed class StrategyCoreEngine
 
         if (upTrend && touchLong && bullReject)
         {
-            decimal swingLow = k.Skip(Math.Max(0, k.Count - SwingLookback)).Min(x => x.LowPrice);
-            decimal sl = Math.Min(swingLow, eS) - atr * StructurePadAtr;
-            if (close - sl < atr * MinSlAtr) sl = close - atr * MinSlAtr;
+            // Invalidation = last structural swing low (prefer structure over raw window min)
+            decimal swingLow = struct_?.LastSwingLow
+                ?? k.Skip(Math.Max(0, k.Count - SwingLookback)).Min(x => x.LowPrice);
+            swingLow = Math.Min(swingLow, eS);
+            decimal sl = swingLow - atr * StructurePadAtr;
             decimal risk = close - sl;
-            if (risk <= 0) return null;
+            if (!RiskOk(risk, atr)) return null;
+            if ((close - swingLow) > atr * MaxExtensionAtr) return null;
+
             return Make(symbol, SignalSide.Buy, close, sl,
                 BuildTpLadder(isLong: true, entry: close, risk: risk, atr: atr),
-                atr, "CORE_PULLBACK_LONG", 0.60m);
+                atr, "CORE_PULLBACK_LONG", 0.62m);
         }
 
         if (dnTrend && touchShort && bearReject)
         {
-            decimal swingHigh = k.Skip(Math.Max(0, k.Count - SwingLookback)).Max(x => x.HighPrice);
-            decimal sl = Math.Max(swingHigh, eS) + atr * StructurePadAtr;
-            if (sl - close < atr * MinSlAtr) sl = close + atr * MinSlAtr;
+            decimal swingHigh = struct_?.LastSwingHigh
+                ?? k.Skip(Math.Max(0, k.Count - SwingLookback)).Max(x => x.HighPrice);
+            swingHigh = Math.Max(swingHigh, eS);
+            decimal sl = swingHigh + atr * StructurePadAtr;
             decimal risk = sl - close;
-            if (risk <= 0) return null;
+            if (!RiskOk(risk, atr)) return null;
+            if ((swingHigh - close) > atr * MaxExtensionAtr) return null;
+
             return Make(symbol, SignalSide.Sell, close, sl,
                 BuildTpLadder(isLong: false, entry: close, risk: risk, atr: atr),
-                atr, "CORE_PULLBACK_SHORT", 0.60m);
+                atr, "CORE_PULLBACK_SHORT", 0.62m);
         }
         return null;
     }
@@ -447,35 +482,115 @@ public sealed class StrategyCoreEngine
         decimal chHigh = window.Max(x => x.HighPrice);
         decimal chLow = window.Min(x => x.LowPrice);
         var cur = k[^1];
+        decimal entry = cur.ClosePrice;
 
         bool brokeUp = k.Skip(k.Count - 4).Any(x => x.ClosePrice > chHigh);
-        bool retestLong = cur.LowPrice <= chHigh + atr * 0.30m && cur.ClosePrice > chHigh && cur.ClosePrice > cur.OpenPrice;
-        if (brokeUp && retestLong)
+        bool brokeDn = k.Skip(k.Count - 4).Any(x => x.ClosePrice < chLow);
+
+        // Retest long: broke up, now sitting back near prior high, SL under retest low / range
+        if (brokeUp && entry >= chHigh - atr * 0.35m && entry <= chHigh + atr * 0.80m
+            && cur.ClosePrice >= cur.OpenPrice)
         {
-            decimal entry = cur.ClosePrice;
             decimal sl = Math.Min(cur.LowPrice, chHigh) - atr * StructurePadAtr;
-            if (entry - sl < atr * MinSlAtr) sl = entry - atr * MinSlAtr;
+            // Prefer last swing low if tighter-but-valid structure exists under entry
+            var st = ReadStructure(k);
+            if (st != null && st.LastSwingLow < entry && st.LastSwingLow > sl - atr)
+                sl = st.LastSwingLow - atr * StructurePadAtr;
+
             decimal risk = entry - sl;
-            if (risk <= 0) return null;
+            if (!RiskOk(risk, atr)) return null;
+
             return Make(symbol, SignalSide.Buy, entry, sl,
                 BuildTpLadder(isLong: true, entry: entry, risk: risk, atr: atr),
                 atr, "CORE_BREAKOUT_LONG", 0.56m);
         }
 
-        bool brokeDn = k.Skip(k.Count - 4).Any(x => x.ClosePrice < chLow);
-        bool retestShort = cur.HighPrice >= chLow - atr * 0.30m && cur.ClosePrice < chLow && cur.ClosePrice < cur.OpenPrice;
-        if (brokeDn && retestShort)
+        if (brokeDn && entry <= chLow + atr * 0.35m && entry >= chLow - atr * 0.80m
+            && cur.ClosePrice <= cur.OpenPrice)
         {
-            decimal entry = cur.ClosePrice;
             decimal sl = Math.Max(cur.HighPrice, chLow) + atr * StructurePadAtr;
-            if (sl - entry < atr * MinSlAtr) sl = entry + atr * MinSlAtr;
+            var st = ReadStructure(k);
+            if (st != null && st.LastSwingHigh > entry && st.LastSwingHigh < sl + atr)
+                sl = st.LastSwingHigh + atr * StructurePadAtr;
+
             decimal risk = sl - entry;
-            if (risk <= 0) return null;
+            if (!RiskOk(risk, atr)) return null;
+
             return Make(symbol, SignalSide.Sell, entry, sl,
                 BuildTpLadder(isLong: false, entry: entry, risk: risk, atr: atr),
                 atr, "CORE_BREAKOUT_SHORT", 0.56m);
         }
         return null;
+    }
+
+    // ── Structure helpers (HH/HL vs LH/LL) ──────────────────────────
+
+    private sealed class MarketStructure
+    {
+        public decimal LastSwingHigh { get; init; }
+        public decimal PrevSwingHigh { get; init; }
+        public decimal LastSwingLow { get; init; }
+        public decimal PrevSwingLow { get; init; }
+        public bool IsBullish => LastSwingHigh > PrevSwingHigh && LastSwingLow > PrevSwingLow;
+        public bool IsBearish => LastSwingHigh < PrevSwingHigh && LastSwingLow < PrevSwingLow;
+    }
+
+    private static MarketStructure? ReadStructure(List<BinanceFuturesUsdtKline> k)
+    {
+        var highs = FindPivots(k, isHigh: true);
+        var lows = FindPivots(k, isHigh: false);
+        if (highs.Count < 2 || lows.Count < 2) return null;
+
+        var h1 = highs[^1];
+        var h0 = highs[^2];
+        var l1 = lows[^1];
+        var l0 = lows[^2];
+
+        return new MarketStructure
+        {
+            LastSwingHigh = h1.price,
+            PrevSwingHigh = h0.price,
+            LastSwingLow = l1.price,
+            PrevSwingLow = l0.price
+        };
+    }
+
+    private static List<(int idx, decimal price)> FindPivots(List<BinanceFuturesUsdtKline> k, bool isHigh)
+    {
+        var list = new List<(int, decimal)>();
+        int w = PivotWing;
+        // Confirmed pivots only (need `w` bars to the right) — skip last `w` bars
+        int last = k.Count - 1 - w;
+        for (int i = w; i <= last; i++)
+        {
+            bool ok = true;
+            decimal p = isHigh ? k[i].HighPrice : k[i].LowPrice;
+            for (int j = i - w; j <= i + w; j++)
+            {
+                if (j == i) continue;
+                decimal q = isHigh ? k[j].HighPrice : k[j].LowPrice;
+                if (isHigh)
+                {
+                    if (q > p) { ok = false; break; }
+                }
+                else
+                {
+                    if (q < p) { ok = false; break; }
+                }
+            }
+            if (ok) list.Add((i, p));
+        }
+        // Keep only recent pivots inside lookback window
+        int minIdx = Math.Max(0, k.Count - SwingLookback);
+        return list.Where(x => x.Item1 >= minIdx).ToList();
+    }
+
+    private static bool RiskOk(decimal risk, decimal atr)
+    {
+        if (risk <= 0 || atr <= 0) return false;
+        if (risk < atr * MinRiskAtr) return false; // too tight — noise trap
+        if (risk > atr * MaxRiskAtr) return false; // too wide — R:R / size broken
+        return true;
     }
 
     private TradeSignal Make(
@@ -544,23 +659,24 @@ public sealed class StrategyCoreEngine
     /// </summary>
     private static decimal[] BuildTpLadder(bool isLong, decimal entry, decimal risk, decimal atr)
     {
+        // Risk is structural. TP = pure R multiples (1R / 2R / 3R).
+        // Soft ATR ceiling only prevents absurd targets on dead markets —
+        // never shrinks TP below 1R.
         if (risk <= 0) risk = Math.Max(atr * 0.5m, entry * 0.003m);
         if (atr <= 0) atr = risk;
 
-        // R legs
         decimal d1 = risk * Tp1Rr;
         decimal d2 = risk * Tp2Rr;
         decimal d3 = risk * Tp3Rr;
 
-        // Soft ATR ceilings (professional band)
-        d1 = Math.Min(d1, atr * 1.55m);
-        d2 = Math.Min(d2, atr * 2.35m);
-        d3 = Math.Min(d3, atr * 3.20m);
+        // Soft ceiling: do not demand > ~4 ATR for TP3 on quiet pairs
+        d2 = Math.Min(d2, Math.Max(d1 * 1.5m, atr * 3.0m));
+        d3 = Math.Min(d3, Math.Max(d2 * 1.25m, atr * 4.5m));
 
-        // Floors: never tighter than ~1R / progressive stack
+        // Floors stay R-based
         d1 = Math.Max(d1, risk * 1.00m);
-        d2 = Math.Max(d2, d1 * 1.30m);
-        d3 = Math.Max(d3, d2 * 1.25m);
+        d2 = Math.Max(d2, risk * 1.80m);
+        d3 = Math.Max(d3, risk * 2.50m);
 
         if (isLong)
             return new[] { entry + d1, entry + d2, entry + d3 };
