@@ -57,6 +57,33 @@ public sealed class TradeJournalService
         }
     }
 
+    /// <summary>Recent closed trades from trade-journal.json (newest first).</summary>
+    public IReadOnlyList<TradeJournalEntry> GetRecentEntries(string clientId, string? sourceFilter = null, int take = 500)
+    {
+        if (string.IsNullOrWhiteSpace(clientId))
+            return Array.Empty<TradeJournalEntry>();
+        try
+        {
+            var path = JournalPath(clientId);
+            lock (LockFor(clientId))
+            {
+                var file = LoadJournal(path);
+                IEnumerable<TradeJournalEntry> q = file.Entries ?? new List<TradeJournalEntry>();
+                if (!string.IsNullOrWhiteSpace(sourceFilter))
+                {
+                    var sf = sourceFilter.Trim();
+                    q = q.Where(e => string.Equals(e.Source, sf, StringComparison.OrdinalIgnoreCase));
+                }
+                return q.OrderByDescending(e => e.ClosedAtUtc).Take(Math.Clamp(take, 1, 2000)).ToList();
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "[JOURNAL] GetRecentEntries failed {c}", clientId);
+            return Array.Empty<TradeJournalEntry>();
+        }
+    }
+
     public SymbolAdjustments GetAdjustments(string clientId, string symbol)
     {
         if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(symbol))

@@ -18,6 +18,7 @@
 @inject VertexAutoTradeBinance8.Services.BinanceAlgoOrderService AlgoOrders
 @inject VertexAutoTradeBinance8.Web.Services.BinanceTimeService BinanceTime
 @inject VertexAutoTradeBinance8.Web.Services.DemoAccountService DemoAccount
+@inject VertexAutoTradeBinance8.Services.Learning.TradeJournalService TradeJournal
 @inject VertexAutoTradeBinance8.Web.Services.ClientDataService ClientData
 @using VertexAutoTradeBinance8.Web.Services.Auth
 @inject AuthSessionService Auth
@@ -863,16 +864,90 @@
 
             @if (_ooActiveTab == "history")
             {
-                <div class="mk-pos-toolbar">
+                <div class="mk-pos-toolbar" style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;">
                     <label class="mk-pos-filter-cb">
                         <input type="checkbox" @bind="_posFilterCurrentSym" /> Only <strong>@_activeSym</strong>
                     </label>
+                    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                        <span class="mk-dim" style="font-size:12px;">Time</span>
+                        <select class="mk-oo-cancel" style="padding:3px 8px;font-size:12px;"
+                                value="@_histTimeRange"
+                                @onchange="OnHistTimeRangeChanged">
+                            <option value="1d">24h</option>
+                            <option value="3d">3d</option>
+                            <option value="7d">7d</option>
+                            <option value="30d">30d</option>
+                            <option value="all">All</option>
+                        </select>
+                    </div>
+                    <div class="mk-hist-subtabs" style="display:flex;gap:6px;margin-left:auto;">
+                        <button type="button"
+                                class="mk-oo-tab @(_histSubTab == "exchange" ? "mk-oo-tab-on" : "")"
+                                style="padding:4px 10px;font-size:12px;"
+                                @onclick="ShowExchangeHistorySubTab">
+                            @(_demoMode ? "Demo account" : "Exchange")
+                            <span class="mk-oo-count">@FilteredExchangeHistoryCount</span>
+                        </button>
+                        <button type="button"
+                                class="mk-oo-tab @(_histSubTab == "journal" ? "mk-oo-tab-on" : "")"
+                                style="padding:4px 10px;font-size:12px;"
+                                @onclick="ShowJournalHistorySubTab">
+                            Bot journal
+                            <span class="mk-oo-count">@FilteredJournalHistory.Count()</span>
+                        </button>
+                    </div>
                 </div>
-                @if (_demoMode)
+
+                @if (_histSubTab == "journal")
                 {
-                    @if (_demoSnapshot.History.Count == 0)
+                    @if (_journalHistoryLoading)
                     {
-                        <div class="mk-oo-empty">No closed demo trades yet</div>
+                        <div class="mk-oo-empty">Loading trade-journal…</div>
+                    }
+                    else if (!FilteredJournalHistory.Any())
+                    {
+                        <div class="mk-oo-empty">
+                            No bot journal trades in selected time range
+                            <button class="mk-oo-cancel" style="margin-left:8px" @onclick="LoadJournalHistoryAsync">Refresh</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <table class="mk-pos-table">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th><th>Side</th><th>Entry</th><th>Exit</th>
+                                    <th>PnL</th><th>R</th><th>Reason</th><th>Source</th><th>Closed</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var t in FilteredJournalHistory)
+                                {
+                                    <tr>
+                                        <td>@(t.Symbol?.Replace("USDT","") ?? "")</td>
+                                        <td class="@(string.Equals(t.Side,"LONG",StringComparison.OrdinalIgnoreCase) || string.Equals(t.Side,"BUY",StringComparison.OrdinalIgnoreCase) ? "up" : "dn")">@t.Side</td>
+                                        <td class="mk-mono">@FmtP(t.EntryPrice)</td>
+                                        <td class="mk-mono">@FmtP(t.ExitPrice)</td>
+                                        <td class="mk-mono @(t.RealizedPnl >= 0 ? "up" : "dn")">@(t.RealizedPnl >= 0 ? "+" : "")@t.RealizedPnl.ToString("F2")</td>
+                                        <td class="mk-mono @(t.RealizedR >= 0 ? "up" : "dn")">@t.RealizedR.ToString("F2")R</td>
+                                        <td class="mk-dim">@t.CloseReason</td>
+                                        <td class="mk-dim">@t.Source</td>
+                                        <td class="mk-dim">@t.ClosedAtUtc.ToLocalTime().ToString("MM/dd HH:mm")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        <button class="mk-oo-cancel" style="margin-top:8px" @onclick="LoadJournalHistoryAsync">Refresh</button>
+                    }
+                }
+                else if (_demoMode)
+                {
+                    @{
+                        var demoRows = FilteredDemoHistory.ToList();
+                    }
+                    @if (demoRows.Count == 0)
+                    {
+                        <div class="mk-oo-empty">No closed demo trades in selected time range</div>
                     }
                     else
                     {
@@ -884,14 +959,7 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                @{
-                    var histFiltered = (_posFilterCurrentSym && !string.IsNullOrEmpty(_activeSym))
-                        ? _demoSnapshot.History.Where(t => t.Symbol == _activeSym).ToList()
-                        : (IEnumerable<object>)_demoSnapshot.History;
-                }
-                @foreach (var t in _demoSnapshot.History
-                    .Where(t => !_posFilterCurrentSym || string.IsNullOrEmpty(_activeSym) || t.Symbol == _activeSym)
-                    .OrderByDescending(t => t.ClosedAtUtc))
+                                @foreach (var t in demoRows)
                                 {
                                     <tr>
                                         <td>@t.Symbol.Replace("USDT","")</td>
@@ -913,50 +981,49 @@
                 }
                 else
                 {
-                    // Real-mode history is loaded on demand (per-symbol
-                    // API calls, unlike demo's always-in-memory list) -
-                    // reuses the exact same GetUserTradesAsync pattern
-                    // already established in Positions.razor.
                     @if (_realHistoryLoading)
                     {
-                        <div class="mk-oo-empty">Loading trade history…</div>
-                    }
-                    else if (_realHistory.Count == 0)
-                    {
-                        <div class="mk-oo-empty">
-                            No closed trade history loaded yet.
-                            <button class="mk-oo-cancel" @onclick="LoadRealHistoryAsync">Load</button>
-                        </div>
+                        <div class="mk-oo-empty">Loading exchange history…</div>
                     }
                     else
                     {
-                        <table class="mk-pos-table">
-                            <thead>
-                                <tr>
-                                    <th>Symbol</th><th>Side</th><th>Price</th><th>Qty</th>
-                                    <th>PnL</th><th>Fee</th><th>Closed</th><th></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                @foreach (var t in _realHistory
-                                    .Where(t => !_posFilterCurrentSym || string.IsNullOrEmpty(_activeSym) || t.Symbol == _activeSym))
-                                {
+                        var realRows = FilteredRealHistory.ToList();
+                        if (realRows.Count == 0)
+                        {
+                            <div class="mk-oo-empty">
+                                No exchange trades in selected time range
+                                <button class="mk-oo-cancel" @onclick="LoadRealHistoryAsync">Load</button>
+                            </div>
+                        }
+                        else
+                        {
+                            <table class="mk-pos-table">
+                                <thead>
                                     <tr>
-                                        <td>@t.Symbol.Replace("USDT","")</td>
-                                        <td class="@(t.Side == "BUY" ? "up" : "dn")">@t.Side</td>
-                                        <td class="mk-mono">@FmtP(t.Price)</td>
-                                        <td class="mk-mono">@t.Qty.ToString("G8")</td>
-                                        <td class="mk-mono @(t.RealizedPnl >= 0 ? "up" : "dn")">@(t.RealizedPnl >= 0 ? "+" : "")@t.RealizedPnl.ToString("F2")</td>
-                                        <td class="mk-dim">@t.Fee.ToString("F4")</td>
-                                        <td class="mk-dim">@t.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
-                                        <td>
-                                            <button class="mk-oo-cancel" @onclick="@(() => OpenShareCardFromRealHistory(t))">Share</button>
-                                        </td>
+                                        <th>Symbol</th><th>Side</th><th>Price</th><th>Qty</th>
+                                        <th>PnL</th><th>Fee</th><th>Time</th><th></th>
                                     </tr>
-                                }
-                            </tbody>
-                        </table>
-                        <button class="mk-oo-cancel" style="margin-top:8px" @onclick="LoadRealHistoryAsync">Refresh</button>
+                                </thead>
+                                <tbody>
+                                    @foreach (var t in realRows)
+                                    {
+                                        <tr>
+                                            <td>@t.Symbol.Replace("USDT","")</td>
+                                            <td class="@(t.Side == "BUY" ? "up" : "dn")">@t.Side</td>
+                                            <td class="mk-mono">@FmtP(t.Price)</td>
+                                            <td class="mk-mono">@t.Qty.ToString("G8")</td>
+                                            <td class="mk-mono @(t.RealizedPnl >= 0 ? "up" : "dn")">@(t.RealizedPnl >= 0 ? "+" : "")@t.RealizedPnl.ToString("F2")</td>
+                                            <td class="mk-dim">@t.Fee.ToString("F4")</td>
+                                            <td class="mk-dim">@t.Time.ToLocalTime().ToString("MM/dd HH:mm")</td>
+                                            <td>
+                                                <button class="mk-oo-cancel" @onclick="@(() => OpenShareCardFromRealHistory(t))">Share</button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                            <button class="mk-oo-cancel" style="margin-top:8px" @onclick="LoadRealHistoryAsync">Refresh</button>
+                        }
                     }
                 }
             }
@@ -7690,9 +7757,113 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     {
         _ooActiveTab = "history";
         _ = SaveSelectionState();
-        if (!_demoMode && _realHistory.Count == 0 && !_realHistoryLoading)
-        {
+        if (_histSubTab == "journal")
+            _ = LoadJournalHistoryAsync();
+        else if (!_demoMode && _realHistory.Count == 0 && !_realHistoryLoading)
             _ = LoadRealHistoryAsync();
+    }
+
+    void ShowExchangeHistorySubTab()
+    {
+        _histSubTab = "exchange";
+        if (!_demoMode && _realHistory.Count == 0 && !_realHistoryLoading)
+            _ = LoadRealHistoryAsync();
+        StateHasChanged();
+    }
+
+    void ShowJournalHistorySubTab()
+    {
+        _histSubTab = "journal";
+        _ = LoadJournalHistoryAsync();
+        StateHasChanged();
+    }
+
+    void OnHistTimeRangeChanged(ChangeEventArgs e)
+    {
+        _histTimeRange = e.Value?.ToString() ?? "7d";
+        StateHasChanged();
+    }
+
+    DateTime? HistTimeCutoffUtc()
+    {
+        var now = DateTime.UtcNow;
+        return _histTimeRange switch
+        {
+            "1d" => now.AddDays(-1),
+            "3d" => now.AddDays(-3),
+            "7d" => now.AddDays(-7),
+            "30d" => now.AddDays(-30),
+            _ => null // all
+        };
+    }
+
+    bool InHistTimeRange(DateTime utc)
+    {
+        var cut = HistTimeCutoffUtc();
+        if (cut == null) return true;
+        if (utc.Kind == DateTimeKind.Unspecified)
+            utc = DateTime.SpecifyKind(utc, DateTimeKind.Utc);
+        return utc.ToUniversalTime() >= cut.Value;
+    }
+
+    bool SymMatch(string? sym)
+    {
+        if (!_posFilterCurrentSym || string.IsNullOrEmpty(_activeSym)) return true;
+        if (string.IsNullOrEmpty(sym)) return false;
+        var a = _activeSym.Replace("USDT", "", StringComparison.OrdinalIgnoreCase);
+        var b = sym.Replace("USDT", "", StringComparison.OrdinalIgnoreCase);
+        return string.Equals(a, b, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(sym, _activeSym, StringComparison.OrdinalIgnoreCase);
+    }
+
+    IEnumerable<VertexAutoTradeBinance8.Services.Learning.TradeJournalEntry> FilteredJournalHistory =>
+        _journalHistory
+            .Where(t => SymMatch(t.Symbol) && InHistTimeRange(t.ClosedAtUtc))
+            .OrderByDescending(t => t.ClosedAtUtc);
+
+    IEnumerable<DemoClosedTrade> FilteredDemoHistory =>
+        _demoSnapshot.History
+            .Where(t => SymMatch(t.Symbol) && InHistTimeRange(t.ClosedAtUtc))
+            .OrderByDescending(t => t.ClosedAtUtc);
+
+    IEnumerable<RealTradeRow> FilteredRealHistory =>
+        _realHistory
+            .Where(t => SymMatch(t.Symbol) && InHistTimeRange(t.Time))
+            .OrderByDescending(t => t.Time);
+
+    int FilteredExchangeHistoryCount =>
+        _demoMode ? FilteredDemoHistory.Count() : FilteredRealHistory.Count();
+
+    string ResolveJournalClientId()
+    {
+        var id = AppConfig["Client:Id"];
+        if (string.IsNullOrWhiteSpace(id))
+            id = "client_001";
+        return id.Trim();
+    }
+
+    async Task LoadJournalHistoryAsync()
+    {
+        if (_journalHistoryLoading) return;
+        _journalHistoryLoading = true;
+        try
+        {
+            await InvokeAsync(StateHasChanged);
+            var clientId = ResolveJournalClientId();
+            var source = _demoMode ? "Demo" : "Live";
+            var list = TradeJournal.GetRecentEntries(clientId, source, 500).ToList();
+            if (list.Count == 0)
+                list = TradeJournal.GetRecentEntries(clientId, null, 500).ToList();
+            _journalHistory = list;
+        }
+        catch
+        {
+            _journalHistory = new();
+        }
+        finally
+        {
+            _journalHistoryLoading = false;
+            await InvokeAsync(StateHasChanged);
         }
     }
 
@@ -7842,6 +8013,10 @@ sealed class RealTradeRow
 
     List<RealTradeRow> _realHistory = new();
     bool _realHistoryLoading;
+    List<VertexAutoTradeBinance8.Services.Learning.TradeJournalEntry> _journalHistory = new();
+    bool _journalHistoryLoading;
+    string _histSubTab = "exchange";
+    string _histTimeRange = "7d";
 
     // Reuses the exact same GetUserTradesAsync pattern already
     // established in Positions.razor, rather than inventing a new
