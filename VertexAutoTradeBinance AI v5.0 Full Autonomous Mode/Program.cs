@@ -142,6 +142,10 @@ public class Program
                     services.Configure<TradingOptions>(
                       ctx.Configuration.GetSection("Trading")); // TRUE default
 
+                    // TradingSessions under Trading:TradingSessions (Yerevan windows in UTC)
+                    services.Configure<VertexAutoTradeBinance8.Configuration.TradingSessionsOptions>(
+                      ctx.Configuration.GetSection("Trading:TradingSessions"));
+
                     // NOTE: SignalOnlyMode section previously also bound to TradingOptions
                     // here, silently overriding any Trading-section value of EnableExecution.
                     // Removed: EnableExecution defaults to true in TradingOptions and is
