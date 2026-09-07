@@ -42,6 +42,12 @@ public class TradingOptions
     public bool EnableExecution { get; set; } = true;
 
     /// <summary>
+    /// Max concurrent open positions (LIVE TradingWorker + Demo auto).
+    /// From Trading:MaxOpenPositions. Default 5. Values <= 0 fall back to 5.
+    /// </summary>
+    public int MaxOpenPositions { get; set; } = 5;
+
+    /// <summary>
     /// Maximum margin as a fraction of balance that a single position may consume.
     /// Default 0.12 = 12%. Previously hardcoded as const decimal in RiskManager.
     /// </summary>

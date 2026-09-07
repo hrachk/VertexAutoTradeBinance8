@@ -60,7 +60,13 @@ public sealed class DemoAutoTradeService : BackgroundService
         }
     }
 
-    private const int MaxDemoPositions = 5; // aligned with LIVE max open
+    /// <summary>From Trading:MaxOpenPositions (same key as LIVE). Fallback 5.</summary>
+    private int GetMaxDemoPositions()
+    {
+        int n = _cfg.GetValue("Trading:MaxOpenPositions", 5);
+        return n > 0 ? n : 5;
+    }
+
 
     private async Task TickAsync(CancellationToken ct)
     {
@@ -105,9 +111,10 @@ public sealed class DemoAutoTradeService : BackgroundService
                 try
                 {
                     int openN = _demo.GetOpenPositionCountForClient(client.Id);
-                    if (openN >= MaxDemoPositions)
+                    int maxDemo = GetMaxDemoPositions();
+                    if (openN >= maxDemo)
                     {
-                        _log.LogDebug("[DEMO-AUTO] {user} at max positions ({n})", client.Id, openN);
+                        _log.LogDebug("[DEMO-AUTO] {user} at max positions ({n}/{max})", client.Id, openN, maxDemo);
                         continue;
                     }
                     if (_demo.HasOpenSymbolForClient(client.Id, sym))

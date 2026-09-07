@@ -43,6 +43,7 @@ namespace VertexAutoTradeBinance8
     {
         private readonly ILogger<TradingWorker> _logger;
         private readonly TradingOptions _options;
+        private readonly IOptionsMonitor<TradingOptions> _tradingMonitor;
         private readonly TradingOptionsResolver _resolver;
 
         private readonly MarketDataService _market;
@@ -135,6 +136,7 @@ namespace VertexAutoTradeBinance8
         public TradingWorker(
             ILogger<TradingWorker> logger,
             IOptions<TradingOptions> options,
+            IOptionsMonitor<TradingOptions> tradingMonitor,
             MarketDataService market,
             MarketDataFacade marketDataFacade,
             StrategyEngine strategy,
@@ -170,6 +172,7 @@ namespace VertexAutoTradeBinance8
         {
             _logger = logger;
             _options = options.Value;
+            _tradingMonitor = tradingMonitor;
 
             _market = market;
             _marketDataFacade = marketDataFacade;
@@ -914,18 +917,20 @@ namespace VertexAutoTradeBinance8
             }
 
             // =====================================================
-            // 4.5) MAX OPEN POSITIONS (LIVE = DEMO: max 5)
+            // 4.5) MAX OPEN POSITIONS — Trading:MaxOpenPositions (appsettings / runtime)
             // =====================================================
             try
             {
                 int openN = await _supervisor.GetActivePositionsCountAsync(ct).ConfigureAwait(false);
-                const int MaxLivePositions = 5;
-                if (openN >= MaxLivePositions)
+                int maxLive = _tradingMonitor?.CurrentValue?.MaxOpenPositions
+                    ?? _options.MaxOpenPositions;
+                if (maxLive <= 0) maxLive = 5;
+                if (openN >= maxLive)
                 {
                     await RejectAsync(
                         signal, symbol, tf,
                         "RISK",
-                        $"MAX_POSITIONS:{openN}>={MaxLivePositions}",
+                        $"MAX_POSITIONS:{openN}>={maxLive}",
                         ct);
                     return;
                 }
