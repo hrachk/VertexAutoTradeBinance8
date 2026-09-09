@@ -971,6 +971,7 @@ namespace VertexAutoTradeBinance8.Services
                     var sigSide = side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell;
 
                     _aiLearning.RecordTrade(symbol, sigSide, prevEntry, exitPrice, _regimeNow);
+                    // Journal USDT write is in DetectClose (full close) — not here (avoid duplicates).
 
                     _logger.LogWarning(
                         "[AI][{symbol}] POSITION CLOSED entry={entry} exit={exit}",
@@ -1650,7 +1651,7 @@ namespace VertexAutoTradeBinance8.Services
                 }
                 else
                 {
-                    // ✅ REALIZED PNL (добавлено)
+                    // ✅ REALIZED PNL (USDT)
                     var qty = Math.Abs(prevQty);
 
                     decimal realizedPnl =
@@ -1660,13 +1661,23 @@ namespace VertexAutoTradeBinance8.Services
 
                     _accountState.AddRealizedPnl(realizedPnl);
 
-                    // AI learning остаётся как есть
+                    // AI learning (pct-based, internal only)
                     _aiLearning.RecordTrade(
                         symbol,
                         side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell,
                         entry: prevEntry,
                         exit: exitPrice,
                         regime: _regimeNow);
+
+                    // Bot journal (USDT, full close — same shape as Demo)
+                    try
+                    {
+                        string sideStr = side == PositionSide.Long ? "LONG" : "SHORT";
+                        string reason = realizedPnl < 0 ? "SL" : "TP";
+                        AiSelfLearningService.LiveTradeJournalHook?.Invoke(
+                            symbol, sideStr, prevEntry, exitPrice, qty, realizedPnl, reason);
+                    }
+                    catch { /* never break close path */ }
 
                     _logger.LogWarning(
                         "[CLOSE][{symbol}][{side}] qty={qty} entry={entry} exit={exit} pnl={pnl}",

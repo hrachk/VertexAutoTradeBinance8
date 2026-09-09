@@ -31,7 +31,11 @@ namespace VertexAutoTradeBinance8.Services
     public class AiSelfLearningService
     {
         /// <summary>Optional: unified trade-journal.json sink (Demo+Live). Wired from Program.</summary>
-        public static Action<string, string, decimal, decimal, decimal, string>? LiveTradeJournalHook { get; set; }
+        /// <summary>
+        /// Unified trade-journal sink for FULL live closes only.
+        /// (symbol, side LONG/SHORT, entry, exit, qty, realizedPnlUsd, reason)
+        /// </summary>
+        public static Action<string, string, decimal, decimal, decimal, decimal, string>? LiveTradeJournalHook { get; set; }
 
         private DateTime? _lastImportedTradeCloseUtc;
         public DateTime? LastImportedTradeCloseUtc => _lastImportedTradeCloseUtc;
@@ -503,18 +507,9 @@ namespace VertexAutoTradeBinance8.Services
                     Time = DateTime.UtcNow
                 });
 
-                try
-                {
-                    // Mirror into per-client trade-journal.json (Source=Live)
-                    LiveTradeJournalHook?.Invoke(
-                        symbol,
-                        side == SignalSide.Buy ? "LONG" : "SHORT",
-                        entry,
-                        exit,
-                        pnlPct,
-                        pnlPct >= 0 ? "TP/Win" : "SL/Loss");
-                }
-                catch { /* never break learning */ }
+                // Live journal is written on FULL position close in PositionSupervisor
+                // (USDT PnL + qty). Do NOT mirror pct-based learning fills here —
+                // that produced Live journal rows with ~0 PnL and partial spam.
 
                 if (_tradeHistory.Count > 5000)
                     _tradeHistory.RemoveRange(0, 2500);

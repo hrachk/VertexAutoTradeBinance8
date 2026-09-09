@@ -459,8 +459,14 @@ try
     var journal = host.Services.GetRequiredService<VertexAutoTradeBinance8.Services.Learning.TradeJournalService>();
     var liveClientId = host.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>()["Client:Id"] ?? "client_001";
     VertexAutoTradeBinance8.Services.AiSelfLearningService.LiveTradeJournalHook =
-        (symbol, side, entry, exit, pnlPct, reason) =>
+        (symbol, side, entry, exit, qty, realizedPnlUsd, reason) =>
         {
+            if (string.IsNullOrWhiteSpace(symbol) || entry <= 0 || exit <= 0)
+                return;
+            // Ignore dust / zero-qty noise
+            if (qty <= 0 && Math.Abs(realizedPnlUsd) < 0.01m)
+                return;
+
             journal.Append(new VertexAutoTradeBinance8.Services.Learning.TradeJournalEntry
             {
                 ClientId = liveClientId,
@@ -469,11 +475,11 @@ try
                 Side = side,
                 EntryPrice = entry,
                 ExitPrice = exit,
-                Qty = 0,
+                Qty = qty,
                 Leverage = 0,
-                RealizedPnl = pnlPct,
-                RealizedR = pnlPct,
-                CloseReason = reason,
+                RealizedPnl = realizedPnlUsd,
+                RealizedR = 0m, // set when SL distance known; Demo often 0 until wired
+                CloseReason = reason ?? "",
                 OpenedAtUtc = DateTime.UtcNow,
                 ClosedAtUtc = DateTime.UtcNow
             });
