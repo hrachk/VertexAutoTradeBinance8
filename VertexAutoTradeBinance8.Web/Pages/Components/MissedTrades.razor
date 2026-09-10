@@ -193,6 +193,8 @@
                             </div>
                         </div>
 
+                        <div class="sl-thesis-brief">@ThesisBrief(r)</div>
+
                         <!-- ── EXPANDED DETAIL ── -->
                         @if (isSel)
                         {
@@ -219,7 +221,10 @@
                                         }
                                     </div>
                                 }
-                                <div class="sl-hint">🤖 @Hint(r)</div>
+                                <div class="sl-thesis">
+                                    <div class="sl-thesis-title">Setup thesis · quality assessment</div>
+                                    @((MarkupString)ThesisHtml(r))
+                                </div>
                             </div>
                         }
 
@@ -400,6 +405,19 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
 .sl-tp1{background:rgba(63,185,80,.15);font-weight:600;}
 .sl-tp b{color:var(--grn);margin-left:4px;}
 .sl-hint{font-size:12px;color:var(--dim);background:var(--bg3);border-radius:6px;padding:10px 12px;line-height:1.6;border:1px solid var(--bdr);}
+
+.sl-thesis-brief{margin-top:10px;font-size:12.5px;color:var(--txt);line-height:1.55;opacity:.92;}
+.sl-thesis{margin-top:4px;font-size:12.5px;color:var(--txt);background:rgba(31,111,235,.06);border-radius:8px;padding:12px 14px;line-height:1.65;border:1px solid rgba(31,111,235,.25);}
+.sl-thesis-title{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--acc);margin-bottom:8px;}
+.sl-thesis ul{margin:6px 0 0 0;padding-left:18px;}
+.sl-thesis li{margin:3px 0;color:var(--dim);}
+.sl-thesis li b{color:var(--txt);font-weight:600;}
+.sl-thesis .tq{display:inline-block;margin-top:8px;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;}
+.sl-thesis .tq-a{background:rgba(46,204,113,.15);color:var(--grn);}
+.sl-thesis .tq-b{background:rgba(31,111,235,.15);color:var(--acc);}
+.sl-thesis .tq-c{background:rgba(241,196,15,.12);color:var(--yel);}
+.sl-thesis .tq-d{background:rgba(231,76,60,.12);color:var(--red);}
+
 
 /* SIDEBAR */
 .sl-side-box{padding:16px 18px;border-bottom:1px solid var(--bdr);}
@@ -670,30 +688,131 @@ html,body{background:var(--bg)!important;color:var(--txt);font-size:14px;}
         _ => r.Length > 20 ? r[..20] + "…" : r
     };
 
-    string Hint(MissedRec r)
+    string StrategyName(string reason)
     {
+        if (string.IsNullOrWhiteSpace(reason)) return "Unspecified strategy";
+        var u = reason.ToUpperInvariant();
+        if (u.Contains("CORE_STRUCT")) return "CORE Structure";
+        if (u.Contains("CORE_PULLBACK")) return "CORE Pullback";
+        if (u.Contains("CORE_BREAKOUT")) return "CORE Breakout";
+        if (u.Contains("CORE_")) return "CORE Engine";
+        if (u.Contains("PULLBACK")) return "EMA / Pullback";
+        if (u.Contains("MEAN") || u.Contains("ZSCORE")) return "Mean-Reversion";
+        if (u.Contains("TREND")) return "Trend continuation";
+        return reason.Length > 28 ? reason[..28] + "…" : reason;
+    }
+
+    string StrategyLogic(string reason, bool isLong)
+    {
+        var u = (reason ?? "").ToUpperInvariant();
+        var dir = isLong ? "long" : "short";
+        if (u.Contains("CORE_STRUCT"))
+            return isLong
+                ? "Price held higher-structure support; invalidation set below the broken/defended swing. Entry anticipates continuation after structural acceptance."
+                : "Price lost structure / accepted below a key swing; stop sits above invalidation. Short targets measured structure extensions.";
+        if (u.Contains("CORE_PULLBACK"))
+            return isLong
+                ? "Pullback into a demand/structure zone inside an uptrend context; stop beyond the pullback low, targets along the prior impulse."
+                : "Rally into supply/structure in a downtrend context; stop above the pullback high, targets toward prior lows / extensions.";
+        if (u.Contains("CORE_BREAKOUT"))
+            return $"Breakout-style {dir}: momentum through a level with structure-based risk; targets scaled from the break range.";
+        if (u.Contains("COOLDOWN"))
+            return "Entry suppressed: symbol still inside post-trade cooldown.";
+        if (u.Contains("LIQ") || u.Contains("LIQUIDATION"))
+            return "Risk engine blocked or resized the idea: stop distance vs liquidation / margin made the plan unsafe at full size.";
+        if (u.Contains("SMARTFLOW") || u.Contains("LIQUIDITY"))
+            return "Microstructure / liquidity guard flagged adverse book or thin conditions near entry.";
+        if (u.Contains("1M") || u.Contains("TIMING"))
+            return "Higher-timeframe idea was valid, but 1m micro-timing was weak at the moment of execution.";
+        if (u.Contains("EXEC") || u.Contains("FAILED"))
+            return "Signal reached execution but the order path failed (API, fill, or exchange reject).";
+        if (u.Contains("BALANCE") || u.Contains("NOTIONAL") || u.Contains("QTY_ZERO"))
+            return "Idea generated, but account size / min-notional / qty math prevented a live order.";
+        return $"Directional {dir} candidate from the active CORE/router pipeline; see confidence and R-multiples for quality.";
+    }
+
+    (string grade, string gradeCss, string gradeText) QualityGrade(MissedRec r)
+    {
+        decimal risk = r.Entry > 0 && r.StopLoss > 0 ? Math.Abs(r.Entry - r.StopLoss) : 0m;
+        decimal tp1 = r.TakeProfits != null && r.TakeProfits.Count > 0 ? r.TakeProfits[0] : 0m;
+        decimal reward = r.Entry > 0 && tp1 > 0 ? Math.Abs(tp1 - r.Entry) : 0m;
+        decimal rr = risk > 0 ? reward / risk : 0m;
+        int conf = r.Confidence;
+        int score = 0;
+        if (conf >= 70) score += 3; else if (conf >= 58) score += 2; else if (conf >= 50) score += 1;
+        if (rr >= 2.0m) score += 3; else if (rr >= 1.4m) score += 2; else if (rr >= 1.0m) score += 1;
+        if (r.ATR > 0 && r.Entry > 0)
+        {
+            var atrPct = r.ATR / r.Entry;
+            if (atrPct >= 0.004m && atrPct <= 0.04m) score += 1; // tradable volatility band
+        }
+        var reason = (r.Reason ?? "").ToUpperInvariant();
+        if (reason.StartsWith("CORE_")) score += 1;
+        if (reason.Contains("EXEC") || reason.Contains("FAILED") || reason.Contains("QTY_ZERO")) score -= 1;
+
+        if (score >= 7) return ("A", "tq-a", "High-quality setup — structure + RR + confidence aligned");
+        if (score >= 5) return ("B", "tq-b", "Tradeable setup — solid thesis, normal variance expected");
+        if (score >= 3) return ("C", "tq-c", "Marginal — valid idea but weaker confluence or RR");
+        return ("D", "tq-d", "Low priority — weak confluence or blocked before a clean fill");
+    }
+
+    string ThesisBrief(MissedRec r)
+    {
+        bool isLong = string.Equals(r.Side, "Buy", StringComparison.OrdinalIgnoreCase);
+        var name = StrategyName(r.Reason);
+        var (g, _, gtxt) = QualityGrade(r);
+        decimal risk = r.Entry > 0 && r.StopLoss > 0 ? Math.Abs(r.Entry - r.StopLoss) / r.Entry * 100m : 0m;
+        decimal tp1 = r.TakeProfits != null && r.TakeProfits.Count > 0 ? r.TakeProfits[0] : 0m;
+        decimal rr = 0m;
+        if (r.Entry > 0 && r.StopLoss > 0 && tp1 > 0)
+            rr = Math.Abs(tp1 - r.Entry) / Math.Abs(r.Entry - r.StopLoss);
+        return $"{name} · {(isLong ? "Long" : "Short")} · conf {r.Confidence}% · risk {risk:F2}% · TP1≈{rr:F1}R · grade {g} — {gtxt}";
+    }
+
+    string ThesisHtml(MissedRec r)
+    {
+        bool isLong = string.Equals(r.Side, "Buy", StringComparison.OrdinalIgnoreCase);
+        var name = StrategyName(r.Reason);
+        var logic = StrategyLogic(r.Reason, isLong);
+        var (g, gcss, gtxt) = QualityGrade(r);
+
+        decimal riskPct = 0m, rr = 0m, atrPct = 0m;
+        if (r.Entry > 0 && r.StopLoss > 0)
+            riskPct = Math.Abs(r.Entry - r.StopLoss) / r.Entry * 100m;
+        decimal tp1 = r.TakeProfits != null && r.TakeProfits.Count > 0 ? r.TakeProfits[0] : 0m;
+        if (r.Entry > 0 && r.StopLoss > 0 && tp1 > 0)
+            rr = Math.Abs(tp1 - r.Entry) / Math.Abs(r.Entry - r.StopLoss);
+        if (r.Entry > 0 && r.ATR > 0)
+            atrPct = r.ATR / r.Entry * 100m;
+
+        string esc(string s) => System.Net.WebUtility.HtmlEncode(s ?? "");
+
         var sb = new System.Text.StringBuilder();
-        if      (r.Confidence >= 80) sb.Append("Strong signal setup. ");
-        else if (r.Confidence >= 60) sb.Append("Decent setup. ");
-        else                          sb.Append("Weak signal — better to skip. ");
-        sb.Append(r.Regime switch {
-            VertexAutoTradeBinance8.Models.MarketRegime.StrongUpTrend   => "Strong bull trend — momentum in favour. ",
-            VertexAutoTradeBinance8.Models.MarketRegime.UpTrend         => "Uptrend — direction clear. ",
-            VertexAutoTradeBinance8.Models.MarketRegime.StrongDownTrend => "Strong bear trend — short opportunity. ",
-            VertexAutoTradeBinance8.Models.MarketRegime.Range           => "Range market — mean reversion play. ",
-            VertexAutoTradeBinance8.Models.MarketRegime.Squeeze         => "Squeeze — breakout expected. ",
-            _ => ""
-        });
-        if      (r.Reason.Contains("Exec") || r.Reason.Contains("Failed"))
-            sb.Append("Blocked at execution — likely API or balance issue.");
-        else if (r.Reason.Contains("Balance") || r.Reason.Contains("balance"))
-            sb.Append("Insufficient balance — add USDT to capture this setup.");
-        else if (r.Reason.Contains("Notional") || r.Reason.Contains("TOO_SMALL"))
-            sb.Append("Min notional not met — this symbol requires larger position size.");
-        else if (r.Reason.Contains("TRAP"))
-            sb.Append("AI detected potential trap pattern — entry blocked to avoid false move.");
-        else if (r.Reason.Contains("Cooldown"))
-            sb.Append("Symbol in cooldown after recent trade.");
+        sb.Append("<div><b>Why this signal fired</b></div>");
+        sb.Append("<ul>");
+        sb.Append($"<li><b>Strategy:</b> {esc(name)} <span class=\"mono\">({esc(r.Reason)})</span></li>");
+        sb.Append($"<li><b>Direction:</b> {(isLong ? "LONG — buy-side continuation / reclaim" : "SHORT — sell-side continuation / rejection")}</li>");
+        sb.Append($"<li><b>Logic:</b> {esc(logic)}</li>");
+        sb.Append($"<li><b>Invalidation (SL):</b> {r.StopLoss.ToString("G6", System.Globalization.CultureInfo.InvariantCulture)}");
+        if (riskPct > 0) sb.Append($" · ≈{riskPct:F2}% from entry");
+        sb.Append("</li>");
+        if (tp1 > 0)
+        {
+            sb.Append($"<li><b>Primary target (TP1):</b> {tp1.ToString("G6", System.Globalization.CultureInfo.InvariantCulture)}");
+            if (rr > 0) sb.Append($" · ≈{rr:F2}R");
+            sb.Append("</li>");
+        }
+        sb.Append($"<li><b>Confidence:</b> {r.Confidence}/100");
+        if (r.Score > 0) sb.Append($" · model score {r.Score}");
+        sb.Append("</li>");
+        if (atrPct > 0)
+            sb.Append($"<li><b>Volatility context:</b> ATR ≈ {atrPct:F2}% of price — {(atrPct < 0.3m ? "tight" : atrPct > 5m ? "very wide" : "normal")} for sizing</li>");
+        if (!string.IsNullOrWhiteSpace(r.Event) && !string.Equals(r.Event, "SIGNAL", StringComparison.OrdinalIgnoreCase))
+            sb.Append($"<li><b>Pipeline event:</b> {esc(r.Event)}</li>");
+        if (r.FreeBalance > 0 && r.FreeBalance < 50)
+            sb.Append($"<li><b>Account note:</b> free balance ${r.FreeBalance:F1} — micro-account constraints may resize or block live fills</li>");
+        sb.Append("</ul>");
+        sb.Append($"<span class=\"tq {gcss}\">Grade {g}</span> <span style=\"margin-left:8px;color:var(--dim)\">{esc(gtxt)}</span>");
         return sb.ToString();
     }
 

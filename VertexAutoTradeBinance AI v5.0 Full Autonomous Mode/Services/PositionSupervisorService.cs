@@ -116,6 +116,8 @@ namespace VertexAutoTradeBinance8.Services
         // collection or throw InvalidOperationException.
         private readonly ConcurrentDictionary<string, bool> _beOverrideForStrongTrend = new();
         private readonly ConcurrentDictionary<string, decimal> _lastSl = new();
+        /// <summary>Last UnrealizedPnl (USDT) per SYMBOL_SIDE while position open — used at full close for journal.</summary>
+        private readonly ConcurrentDictionary<string, decimal> _lastUPnlByPos = new();
         private readonly IOptionsMonitor<TradingOptions> _tradingOptions;
         private readonly IOptionsMonitor<DcaOptions> _dcaOptions;
 
@@ -1002,7 +1004,10 @@ namespace VertexAutoTradeBinance8.Services
                 }
 
                 if (pos.Quantity != 0)
+                {
                     _manualHandler.SetPrevState(key, pos.Quantity, pos.EntryPrice);
+                    try { _lastUPnlByPos[key] = pos.UnrealizedPnl; } catch { /* soft */ }
+                }
 
             // =====================================================
             // ❌ НЕТ ПОЗИЦИИ → ЧИСТИМ LIFECYCLE
@@ -1609,21 +1614,48 @@ namespace VertexAutoTradeBinance8.Services
             }, TaskContinuationOptions.OnlyOnFaulted);
         }
 
-        private decimal ResolveExitPrice(string symbol)
+        private decimal ResolveExitPrice(string symbol, decimal fallback = 0m)
         {
-            // 1) Пытаемся взять свежий стакан
-            var depth = _marketData.GetCachedDepth(symbol);
-
-            if (depth != null && depth.Bids.Count > 0 && depth.Asks.Count > 0)
+            try
             {
-                var bestBid = depth.Bids[0].price;
-                var bestAsk = depth.Asks[0].price;
-
-                if (bestBid > 0 && bestAsk > 0)
-                    return (bestBid + bestAsk) / 2m;
+                var depth = _marketData.GetCachedDepth(symbol);
+                if (depth != null && depth.Bids.Count > 0 && depth.Asks.Count > 0)
+                {
+                    var bestBid = depth.Bids[0].price;
+                    var bestAsk = depth.Asks[0].price;
+                    if (bestBid > 0 && bestAsk > 0)
+                        return (bestBid + bestAsk) / 2m;
+                }
             }
+            catch { /* soft */ }
 
-            return 0m;
+            // Last known mark/last from market data push if any
+            try
+            {
+                if (_marketData is MarketData.MarketDataFacade fac)
+                {
+                    // no typed last-price API guaranteed — fall through
+                }
+            }
+            catch { }
+
+            return fallback > 0 ? fallback : 0m;
+        }
+
+        private static string ClassifyCloseReason(decimal realizedPnlUsd, decimal entry, decimal exit, decimal qty)
+        {
+            // Tiny residual / flat → Manual or Close (not fake TP)
+            if (Math.Abs(realizedPnlUsd) < 0.50m)
+                return "Manual";
+            if (realizedPnlUsd < 0)
+                return "SL";
+            // Prefer TP label when clearly profitable
+            if (entry > 0 && exit > 0 && qty > 0)
+            {
+                decimal move = Math.Abs(exit - entry) / entry;
+                if (move >= 0.002m) return "TP";
+            }
+            return realizedPnlUsd > 0 ? "TP" : "Close";
         }
         private void DetectClose(
      string symbol,
@@ -1641,27 +1673,44 @@ namespace VertexAutoTradeBinance8.Services
             // 🔥 CLOSE DETECTED
             if (prevQty != 0m && currQty == 0m)
             {
-                var exitPrice = ResolveExitPrice(symbol);
+                var qty = Math.Abs(prevQty);
+                var exitPrice = ResolveExitPrice(symbol, prevEntry);
 
-                if (exitPrice <= 0m)
+                // Prefer last exchange UnrealizedPnl (USDT) captured while position was open
+                decimal realizedPnl;
+                if (_lastUPnlByPos.TryRemove(key, out var lastUpnl) && Math.Abs(lastUpnl) >= 0.01m)
+                {
+                    realizedPnl = lastUpnl;
+                    // Back-out exit from PnL when mid/last is stale
+                    if (qty > 0 && prevEntry > 0)
+                    {
+                        var implied = side == PositionSide.Long
+                            ? prevEntry + (realizedPnl / qty)
+                            : prevEntry - (realizedPnl / qty);
+                        if (implied > 0)
+                            exitPrice = implied;
+                    }
+                }
+                else
+                {
+                    if (exitPrice <= 0m)
+                        exitPrice = prevEntry;
+                    realizedPnl =
+                        side == PositionSide.Long
+                            ? (exitPrice - prevEntry) * qty
+                            : (prevEntry - exitPrice) * qty;
+                }
+
+                if (exitPrice <= 0m || prevEntry <= 0m)
                 {
                     _logger.LogWarning(
-                        "[CLOSE][{symbol}][{side}] Exit price unresolved, skip record",
+                        "[CLOSE][{symbol}][{side}] Exit/entry unresolved, skip journal",
                         symbol, side);
                 }
                 else
                 {
-                    // ✅ REALIZED PNL (USDT)
-                    var qty = Math.Abs(prevQty);
-
-                    decimal realizedPnl =
-                        side == PositionSide.Long
-                            ? (exitPrice - prevEntry) * qty
-                            : (prevEntry - exitPrice) * qty;
-
                     _accountState.AddRealizedPnl(realizedPnl);
 
-                    // AI learning (pct-based, internal only)
                     _aiLearning.RecordTrade(
                         symbol,
                         side == PositionSide.Long ? SignalSide.Buy : SignalSide.Sell,
@@ -1669,18 +1718,17 @@ namespace VertexAutoTradeBinance8.Services
                         exit: exitPrice,
                         regime: _regimeNow);
 
-                    // Bot journal (USDT, full close — same shape as Demo)
                     try
                     {
                         string sideStr = side == PositionSide.Long ? "LONG" : "SHORT";
-                        string reason = realizedPnl < 0 ? "SL" : "TP";
+                        string reason = ClassifyCloseReason(realizedPnl, prevEntry, exitPrice, qty);
                         AiSelfLearningService.LiveTradeJournalHook?.Invoke(
                             symbol, sideStr, prevEntry, exitPrice, qty, realizedPnl, reason);
                     }
                     catch { /* never break close path */ }
 
                     _logger.LogWarning(
-                        "[CLOSE][{symbol}][{side}] qty={qty} entry={entry} exit={exit} pnl={pnl}",
+                        "[CLOSE][{symbol}][{side}] qty={qty} entry={entry} exit={exit} pnl={pnl} reason journaled",
                         symbol, side, prevQty, prevEntry, exitPrice, realizedPnl);
                 }
 
