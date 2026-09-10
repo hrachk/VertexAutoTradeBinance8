@@ -1161,6 +1161,14 @@ namespace VertexAutoTradeBinance8
             }
 
             var leverage = trading.Leverage > 0 ? trading.Leverage : (signal.Leverage ?? 1m);
+            if (_risk.LastAdjustedLeverage is decimal adjLev && adjLev > 0 && adjLev < leverage)
+            {
+                _logger.LogWarning(
+                    "[PROC][{symbol}] leverage adjusted by liq-retry {old}→{neu}",
+                    symbol, leverage, adjLev);
+                leverage = adjLev;
+                signal.Leverage = adjLev;
+            }
             _dataDbFeed?.NotifyExecution(signal.Symbol);
 
             // ── Multi-exchange (phase-2): Binance and/or Bybit ──────────

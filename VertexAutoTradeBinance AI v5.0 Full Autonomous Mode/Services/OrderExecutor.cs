@@ -269,7 +269,8 @@ namespace VertexAutoTradeBinance8.Services
         ///   STALE SIGNAL — if the last 1M bar opened more than 3 bars after
         ///   the signal was generated, the market has moved on; skip this entry.
         /// </summary>
-        public async Task<bool> ConfirmEntryOn1m(
+        /// <returns>Pass=true if score meets threshold. Score/Threshold always filled for soft-degrade.</returns>
+        public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
             string symbol,
             SignalSide side,
             CancellationToken ct,
@@ -279,7 +280,7 @@ namespace VertexAutoTradeBinance8.Services
             const int BARS = 20;
             var k1m = await _marketDataFacade.GetKlinesAsync(symbol, KlineInterval.OneMinute, BARS, ct);
             if (k1m == null || k1m.Count < 6)
-                return true; // not enough data — don't block
+                return (true, 100, 30); // not enough data — don't block
 
             var last = k1m[^1];
             var prev = k1m[^2];
@@ -296,7 +297,7 @@ namespace VertexAutoTradeBinance8.Services
                     _logger.LogInformation(
                         "[1M][{symbol}] STALE: signal {sigTime:HH:mm} is {n} 1M bars old",
                         symbol, sigTime, staleBars);
-                    return false;
+                    return (false, 0, 30);
                 }
             }
 
@@ -388,7 +389,7 @@ namespace VertexAutoTradeBinance8.Services
                 symbol, side, score, passThreshold,
                 lastAligned, score >= 25, solidBody, pressure);
 
-            return score >= passThreshold;
+            return (score >= passThreshold, score, passThreshold);
         }
 
         /// <summary>Exponential moving average helper for 1M timing.</summary>
@@ -1184,14 +1185,47 @@ namespace VertexAutoTradeBinance8.Services
             }
             // =====================================================
             // FINAL MICRO TIMING (1M CONFIRMATION)
+            // CORE: soft degrade (size↓ + TP closer) — never hard-block like DEMO miss.
+            // Non-CORE: hard BAD_1M_TIMING as before.
             // =====================================================
-            if (!await ConfirmEntryOn1m(signal.Symbol, signal.Side, ct, signal, smart))
             {
-                _logger.LogInformation(
-                    "[1M BLOCK][{symbol}] bad micro timing",
-                    signal.Symbol);
+                var (ok1m, score1m, thr1m) = await ConfirmEntryOn1m(
+                    signal.Symbol, signal.Side, ct, signal, smart);
+                bool isCoreSig = signal.Reason != null &&
+                    signal.Reason.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase);
 
-                return OrderResult.Fail("BAD_1M_TIMING");
+                if (!ok1m)
+                {
+                    if (!isCoreSig)
+                    {
+                        _logger.LogInformation(
+                            "[1M BLOCK][{symbol}] bad micro timing score={s}/{t}",
+                            signal.Symbol, score1m, thr1m);
+                        return OrderResult.Fail("BAD_1M_TIMING");
+                    }
+
+                    // Soft: size factor from score ratio (floor 0.50, cap 0.85)
+                    decimal ratio = thr1m > 0 ? (decimal)score1m / thr1m : 0m;
+                    decimal sizeFactor = Math.Clamp(0.50m + ratio * 0.35m, 0.50m, 0.85m);
+                    decimal tpScale = Math.Clamp(0.70m + ratio * 0.20m, 0.70m, 0.90m);
+
+                    decimal q0 = quantity;
+                    quantity = Math.Floor(quantity * sizeFactor / step) * step;
+                    if (quantity < filters.minQty && q0 >= filters.minQty * 0.5m)
+                        quantity = filters.minQty;
+                    notional = quantity * entryPrice;
+
+                    if (signal.TakeProfits != null && signal.EntryPrice > 0)
+                    {
+                        var e = signal.EntryPrice;
+                        for (int ti = 0; ti < signal.TakeProfits.Count; ti++)
+                            signal.TakeProfits[ti] = e + (signal.TakeProfits[ti] - e) * tpScale;
+                    }
+
+                    _logger.LogWarning(
+                        "[1M SOFT][{symbol}] CORE weak timing score={s}/{t} → size×{sf:F2} tpScale={tp:F2} qty {q0}->{q1}",
+                        signal.Symbol, score1m, thr1m, sizeFactor, tpScale, q0, quantity);
+                }
             }
 
             // =============================================================
@@ -2148,10 +2182,23 @@ namespace VertexAutoTradeBinance8.Services
                 // ========================================================
                 // MARKET ENTRY
                 // ========================================================
-                if (!await ConfirmEntryOn1m(signal.Symbol, signal.Side, ct, signal, smart))
+                var (ok1mFb, score1mFb, thr1mFb) = await ConfirmEntryOn1m(
+                    signal.Symbol, signal.Side, ct, signal, smart);
+                bool isCoreFb = signal.Reason != null &&
+                    signal.Reason.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase);
+                if (!ok1mFb)
                 {
-                    _logger.LogInformation("Entry rejected by 1m timing");
-                    return OrderResult.Fail("Entry rejected by 1m timing");
+                    if (!isCoreFb)
+                    {
+                        _logger.LogInformation("Entry rejected by 1m timing");
+                        return OrderResult.Fail("Entry rejected by 1m timing");
+                    }
+                    decimal ratioFb = thr1mFb > 0 ? (decimal)score1mFb / thr1mFb : 0m;
+                    decimal sf = Math.Clamp(0.50m + ratioFb * 0.35m, 0.50m, 0.85m);
+                    quantity = Math.Floor(quantity * sf / Math.Max(step, 0.00000001m)) * Math.Max(step, 0.00000001m);
+                    _logger.LogWarning(
+                        "[1M SOFT][{symbol}] fallback CORE weak timing {s}/{t} size×{sf:F2}",
+                        signal.Symbol, score1mFb, thr1mFb, sf);
                 }
                 var mktRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: signal.Symbol,
@@ -2526,7 +2573,13 @@ namespace VertexAutoTradeBinance8.Services
                         "[TP_PLACE][{symbol}] level={level} price={tp} qty={qty} mark={mark} entry={entry}",
                         signal.Symbol, i + 1, tpPrice, tpQty, markPrice, entryPrice);
 
-                    // Попытка 1: WorkingType.Mark
+                    // Algo-first (mandatory conditional API since 2025-12-09)
+                    if (await PlaceConditionalAlgoOrLegacyAsync(
+                            client, signal.Symbol, tpSide, posSide, isHedge,
+                            "TAKE_PROFIT_MARKET", tpPrice, tpQty, ct, $"TP{i + 1}"))
+                        continue;
+
+                    // Попытка 1: WorkingType.Mark (legacy, usually -4120)
                     var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
                         symbol:       signal.Symbol,
                         side:         tpSide,
@@ -2650,82 +2703,13 @@ namespace VertexAutoTradeBinance8.Services
                     "[SL_PLACE][{symbol}] price={sl} qty={qty} mark={mark} entry={entry}",
                     signal.Symbol, slPrice, slQty, markPrice, entryPrice);
 
-                // Попытка 1: WorkingType.Mark
-                var slRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                    symbol:       signal.Symbol,
-                    side:         slSide,
-                    type:         FuturesOrderType.StopMarket,
-                    stopPrice:    slPrice,
-                    quantity:     slQty,
-                    reduceOnly:   isHedge ? null : true,
-                    positionSide: isHedge ? posSide : null,
-                    workingType:  WorkingType.Mark,
-                    selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
-                    ct: ct);
-
-                if (slRes.Success)
+                if (!await PlaceConditionalAlgoOrLegacyAsync(
+                        client, signal.Symbol, slSide, posSide, isHedge,
+                        "STOP_MARKET", slPrice, slQty, ct, "SL"))
                 {
-                    _logger.LogInformation(
-                        "[SL_PLACED][{symbol}] orderId={id} price={sl} qty={qty} (Mark)",
-                        signal.Symbol, slRes.Data?.Id, slPrice, slQty);
-                }
-                else
-                {
-                    _logger.LogWarning(
-                        "[SL_FAIL_MARK][{symbol}] code={code} msg={msg} → retry Contract",
-                        signal.Symbol, slRes.Error?.Code, slRes.Error?.Message);
-
-                    // Попытка 2: WorkingType.Contract
-                    var slRes2 = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
-                        symbol:       signal.Symbol,
-                        side:         slSide,
-                        type:         FuturesOrderType.StopMarket,
-                        stopPrice:    slPrice,
-                        quantity:     slQty,
-                        reduceOnly:   isHedge ? null : true,
-                        positionSide: isHedge ? posSide : null,
-                        workingType:  WorkingType.Contract,
-                        ct: ct);
-
-                    if (slRes2.Success)
-                    {
-                        _logger.LogInformation(
-                            "[SL_PLACED_CONTRACT][{symbol}] orderId={id} price={sl} qty={qty}",
-                            signal.Symbol, slRes2.Data?.Id, slPrice, slQty);
-                    }
-                    else
-                    {
-                        _logger.LogError(
-                            "[SL_FAIL_FINAL][{symbol}] code={code} msg={msg} → trying ALGO endpoint",
-                            signal.Symbol, slRes2.Error?.Code, slRes2.Error?.Message);
-
-                        // Same Binance Dec 2025 migration reasoning as the TP
-                        // fallback above — STOP_MARKET also requires the Algo
-                        // Order endpoint now, not the regular order endpoint.
-                        var slAlgoOk = await _algoOrders.PlaceConditionalAsync(
-                            symbol: signal.Symbol,
-                            side: slSide,
-                            positionSide: posSide,
-                            type: "STOP_MARKET",
-                            quantity: slQty,
-                            triggerPrice: slPrice,
-                            workingType: "MARK_PRICE",
-                            reduceOnly: isHedge ? null : true,
-                            ct: ct);
-
-                        if (slAlgoOk)
-                        {
-                            _logger.LogInformation(
-                                "[SL_PLACED_ALGO][{symbol}] price={sl} qty={qty} (via Algo Order endpoint)",
-                                signal.Symbol, slPrice, slQty);
-                        }
-                        else
-                        {
-                            _logger.LogError(
-                                "[SL_FAIL_ALGO][{symbol}] Algo endpoint also failed — Supervisor will place emergency SL",
-                                signal.Symbol);
-                        }
-                    }
+                    _logger.LogError(
+                        "[SL_FAIL][{symbol}] Algo+legacy failed — Supervisor will place emergency SL",
+                        signal.Symbol);
                 }
             }
             else
@@ -2969,6 +2953,77 @@ namespace VertexAutoTradeBinance8.Services
         }
 
      
+
+        /// <summary>
+        /// Binance Dec-2025+: conditional TP/SL must use Algo Order API.
+        /// Prefer Algo first; avoid -4120 spam on POST /fapi/v1/order.
+        /// </summary>
+        async Task<bool> PlaceConditionalAlgoOrLegacyAsync(
+            BinanceRestClient client,
+            string symbol,
+            OrderSide side,
+            PositionSide posSide,
+            bool isHedge,
+            string algoType, // STOP_MARKET | TAKE_PROFIT_MARKET
+            decimal triggerPrice,
+            decimal qty,
+            CancellationToken ct,
+            string logTag)
+        {
+            var algoOk = await _algoOrders.PlaceConditionalAsync(
+                symbol: symbol,
+                side: side,
+                positionSide: posSide,
+                type: algoType,
+                quantity: qty,
+                triggerPrice: triggerPrice,
+                workingType: "MARK_PRICE",
+                reduceOnly: isHedge ? null : true,
+                ct: ct);
+
+            if (algoOk)
+            {
+                _logger.LogInformation(
+                    "[{tag}_ALGO][{symbol}] {type} trig={px} qty={qty} OK",
+                    logTag, symbol, algoType, triggerPrice, qty);
+                return true;
+            }
+
+            _logger.LogWarning(
+                "[{tag}_ALGO][{symbol}] Algo failed — legacy PlaceOrder (may -4120)",
+                logTag, symbol);
+
+            var futType = algoType.Contains("TAKE_PROFIT", StringComparison.OrdinalIgnoreCase)
+                ? FuturesOrderType.TakeProfitMarket
+                : FuturesOrderType.StopMarket;
+
+            var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                symbol: symbol,
+                side: side,
+                type: futType,
+                stopPrice: triggerPrice,
+                quantity: qty,
+                reduceOnly: isHedge ? null : true,
+                positionSide: isHedge ? posSide : null,
+                workingType: WorkingType.Mark,
+                selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
+                ct: ct);
+
+            if (res.Success)
+            {
+                _logger.LogInformation(
+                    "[{tag}_LEGACY][{symbol}] orderId={id} px={px}",
+                    logTag, symbol, res.Data?.Id, triggerPrice);
+                return true;
+            }
+
+            _logger.LogError(
+                "[{tag}_FAIL][{symbol}] code={code} msg={msg}",
+                logTag, symbol, res.Error?.Code, res.Error?.Message);
+            return false;
+        }
+
+
     }
 }
 

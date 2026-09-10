@@ -24,6 +24,8 @@ namespace VertexAutoTradeBinance8.Services
 
         public string? LastRejectReason { get; private set; }
         public decimal LastBalanceUsdt { get; private set; }
+        /// <summary>Set when liq-retry lowered leverage; TradingWorker/Executor should honor.</summary>
+        public decimal? LastAdjustedLeverage { get; private set; }
 
         public RiskManager(
             ILogger<RiskManager> logger,
@@ -118,6 +120,8 @@ namespace VertexAutoTradeBinance8.Services
             TradingOptions trading,
             decimal effectiveLeverage = 0m)
         {
+            LastAdjustedLeverage = null;
+
             LastRejectReason = null;
 
             // -----------------------------
@@ -195,6 +199,10 @@ namespace VertexAutoTradeBinance8.Services
                         var liqCheck = _liqRisk.CheckPreTrade(signal, marginQty, balance, leverage);
                         if (!liqCheck.IsAllowed)
                         {
+                            var retried = TryReduceRiskForLiquidation(
+                                signal, marginQty, balance, leverage, step, minQty);
+                            if (retried > 0)
+                                return retried;
                             LastRejectReason = $"LIQ_RISK_BLOCKED: {liqCheck.BlockReason}";
                             return 0;
                         }
@@ -360,6 +368,10 @@ namespace VertexAutoTradeBinance8.Services
                     var liqCheck = _liqRisk.CheckPreTrade(signal, qtyMicro, balance, leverage);
                     if (!liqCheck.IsAllowed)
                     {
+                        var retried = TryReduceRiskForLiquidation(
+                            signal, qtyMicro, balance, leverage, step, minQty);
+                        if (retried > 0)
+                            return retried;
                         LastRejectReason = $"LIQ_RISK_BLOCKED: {liqCheck.BlockReason}";
                         return 0;
                     }
@@ -467,9 +479,14 @@ namespace VertexAutoTradeBinance8.Services
 
                 if (!liqCheck.IsAllowed)
                 {
+                    var retried = TryReduceRiskForLiquidation(
+                        signal, qty, balance, leverage, step, minQty);
+                    if (retried > 0)
+                        return retried;
+
                     LastRejectReason = $"LIQ_RISK_BLOCKED: {liqCheck.BlockReason}";
                     _logger.LogWarning(
-                        "[RISK] {symbol} BLOCKED by liquidation risk: {reason}",
+                        "[RISK] {symbol} BLOCKED by liquidation risk after retry: {reason}",
                         signal.Symbol, liqCheck.BlockReason);
                     return 0;
                 }
@@ -721,6 +738,87 @@ namespace VertexAutoTradeBinance8.Services
             // still caps actual exposure downstream, so this is safe.
             return Math.Clamp(risk, 0.015m, 0.12m); // high-conf + wider SL needs higher risk% 
         }
+
+        /// <summary>
+        /// When SL is too close to liquidation at current qty/lev: lower lev then size
+        /// and re-check (up to 4 attempts). Returns safe qty or 0 if still impossible.
+        /// </summary>
+        private decimal TryReduceRiskForLiquidation(
+            TradeSignal signal,
+            decimal qty,
+            decimal balance,
+            decimal leverage,
+            decimal step,
+            decimal minQty)
+        {
+            LastAdjustedLeverage = null;
+            if (_liqRisk == null || qty <= 0 || leverage <= 0)
+                return 0;
+
+            decimal tryLev = leverage;
+            decimal tryQty = qty;
+
+            for (int attempt = 0; attempt < 4; attempt++)
+            {
+                // Odd attempts: cut leverage; even: cut size (always cut something each pass)
+                if (attempt == 0)
+                    tryLev = Math.Max(2m, Math.Floor(leverage * 0.50m));
+                else if (attempt == 1)
+                {
+                    tryLev = Math.Max(2m, Math.Floor(leverage * 0.35m));
+                    tryQty = Math.Floor(qty * 0.70m / Math.Max(step, 0.00000001m)) * Math.Max(step, 0.00000001m);
+                }
+                else if (attempt == 2)
+                {
+                    tryLev = Math.Max(2m, Math.Floor(leverage * 0.25m));
+                    tryQty = Math.Floor(qty * 0.50m / Math.Max(step, 0.00000001m)) * Math.Max(step, 0.00000001m);
+                }
+                else
+                {
+                    tryLev = 2m;
+                    tryQty = Math.Floor(qty * 0.35m / Math.Max(step, 0.00000001m)) * Math.Max(step, 0.00000001m);
+                }
+
+                if (tryQty < minQty)
+                    tryQty = minQty;
+
+                var check = _liqRisk.CheckPreTrade(signal, tryQty, balance, tryLev);
+                if (check.IsAllowed)
+                {
+                    decimal use = check.SafeQty > 0 && check.SafeQty < tryQty ? check.SafeQty : tryQty;
+                    use = Math.Floor(use / Math.Max(step, 0.00000001m)) * Math.Max(step, 0.00000001m);
+                    if (use < minQty)
+                        continue;
+
+                    LastAdjustedLeverage = tryLev;
+                    if (signal.Leverage == null || signal.Leverage > tryLev)
+                        signal.Leverage = tryLev;
+
+                    _logger.LogWarning(
+                        "[RISK] {symbol} liq-retry OK attempt={a} lev {L0}→{L1} qty {q0}→{q1}",
+                        signal.Symbol, attempt, leverage, tryLev, qty, use);
+                    return use;
+                }
+
+                if (check.SafeQty > 0)
+                {
+                    decimal use = Math.Floor(check.SafeQty / Math.Max(step, 0.00000001m)) * Math.Max(step, 0.00000001m);
+                    if (use >= minQty)
+                    {
+                        LastAdjustedLeverage = tryLev;
+                        signal.Leverage = tryLev;
+                        _logger.LogWarning(
+                            "[RISK] {symbol} liq-retry SafeQty attempt={a} lev={L} qty={q}",
+                            signal.Symbol, attempt, tryLev, use);
+                        return use;
+                    }
+                }
+            }
+
+            return 0;
+        }
+
+
     }
 }
 

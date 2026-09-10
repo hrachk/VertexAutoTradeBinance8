@@ -65,7 +65,7 @@ namespace VertexAutoTradeBinance8.Services
         private long _timeOffsetMs = 0;
         private DateTime _lastTimeSync = DateTime.MinValue;
         private readonly SemaphoreSlim _timeSyncLock = new(1, 1);
-        private static readonly TimeSpan TimeSyncInterval = TimeSpan.FromMinutes(10);
+        private static readonly TimeSpan TimeSyncInterval = TimeSpan.FromMinutes(5);
 
         // ── GetOpenAlgoOrders 20-second cache (prevents Binance 429) ──────
         // Binance rate-limits this endpoint aggressively; calling it on
@@ -198,64 +198,86 @@ namespace VertexAutoTradeBinance8.Services
                 return false;
             }
 
-            var ts = await GetBinanceTimestampAsync(ct);
             string D(decimal v) => v.ToString("0.########", CultureInfo.InvariantCulture);
 
-            var q = new List<KeyValuePair<string, string>>
+            for (int attempt = 0; attempt < 2; attempt++)
             {
-                new("algoType",    "CONDITIONAL"),
-                new("symbol",      symbol),
-                new("side",        side == OrderSide.Buy ? "BUY" : "SELL"),
-                new("type",        type),
-                new("timestamp",   ts.ToString(CultureInfo.InvariantCulture)),
-                new("recvWindow",  "5000"),
-                new("workingType", workingType),
-                new("triggerPrice", D(triggerPrice)),
-                new("positionSide", positionSide.ToString().ToUpperInvariant()),
-                new("quantity",    D(quantity))
-            };
-
-            if (!string.IsNullOrWhiteSpace(clientAlgoId))
-                q.Add(new("clientAlgoId", clientAlgoId.Length > 32 ? clientAlgoId[..32] : clientAlgoId));
-
-            if (reduceOnly.HasValue && positionSide == PositionSide.Both)
-                q.Add(new("reduceOnly", reduceOnly.Value ? "true" : "false"));
-
-            var (query, rawQuery) = BuildQuery(q);
-            var sig = Sign(rawQuery, apiSecret);
-
-            var url = $"{_baseUrl}/fapi/v1/algoOrder?{query}&signature={sig}";
-
-            using var req = new HttpRequestMessage(HttpMethod.Post, url);
-            req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", apiKey);
-
-            try
-            {
-                using var resp = await _http.SendAsync(req, ct);
-                var body = await resp.Content.ReadAsStringAsync(ct);
-
-                if (!resp.IsSuccessStatusCode)
+                if (attempt > 0)
                 {
-                    // -1021 means clock drift — force immediate re-sync on next call
-                    if (body.Contains("-1021"))
-                    {
-                        _lastTimeSync = DateTime.MinValue;
-                        _logger.LogWarning("[ALGO-RAW] -1021 on PlaceConditional — clock drift detected, will re-sync on next call");
-                    }
-                    _logger.LogError("[ALGO-RAW] HTTP {code} body={body}", (int)resp.StatusCode, body);
-                    return false;
+                    _lastTimeSync = DateTime.MinValue;
+                    await EnsureTimeSyncedAsync(ct);
                 }
 
-                _logger.LogInformation("[ALGO-RAW] OK {symbol} {type} posSide={ps} trig={tp} body={body}",
-                    symbol, type, positionSide, triggerPrice, body);
+                var ts = await GetBinanceTimestampAsync(ct);
 
-                return true;
+                var q = new List<KeyValuePair<string, string>>
+                {
+                    new("algoType",     "CONDITIONAL"),
+                    new("symbol",       symbol),
+                    new("side",         side == OrderSide.Buy ? "BUY" : "SELL"),
+                    new("type",         type),
+                    new("timestamp",    ts.ToString(CultureInfo.InvariantCulture)),
+                    new("recvWindow",   "60000"),
+                    new("workingType",  string.IsNullOrWhiteSpace(workingType) ? "MARK_PRICE" : workingType),
+                    new("triggerPrice", D(triggerPrice)),
+                    new("positionSide", positionSide.ToString().ToUpperInvariant()),
+                    new("quantity",     D(quantity))
+                };
+
+                if (!string.IsNullOrWhiteSpace(clientAlgoId))
+                    q.Add(new("clientAlgoId", clientAlgoId.Length > 36 ? clientAlgoId[..36] : clientAlgoId));
+
+                // reduceOnly only in one-way (BOTH); hedge rejects the param
+                if (reduceOnly.HasValue && positionSide == PositionSide.Both)
+                    q.Add(new("reduceOnly", reduceOnly.Value ? "true" : "false"));
+
+                var (query, toSign) = BuildQuery(q);
+                var sig = Sign(toSign, apiSecret);
+                var url = $"{_baseUrl}/fapi/v1/algoOrder?{query}&signature={sig}";
+
+                using var req = new HttpRequestMessage(HttpMethod.Post, url);
+                req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", apiKey);
+
+                try
+                {
+                    using var resp = await _http.SendAsync(req, ct);
+                    var body = await resp.Content.ReadAsStringAsync(ct);
+
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        if (body.Contains("-1021") && attempt == 0)
+                        {
+                            _logger.LogWarning("[ALGO-RAW] -1021 on PlaceConditional — re-sync clock and retry");
+                            _lastTimeSync = DateTime.MinValue;
+                            continue;
+                        }
+                        if (body.Contains("-1022") && attempt == 0)
+                        {
+                            // One retry with fresh timestamp (clock skew can also surface as -1022)
+                            _logger.LogWarning("[ALGO-RAW] -1022 on PlaceConditional — re-sync and retry once");
+                            _lastTimeSync = DateTime.MinValue;
+                            continue;
+                        }
+                        _logger.LogError("[ALGO-RAW] HTTP {code} body={body}", (int)resp.StatusCode, body);
+                        return false;
+                    }
+
+                    _logger.LogInformation(
+                        "[ALGO-RAW] OK {symbol} {type} posSide={ps} trig={tp} body={body}",
+                        symbol, type, positionSide, triggerPrice, body);
+                    // Invalidate open-orders cache so Supervisor sees new algo orders
+                    _algoOrdersCache = null;
+                    _algoOrdersCacheExpiry = DateTime.MinValue;
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[ALGO-RAW] EX PlaceConditionalAsync {symbol}", symbol);
+                    return false;
+                }
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[ALGO-RAW] EX PlaceConditionalAsync {symbol}", symbol);
-                return false;
-            }
+
+            return false;
         }
 
         public async Task<List<BinanceAlgoOrderInfo>> GetOpenAlgoOrdersAsync(string? symbol, CancellationToken ct)
@@ -292,12 +314,12 @@ namespace VertexAutoTradeBinance8.Services
                 var q = new List<KeyValuePair<string, string>>
                 {
                     new("timestamp",  ts.ToString(CultureInfo.InvariantCulture)),
-                    new("recvWindow", "5000"),
+                    new("recvWindow", "60000"),
                 };
                 if (!string.IsNullOrEmpty(symbol)) q.Add(new("symbol", symbol));
 
-                var (query, rawQuery) = BuildQuery(q);
-                var sig = Sign(rawQuery, apiSecret);
+                var (query, toSign) = BuildQuery(q);
+                var sig = Sign(toSign, apiSecret);
                 var url = $"{_baseUrl}/fapi/v1/openAlgoOrders?{query}&signature={sig}";
 
                 using var req = new HttpRequestMessage(HttpMethod.Get, url);
@@ -376,10 +398,10 @@ namespace VertexAutoTradeBinance8.Services
             {
                 new("algoId",     algoId.ToString(CultureInfo.InvariantCulture)),
                 new("timestamp",  ts.ToString(CultureInfo.InvariantCulture)),
-                new("recvWindow", "5000"),
+                new("recvWindow", "60000"),
             };
-            var (query, rawQuery) = BuildQuery(q);
-            var sig = Sign(rawQuery, apiSecret);
+            var (query, toSign) = BuildQuery(q);
+            var sig = Sign(toSign, apiSecret);
             var url = $"{_baseUrl}/fapi/v1/algoOrder?{query}&signature={sig}";
 
             using var req = new HttpRequestMessage(HttpMethod.Delete, url);
@@ -404,27 +426,38 @@ namespace VertexAutoTradeBinance8.Services
             }
         }
 
-        private static (string encoded, string raw) BuildQuery(IEnumerable<KeyValuePair<string, string>> q)
+        /// <summary>
+        /// Build query for URL + signature payload.
+        /// Binance signed endpoints (post-2026 guidance): percent-encode values
+        /// consistently; HMAC is over the same parameter string used in the request
+        /// (without signature). Keys sorted alphabetically for stable signatures.
+        /// </summary>
+        private static (string encoded, string toSign) BuildQuery(IEnumerable<KeyValuePair<string, string>> q)
         {
+            // Sort by key — avoids accidental param-order mismatches across call sites
+            var ordered = q.OrderBy(kv => kv.Key, StringComparer.Ordinal).ToList();
             var encoded = new StringBuilder();
-            var raw = new StringBuilder();
+            var toSign = new StringBuilder();
 
-            foreach (var kv in q)
+            foreach (var kv in ordered)
             {
-                if (encoded.Length > 0) { encoded.Append('&'); raw.Append('&'); }
-                raw.Append(kv.Key).Append('=').Append(kv.Value);
-                encoded.Append(Uri.EscapeDataString(kv.Key))
-                       .Append('=')
-                       .Append(Uri.EscapeDataString(kv.Value));
+                if (encoded.Length > 0) { encoded.Append('&'); toSign.Append('&'); }
+                var ek = Uri.EscapeDataString(kv.Key);
+                // EscapeDataString is close to application/x-www-form-urlencoded;
+                // Binance accepts this for totalParams when values are simple ASCII.
+                var ev = Uri.EscapeDataString(kv.Value);
+                encoded.Append(ek).Append('=').Append(ev);
+                toSign.Append(ek).Append('=').Append(ev);
             }
 
-            return (encoded.ToString(), raw.ToString());
+            return (encoded.ToString(), toSign.ToString());
         }
 
-        private static string Sign(string rawQueryString, string secret)
+        private static string Sign(string totalParams, string secret)
         {
-            using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-            var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(rawQueryString));
+            var key = (secret ?? "").Trim();
+            using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(key));
+            var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(totalParams));
             var sb = new StringBuilder(hash.Length * 2);
             foreach (var b in hash) sb.Append(b.ToString("x2"));
             return sb.ToString();
