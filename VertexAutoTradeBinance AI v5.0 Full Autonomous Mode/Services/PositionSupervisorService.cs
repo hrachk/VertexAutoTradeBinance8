@@ -1629,16 +1629,6 @@ namespace VertexAutoTradeBinance8.Services
             }
             catch { /* soft */ }
 
-            // Last known mark/last from market data push if any
-            try
-            {
-                if (_marketData is MarketData.MarketDataFacade fac)
-                {
-                    // no typed last-price API guaranteed — fall through
-                }
-            }
-            catch { }
-
             return fallback > 0 ? fallback : 0m;
         }
 
