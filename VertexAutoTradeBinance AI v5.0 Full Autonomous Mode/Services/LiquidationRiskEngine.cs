@@ -284,34 +284,15 @@ namespace VertexAutoTradeBinance8.Services
                         break;
 
                     case LiqRiskLevel.Critical:
-                        // Если рабочий SL стоит МЕЖДУ mark и liquidation — он спасёт
-                        // раньше ликвидации. Emergency reduce тогда вреден (режет
-                        // позицию зря, как на HYPE). Режем только если SL нет
-                        // или SL не защищает (за liq / с той же стороны что mark).
+                        // USER POLICY: never auto-reduce. SL/TP (incl. Algo) manage
+                        // the position. Emergency reduce was firing on false
+                        // "SL=none" (algo stops not seen) and chopping size.
                         {
                             var slPrice = await TryGetProtectiveStopAsync(pos, ct);
-                            bool isLong = pos.Side == PositionSide.Long;
-                            bool slProtects = SlProtectsBeforeLiquidation(
-                                isLong, mark, liqPrice, slPrice);
-
-                            if (slProtects)
-                            {
-                                _logger.LogWarning(
-                                    "[LIQ-RISK] CRITICAL {symbol} {side} buffer={buf:P2} but SL={sl:F6} protects before liq={liq:F6} → skip emergency reduce",
-                                    pos.Symbol, pos.Side, liqBuffer, slPrice!.Value, liqPrice);
-                                break;
-                            }
-
-                            decimal reduceQty = Math.Round(pos.Qty * 0.25m, 8);
-                            if (reduceQty > 0)
-                            {
-                                _logger.LogError(
-                                    "[LIQ-RISK] CRITICAL {symbol} {side} buffer={buf:P2} < {thresh:P0} SL={sl} → EMERGENCY REDUCE 25%",
-                                    pos.Symbol, pos.Side, liqBuffer, LIQBUFFER_CRITICAL,
-                                    slPrice.HasValue ? slPrice.Value.ToString("F6") : "none");
-
-                                await EmergencyReduceAsync(pos, reduceQty, ct);
-                            }
+                            _logger.LogWarning(
+                                "[LIQ-RISK] CRITICAL {symbol} {side} buffer={buf:P2} < {thresh:P0} SL={sl} → log only (emergency reduce DISABLED)",
+                                pos.Symbol, pos.Side, liqBuffer, LIQBUFFER_CRITICAL,
+                                slPrice.HasValue ? slPrice.Value.ToString("F6") : "none/unknown");
                         }
                         break;
                 }
