@@ -493,11 +493,15 @@
             tooltip.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
             tooltip.style.pointerEvents = 'none';
             tooltip.style.zIndex = '20';
-            tooltip.style.whiteSpace = 'nowrap';
-            tooltip.style.lineHeight = '1.4';
+            tooltip.style.whiteSpace = 'normal';
+            tooltip.style.wordBreak = 'break-word';
+            tooltip.style.overflow = 'hidden';
+            tooltip.style.boxSizing = 'border-box';
+            tooltip.style.lineHeight = '1.35';
             tooltip.style.boxShadow = '0 6px 18px rgba(0,0,0,0.35)';
-            tooltip.style.minWidth = '168px';
-            tooltip.style.maxWidth = '200px';
+            tooltip.style.width = '188px';
+            tooltip.style.minWidth = '188px';
+            tooltip.style.maxWidth = '188px';
             tooltip.style.backdropFilter = 'blur(6px)';
             container.appendChild(tooltip);
 
@@ -566,32 +570,32 @@
                     const buyVol = raw.takerBuyVolume;
                     const sellVol = Math.max(0, vol - buyVol);
                     volSplitHtml =
-                        `<div style="display:flex;justify-content:space-between;gap:12px;margin-top:4px;">` +
-                        `<span style="color:${colors.up}">Buy ▲ ${fmtVol(buyVol)}${buyPct!=null?` (${buyPct.toFixed(0)}%)`:''}</span>` +
-                        `<span style="color:${colors.down}">Sell ▼ ${fmtVol(sellVol)}${sellPct!=null?` (${sellPct.toFixed(0)}%)`:''}</span>` +
+                        `<div style="display:flex;flex-direction:column;gap:2px;margin-top:4px;min-width:0;">` +
+                        `<span style="color:${colors.up};font-size:10.5px;overflow:hidden;text-overflow:ellipsis;">Buy ▲ ${fmtVol(buyVol)}${buyPct!=null?` (${buyPct.toFixed(0)}%)`:''}</span>` +
+                        `<span style="color:${colors.down};font-size:10.5px;overflow:hidden;text-overflow:ellipsis;">Sell ▼ ${fmtVol(sellVol)}${sellPct!=null?` (${sellPct.toFixed(0)}%)`:''}</span>` +
                         `</div>`;
                 }
 
                 const row = (label, val, color) =>
-                    `<div style="display:flex;justify-content:space-between;gap:10px;">` +
-                    `<span style="color:#64748b;">${label}</span>` +
-                    `<b style="color:${color||'#e2e8f0'};font-weight:600;">${val}</b></div>`;
+                    `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px;min-width:0;">` +
+                    `<span style="color:#64748b;flex-shrink:0;font-size:10px;">${label}</span>` +
+                    `<b style="color:${color||'#e2e8f0'};font-weight:600;font-size:10.5px;text-align:right;overflow:hidden;text-overflow:ellipsis;min-width:0;">${val}</b></div>`;
 
                 tooltip.innerHTML =
-                    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">` +
-                    `<span style="color:#94a3b8;font-size:10.5px;letter-spacing:.02em;">${dateStr}</span>` +
-                    `<span style="color:${chgColor};font-weight:700;font-size:12px;">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>` +
+                    `<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:6px;min-width:0;">` +
+                    `<span style="color:#94a3b8;font-size:10px;overflow:hidden;text-overflow:ellipsis;min-width:0;">${dateStr}</span>` +
+                    `<span style="color:${chgColor};font-weight:700;font-size:11px;flex-shrink:0;">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>` +
                     `</div>` +
-                    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:1px 10px;margin-bottom:4px;">` +
+                    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;margin-bottom:4px;min-width:0;">` +
                     row('Open', fmtPrice(open)) +
                     row('High', fmtPrice(high), colors.up) +
                     row('Low', fmtPrice(low), colors.down) +
                     row('Close', fmtPrice(close), chgColor) +
                     `</div>` +
                     `<div style="height:1px;background:rgba(148,163,184,.15);margin:6px 0;"></div>` +
-                    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:1px 10px;margin-bottom:3px;">` +
+                    `<div style="display:grid;grid-template-columns:1fr;gap:2px;margin-bottom:3px;min-width:0;">` +
                     row('Range', `${fmtPrice(range)} (${rangePct.toFixed(2)}%)`) +
-                    row('Body', `${bodyPct.toFixed(0)}% of range`) +
+                    row('Body', `${bodyPct.toFixed(0)}% range`) +
                     row('Upper wick', fmtPrice(upperWick)) +
                     row('Lower wick', fmtPrice(lowerWick)) +
                     `</div>` +
