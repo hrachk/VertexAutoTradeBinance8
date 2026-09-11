@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Threading;
 using VertexAutoTradeBinance8.Models;
+using VertexAutoTradeBinance8.Services.Learning;
 
 namespace VertexAutoTradeBinance8.Services;
 
@@ -15,6 +16,7 @@ public class SymbolRegistryService
     private readonly AiSelfLearningService _ai;
     private readonly UniverseDryRunFileLogger _dryRun;
     private readonly IOpenPositionSymbolSource? _posSource;
+    private readonly TradeJournalService? _journal;
 
     private readonly SemaphoreSlim _refreshLock = new(1, 1); 
 
@@ -53,7 +55,8 @@ public class SymbolRegistryService
         AiMarketRegimeService marketRegime,
         AiSelfLearningService ai,
         UniverseDryRunFileLogger dryRun,
-        IOpenPositionSymbolSource? posSource = null)
+        IOpenPositionSymbolSource? posSource = null,
+        TradeJournalService? journal = null)
     {
         _cfg = cfg;
         _logger = logger;
@@ -63,6 +66,7 @@ public class SymbolRegistryService
         _ai = ai;
         _dryRun = dryRun;
         _posSource = posSource;
+        _journal = journal;
     }
 
     // ============================================================
@@ -193,6 +197,31 @@ public class SymbolRegistryService
            .Where(s => !pinSet.Contains(s))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        // Rotation: after repeated SLs, demote symbol in scan order so other
+        // liquid names fill slots first (no hard ban — still eligible later).
+        try
+        {
+            var clientId = _cfg["Client:Id"] ?? "client_001";
+            if (_journal != null && rest.Count > 1)
+            {
+                rest = rest
+                    .Select(s =>
+                    {
+                        var adj = _journal.GetAdjustments(clientId, s);
+                        int demote = 0;
+                        if (adj.RecentStops >= 3) demote = 2;
+                        else if (adj.RecentStops >= 2) demote = 1;
+                        if (adj.SlPadAtr >= 0.35m) demote = Math.Max(demote, 1);
+                        return (s, demote);
+                    })
+                    .OrderBy(x => x.demote)
+                    .ThenBy(x => x.s, StringComparer.OrdinalIgnoreCase)
+                    .Select(x => x.s)
+                    .ToList();
+            }
+        }
+        catch { /* never break universe */ }
 
         var slots = Math.Max(0, totalCap - pin.Count);
         return pin.Concat(rest.Take(slots)).ToList();

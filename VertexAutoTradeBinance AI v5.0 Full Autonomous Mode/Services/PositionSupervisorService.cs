@@ -176,7 +176,7 @@ namespace VertexAutoTradeBinance8.Services
 
             _regimeNow = MarketRegime.Range;
 
-            _algoRaw = new BinanceAlgoOrderRaw(cfg, httpFactory, _logger);
+            _algoRaw = new BinanceAlgoOrderRaw(cfg, httpFactory, _logger, factory);
             _liquidityGuard = liquidityGuard;
             _dispatcher = dispatcher;
             _stateSvc = stateSvc;
@@ -3684,9 +3684,10 @@ namespace VertexAutoTradeBinance8.Services
         {
             private readonly HttpClient _http;
             private readonly ILogger _logger;
-            private readonly string _apiKey;
-            private readonly string _apiSecret;
             private readonly string _baseUrl;
+            private readonly BinanceClientFactory? _clientFactory;
+            private readonly string _cfgApiKey;
+            private readonly string _cfgApiSecret;
 
             // ── Server-time sync (fixes -1021 "timestamp ahead" errors) ──────
             // Binance rejects signed requests when local clock differs from
@@ -3705,23 +3706,41 @@ namespace VertexAutoTradeBinance8.Services
             private DateTime  _cacheExpiry = DateTime.MinValue;
             private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(20);
 
-            public BinanceAlgoOrderRaw(IConfiguration cfg, IHttpClientFactory httpFactory, ILogger logger)
+            public BinanceAlgoOrderRaw(
+                IConfiguration cfg,
+                IHttpClientFactory httpFactory,
+                ILogger logger,
+                BinanceClientFactory? clientFactory = null)
             {
                 _logger = logger;
-
-                _apiKey = cfg["Binance:ApiKey"] ?? string.Empty;
-                // CRITICAL FIX: appsettings.json's real field name is
-                // "SecretKey" (confirmed directly), not "ApiSecret" —
-                // this was reading a key that doesn't exist, meaning
-                // _apiSecret was empty the entire time and every
-                // algo-order call (including this session's BE-move/
-                // cleanup fixes) was silently failing the credentials
-                // check before ever reaching the network.
-                _apiSecret = cfg["Binance:SecretKey"] ?? cfg["Binance:ApiSecret"] ?? string.Empty;
+                _clientFactory = clientFactory;
+                // Fallback only — LIVE keys must come from TradingCredentialStore via factory
+                _cfgApiKey = (cfg["Binance:ApiKey"] ?? string.Empty).Trim();
+                _cfgApiSecret = (cfg["Binance:SecretKey"] ?? cfg["Binance:ApiSecret"] ?? string.Empty).Trim();
                 _baseUrl = (cfg["Binance:FuturesBaseUrl"] ?? "https://fapi.binance.com").TrimEnd('/');
 
                 _http = httpFactory.CreateClient("BinanceAlgoRaw");
-                _http.Timeout = TimeSpan.FromSeconds(8);
+                _http.Timeout = TimeSpan.FromSeconds(12);
+            }
+
+            private bool TryResolveKeys(out string apiKey, out string apiSecret)
+            {
+                apiKey = ""; apiSecret = "";
+                try
+                {
+                    if (_clientFactory != null &&
+                        _clientFactory.TryGetCredentials(out apiKey, out apiSecret, out var src))
+                    {
+                        apiKey = (apiKey ?? "").Trim();
+                        apiSecret = (apiSecret ?? "").Trim();
+                        if (!string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(apiSecret))
+                            return true;
+                    }
+                }
+                catch { /* fall through */ }
+                apiKey = _cfgApiKey;
+                apiSecret = _cfgApiSecret;
+                return !string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(apiSecret);
             }
             private async Task<long> GetBinanceTimestampAsync(CancellationToken ct)
             {
@@ -3773,9 +3792,9 @@ namespace VertexAutoTradeBinance8.Services
                 CancellationToken ct,
                 string? clientAlgoId = null)
             {
-                if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret))
+                if (!TryResolveKeys(out var apiKey, out var apiSecret))
                 {
-                    _logger.LogError("[ALGO-RAW] Missing Binance:ApiKey / Binance:ApiSecret in config");
+                    _logger.LogError("[ALGO-RAW] Missing API credentials (user LIVE keys or Binance:ApiKey/SecretKey)");
                     return false;
                 }
 
@@ -3789,7 +3808,7 @@ namespace VertexAutoTradeBinance8.Services
                     new("side",        side == OrderSide.Buy ? "BUY" : "SELL"),
                     new("type",        type),
                     new("timestamp",   ts.ToString(CultureInfo.InvariantCulture)),
-                    new("recvWindow",  "5000"),
+                    new("recvWindow",  "60000"),
                     new("workingType", workingType),
                     new("triggerPrice", D(triggerPrice)),
                     new("positionSide", positionSide.ToString().ToUpperInvariant()),
@@ -3815,12 +3834,12 @@ namespace VertexAutoTradeBinance8.Services
                     q.Add(new("reduceOnly", reduceOnly.Value ? "true" : "false"));
 
                 var (query, rawQuery) = BuildQuery(q);
-                var sig = Sign(rawQuery, _apiSecret);  // подписываем RAW строку
+                var sig = Sign(rawQuery, apiSecret);  // подписываем RAW строку
 
                 var url = $"{_baseUrl}/fapi/v1/algoOrder?{query}&signature={sig}";
 
                 using var req = new HttpRequestMessage(HttpMethod.Post, url);
-                req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", _apiKey);
+                req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", apiKey);
 
                 try
                 {
@@ -3870,9 +3889,9 @@ namespace VertexAutoTradeBinance8.Services
             public async Task<List<BinanceAlgoOrderInfo>> GetOpenAlgoOrdersAsync(string? symbol, CancellationToken ct)
             {
                 var result = new List<BinanceAlgoOrderInfo>();
-                if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret))
+                if (!TryResolveKeys(out var apiKey, out var apiSecret))
                 {
-                    _logger.LogError("[ALGO-RAW] Missing Binance:ApiKey / Binance:ApiSecret in config");
+                    _logger.LogError("[ALGO-RAW] Missing API credentials for GetOpenAlgoOrders");
                     return result;
                 }
 
@@ -3892,16 +3911,16 @@ namespace VertexAutoTradeBinance8.Services
                 var q = new List<KeyValuePair<string, string>>
                 {
                     new("timestamp",  ts.ToString(CultureInfo.InvariantCulture)),
-                    new("recvWindow", "5000"),
+                    new("recvWindow", "60000"),
                 };
                 if (!string.IsNullOrEmpty(symbol)) q.Add(new("symbol", symbol));
 
                 var (query, rawQuery) = BuildQuery(q);
-                var sig = Sign(rawQuery, _apiSecret);
+                var sig = Sign(rawQuery, apiSecret);
                 var url = $"{_baseUrl}/fapi/v1/openAlgoOrders?{query}&signature={sig}";
 
                 using var req = new HttpRequestMessage(HttpMethod.Get, url);
-                req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", _apiKey);
+                req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", apiKey);
 
                 try
                 {
@@ -3909,9 +3928,49 @@ namespace VertexAutoTradeBinance8.Services
                     var body = await resp.Content.ReadAsStringAsync(ct);
                     if (!resp.IsSuccessStatusCode)
                     {
-                        if (body.Contains("-1021")) _lastTimeSync = DateTime.MinValue;
-                        _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
-                        return result;
+                        if (body.Contains("-1021") || body.Contains("-1022"))
+                            _lastTimeSync = DateTime.MinValue;
+                        if (body.Contains("-1022"))
+                        {
+                            _logger.LogWarning("[ALGO-RAW] GetOpenAlgoOrders -1022 — resync + retry once (LIVE keys)");
+                            if (TryResolveKeys(out apiKey, out apiSecret))
+                            {
+                                var ts2 = await GetBinanceTimestampAsync(ct);
+                                var q2 = new List<KeyValuePair<string, string>>
+                                {
+                                    new("timestamp", ts2.ToString(CultureInfo.InvariantCulture)),
+                                    new("recvWindow", "60000"),
+                                };
+                                if (!string.IsNullOrEmpty(symbol)) q2.Add(new("symbol", symbol));
+                                var (query2, raw2) = BuildQuery(q2);
+                                var sig2 = Sign(raw2, apiSecret);
+                                var url2 = $"{_baseUrl}/fapi/v1/openAlgoOrders?{query2}&signature={sig2}";
+                                using var req2 = new HttpRequestMessage(HttpMethod.Get, url2);
+                                req2.Headers.TryAddWithoutValidation("X-MBX-APIKEY", apiKey);
+                                using var resp2 = await _http.SendAsync(req2, ct);
+                                var body2 = await resp2.Content.ReadAsStringAsync(ct);
+                                if (resp2.IsSuccessStatusCode)
+                                {
+                                    body = body2;
+                                    // continue parse with success path by not returning
+                                }
+                                else
+                                {
+                                    _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp2.StatusCode, body2);
+                                    return result;
+                                }
+                            }
+                            else
+                            {
+                                _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
+                                return result;
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
+                            return result;
+                        }
                     }
 
                     // CONFIRMED real response shape via official Binance
@@ -3961,21 +4020,21 @@ namespace VertexAutoTradeBinance8.Services
 
             public async Task<bool> CancelAlgoOrderAsync(long algoId, CancellationToken ct)
             {
-                if (string.IsNullOrWhiteSpace(_apiKey) || string.IsNullOrWhiteSpace(_apiSecret)) return false;
+                if (!TryResolveKeys(out var apiKey, out var apiSecret)) return false;
 
                 var ts = await GetBinanceTimestampAsync(ct);
                 var q = new List<KeyValuePair<string, string>>
                 {
                     new("algoId",     algoId.ToString(CultureInfo.InvariantCulture)),
                     new("timestamp",  ts.ToString(CultureInfo.InvariantCulture)),
-                    new("recvWindow", "5000"),
+                    new("recvWindow", "60000"),
                 };
                 var (query, rawQuery) = BuildQuery(q);
-                var sig = Sign(rawQuery, _apiSecret);
+                var sig = Sign(rawQuery, apiSecret);
                 var url = $"{_baseUrl}/fapi/v1/algoOrder?{query}&signature={sig}";
 
                 using var req = new HttpRequestMessage(HttpMethod.Delete, url);
-                req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", _apiKey);
+                req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", apiKey);
 
                 try
                 {
@@ -4001,28 +4060,25 @@ namespace VertexAutoTradeBinance8.Services
             // =====================================================
             private static (string encoded, string raw) BuildQuery(IEnumerable<KeyValuePair<string, string>> q)
             {
+                // Alphabetical key order — required for stable Binance signatures
+                var ordered = q.OrderBy(kv => kv.Key, StringComparer.Ordinal).ToList();
                 var encoded = new StringBuilder();
                 var raw = new StringBuilder();
 
-                foreach (var kv in q)
+                foreach (var kv in ordered)
                 {
                     if (encoded.Length > 0) { encoded.Append('&'); raw.Append('&'); }
-
-                    // raw — без encoding, используется для подписи
                     raw.Append(kv.Key).Append('=').Append(kv.Value);
-
-                    // encoded — для URL
                     encoded.Append(Uri.EscapeDataString(kv.Key))
                            .Append('=')
                            .Append(Uri.EscapeDataString(kv.Value));
                 }
-
                 return (encoded.ToString(), raw.ToString());
             }
 
             private static string Sign(string rawQueryString, string secret)
             {
-                using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+                using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret.Trim()));
                 var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(rawQueryString));
                 var sb = new StringBuilder(hash.Length * 2);
                 foreach (var b in hash) sb.Append(b.ToString("x2"));

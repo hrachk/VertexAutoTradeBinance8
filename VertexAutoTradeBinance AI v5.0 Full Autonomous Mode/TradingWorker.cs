@@ -1600,22 +1600,24 @@ namespace VertexAutoTradeBinance8
                 return true;
             }
 
-            // After any SL: 2× cooldown from TradeStateManager
-            int penaltyMin = Math.Max(1, cooldownSec * 2 / 60);
+            // Post-SL: short anti-spam only (not hours of mute). Learning is via symbol-memory SL pad.
+            int penaltyMin = Math.Max(1, Math.Min(2, Math.Max(1, cooldownSec / 60)));
             if (_tradeState.IsInCooldown(symbol, penaltyMin))
                 return true;
 
-            // ── Local fallback ──
+            // Local fallback after SL — max 2 minutes
             if (_slPenalty.TryGetValue(symbol, out var slTime))
             {
-                var penaltySec = cooldownSec * 2;
+                var penaltySec = Math.Min(120, Math.Max(45, cooldownSec));
                 if (DateTime.UtcNow - slTime < TimeSpan.FromSeconds(penaltySec))
                     return true;
                 _slPenalty.TryRemove(symbol, out _);
             }
 
+            // Between any trades: normal cooldown (anti double-fire), not multi-hour
+            var gapSec = Math.Min(cooldownSec > 0 ? cooldownSec : 90, 180);
             return _lastTrade.TryGetValue(symbol, out var last)
-                   && DateTime.UtcNow - last < TimeSpan.FromSeconds(cooldownSec);
+                   && DateTime.UtcNow - last < TimeSpan.FromSeconds(gapSec);
         }
 
         private void MarkTrade(string symbol) =>

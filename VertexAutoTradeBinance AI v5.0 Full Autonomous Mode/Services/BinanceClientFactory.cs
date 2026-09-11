@@ -45,6 +45,10 @@ public sealed class BinanceClientFactory
         _logger.LogInformation("[BINANCE] Client cache invalidated (credentials changed)");
     }
 
+    /// <summary>Same credential resolution as REST client (user LIVE keys first).</summary>
+    public bool TryGetCredentials(out string apiKey, out string apiSecret, out string source)
+        => ResolveCredentials(out apiKey, out apiSecret, out source);
+
     private bool ResolveCredentials(out string apiKey, out string apiSecret, out string source)
     {
         if (_creds.TryGet(out var clientId, out apiKey, out apiSecret))
