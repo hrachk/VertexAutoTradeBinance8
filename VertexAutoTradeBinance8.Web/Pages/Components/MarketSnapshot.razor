@@ -8041,20 +8041,6 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
                 }
             }
 
-            // 4) Open position entry mark for active symbol
-            foreach (var pos in DisplayedPositions.Where(p => SymMatch(p.Symbol, _activeSym)))
-            {
-                bool isLong = string.Equals(pos.Side, "LONG", StringComparison.OrdinalIgnoreCase);
-                // Approximate: use "now" snapped bar if we lack open time
-                long tIn = SnapBarUnix(DateTime.UtcNow, tfMin);
-                markers.Add(new {
-                    time = (int)tIn,
-                    position = isLong ? "belowBar" : "aboveBar",
-                    color = isLong ? "#22c55e" : "#ef4444",
-                    shape = isLong ? "arrowUp" : "arrowDown",
-                    text = "IN"
-                });
-            }
         }
         catch { }
 
