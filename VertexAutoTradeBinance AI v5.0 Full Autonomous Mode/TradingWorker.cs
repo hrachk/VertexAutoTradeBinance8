@@ -1592,10 +1592,13 @@ namespace VertexAutoTradeBinance8
                 ? trading.CooldownSeconds
                 : (_options.CooldownSeconds > 0 ? _options.CooldownSeconds : 180);
 
-            // ── TradeStateManager checks (shared with PositionSupervisor) ──
-            // 3 consecutive SL hits → block this symbol until a win
-            if (_tradeState.IsLosingStreakLimit(symbol, 5))
+            // ── TradeStateManager (shared with PositionSupervisor) ──
+            // Losing streak: temporary lockout (TTL), not permanent mute until win
+            if (_tradeState.IsLosingStreakLimit(symbol, 4))
+            {
+                _logger.LogDebug("[COOLDOWN][{symbol}] losing-streak lockout active (auto-expires)", symbol);
                 return true;
+            }
 
             // After any SL: 2× cooldown from TradeStateManager
             int penaltyMin = Math.Max(1, cooldownSec * 2 / 60);

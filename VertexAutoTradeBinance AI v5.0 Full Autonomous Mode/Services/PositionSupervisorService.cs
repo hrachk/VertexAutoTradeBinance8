@@ -131,6 +131,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly ConcurrentDictionary<string, decimal> _lastUPnlByPos = new();
         private readonly IOptionsMonitor<TradingOptions> _tradingOptions;
         private readonly IOptionsMonitor<DcaOptions> _dcaOptions;
+        private readonly TradeStateManager _tradeState;
 
         /// <summary>
         /// Returns true if the symbol is in the DCA accumulation list
@@ -162,6 +163,7 @@ namespace VertexAutoTradeBinance8.Services
             IOptionsMonitor<TradingSettings> tradingSettings,
             IOptionsMonitor<TradingOptions> tradingOptions,
             IOptionsMonitor<DcaOptions> dcaOptions,
+            TradeStateManager tradeState,
             MarketDataPushClient? push = null)
         {
             _logger = logger;
@@ -187,6 +189,7 @@ namespace VertexAutoTradeBinance8.Services
             _tradingSettings = tradingSettings;
             _tradingOptions = tradingOptions;
             _dcaOptions = dcaOptions;
+            _tradeState = tradeState ?? new TradeStateManager();
             _push = push;
         }
 
@@ -1140,10 +1143,15 @@ namespace VertexAutoTradeBinance8.Services
                     if (isStopLoss)
                     {
                         _manualHandler.RegisterStop(symbol);
+                        try { _tradeState.RegisterStop(symbol); } catch { }
 
                         _logger.LogWarning(
-                            "[STOP][{symbol}] StopLoss detected → cooldown",
+                            "[STOP][{symbol}] StopLoss detected → cooldown + TradeState streak",
                             symbol);
+                    }
+                    else
+                    {
+                        try { _tradeState.RegisterWin(symbol); } catch { }
                     }
 
                     _earlyTpDone.TryRemove(BuildPosGuardKey(symbol, side, prevEntry, prevQty), out _);
@@ -1853,6 +1861,15 @@ namespace VertexAutoTradeBinance8.Services
                 else
                 {
                     _accountState.AddRealizedPnl(realizedPnl);
+
+                    try
+                    {
+                        if (realizedPnl < 0)
+                            _tradeState.RegisterStop(symbol);
+                        else
+                            _tradeState.RegisterWin(symbol);
+                    }
+                    catch { }
 
                     _aiLearning.RecordTrade(
                         symbol,

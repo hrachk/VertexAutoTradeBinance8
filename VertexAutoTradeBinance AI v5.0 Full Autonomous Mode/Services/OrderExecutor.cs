@@ -888,13 +888,21 @@ namespace VertexAutoTradeBinance8.Services
                 signal.Side == SignalSide.Sell &&
                 signalKlines[^1].ClosePrice < signalKlines[^1].OpenPrice;
 
-            if (postImpulseTrap)
+            if (postImpulseTrap && !IsCoreSignal(signal))
             {
                 _logger.LogWarning(
                     "[TRAP BLOCK][{symbol}] short after impulse sweep",
                     signal.Symbol);
 
                 return OrderResult.Fail("POST_IMPULSE_TRAP");
+            }
+            if (postImpulseTrap && IsCoreSignal(signal))
+            {
+                signal.SizeMultiplier = Math.Min(
+                    signal.SizeMultiplier <= 0 ? 1m : signal.SizeMultiplier, 0.65m);
+                _logger.LogInformation(
+                    "[IMPULSE SOFT][{symbol}] CORE short on impulse bar → size soft (no hard block)",
+                    signal.Symbol);
             }
 
             var lastCandle = signalKlines[^1];
@@ -909,13 +917,21 @@ namespace VertexAutoTradeBinance8.Services
                 signal.Side == SignalSide.Buy &&
                 isStrongGreen;
 
-            if (postImpulseLongTrap)
+            if (postImpulseLongTrap && !IsCoreSignal(signal))
             {
                 _logger.LogWarning(
                     "[TRAP BLOCK][{symbol}] long after impulse pump",
                     signal.Symbol);
 
                 return OrderResult.Fail("POST_IMPULSE_LONG_TRAP");
+            }
+            if (postImpulseLongTrap && IsCoreSignal(signal))
+            {
+                signal.SizeMultiplier = Math.Min(
+                    signal.SizeMultiplier <= 0 ? 1m : signal.SizeMultiplier, 0.65m);
+                _logger.LogInformation(
+                    "[IMPULSE SOFT][{symbol}] CORE long on impulse bar → size soft (no hard block)",
+                    signal.Symbol);
             }
 
             // =====================================================
@@ -1088,10 +1104,23 @@ namespace VertexAutoTradeBinance8.Services
            
             if (hasImpulse && !signal.IsSuperSignal)
             {
-                _logger.LogWarning(
-                  "[IMPULSE BLOCK][{symbol}] waiting pullback instead of chasing",
-                  signal.Symbol);
-                allowMarketEntry = false;
+                if (IsCoreSignal(signal))
+                {
+                    // CORE already has structural SL — do not freeze execution after BTC impulse;
+                    // prefer limit/pullback path but keep size reduced.
+                    signal.SizeMultiplier = Math.Min(
+                        signal.SizeMultiplier <= 0 ? 1m : signal.SizeMultiplier, 0.70m);
+                    _logger.LogInformation(
+                      "[IMPULSE SOFT][{symbol}] CORE — size×0.70, allow entry (no hard block)",
+                      signal.Symbol);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                      "[IMPULSE BLOCK][{symbol}] waiting pullback instead of chasing",
+                      signal.Symbol);
+                    allowMarketEntry = false;
+                }
             }
 
             // =============================================================
@@ -2339,8 +2368,11 @@ namespace VertexAutoTradeBinance8.Services
         private static bool IsImpulse(
          IReadOnlyList<BinanceFuturesUsdtKline> klines,
          decimal atr,
-         decimal minBodyAtr = 0.8m)  
+         decimal minBodyAtr = 1.6m)  
         {
+            // Was 0.8×ATR body / 1.2× range — after BTC impulse almost every alt
+            // candle tripped "impulse" and blocked the whole book for hours.
+            // Professional threshold: true expansion bar, not normal vol noise.
             if (klines == null || klines.Count < 2 || atr <= 0)
                 return false;
 
@@ -2349,7 +2381,13 @@ namespace VertexAutoTradeBinance8.Services
             var body = Math.Abs(last.ClosePrice - last.OpenPrice);
             var range = last.HighPrice - last.LowPrice;
 
-            return body >= atr * minBodyAtr || range >= atr * 1.2m;
+            return body >= atr * minBodyAtr || range >= atr * 2.2m;
+        }
+
+        private static bool IsCoreSignal(TradeSignal signal)
+        {
+            var r = signal?.Reason ?? "";
+            return r.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase);
         }
 
         // =====================================================================

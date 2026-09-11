@@ -8,6 +8,8 @@ namespace VertexAutoTradeBinance8.Models
     {
         public DateTime? LastStopTimeUtc { get; set; }
         public int LosingStreak { get; set; }
+        /// <summary>UTC until which losing-streak lockout is active (auto-expires).</summary>
+        public DateTime? StreakLockoutUntilUtc { get; set; }
         public DateTime? LastHtfOpenTimeUtc { get; set; }
         public bool HadStopInsideHtf { get; set; }
 
