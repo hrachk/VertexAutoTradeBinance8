@@ -181,7 +181,7 @@
                     const d = Math.abs(times[i] - x);
                     if (d < bestD) { bestD = d; best = times[i]; }
                 }
-                return bestD <= 7200 ? best : null;
+                return bestD <= 7 * 24 * 3600 ? best : null; // allow snap within ~7d (higher TFs)
             };
 
             const filtered = [];
@@ -2438,7 +2438,12 @@
             const s = sessions.get(containerId);
             if (!s) return;
             s.tradeMarkers = [];
-            try { s.candleSeries && s.candleSeries.setMarkers([]); } catch (e) {}
+            try {
+                if (s.seriesMarkers && typeof s.seriesMarkers.setMarkers === 'function')
+                    s.seriesMarkers.setMarkers([]);
+                else if (s.candleSeries && typeof s.candleSeries.setMarkers === 'function')
+                    s.candleSeries.setMarkers([]);
+            } catch (e) {}
         },
 
         hidePositionLines(containerId) {

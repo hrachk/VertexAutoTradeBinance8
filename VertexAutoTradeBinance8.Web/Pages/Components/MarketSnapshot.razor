@@ -7857,6 +7857,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             if (list.Count == 0)
                 list = TradeJournal.GetRecentEntries(clientId, null, 500).ToList();
             _journalHistory = list;
+            try { await PushTradeMarkersAsync(); } catch { }
         }
         catch
         {
@@ -7932,6 +7933,15 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         StateHasChanged();
     }
 
+    static bool SymMatch(string a, string b)
+    {
+        if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
+        if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase)) return true;
+        var na = a.EndsWith("USDT", StringComparison.OrdinalIgnoreCase) ? a[..^4] : a;
+        var nb = b.EndsWith("USDT", StringComparison.OrdinalIgnoreCase) ? b[..^4] : b;
+        return string.Equals(na, nb, StringComparison.OrdinalIgnoreCase);
+    }
+
     async Task PushTradeMarkersAsync()
     {
         if (string.IsNullOrEmpty(_activeSym) || string.IsNullOrEmpty(_chartInstanceId))
@@ -7949,48 +7959,101 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
         try
         {
+            // 1) Demo closed trades → IN / OUT
             if (_demoMode && _demoSnapshot?.History != null)
             {
                 foreach (var h in _demoSnapshot.History
-                    .Where(x => string.Equals(x.Symbol, _activeSym, StringComparison.OrdinalIgnoreCase))
+                    .Where(x => SymMatch(x.Symbol, _activeSym))
                     .Take(40))
                 {
                     bool isLong = string.Equals(h.Side, "LONG", StringComparison.OrdinalIgnoreCase)
                                   || string.Equals(h.Side, "BUY", StringComparison.OrdinalIgnoreCase);
-                    long tIn = SnapBarUnix(h.OpenedAtUtc, tfMin);
-                    long tOut = SnapBarUnix(h.ClosedAtUtc, tfMin);
-                    markers.Add(new {
-                        time = (int)tIn,
-                        position = isLong ? "belowBar" : "aboveBar",
-                        color = isLong ? "#22c55e" : "#ef4444",
-                        shape = isLong ? "arrowUp" : "arrowDown",
-                        text = "IN"
-                    });
-                    markers.Add(new {
-                        time = (int)tOut,
-                        position = isLong ? "aboveBar" : "belowBar",
-                        color = h.RealizedPnl >= 0 ? "#22c55e" : "#f97316",
-                        shape = isLong ? "arrowDown" : "arrowUp",
-                        text = "OUT"
-                    });
+                    if (h.OpenedAtUtc != default)
+                    {
+                        markers.Add(new {
+                            time = (int)SnapBarUnix(h.OpenedAtUtc, tfMin),
+                            position = isLong ? "belowBar" : "aboveBar",
+                            color = isLong ? "#22c55e" : "#ef4444",
+                            shape = isLong ? "arrowUp" : "arrowDown",
+                            text = "IN"
+                        });
+                    }
+                    if (h.ClosedAtUtc != default)
+                    {
+                        markers.Add(new {
+                            time = (int)SnapBarUnix(h.ClosedAtUtc, tfMin),
+                            position = isLong ? "aboveBar" : "belowBar",
+                            color = h.RealizedPnl >= 0 ? "#22c55e" : "#f97316",
+                            shape = isLong ? "arrowDown" : "arrowUp",
+                            text = "OUT"
+                        });
+                    }
                 }
             }
-            else if (!_demoMode && _realHistory != null)
+
+            // 2) Live/Demo bot journal → proper IN/OUT (same shape as Demo)
+            if (_journalHistory != null && _journalHistory.Count > 0)
+            {
+                foreach (var h in _journalHistory
+                    .Where(x => SymMatch(x.Symbol, _activeSym))
+                    .Take(50))
+                {
+                    bool isLong = string.Equals(h.Side, "LONG", StringComparison.OrdinalIgnoreCase)
+                                  || string.Equals(h.Side, "BUY", StringComparison.OrdinalIgnoreCase);
+                    if (h.OpenedAtUtc != default)
+                    {
+                        markers.Add(new {
+                            time = (int)SnapBarUnix(h.OpenedAtUtc, tfMin),
+                            position = isLong ? "belowBar" : "aboveBar",
+                            color = isLong ? "#22c55e" : "#ef4444",
+                            shape = isLong ? "arrowUp" : "arrowDown",
+                            text = "IN"
+                        });
+                    }
+                    if (h.ClosedAtUtc != default)
+                    {
+                        markers.Add(new {
+                            time = (int)SnapBarUnix(h.ClosedAtUtc, tfMin),
+                            position = isLong ? "aboveBar" : "belowBar",
+                            color = h.RealizedPnl >= 0 ? "#22c55e" : "#f97316",
+                            shape = isLong ? "arrowDown" : "arrowUp",
+                            text = "OUT"
+                        });
+                    }
+                }
+            }
+
+            // 3) Live exchange fills (closing legs) — B/S if journal empty
+            if (!_demoMode && _realHistory != null && markers.Count == 0)
             {
                 foreach (var h in _realHistory
-                    .Where(x => string.Equals(x.Symbol, _activeSym, StringComparison.OrdinalIgnoreCase))
+                    .Where(x => SymMatch(x.Symbol, _activeSym))
                     .Take(50))
                 {
                     bool buy = string.Equals(h.Side, "BUY", StringComparison.OrdinalIgnoreCase);
-                    long tm = SnapBarUnix(h.Time, tfMin);
                     markers.Add(new {
-                        time = (int)tm,
+                        time = (int)SnapBarUnix(h.Time, tfMin),
                         position = buy ? "belowBar" : "aboveBar",
                         color = buy ? "#22c55e" : "#ef4444",
                         shape = buy ? "arrowUp" : "arrowDown",
                         text = buy ? "B" : "S"
                     });
                 }
+            }
+
+            // 4) Open position entry mark for active symbol
+            foreach (var pos in DisplayedPositions.Where(p => SymMatch(p.Symbol, _activeSym)))
+            {
+                bool isLong = string.Equals(pos.Side, "LONG", StringComparison.OrdinalIgnoreCase);
+                // Approximate: use "now" snapped bar if we lack open time
+                long tIn = SnapBarUnix(DateTime.UtcNow, tfMin);
+                markers.Add(new {
+                    time = (int)tIn,
+                    position = isLong ? "belowBar" : "aboveBar",
+                    color = isLong ? "#22c55e" : "#ef4444",
+                    shape = isLong ? "arrowUp" : "arrowDown",
+                    text = "IN"
+                });
             }
         }
         catch { }
