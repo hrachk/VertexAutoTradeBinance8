@@ -116,6 +116,17 @@ namespace VertexAutoTradeBinance8.Services
         // collection or throw InvalidOperationException.
         private readonly ConcurrentDictionary<string, bool> _beOverrideForStrongTrend = new();
         private readonly ConcurrentDictionary<string, decimal> _lastSl = new();
+        private sealed class ProfitAwareState
+        {
+            public decimal PeakMfeR;
+            public decimal InitialRisk;
+            public int PartialsDone;
+            public decimal LockedR;
+            public bool GaveBackExitDone;
+            public DateTime LastActionUtc;
+        }
+        private readonly ConcurrentDictionary<string, ProfitAwareState> _profitAware = new(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>Last UnrealizedPnl (USDT) per SYMBOL_SIDE while position open — used at full close for journal.</summary>
         private readonly ConcurrentDictionary<string, decimal> _lastUPnlByPos = new();
         private readonly IOptionsMonitor<TradingOptions> _tradingOptions;
@@ -381,6 +392,8 @@ namespace VertexAutoTradeBinance8.Services
                 _beMoved.Clear();
                 _pendingReset.Clear();
                 _beOverrideForStrongTrend.Clear();
+                foreach (var pk in _profitAware.Keys.Where(k => k.StartsWith(symbol + "|", StringComparison.OrdinalIgnoreCase)).ToList())
+                    _profitAware.TryRemove(pk, out _);
                 return;
             }
 
@@ -817,6 +830,13 @@ namespace VertexAutoTradeBinance8.Services
                 _logger.LogDebug("[SUPERVISOR][{sym}] SHORT hands-off (manual={m} userSet={u})",
                     symbol, lastSignal?.IsManual == true, IsHandsOff(symbol, "SHORT"));
 
+            // ── PROFIT-AWARE (MFE / giveback / lock +R / early partial) ──
+            // Runs for bot-managed positions only (same hands-off rules).
+            if (hasLong && !longHandsOff && longPos != null)
+                await RunProfitAwareAsync(client, symbol, PositionSide.Long, longPos, lastSignal, atr14_1m, ct);
+            if (hasShort && !shortHandsOff && shortPos != null)
+                await RunProfitAwareAsync(client, symbol, PositionSide.Short, shortPos, lastSignal, atr14_1m, ct);
+
             if (hasLong  && !longHandsOff)
                 await HandleSideAsync(client, symbol, PositionSide.Long,  longPos!,  sharedOrders, lastSignal, klines1m, ct);
             if (hasShort && !shortHandsOff)
@@ -824,6 +844,139 @@ namespace VertexAutoTradeBinance8.Services
         }
 
         // ===== PLACE BE SL =====
+
+        /// <summary>
+        /// Professional profit management: track MFE in R-multiples, lock SL into profit,
+        /// partial on giveback, exit remainder if winner is given back near entry.
+        /// </summary>
+        private async Task RunProfitAwareAsync(
+            IBinanceRestClient client,
+            string symbol,
+            PositionSide side,
+            BinancePositionDetailsUsdt pos,
+            TradeSignal? signal,
+            decimal atr,
+            CancellationToken ct)
+        {
+            try
+            {
+                if (!_tradingOptions.CurrentValue.SupervisorManageTP)
+                    return;
+
+                decimal qty = Math.Abs(pos.Quantity);
+                decimal entry = pos.EntryPrice;
+                decimal mark = pos.MarkPrice;
+                if (qty <= 0 || entry <= 0 || mark <= 0)
+                    return;
+
+                var key = BuildExitKey(symbol, side, entry);
+                var st = _profitAware.GetOrAdd(key, _ => new ProfitAwareState());
+
+                if (st.InitialRisk <= 0)
+                {
+                    decimal r0 = 0m;
+                    if (signal != null && signal.StopLoss > 0)
+                        r0 = Math.Abs(entry - signal.StopLoss);
+                    if (r0 <= 0 && atr > 0)
+                        r0 = atr * 1.3m;
+                    if (r0 <= 0)
+                        r0 = entry * 0.008m;
+                    st.InitialRisk = r0;
+                }
+
+                decimal risk = st.InitialRisk;
+                if (risk <= 0) return;
+
+                decimal favorable = side == PositionSide.Long ? (mark - entry) : (entry - mark);
+                decimal curR = favorable / risk;
+                if (curR > st.PeakMfeR)
+                    st.PeakMfeR = curR;
+
+                decimal peak = st.PeakMfeR;
+                decimal giveback = peak > 0.01m ? (peak - curR) / peak : 0m;
+
+                if ((DateTime.UtcNow - st.LastActionUtc).TotalSeconds < 25)
+                    return;
+
+                decimal targetLockR = 0m;
+                if (peak >= 1.5m) targetLockR = 0.60m;
+                else if (peak >= 1.0m) targetLockR = 0.35m;
+                else if (peak >= 0.55m) targetLockR = 0.15m;
+
+                if (targetLockR > st.LockedR + 0.05m)
+                {
+                    decimal lockSl = side == PositionSide.Long
+                        ? entry + risk * targetLockR
+                        : entry - risk * targetLockR;
+
+                    decimal lastSl = _lastSl.TryGetValue(key, out var ls) ? ls : 0m;
+                    bool better = lastSl <= 0 || (side == PositionSide.Long
+                        ? lockSl > lastSl
+                        : lockSl < lastSl);
+
+                    if (better)
+                    {
+                        _logger.LogWarning(
+                            "[PROFIT-AWARE][{symbol}][{side}] LOCK SL → +{lockR:F2}R (peak={peak:F2}R cur={cur:F2}R) sl={sl}",
+                            symbol, side, targetLockR, peak, curR, lockSl);
+
+                        await PlaceStopLossAtBeAsync(client, symbol, side, qty, lockSl, pos, ct);
+                        _lastSl[key] = lockSl;
+                        st.LockedR = targetLockR;
+                        st.LastActionUtc = DateTime.UtcNow;
+                        return;
+                    }
+                }
+
+                if (peak >= 0.55m && giveback >= 0.40m && st.PartialsDone < 2 && curR > 0.05m)
+                {
+                    decimal frac = st.PartialsDone == 0 ? 0.40m : 0.30m;
+                    decimal closeQty = Math.Round(qty * frac, 8);
+                    closeQty = Math.Min(closeQty, Math.Round(qty * 0.85m, 8));
+                    if (closeQty > 0)
+                    {
+                        _logger.LogWarning(
+                            "[PROFIT-AWARE][{symbol}][{side}] PARTIAL giveback={gb:P0} peak={peak:F2}R cur={cur:F2}R qty={q}",
+                            symbol, side, giveback, peak, curR, closeQty);
+
+                        await ClosePartialAsync(client, symbol, side, closeQty, pos, ct);
+                        st.PartialsDone++;
+                        st.LastActionUtc = DateTime.UtcNow;
+
+                        if (st.LockedR < 0.15m)
+                        {
+                            decimal lockSl = side == PositionSide.Long
+                                ? entry + risk * 0.15m
+                                : entry - risk * 0.15m;
+                            decimal remain = Math.Max(0m, qty - closeQty);
+                            if (remain > 0)
+                            {
+                                await PlaceStopLossAtBeAsync(client, symbol, side, remain, lockSl, pos, ct);
+                                _lastSl[key] = lockSl;
+                                st.LockedR = Math.Max(st.LockedR, 0.15m);
+                            }
+                        }
+                        return;
+                    }
+                }
+
+                if (!st.GaveBackExitDone && peak >= 0.80m && curR < 0.12m && curR > -0.15m)
+                {
+                    _logger.LogWarning(
+                        "[PROFIT-AWARE][{symbol}][{side}] EXIT gave-back winner peak={peak:F2}R cur={cur:F2}R → close rest",
+                        symbol, side, peak, curR);
+
+                    await ClosePartialAsync(client, symbol, side, qty, pos, ct);
+                    st.GaveBackExitDone = true;
+                    st.LastActionUtc = DateTime.UtcNow;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[PROFIT-AWARE][{symbol}] soft error", symbol);
+            }
+        }
+
         private async Task PlaceStopLossAtBeAsync(
       IBinanceRestClient client,
       string symbol,
@@ -1716,6 +1869,22 @@ namespace VertexAutoTradeBinance8.Services
                             symbol, sideStr, prevEntry, exitPrice, qty, realizedPnl, reason);
                     }
                     catch { /* never break close path */ }
+
+                        // Profit-aware learning hint (peak was tracked while open)
+                        try
+                        {
+                            var paKey = BuildExitKey(symbol, side, prevEntry);
+                            if (_profitAware.TryRemove(paKey, out var pa) && pa.PeakMfeR >= 0.5m)
+                            {
+                                string kind = realizedPnl < 0
+                                    ? (pa.PeakMfeR >= 0.5m ? "gave_back_winner" : "bad_entry")
+                                    : "winner";
+                                _logger.LogWarning(
+                                    "[PROFIT-AWARE][LEARN][{symbol}][{side}] kind={kind} peakMfeR={peak:F2} pnl={pnl:F2} partials={p}",
+                                    symbol, side, kind, pa.PeakMfeR, realizedPnl, pa.PartialsDone);
+                            }
+                        }
+                        catch { }
 
                     _logger.LogWarning(
                         "[CLOSE][{symbol}][{side}] qty={qty} entry={entry} exit={exit} pnl={pnl} reason journaled",
