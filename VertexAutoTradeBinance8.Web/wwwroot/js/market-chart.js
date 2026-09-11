@@ -479,22 +479,26 @@
             // library's own documented pattern: subscribeCrosshairMove
             // gives the hovered bar's data, and a plain HTML element
             // absolutely positioned over the container does the rest.
-            const tooltip = document.createElement('div');
+                        const tooltip = document.createElement('div');
+            tooltip.className = 'mk-candle-tip';
             tooltip.style.position = 'absolute';
             tooltip.style.display = 'none';
-            tooltip.style.padding = '8px 12px';
-            tooltip.style.borderRadius = '6px';
-            tooltip.style.background = 'rgba(10,13,18,0.95)';
-            tooltip.style.border = '1px solid rgba(255,255,255,0.1)';
+            tooltip.style.padding = '10px 12px';
+            tooltip.style.borderRadius = '10px';
+            tooltip.style.background = 'linear-gradient(165deg, rgba(12,18,32,0.97), rgba(8,12,22,0.96))';
+            tooltip.style.border = '1px solid rgba(56,189,248,0.22)';
             tooltip.style.color = '#e2e8f0';
             tooltip.style.fontSize = '11.5px';
-            tooltip.style.fontFamily = 'monospace';
+            tooltip.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
             tooltip.style.pointerEvents = 'none';
-            tooltip.style.zIndex = '7';
+            tooltip.style.zIndex = '20';
             tooltip.style.whiteSpace = 'nowrap';
-            tooltip.style.lineHeight = '1.5';
-            container.style.position = container.style.position || 'relative';
+            tooltip.style.lineHeight = '1.45';
+            tooltip.style.boxShadow = '0 10px 28px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.04) inset';
+            tooltip.style.minWidth = '220px';
+            tooltip.style.backdropFilter = 'blur(8px)';
             container.appendChild(tooltip);
+
 
             function fmtVol(v) {
                 if (v >= 1_000_000) return (v / 1_000_000).toFixed(2) + 'M';
@@ -533,37 +537,77 @@
                     hour: '2-digit', minute: '2-digit', hour12: false
                 });
 
-                // Buy/sell volume split — Binance's own kline data already
-                // includes taker-buy volume directly (no extra API call
-                // needed); sell-side is simply the remainder. Only shown
-                // when this specific bar actually has the field (older
-                // archived/snapshot data before this field existed won't).
-                let volSplitHtml = '';
+                                const range = high - low;
+                const body = Math.abs(close - open);
+                const bodyPct = range > 0 ? (body / range * 100) : 0;
+                const upperWick = high - Math.max(open, close);
+                const lowerWick = Math.min(open, close) - low;
+                const rangePct = open !== 0 ? (range / open * 100) : 0;
+
+                // VOL = Binance kline base-asset volume for THIS candle (not USD quote).
+                // On live TF, last closed + forming bar update from the same WS/REST klines
+                // as the chart — so it is exchange volume for that interval, not a separate feed.
+                let buyPct = null, sellPct = null, quoteVol = null;
                 const raw = session.rawKlineByTime && session.rawKlineByTime.get(param.time);
+                if (raw) {
+                    if (raw.takerBuyVolume != null && raw.takerBuyVolume >= 0 && vol > 0) {
+                        buyPct = (raw.takerBuyVolume / vol) * 100;
+                        sellPct = 100 - buyPct;
+                    }
+                    // quote volume if present on raw kline (Binance field quoteVolume / QuoteVolume)
+                    const qv = raw.quoteVolume ?? raw.QuoteVolume ?? raw.quoteAssetVolume;
+                    if (qv != null && Number(qv) > 0) quoteVol = Number(qv);
+                }
+
+                let volSplitHtml = '';
                 if (raw && raw.takerBuyVolume != null && raw.takerBuyVolume >= 0) {
                     const buyVol = raw.takerBuyVolume;
                     const sellVol = Math.max(0, vol - buyVol);
-                    volSplitHtml = ` <span style="color:${colors.up}">▲${fmtVol(buyVol)}</span>` +
-                                   ` <span style="color:${colors.down}">▼${fmtVol(sellVol)}</span>`;
+                    volSplitHtml =
+                        `<div style="display:flex;justify-content:space-between;gap:12px;margin-top:4px;">` +
+                        `<span style="color:${colors.up}">Buy ▲ ${fmtVol(buyVol)}${buyPct!=null?` (${buyPct.toFixed(0)}%)`:''}</span>` +
+                        `<span style="color:${colors.down}">Sell ▼ ${fmtVol(sellVol)}${sellPct!=null?` (${sellPct.toFixed(0)}%)`:''}</span>` +
+                        `</div>`;
                 }
 
+                const row = (label, val, color) =>
+                    `<div style="display:flex;justify-content:space-between;gap:18px;">` +
+                    `<span style="color:#64748b;">${label}</span>` +
+                    `<b style="color:${color||'#e2e8f0'};font-weight:600;">${val}</b></div>`;
+
                 tooltip.innerHTML =
-                    `<div style="color:#94a3b8;font-size:10.5px;margin-bottom:4px;">${dateStr}</div>` +
-                    `<div style="display:flex;gap:10px;margin-bottom:4px;">` +
-                    `<span>O <b style="color:${colors.text}">${fmtPrice(open)}</b></span>` +
-                    `<span>H <b style="color:${colors.up}">${fmtPrice(high)}</b></span>` +
-                    `<span>L <b style="color:${colors.down}">${fmtPrice(low)}</b></span>` +
-                    `<span>C <b style="color:${chgColor}">${fmtPrice(close)}</b></span>` +
-                    `<span style="color:${chgColor}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>` +
+                    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">` +
+                    `<span style="color:#94a3b8;font-size:10.5px;letter-spacing:.02em;">${dateStr}</span>` +
+                    `<span style="color:${chgColor};font-weight:700;font-size:12px;">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>` +
                     `</div>` +
-                    `<div style="font-size:13px;font-weight:700;color:#eab308;">VOL ${fmtVol(vol)}${volSplitHtml}</div>`;
+                    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 14px;margin-bottom:6px;">` +
+                    row('Open', fmtPrice(open)) +
+                    row('High', fmtPrice(high), colors.up) +
+                    row('Low', fmtPrice(low), colors.down) +
+                    row('Close', fmtPrice(close), chgColor) +
+                    `</div>` +
+                    `<div style="height:1px;background:rgba(148,163,184,.15);margin:6px 0;"></div>` +
+                    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 14px;margin-bottom:4px;">` +
+                    row('Range', `${fmtPrice(range)} (${rangePct.toFixed(2)}%)`) +
+                    row('Body', `${bodyPct.toFixed(0)}% of range`) +
+                    row('Upper wick', fmtPrice(upperWick)) +
+                    row('Lower wick', fmtPrice(lowerWick)) +
+                    `</div>` +
+                    `<div style="height:1px;background:rgba(148,163,184,.15);margin:6px 0;"></div>` +
+                    `<div style="font-size:11px;color:#eab308;font-weight:700;margin-bottom:2px;">VOL (base) ${fmtVol(vol)}</div>` +
+                    (quoteVol != null ? `<div style="font-size:10.5px;color:#94a3b8;margin-bottom:2px;">Quote ≈ ${fmtVol(quoteVol)} USDT</div>` : '') +
+                    volSplitHtml +
+                    `<div style="margin-top:6px;font-size:9.5px;color:#64748b;max-width:260px;white-space:normal;line-height:1.35;">` +
+                    `Volume = Binance futures kline volume for this bar (base asset). Live chart uses the same WS/REST klines — forming bar updates in real time.</div>`;
 
                 tooltip.style.display = 'block';
                 const rect = container.getBoundingClientRect();
                 let left = param.point.x + 16;
-                if (left + 220 > rect.width) left = param.point.x - 220;
+                const tipW = 280;
+                if (left + tipW > rect.width) left = Math.max(8, param.point.x - tipW);
                 tooltip.style.left = left + 'px';
-                tooltip.style.top = '8px';
+                tooltip.style.top = '42px'; // below top icon tools
+
             });
 
             const session = {

@@ -675,26 +675,16 @@
                  It is self-contained with its own buttons, state, and event listeners.
                  We make it draggable after init via InitDraggableElementsAsync(). -->
 
-            <!-- TP/SL toggle button — draggable, outside mk-tpsl-overlay -->
-            <div class="mk-tpsl-btn-wrapper" id="mk-tpsl-btn-wrapper">
-                <div class="mk-tpsl-drag-grip" title="Drag to move">
-                    <span></span><span></span><span></span>
-                </div>
-                <button class="mk-tpsl-btn @(_tpSlEditMode ? "mk-tpsl-btn-on" : "")" @onclick="ToggleTpSlEdit" title="Show/hide existing TP/SL lines">
+            <!-- Chart overlay tools: fixed top-right icon strip (no drag) -->
+            <div class="mk-chart-tools" id="mk-tpsl-btn-wrapper" title="Chart layers">
+                <button type="button" class="mk-chart-tool @(_tpSlEditMode ? "mk-chart-tool-on" : "")" @onclick="ToggleTpSlEdit" title="TP/SL lines">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6M9 8h6M17 16h6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                    TP/SL
                 </button>
-                <button class="mk-tpsl-btn @(_showTradeMarkers ? "mk-tpsl-btn-on" : "")"
-                        @onclick="ToggleTradeMarkersAsync"
-                        title="Show entry/exit marks on candles (trade history)">
+                <button type="button" class="mk-chart-tool @(_showTradeMarkers ? "mk-chart-tool-on" : "")" @onclick="ToggleTradeMarkersAsync" title="IN/OUT trade marks">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M5 10l7-7 7 7M5 14l7 7 7-7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                    IN/OUT
                 </button>
-                <button class="mk-tpsl-btn @(_showStructure ? "mk-tpsl-btn-on" : "")"
-                        @onclick="ToggleStructureAsync"
-                        title="Market structure: swing H/L zigzag (HH/HL/LH/LL, BOS)">
+                <button type="button" class="mk-chart-tool @(_showStructure ? "mk-chart-tool-on" : "")" @onclick="ToggleStructureAsync" title="Structure HH/HL/LH/LL">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,16 8,8 12,14 16,6 21,12" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                    STRUCT
                 </button>
             </div>
             <div class="mk-tpsl-overlay">
@@ -2262,8 +2252,29 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 .mk-chart-container-wrap:not(.mk-chart-maximized)::after{content:'';position:absolute;right:2px;bottom:2px;width:14px;height:14px;background:repeating-linear-gradient(135deg,var(--dim) 0 1.5px,transparent 1.5px 4px);opacity:.5;pointer-events:none;}
 
 .mk-tpsl-overlay{position:absolute;top:56px;left:8px;z-index:5;pointer-events:none;display:flex;align-items:center;gap:8px;}
-.mk-tpsl-btn-wrapper{display:flex;flex-direction:column;gap:4px;position:absolute;top:8px;right:46px;z-index:9;user-select:none;touch-action:none;display:flex;align-items:center;gap:0;background:rgba(8,13,26,.92);border:1px solid var(--bdr2);border-radius:7px;overflow:hidden;backdrop-filter:blur(8px);box-shadow:0 2px 12px rgba(0,0,0,.4);cursor:grab;pointer-events:auto;}.mk-tpsl-btn-wrapper:active{cursor:grabbing;}.mk-tpsl-drag-grip{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:2px;width:14px;padding:5px 3px;border-right:1px solid var(--bdr);opacity:.4;}.mk-tpsl-drag-grip span{display:block;width:8px;height:1.5px;background:var(--t1);border-radius:1px;}.mk-tpsl-btn{pointer-events:auto;display:flex;align-items:center;gap:6px;background:transparent;border:none;color:var(--dim);padding:5px 10px;font-size:11.5px;font-weight:600;cursor:pointer;transition:color .15s,background .15s;}
-.mk-tpsl-btn svg{width:13px;height:13px;}
+/* Chart layer tools — top-right icon strip (aligned under TF / live area) */
+.mk-chart-tools, .mk-tpsl-btn-wrapper{
+  position:absolute;top:10px;right:52px;z-index:12;
+  display:flex;flex-direction:row;align-items:center;gap:2px;
+  padding:3px;border-radius:10px;
+  background:rgba(8,12,22,.88);border:1px solid rgba(148,163,184,.18);
+  backdrop-filter:blur(10px);box-shadow:0 4px 18px rgba(0,0,0,.35);
+  pointer-events:auto;user-select:none;
+}
+.mk-chart-tool, .mk-tpsl-btn{
+  pointer-events:auto;display:flex;align-items:center;justify-content:center;
+  width:30px;height:28px;padding:0;margin:0;
+  background:transparent;border:none;border-radius:7px;
+  color:rgba(148,163,184,.95);cursor:pointer;
+  transition:color .15s,background .15s,box-shadow .15s;
+}
+.mk-chart-tool:hover, .mk-tpsl-btn:hover{color:#e2e8f0;background:rgba(255,255,255,.06);}
+.mk-chart-tool-on, .mk-tpsl-btn-on{
+  color:#38bdf8;background:rgba(56,189,248,.14);
+  box-shadow:inset 0 0 0 1px rgba(56,189,248,.35);
+}
+.mk-chart-tool svg, .mk-tpsl-btn svg{width:15px;height:15px;}
+.mk-tpsl-drag-grip{display:none!important;}
 
 /* DRAWING TOOLS TOOLBAR */
 /* mk-draw-toolbar removed — CDT chart-drawing-tools.js manages its own toolbar with inline styles */
@@ -2271,8 +2282,6 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
 
 
 
-.mk-tpsl-btn:hover{color:var(--txt);border-color:var(--acc);}
-.mk-tpsl-btn-on{background:rgba(59,130,246,0.15);border-color:var(--acc);color:var(--acc);}
 .mk-chart-maximized{position:fixed;inset:0;z-index:2100;height:auto;max-height:none;resize:none;background:var(--bg);display:flex;flex-direction:column;padding:6px 10px;overflow:visible!important;}
 /* Chart canvas must sit BELOW the max-bar so symbol dropdown is not covered */
 .mk-chart-maximized > .mk-max-bar{position:relative;z-index:30!important;overflow:visible!important;flex-shrink:0;}
