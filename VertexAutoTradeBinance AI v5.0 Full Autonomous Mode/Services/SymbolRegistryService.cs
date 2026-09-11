@@ -175,7 +175,7 @@ public class SymbolRegistryService
                   .Distinct(StringComparer.OrdinalIgnoreCase)
                   .ToList();
 
-    private static IReadOnlyList<string> LimitUnion(
+    private IReadOnlyList<string> LimitUnion(
         IEnumerable<string> pinnedCfg,
         IEnumerable<string> pinnedByPos,
         IEnumerable<string> longs,
