@@ -176,63 +176,63 @@ namespace VertexAutoTradeBinance8.Services
                     }
 
                     decimal riskFrac = major ? 0.0075m : 0.0060m;
-                    decimal riskBudget = balance * riskFrac;
-                    if (riskMult > 0) riskBudget *= riskMult;
+                    decimal riskBudget1R = balance * riskFrac;
+                    if (riskMult > 0) riskBudget1R *= riskMult;
                     if (signal.SizeMultiplier > 0m)
-                        riskBudget *= Math.Clamp(signal.SizeMultiplier, 0.40m, 1.0m);
+                        riskBudget1R *= Math.Clamp(signal.SizeMultiplier, 0.40m, 1.0m);
 
-                    decimal qty = riskBudget / slDist;
+                    decimal qty1R = riskBudget1R / slDist;
 
                     decimal marginFrac = major ? 0.12m : 0.10m;
                     decimal maxNotional = balance * marginFrac * leverage;
-                    decimal notional = qty * entry;
+                    decimal notional = qty1R * entry;
                     if (notional > maxNotional && entry > 0)
                     {
-                        qty = maxNotional / entry;
-                        notional = qty * entry;
+                        qty1R = maxNotional / entry;
+                        notional = qty1R * entry;
                     }
 
                     const decimal marginMinNotional = 5m;
                     if (notional < marginMinNotional && entry > 0)
                     {
-                        qty = marginMinNotional / entry;
-                        notional = qty * entry;
-                        if (qty * slDist > riskBudget * 2.5m)
+                        qty1R = marginMinNotional / entry;
+                        notional = qty1R * entry;
+                        if (qty1R * slDist > riskBudget1R * 2.5m)
                         {
-                            LastRejectReason = $"MIN_NOTIONAL_EXCEEDS_RISK need={qty * slDist:F2} budget={riskBudget:F2}";
+                            LastRejectReason = $"MIN_NOTIONAL_EXCEEDS_RISK need={qty1R * slDist:F2} budget={riskBudget1R:F2}";
                             return 0;
                         }
                     }
 
-                    qty = Math.Floor(qty / step) * step;
-                    if (qty < minQty)
+                    qty1R = Math.Floor(qty1R / step) * step;
+                    if (qty1R < minQty)
                     {
-                        LastRejectReason = $"QTY_BELOW_MIN qty={qty} min={minQty}";
+                        LastRejectReason = $"QTY_BELOW_MIN qty={qty1R} min={minQty}";
                         return 0;
                     }
 
                     _logger.LogInformation(
                         "[RISK] 1R-SIZE {sym} bal={bal:F2} riskFrac={rf:P2} budget={b:F2} slDist={sd} lev={lev}x notional={n:F2} qty={q} (maxN={mx:F2})",
-                        signal.Symbol, balance, riskFrac, riskBudget, slDist, leverage, notional, qty, maxNotional);
+                        signal.Symbol, balance, riskFrac, riskBudget1R, slDist, leverage, notional, qty1R, maxNotional);
 
                     try
                     {
                         if (_liqRisk != null)
                         {
-                            var liqCheck = _liqRisk.CheckPreTrade(signal, qty, balance, leverage);
+                            var liqCheck = _liqRisk.CheckPreTrade(signal, qty1R, balance, leverage);
                             if (!liqCheck.IsAllowed)
                             {
                                 var retried = TryReduceRiskForLiquidation(
-                                    signal, qty, balance, leverage, step, minQty);
+                                    signal, qty1R, balance, leverage, step, minQty);
                                 if (retried <= 0)
                                 {
                                     LastRejectReason = "LIQ_RISK_BLOCKED: " + (liqCheck.BlockReason ?? "");
                                     return 0;
                                 }
-                                qty = retried;
+                                qty1R = retried;
                             }
-                            else if (liqCheck.SafeQty > 0 && liqCheck.SafeQty < qty)
-                                qty = Math.Floor(liqCheck.SafeQty / step) * step;
+                            else if (liqCheck.SafeQty > 0 && liqCheck.SafeQty < qty1R)
+                                qty1R = Math.Floor(liqCheck.SafeQty / step) * step;
                         }
                     }
                     catch (Exception ex)
@@ -245,20 +245,20 @@ namespace VertexAutoTradeBinance8.Services
                         var adj = _journal?.GetAdjustments(_clientId, signal.Symbol);
                         if (adj != null && adj.SizeMult > 0 && adj.SizeMult < 1m)
                         {
-                            qty = Math.Floor(qty * adj.SizeMult / step) * step;
-                            if (qty < minQty) qty = minQty;
+                            qty1R = Math.Floor(qty1R * adj.SizeMult / step) * step;
+                            if (qty1R < minQty) qty1R = minQty;
                             _logger.LogInformation("[RISK-MEM] {sym} size×{sm:F2} ({note})",
                                 signal.Symbol, adj.SizeMult, adj.Note);
                         }
                     }
                     catch { }
 
-                    if (qty < minQty)
+                    if (qty1R < minQty)
                     {
                         LastRejectReason = "QTY_BELOW_MIN after memory";
                         return 0;
                     }
-                    return qty;
+                    return qty1R;
                 }
             }
 

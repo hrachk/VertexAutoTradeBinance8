@@ -585,6 +585,16 @@ public sealed class StrategyCoreEngine
         return list.Where(x => x.Item1 >= minIdx).ToList();
     }
 
+
+    private static decimal EnforceMinRiskSl(bool isLong, decimal entry, decimal sl, decimal atr)
+    {
+        if (entry <= 0 || atr <= 0) return sl;
+        decimal risk = Math.Abs(entry - sl);
+        decimal minRisk = atr * MinRiskAtr;
+        if (risk >= minRisk) return sl;
+        return isLong ? entry - minRisk : entry + minRisk;
+    }
+
     private static bool RiskOk(decimal risk, decimal atr)
     {
         if (risk <= 0 || atr <= 0) return false;
