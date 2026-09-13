@@ -154,10 +154,10 @@ namespace VertexAutoTradeBinance8.Services
             }
 
             // =============================================================
-            // CORE / LIVE=DEMO sizing: pure margin from Available (balance)
-            //   majors (BTC/ETH/BNB/SOL): 10% of available as margin
-            //   others:                    8% of available as margin
-            //   notional = margin × leverage
+            // CORE / LIVE=DEMO sizing: RISK% of equity at 1R (SL distance)
+            //   was: fixed 8–10% margin × lev → fat $ loss when SL wide
+            //   now: ~0.6–0.75% of available if SL hits; size scales with SL
+            //   cap: notional ≤ marginFrac × balance × leverage
             // =============================================================
             {
                 string symU = (signal.Symbol ?? "").Trim().ToUpperInvariant();
@@ -166,64 +166,99 @@ namespace VertexAutoTradeBinance8.Services
                 bool isCore = !string.IsNullOrEmpty(signal.Reason)
                               && signal.Reason.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase);
 
-                // Apply to CORE always; also as default policy for consistency with DEMO
                 if (isCore || true)
                 {
-                    decimal marginFrac = major ? 0.10m : 0.08m;
-                    decimal margin = balance * marginFrac;
-                    if (margin > balance * 0.95m) margin = balance * 0.95m;
-                    decimal notional = margin * leverage;
-
-                    const decimal marginMinNotional = 5m;
-                    if (notional < marginMinNotional)
+                    decimal slDist = Math.Abs(entry - stop);
+                    if (slDist <= 0)
                     {
-                        LastRejectReason = $"MARGIN_NOTIONAL_TOO_SMALL ntn={notional:F2}";
+                        LastRejectReason = "SL_DISTANCE_ZERO";
                         return 0;
                     }
 
-                    decimal marginQty = notional / entry;
-                    if (step > 0)
-                        marginQty = Math.Floor(marginQty / step) * step;
-                    if (marginQty < minQty)
+                    decimal riskFrac = major ? 0.0075m : 0.0060m;
+                    decimal riskBudget = balance * riskFrac;
+                    if (riskMult > 0) riskBudget *= riskMult;
+                    if (signal.SizeMultiplier > 0m)
+                        riskBudget *= Math.Clamp(signal.SizeMultiplier, 0.40m, 1.0m);
+
+                    decimal qty = riskBudget / slDist;
+
+                    decimal marginFrac = major ? 0.12m : 0.10m;
+                    decimal maxNotional = balance * marginFrac * leverage;
+                    decimal notional = qty * entry;
+                    if (notional > maxNotional && entry > 0)
                     {
-                        LastRejectReason = $"QTY_BELOW_MIN qty={marginQty} min={minQty}";
+                        qty = maxNotional / entry;
+                        notional = qty * entry;
+                    }
+
+                    const decimal marginMinNotional = 5m;
+                    if (notional < marginMinNotional && entry > 0)
+                    {
+                        qty = marginMinNotional / entry;
+                        notional = qty * entry;
+                        if (qty * slDist > riskBudget * 2.5m)
+                        {
+                            LastRejectReason = $"MIN_NOTIONAL_EXCEEDS_RISK need={qty * slDist:F2} budget={riskBudget:F2}";
+                            return 0;
+                        }
+                    }
+
+                    qty = Math.Floor(qty / step) * step;
+                    if (qty < minQty)
+                    {
+                        LastRejectReason = $"QTY_BELOW_MIN qty={qty} min={minQty}";
                         return 0;
                     }
 
                     _logger.LogInformation(
-                        "[RISK] MARGIN-SIZE {sym} available={bal:F2} marginFrac={mf:P0} margin={m:F2} lev={lev}x notional={n:F2} qty={q}",
-                        signal.Symbol, balance, marginFrac, margin, leverage, notional, marginQty);
+                        "[RISK] 1R-SIZE {sym} bal={bal:F2} riskFrac={rf:P2} budget={b:F2} slDist={sd} lev={lev}x notional={n:F2} qty={q} (maxN={mx:F2})",
+                        signal.Symbol, balance, riskFrac, riskBudget, slDist, leverage, notional, qty, maxNotional);
 
-                    if (_liqRisk != null)
+                    try
                     {
-                        var liqCheck = _liqRisk.CheckPreTrade(signal, marginQty, balance, leverage);
-                        if (!liqCheck.IsAllowed)
+                        if (_liqRisk != null)
                         {
-                            var retried = TryReduceRiskForLiquidation(
-                                signal, marginQty, balance, leverage, step, minQty);
-                            if (retried > 0)
-                                return retried;
-                            LastRejectReason = $"LIQ_RISK_BLOCKED: {liqCheck.BlockReason}";
-                            return 0;
+                            var liqCheck = _liqRisk.CheckPreTrade(signal, qty, balance, leverage);
+                            if (!liqCheck.IsAllowed)
+                            {
+                                var retried = TryReduceRiskForLiquidation(
+                                    signal, qty, balance, leverage, step, minQty);
+                                if (retried <= 0)
+                                {
+                                    LastRejectReason = "LIQ_RISK_BLOCKED: " + (liqCheck.BlockReason ?? "");
+                                    return 0;
+                                }
+                                qty = retried;
+                            }
+                            else if (liqCheck.SafeQty > 0 && liqCheck.SafeQty < qty)
+                                qty = Math.Floor(liqCheck.SafeQty / step) * step;
                         }
-                        if (liqCheck.SafeQty < marginQty && liqCheck.SafeQty > 0)
-                            marginQty = Math.Floor(liqCheck.SafeQty / step) * step;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "[RISK] liq pre-check soft fail");
                     }
 
-                    // Trade-memory size feedback (never increases above base)
                     try
                     {
                         var adj = _journal?.GetAdjustments(_clientId, signal.Symbol);
                         if (adj != null && adj.SizeMult > 0 && adj.SizeMult < 1m)
                         {
-                            marginQty = Math.Floor(marginQty * adj.SizeMult / step) * step;
-                            if (marginQty < minQty) marginQty = minQty;
+                            qty = Math.Floor(qty * adj.SizeMult / step) * step;
+                            if (qty < minQty) qty = minQty;
                             _logger.LogInformation("[RISK-MEM] {sym} size×{sm:F2} ({note})",
                                 signal.Symbol, adj.SizeMult, adj.Note);
                         }
                     }
                     catch { }
-                    return marginQty;
+
+                    if (qty < minQty)
+                    {
+                        LastRejectReason = "QTY_BELOW_MIN after memory";
+                        return 0;
+                    }
+                    return qty;
                 }
             }
 

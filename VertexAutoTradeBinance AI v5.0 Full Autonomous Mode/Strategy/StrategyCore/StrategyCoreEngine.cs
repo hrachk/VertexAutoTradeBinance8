@@ -52,10 +52,10 @@ public sealed class StrategyCoreEngine
     private const decimal MinRr = Tp1Rr;
     private const decimal MinAtrPct = 0.0015m;
     private const decimal MaxAtrPct = 0.060m;
-    // ATR is ONLY a clamp / pad — never the sole SL formula
-    private const decimal MinRiskAtr = 0.80m;   // skip if structural risk tighter than this
-    private const decimal MaxRiskAtr = 3.50m;   // skip if SL is absurdly far
-    private const decimal StructurePadAtr = 0.20m; // small buffer beyond swing
+    // ATR is clamp / pad / noise-floor — never the sole SL formula.
+    private const decimal MinRiskAtr = 1.40m;   // widen if structure tighter than this
+    private const decimal MaxRiskAtr = 3.80m;
+    private const decimal StructurePadAtr = 0.50m; // buffer beyond swing (was 0.20)
     private const decimal MaxExtensionAtr = 2.20m; // no late chase past structure
     private const int EmaFast = 21;
     private const int EmaSlow = 50;
@@ -588,7 +588,8 @@ public sealed class StrategyCoreEngine
     private static bool RiskOk(decimal risk, decimal atr)
     {
         if (risk <= 0 || atr <= 0) return false;
-        if (risk < atr * MinRiskAtr) return false; // too tight — noise trap
+        if (risk < atr * 0.45m) return false; // absurdly tight
+        // [0.45, MinRisk) widened in Make via EnforceMinRiskSl
         if (risk > atr * MaxRiskAtr) return false; // too wide — R:R / size broken
         return true;
     }
@@ -598,6 +599,14 @@ public sealed class StrategyCoreEngine
         IEnumerable<decimal> tps, decimal atr, string reason, decimal confidence)
     {
         var tpList = tps.ToList();
+
+        bool isLongSide = side == SignalSide.Buy;
+        sl = EnforceMinRiskSl(isLongSide, entry, sl, atr);
+        {
+            decimal fr = Math.Abs(entry - sl);
+            if (fr > 0 && atr > 0)
+                tpList = BuildTpLadder(isLongSide, entry, fr, atr).ToList();
+        }
 
         // Trade-memory: after SL on THIS symbol → smarter SL/TP only. NEVER cut confidence.
         try
@@ -627,6 +636,9 @@ public sealed class StrategyCoreEngine
                 _log.LogInformation(
                     "[CORE-MEM] {sym} {note} slPadAtr={sp:F2} tpScale={ts:F2} conf untouched={cf:F2}",
                     symbol, adj.Note, adj.SlPadAtr, adj.TpScale, confidence);
+                decimal fr2 = Math.Abs(entry - sl);
+                if (fr2 > 0 && atr > 0)
+                    tpList = BuildTpLadder(isLongSide, entry, fr2, atr).ToList();
             }
         }
         catch { /* never block signal emit */ }
