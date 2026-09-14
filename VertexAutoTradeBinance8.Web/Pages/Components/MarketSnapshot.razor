@@ -259,8 +259,9 @@
                         bool sigIsBuy = sig.Side?.ToUpper() == "BUY" || sig.Side?.ToUpper() == "LONG";
                         bool isActive = _activeSignal == sig;
                         decimal sigTp1 = sig.TakeProfits?.FirstOrDefault() ?? 0m;
-                        decimal rr = sig.StopLoss > 0 && sig.Entry > 0 && sigTp1 > 0
-                            ? Math.Abs(sigTp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry)
+                        decimal slDist = Math.Abs(sig.StopLoss - sig.Entry);
+                        decimal rr = sig.StopLoss > 0 && sig.Entry > 0 && sigTp1 > 0 && slDist > 0
+                            ? Math.Abs(sigTp1 - sig.Entry) / slDist
                             : 0m;
                         int conf = sig.Confidence;
     
@@ -3622,7 +3623,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             {
 
             var idx = Series.FindIndex(s => s.Symbol == symbol && s.Timeframe == _activeTf);
-            if (idx < 0 || Series[idx].Klines.Count == 0) return;
+            if (idx < 0 || idx >= Series.Count || Series[idx].Klines.Count == 0) return;
 
             var last = Series[idx].Klines[^1];
             var updated = last with
@@ -3665,6 +3666,10 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
             // lines of template for a chart-only tick is wasteful.
             // We still need it for PnL numbers and ticker to stay live.
             StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("[Market] OnTick: " + ex.Message);
             }
             finally { _onTickBusy = false; }
         });
@@ -5815,7 +5820,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // genuinely tradeable one — cap at 8 min base + 2-3 min grace.
         decimal sigTp1 = sig.TakeProfits?.FirstOrDefault() ?? 0m;
         decimal rr = sig.StopLoss > 0 && sig.Entry > 0 && sigTp1 > 0
-            ? Math.Abs(sigTp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry)
+            ? (Math.Abs(sig.StopLoss - sig.Entry) > 0 ? Math.Abs(sigTp1 - sig.Entry) / Math.Abs(sig.StopLoss - sig.Entry) : 0m)
             : 0m;
         var (belowThreshold, lowRr, _) = IsWeakSignal(sig, sig.Confidence, rr);
         if (belowThreshold || lowRr)
