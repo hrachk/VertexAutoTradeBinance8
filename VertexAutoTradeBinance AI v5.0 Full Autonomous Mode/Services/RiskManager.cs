@@ -181,6 +181,18 @@ namespace VertexAutoTradeBinance8.Services
                     if (signal.SizeMultiplier > 0m)
                         riskBudget1R *= Math.Clamp(signal.SizeMultiplier, 0.40m, 1.0m);
 
+                    // Hard USD cap: journal showed wins ~$20–100 vs SL -$300–900
+                    // Keep single-trade loss bounded even if SL is wide.
+                    decimal hardCapUsd = major
+                        ? Math.Min(150m, Math.Max(40m, balance * 0.012m))
+                        : Math.Min(55m, Math.Max(18m, balance * 0.0075m));
+                    if (riskBudget1R > hardCapUsd)
+                    {
+                        _logger.LogInformation("[RISK] hardCap {sym} budget {b:F2} → {cap:F2}",
+                            signal.Symbol, riskBudget1R, hardCapUsd);
+                        riskBudget1R = hardCapUsd;
+                    }
+
                     decimal qty1R = riskBudget1R / slDist;
 
                     decimal marginFrac = major ? 0.12m : 0.10m;

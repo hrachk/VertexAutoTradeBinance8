@@ -83,6 +83,8 @@ public sealed class DemoClosedTrade
     /// <summary>Qty at open (and after adds). TP.Pct is percent of this, not of remaining.</summary>
     public decimal InitialQty { get; set; }
     public decimal RealizedPnl { get; set; }
+    public decimal RealizedR { get; set; }
+    public decimal InitialRiskPrice { get; set; }
     public string CloseReason { get; set; } = ""; // "SL" / "TP1" / "Manual" / etc
     public DateTime OpenedAtUtc { get; set; }
     public DateTime ClosedAtUtc { get; set; } = DateTime.UtcNow;

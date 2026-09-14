@@ -677,10 +677,15 @@ public sealed class DemoAccountService
                 TradeJournalHook?.Invoke(_clientId, pos, exitPrice, closeQty, realizedPnl, reason);
         }
         catch { /* never break demo close */ }
-_state.History.Add(new DemoClosedTrade
+decimal riskPxH = (pos.StopLoss.HasValue && pos.StopLoss.Value > 0)
+            ? Math.Abs(pos.EntryPrice - pos.StopLoss.Value) : 0m;
+        decimal rH = (riskPxH > 0 && closeQty > 0) ? realizedPnl / (riskPxH * closeQty) : 0m;
+        if (rH > 20m) rH = 20m; if (rH < -20m) rH = -20m;
+        _state.History.Add(new DemoClosedTrade
         {
             Symbol = pos.Symbol, Side = pos.Side, EntryPrice = pos.EntryPrice, ExitPrice = exitPrice,
-            Qty = closeQty, RealizedPnl = realizedPnl, CloseReason = reason, OpenedAtUtc = pos.OpenedAtUtc,
+            Qty = closeQty, RealizedPnl = realizedPnl, RealizedR = Math.Round(rH, 4),
+            InitialRiskPrice = riskPxH, CloseReason = reason, OpenedAtUtc = pos.OpenedAtUtc,
         });
 
         if (pctToClose >= 100m || closeQty >= pos.Qty * 0.999m)

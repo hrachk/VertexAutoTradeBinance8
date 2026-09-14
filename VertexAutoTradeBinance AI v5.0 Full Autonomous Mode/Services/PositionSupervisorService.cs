@@ -11,6 +11,7 @@ using System.Drawing;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Text.Json;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
@@ -126,6 +127,9 @@ namespace VertexAutoTradeBinance8.Services
             public DateTime LastActionUtc;
         }
         private readonly ConcurrentDictionary<string, ProfitAwareState> _profitAware = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, decimal> _openInitialRisk = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly SemaphoreSlim _restGate = new(3, 3);
+        private static long _lastRestMs;
 
         /// <summary>Last UnrealizedPnl (USDT) per SYMBOL_SIDE while position open — used at full close for journal.</summary>
         private readonly ConcurrentDictionary<string, decimal> _lastUPnlByPos = new();
@@ -383,6 +387,25 @@ namespace VertexAutoTradeBinance8.Services
 
             bool hasLong = Math.Abs(longPos?.Quantity ?? 0m) > POSITION_EPS;
             bool hasShort = Math.Abs(shortPos?.Quantity ?? 0m) > POSITION_EPS;
+
+            try
+            {
+                if (hasLong && longPos != null && lastSignal != null && lastSignal.StopLoss > 0
+                    && lastSignal.Side == SignalSide.Buy)
+                {
+                    var k = BuildExitKey(symbol, PositionSide.Long, longPos.EntryPrice);
+                    var r0 = Math.Abs(longPos.EntryPrice - lastSignal.StopLoss);
+                    if (r0 > 0) _openInitialRisk[k] = r0;
+                }
+                if (hasShort && shortPos != null && lastSignal != null && lastSignal.StopLoss > 0
+                    && lastSignal.Side == SignalSide.Sell)
+                {
+                    var k = BuildExitKey(symbol, PositionSide.Short, shortPos.EntryPrice);
+                    var r0 = Math.Abs(shortPos.EntryPrice - lastSignal.StopLoss);
+                    if (r0 > 0) _openInitialRisk[k] = r0;
+                }
+            }
+            catch { }
 
             // 2) LIFECYCLE CLEANUP IF FLAT
             if (!hasLong && !hasShort)
@@ -878,13 +901,16 @@ namespace VertexAutoTradeBinance8.Services
                 if (st.InitialRisk <= 0)
                 {
                     decimal r0 = 0m;
-                    if (signal != null && signal.StopLoss > 0)
+                    if (_openInitialRisk.TryGetValue(key, out var seeded) && seeded > 0)
+                        r0 = seeded;
+                    if (r0 <= 0 && signal != null && signal.StopLoss > 0)
                         r0 = Math.Abs(entry - signal.StopLoss);
                     if (r0 <= 0 && atr > 0)
                         r0 = atr * 1.3m;
                     if (r0 <= 0)
                         r0 = entry * 0.008m;
                     st.InitialRisk = r0;
+                    if (r0 > 0) _openInitialRisk[key] = r0;
                 }
 
                 decimal risk = st.InitialRisk;
@@ -1808,6 +1834,21 @@ namespace VertexAutoTradeBinance8.Services
             }
             return realizedPnlUsd > 0 ? "TP" : "Close";
         }
+
+        private static async Task RestWeightPaceAsync(CancellationToken ct)
+        {
+            await _restGate.WaitAsync(ct);
+            try
+            {
+                long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                long last = Interlocked.Read(ref _lastRestMs);
+                long wait = 120 - (now - last); // ~8 req/s shared across supervisors
+                if (wait > 0) await Task.Delay((int)wait, ct);
+                Interlocked.Exchange(ref _lastRestMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            }
+            finally { _restGate.Release(); }
+        }
+
         private void DetectClose(
      string symbol,
      BinancePositionDetailsUsdt? pos,
@@ -1888,6 +1929,9 @@ namespace VertexAutoTradeBinance8.Services
                             var paKey = BuildExitKey(symbol, side, prevEntry);
                             if (_profitAware.TryGetValue(paKey, out var paSt) && paSt.InitialRisk > 0)
                                 riskPx = paSt.InitialRisk;
+                            else if (_openInitialRisk.TryGetValue(paKey, out var or0) && or0 > 0)
+                                riskPx = or0;
+                            _openInitialRisk.TryRemove(paKey, out _);
                         }
                         catch { }
                         AiSelfLearningService.LiveTradeJournalHook?.Invoke(
@@ -1946,6 +1990,7 @@ namespace VertexAutoTradeBinance8.Services
                 ct.ThrowIfCancellationRequested();
 
                 // 🔥 БЕЗ symbol-фильтра — Binance bug-safe
+                await RestWeightPaceAsync(ct);
                 var res = await client.UsdFuturesApi.Account.GetPositionInformationAsync(ct: ct);
                 last = res;
 

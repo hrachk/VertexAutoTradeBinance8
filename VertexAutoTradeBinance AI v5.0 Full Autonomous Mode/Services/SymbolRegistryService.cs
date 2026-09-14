@@ -392,12 +392,26 @@ public class SymbolRegistryService
         // ============================================================
         // TRADABLE FILTER (AI / REGIME)
         // ============================================================
-        var tradable = btcDumpSqueezeActive
-            ? new List<SymbolMarketSnapshot>() // Auto-scanner paused; Pinned symbols (added below via pinnedCfg/pinnedPos) still flow through untouched
-            : snapshots
-                .Where(s => !string.IsNullOrWhiteSpace(s.Symbol))
-                .Where(s => _marketRegime.IsTradable(s.Symbol))
-                .ToList();
+        var baseSnaps = snapshots
+            .Where(s => !string.IsNullOrWhiteSpace(s.Symbol))
+            .Where(s => _marketRegime.IsTradable(s.Symbol))
+            .ToList();
+
+        List<SymbolMarketSnapshot> tradable;
+        if (btcDumpSqueezeActive)
+        {
+            decimal btcAbs = Math.Abs(btcChangeSigned);
+            tradable = baseSnaps.Where(s =>
+            {
+                if (s.Symbol.StartsWith("BTC", StringComparison.OrdinalIgnoreCase)) return false;
+                decimal altAbs = Math.Abs(s.PriceChangePercent);
+                return btcAbs <= 0.01m || altAbs < btcAbs * 0.55m;
+            }).ToList();
+            _logger.LogWarning(
+                "[SYMBOL-REGISTRY] BTC stress: kept {n}/{total} low-beta autos (not full wipe)",
+                tradable.Count, baseSnaps.Count);
+        }
+        else tradable = baseSnaps;
 
         if (tradable.Count == 0 && !btcDumpSqueezeActive)
         {

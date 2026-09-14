@@ -976,7 +976,7 @@
                             <thead>
                                 <tr>
                                     <th>Symbol</th><th>Side</th><th>Entry</th><th>Exit</th>
-                                    <th>PnL</th><th>Reason</th><th>Closed</th><th></th>
+                                    <th>PnL</th><th>R</th><th>Reason</th><th>Closed</th><th></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -988,6 +988,7 @@
                                         <td class="mk-mono">@FmtP(t.EntryPrice)</td>
                                         <td class="mk-mono">@FmtP(t.ExitPrice)</td>
                                         <td class="mk-mono @(t.RealizedPnl >= 0 ? "up" : "dn")">@(t.RealizedPnl >= 0 ? "+" : "")@t.RealizedPnl.ToString("F2")</td>
+                                        <td class="mk-mono @(t.RealizedR >= 0 ? "up" : "dn")">@t.RealizedR.ToString("F2")R</td>
                                         <td class="mk-dim">@t.CloseReason</td>
                                         <td class="mk-dim">@t.ClosedAtUtc.ToLocalTime().ToString("MM/dd HH:mm")</td>
                                         <td>

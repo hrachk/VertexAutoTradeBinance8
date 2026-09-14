@@ -48,6 +48,11 @@ public sealed class TradeJournalService
                 if (file.Entries.Count > 2000)
                     file.Entries = file.Entries.OrderByDescending(x => x.ClosedAtUtc).Take(2000).ToList();
                 File.WriteAllText(path, JsonSerializer.Serialize(file, JsonOpt));
+                try {
+                    var featPath = Path.Combine(ClientDir(e.ClientId), "trade-features.jsonl");
+                    var line = JsonSerializer.Serialize(new { e.Symbol, e.Side, e.Source, e.RealizedPnl, e.RealizedR, e.InitialRiskPrice, e.CloseReason, e.ClosedAtUtc, e.SignalConf });
+                    File.AppendAllText(featPath, line + Environment.NewLine);
+                } catch { }
             }
             RebuildMemory(e.ClientId);
         }
@@ -206,11 +211,16 @@ public sealed class TradeJournalService
                 : consecutiveStops >= 2 ? 0.92m
                 : 0.95m;
 
-            sizeMult = consecutiveStops >= 3 ? 0.80m
-                : consecutiveStops == 2 ? 0.90m
-                : stopRate >= 0.55m ? 0.92m
-                : 0.95m;
-            levMult = consecutiveStops >= 3 ? 0.90m : 1.0m;
+            sizeMult = consecutiveStops >= 3 ? 0.70m
+                : consecutiveStops == 2 ? 0.82m
+                : stopRate >= 0.55m ? 0.88m
+                : 0.93m;
+            // Offline expectancy from RealizedR samples
+            if (avgRealizedR <= -0.50m && rSamples.Count >= 3)
+                sizeMult = Math.Min(sizeMult, 0.50m); // soft-skip territory
+            else if (avgRealizedR <= -0.30m && rSamples.Count >= 2)
+                sizeMult = Math.Min(sizeMult, 0.70m);
+            levMult = consecutiveStops >= 3 ? 0.85m : 1.0m;
 
             note = "smart SL/TP after SL history stopsInRow=" + consecutiveStops
                 + " missTp=" + avgMiss.ToString("F2") + " (conf untouched)";

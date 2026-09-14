@@ -13,6 +13,7 @@
 
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using VertexAutoTradeBinance8.Services.News;
 using System;
 using System.Net.Http;
 using System.Text.Json;
@@ -70,15 +71,17 @@ namespace VertexAutoTradeBinance8.Services
     {
         private readonly ILogger<FearGreedService> _logger;
         private readonly HttpClient _http;
+        private readonly INewsCatalystService? _news;
         private FearGreedSnapshot _current = new();
         private readonly SemaphoreSlim _lock = new(1, 1);
 
         private const string ApiUrl = "https://api.alternative.me/fng/?limit=1&format=json";
         private static readonly TimeSpan RefreshInterval = TimeSpan.FromHours(4);
 
-        public FearGreedService(ILogger<FearGreedService> logger)
+        public FearGreedService(ILogger<FearGreedService> logger, INewsCatalystService? news = null)
         {
             _logger = logger;
+            _news = news;
             _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         }
 
@@ -129,6 +132,27 @@ namespace VertexAutoTradeBinance8.Services
 
                 _logger.LogInformation("[FearGreed] Index={idx} ({label}) Bias={bias}",
                     value, label, _current.SideBias > 0 ? "LONG" : _current.SideBias < 0 ? "SHORT" : "NEUTRAL");
+
+                try
+                {
+                    if (_news != null && (classification == FearGreedClassification.ExtremeFear
+                        || classification == FearGreedClassification.ExtremeGreed))
+                    {
+                        _news.Ingest(new NewsEvent
+                        {
+                            Source = "alternative.me/fng",
+                            Headline = $"Crypto Fear&Greed {value} ({label})",
+                            Credibility = 0.85m,
+                            Impact = classification is FearGreedClassification.ExtremeFear
+                                or FearGreedClassification.ExtremeGreed ? 0.62m : 0.40m,
+                            Vector = classification == FearGreedClassification.ExtremeFear
+                                ? NewsVector.Bullish
+                                : NewsVector.Bearish,
+                            RelatedSymbols = new List<string>() // broad market → pause all auto
+                        });
+                    }
+                }
+                catch { /* news layer optional */ }
             }
             catch (Exception ex)
             {

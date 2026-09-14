@@ -247,6 +247,14 @@ try
     var journal = app.Services.GetRequiredService<VertexAutoTradeBinance8.Services.Learning.TradeJournalService>();
     VertexAutoTradeBinance8.Web.Services.DemoAccountService.TradeJournalHook = (clientId, pos, exit, closeQty, pnl, reason) =>
     {
+        decimal riskPx = 0m;
+        if (pos.StopLoss.HasValue && pos.StopLoss.Value > 0)
+            riskPx = Math.Abs(pos.EntryPrice - pos.StopLoss.Value);
+        decimal riskUsd = (riskPx > 0 && closeQty > 0) ? riskPx * closeQty : 0m;
+        decimal r = riskUsd > 0.0000001m ? pnl / riskUsd : 0m;
+        if (r > 20m) r = 20m;
+        if (r < -20m) r = -20m;
+
         journal.Append(new VertexAutoTradeBinance8.Services.Learning.TradeJournalEntry
         {
             ClientId = clientId,
@@ -258,8 +266,10 @@ try
             Qty = closeQty,
             Leverage = pos.Leverage,
             StopLoss = pos.StopLoss,
-            TakeProfits = pos.TakeProfits?.Select(t => t.Price).ToList() ?? new(),
+            TakeProfits = pos.TakeProfits?.Select(tp => tp.Price).ToList() ?? new(),
             RealizedPnl = pnl,
+            RealizedR = Math.Round(r, 4),
+            InitialRiskPrice = riskPx,
             CloseReason = reason,
             OpenedAtUtc = pos.OpenedAtUtc,
             ClosedAtUtc = DateTime.UtcNow
