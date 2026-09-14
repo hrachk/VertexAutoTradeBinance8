@@ -500,7 +500,7 @@ try
                 OpenedAtUtc = DateTime.UtcNow,
                 ClosedAtUtc = DateTime.UtcNow
             });
-        }
+        };
 }
 catch (Exception ex)
 {
