@@ -1441,46 +1441,20 @@
 
                 if (!s.entryBtnTp) {
                     s.entryBtnTp = document.createElement('button');
-                    s.entryBtnTp.textContent = 'TP';
-                    s.entryBtnTp.style.position = 'absolute';
-                    s.entryBtnTp.style.zIndex = '6';
-                    s.entryBtnTp.style.padding = '2px 8px';
-                    s.entryBtnTp.style.borderRadius = '4px';
-                    s.entryBtnTp.style.fontSize = '10.5px';
-                    s.entryBtnTp.style.fontWeight = '700';
-                    s.entryBtnTp.style.border = 'none';
-                    s.entryBtnTp.style.cursor = 'pointer';
-                    s.entryBtnTp.style.background = '#22c55e';
-                    s.entryBtnTp.style.color = '#000';
-                    s.entryBtnTp.style.transform = 'translateY(-50%)';
-                    s.entryBtnTp.style.boxShadow = '0 1px 4px rgba(0,0,0,0.5)';
-                    s.entryBtnTp.style.letterSpacing = '0.5px';
-                    s.entryBtnTp.style.transition = 'opacity .15s';
-                    s.entryBtnTp.onmouseenter = () => s.entryBtnTp.style.opacity = '1';
-                    s.entryBtnTp.onmouseleave = () => s.entryBtnTp.style.opacity = '0.9';
+                    s.entryBtnTp.className = 'mk-neon-btn mk-neon-btn-tp';
+                    s.entryBtnTp.innerHTML = '<span class="mk-neon-ico">◎</span><span>TP</span>';
+                    s.entryBtnTp.title = 'Add / update Take Profit';
+                    s.entryBtnTp.style.cssText = 'position:absolute;z-index:12;display:flex;align-items:center;gap:4px;padding:5px 10px;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:.4px;cursor:pointer;font-family:JetBrains Mono,ui-monospace,monospace;color:#00ff9c;background:rgba(5,12,10,.92);border:1px solid #00ff9c;box-shadow:0 0 12px rgba(0,255,156,.35);backdrop-filter:blur(6px);transform:none;';
                     s.entryBtnTp.onclick = () => this.promptAddTp(containerId);
                     s.entryBtnTp.addEventListener('mousedown', (ev) => ev.stopPropagation());
                     container.appendChild(s.entryBtnTp);
                 }
                 if (!s.entryBtnSl) {
                     s.entryBtnSl = document.createElement('button');
-                    s.entryBtnSl.textContent = 'SL';
-                    s.entryBtnSl.style.position = 'absolute';
-                    s.entryBtnSl.style.zIndex = '6';
-                    s.entryBtnSl.style.padding = '2px 8px';
-                    s.entryBtnSl.style.borderRadius = '4px';
-                    s.entryBtnSl.style.fontSize = '10.5px';
-                    s.entryBtnSl.style.fontWeight = '700';
-                    s.entryBtnSl.style.border = 'none';
-                    s.entryBtnSl.style.cursor = 'pointer';
-                    s.entryBtnSl.style.background = '#ef4444';
-                    s.entryBtnSl.style.color = '#000';
-                    s.entryBtnSl.style.transform = 'translateY(-50%)';
-                    s.entryBtnSl.style.boxShadow = '0 1px 4px rgba(0,0,0,0.5)';
-                    s.entryBtnSl.style.letterSpacing = '0.5px';
-                    s.entryBtnSl.style.transition = 'opacity .15s';
-                    s.entryBtnSl.onmouseenter = () => s.entryBtnSl.style.opacity = '1';
-                    s.entryBtnSl.onmouseleave = () => s.entryBtnSl.style.opacity = '0.9';
+                    s.entryBtnSl.className = 'mk-neon-btn mk-neon-btn-sl';
+                    s.entryBtnSl.innerHTML = '<span class="mk-neon-ico">◎</span><span>SL</span>';
+                    s.entryBtnSl.title = 'Add / update Stop Loss';
+                    s.entryBtnSl.style.cssText = 'position:absolute;z-index:12;display:flex;align-items:center;gap:4px;padding:5px 10px;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:.4px;cursor:pointer;font-family:JetBrains Mono,ui-monospace,monospace;color:#ff6b35;background:rgba(12,8,5,.92);border:1px solid #ff6b35;box-shadow:0 0 12px rgba(255,107,53,.35);backdrop-filter:blur(6px);transform:none;';
                     s.entryBtnSl.onclick = () => this.promptAddSl(containerId);
                     s.entryBtnSl.addEventListener('mousedown', (ev) => ev.stopPropagation());
                     container.appendChild(s.entryBtnSl);
@@ -1510,22 +1484,16 @@
         repositionEntryButtons(containerId) {
             const s = sessions.get(containerId);
             if (!s || !s.entryBtnTp || !s.entryBtnSl) return;
-            // Buttons follow the LIVE PRICE line (pnlLine), not the static
-            // entry line — they sit right next to the current market price
-            // so the user can quickly add TP/SL relative to where price IS now.
-            const trackPrice = s.lastPnlPrice || s.entryPrice;
-            if (!trackPrice) return;
-            const y = s.candleSeries.priceToCoordinate(trackPrice);
-            if (y == null) return;
-
+            // FIXED stack on the right price-axis gutter — never overlays entry/mark line
             let scaleWidth = 60;
             try { scaleWidth = s.chart.priceScale('right').width() || 60; } catch (e) {}
-
-            // SL (red) left of TP (green), both centered on the live price line Y
-            s.entryBtnTp.style.right = (scaleWidth + 50) + 'px';
-            s.entryBtnTp.style.top   = y + 'px';
-            s.entryBtnSl.style.right = (scaleWidth + 84) + 'px';
-            s.entryBtnSl.style.top   = y + 'px';
+            const right = Math.max(8, scaleWidth + 6);
+            s.entryBtnTp.style.right = right + 'px';
+            s.entryBtnTp.style.left = 'auto';
+            s.entryBtnTp.style.top = '48px';
+            s.entryBtnSl.style.right = right + 'px';
+            s.entryBtnSl.style.left = 'auto';
+            s.entryBtnSl.style.top = '78px';
         },
 
         // Per direct confirmation: a single combined prompt asking for
@@ -1800,23 +1768,90 @@
         promptAddTp(containerId) {
             const s = sessions.get(containerId);
             if (!s || !s.onNewTpRequestedWithPercent) return;
-            const input = window.prompt('New TP — enter price, percent (e.g. "65000, 25"):');
-            if (!input) return;
-            const parts = input.split(',').map(p => p.trim());
-            const price = parseFloat(parts[0]);
-            const pct = parts.length > 1 ? parseFloat(parts[1]) : NaN;
-            if (!price || price <= 0) return;
-            s.onNewTpRequestedWithPercent(price, isNaN(pct) ? 0 : pct);
+            const ref = s.lastPnlPrice || s.entryPrice || 0;
+            this._showTargetModal({
+                kind: 'tp',
+                title: 'Update Position Targets',
+                subtitle: 'Take Profit',
+                accent: '#00ff9c',
+                defaultPrice: ref > 0 ? ref : '',
+                showPct: true,
+                onConfirm: (price, pct) => {
+                    if (!price || price <= 0) return;
+                    s.onNewTpRequestedWithPercent(price, pct || 0);
+                }
+            });
         },
 
         promptAddSl(containerId) {
             const s = sessions.get(containerId);
             if (!s || !s.onSlChanged) return;
-            const input = window.prompt('Stop Loss price:');
-            if (!input) return;
-            const price = parseFloat(input);
-            if (!price || price <= 0) return;
-            s.onSlChanged(price);
+            const ref = s.lastPnlPrice || s.entryPrice || 0;
+            this._showTargetModal({
+                kind: 'sl',
+                title: 'Update Position Targets',
+                subtitle: 'Stop Loss',
+                accent: '#ff6b35',
+                defaultPrice: ref > 0 ? ref : '',
+                showPct: false,
+                onConfirm: (price) => {
+                    if (!price || price <= 0) return;
+                    s.onSlChanged(price);
+                }
+            });
+        },
+
+        _showTargetModal(opts) {
+            this._removeTargetModal();
+            const accent = opts.accent || '#00ff9c';
+            const overlay = document.createElement('div');
+            overlay.id = '__vx_target_modal';
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);';
+            const card = document.createElement('div');
+            card.style.cssText = 'width:min(380px,92vw);background:linear-gradient(165deg,#0a121c,#060a12);border:1px solid ' + accent + '55;border-radius:12px;box-shadow:0 0 32px ' + accent + '22,0 20px 50px rgba(0,0,0,.55);overflow:hidden;font-family:JetBrains Mono,ui-monospace,system-ui,sans-serif;';
+            card.innerHTML = `
+              <div style="padding:14px 16px 10px;border-bottom:1px solid #132033;display:flex;align-items:center;gap:10px;">
+                <span style="width:28px;height:28px;border-radius:50%;border:1px solid ${accent};color:${accent};display:flex;align-items:center;justify-content:center;font-size:14px;box-shadow:0 0 10px ${accent}44;">◎</span>
+                <div>
+                  <div style="font-size:13px;font-weight:800;color:#e8f4ff;letter-spacing:.2px;">${opts.title || 'Update Position Targets'}</div>
+                  <div style="font-size:10px;color:#5a7a96;margin-top:2px;text-transform:uppercase;letter-spacing:.6px;">${opts.subtitle || ''}</div>
+                </div>
+              </div>
+              <div style="padding:14px 16px 6px;">
+                <label style="display:block;font-size:9px;font-weight:700;color:#3d5a78;letter-spacing:.6px;text-transform:uppercase;margin-bottom:6px;">Price</label>
+                <input id="__vx_tm_price" type="number" step="any" value="${opts.defaultPrice !== '' ? opts.defaultPrice : ''}"
+                  style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid #1a2d45;background:#050a10;color:${accent};font-size:15px;font-weight:700;outline:none;font-family:inherit;" />
+                ${opts.showPct ? `
+                <label style="display:block;font-size:9px;font-weight:700;color:#3d5a78;letter-spacing:.6px;text-transform:uppercase;margin:12px 0 6px;">Allocation (% of position)</label>
+                <input id="__vx_tm_pct" type="number" step="1" min="1" max="100" value="100"
+                  style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid #1a2d45;background:#050a10;color:#c8e6ff;font-size:14px;font-weight:700;outline:none;font-family:inherit;" />
+                ` : ''}
+              </div>
+              <div style="padding:12px 16px 16px;display:flex;gap:8px;justify-content:flex-end;">
+                <button id="__vx_tm_cancel" type="button" style="padding:8px 14px;border-radius:7px;border:1px solid #1a2d45;background:#0a121c;color:#8aa4be;font-weight:700;font-size:12px;cursor:pointer;">Cancel</button>
+                <button id="__vx_tm_ok" type="button" style="padding:8px 16px;border-radius:7px;border:1px solid ${accent};background:rgba(0,0,0,.35);color:${accent};font-weight:800;font-size:12px;cursor:pointer;box-shadow:0 0 14px ${accent}33;">Confirm</button>
+              </div>`;
+            overlay.appendChild(card);
+            const close = () => this._removeTargetModal();
+            overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
+            card.querySelector('#__vx_tm_cancel').onclick = close;
+            card.querySelector('#__vx_tm_ok').onclick = () => {
+                const price = parseFloat(card.querySelector('#__vx_tm_price').value);
+                const pctEl = card.querySelector('#__vx_tm_pct');
+                const pct = pctEl ? parseFloat(pctEl.value) : 0;
+                close();
+                if (opts.onConfirm) opts.onConfirm(price, isNaN(pct) ? 0 : pct);
+            };
+            document.addEventListener('keydown', function esc(ev) {
+                if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
+            });
+            document.body.appendChild(overlay);
+            setTimeout(() => { try { card.querySelector('#__vx_tm_price').focus(); card.querySelector('#__vx_tm_price').select(); } catch(e) {} }, 30);
+        },
+
+        _removeTargetModal() {
+            const el = document.getElementById('__vx_target_modal');
+            if (el && el.parentNode) el.parentNode.removeChild(el);
         },
 
         // Shows the draggable SL + ALL TP lines — called only when the
@@ -2330,54 +2365,29 @@
             // separate floating box off to the side as before.
             const container = document.getElementById(containerId);
             if (!container) return;
-            const y = s.candleSeries.priceToCoordinate(currentPrice);
-            if (y == null) return;
 
             if (!s.pnlLabelEl) {
                 s.pnlLabelEl = document.createElement('div');
-                s.pnlLabelEl.style.position = 'absolute';
-                s.pnlLabelEl.style.pointerEvents = 'none';
-                s.pnlLabelEl.style.zIndex = '5';
-                s.pnlLabelEl.style.padding = '2px 8px';
-                s.pnlLabelEl.style.borderRadius = '4px';
-                s.pnlLabelEl.style.fontSize = '11px';
-                s.pnlLabelEl.style.fontWeight = '700';
-                s.pnlLabelEl.style.fontFamily = 'monospace';
-                s.pnlLabelEl.style.transform = 'translateY(-50%)';
-                s.pnlLabelEl.style.boxShadow = '0 1px 4px rgba(0,0,0,.25)';
-                s.pnlLabelEl.style.opacity = '0.82';
-                s.pnlLabelEl.style.transition = 'top .12s ease-out, background .15s, opacity .15s';
+                s.pnlLabelEl.className = 'mk-pnl-live-panel';
+                s.pnlLabelEl.style.cssText = 'position:absolute;pointer-events:none;z-index:11;left:12px;top:44px;right:auto;transform:none;min-width:132px;padding:8px 12px;border-radius:8px;font-family:JetBrains Mono,ui-monospace,monospace;backdrop-filter:blur(8px);box-shadow:0 0 0 1px rgba(255,255,255,.04),0 8px 24px rgba(0,0,0,.45);';
                 if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
                 container.appendChild(s.pnlLabelEl);
             }
-            // Per direct request: positioned at the last candle's time
-            // + 3 bars further right (using the chart's own
-            // timeToCoordinate for the actual last loaded bar, plus 3x
-            // the current bar spacing) rather than a fixed left-edge
-            // offset - this is what correctly tracks "3 candles past
-            // the last one" across different timeframes/zoom levels.
-            let pnlLabelX = null;
-            try {
-                if (s.lastKlinesRaw && s.lastKlinesRaw.length > 0) {
-                    const lastBar = s.lastKlinesRaw[s.lastKlinesRaw.length - 1];
-                    const lastX = s.chart.timeScale().timeToCoordinate(Math.floor(lastBar.openTime / 1000));
-                    const barSpacing = s.chart.timeScale().options().barSpacing || 6;
-                    if (lastX != null) pnlLabelX = lastX + barSpacing * 8;
-                }
-            } catch (e) {}
-            if (pnlLabelX != null) {
-                s.pnlLabelEl.style.left = pnlLabelX + 'px';
-                s.pnlLabelEl.style.right = 'auto';
-            } else {
-                // Fallback if the last bar's time can't be resolved for
-                // any reason - keep the label somewhere reasonable
-                // rather than disappearing entirely.
-                s.pnlLabelEl.style.left = '10px';
-            }
-            s.pnlLabelEl.style.top = y + 'px';
-            s.pnlLabelEl.style.background = color;
-            s.pnlLabelEl.style.color = '#0a0d12';
-            s.pnlLabelEl.textContent = `${sign}${pnl.toFixed(2)} USDT`;
+            // PINNED top-left — does not float with candles / zoom
+            s.pnlLabelEl.style.left = '12px';
+            s.pnlLabelEl.style.top = '44px';
+            s.pnlLabelEl.style.right = 'auto';
+            s.pnlLabelEl.style.transform = 'none';
+            const posColor = color;
+            const borderCol = pnl >= 0 ? 'rgba(0,255,156,.45)' : 'rgba(255,77,106,.45)';
+            const bgCol = pnl >= 0 ? 'rgba(5,14,12,.92)' : 'rgba(14,6,10,.92)';
+            s.pnlLabelEl.style.background = bgCol;
+            s.pnlLabelEl.style.border = '1px solid ' + borderCol;
+            s.pnlLabelEl.style.boxShadow = '0 0 16px ' + (pnl >= 0 ? 'rgba(0,255,156,.2)' : 'rgba(255,77,106,.2)');
+            s.pnlLabelEl.innerHTML =
+                '<div style="font-size:9px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:#5a7a96;margin-bottom:3px;">Current PnL (LIVE)</div>' +
+                '<div style="font-size:15px;font-weight:800;color:' + posColor + ';text-shadow:0 0 12px ' + posColor + '55;">' +
+                sign + pnl.toFixed(2) + ' <span style="font-size:10px;opacity:.85">USDT</span></div>';
 
             // Reposition TP/SL quick-add buttons to follow the live price line Y
             this.repositionEntryButtons(containerId);
@@ -2388,24 +2398,11 @@
             // last known price whenever the user scrolls/zooms the chart.
             if (!s.pnlRangeSub) {
                 s.pnlRangeSub = () => {
-                    if (s.lastPnlPrice == null || !s.entryPrice) return;
-                    const yy = s.candleSeries.priceToCoordinate(s.lastPnlPrice);
-                    if (yy != null && s.pnlLabelEl) s.pnlLabelEl.style.top = yy + 'px';
-                    this.repositionEntryButtons(containerId); // keep buttons on live price during scroll/zoom
-
-                    // Also recalculate X - barSpacing changes on zoom,
-                    // so "last bar + 3 bar widths" would otherwise
-                    // visibly drift from the correct spot as soon as
-                    // the user zooms, since only Y was kept in sync
-                    // here before this fix.
-                    try {
-                        if (s.lastKlinesRaw && s.lastKlinesRaw.length > 0 && s.pnlLabelEl) {
-                            const lastBar = s.lastKlinesRaw[s.lastKlinesRaw.length - 1];
-                            const lastX = s.chart.timeScale().timeToCoordinate(Math.floor(lastBar.openTime / 1000));
-                            const barSpacing = s.chart.timeScale().options().barSpacing || 6;
-                            if (lastX != null) s.pnlLabelEl.style.left = (lastX + barSpacing * 8) + 'px';
-                        }
-                    } catch (e) {}
+                    this.repositionEntryButtons(containerId);
+                    if (s.pnlLabelEl) {
+                        s.pnlLabelEl.style.left = '12px';
+                        s.pnlLabelEl.style.top = '44px';
+                    }
                 };
                 s.chart.timeScale().subscribeVisibleLogicalRangeChange(s.pnlRangeSub);
             }
