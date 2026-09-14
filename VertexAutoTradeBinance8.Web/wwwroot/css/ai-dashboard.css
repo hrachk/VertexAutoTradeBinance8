@@ -182,3 +182,9 @@
     background: rgba(56,189,248,0.2);
     color: #38bdf8;
 }
+
+
+/* Unified neon glass (shared helpers) */
+.summary-chip{background:rgba(8,14,24,.8)!important;border:1px solid rgba(0,212,255,.14)!important;border-radius:12px!important;box-shadow:0 0 16px rgba(0,212,255,.08);backdrop-filter:blur(8px);}
+.status-pill.hot{background:rgba(255,138,61,.15)!important;color:#ff8a3d!important;box-shadow:0 0 10px rgba(255,138,61,.2);}
+.status-pill.active{background:rgba(0,212,255,.12)!important;color:#00d4ff!important;}

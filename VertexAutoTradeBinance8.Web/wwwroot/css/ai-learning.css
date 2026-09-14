@@ -213,3 +213,6 @@ canvas {
     margin-top: 12px;
     font-size: 14px;
 }
+
+
+.summary-chip,.section-header{border-color:rgba(0,212,255,.14)!important;}
