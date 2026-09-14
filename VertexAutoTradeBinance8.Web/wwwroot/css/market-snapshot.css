@@ -139,3 +139,58 @@
 }
 .mk-pos-close-btn:hover{background:rgba(255,68,102,.18);}
 .mk-pos-close-btn:disabled{opacity:.4;cursor:not-allowed;}
+
+
+/* PROMO HUD — Market page neon TP/SL */
+.mk-stats {
+  background: linear-gradient(180deg, #070d16 0%, #05080f 100%) !important;
+  border-bottom: 1px solid #132033 !important;
+  box-shadow: inset 0 -1px 0 rgba(0,255,156,0.06);
+}
+.mk-s { background: transparent !important; border-right: 1px solid #101c2c !important; }
+.mk-sl { color: #3d5a78 !important; letter-spacing: 0.8px !important; }
+.mk-sv { color: #c8e6ff !important; text-shadow: 0 0 18px rgba(59,158,255,0.15); }
+.mk-sv.up, .up { color: #00ff9c !important; text-shadow: 0 0 12px rgba(0,255,156,0.35); }
+.mk-sv.dn, .dn { color: #ff4d6a !important; }
+.mk-charts-area, .chart-box, [id^="chartContainer-"] { background: #03060c !important; }
+.mk-body-grid { background: #03060c; }
+.mk-chart-head {
+  background: linear-gradient(90deg, #070d16, #0a121f) !important;
+  border-bottom: 1px solid #132033 !important;
+}
+.mk-sys-metrics {
+  display: flex; align-items: stretch; gap: 0; margin: 0; padding: 0;
+  background: #060b14; border-bottom: 1px solid #132033;
+  min-height: 44px; overflow-x: auto; scrollbar-width: none;
+}
+.mk-sys-metrics::-webkit-scrollbar { display: none; }
+.mk-sys-card {
+  flex: 1 1 120px; min-width: 110px; padding: 6px 12px;
+  border-right: 1px solid #101c2c; display: flex; flex-direction: column; justify-content: center; gap: 2px;
+}
+.mk-sys-card:last-child { border-right: none; }
+.mk-sys-lbl { font-size: 9px; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase; color: #3d5a78; }
+.mk-sys-val { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; font-weight: 700; color: #a8c8e8; }
+.mk-sys-val.neon { color: #00ff9c; text-shadow: 0 0 10px rgba(0,255,156,0.4); }
+.mk-sys-bar { height: 3px; background: #121c2c; border-radius: 2px; overflow: hidden; margin-top: 3px; }
+.mk-sys-bar > i {
+  display: block; height: 100%;
+  background: linear-gradient(90deg, #00ff9c, #3b9eff); border-radius: 2px;
+  box-shadow: 0 0 8px rgba(0,255,156,0.5);
+}
+.mk-acct-summary {
+  border: 1px solid #132033 !important;
+  box-shadow: 0 0 0 1px rgba(0,255,156,0.04), inset 0 1px 0 rgba(255,255,255,0.02);
+  background: linear-gradient(165deg, #0a121c, #060a12) !important;
+  border-radius: 8px;
+}
+.mk-acct-label { color: #3d5a78 !important; letter-spacing: 0.5px; }
+.mk-acct-value.up { color: #00ff9c !important; text-shadow: 0 0 10px rgba(0,255,156,0.3); }
+.sig-panel, .sig-panel-head { border-color: #132033 !important; }
+.sig-dot { box-shadow: 0 0 8px #00ff9c !important; background: #00ff9c !important; }
+@keyframes mkTpFlash {
+  0% { box-shadow: inset 0 0 0 0 rgba(0,255,156,0); }
+  40% { box-shadow: inset 0 0 40px 2px rgba(0,255,156,0.25); }
+  100% { box-shadow: inset 0 0 0 0 rgba(0,255,156,0); }
+}
+.mk-tp-hit-flash { animation: mkTpFlash 1.1s ease-out; }

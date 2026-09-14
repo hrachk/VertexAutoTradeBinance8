@@ -408,7 +408,8 @@
 
             const colors = {
                 bg: '#0a0d12', text: '#94a3b8', grid: '#1a1f2e',
-                up: '#22c55e', down: '#ef4444',
+                up: '#00ff9c', down: '#ff4d6a',
+                tpNeon: '#00ff9c', slNeon: '#ff6b35', trailNeon: '#3b9eff',
                 ema21: '#3b82f6', ema55: '#a855f7',
                 rsi: '#3b82f6', rsiOb: '#ef4444', rsiOs: '#22c55e',
             };
@@ -863,7 +864,7 @@
 
                 if (session.previewLine) { try { candleSeries.removePriceLine(session.previewLine); } catch (err) {} }
                 session.previewLine = candleSeries.createPriceLine({
-                    price, color: isProfitSide ? '#22c55e' : '#ef4444', lineWidth: 1,
+                    price, color: isProfitSide ? '#00ff9c' : '#ff6b35', lineWidth: 2,
                     lineStyle: LightweightCharts.LineStyle.Dashed,
                     axisLabelVisible: true,
                     title: `${isProfitSide ? 'TP' : 'SL'} ${fmt(price)}`,
@@ -1854,11 +1855,11 @@
 
             if (sl > 0) {
                 s.slLine = s.candleSeries.createPriceLine({
-                    price: sl, color: '#ef4444', lineWidth: 1,
-                    lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: false, title: '',
+                    price: sl, color: '#ff6b35', lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    axisLabelVisible: true, title: 'STOP-LOSS',
                 });
-                s.slPill = this.makeLevelPill(containerId, '#ef4444', 'SL', 'sl', null);
+                s.slPill = this.makeLevelPill(containerId, '#ff6b35', '◎ STOP-LOSS', 'sl', null);
             }
 
             const tpList = Array.isArray(tps) ? tps : (tps > 0 ? [tps] : []);
@@ -1867,12 +1868,12 @@
             tpList.forEach((tpPrice, i) => {
                 if (!tpPrice || tpPrice <= 0) return;
                 const line = s.candleSeries.createPriceLine({
-                    price: tpPrice, color: '#22c55e', lineWidth: 1,
+                    price: tpPrice, color: '#00ff9c', lineWidth: 2,
                     lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: false, title: '',
+                    axisLabelVisible: true, title: (tpList.length > 1 ? `TAKE-PROFIT ${i + 1}` : 'TAKE-PROFIT'),
                 });
-                const label = tpList.length > 1 ? `TP${i + 1}` : 'TP';
-                const pill = this.makeLevelPill(containerId, '#22c55e', label, 'tp', i);
+                const label = tpList.length > 1 ? `◎ TP${i + 1}` : '◎ TAKE-PROFIT';
+                const pill = this.makeLevelPill(containerId, '#00ff9c', label, 'tp', i);
                 s.tpLines.push({ line, index: i, price: tpPrice });
                 s.tpPills.push(pill);
             });
@@ -1944,9 +1945,12 @@
             pill.style.fontFamily = 'monospace';
             pill.style.fontSize = '10.5px';
             pill.style.fontWeight = '700';
-            pill.style.color = '#0a0d12';
-            pill.style.background = color;
-            pill.style.boxShadow = '0 1px 3px rgba(0,0,0,.35)';
+            pill.style.color = color;
+            pill.style.background = 'rgba(5,10,16,0.92)';
+            pill.style.border = '1px solid ' + color;
+            pill.style.boxShadow = '0 0 12px ' + color + '55, 0 0 2px ' + color;
+            pill.style.backdropFilter = 'blur(6px)';
+            pill.style.letterSpacing = '0.4px';
             pill.style.transform = 'translateY(-50%)';
             pill.style.pointerEvents = 'none'; // doesn't block chart drag gestures underneath - the cancel button below re-enables it on itself specifically
             pill.style.whiteSpace = 'nowrap';
@@ -1974,8 +1978,8 @@
                 cancelBtn.style.pointerEvents = 'auto'; // re-enable specifically on this button, despite the pill itself being pointer-events:none
                 cancelBtn.style.border = 'none';
                 cancelBtn.style.borderRadius = '2px';
-                cancelBtn.style.background = 'rgba(0,0,0,.22)';
-                cancelBtn.style.color = '#0a0d12';
+                cancelBtn.style.background = 'rgba(255,255,255,.08)';
+                cancelBtn.style.color = color;
                 cancelBtn.style.cursor = 'pointer';
                 cancelBtn.style.fontSize = '10px';
                 cancelBtn.style.fontWeight = '700';

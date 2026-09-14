@@ -125,6 +125,40 @@
             <div class="mk-s"><div class="mk-sl">BARS</div><div class="mk-sv mk-dim">@Selected.Klines.Count</div></div>
             <div class="mk-s"><div class="mk-sl">VOLUME</div><div class="mk-sv mk-dim">@FmtV(Selected.Klines[^1].Volume)</div></div>
         </div>
+
+        <!-- SYSTEM METRICS (promo HUD strip) -->
+        <div class="mk-sys-metrics">
+            <div class="mk-sys-card">
+                <div class="mk-sys-lbl">Engine</div>
+                <div class="mk-sys-val neon">OPERATIONAL</div>
+            </div>
+            <div class="mk-sys-card">
+                <div class="mk-sys-lbl">Mode</div>
+                <div class="mk-sys-val" style="color:#3b9eff">AUTONOMOUS</div>
+            </div>
+            <div class="mk-sys-card">
+                <div class="mk-sys-lbl">TF</div>
+                <div class="mk-sys-val">@_activeTf</div>
+            </div>
+            <div class="mk-sys-card">
+                <div class="mk-sys-lbl">Symbols</div>
+                <div class="mk-sys-val">@(_symbols?.Count ?? 0)</div>
+            </div>
+            <div class="mk-sys-card">
+                <div class="mk-sys-lbl">Signals</div>
+                <div class="mk-sys-val neon">@DisplayedSignals.Count</div>
+            </div>
+            <div class="mk-sys-card">
+                <div class="mk-sys-lbl">Open pos</div>
+                <div class="mk-sys-val">@DisplayedPositions.Count</div>
+            </div>
+            <div class="mk-sys-card">
+                <div class="mk-sys-lbl">Latency</div>
+                <div class="mk-sys-val">LIVE</div>
+                <div class="mk-sys-bar"><i style="width:72%"></i></div>
+            </div>
+        </div>
+
     }
 
         <!-- ═══ CANVAS AREA — always rendered so canvas has real dimensions ═══ -->
