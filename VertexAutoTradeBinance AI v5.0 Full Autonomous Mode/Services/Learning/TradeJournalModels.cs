@@ -15,6 +15,8 @@ public sealed class TradeJournalEntry
     public List<decimal> TakeProfits { get; set; } = new();
     public decimal RealizedPnl { get; set; }
     public decimal RealizedR { get; set; }
+    /// <summary>|Entry−SL| in price units at open (1R distance).</summary>
+    public decimal InitialRiskPrice { get; set; }
     public string CloseReason { get; set; } = "";
     public decimal SignalConf { get; set; }
     public DateTime OpenedAtUtc { get; set; }

@@ -1882,8 +1882,16 @@ namespace VertexAutoTradeBinance8.Services
                     {
                         string sideStr = side == PositionSide.Long ? "LONG" : "SHORT";
                         string reason = ClassifyCloseReason(realizedPnl, prevEntry, exitPrice, qty);
+                        decimal riskPx = 0m;
+                        try
+                        {
+                            var paKey = BuildExitKey(symbol, side, prevEntry);
+                            if (_profitAware.TryGetValue(paKey, out var paSt) && paSt.InitialRisk > 0)
+                                riskPx = paSt.InitialRisk;
+                        }
+                        catch { }
                         AiSelfLearningService.LiveTradeJournalHook?.Invoke(
-                            symbol, sideStr, prevEntry, exitPrice, qty, realizedPnl, reason);
+                            symbol, sideStr, prevEntry, exitPrice, qty, realizedPnl, reason, riskPx);
                     }
                     catch { /* never break close path */ }
 
@@ -3742,6 +3750,12 @@ namespace VertexAutoTradeBinance8.Services
                 apiSecret = _cfgApiSecret;
                 return !string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(apiSecret);
             }
+            private void ForceClockResync()
+            {
+                _lastTimeSync = DateTime.MinValue;
+                _timeOffsetMs = 0;
+            }
+
             private async Task<long> GetBinanceTimestampAsync(CancellationToken ct)
             {
                 // Fast path
@@ -3933,6 +3947,7 @@ namespace VertexAutoTradeBinance8.Services
                         if (body.Contains("-1022"))
                         {
                             _logger.LogWarning("[ALGO-RAW] GetOpenAlgoOrders -1022 — resync + retry once (LIVE keys)");
+                            ForceClockResync();
                             if (TryResolveKeys(out apiKey, out apiSecret))
                             {
                                 var ts2 = await GetBinanceTimestampAsync(ct);

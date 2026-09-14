@@ -182,6 +182,10 @@ public sealed class TradeJournalService
         decimal avgMiss = missScores.Count > 0 ? missScores.Average() : 0m;
         decimal avgTight = tightSlScores.Count > 0 ? tightSlScores.Average() : 1m;
         decimal stopRate = (decimal)stops / valid.Count;
+        var rSamples = valid.Where(t => t.RealizedR != 0m).Select(t => t.RealizedR).ToList();
+        decimal avgRealizedR = rSamples.Count > 0 ? rSamples.Average() : 0m;
+        if (avgRealizedR <= -0.35m && rSamples.Count >= 2)
+            stopRate = Math.Max(stopRate, 0.50m);
 
         decimal sizeMult = 1m, slPad = 0m, tpScale = 1m, confMult = 1m, levMult = 1m;
         string note = "neutral";
@@ -217,6 +221,8 @@ public sealed class TradeJournalService
             note = "win streak hold/slight ease (conf untouched)";
         }
 
+                if (rSamples.Count > 0)
+            note = $"{note} | avgR={avgRealizedR:F2} nR={rSamples.Count}";
         return new SymbolAdjustments
         {
             Symbol = symbol,

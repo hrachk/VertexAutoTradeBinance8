@@ -33,9 +33,9 @@ namespace VertexAutoTradeBinance8.Services
         /// <summary>Optional: unified trade-journal.json sink (Demo+Live). Wired from Program.</summary>
         /// <summary>
         /// Unified trade-journal sink for FULL live closes only.
-        /// (symbol, side LONG/SHORT, entry, exit, qty, realizedPnlUsd, reason)
+        /// (symbol, side, entry, exit, qty, realizedPnlUsd, reason, initialRiskPrice)
         /// </summary>
-        public static Action<string, string, decimal, decimal, decimal, decimal, string>? LiveTradeJournalHook { get; set; }
+        public static Action<string, string, decimal, decimal, decimal, decimal, string, decimal>? LiveTradeJournalHook { get; set; }
 
         private DateTime? _lastImportedTradeCloseUtc;
         public DateTime? LastImportedTradeCloseUtc => _lastImportedTradeCloseUtc;

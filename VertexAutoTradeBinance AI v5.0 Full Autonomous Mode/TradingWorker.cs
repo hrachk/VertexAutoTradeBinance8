@@ -76,6 +76,7 @@ namespace VertexAutoTradeBinance8
         private readonly IStrategyPreFilter _pre;
         private readonly MarketContextService _marketContext;
         private readonly SimulatedTradeService _sim;
+        private readonly VertexAutoTradeBinance8.Services.News.INewsCatalystService? _news;
         private readonly LiveSignalService _liveSig;
         private readonly SymbolInfoService _symbolInfo;
         private readonly FundingRateService _fundingRate;
@@ -168,7 +169,8 @@ namespace VertexAutoTradeBinance8
             SmartFlowGuardService smartFlow,
             IOptionsMonitor<VertexAutoTradeBinance8.Configuration.SignalConfidenceSettings> confSettings,
             VertexAutoTradeBinance8.Services.HistoricalData.DataDbSymbolFeed? dataDbFeed = null,
-            TradeStateManager tradeState = null)
+            TradeStateManager tradeState = null,
+            VertexAutoTradeBinance8.Services.News.INewsCatalystService? news = null)
         {
             _logger = logger;
             _options = options.Value;
@@ -184,6 +186,7 @@ namespace VertexAutoTradeBinance8
             _exchangeRouter = exchangeRouter;
             _dataDbFeed = dataDbFeed;
             _tradeState = tradeState ?? new TradeStateManager();
+            _news = news;
             _factory = factory;
             _liq = liq;
             _cleaner = cleaner;
@@ -887,6 +890,19 @@ namespace VertexAutoTradeBinance8
                         ct, extra: $"conf={sigConf:F2} < minExec={minExec:F2} — shown in UI only");
                     return;
                 }
+
+            try
+            {
+                if (_news != null && _news.IsEntryPaused(symbol))
+                {
+                    var dir = _news.TryGetActiveDirective();
+                    await RejectAsync(signal, symbol, tf, "NEWS", "CATALYST_PAUSE",
+                        ct, extra: dir?.Reason ?? "active news directive");
+                    return;
+                }
+            }
+            catch { }
+
             }
 
             // =====================================================

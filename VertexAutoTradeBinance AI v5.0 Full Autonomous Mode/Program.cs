@@ -282,6 +282,7 @@ public class Program
 
                     // ===== AI / CORE =====
                     services.AddSingleton<AiSelfLearningService>();
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.News.INewsCatalystService, VertexAutoTradeBinance8.Services.News.NewsCatalystService>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.Learning.TradeJournalService>();
 
                     services.AddSingleton<AiMarketRegimeService>();
@@ -459,13 +460,27 @@ try
     var journal = host.Services.GetRequiredService<VertexAutoTradeBinance8.Services.Learning.TradeJournalService>();
     var liveClientId = host.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>()["Client:Id"] ?? "client_001";
     VertexAutoTradeBinance8.Services.AiSelfLearningService.LiveTradeJournalHook =
-        (symbol, side, entry, exit, qty, realizedPnlUsd, reason) =>
+        (symbol, side, entry, exit, qty, realizedPnlUsd, reason, initialRiskPrice) =>
         {
             if (string.IsNullOrWhiteSpace(symbol) || entry <= 0 || exit <= 0)
                 return;
-            // Ignore dust / zero-qty noise
             if (qty <= 0 && Math.Abs(realizedPnlUsd) < 0.01m)
                 return;
+
+            decimal riskUsd = 0m;
+            if (initialRiskPrice > 0 && qty > 0)
+                riskUsd = initialRiskPrice * qty;
+            decimal r = riskUsd > 0.0000001m ? realizedPnlUsd / riskUsd : 0m;
+            if (r > 20m) r = 20m;
+            if (r < -20m) r = -20m;
+
+            decimal? sl = null;
+            if (initialRiskPrice > 0)
+            {
+                bool isLong = (side ?? "").Contains("LONG", StringComparison.OrdinalIgnoreCase)
+                              || (side ?? "").Equals("Buy", StringComparison.OrdinalIgnoreCase);
+                sl = isLong ? entry - initialRiskPrice : entry + initialRiskPrice;
+            }
 
             journal.Append(new VertexAutoTradeBinance8.Services.Learning.TradeJournalEntry
             {
@@ -477,13 +492,15 @@ try
                 ExitPrice = exit,
                 Qty = qty,
                 Leverage = 0,
+                StopLoss = sl,
                 RealizedPnl = realizedPnlUsd,
-                RealizedR = 0m, // set when SL distance known; Demo often 0 until wired
+                RealizedR = Math.Round(r, 4),
+                InitialRiskPrice = initialRiskPrice,
                 CloseReason = reason ?? "",
                 OpenedAtUtc = DateTime.UtcNow,
                 ClosedAtUtc = DateTime.UtcNow
             });
-        };
+        }
 }
 catch (Exception ex)
 {
