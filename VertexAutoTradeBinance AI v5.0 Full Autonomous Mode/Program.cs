@@ -284,6 +284,8 @@ public class Program
                     services.AddSingleton<AiSelfLearningService>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.News.INewsCatalystService, VertexAutoTradeBinance8.Services.News.NewsCatalystService>();
                     services.AddHostedService<VertexAutoTradeBinance8.Services.News.NewsFeedIngestService>();
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.News.MacroCalendarService>();
+                    services.AddHostedService(sp => sp.GetRequiredService<VertexAutoTradeBinance8.Services.News.MacroCalendarService>());
                     services.AddSingleton<VertexAutoTradeBinance8.Services.Learning.TradeJournalService>();
 
                     services.AddSingleton<AiMarketRegimeService>();

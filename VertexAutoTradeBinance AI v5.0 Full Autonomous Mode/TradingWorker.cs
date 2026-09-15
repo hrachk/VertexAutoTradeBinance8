@@ -893,12 +893,27 @@ namespace VertexAutoTradeBinance8
 
             try
             {
-                if (_news != null && _news.IsEntryPaused(symbol))
+                if (_news != null)
                 {
-                    var dir = _news.TryGetActiveDirective();
-                    await RejectAsync(signal, symbol, tf, "NEWS", "CATALYST_PAUSE",
-                        ct, extra: dir?.Reason ?? "active news directive");
-                    return;
+                    // ShadowMode: IsEntryPaused always false; GetEntrySizeMult logs only
+                    if (_news.IsEntryPaused(symbol))
+                    {
+                        var dir = _news.TryGetActiveDirective();
+                        await RejectAsync(signal, symbol, tf, "NEWS", "CATALYST_PAUSE",
+                            ct, extra: dir?.Reason ?? "active news directive");
+                        return;
+                    }
+                    var sm = _news.GetEntrySizeMult(symbol, signal.Side.ToString());
+                    if (sm <= 0m && !_news.ShadowMode)
+                    {
+                        await RejectAsync(signal, symbol, tf, "NEWS", "CATALYST_SIZE_ZERO",
+                            ct, extra: "news size mult 0");
+                        return;
+                    }
+                    if (sm > 0m && sm < 1m)
+                    {
+                        signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * sm, 0.25m, 1.0m);
+                    }
                 }
             }
             catch { }
