@@ -20,6 +20,7 @@ namespace VertexAutoTradeBinance8.Services
         private readonly AiSelfLearningService _ai;
         private readonly LiquidationRiskEngine _liqRisk;
         private readonly TradeJournalService? _journal;
+        private readonly IConfiguration? _config;
         private readonly string _clientId;
 
         public string? LastRejectReason { get; private set; }
@@ -51,6 +52,7 @@ namespace VertexAutoTradeBinance8.Services
             _smartRegime = smartRegime;
             _tradingResolver = tradingResolver;
             _journal = journal;
+            _config = cfg;
             _clientId = cfg?["Client:Id"] ?? "client_001";
             _ai = ai;
             _liqRisk = liqRisk;
@@ -186,6 +188,17 @@ namespace VertexAutoTradeBinance8.Services
                     decimal hardCapUsd = major
                         ? Math.Min(150m, Math.Max(40m, balance * 0.012m))
                         : Math.Min(55m, Math.Max(18m, balance * 0.0075m));
+                    try
+                    {
+                        if (_config != null)
+                        {
+                            var cfgMajor = _config.GetValue<decimal?>("Trading:HardCapUsdMajor");
+                            var cfgAlt = _config.GetValue<decimal?>("Trading:HardCapUsdAlt");
+                            if (major && cfgMajor.HasValue && cfgMajor.Value > 0) hardCapUsd = cfgMajor.Value;
+                            if (!major && cfgAlt.HasValue && cfgAlt.Value > 0) hardCapUsd = cfgAlt.Value;
+                        }
+                    }
+                    catch { }
                     if (riskBudget1R > hardCapUsd)
                     {
                         _logger.LogInformation("[RISK] hardCap {sym} budget {b:F2} → {cap:F2}",

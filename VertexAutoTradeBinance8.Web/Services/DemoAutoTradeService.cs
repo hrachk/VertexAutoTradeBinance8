@@ -125,9 +125,12 @@ public sealed class DemoAutoTradeService : BackgroundService
                 catch { /* non-fatal */ }
 
                 decimal price = sig.Entry;
-                // Majors: BTC/ETH/BNB/SOL — 10% of Available as pure margin; others 8%.
-                // Notional = margin × leverage (pleчо учитывается).
-                bool major = sym is "BTCUSDT" or "ETHUSDT" or "BNBUSDT" or "SOLUSDT";
+                // 1R equity sizing + HardCap USD — parity with Engine RiskManager.
+                // Was: marginFrac 8–10% × lev → $300–900 SL hits on alts.
+                // Now: risk $ = min(riskFrac×equity, hardCap); qty = risk$ / |entry−SL|.
+                bool major = sym is "BTCUSDT" or "ETHUSDT" or "BNBUSDT" or "SOLUSDT"
+                             || sym.StartsWith("BTC", StringComparison.Ordinal)
+                             || sym.StartsWith("ETH", StringComparison.Ordinal);
                 int lev = major ? 10 : 5;
 
                 decimal available = 10_000m;
@@ -137,19 +140,63 @@ public sealed class DemoAutoTradeService : BackgroundService
                 }
                 catch { /* keep default */ }
 
-                decimal marginFrac = major ? 0.10m : 0.08m;
-                decimal margin = available * marginFrac;
-                decimal notional = margin * lev;
-                // Cap: never use more than 95% of available as margin
-                if (margin > available * 0.95m)
+                var adj = _journal?.GetAdjustments(client.Id, sym)
+                    ?? new VertexAutoTradeBinance8.Services.Learning.SymbolAdjustments();
+                lev = Math.Max(1, (int)Math.Round(lev * (adj.LevMult > 0 ? adj.LevMult : 1m)));
+
+                decimal slDist = (sig.StopLoss > 0) ? Math.Abs(price - sig.StopLoss) : 0m;
+                // If no SL on signal, use ~1.2% of price as proxy (must not blow size)
+                if (slDist <= 0) slDist = price * 0.012m;
+
+                decimal riskFrac = major ? 0.0075m : 0.0060m;
+                decimal riskBudget1R = available * riskFrac;
+                if (adj.SizeMult > 0m && adj.SizeMult < 1m)
+                    riskBudget1R *= adj.SizeMult;
+
+                // Hard USD cap — journal BR/CVC/CAP showed $300–800 single SL
+                decimal hardCapUsd = major
+                    ? Math.Min(150m, Math.Max(40m, available * 0.012m))
+                    : Math.Min(55m, Math.Max(18m, available * 0.0075m));
+                // Optional config override: Trading:HardCapUsdAlt / HardCapUsdMajor
+                try
                 {
-                    margin = available * 0.95m;
-                    notional = margin * lev;
+                    var cfgMajor = _cfg.GetValue<decimal?>("Trading:HardCapUsdMajor");
+                    var cfgAlt = _cfg.GetValue<decimal?>("Trading:HardCapUsdAlt");
+                    if (major && cfgMajor.HasValue && cfgMajor.Value > 0) hardCapUsd = cfgMajor.Value;
+                    if (!major && cfgAlt.HasValue && cfgAlt.Value > 0) hardCapUsd = cfgAlt.Value;
                 }
-                var adj = _journal?.GetAdjustments(client.Id, sym) ?? new VertexAutoTradeBinance8.Services.Learning.SymbolAdjustments();
-                notional *= adj.SizeMult;
-                lev = Math.Max(1, (int)Math.Round(lev * adj.LevMult));
-                decimal qty = notional / Math.Max(price, 0.0000001m);
+                catch { }
+
+                if (riskBudget1R > hardCapUsd)
+                    riskBudget1R = hardCapUsd;
+
+                decimal qty = riskBudget1R / slDist;
+
+                // Notional / margin ceiling (same spirit as RiskManager)
+                decimal marginFrac = major ? 0.12m : 0.10m;
+                decimal maxNotional = available * marginFrac * lev;
+                decimal notional = qty * price;
+                if (notional > maxNotional && price > 0)
+                {
+                    qty = maxNotional / price;
+                    notional = qty * price;
+                }
+                // Floor min notional ~5 USDT for demo realism
+                if (notional < 5m && price > 0)
+                {
+                    qty = 5m / price;
+                    notional = 5m;
+                    // If min notional would risk >2.5× budget, skip
+                    if (qty * slDist > riskBudget1R * 2.5m)
+                    {
+                        _log.LogDebug("[DEMO-AUTO] {user} skip {sym}: minNotional exceeds risk budget", client.Id, sym);
+                        continue;
+                    }
+                }
+
+                _log.LogInformation(
+                    "[DEMO-AUTO] 1R-SIZE {user} {sym} avail={a:F0} budget={b:F2} hardCap={c:F2} slDist={sd} qty={q} notional={n:F2}",
+                    client.Id, sym, available, riskBudget1R, hardCapUsd, slDist, qty, notional);
 
                 List<DemoTpLevel>? tps = null;
                 if (sig.TakeProfits != null && sig.TakeProfits.Count > 0)
