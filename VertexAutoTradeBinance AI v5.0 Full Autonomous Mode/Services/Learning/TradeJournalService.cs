@@ -37,6 +37,9 @@ public sealed class TradeJournalService
     public void Append(TradeJournalEntry e)
     {
         if (string.IsNullOrWhiteSpace(e.ClientId) || string.IsNullOrWhiteSpace(e.Symbol)) return;
+        // Sanitize R: BE-trail partials used to store ±20 and poison memory
+        if (e.RealizedR > 5m) e.RealizedR = 5m;
+        if (e.RealizedR < -5m) e.RealizedR = -5m;
         try
         {
             Directory.CreateDirectory(ClientDir(e.ClientId));
@@ -187,7 +190,8 @@ public sealed class TradeJournalService
         decimal avgMiss = missScores.Count > 0 ? missScores.Average() : 0m;
         decimal avgTight = tightSlScores.Count > 0 ? tightSlScores.Average() : 1m;
         decimal stopRate = (decimal)stops / valid.Count;
-        var rSamples = valid.Where(t => t.RealizedR != 0m).Select(t => t.RealizedR).ToList();
+        var rSamples = valid.Where(t => t.RealizedR != 0m && Math.Abs(t.RealizedR) <= 3.0m)
+            .Select(t => t.RealizedR).ToList();
         decimal avgRealizedR = rSamples.Count > 0 ? rSamples.Average() : 0m;
         if (avgRealizedR <= -0.35m && rSamples.Count >= 2)
             stopRate = Math.Max(stopRate, 0.50m);

@@ -378,7 +378,12 @@ public sealed class DemoAccountService
                 // position already had — a fresh add usually doesn't
                 // come with new protective levels, and overwriting
                 // existing ones here would be a surprising side effect.
-                if (stopLoss.HasValue && stopLoss.Value > 0) existing.StopLoss = stopLoss;
+                if (stopLoss.HasValue && stopLoss.Value > 0)
+                {
+                    existing.StopLoss = stopLoss;
+                    if (existing.InitialRiskPrice <= 0)
+                        existing.InitialRiskPrice = Math.Abs(existing.EntryPrice - stopLoss.Value);
+                }
                 if (takeProfits != null && takeProfits.Count > 0) existing.TakeProfits = takeProfits;
                 Save();
                 _lastPrices[symbol] = currentPrice;
@@ -393,6 +398,8 @@ public sealed class DemoAccountService
                 Symbol = symbol, Side = side, Qty = qty, InitialQty = qty, Leverage = leverage,
                 EntryPrice = currentPrice, Margin = margin,
                 StopLoss = stopLoss, TakeProfits = takeProfits ?? new(),
+                InitialRiskPrice = (stopLoss.HasValue && stopLoss.Value > 0)
+                    ? Math.Abs(currentPrice - stopLoss.Value) : 0m,
                 OpenedAtUtc = DateTime.UtcNow,
             };
             _state.Positions.Add(pos);
@@ -483,6 +490,7 @@ public sealed class DemoAccountService
                     Margin = margin,
                     OpenedAtUtc = DateTime.UtcNow,
                     StopLoss = stopLoss,
+                    InitialRiskPrice = (stopLoss.HasValue && stopLoss.Value > 0) ? Math.Abs(currentPrice - stopLoss.Value) : 0m,
                     TakeProfits = takeProfits ?? new(),
                 });
             }
@@ -677,10 +685,12 @@ public sealed class DemoAccountService
                 TradeJournalHook?.Invoke(_clientId, pos, exitPrice, closeQty, realizedPnl, reason);
         }
         catch { /* never break demo close */ }
-decimal riskPxH = (pos.StopLoss.HasValue && pos.StopLoss.Value > 0)
-            ? Math.Abs(pos.EntryPrice - pos.StopLoss.Value) : 0m;
+decimal riskPxH = pos.InitialRiskPrice > 0 ? pos.InitialRiskPrice
+            : ((pos.StopLoss.HasValue && pos.StopLoss.Value > 0)
+                ? Math.Abs(pos.EntryPrice - pos.StopLoss.Value) : 0m);
+        if (pos.InitialRiskPrice <= 0 && riskPxH > 0) pos.InitialRiskPrice = riskPxH;
         decimal rH = (riskPxH > 0 && closeQty > 0) ? realizedPnl / (riskPxH * closeQty) : 0m;
-        if (rH > 20m) rH = 20m; if (rH < -20m) rH = -20m;
+        if (rH > 5m) rH = 5m; if (rH < -5m) rH = -5m;
         _state.History.Add(new DemoClosedTrade
         {
             Symbol = pos.Symbol, Side = pos.Side, EntryPrice = pos.EntryPrice, ExitPrice = exitPrice,
@@ -799,7 +809,8 @@ _state.History.Add(new DemoClosedTrade
                     _state.Positions.Add(new DemoPosition
                     {
                         Symbol = order.Symbol, Side = order.Side, Qty = order.Qty, InitialQty = order.Qty, Leverage = order.Leverage,
-                        EntryPrice = price, Margin = margin, StopLoss = order.StopLoss, TakeProfits = order.TakeProfits,
+                        EntryPrice = price, Margin = margin, StopLoss = order.StopLoss,
+                        InitialRiskPrice = (order.StopLoss.HasValue && order.StopLoss.Value > 0) ? Math.Abs(price - order.StopLoss.Value) : 0m, TakeProfits = order.TakeProfits,
                     });
                 }
                 _state.PendingOrders.Remove(order);

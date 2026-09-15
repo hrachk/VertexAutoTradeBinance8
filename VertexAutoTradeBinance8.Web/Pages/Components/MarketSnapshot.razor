@@ -1029,7 +1029,7 @@
                                 {
                                     <tr>
                                         <td>@t.Symbol.Replace("USDT","")</td>
-                                        <td class="@(t.Side == "BUY" ? "up" : "dn")">@t.Side</td>
+                                        <td class="@((t.Side is "BUY" or "LONG") ? "up" : "dn")">@t.Side</td>
                                         <td class="mk-mono">@FmtP(t.Price)</td>
                                         <td class="mk-mono">@t.Qty.ToString("G8")</td>
                                         <td class="mk-mono @(t.RealizedPnl >= 0 ? "up" : "dn")">@(t.RealizedPnl >= 0 ? "+" : "")@t.RealizedPnl.ToString("F2")</td>
@@ -7799,9 +7799,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     {
         _ooActiveTab = "history";
         _ = SaveSelectionState();
-        if (_histSubTab == "journal")
-            _ = LoadJournalHistoryAsync();
-        else if (!_demoMode && _realHistory.Count == 0 && !_realHistoryLoading)
+        _ = LoadJournalHistoryAsync();
+        if (!_demoMode)
             _ = LoadRealHistoryAsync();
     }
 
@@ -8106,7 +8105,7 @@ sealed class RealTradeRow
     bool _realHistoryLoading;
     List<VertexAutoTradeBinance8.Services.Learning.TradeJournalEntry> _journalHistory = new();
     bool _journalHistoryLoading;
-    string _histSubTab = "exchange";
+    string _histSubTab = "journal"; // bot journal first (Demo+Live)
     string _histTimeRange = "7d";
 
     // Reuses the exact same GetUserTradesAsync pattern already
@@ -8121,6 +8120,7 @@ sealed class RealTradeRow
     async Task LoadRealHistoryAsync()
     {
         if (_demoMode) return;
+        if (_realHistoryLoading) return;
         _realHistoryLoading = true;
         StateHasChanged();
         try
@@ -8128,38 +8128,77 @@ sealed class RealTradeRow
             var client = Factory.TryCreateRestClient();
             if (client == null) return;
 
-            // Combine: open positions + active symbol + recently visible symbols
-            // Previously only queried symbols with open positions — if no positions
-            // were open, history was always empty. Now also includes the active
-            // symbol and up to 10 symbols from the visible ticker list.
+            var journalSyms = Enumerable.Empty<string>();
+            try
+            {
+                journalSyms = TradeJournal.GetRecentEntries(ResolveJournalClientId(), "Live", 200)
+                    .Select(e => e.Symbol)
+                    .Where(s => !string.IsNullOrWhiteSpace(s));
+            }
+            catch { }
+
             var symbols = _allPositions.Select(p => p.Symbol)
                 .Concat(string.IsNullOrEmpty(_activeSym) ? Array.Empty<string>() : new[] { _activeSym })
-                .Concat(Series.Take(15).Select(m => m.Symbol))
-                .Distinct().Take(20).ToList();
+                .Concat(Series.Take(20).Select(m => m.Symbol))
+                .Concat(journalSyms)
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(40)
+                .ToList();
 
             var results = new List<RealTradeRow>();
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(45));
             foreach (var sym in symbols)
             {
                 try
                 {
-                    var r = await client.UsdFuturesApi.Trading.GetUserTradesAsync(sym, limit: 20, ct: cts.Token);
+                    var r = await client.UsdFuturesApi.Trading.GetUserTradesAsync(sym, limit: 100, ct: cts.Token);
                     if (!r.Success || r.Data == null) continue;
-                    foreach (var t in r.Data)
+                    foreach (var tr in r.Data)
                     {
-                        if (t.RealizedPnl == 0) continue; // skip entry fills, only closing trades
+                        if (tr.RealizedPnl == 0) continue;
+                        string side;
+                        try
+                        {
+                            var ps = tr.PositionSide.ToString();
+                            if (!string.IsNullOrEmpty(ps)
+                                && !ps.Equals("Both", StringComparison.OrdinalIgnoreCase)
+                                && !ps.Equals("0", StringComparison.OrdinalIgnoreCase)
+                                && !ps.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
+                                side = ps.Equals("Short", StringComparison.OrdinalIgnoreCase) ? "SHORT" : "LONG";
+                            else
+                                side = tr.Buyer ? "BUY" : "SELL";
+                        }
+                        catch { side = tr.Buyer ? "BUY" : "SELL"; }
+
                         results.Add(new RealTradeRow
                         {
-                            Symbol = t.Symbol, Side = t.Buyer ? "BUY" : "SELL",
-                            Price = t.Price, Qty = t.Quantity, RealizedPnl = t.RealizedPnl,
-                            Fee = t.Fee, Time = t.Timestamp,
+                            Symbol = tr.Symbol,
+                            Side = side,
+                            Price = tr.Price,
+                            Qty = tr.Quantity,
+                            RealizedPnl = tr.RealizedPnl,
+                            Fee = tr.Fee,
+                            Time = tr.Timestamp.Kind == DateTimeKind.Unspecified
+                                ? DateTime.SpecifyKind(tr.Timestamp, DateTimeKind.Utc)
+                                : tr.Timestamp.ToUniversalTime(),
                         });
                     }
                 }
                 catch { }
             }
-            _realHistory = results.OrderByDescending(t => t.Time).Take(100).ToList();
+
+            _realHistory = results
+                .GroupBy(x => $"{x.Symbol}|{x.Time:o}|{x.RealizedPnl}|{x.Qty}|{x.Price}")
+                .Select(g => g.First())
+                .OrderByDescending(x => x.Time)
+                .Take(200)
+                .ToList();
             try { await PushTradeMarkersAsync(); } catch { }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine("[Market] LoadRealHistory: " + ex.Message);
         }
         finally { _realHistoryLoading = false; StateHasChanged(); }
     }

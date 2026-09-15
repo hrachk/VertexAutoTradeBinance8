@@ -18,6 +18,8 @@ public sealed class DemoPosition
     // this position by DemoEngineService on every live price tick.
     public decimal? StopLoss { get; set; }
     public List<DemoTpLevel> TakeProfits { get; set; } = new();
+    /// <summary>|Entry−SL| at open — fixed for R-multiple even after BE trail.</summary>
+    public decimal InitialRiskPrice { get; set; }
 
     public decimal Notional(decimal markPrice) => Qty * markPrice;
 

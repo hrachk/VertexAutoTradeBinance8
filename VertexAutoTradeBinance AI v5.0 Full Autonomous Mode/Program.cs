@@ -471,8 +471,8 @@ try
             if (initialRiskPrice > 0 && qty > 0)
                 riskUsd = initialRiskPrice * qty;
             decimal r = riskUsd > 0.0000001m ? realizedPnlUsd / riskUsd : 0m;
-            if (r > 20m) r = 20m;
-            if (r < -20m) r = -20m;
+            if (r > 5m) r = 5m;
+            if (r < -5m) r = -5m;
 
             decimal? sl = null;
             if (initialRiskPrice > 0)
