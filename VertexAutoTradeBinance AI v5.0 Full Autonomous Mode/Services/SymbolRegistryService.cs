@@ -17,6 +17,7 @@ public class SymbolRegistryService
     private readonly UniverseDryRunFileLogger _dryRun;
     private readonly IOpenPositionSymbolSource? _posSource;
     private readonly TradeJournalService? _journal;
+    private readonly AiCorrelationService? _corr;
 
     private readonly SemaphoreSlim _refreshLock = new(1, 1); 
 
@@ -56,7 +57,8 @@ public class SymbolRegistryService
         AiSelfLearningService ai,
         UniverseDryRunFileLogger dryRun,
         IOpenPositionSymbolSource? posSource = null,
-        TradeJournalService? journal = null)
+        TradeJournalService? journal = null,
+        AiCorrelationService? corr = null)
     {
         _cfg = cfg;
         _logger = logger;
@@ -67,6 +69,7 @@ public class SymbolRegistryService
         _dryRun = dryRun;
         _posSource = posSource;
         _journal = journal;
+        _corr = corr;
     }
 
     // ============================================================
@@ -401,15 +404,44 @@ public class SymbolRegistryService
         if (btcDumpSqueezeActive)
         {
             decimal btcAbs = Math.Abs(btcChangeSigned);
+            int highCorrDropped = 0;
             tradable = baseSnaps.Where(s =>
             {
                 if (s.Symbol.StartsWith("BTC", StringComparison.OrdinalIgnoreCase)) return false;
-                decimal altAbs = Math.Abs(s.PriceChangePercent);
-                return btcAbs <= 0.01m || altAbs < btcAbs * 0.55m;
+
+                // Prefer real rolling correlation when SmartRegime has fed AiCorrelationService
+                decimal? corr = null;
+                try { corr = _corr?.GetCorrelation("BTCUSDT", s.Symbol); } catch { }
+
+                if (corr.HasValue)
+                {
+                    // High positive corr to BTC during dump/squeeze → pause Auto for this alt
+                    // Independent / negative corr → keep trading
+                    if (corr.Value >= 0.65m)
+                    {
+                        highCorrDropped++;
+                        return false;
+                    }
+                    return true;
+                }
+
+                // Fallback proxy (no corr matrix yet):
+                // high-beta ≈ same direction as BTC and move magnitude ≥ 65% of BTC's
+                decimal altChg = s.PriceChangePercent;
+                decimal altAbs = Math.Abs(altChg);
+                bool sameDir = (btcChangeSigned >= 0 && altChg >= 0) || (btcChangeSigned < 0 && altChg < 0);
+                bool highBetaProxy = sameDir && btcAbs > 0.01m && altAbs >= btcAbs * 0.65m;
+                if (highBetaProxy)
+                {
+                    highCorrDropped++;
+                    return false;
+                }
+                // keep low-beta / divergent alts
+                return true;
             }).ToList();
             _logger.LogWarning(
-                "[SYMBOL-REGISTRY] BTC stress: kept {n}/{total} low-beta autos (not full wipe)",
-                tradable.Count, baseSnaps.Count);
+                "[SYMBOL-REGISTRY] BTC stress corr-filter: kept {n}/{total} autos (dropped {d} high-corr/high-beta; Pinned untouched)",
+                tradable.Count, baseSnaps.Count, highCorrDropped);
         }
         else tradable = baseSnaps;
 

@@ -268,12 +268,22 @@ namespace VertexAutoTradeBinance8.Services
                     try
                     {
                         var adj = _journal?.GetAdjustments(_clientId, signal.Symbol);
-                        if (adj != null && adj.SizeMult > 0 && adj.SizeMult < 1m)
+                        if (adj != null)
                         {
-                            qty1R = Math.Floor(qty1R * adj.SizeMult / step) * step;
-                            if (qty1R < minQty) qty1R = minQty;
-                            _logger.LogInformation("[RISK-MEM] {sym} size×{sm:F2} ({note})",
-                                signal.Symbol, adj.SizeMult, adj.Note);
+                            if (adj.SoftSkip || adj.SizeMult <= 0.20m)
+                            {
+                                LastRejectReason = "MEMORY_SOFT_SKIP: " + (adj.Note ?? "offline expectancy");
+                                _logger.LogWarning("[RISK-MEM] {sym} SOFT_SKIP size×{sm:F2} ({note})",
+                                    signal.Symbol, adj.SizeMult, adj.Note);
+                                return 0;
+                            }
+                            if (adj.SizeMult > 0 && adj.SizeMult < 1m)
+                            {
+                                qty1R = Math.Floor(qty1R * adj.SizeMult / step) * step;
+                                if (qty1R < minQty) qty1R = minQty;
+                                _logger.LogInformation("[RISK-MEM] {sym} size×{sm:F2} ({note})",
+                                    signal.Symbol, adj.SizeMult, adj.Note);
+                            }
                         }
                     }
                     catch { }

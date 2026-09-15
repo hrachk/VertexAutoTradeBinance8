@@ -142,6 +142,11 @@ public sealed class DemoAutoTradeService : BackgroundService
 
                 var adj = _journal?.GetAdjustments(client.Id, sym)
                     ?? new VertexAutoTradeBinance8.Services.Learning.SymbolAdjustments();
+                if (adj.SoftSkip || adj.SizeMult <= 0.20m)
+                {
+                    _log.LogInformation("[DEMO-AUTO] {user} SOFT_SKIP {sym} ({note})", client.Id, sym, adj.Note);
+                    continue;
+                }
                 lev = Math.Max(1, (int)Math.Round(lev * (adj.LevMult > 0 ? adj.LevMult : 1m)));
 
                 decimal slDist = (sig.StopLoss > 0) ? Math.Abs(price - sig.StopLoss) : 0m;

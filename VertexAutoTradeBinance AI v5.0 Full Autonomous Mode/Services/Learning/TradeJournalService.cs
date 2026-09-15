@@ -58,6 +58,7 @@ public sealed class TradeJournalService
                 } catch { }
             }
             RebuildMemory(e.ClientId);
+                try { RebuildFromFeatures(e.ClientId); } catch { }
         }
         catch (Exception ex)
         {
@@ -103,6 +104,71 @@ public sealed class TradeJournalService
         }
         catch { }
         return new SymbolAdjustments { Symbol = symbol };
+    }
+
+
+    /// <summary>
+    /// Offline feature-store pass: re-read trade-features.jsonl + journal and rebuild memory.
+    /// Call after batch of closes or on a timer so skip/size stays fresh.
+    /// </summary>
+    public void RebuildFromFeatures(string clientId)
+    {
+        try
+        {
+            RebuildMemory(clientId);
+            var featPath = Path.Combine(ClientDir(clientId), "trade-features.jsonl");
+            if (!File.Exists(featPath)) return;
+            var bySym = new Dictionary<string, List<decimal>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var line in File.ReadLines(featPath))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                try
+                {
+                    using var doc = JsonDocument.Parse(line);
+                    var root = doc.RootElement;
+                    if (!root.TryGetProperty("Symbol", out var sEl)) continue;
+                    var sym = sEl.GetString() ?? "";
+                    if (string.IsNullOrEmpty(sym)) continue;
+                    decimal r = 0m;
+                    if (root.TryGetProperty("RealizedR", out var rEl) && rEl.TryGetDecimal(out var rd))
+                        r = rd;
+                    if (Math.Abs(r) > 3m || r == 0m) continue;
+                    if (!bySym.TryGetValue(sym, out var list))
+                        bySym[sym] = list = new List<decimal>();
+                    list.Add(r);
+                }
+                catch { }
+            }
+            if (bySym.Count == 0) return;
+            var mem = LoadMemory(MemoryPath(clientId));
+            foreach (var kv in bySym)
+            {
+                if (kv.Value.Count < 3) continue;
+                var avg = kv.Value.Average();
+                if (!mem.BySymbol.TryGetValue(kv.Key, out var adj))
+                    adj = new SymbolAdjustments { Symbol = kv.Key };
+                if (avg <= -0.55m)
+                {
+                    adj.SoftSkip = true;
+                    adj.SizeMult = Math.Min(adj.SizeMult <= 0 ? 1m : adj.SizeMult, 0.15m);
+                    adj.Note = (adj.Note ?? "") + $" | features avgR={avg:F2} n={kv.Value.Count} SOFT_SKIP";
+                }
+                else if (avg <= -0.30m)
+                {
+                    adj.SizeMult = Math.Min(adj.SizeMult <= 0 ? 1m : adj.SizeMult, 0.60m);
+                    adj.Note = (adj.Note ?? "") + $" | features avgR={avg:F2} n={kv.Value.Count}";
+                }
+                mem.BySymbol[kv.Key] = adj;
+            }
+            mem.UpdatedUtc = DateTime.UtcNow;
+            lock (LockFor(clientId))
+                File.WriteAllText(MemoryPath(clientId), JsonSerializer.Serialize(mem, JsonOpt));
+            _log.LogInformation("[JOURNAL] RebuildFromFeatures {c}: {n} symbols touched", clientId, bySym.Count);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "[JOURNAL] RebuildFromFeatures failed {c}", clientId);
+        }
     }
 
     public void RebuildMemory(string clientId)
@@ -219,11 +285,13 @@ public sealed class TradeJournalService
                 : consecutiveStops == 2 ? 0.82m
                 : stopRate >= 0.55m ? 0.88m
                 : 0.93m;
-            // Offline expectancy from RealizedR samples
-            if (avgRealizedR <= -0.50m && rSamples.Count >= 3)
-                sizeMult = Math.Min(sizeMult, 0.50m); // soft-skip territory
-            else if (avgRealizedR <= -0.30m && rSamples.Count >= 2)
-                sizeMult = Math.Min(sizeMult, 0.70m);
+            // Offline expectancy from RealizedR (feature-store / journal)
+            if (avgRealizedR <= -0.55m && rSamples.Count >= 3)
+                sizeMult = Math.Min(sizeMult, 0.15m); // soft-skip: near-zero size
+            else if (avgRealizedR <= -0.40m && rSamples.Count >= 3)
+                sizeMult = Math.Min(sizeMult, 0.40m);
+            else if (avgRealizedR <= -0.25m && rSamples.Count >= 2)
+                sizeMult = Math.Min(sizeMult, 0.65m);
             levMult = consecutiveStops >= 3 ? 0.85m : 1.0m;
 
             note = "smart SL/TP after SL history stopsInRow=" + consecutiveStops
@@ -235,7 +303,15 @@ public sealed class TradeJournalService
             note = "win streak hold/slight ease (conf untouched)";
         }
 
-                if (rSamples.Count > 0)
+        // Standalone soft-skip even without stop-streak block
+        bool softSkip = avgRealizedR <= -0.55m && rSamples.Count >= 3;
+        if (softSkip)
+        {
+            sizeMult = Math.Min(sizeMult, 0.15m);
+            note = (note == "neutral" ? "offline soft-skip" : note) + " SOFT_SKIP";
+        }
+
+        if (rSamples.Count > 0)
             note = $"{note} | avgR={avgRealizedR:F2} nR={rSamples.Count}";
         return new SymbolAdjustments
         {
@@ -248,6 +324,7 @@ public sealed class TradeJournalService
             RecentTrades = valid.Count,
             RecentStops = stops,
             RecentWins = wins,
+            SoftSkip = softSkip,
             Note = note
         };
     }

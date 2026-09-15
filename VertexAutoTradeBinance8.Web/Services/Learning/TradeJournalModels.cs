@@ -39,6 +39,7 @@ public sealed class SymbolAdjustments
     public int RecentTrades { get; set; }
     public int RecentStops { get; set; }
     public int RecentWins { get; set; }
+    public bool SoftSkip { get; set; }
     public string Note { get; set; } = "";
 }
 
