@@ -55,8 +55,29 @@ public sealed class DemoAutoTradeService : BackgroundService
             try { await TickAsync(stoppingToken); }
             catch (Exception ex) { _log.LogWarning(ex, "[DEMO-AUTO] tick failed"); }
 
-            try { await Task.Delay(TimeSpan.FromSeconds(12), stoppingToken); }
+            // Fast path: wake on live_signals.json change; backup poll 12s
+            try
+            {
+                var root = _cfg["SharedData:Root"] ?? "";
+                var sigPath = System.IO.Path.Combine(root, "live_signals.json");
+                if (System.IO.File.Exists(sigPath) || System.IO.Directory.Exists(root))
+                {
+                    using var fsw = new FileSystemWatcher(root, "live_signals.json")
+                    {
+                        NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime,
+                        EnableRaisingEvents = true
+                    };
+                    var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    void Wake(object s, FileSystemEventArgs e) { try { tcs.TrySetResult(); } catch { } }
+                    fsw.Changed += Wake; fsw.Created += Wake;
+                    var delay = Task.Delay(TimeSpan.FromSeconds(12), stoppingToken);
+                    await Task.WhenAny(tcs.Task, delay);
+                    fsw.Changed -= Wake; fsw.Created -= Wake;
+                }
+                else await Task.Delay(TimeSpan.FromSeconds(12), stoppingToken);
+            }
             catch (TaskCanceledException) { break; }
+            catch { try { await Task.Delay(TimeSpan.FromSeconds(12), stoppingToken); } catch (TaskCanceledException) { break; } }
         }
     }
 

@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using VertexAutoTradeBinance8.Models;
+using VertexAutoTradeBinance8.Services.Infra;
 
 namespace VertexAutoTradeBinance8.Services
 {
@@ -19,17 +20,19 @@ namespace VertexAutoTradeBinance8.Services
         private readonly string _filePath;
         private readonly string _missedPath;
         private readonly ILogger<LiveSignalService> _logger;
+        private readonly ISignalBus? _bus;
         private readonly SemaphoreSlim _lock = new(1, 1);
         private const int MaxRecords = 50;
         private const int MaxMissedRecords = 500;
         private static readonly TimeSpan RecordTtl = TimeSpan.FromHours(2);
 
-        public LiveSignalService(IConfiguration cfg, ILogger<LiveSignalService> logger)
+        public LiveSignalService(IConfiguration cfg, ILogger<LiveSignalService> logger, ISignalBus? bus = null)
         {
             var root = cfg["SharedData:Root"] ?? @"C:\Vertex\Engines\client_001";
             _filePath = Path.Combine(root, "live_signals.json");
             _missedPath = Path.Combine(root, "missed_trades.json");
             _logger = logger;
+            _bus = bus;
             _logger.LogInformation("[LIVESIG] live={path} missed={missed}", _filePath, _missedPath);
         }
 
@@ -144,6 +147,21 @@ namespace VertexAutoTradeBinance8.Services
                     _logger.LogInformation(
                         "[LIVESIG] wrote {sym} {side} conf={c} → live+missed",
                         symbol, side, confPct);
+                try
+                {
+                    _bus?.PublishAsync(new LiveSignalEvent
+                    {
+                        Symbol = (string)(signal.Symbol ?? ""),
+                        Side = (string)(signal.Side?.ToString() ?? ""),
+                        Entry = entry,
+                        StopLoss = sl,
+                        Confidence = (decimal)(signal.Confidence ?? 0m),
+                        Reason = (string)(signal.Reason ?? signal.StrategyName ?? ""),
+                        Utc = DateTime.UtcNow
+                    });
+                }
+                catch { }
+
                 }
                 finally { _lock.Release(); }
             }

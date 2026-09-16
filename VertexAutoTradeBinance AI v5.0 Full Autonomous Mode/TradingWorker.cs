@@ -77,6 +77,9 @@ namespace VertexAutoTradeBinance8
         private readonly MarketContextService _marketContext;
         private readonly SimulatedTradeService _sim;
         private readonly VertexAutoTradeBinance8.Services.News.INewsCatalystService? _news;
+        private readonly VertexAutoTradeBinance8.Services.Risk.BtcVolatilityFilterService? _btcVol;
+        private readonly VertexAutoTradeBinance8.Services.Risk.DailyDrawdownGuard? _dailyDd;
+        private readonly VertexAutoTradeBinance8.Services.Notify.TelegramNotificationService? _tg;
         private readonly LiveSignalService _liveSig;
         private readonly SymbolInfoService _symbolInfo;
         private readonly FundingRateService _fundingRate;
@@ -170,7 +173,10 @@ namespace VertexAutoTradeBinance8
             IOptionsMonitor<VertexAutoTradeBinance8.Configuration.SignalConfidenceSettings> confSettings,
             VertexAutoTradeBinance8.Services.HistoricalData.DataDbSymbolFeed? dataDbFeed = null,
             TradeStateManager tradeState = null,
-            VertexAutoTradeBinance8.Services.News.INewsCatalystService? news = null)
+            VertexAutoTradeBinance8.Services.News.INewsCatalystService? news = null,
+            VertexAutoTradeBinance8.Services.Risk.BtcVolatilityFilterService? btcVol = null,
+            VertexAutoTradeBinance8.Services.Risk.DailyDrawdownGuard? dailyDd = null,
+            VertexAutoTradeBinance8.Services.Notify.TelegramNotificationService? tg = null)
         {
             _logger = logger;
             _options = options.Value;
@@ -187,6 +193,9 @@ namespace VertexAutoTradeBinance8
             _dataDbFeed = dataDbFeed;
             _tradeState = tradeState ?? new TradeStateManager();
             _news = news;
+            _btcVol = btcVol;
+            _dailyDd = dailyDd;
+            _tg = tg;
             _factory = factory;
             _liq = liq;
             _cleaner = cleaner;
@@ -890,6 +899,24 @@ namespace VertexAutoTradeBinance8
                         ct, extra: $"conf={sigConf:F2} < minExec={minExec:F2} — shown in UI only");
                     return;
                 }
+
+            try
+            {
+                if (_dailyDd != null && _dailyDd.ShouldBlockNewEntries(out var ddReason))
+                {
+                    _tg?.RiskAlert(ddReason);
+                    await RejectAsync(signal, symbol, tf, "RISK", "EMERGENCY_STOP", ct, extra: ddReason);
+                    return;
+                }
+                if (_btcVol != null && _btcVol.IsAltEntryLocked(out var volReason)
+                    && !symbol.StartsWith("BTC", StringComparison.OrdinalIgnoreCase))
+                {
+                    _tg?.RiskAlert(volReason);
+                    await RejectAsync(signal, symbol, tf, "RISK", "BTC_VOLATILITY_LOCK", ct, extra: volReason);
+                    return;
+                }
+            }
+            catch { }
 
             try
             {

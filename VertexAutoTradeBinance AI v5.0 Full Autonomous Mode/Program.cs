@@ -286,6 +286,15 @@ public class Program
                     services.AddHostedService<VertexAutoTradeBinance8.Services.News.NewsFeedIngestService>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.News.MacroCalendarService>();
                     services.AddHostedService(sp => sp.GetRequiredService<VertexAutoTradeBinance8.Services.News.MacroCalendarService>());
+                    
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.Infra.ISignalBus, VertexAutoTradeBinance8.Services.Infra.InProcessSignalBus>();
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.Infra.SqliteJournalStore>();
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.Learning.ShadowKpiEvaluator>();
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.Risk.BtcVolatilityFilterService>();
+                    services.AddHostedService(sp => sp.GetRequiredService<VertexAutoTradeBinance8.Services.Risk.BtcVolatilityFilterService>());
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.Risk.DailyDrawdownGuard>();
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.Notify.TelegramNotificationService>();
+                    services.AddHostedService(sp => sp.GetRequiredService<VertexAutoTradeBinance8.Services.Notify.TelegramNotificationService>());
                     services.AddSingleton<VertexAutoTradeBinance8.Services.Learning.TradeJournalService>();
 
                     services.AddSingleton<AiMarketRegimeService>();

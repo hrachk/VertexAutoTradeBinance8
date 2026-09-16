@@ -2,6 +2,9 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using VertexAutoTradeBinance8.Services.Infra;
+using VertexAutoTradeBinance8.Services.Risk;
+using VertexAutoTradeBinance8.Services.Notify;
 
 namespace VertexAutoTradeBinance8.Services.Learning;
 
@@ -10,12 +13,19 @@ public sealed class TradeJournalService
     private readonly ILogger<TradeJournalService> _log;
     private readonly string _enginesRoot;
     private readonly int _windowDays;
+    private readonly SqliteJournalStore? _sqlite;
+    private readonly DailyDrawdownGuard? _dailyDd;
+    private readonly TelegramNotificationService? _tg;
     private static readonly JsonSerializerOptions JsonOpt = new() { WriteIndented = true };
     private static readonly ConcurrentDictionary<string, object> Locks = new();
 
-    public TradeJournalService(IConfiguration cfg, ILogger<TradeJournalService> log)
+    public TradeJournalService(IConfiguration cfg, ILogger<TradeJournalService> log, SqliteJournalStore? sqlite = null,
+        DailyDrawdownGuard? dailyDd = null, TelegramNotificationService? tg = null)
     {
         _log = log;
+        _sqlite = sqlite;
+        _dailyDd = dailyDd;
+        _tg = tg;
         _enginesRoot = cfg["SharedData:Root"]
             ?? Path.Combine(AppContext.BaseDirectory, "engines");
         _windowDays = Math.Clamp(cfg.GetValue("TradeMemory:WindowDays", 30), 7, 90);
@@ -59,6 +69,14 @@ public sealed class TradeJournalService
             }
             RebuildMemory(e.ClientId);
                 try { RebuildFromFeatures(e.ClientId); } catch { }
+            try { _sqlite?.InsertTrade(e); } catch { }
+            try
+            {
+                bool isSl = (e.CloseReason ?? "").IndexOf("SL", StringComparison.OrdinalIgnoreCase) >= 0;
+                _dailyDd?.OnTradeClosed(e.RealizedPnl, isSl);
+                _tg?.Exit(e.Symbol, e.RealizedR, e.RealizedPnl, e.CloseReason ?? "");
+            }
+            catch { }
         }
         catch (Exception ex)
         {
