@@ -25,7 +25,72 @@ public sealed class SqliteJournalStore
         _dbPath = Path.Combine(_sharedRoot, "vertex_journal.db");
         _log = log;
         EnsureSchema();
+        RunIntegrityCheck();
+        MaybeRotateBackup();
         TryMigrateJsonOnce();
+    }
+
+    public string DbPath => _dbPath;
+
+    public double DbSizeMb
+    {
+        get
+        {
+            try
+            {
+                if (!File.Exists(_dbPath)) return 0;
+                return new FileInfo(_dbPath).Length / (1024.0 * 1024.0);
+            }
+            catch { return 0; }
+        }
+    }
+
+    public string IntegrityStatus { get; private set; } = "unknown";
+
+    private void RunIntegrityCheck()
+    {
+        try
+        {
+            using var c = Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "PRAGMA quick_check;";
+            var result = cmd.ExecuteScalar()?.ToString() ?? "fail";
+            IntegrityStatus = string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase) ? "ok" : result;
+            if (IntegrityStatus == "ok")
+                _log.LogInformation("[SQLITE-JOURNAL] PRAGMA quick_check=ok path={p}", _dbPath);
+            else
+                _log.LogError("[SQLITE-JOURNAL] PRAGMA quick_check FAILED: {r} path={p}", IntegrityStatus, _dbPath);
+        }
+        catch (Exception ex)
+        {
+            IntegrityStatus = "error:" + ex.Message;
+            _log.LogWarning(ex, "[SQLITE-JOURNAL] integrity check failed");
+        }
+    }
+
+    /// <summary>If DB exceeds 32 MB, copy to vertex_journal_yyyyMMdd_HHmm.db.bak (keep last 5).</summary>
+    private void MaybeRotateBackup()
+    {
+        try
+        {
+            if (!File.Exists(_dbPath)) return;
+            var len = new FileInfo(_dbPath).Length;
+            const long threshold = 32L * 1024 * 1024; // 32 MB
+            if (len < threshold) return;
+            var bak = Path.Combine(_sharedRoot, $"vertex_journal_{DateTime.UtcNow:yyyyMMdd_HHmmss}.db.bak");
+            File.Copy(_dbPath, bak, overwrite: true);
+            _log.LogWarning("[SQLITE-JOURNAL] size={mb:F1}MB ≥32MB → backup {bak}", len / (1024.0 * 1024.0), bak);
+            var old = Directory.GetFiles(_sharedRoot, "vertex_journal_*.db.bak")
+                .OrderByDescending(f => f).Skip(5).ToList();
+            foreach (var f in old)
+            {
+                try { File.Delete(f); } catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "[SQLITE-JOURNAL] backup skipped");
+        }
     }
 
     private SqliteConnection Open()

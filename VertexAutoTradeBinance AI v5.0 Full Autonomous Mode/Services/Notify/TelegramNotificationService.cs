@@ -33,6 +33,9 @@ public sealed class TelegramNotificationService : BackgroundService
         });
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(60) };
     private long _updateOffset;
+    private DateTime _lastOkUtc = DateTime.UtcNow;
+    private readonly SqliteJournalStore? _sqlite;
+    private readonly BinanceTimeSyncService? _timeSync;
 
     public TelegramNotificationService(
         ILogger<TelegramNotificationService> log,
@@ -40,7 +43,9 @@ public sealed class TelegramNotificationService : BackgroundService
         EmergencyControlService? kill = null,
         BtcVolatilityFilterService? btcVol = null,
         DailyDrawdownGuard? dailyDd = null,
-        FlattenAllService? flatten = null)
+        FlattenAllService? flatten = null,
+        SqliteJournalStore? sqlite = null,
+        BinanceTimeSyncService? timeSync = null)
     {
         _log = log;
         _cfg = cfg;
@@ -48,6 +53,8 @@ public sealed class TelegramNotificationService : BackgroundService
         _btcVol = btcVol;
         _dailyDd = dailyDd;
         _flatten = flatten;
+        _sqlite = sqlite;
+        _timeSync = timeSync;
     }
 
     public void Enqueue(string text) => _q.Writer.TryWrite(new TelegramMessage { Text = text });
@@ -80,7 +87,8 @@ public sealed class TelegramNotificationService : BackgroundService
 
         var sendTask = Task.Run(() => SendLoopAsync(stoppingToken), stoppingToken);
         var cmdTask = Task.Run(() => CommandLoopAsync(stoppingToken), stoppingToken);
-        await Task.WhenAny(sendTask, cmdTask);
+        var healthTask = Task.Run(() => TgHealthLoopAsync(stoppingToken), stoppingToken);
+        await Task.WhenAny(sendTask, cmdTask, healthTask);
     }
 
     private async Task SendLoopAsync(CancellationToken ct)
@@ -114,6 +122,7 @@ public sealed class TelegramNotificationService : BackgroundService
                     await Task.Delay(3000, ct);
                     continue;
                 }
+                MarkTgOk();
                 var json = await resp.Content.ReadAsStringAsync(ct);
                 using var doc = JsonDocument.Parse(json);
                 if (!doc.RootElement.TryGetProperty("result", out var arr)) continue;
@@ -137,6 +146,47 @@ public sealed class TelegramNotificationService : BackgroundService
         }
     }
 
+
+    private void MarkTgOk() => _lastOkUtc = DateTime.UtcNow;
+
+    private async Task TgHealthLoopAsync(CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(Token))
+        {
+            _log.LogInformation("[TG-HEALTH] no BotToken — health monitor idle");
+            return;
+        }
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                var silence = DateTime.UtcNow - _lastOkUtc;
+                if (silence.TotalSeconds > 60)
+                {
+                    _log.LogWarning(
+                        "[TG-HEALTH] no successful Telegram API contact for {sec:F0}s (lastOk={last:u})",
+                        silence.TotalSeconds, _lastOkUtc);
+                    // probe getMe
+                    try
+                    {
+                        using var resp = await _http.GetAsync($"https://api.telegram.org/bot{Token}/getMe", ct);
+                        if (resp.IsSuccessStatusCode)
+                            MarkTgOk();
+                        else
+                            _log.LogWarning("[TG-HEALTH] getMe HTTP {code}", (int)resp.StatusCode);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.LogWarning(ex, "[TG-HEALTH] getMe failed");
+                    }
+                }
+            }
+            catch { }
+            try { await Task.Delay(TimeSpan.FromSeconds(30), ct); }
+            catch (TaskCanceledException) { break; }
+        }
+    }
+
     private async Task HandleCommandAsync(string chat, string text, CancellationToken ct)
     {
         var cmd = text.Split(' ', 2)[0].Split('@')[0].ToLowerInvariant();
@@ -147,11 +197,28 @@ public sealed class TelegramNotificationService : BackgroundService
                 var vol = _btcVol != null && _btcVol.IsAltEntryLocked(out var vr) ? vr : "BTC vol: OK";
                 var (em, dayPnl, stops) = _dailyDd?.Snapshot() ?? (false, 0m, 0);
                 var kill = _kill?.IsKillActive == true ? "KILL ACTIVE" : "running";
+                var dbMb = _sqlite?.DbSizeMb ?? 0;
+                var dbOk = _sqlite?.IntegrityStatus ?? "n/a";
+                var offset = _timeSync?.OffsetMs ?? 0;
+                var lastSync = _timeSync?.LastSyncUtc;
+                var syncStr = lastSync.HasValue && lastSync.Value > DateTime.MinValue
+                    ? lastSync.Value.ToString("HH:mm:ss") + "Z"
+                    : "never";
+                var tgAge = (DateTime.UtcNow - _lastOkUtc).TotalSeconds;
                 await SendAsync(chat,
-                    $"📊 STATUS\nEngine: {kill}\nDay PnL≈{dayPnl:F2} stopsInRow={stops}\nEmergencyDD={(em ? "YES" : "no")}\n{vol}\nUTC {DateTime.UtcNow:HH:mm:ss}",
+                    $"📊 STATUS\n" +
+                    $"Engine: {kill}\n" +
+                    $"Day PnL≈{dayPnl:F2} stopsInRow={stops}\n" +
+                    $"EmergencyDD={(em ? "YES" : "no")}\n" +
+                    $"{vol}\n" +
+                    $"SQLite: {dbMb:F2} MB · integrity={dbOk}\n" +
+                    $"TimeOffset: {offset} ms · lastSync={syncStr}\n" +
+                    $"TG lastOk: {tgAge:F0}s ago\n" +
+                    $"UTC {DateTime.UtcNow:HH:mm:ss}",
                     ct);
                 break;
             }
+
             case "/kill":
                 _kill?.ActivateKill("telegram /kill");
                 await SendAsync(chat, "🛑 KILL — flattening all positions...", ct);
@@ -215,5 +282,7 @@ public sealed class TelegramNotificationService : BackgroundService
         using var resp = await _http.PostAsync(url, content, ct);
         if (!resp.IsSuccessStatusCode)
             _log.LogWarning("[TG] HTTP {code}", (int)resp.StatusCode);
+        else
+            MarkTgOk();
     }
 }
