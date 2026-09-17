@@ -80,6 +80,7 @@ namespace VertexAutoTradeBinance8
         private readonly VertexAutoTradeBinance8.Services.Risk.BtcVolatilityFilterService? _btcVol;
         private readonly VertexAutoTradeBinance8.Services.Risk.DailyDrawdownGuard? _dailyDd;
         private readonly VertexAutoTradeBinance8.Services.Notify.TelegramNotificationService? _tg;
+        private readonly VertexAutoTradeBinance8.Services.Infra.EmergencyControlService? _killCtrl;
         private readonly LiveSignalService _liveSig;
         private readonly SymbolInfoService _symbolInfo;
         private readonly FundingRateService _fundingRate;
@@ -176,7 +177,8 @@ namespace VertexAutoTradeBinance8
             VertexAutoTradeBinance8.Services.News.INewsCatalystService? news = null,
             VertexAutoTradeBinance8.Services.Risk.BtcVolatilityFilterService? btcVol = null,
             VertexAutoTradeBinance8.Services.Risk.DailyDrawdownGuard? dailyDd = null,
-            VertexAutoTradeBinance8.Services.Notify.TelegramNotificationService? tg = null)
+            VertexAutoTradeBinance8.Services.Notify.TelegramNotificationService? tg = null,
+            VertexAutoTradeBinance8.Services.Infra.EmergencyControlService? killCtrl = null)
         {
             _logger = logger;
             _options = options.Value;
@@ -196,6 +198,7 @@ namespace VertexAutoTradeBinance8
             _btcVol = btcVol;
             _dailyDd = dailyDd;
             _tg = tg;
+            _killCtrl = killCtrl;
             _factory = factory;
             _liq = liq;
             _cleaner = cleaner;
@@ -899,6 +902,17 @@ namespace VertexAutoTradeBinance8
                         ct, extra: $"conf={sigConf:F2} < minExec={minExec:F2} — shown in UI only");
                     return;
                 }
+
+            try
+            {
+                if (_killCtrl != null && _killCtrl.IsKillActive)
+                {
+                    await RejectAsync(signal, symbol, tf, "RISK", "KILL_SWITCH",
+                        ct, extra: "emergency_kill.flag active (/kill or /pause)");
+                    return;
+                }
+            }
+            catch { }
 
             try
             {

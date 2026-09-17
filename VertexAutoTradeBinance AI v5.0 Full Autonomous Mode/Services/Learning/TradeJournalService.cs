@@ -11,6 +11,7 @@ namespace VertexAutoTradeBinance8.Services.Learning;
 public sealed class TradeJournalService
 {
     private readonly ILogger<TradeJournalService> _log;
+    private readonly IConfiguration _cfg;
     private readonly string _enginesRoot;
     private readonly int _windowDays;
     private readonly SqliteJournalStore? _sqlite;
@@ -23,6 +24,7 @@ public sealed class TradeJournalService
         DailyDrawdownGuard? dailyDd = null, TelegramNotificationService? tg = null)
     {
         _log = log;
+        _cfg = cfg;
         _sqlite = sqlite;
         _dailyDd = dailyDd;
         _tg = tg;
@@ -43,6 +45,7 @@ public sealed class TradeJournalService
 
     private string JournalPath(string clientId) => Path.Combine(ClientDir(clientId), "trade-journal.json");
     private string MemoryPath(string clientId) => Path.Combine(ClientDir(clientId), "symbol-memory.json");
+    private bool SqliteOnly => _cfg.GetValue("Journal:SqliteOnly", false);
 
     public void Append(TradeJournalEntry e)
     {
@@ -54,13 +57,27 @@ public sealed class TradeJournalService
         {
             Directory.CreateDirectory(ClientDir(e.ClientId));
             var path = JournalPath(e.ClientId);
-            lock (LockFor(e.ClientId))
+            // SQLite is primary; JSON dual-write unless Journal:SqliteOnly=true
+            try { _sqlite?.InsertTrade(e); } catch { }
+            if (!SqliteOnly)
             {
-                var file = LoadJournal(path);
-                file.Entries.Add(e);
-                if (file.Entries.Count > 2000)
-                    file.Entries = file.Entries.OrderByDescending(x => x.ClosedAtUtc).Take(2000).ToList();
-                File.WriteAllText(path, JsonSerializer.Serialize(file, JsonOpt));
+                lock (LockFor(e.ClientId))
+                {
+                    var file = LoadJournal(path);
+                    file.Entries.Add(e);
+                    if (file.Entries.Count > 2000)
+                        file.Entries = file.Entries.OrderByDescending(x => x.ClosedAtUtc).Take(2000).ToList();
+                    File.WriteAllText(path, JsonSerializer.Serialize(file, JsonOpt));
+                    try {
+                        var featPath = Path.Combine(ClientDir(e.ClientId), "trade-features.jsonl");
+                        var line = JsonSerializer.Serialize(new { e.Symbol, e.Side, e.Source, e.RealizedPnl, e.RealizedR, e.InitialRiskPrice, e.CloseReason, e.ClosedAtUtc, e.SignalConf });
+                        File.AppendAllText(featPath, line + Environment.NewLine);
+                    } catch { }
+                }
+            }
+            else
+            {
+                // features still useful for offline skip model
                 try {
                     var featPath = Path.Combine(ClientDir(e.ClientId), "trade-features.jsonl");
                     var line = JsonSerializer.Serialize(new { e.Symbol, e.Side, e.Source, e.RealizedPnl, e.RealizedR, e.InitialRiskPrice, e.CloseReason, e.ClosedAtUtc, e.SignalConf });
@@ -68,8 +85,7 @@ public sealed class TradeJournalService
                 } catch { }
             }
             RebuildMemory(e.ClientId);
-                try { RebuildFromFeatures(e.ClientId); } catch { }
-            try { _sqlite?.InsertTrade(e); } catch { }
+            try { RebuildFromFeatures(e.ClientId); } catch { }
             try
             {
                 bool isSl = (e.CloseReason ?? "").IndexOf("SL", StringComparison.OrdinalIgnoreCase) >= 0;

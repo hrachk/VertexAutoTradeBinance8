@@ -18,6 +18,7 @@ public class SymbolRegistryService
     private readonly IOpenPositionSymbolSource? _posSource;
     private readonly TradeJournalService? _journal;
     private readonly AiCorrelationService? _corr;
+    private readonly BtcVolatilityFilterService? _btcVolFilter;
 
     private readonly SemaphoreSlim _refreshLock = new(1, 1); 
 
@@ -58,7 +59,8 @@ public class SymbolRegistryService
         UniverseDryRunFileLogger dryRun,
         IOpenPositionSymbolSource? posSource = null,
         TradeJournalService? journal = null,
-        AiCorrelationService? corr = null)
+        AiCorrelationService? corr = null,
+        BtcVolatilityFilterService? btcVolFilter = null)
     {
         _cfg = cfg;
         _logger = logger;
@@ -70,6 +72,7 @@ public class SymbolRegistryService
         _posSource = posSource;
         _journal = journal;
         _corr = corr;
+        _btcVolFilter = btcVolFilter;
     }
 
     // ============================================================
@@ -360,6 +363,12 @@ public class SymbolRegistryService
         {
             btcChangeSigned = btc.PriceChangePercent;
             btcVol = Math.Abs(btcChangeSigned);
+            try
+            {
+                if (btc.LastPrice > 0)
+                    _btcVolFilter?.ObserveBtcPrice(btc.LastPrice);
+            }
+            catch { }
         }
 
         // ============================================================

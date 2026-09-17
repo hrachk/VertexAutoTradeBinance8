@@ -3,6 +3,8 @@
 @using VertexAutoTradeBinance8.Services
 @inject IJSRuntime JS
 @inject AiRuntimeDataProvider Runtime
+@inject VertexAutoTradeBinance8.Services.Learning.TradeJournalService Journal
+@inject IConfiguration Cfg
 @implements IDisposable
 
 <PageTitle>AI Brain — Vertex</PageTitle>
@@ -67,6 +69,54 @@
     {
         var Stats = State.Snapshot;
         var Trades = State.Trades;
+
+        <!-- ═══ SHADOW KPI (News filter impact) ═══════════════════ -->
+        <div class="ab-panel" style="margin:12px 16px;border:1px solid rgba(0,212,255,.25);background:rgba(0,20,40,.55);backdrop-filter:blur(8px);border-radius:12px;padding:14px 16px;">
+            <div class="ab-panel-hd" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                <span class="ab-panel-title">📰 NEWS FILTER ALPHA IMPACT</span>
+                <span style="font-size:12px;padding:3px 10px;border-radius:999px;background:@(_shadowRecommend ? "rgba(0,255,156,.15)" : "rgba(255,80,80,.12)");color:@(_shadowRecommend ? "#00ff9c" : "#ff6b6b");border:1px solid @(_shadowRecommend ? "rgba(0,255,156,.35)" : "rgba(255,80,80,.3)")">
+                    RecommendEnableGate @(_shadowRecommend ? "🟢" : "🔴")
+                </span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;font-size:13px;">
+                <div style="background:rgba(0,0,0,.25);border-radius:8px;padding:10px;">
+                    <div class="ab-dim" style="font-size:10px;letter-spacing:.06em;">ACTUAL PF</div>
+                    <div style="font-size:20px;font-weight:700;">@_shadowActualPf.ToString("F2")</div>
+                    <div class="ab-dim">n=@_shadowActualN · WR @_shadowActualWr.ToString("P0")</div>
+                </div>
+                <div style="background:rgba(0,0,0,.25);border-radius:8px;padding:10px;">
+                    <div class="ab-dim" style="font-size:10px;letter-spacing:.06em;">FILTERED PF</div>
+                    <div style="font-size:20px;font-weight:700;color:#00d4ff;">@_shadowFiltPf.ToString("F2")</div>
+                    <div class="ab-dim">n=@_shadowFiltN · WR @_shadowFiltWr.ToString("P0")</div>
+                </div>
+                <div style="background:rgba(0,0,0,.25);border-radius:8px;padding:10px;">
+                    <div class="ab-dim" style="font-size:10px;letter-spacing:.06em;">Δ PF</div>
+                    <div style="font-size:20px;font-weight:700;color:@(_shadowDeltaPf>=0?"#00ff9c":"#ff6b6b");">@(_shadowDeltaPf>=0?"+":"")@_shadowDeltaPf.ToString("F2")</div>
+                    <div class="ab-dim">target ≥ +0.15</div>
+                </div>
+                <div style="background:rgba(0,0,0,.25);border-radius:8px;padding:10px;">
+                    <div class="ab-dim" style="font-size:10px;letter-spacing:.06em;">Δ DD ($)</div>
+                    <div style="font-size:20px;font-weight:700;color:@(_shadowDeltaDd<=0?"#00ff9c":"#ff6b6b");">@_shadowDeltaDd.ToString("F1")</div>
+                    <div class="ab-dim">Actual DD @_shadowActualDd.ToString("F1") → Filt @_shadowFiltDd.ToString("F1")</div>
+                </div>
+            </div>
+            <div style="margin-top:10px;height:48px;display:flex;align-items:flex-end;gap:2px;">
+                @foreach (var v in _equityActual.TakeLast(48))
+                {
+                    var h = Math.Max(2, (int)(Math.Abs(v) / Math.Max(1m, _equityScale) * 44));
+                    <div title="@v.ToString("F1")" style="flex:1;height:@(h)px;background:rgba(255,255,255,.35);border-radius:2px 2px 0 0;"></div>
+                }
+            </div>
+            <div style="margin-top:4px;height:48px;display:flex;align-items:flex-end;gap:2px;">
+                @foreach (var v in _equityFiltered.TakeLast(48))
+                {
+                    var h = Math.Max(2, (int)(Math.Abs(v) / Math.Max(1m, _equityScale) * 44));
+                    <div title="@v.ToString("F1")" style="flex:1;height:@(h)px;background:rgba(0,212,255,.55);border-radius:2px 2px 0 0;"></div>
+                }
+            </div>
+            <div class="ab-dim" style="font-size:10px;margin-top:6px;">Curves: white = Actual cumulative PnL · cyan = Filtered (ex NEWS/MACRO reasons). Shadow mode does not block live trades.</div>
+        </div>
+
 
         <div class="ab-body">
 
@@ -528,6 +578,15 @@ html,body { background:var(--bg)!important; color:var(--txt); }
     int _hotCount, _thinkingCount, _watchCount, _totalWins, _totalLosses, _winRatePct;
     int _runtimeSec;
 
+    decimal _shadowActualPf, _shadowFiltPf, _shadowDeltaPf;
+    decimal _shadowActualDd, _shadowFiltDd, _shadowDeltaDd;
+    decimal _shadowActualWr, _shadowFiltWr;
+    int _shadowActualN, _shadowFiltN;
+    bool _shadowRecommend;
+    List<decimal> _equityActual = new();
+    List<decimal> _equityFiltered = new();
+    decimal _equityScale = 1m;
+
     bool IsExpanded(string s) => ExpandedSymbols.Contains(s);
     bool IsPinned(string s) => PinnedSymbols.Contains(s);
 
@@ -562,6 +621,12 @@ html,body { background:var(--bg)!important; color:var(--txt); }
 
     void Refresh()
     {
+        RecomputeShadowKpi();
+        RefreshInner();
+    }
+
+    void RefreshInner()
+    {
         RebuildBrainSymbols();
         CalcStats();
         _runtimeSec = (int)(DateTime.UtcNow - (State?.LoadedAtUtc ?? DateTime.UtcNow)).TotalSeconds;
@@ -589,6 +654,64 @@ html,body { background:var(--bg)!important; color:var(--txt); }
         _hotCount      = BrainSymbols.Count(x => NeuronLevel(NeuronPower(x.Strongest)) == 3);
         _thinkingCount = BrainSymbols.Count(x => NeuronLevel(NeuronPower(x.Strongest)) == 2);
         _watchCount    = BrainSymbols.Count(x => NeuronLevel(NeuronPower(x.Strongest)) == 1);
+    }
+
+
+    void RecomputeShadowKpi()
+    {
+        try
+        {
+            var clientId = Cfg["SharedData:DefaultClientId"] ?? "client_001";
+            var trades = Journal.GetRecentEntries(clientId, null, 500)?.ToList()
+                         ?? new List<VertexAutoTradeBinance8.Services.Learning.TradeJournalEntry>();
+            var ordered = trades.OrderBy(x => x.ClosedAtUtc).ToList();
+
+            (decimal pf, decimal wr, decimal dd, int n, List<decimal> curve) Compute(List<VertexAutoTradeBinance8.Services.Learning.TradeJournalEntry> list)
+            {
+                decimal gw = 0, gl = 0, eq = 0, peak = 0, maxDd = 0;
+                int wins = 0;
+                var curve = new List<decimal>();
+                foreach (var tr in list)
+                {
+                    var p = tr.RealizedPnl;
+                    if (p > 0) { gw += p; wins++; } else gl += Math.Abs(p);
+                    eq += p;
+                    if (eq > peak) peak = eq;
+                    var d = peak - eq;
+                    if (d > maxDd) maxDd = d;
+                    curve.Add(eq);
+                }
+                decimal pf = gl > 0 ? gw / gl : (gw > 0 ? 99m : 0m);
+                decimal wr = list.Count > 0 ? (decimal)wins / list.Count : 0m;
+                return (pf, wr, maxDd, list.Count, curve);
+            }
+
+            var actual = Compute(ordered);
+            var filtered = ordered.Where(tr =>
+            {
+                var r = (tr.CloseReason ?? "").ToUpperInvariant();
+                return !(r.Contains("NEWS") || r.Contains("MACRO") || r.Contains("CATALYST"));
+            }).ToList();
+            var filt = Compute(filtered);
+
+            _shadowActualPf = actual.pf; _shadowFiltPf = filt.pf;
+            _shadowDeltaPf = filt.pf - actual.pf;
+            _shadowActualDd = actual.dd; _shadowFiltDd = filt.dd;
+            _shadowDeltaDd = filt.dd - actual.dd;
+            _shadowActualWr = actual.wr; _shadowFiltWr = filt.wr;
+            _shadowActualN = actual.n; _shadowFiltN = filt.n;
+            _equityActual = actual.curve;
+            _equityFiltered = filt.curve;
+            _equityScale = Math.Max(
+                actual.curve.DefaultIfEmpty(1).Select(Math.Abs).DefaultIfEmpty(1m).Max(),
+                filt.curve.DefaultIfEmpty(1).Select(Math.Abs).DefaultIfEmpty(1m).Max());
+            if (_equityScale < 1) _equityScale = 1;
+            _shadowRecommend = actual.n >= 50 && _shadowDeltaPf >= 0.15m && _shadowDeltaDd <= 0m;
+        }
+        catch
+        {
+            _shadowRecommend = false;
+        }
     }
 
     void CalcStats()
