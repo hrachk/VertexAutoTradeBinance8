@@ -105,8 +105,19 @@ public sealed class TradeJournalService
     {
         if (string.IsNullOrWhiteSpace(clientId))
             return Array.Empty<TradeJournalEntry>();
+        take = Math.Clamp(take, 1, 2000);
         try
         {
+            if (_sqlite != null && (SqliteOnly || !File.Exists(JournalPath(clientId))))
+            {
+                var list = _sqlite.GetRecent(take).ToList();
+                if (!string.IsNullOrWhiteSpace(sourceFilter))
+                {
+                    var sf = sourceFilter.Trim();
+                    list = list.Where(e => string.Equals(e.Source, sf, StringComparison.OrdinalIgnoreCase)).ToList();
+                }
+                return list;
+            }
             var path = JournalPath(clientId);
             lock (LockFor(clientId))
             {
@@ -117,13 +128,14 @@ public sealed class TradeJournalService
                     var sf = sourceFilter.Trim();
                     q = q.Where(e => string.Equals(e.Source, sf, StringComparison.OrdinalIgnoreCase));
                 }
-                return q.OrderByDescending(e => e.ClosedAtUtc).Take(Math.Clamp(take, 1, 2000)).ToList();
+                return q.OrderByDescending(e => e.ClosedAtUtc).Take(take).ToList();
             }
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "[JOURNAL] GetRecentEntries failed {c}", clientId);
-            return Array.Empty<TradeJournalEntry>();
+            try { return _sqlite?.GetRecent(take) ?? Array.Empty<TradeJournalEntry>(); }
+            catch { return Array.Empty<TradeJournalEntry>(); }
         }
     }
 

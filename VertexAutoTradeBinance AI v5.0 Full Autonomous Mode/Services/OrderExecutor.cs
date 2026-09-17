@@ -9,6 +9,8 @@ using Binance.Net.Clients;
 using Binance.Net.Enums;
 using Binance.Net.Objects.Models.Futures;
 using Microsoft.Extensions.Options;
+using VertexAutoTradeBinance8.Services.Infra;
+using Polly.Retry;
 using System.Collections.Concurrent;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
@@ -45,6 +47,8 @@ namespace VertexAutoTradeBinance8.Services
         private readonly IOptionsMonitor<TradingOptions> _tradingOptions;
         private readonly IAccountStateService _accountState;
         private readonly BinanceAlgoOrderService _algoOrders;
+        private readonly AsyncRetryPolicy _binanceRetry;
+        private readonly BinanceTimeSyncService? _timeSync;
 
         // =====================================================
         // Максимум открытых позиций глобально (по всем символам)
@@ -202,7 +206,8 @@ namespace VertexAutoTradeBinance8.Services
             IOptionsMonitor<TradingOptions> tradingOptions,
             IAccountStateService accountState,
             BinanceAlgoOrderService algoOrders,
-            MarketDataPushClient? pushClient = null) // optional — null OK if not registered
+            MarketDataPushClient? pushClient = null, // optional — null OK if not registered
+            BinanceTimeSyncService? timeSync = null)
         {
             _logger = logger;
             _factory = factory;
@@ -223,6 +228,13 @@ namespace VertexAutoTradeBinance8.Services
             _tradingOptions = tradingOptions;
             _accountState = accountState;
             _algoOrders  = algoOrders;
+            _timeSync = timeSync;
+            _binanceRetry = BinanceResilience.CreateRetryPolicy(
+                logger,
+                onTimestampError: async () =>
+                {
+                    try { if (_timeSync != null) await _timeSync.SyncOnceAsync(); } catch { }
+                });
             _pushClient  = pushClient;
         }
 
@@ -270,7 +282,14 @@ namespace VertexAutoTradeBinance8.Services
         ///   the signal was generated, the market has moved on; skip this entry.
         /// </summary>
         /// <returns>Pass=true if score meets threshold. Score/Threshold always filled for soft-degrade.</returns>
-        public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
+        
+        private Task<T> ExecBinanceAsync<T>(Func<Task<T>> action)
+            => _binanceRetry.ExecuteAsync(action);
+
+        private Task ExecBinanceAsync(Func<Task> action)
+            => _binanceRetry.ExecuteAsync(action);
+
+public async Task<(bool Pass, int Score, int Threshold)> ConfirmEntryOn1m(
             string symbol,
             SignalSide side,
             CancellationToken ct,
@@ -515,8 +534,8 @@ namespace VertexAutoTradeBinance8.Services
                 }
                 catch { /* non-critical — proceed with our calculated leverage */ }
 
-                var setLevResult = await client.UsdFuturesApi.Account.ChangeInitialLeverageAsync(
-                    signal.Symbol, leverageToSet, ct: ct);
+                var setLevResult = await ExecBinanceAsync(() => client.UsdFuturesApi.Account.ChangeInitialLeverageAsync(
+                    signal.Symbol, leverageToSet, ct: ct));
                 leverage = leverageToSet; // update for downstream margin math
 
                 if (!setLevResult.Success)
@@ -1754,7 +1773,7 @@ namespace VertexAutoTradeBinance8.Services
 
                 return OrderResult.Fail("EXECUTION_DISABLED");
             }
-            var entryRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+            var entryRes = await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol:                  signal.Symbol,
                 side:                    side,
                 type:                    entryType,
@@ -1764,7 +1783,7 @@ namespace VertexAutoTradeBinance8.Services
                 timeInForce:             tif,
                 reduceOnly:              null,
                 selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
-                ct:                      ct);
+                ct:                      ct));
 
             _logger.LogInformation(
                 "[ENTRY][{symbol}] PlaceOrder type={type} side={side} qty={qty} price={price} hedge={h} → {ok}",
@@ -1819,7 +1838,7 @@ namespace VertexAutoTradeBinance8.Services
                                 signal.Symbol,
                                 retryPrice);
 
-                            entryRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                            entryRes = await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.PlaceOrderAsync(
                                 symbol: signal.Symbol,
                                 side: side,
                                 type: FuturesOrderType.Limit,
@@ -1827,7 +1846,7 @@ namespace VertexAutoTradeBinance8.Services
                                 price: retryPrice,
                                 positionSide: isHedge ? posSide : null,
                                 timeInForce: TimeInForce.GoodTillCanceled,
-                                ct: ct);
+                                ct: ct));
                         }
                     }
                     catch (Exception ex)
@@ -1948,10 +1967,10 @@ namespace VertexAutoTradeBinance8.Services
 
                             try
                             {
-                                await client.UsdFuturesApi.Trading.CancelOrderAsync(
+                                await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.CancelOrderAsync(
                                     signal.Symbol,
                                     entryOrderId,
-                                    ct: ct);
+                                    ct: ct));
                             }
                             catch { }
 
@@ -2029,7 +2048,7 @@ namespace VertexAutoTradeBinance8.Services
 
                 try
                 {
-                    await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, entryOrderId, ct: ct);
+                    await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, entryOrderId, ct: ct));
                 }
                 catch { }
 
@@ -2068,7 +2087,7 @@ namespace VertexAutoTradeBinance8.Services
                     signal.Symbol,
                     retryPrice);
 
-                var retryOrder = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                var retryOrder = await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: signal.Symbol,
                     side: side,
                     type: FuturesOrderType.Limit,
@@ -2076,7 +2095,7 @@ namespace VertexAutoTradeBinance8.Services
                     price: retryPrice,
                     positionSide: isHedge ? posSide : null,
                     timeInForce: TimeInForce.GoodTillCanceled,
-                    ct: ct);
+                    ct: ct));
 
                 if (retryOrder.Success && retryOrder.Data != null)
                 {
@@ -2229,13 +2248,13 @@ namespace VertexAutoTradeBinance8.Services
                         "[1M SOFT][{symbol}] fallback CORE weak timing {s}/{t} size×{sf:F2}",
                         signal.Symbol, score1mFb, thr1mFb, sf);
                 }
-                var mktRes = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                var mktRes = await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.PlaceOrderAsync(
                     symbol: signal.Symbol,
                     side: side,
                     type: FuturesOrderType.Market,
                     quantity: mktQty,
                     positionSide: isHedge ? posSide : null,
-                    ct: ct);
+                    ct: ct));
 
                 if (mktRes.Success && mktRes.Data != null)
                 {
@@ -2518,7 +2537,7 @@ namespace VertexAutoTradeBinance8.Services
                 else
                 {
                     foreach (var tp in existingTps)
-                        try { await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, tp.Id, ct: ct); } catch { }
+                        try { await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, tp.Id, ct: ct)); } catch { }
                     _logger.LogInformation("[DEDUP][{sym}] Cancelled {n} old TPs — placing updated levels", signal.Symbol, existingTps.Count);
                 }
             }
@@ -2540,13 +2559,13 @@ namespace VertexAutoTradeBinance8.Services
                     skipSlPlacement = true;
                     // Clean up any duplicate SLs beyond the best one
                     foreach (var dupe in existingSlList.Where(o => o.Id != bestSl.Id))
-                        try { await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, dupe.Id, ct: ct); } catch { }
+                        try { await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, dupe.Id, ct: ct)); } catch { }
                 }
                 else
                 {
                     // New SL is tighter — cancel old and place better one
                     foreach (var sl in existingSlList)
-                        try { await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, sl.Id, ct: ct); } catch { }
+                        try { await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, sl.Id, ct: ct)); } catch { }
                     _logger.LogInformation("[DEDUP][{sym}] SL replace: old={ep} → new={np}", signal.Symbol, bestSl.StopPrice ?? 0m, slNew);
                 }
             }
@@ -2556,7 +2575,7 @@ namespace VertexAutoTradeBinance8.Services
                 var keepSl = isLong ? existingSlList.OrderByDescending(o => o.StopPrice ?? 0m).First()
                                     : existingSlList.OrderBy(o => o.StopPrice ?? 0m).First();
                 foreach (var dupe in existingSlList.Where(o => o.Id != keepSl.Id))
-                    try { await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, dupe.Id, ct: ct); } catch { }
+                    try { await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, dupe.Id, ct: ct)); } catch { }
                 _logger.LogWarning("[DEDUP][{sym}] Cleaned {n} duplicate SLs, kept best", signal.Symbol, existingSlList.Count - 1);
             }
 
@@ -2618,7 +2637,7 @@ namespace VertexAutoTradeBinance8.Services
                         continue;
 
                     // Попытка 1: WorkingType.Mark (legacy, usually -4120)
-                    var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    var res = await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.PlaceOrderAsync(
                         symbol:       signal.Symbol,
                         side:         tpSide,
                         type:         FuturesOrderType.TakeProfitMarket,
@@ -2628,7 +2647,7 @@ namespace VertexAutoTradeBinance8.Services
                         positionSide: isHedge ? posSide : null,
                         workingType:  WorkingType.Mark,
                         selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
-                        ct: ct);
+                        ct: ct));
 
                     if (res.Success)
                     {
@@ -2643,7 +2662,7 @@ namespace VertexAutoTradeBinance8.Services
                         signal.Symbol, i + 1, res.Error?.Code, res.Error?.Message);
 
                     // Попытка 2: WorkingType.Contract
-                    var res2 = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+                    var res2 = await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.PlaceOrderAsync(
                         symbol:       signal.Symbol,
                         side:         tpSide,
                         type:         FuturesOrderType.TakeProfitMarket,
@@ -2652,7 +2671,7 @@ namespace VertexAutoTradeBinance8.Services
                         reduceOnly:   isHedge ? null : true,
                         positionSide: isHedge ? posSide : null,
                         workingType:  WorkingType.Contract,
-                        ct: ct);
+                        ct: ct));
 
                     if (res2.Success)
                     {
@@ -2963,7 +2982,7 @@ namespace VertexAutoTradeBinance8.Services
                 // Try cancel order (best-effort)
                 try
                 {
-                    await client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, entryOrderId, ct: ct);
+                    await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.CancelOrderAsync(signal.Symbol, entryOrderId, ct: ct));
                 }
                 catch { }
 
@@ -3035,7 +3054,7 @@ namespace VertexAutoTradeBinance8.Services
                 ? FuturesOrderType.TakeProfitMarket
                 : FuturesOrderType.StopMarket;
 
-            var res = await client.UsdFuturesApi.Trading.PlaceOrderAsync(
+            var res = await ExecBinanceAsync(() => client.UsdFuturesApi.Trading.PlaceOrderAsync(
                 symbol: symbol,
                 side: side,
                 type: futType,
@@ -3045,7 +3064,7 @@ namespace VertexAutoTradeBinance8.Services
                 positionSide: isHedge ? posSide : null,
                 workingType: WorkingType.Mark,
                 selfTradePreventionMode: SelfTradePreventionMode.ExpireMaker,
-                ct: ct);
+                ct: ct));
 
             if (res.Success)
             {

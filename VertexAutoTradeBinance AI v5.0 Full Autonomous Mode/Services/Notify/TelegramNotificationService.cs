@@ -23,6 +23,7 @@ public sealed class TelegramNotificationService : BackgroundService
     private readonly ILogger<TelegramNotificationService> _log;
     private readonly IConfiguration _cfg;
     private readonly EmergencyControlService? _kill;
+    private readonly FlattenAllService? _flatten;
     private readonly BtcVolatilityFilterService? _btcVol;
     private readonly DailyDrawdownGuard? _dailyDd;
     private readonly Channel<TelegramMessage> _q =
@@ -38,13 +39,15 @@ public sealed class TelegramNotificationService : BackgroundService
         IConfiguration cfg,
         EmergencyControlService? kill = null,
         BtcVolatilityFilterService? btcVol = null,
-        DailyDrawdownGuard? dailyDd = null)
+        DailyDrawdownGuard? dailyDd = null,
+        FlattenAllService? flatten = null)
     {
         _log = log;
         _cfg = cfg;
         _kill = kill;
         _btcVol = btcVol;
         _dailyDd = dailyDd;
+        _flatten = flatten;
     }
 
     public void Enqueue(string text) => _q.Writer.TryWrite(new TelegramMessage { Text = text });
@@ -151,8 +154,21 @@ public sealed class TelegramNotificationService : BackgroundService
             }
             case "/kill":
                 _kill?.ActivateKill("telegram /kill");
-                RiskAlert("Telegram /kill — AutoTrade blocked. Close positions manually if needed.");
-                await SendAsync(chat, "🛑 KILL activated. New entries blocked until /resume.", ct);
+                await SendAsync(chat, "🛑 KILL — flattening all positions...", ct);
+                try
+                {
+                    if (_flatten != null)
+                    {
+                        var report = await _flatten.ExecuteAsync("telegram /kill", ct);
+                        await SendAsync(chat, report.Length > 3500 ? report[..3500] : report, ct);
+                    }
+                    else
+                        await SendAsync(chat, "Flatten service unavailable — only entry block active. /resume to clear.", ct);
+                }
+                catch (Exception ex)
+                {
+                    await SendAsync(chat, "Flatten error: " + ex.Message, ct);
+                }
                 break;
             case "/resume":
                 _kill?.ClearKill();

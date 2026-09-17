@@ -91,6 +91,19 @@ public sealed class DemoAutoTradeService : BackgroundService
 
     private async Task TickAsync(CancellationToken ct)
     {
+        try
+        {
+            var root = _cfg["SharedData:Root"] ?? "";
+            var flag = System.IO.Path.Combine(root, "flatten_demo.flag");
+            if (System.IO.File.Exists(flag))
+            {
+                // Engine already cleared demo-account.json; remove flag and refresh
+                try { System.IO.File.Delete(flag); } catch { }
+                _log.LogWarning("[DEMO-AUTO] flatten_demo.flag consumed — demo books force-closed by Engine");
+            }
+        }
+        catch { }
+
         var clients = await _db.GetClientsWithParallelDemoAsync();
         if (clients.Count == 0) return;
 
