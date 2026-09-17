@@ -62,6 +62,14 @@ public sealed class BtcVolatilityFilterService : BackgroundService
                     _log.LogWarning(
                         "[BTC-VOL] LOCK impulse5m={imp:F2}% >= {th:F2}% → alts blocked until {u:HH:mm:ss}Z",
                         impulse, threshold, until);
+                    try
+                    {
+                        var root = _cfg["SharedData:Root"] ?? "";
+                        if (!string.IsNullOrEmpty(root))
+                            File.WriteAllText(Path.Combine(root, "btc_vol_lock.flag"),
+                                $"until {until:o}\nimpulse={impulse:F2}%");
+                    }
+                    catch { }
                 }
             }
         }
@@ -78,6 +86,13 @@ public sealed class BtcVolatilityFilterService : BackgroundService
                 reason = $"BTC_VOLATILITY_LOCK until {_lockUntilUtc:HH:mm:ss}Z impulse={_lastImpulse:F2}%";
                 return true;
             }
+            try
+            {
+                var root = _cfg["SharedData:Root"] ?? "";
+                var f = Path.Combine(root, "btc_vol_lock.flag");
+                if (File.Exists(f)) File.Delete(f);
+            }
+            catch { }
         }
         return false;
     }

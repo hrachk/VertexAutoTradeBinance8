@@ -74,6 +74,7 @@ builder.Services.AddSingleton<RealDcaHistoryReader>();
 builder.Services.Configure<DcaOptions>(builder.Configuration.GetSection("Dca"));
 builder.Services.AddSingleton<MarketDataLiveState>();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.DemoAccountService>();
+builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Twa.TwaDashboardService>();
 builder.Services.AddHostedService<VertexAutoTradeBinance8.Web.Services.DemoAutoTradeService>();
 builder.Services.AddSingleton<DecisionMarkersFileService>();
 
@@ -229,6 +230,12 @@ app.UseStaticFiles();
 
 app.UseRouting();
 app.MapControllers();   // API маршруты
+app.MapGet("/twa/dashboard", async (HttpContext ctx) =>
+{
+    var path = Path.Combine(ctx.RequestServices.GetRequiredService<IWebHostEnvironment>().WebRootPath, "twa", "dashboard.html");
+    ctx.Response.ContentType = "text/html; charset=utf-8";
+    await ctx.Response.SendFileAsync(path);
+});
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
 app.MapHub<ExecutedSignalsHub>("/hubs/executedSignals");

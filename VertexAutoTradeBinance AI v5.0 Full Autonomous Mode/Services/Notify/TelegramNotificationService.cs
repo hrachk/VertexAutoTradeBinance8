@@ -262,9 +262,14 @@ public sealed class TelegramNotificationService : BackgroundService
                 await SendAsync(chat, $"⏸ Paused {mins} minutes.", ct);
                 break;
             }
+            case "/start":
+            case "/dashboard":
+            case "/app":
+                await SendDashboardButtonAsync(chat, ct);
+                break;
             default:
                 if (cmd.StartsWith("/"))
-                    await SendAsync(chat, "Commands: /status /kill /resume /pause [minutes]", ct);
+                    await SendAsync(chat, "Commands: /status /kill /resume /pause [minutes] /dashboard", ct);
                 break;
         }
     }

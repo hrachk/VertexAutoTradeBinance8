@@ -291,6 +291,7 @@ public class Program
                     services.AddSingleton<VertexAutoTradeBinance8.Services.Infra.SqliteJournalStore>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.Infra.EmergencyControlService>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.Infra.FlattenAllService>();
+                    services.AddHostedService<VertexAutoTradeBinance8.Services.Infra.KillFlagWatcherService>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.Infra.BinanceTimeSyncService>();
                     services.AddHostedService(sp => sp.GetRequiredService<VertexAutoTradeBinance8.Services.Infra.BinanceTimeSyncService>());
                     services.AddSingleton<VertexAutoTradeBinance8.Services.Learning.ShadowKpiEvaluator>();
