@@ -50,18 +50,15 @@ public sealed class TwaDashboardService
     private readonly IConfiguration _cfg;
     private readonly DemoAccountService _demo;
     private readonly ILogger<TwaDashboardService> _log;
-    private readonly BinanceClientFactory? _binance;
 
     public TwaDashboardService(
         IConfiguration cfg,
         DemoAccountService demo,
-        ILogger<TwaDashboardService> log,
-        BinanceClientFactory? binance = null)
+        ILogger<TwaDashboardService> log)
     {
         _cfg = cfg;
         _demo = demo;
         _log = log;
-        _binance = binance;
     }
 
     private string SharedRoot => _cfg["SharedData:Root"] ?? @"C:\Vertex\Engines\client_001";

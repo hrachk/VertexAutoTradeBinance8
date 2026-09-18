@@ -2,6 +2,7 @@
 using System.Threading;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services.Learning;
+using VertexAutoTradeBinance8.Services.Risk;
 
 namespace VertexAutoTradeBinance8.Services;
 
