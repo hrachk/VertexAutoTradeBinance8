@@ -103,7 +103,7 @@ public sealed class FlattenAllService
                                     ct: ct));
                             if (close.Success)
                             {
-                                decimal upnl = p.UnrealizedProfit;
+                                decimal upnl = p.UnrealizedPnl;
                                 totalPnl += upnl;
                                 lines.Add($"LIVE CLOSE {symbol} {p.PositionSide} qty={qty} uPnL≈{upnl:F2}");
                             }

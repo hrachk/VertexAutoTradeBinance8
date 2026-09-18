@@ -274,6 +274,49 @@ public sealed class TelegramNotificationService : BackgroundService
         }
     }
 
+
+    private async Task SendDashboardButtonAsync(string chatId, CancellationToken ct)
+    {
+        var url = (_cfg["Telegram:MiniAppUrl"] ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            await SendAsync(chatId,
+                "Mini App URL not configured.\nSet Telegram:MiniAppUrl to your HTTPS tunnel, e.g.\nhttps://xxx.trycloudflare.com/twa/dashboard",
+                ct);
+            return;
+        }
+        if (!url.Contains("/twa/dashboard", StringComparison.OrdinalIgnoreCase))
+            url = url.TrimEnd('/') + "/twa/dashboard";
+
+        if (string.IsNullOrWhiteSpace(Token)) return;
+        var api = $"https://api.telegram.org/bot{Token}/sendMessage";
+        var payload = new
+        {
+            chat_id = chatId,
+            text = "📊 Vertex Dashboard — open inside Telegram:",
+            reply_markup = new
+            {
+                inline_keyboard = new object[]
+                {
+                    new object[]
+                    {
+                        new { text = "📊 Open Dashboard", web_app = new { url } }
+                    }
+                }
+            }
+        };
+        var json = System.Text.Json.JsonSerializer.Serialize(payload);
+        using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        using var resp = await _http.PostAsync(api, content, ct);
+        if (!resp.IsSuccessStatusCode)
+        {
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            _log.LogWarning("[TG] web_app button HTTP {code} {body}", (int)resp.StatusCode, body);
+            await SendAsync(chatId, "Dashboard: " + url, ct);
+        }
+        else MarkTgOk();
+    }
+
     private async Task SendAsync(string chatId, string text, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(Token)) return;
