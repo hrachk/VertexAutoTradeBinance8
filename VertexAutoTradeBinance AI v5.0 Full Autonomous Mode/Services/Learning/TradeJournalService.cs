@@ -58,7 +58,22 @@ public sealed class TradeJournalService
             Directory.CreateDirectory(ClientDir(e.ClientId));
             var path = JournalPath(e.ClientId);
             // SQLite is primary; JSON dual-write unless Journal:SqliteOnly=true
-            try { _sqlite?.InsertTrade(e); } catch { }
+            if (_sqlite == null)
+            {
+                _log.LogError("[SQLITE-TRACE] SqliteJournalStore is NULL — trade will not be written to DB (DI missing?)");
+            }
+            else
+            {
+                try
+                {
+                    _sqlite.InsertTrade(e);
+                }
+                catch (Exception sx)
+                {
+                    _log.LogError(sx, "[SQLITE-TRACE] InsertTrade failed for {s} — falling back JSON if allowed", e.Symbol);
+                    if (SqliteOnly) throw;
+                }
+            }
             if (!SqliteOnly)
             {
                 lock (LockFor(e.ClientId))

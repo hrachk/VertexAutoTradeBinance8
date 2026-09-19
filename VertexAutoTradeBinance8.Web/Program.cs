@@ -46,6 +46,7 @@ if (builder.Environment.IsDevelopment())
 // Add services to the container.
 builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
+builder.Services.AddSingleton<VertexAutoTradeBinance8.Services.Infra.SqliteJournalStore>();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Services.Learning.TradeJournalService>();
 builder.Services.AddSingleton<WeatherForecastService>();
 

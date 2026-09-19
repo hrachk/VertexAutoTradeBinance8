@@ -8,8 +8,7 @@ using VertexAutoTradeBinance8.Services.Learning;
 namespace VertexAutoTradeBinance8.Services.Infra;
 
 /// <summary>
-/// Production journal store (SQLite). On first start migrates trade-journal.json → .bak.
-/// JSON file writes can remain as dual-write for compatibility.
+/// Production journal store (SQLite). WAL mode, shared cache, explicit TRACE logs.
 /// </summary>
 public sealed class SqliteJournalStore
 {
@@ -28,6 +27,7 @@ public sealed class SqliteJournalStore
         RunIntegrityCheck();
         MaybeRotateBackup();
         TryMigrateJsonOnce();
+        _log.LogInformation("[SQLITE-TRACE] store ready path={p} size={mb:F3}MB", _dbPath, DbSizeMb);
     }
 
     public string DbPath => _dbPath;
@@ -47,55 +47,17 @@ public sealed class SqliteJournalStore
 
     public string IntegrityStatus { get; private set; } = "unknown";
 
-    private void RunIntegrityCheck()
-    {
-        try
-        {
-            using var c = Open();
-            using var cmd = c.CreateCommand();
-            cmd.CommandText = "PRAGMA quick_check;";
-            var result = cmd.ExecuteScalar()?.ToString() ?? "fail";
-            IntegrityStatus = string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase) ? "ok" : result;
-            if (IntegrityStatus == "ok")
-                _log.LogInformation("[SQLITE-JOURNAL] PRAGMA quick_check=ok path={p}", _dbPath);
-            else
-                _log.LogError("[SQLITE-JOURNAL] PRAGMA quick_check FAILED: {r} path={p}", IntegrityStatus, _dbPath);
-        }
-        catch (Exception ex)
-        {
-            IntegrityStatus = "error:" + ex.Message;
-            _log.LogWarning(ex, "[SQLITE-JOURNAL] integrity check failed");
-        }
-    }
-
-    /// <summary>If DB exceeds 32 MB, copy to vertex_journal_yyyyMMdd_HHmm.db.bak (keep last 5).</summary>
-    private void MaybeRotateBackup()
-    {
-        try
-        {
-            if (!File.Exists(_dbPath)) return;
-            var len = new FileInfo(_dbPath).Length;
-            const long threshold = 32L * 1024 * 1024; // 32 MB
-            if (len < threshold) return;
-            var bak = Path.Combine(_sharedRoot, $"vertex_journal_{DateTime.UtcNow:yyyyMMdd_HHmmss}.db.bak");
-            File.Copy(_dbPath, bak, overwrite: true);
-            _log.LogWarning("[SQLITE-JOURNAL] size={mb:F1}MB ≥32MB → backup {bak}", len / (1024.0 * 1024.0), bak);
-            var old = Directory.GetFiles(_sharedRoot, "vertex_journal_*.db.bak")
-                .OrderByDescending(f => f).Skip(5).ToList();
-            foreach (var f in old)
-            {
-                try { File.Delete(f); } catch { }
-            }
-        }
-        catch (Exception ex)
-        {
-            _log.LogDebug(ex, "[SQLITE-JOURNAL] backup skipped");
-        }
-    }
-
     private SqliteConnection Open()
     {
-        var c = new SqliteConnection($"Data Source={_dbPath}");
+        // Mode=ReadWriteCreate + Cache=Shared so Engine + Web can open concurrently (WAL).
+        var cs = new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Shared,
+            Pooling = true
+        }.ToString();
+        var c = new SqliteConnection(cs);
         c.Open();
         return c;
     }
@@ -103,6 +65,11 @@ public sealed class SqliteJournalStore
     private void EnsureSchema()
     {
         using var c = Open();
+        using (var pragma = c.CreateCommand())
+        {
+            pragma.CommandText = "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;";
+            pragma.ExecuteNonQuery();
+        }
         using var cmd = c.CreateCommand();
         cmd.CommandText = @"
 CREATE TABLE IF NOT EXISTS Trades (
@@ -146,30 +113,93 @@ CREATE TABLE IF NOT EXISTS SignalLogs (
 );
 ";
         cmd.ExecuteNonQuery();
+        _log.LogInformation("[SQLITE-TRACE] schema ensured (WAL) path={p}", _dbPath);
+    }
+
+    private void RunIntegrityCheck()
+    {
+        try
+        {
+            using var c = Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "PRAGMA quick_check;";
+            var result = cmd.ExecuteScalar()?.ToString() ?? "fail";
+            IntegrityStatus = string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase) ? "ok" : result;
+            if (IntegrityStatus == "ok")
+                _log.LogInformation("[SQLITE-JOURNAL] PRAGMA quick_check=ok path={p}", _dbPath);
+            else
+                _log.LogError("[SQLITE-JOURNAL] PRAGMA quick_check FAILED: {r} path={p}", IntegrityStatus, _dbPath);
+        }
+        catch (Exception ex)
+        {
+            IntegrityStatus = "error:" + ex.Message;
+            _log.LogWarning(ex, "[SQLITE-JOURNAL] integrity check failed");
+        }
+    }
+
+    private void MaybeRotateBackup()
+    {
+        try
+        {
+            if (!File.Exists(_dbPath)) return;
+            var len = new FileInfo(_dbPath).Length;
+            const long threshold = 32L * 1024 * 1024;
+            if (len < threshold) return;
+            var bak = Path.Combine(_sharedRoot, $"vertex_journal_{DateTime.UtcNow:yyyyMMdd_HHmmss}.db.bak");
+            File.Copy(_dbPath, bak, overwrite: true);
+            _log.LogWarning("[SQLITE-JOURNAL] size={mb:F1}MB ≥32MB → backup {bak}", len / (1024.0 * 1024.0), bak);
+            foreach (var f in Directory.GetFiles(_sharedRoot, "vertex_journal_*.db.bak").OrderByDescending(x => x).Skip(5))
+            {
+                try { File.Delete(f); } catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "[SQLITE-JOURNAL] backup skipped");
+        }
     }
 
     private void TryMigrateJsonOnce()
     {
         try
         {
-            var jsonPath = Path.Combine(_sharedRoot, "trade-journal.json");
-            var bak = jsonPath + ".bak";
-            if (!File.Exists(jsonPath) || File.Exists(bak)) return;
-
-            lock (this)
+            // Migrate both root and client_* journals
+            var candidates = new List<string>();
+            var rootJson = Path.Combine(_sharedRoot, "trade-journal.json");
+            if (File.Exists(rootJson)) candidates.Add(rootJson);
+            if (Directory.Exists(_sharedRoot))
             {
-                if (!File.Exists(jsonPath) || File.Exists(bak)) return;
-                var text = File.ReadAllText(jsonPath);
-                var file = JsonSerializer.Deserialize<TradeJournalFile>(text) ?? new TradeJournalFile();
-                int n = 0;
-                foreach (var e in file.Entries)
+                foreach (var d in Directory.GetDirectories(_sharedRoot, "client_*"))
                 {
-                    InsertTrade(e);
-                    n++;
+                    var p = Path.Combine(d, "trade-journal.json");
+                    if (File.Exists(p)) candidates.Add(p);
                 }
-                File.Move(jsonPath, bak, overwrite: true);
-                _log.LogWarning("[SQLITE-JOURNAL] migrated {n} trades from JSON → {db}; JSON renamed .bak", n, _dbPath);
             }
+
+            int total = 0;
+            foreach (var jsonPath in candidates)
+            {
+                var bak = jsonPath + ".bak";
+                if (File.Exists(bak)) continue;
+                try
+                {
+                    var text = File.ReadAllText(jsonPath);
+                    var file = JsonSerializer.Deserialize<TradeJournalFile>(text) ?? new TradeJournalFile();
+                    foreach (var e in file.Entries)
+                    {
+                        InsertTrade(e);
+                        total++;
+                    }
+                    File.Move(jsonPath, bak, overwrite: true);
+                    _log.LogWarning("[SQLITE-TRACE] migrated {n} trades from {json}", file.Entries.Count, jsonPath);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "[SQLITE-TRACE] migrate failed for {p}", jsonPath);
+                }
+            }
+            if (total > 0)
+                _log.LogWarning("[SQLITE-JOURNAL] migrated total {n} trades → {db}", total, _dbPath);
         }
         catch (Exception ex)
         {
@@ -179,16 +209,24 @@ CREATE TABLE IF NOT EXISTS SignalLogs (
 
     public void InsertTrade(TradeJournalEntry e)
     {
+        if (e == null) return;
+        var id = string.IsNullOrWhiteSpace(e.Id) ? Guid.NewGuid().ToString("N") : e.Id;
+        _log.LogInformation(
+            "[SQLITE-TRACE] Attempting to write trade {id} {src} {sym} {side} pnl={pnl} → {db}",
+            id, e.Source, e.Symbol, e.Side, e.RealizedPnl, _dbPath);
+
         _gate.Wait();
         try
         {
             using var c = Open();
+            using var tx = c.BeginTransaction();
             using var cmd = c.CreateCommand();
+            cmd.Transaction = tx;
             cmd.CommandText = @"
 INSERT OR REPLACE INTO Trades
 (Id,ClientId,Source,Symbol,Side,EntryPrice,ExitPrice,Qty,Leverage,RealizedPnL,RealizedR,InitialRiskPrice,ExitReason,StrategyName,EntryTime,ExitTime)
 VALUES ($id,$cid,$src,$sym,$side,$ep,$xp,$qty,$lev,$pnl,$r,$risk,$reason,$strat,$ot,$ct)";
-            cmd.Parameters.AddWithValue("$id", e.Id ?? Guid.NewGuid().ToString("N"));
+            cmd.Parameters.AddWithValue("$id", id);
             cmd.Parameters.AddWithValue("$cid", e.ClientId ?? "");
             cmd.Parameters.AddWithValue("$src", e.Source ?? "");
             cmd.Parameters.AddWithValue("$sym", e.Symbol ?? "");
@@ -202,14 +240,45 @@ VALUES ($id,$cid,$src,$sym,$side,$ep,$xp,$qty,$lev,$pnl,$r,$risk,$reason,$strat,
             cmd.Parameters.AddWithValue("$risk", (double)e.InitialRiskPrice);
             cmd.Parameters.AddWithValue("$reason", e.CloseReason ?? "");
             cmd.Parameters.AddWithValue("$strat", "");
-            cmd.Parameters.AddWithValue("$ot", e.OpenedAtUtc.ToString("o"));
-            cmd.Parameters.AddWithValue("$ct", e.ClosedAtUtc.ToString("o"));
-            cmd.ExecuteNonQuery();
+            cmd.Parameters.AddWithValue("$ot", e.OpenedAtUtc == default ? DateTime.UtcNow.ToString("o") : e.OpenedAtUtc.ToString("o"));
+            cmd.Parameters.AddWithValue("$ct", e.ClosedAtUtc == default ? DateTime.UtcNow.ToString("o") : e.ClosedAtUtc.ToString("o"));
+            var rows = cmd.ExecuteNonQuery();
+            tx.Commit();
+
+            // Checkpoint so size grows visibly even under WAL
+            try
+            {
+                using var cp = c.CreateCommand();
+                cp.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                cp.ExecuteNonQuery();
+            }
+            catch { /* soft */ }
+
+            long count = 0;
+            try
+            {
+                using var q = c.CreateCommand();
+                q.CommandText = "SELECT COUNT(*) FROM Trades;";
+                count = Convert.ToInt64(q.ExecuteScalar());
+            }
+            catch { }
+
+            _log.LogInformation(
+                "[SQLITE-TRACE] Successfully inserted row id={id} rowsAffected={rows} tradesTotal={n} size={mb:F3}MB",
+                id, rows, count, DbSizeMb);
         }
-        finally { _gate.Release(); }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "[SQLITE-TRACE] ERROR insert trade {id} {sym}: {msg}", id, e.Symbol, ex.Message);
+            throw;
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
-    public IReadOnlyList<TradeJournalEntry> GetRecent(int limit = 200)
+    public IReadOnlyList<TradeJournalEntry> GetRecent(int take = 200)
     {
         var list = new List<TradeJournalEntry>();
         try
@@ -217,7 +286,7 @@ VALUES ($id,$cid,$src,$sym,$side,$ep,$xp,$qty,$lev,$pnl,$r,$risk,$reason,$strat,
             using var c = Open();
             using var cmd = c.CreateCommand();
             cmd.CommandText = "SELECT * FROM Trades ORDER BY ExitTime DESC LIMIT $n";
-            cmd.Parameters.AddWithValue("$n", limit);
+            cmd.Parameters.AddWithValue("$n", Math.Clamp(take, 1, 5000));
             using var r = cmd.ExecuteReader();
             while (r.Read())
             {
@@ -243,7 +312,7 @@ VALUES ($id,$cid,$src,$sym,$side,$ep,$xp,$qty,$lev,$pnl,$r,$risk,$reason,$strat,
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "[SQLITE-JOURNAL] GetRecent failed");
+            _log.LogWarning(ex, "[SQLITE-TRACE] GetRecent failed");
         }
         return list;
     }
@@ -267,8 +336,12 @@ ON CONFLICT(Symbol) DO UPDATE SET
             cmd.Parameters.AddWithValue("$n", note ?? "");
             cmd.Parameters.AddWithValue("$u", DateTime.UtcNow.ToString("o"));
             cmd.ExecuteNonQuery();
+            _log.LogDebug("[SQLITE-TRACE] SymbolMemory upsert {s}", symbol);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "[SQLITE-TRACE] SymbolMemory upsert failed {s}", symbol);
+        }
     }
 
     public void LogSignal(string symbol, string type, string action, string? blockReason)
@@ -279,13 +352,17 @@ ON CONFLICT(Symbol) DO UPDATE SET
             using var cmd = c.CreateCommand();
             cmd.CommandText = "INSERT INTO SignalLogs(Id,Symbol,SignalType,Action,BlockReason,Timestamp) VALUES ($i,$s,$t,$a,$b,$ts)";
             cmd.Parameters.AddWithValue("$i", Guid.NewGuid().ToString("N"));
-            cmd.Parameters.AddWithValue("$s", symbol);
-            cmd.Parameters.AddWithValue("$t", type);
-            cmd.Parameters.AddWithValue("$a", action);
+            cmd.Parameters.AddWithValue("$s", symbol ?? "");
+            cmd.Parameters.AddWithValue("$t", type ?? "");
+            cmd.Parameters.AddWithValue("$a", action ?? "");
             cmd.Parameters.AddWithValue("$b", blockReason ?? "");
             cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
             cmd.ExecuteNonQuery();
+            _log.LogDebug("[SQLITE-TRACE] SignalLog {s} {a}", symbol, action);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "[SQLITE-TRACE] SignalLog failed {s}", symbol);
+        }
     }
 }
