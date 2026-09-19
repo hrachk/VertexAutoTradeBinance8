@@ -205,12 +205,38 @@ public sealed class TelegramNotificationService : BackgroundService
                     ? lastSync.Value.ToString("HH:mm:ss") + "Z"
                     : "never";
                 var tgAge = (DateTime.UtcNow - _lastOkUtc).TotalSeconds;
-                await SendAsync(chat,
+                                var mlLine = "ML Gate: n/a";
+                try
+                {
+                    var root = _cfg["SharedData:Root"] ?? "";
+                    var kpiPath = System.IO.Path.Combine(root, "ml_shadow_kpi.json");
+                    if (System.IO.File.Exists(kpiPath))
+                    {
+                        using var doc = JsonDocument.Parse(System.IO.File.ReadAllText(kpiPath));
+                        var r = doc.RootElement;
+                        var hard = r.TryGetProperty("HardGateEnabled", out var h) && h.GetBoolean();
+                        var skip = r.TryGetProperty("SkipRatePct", out var s) ? s.GetDouble() : 0;
+                        var thr = r.TryGetProperty("Threshold", out var th) ? th.GetDouble() : 0.42;
+                        var n = r.TryGetProperty("TotalEvaluated", out var te) ? te.GetInt32() : 0;
+                        mlLine = hard
+                            ? $"[ML Gate: HARD REJECT ENABLED (thr={thr:P0}) n={n}]"
+                            : $"[ML Gate: SHADOW MODE (Skip≈{skip:F0}% n={n})]";
+                    }
+                    else
+                    {
+                        bool hard = _cfg.GetValue("MlGate:EnableMlSkipGate", false);
+                        mlLine = hard ? "[ML Gate: HARD REJECT ENABLED]" : "[ML Gate: SHADOW MODE]";
+                    }
+                }
+                catch { }
+
+await SendAsync(chat,
                     $"📊 STATUS\n" +
                     $"Engine: {kill}\n" +
                     $"Day PnL≈{dayPnl:F2} stopsInRow={stops}\n" +
                     $"EmergencyDD={(em ? "YES" : "no")}\n" +
                     $"{vol}\n" +
+                    $"{mlLine}\n" +
                     $"SQLite: {dbMb:F2} MB · integrity={dbOk}\n" +
                     $"TimeOffset: {offset} ms · lastSync={syncStr}\n" +
                     $"TG lastOk: {tgAge:F0}s ago\n" +

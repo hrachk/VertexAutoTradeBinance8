@@ -292,7 +292,11 @@ public class Program
                     services.AddSingleton<VertexAutoTradeBinance8.Services.Entry.ApprovedEntryFileBus>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.Entry.IApprovedEntryPublisher>(sp => sp.GetRequiredService<VertexAutoTradeBinance8.Services.Entry.ApprovedEntryFileBus>());
                     services.AddSingleton<VertexAutoTradeBinance8.Services.Entry.IApprovedEntryReader>(sp => sp.GetRequiredService<VertexAutoTradeBinance8.Services.Entry.ApprovedEntryFileBus>());
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.Ml.ShadowMlKpiStore>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.Ml.ShadowMlGatekeeper>();
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.Learning.MarketDeltaTracker>();
+                    services.AddHostedService(sp => sp.GetRequiredService<VertexAutoTradeBinance8.Services.Learning.MarketDeltaTracker>());
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.Learning.ICloseContextProvider, VertexAutoTradeBinance8.Services.Learning.CloseContextProvider>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.Infra.EmergencyControlService>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.Infra.FlattenAllService>();
                     services.AddHostedService<VertexAutoTradeBinance8.Services.Infra.KillFlagWatcherService>();

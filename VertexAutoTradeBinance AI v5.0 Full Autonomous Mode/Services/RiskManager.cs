@@ -285,6 +285,7 @@ namespace VertexAutoTradeBinance8.Services
                                     _logger.LogWarning(
                                         "[RISK-MEM] {sym} PROBE entry size×{sm:F2} conf={c:F2} ({note})",
                                         signal.Symbol, probe, conf, adj.Note);
+                                    ProbeEntryTracker.MarkOpened(signal.Symbol);
                                     // keep going — do not return 0
                                 }
                                 else

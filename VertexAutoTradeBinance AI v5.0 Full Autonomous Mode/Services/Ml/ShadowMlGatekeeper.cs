@@ -24,17 +24,19 @@ public sealed class ShadowMlGatekeeper
     private readonly IConfiguration _cfg;
     private readonly ILogger<ShadowMlGatekeeper> _log;
     private readonly TradeJournalService? _journal;
+    private readonly ShadowMlKpiStore? _kpi;
     private readonly object _gate = new();
     private Dictionary<string, double>? _weights;
     private double _bias;
     private double _threshold = 0.42;
     private DateTime _modelLoadedUtc = DateTime.MinValue;
 
-    public ShadowMlGatekeeper(IConfiguration cfg, ILogger<ShadowMlGatekeeper> log, TradeJournalService? journal = null)
+    public ShadowMlGatekeeper(IConfiguration cfg, ILogger<ShadowMlGatekeeper> log, TradeJournalService? journal = null, ShadowMlKpiStore? kpi = null)
     {
         _cfg = cfg;
         _log = log;
         _journal = journal;
+        _kpi = kpi;
     }
 
     public bool EnableMlSkipGate => _cfg.GetValue("MlGate:EnableMlSkipGate", false);
@@ -80,6 +82,15 @@ public sealed class ShadowMlGatekeeper
         _log.LogInformation(
             "[ML-SHADOW] {sym} P(Win)={p:F3} E(R)={er:F2} wouldSkip={skip} src={src} gate={gate}",
             signal.Symbol, pred.PWin, pred.ExpectedR, pred.WouldSkip, pred.Source, EnableMlSkipGate);
+        try { _kpi?.Record(pred); } catch { }
+        try
+        {
+            var snap = _kpi?.GetSnapshot();
+            if (snap != null && snap.TotalEvaluated > 0 && snap.TotalEvaluated % 10 == 0)
+                _log.LogInformation("[ML-KPI] {label} evaluated={n} wouldSkip={s}",
+                    snap.ModeLabel, snap.TotalEvaluated, snap.ShadowWouldSkip);
+        }
+        catch { }
 
         try
         {

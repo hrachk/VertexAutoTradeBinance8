@@ -16,6 +16,7 @@ public sealed class TradeJournalService
     private readonly int _windowDays;
     private readonly double _halfLifeDays;
     private readonly decimal _probeMinConf;
+    private readonly ICloseContextProvider? _closeCtx;
     private readonly SqliteJournalStore? _sqlite;
     private readonly DailyDrawdownGuard? _dailyDd;
     private readonly TelegramNotificationService? _tg;
@@ -23,13 +24,15 @@ public sealed class TradeJournalService
     private static readonly ConcurrentDictionary<string, object> Locks = new();
 
     public TradeJournalService(IConfiguration cfg, ILogger<TradeJournalService> log, SqliteJournalStore? sqlite = null,
-        DailyDrawdownGuard? dailyDd = null, TelegramNotificationService? tg = null)
+        DailyDrawdownGuard? dailyDd = null, TelegramNotificationService? tg = null,
+        ICloseContextProvider? closeCtx = null)
     {
         _log = log;
         _cfg = cfg;
         _sqlite = sqlite;
         _dailyDd = dailyDd;
         _tg = tg;
+        _closeCtx = closeCtx;
         _enginesRoot = cfg["SharedData:Root"]
             ?? Path.Combine(AppContext.BaseDirectory, "engines");
         _windowDays = Math.Clamp(cfg.GetValue("TradeMemory:WindowDays", 30), 7, 90);
@@ -57,16 +60,35 @@ public sealed class TradeJournalService
         // Sanitize R: BE-trail partials used to store ±20 and poison memory
         if (e.RealizedR > 5m) e.RealizedR = 5m;
         if (e.RealizedR < -5m) e.RealizedR = -5m;
-        // Phase 1: contextual SL tag
+        // Phase 1 final: live BTC/ETH deltas + news + probe flag
+        if (!e.IsMemoryProbe)
+            e.IsMemoryProbe = ProbeEntryTracker.TryConsume(e.Symbol);
+        try
+        {
+            if (_closeCtx != null && e.BtcDeltaPctAtClose == 0 && e.EthDeltaPctAtClose == 0)
+            {
+                var (btc, eth, news) = _closeCtx.GetContext();
+                e.BtcDeltaPctAtClose = btc;
+                e.EthDeltaPctAtClose = eth;
+                if (string.IsNullOrWhiteSpace(e.SlAttributionCode))
+                {
+                    e.SlAttributionCode = SlAttribution.Classify(
+                        e.CloseReason, e.RealizedPnl, btc, eth, news,
+                        e.InitialRiskPrice, e.EntryPrice, e.ExitPrice);
+                }
+            }
+        }
+        catch { }
+
         if (string.IsNullOrWhiteSpace(e.SlAttributionCode))
         {
             e.SlAttributionCode = SlAttribution.Classify(
                 e.CloseReason, e.RealizedPnl, e.BtcDeltaPctAtClose, e.EthDeltaPctAtClose,
                 newsSpikeActive: false, e.InitialRiskPrice, e.EntryPrice, e.ExitPrice);
-            if (SlAttribution.IsStop(e.CloseReason, e.RealizedPnl) &&
-                (e.CloseReason ?? "").IndexOf("SL_", StringComparison.OrdinalIgnoreCase) < 0)
-                e.CloseReason = e.SlAttributionCode;
         }
+        if (SlAttribution.IsStop(e.CloseReason, e.RealizedPnl) &&
+            (e.CloseReason ?? "").IndexOf("SL_", StringComparison.OrdinalIgnoreCase) < 0)
+            e.CloseReason = e.SlAttributionCode;
         try
         {
             Directory.CreateDirectory(ClientDir(e.ClientId));
@@ -476,7 +498,17 @@ public sealed class TradeJournalService
             note = (note == "neutral" ? "offline soft-skip" : note) + " SOFT_SKIP";
         }
 
-        // Phase 3: probe entry allowed under SoftSkip for high-confidence recovery
+        // Phase 3 final: successful probe TP clears SoftSkip
+        var probeWins = valid.Where(tr => tr.IsMemoryProbe && (tr.RealizedPnl > 0
+            || (tr.CloseReason ?? "").IndexOf("TP", StringComparison.OrdinalIgnoreCase) >= 0)).ToList();
+        if (probeWins.Count > 0)
+        {
+            softSkip = false;
+            sizeMult = Math.Max(sizeMult, 0.55m);
+            note += " | Probe SUCCESS -> SoftSkip clear";
+            _log.LogInformation("[MEMORY] {sym} Probe SUCCESS -> SoftSkip clear (n={n})", symbol, probeWins.Count);
+        }
+
         bool allowProbe = softSkip;
         decimal probeSize = 0.25m;
 
