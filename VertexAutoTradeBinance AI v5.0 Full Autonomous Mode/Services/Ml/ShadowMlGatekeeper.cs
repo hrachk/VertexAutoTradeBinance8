@@ -63,13 +63,13 @@ public sealed class ShadowMlGatekeeper
             // Heuristic stand-in until offline LightGBM→JSON exported
             double conf = (double)(signal.Confidence ?? 0m);
             if (conf > 1.5) conf /= 100.0;
-            double avgR = mem != null ? (double)(mem.Note?.Contains("avgR=") == true ? TryParseAvgR(mem.Note) : 0m) : 0;
+            double avgR = mem != null && mem.Note != null && mem.Note.Contains("avgR=") ? TryParseAvgR(mem.Note) : 0.0;
             double sizePen = mem != null && mem.SoftSkip ? -0.25 : (mem != null ? (1.0 - (double)mem.SizeMult) * -0.15 : 0);
             score = Math.Clamp(0.45 + conf * 0.35 + avgR * 0.15 + sizePen, 0.05, 0.95);
             src = "heuristic";
         }
 
-        double thr = _cfg.GetValue("MlGate:SkipThreshold", _threshold);
+        double thr = _cfg.GetValue<double>("MlGate:SkipThreshold", _threshold);
         var pred = new ShadowMlPrediction
         {
             PWin = score,

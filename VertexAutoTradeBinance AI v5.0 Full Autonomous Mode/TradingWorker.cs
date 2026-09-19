@@ -1312,8 +1312,8 @@ namespace VertexAutoTradeBinance8
                     Qty = qty,
                     Leverage = leverage,
                     Confidence = signal.Confidence ?? 0m,
-                    Reason = signal.Reason ?? signal.StrategyName ?? "CORE",
-                    Strategy = signal.StrategyName ?? "CORE",
+                    Reason = signal.Reason ?? "CORE",
+                    Strategy = signal.Reason ?? "CORE",
                     SizeMultiplier = signal.SizeMultiplier,
                     InitialRiskPrice = riskPx
                 });
