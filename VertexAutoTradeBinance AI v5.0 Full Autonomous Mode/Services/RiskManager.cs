@@ -914,23 +914,55 @@ namespace VertexAutoTradeBinance8.Services
         {
             try
             {
+                var roots = new List<string>();
                 var root = _config?["SharedData:Root"];
-                if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
-                    return 0m;
-                foreach (var path in Directory.GetFiles(root, "demo-account.json", SearchOption.AllDirectories))
+                var eng = _config?["SharedData:EnginesRoot"];
+                if (!string.IsNullOrWhiteSpace(root))
                 {
+                    roots.Add(root!);
                     try
                     {
-                        var json = File.ReadAllText(path);
-                        using var doc = System.Text.Json.JsonDocument.Parse(json);
-                        var el = doc.RootElement;
-                        if (el.TryGetProperty("Balance", out var bal) && bal.TryGetDecimal(out var b) && b > 0)
-                            return b;
-                        if (el.TryGetProperty("balance", out var bal2) && bal2.TryGetDecimal(out var b2) && b2 > 0)
-                            return b2;
+                        var parent = Path.GetDirectoryName(root!.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                        if (!string.IsNullOrWhiteSpace(parent)) roots.Add(parent!);
                     }
                     catch { }
                 }
+                if (!string.IsNullOrWhiteSpace(eng)) roots.Add(eng!);
+                // Classic layout
+                roots.Add(@"C:\Vertex\Engines");
+
+                decimal best = 0m;
+                string? found = null;
+                foreach (var r in roots.Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    if (string.IsNullOrWhiteSpace(r) || !Directory.Exists(r)) continue;
+                    IEnumerable<string> files;
+                    try { files = Directory.GetFiles(r, "demo-account.json", SearchOption.AllDirectories); }
+                    catch { continue; }
+                    foreach (var path in files)
+                    {
+                        try
+                        {
+                            var json = File.ReadAllText(path);
+                            using var doc = System.Text.Json.JsonDocument.Parse(json);
+                            var el = doc.RootElement;
+                            decimal b = 0m;
+                            if (el.TryGetProperty("Balance", out var bal))
+                                bal.TryGetDecimal(out b);
+                            else if (el.TryGetProperty("balance", out var bal2))
+                                bal2.TryGetDecimal(out b);
+                            if (b > best)
+                            {
+                                best = b;
+                                found = path;
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                if (best > 0 && found != null)
+                    _logger.LogInformation("[BALANCE] Demo equity {b:F2} from {p}", best, found);
+                return best;
             }
             catch { }
             return 0m;
