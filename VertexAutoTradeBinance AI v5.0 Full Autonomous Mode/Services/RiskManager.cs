@@ -908,7 +908,7 @@ namespace VertexAutoTradeBinance8.Services
         }
 
 
-    }
+
         /// <summary>Demo equity from SharedData demo-account.json — independent of Binance.</summary>
         public decimal TryGetDemoEquity()
         {
@@ -935,5 +935,5 @@ namespace VertexAutoTradeBinance8.Services
             catch { }
             return 0m;
         }
-
+    }
 }
