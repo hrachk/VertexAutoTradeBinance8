@@ -8,6 +8,7 @@ using System.Threading.Channels;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
+using VertexAutoTradeBinance8.Services.Entry;
 using VertexAutoTradeBinance8.Services.Bootstrap;
 using VertexAutoTradeBinance8.Services.Engine;
 using VertexAutoTradeBinance8.Services.Formatting;
@@ -83,6 +84,7 @@ namespace VertexAutoTradeBinance8
         private readonly VertexAutoTradeBinance8.Services.Infra.EmergencyControlService? _killCtrl;
         private readonly LiveSignalService _liveSig;
         private readonly VertexAutoTradeBinance8.Services.Learning.TradeJournalService? _tradeJournal;
+        private readonly IApprovedEntryPublisher? _approvedEntries;
         private readonly SymbolInfoService _symbolInfo;
         private readonly FundingRateService _fundingRate;
         private readonly RealtimeMomentumDetector _momentum;
@@ -180,9 +182,11 @@ namespace VertexAutoTradeBinance8
             VertexAutoTradeBinance8.Services.Risk.DailyDrawdownGuard? dailyDd = null,
             VertexAutoTradeBinance8.Services.Notify.TelegramNotificationService? tg = null,
             VertexAutoTradeBinance8.Services.Infra.EmergencyControlService? killCtrl = null,
-            VertexAutoTradeBinance8.Services.Learning.TradeJournalService? tradeJournal = null)
+            VertexAutoTradeBinance8.Services.Learning.TradeJournalService? tradeJournal = null,
+            IApprovedEntryPublisher? approvedEntries = null)
         {
             _tradeJournal = tradeJournal;
+            _approvedEntries = approvedEntries;
             _logger = logger;
             _options = options.Value;
             _tradingMonitor = tradingMonitor;
@@ -1250,6 +1254,54 @@ namespace VertexAutoTradeBinance8
                 leverage = adjLev;
                 signal.Leverage = adjLev;
             }
+            // 8a) ConfirmEntryOn1m — same gate for Live AND Demo (parity)
+            try
+            {
+                var (ok1m, score1m, thr1m) = await _executor.ConfirmEntryOn1m(
+                    symbol, signal.Side, ct, signal, null);
+                if (!ok1m)
+                {
+                    await RejectAsync(signal, symbol, tf, "EXEC", "BAD_1M_TIMING",
+                        ct, extra: $"score={score1m}/{thr1m}");
+                    return;
+                }
+            }
+            catch (Exception ex1m)
+            {
+                _logger.LogWarning(ex1m, "[PROC] 1m confirm error {sym} — soft pass", symbol);
+            }
+
+            // 8b) Publish approved entry for Demo (RiskManager qty + all filters passed)
+            try
+            {
+                decimal riskPx = signal.StopLoss > 0
+                    ? Math.Abs(signal.EntryPrice - signal.StopLoss) : 0m;
+                var tps = signal.TakeProfits?.ToList() ?? new List<decimal>();
+                if (tps.Count == 0 && signal.TakeProfit is decimal tp0 && tp0 > 0)
+                    tps.Add(tp0);
+                _approvedEntries?.Publish(new ApprovedEntry
+                {
+                    Symbol = symbol,
+                    Side = signal.Side.ToString(),
+                    Entry = signal.EntryPrice,
+                    StopLoss = signal.StopLoss,
+                    TakeProfits = tps,
+                    Qty = qty,
+                    Leverage = leverage,
+                    Confidence = signal.Confidence ?? 0m,
+                    Reason = signal.Reason ?? signal.StrategyName ?? "CORE",
+                    Strategy = signal.StrategyName ?? "CORE",
+                    SizeMultiplier = signal.SizeMultiplier,
+                    InitialRiskPrice = riskPx
+                });
+                _tradeJournal?.LogSignal(symbol, "PROC", "APPROVED",
+                    $"qty={qty} lev={leverage} src=LivePipe");
+            }
+            catch (Exception exPub)
+            {
+                _logger.LogWarning(exPub, "[ENTRY-PIPE] publish failed {sym}", symbol);
+            }
+
             _dataDbFeed?.NotifyExecution(signal.Symbol);
 
             // ── Multi-exchange (phase-2): Binance and/or Bybit ──────────
@@ -1286,10 +1338,15 @@ namespace VertexAutoTradeBinance8
                 (wantBinance && binanceResult?.Success == true)
                 || (wantBybit && bybitResult?.Success == true);
 
-            // Nothing enabled → treat as config error
+            // Nothing enabled → Demo-only: entry already published to approved_entries
             if (!wantBinance && !wantBybit)
             {
-                await RejectAsync(signal, symbol, tf, "EXEC", "NO_EXCHANGE_ENABLED", ct);
+                _logger.LogInformation(
+                    "[PROC][{symbol}] DEMO-ONLY path (no exchange) — approved entry published",
+                    symbol);
+                _tradeJournal?.LogSignal(symbol, "PROC", "EXECUTE_DEMO_ONLY", "no exchange enabled");
+                MarkTrade(symbol);
+                TrackSymbol(symbol, keepAlive: true);
                 return;
             }
 

@@ -1,46 +1,43 @@
-﻿using Microsoft.Extensions.Configuration;
 using System.Collections.Concurrent;
-using VertexAutoTradeBinance8.Web.Demo;
+using VertexAutoTradeBinance8.Services.Entry;
+using VertexAutoTradeBinance8.Services.Learning;
 using VertexAutoTradeBinance8.Web.Services.Auth;
 
 namespace VertexAutoTradeBinance8.Web.Services;
 
 /// <summary>
-/// When ParallelDemoEnabled is on for a user, new Engine signals ALWAYS open
-/// paper positions on their DEMO balance.
-///
-/// Independent of AutoTrade ON/OFF and of Trading:EnableExecution.
-/// AutoTrade only gates REAL Binance orders in the Engine; this worker
-/// reads live_signals.json and trades the virtual account regardless.
+/// Demo execution mirror: opens ONLY Engine-approved entries (full PROC + RiskManager + 1m).
+/// No local sizing/filters — parity 1:1 with Live decision path.
 /// </summary>
 public sealed class DemoAutoTradeService : BackgroundService
 {
-    private readonly LiveSignalFileService _signals;
     private readonly DemoAccountService _demo;
     private readonly ClientDbService _db;
-    private readonly ILogger<DemoAutoTradeService> _log;
     private readonly IConfiguration _cfg;
-    private readonly VertexAutoTradeBinance8.Services.Learning.TradeJournalService? _journal;
+    private readonly ILogger<DemoAutoTradeService> _log;
+    private readonly TradeJournalService? _journal;
+    private readonly IApprovedEntryReader? _approved;
     private readonly ConcurrentDictionary<string, byte> _seen = new();
-    private DateTime _startedUtc = DateTime.UtcNow;
-    private readonly string _seenFilePath;
+    private string? _seenFilePath;
+    private DateTime _startedUtc;
 
     public DemoAutoTradeService(
-        LiveSignalFileService signals,
         DemoAccountService demo,
         ClientDbService db,
-        ILogger<DemoAutoTradeService> log,
         IConfiguration cfg,
-        VertexAutoTradeBinance8.Services.Learning.TradeJournalService? journal = null)
+        ILogger<DemoAutoTradeService> log,
+        TradeJournalService? journal = null,
+        IApprovedEntryReader? approved = null)
     {
-        _signals = signals;
         _demo = demo;
         _db = db;
-        _log = log;
         _cfg = cfg;
+        _log = log;
         _journal = journal;
-        var root = cfg["SharedData:Root"] ?? AppContext.BaseDirectory;
-        _seenFilePath = Path.Combine(root, "demo-auto-seen.json");
+        _approved = approved;
+        var root = cfg["SharedData:Root"] ?? "";
+        if (!string.IsNullOrEmpty(root))
+            _seenFilePath = Path.Combine(root, "demo_approved_seen.json");
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -48,58 +45,68 @@ public sealed class DemoAutoTradeService : BackgroundService
         _startedUtc = DateTime.UtcNow;
         LoadSeenKeys();
         _log.LogInformation(
-            "[DEMO-AUTO] started at {t:o} — only NEW signals after start; seen={n} (no revive closed positions)",
+            "[DEMO-AUTO] started (approved-entries parity mode) at {t:o} seen={n}",
             _startedUtc, _seen.Count);
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try { await TickAsync(stoppingToken); }
             catch (Exception ex) { _log.LogWarning(ex, "[DEMO-AUTO] tick failed"); }
 
-            // Fast path: wake on live_signals.json change; backup poll 12s
             try
             {
                 var root = _cfg["SharedData:Root"] ?? "";
-                var sigPath = System.IO.Path.Combine(root, "live_signals.json");
-                if (System.IO.File.Exists(sigPath) || System.IO.Directory.Exists(root))
+                var path = Path.Combine(root, "approved_entries.json");
+                if (Directory.Exists(root))
                 {
-                    using var fsw = new FileSystemWatcher(root, "live_signals.json")
+                    using var fsw = new FileSystemWatcher(root)
                     {
+                        Filter = "approved_entries.json",
                         NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime,
                         EnableRaisingEvents = true
                     };
                     var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                     void Wake(object s, FileSystemEventArgs e) { try { tcs.TrySetResult(); } catch { } }
                     fsw.Changed += Wake; fsw.Created += Wake;
-                    var delay = Task.Delay(TimeSpan.FromSeconds(12), stoppingToken);
+                    var delay = Task.Delay(TimeSpan.FromSeconds(8), stoppingToken);
                     await Task.WhenAny(tcs.Task, delay);
                     fsw.Changed -= Wake; fsw.Created -= Wake;
                 }
-                else await Task.Delay(TimeSpan.FromSeconds(12), stoppingToken);
+                else await Task.Delay(TimeSpan.FromSeconds(8), stoppingToken);
             }
             catch (TaskCanceledException) { break; }
-            catch { try { await Task.Delay(TimeSpan.FromSeconds(12), stoppingToken); } catch (TaskCanceledException) { break; } }
+            catch { try { await Task.Delay(TimeSpan.FromSeconds(8), stoppingToken); } catch (TaskCanceledException) { break; } }
         }
     }
 
-    /// <summary>From Trading:MaxOpenPositions (same key as LIVE). Fallback 5.</summary>
     private int GetMaxDemoPositions()
     {
         int n = _cfg.GetValue("Trading:MaxOpenPositions", 5);
         return n > 0 ? n : 5;
     }
 
-
     private async Task TickAsync(CancellationToken ct)
     {
         try
         {
             var root = _cfg["SharedData:Root"] ?? "";
-            var flag = System.IO.Path.Combine(root, "flatten_demo.flag");
-            if (System.IO.File.Exists(flag))
+            var flag = Path.Combine(root, "flatten_demo.flag");
+            if (File.Exists(flag))
             {
-                // Engine already cleared demo-account.json; remove flag and refresh
-                try { System.IO.File.Delete(flag); } catch { }
-                _log.LogWarning("[DEMO-AUTO] flatten_demo.flag consumed — demo books force-closed by Engine");
+                try { File.Delete(flag); } catch { }
+                _log.LogWarning("[DEMO-AUTO] flatten_demo.flag consumed");
+            }
+        }
+        catch { }
+
+        // Kill flag blocks Demo same as Live
+        try
+        {
+            var root = _cfg["SharedData:Root"] ?? "";
+            if (File.Exists(Path.Combine(root, "emergency_kill.flag")))
+            {
+                _log.LogDebug("[DEMO-AUTO] kill flag active — skip");
+                return;
             }
         }
         catch { }
@@ -107,197 +114,105 @@ public sealed class DemoAutoTradeService : BackgroundService
         var clients = await _db.GetClientsWithParallelDemoAsync();
         if (clients.Count == 0) return;
 
-        var signals = await _signals.LoadAsync();
-        if (signals == null || signals.Count == 0) return;
-
-        var cutoff = DateTime.UtcNow.AddMinutes(-45);
-        // Prefer CORE_ signals, liquid symbols only, highest confidence first
-        // LIVE-like: never re-open from stale signals after restart.
-        // Signal must be at/after worker start (with small clock skew grace).
-        var notBefore = _startedUtc.AddMinutes(-1);
-
-        var candidates = signals
-            .Where(s => s.Time >= cutoff
-                        && s.Time >= notBefore
-                        && s.Entry > 0
-                        && !string.IsNullOrWhiteSpace(s.Symbol)
-                        && s.Symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase)
-                        && (string.IsNullOrEmpty(s.Reason) || s.Reason.StartsWith("CORE_", StringComparison.OrdinalIgnoreCase))
-                        && s.Confidence >= 55)
-            .OrderByDescending(s => s.Confidence)
-            .ThenByDescending(s => s.Time)
-            .Take(15)
-            .ToList();
-
-        foreach (var sig in candidates)
+        if (_approved == null)
         {
-            var side = (sig.Side ?? "").Contains("Sell", StringComparison.OrdinalIgnoreCase)
-                ? "SHORT" : "LONG";
-            var sym = sig.Symbol.Trim().ToUpperInvariant();
-            var keyBase = $"{sym}|{side}|{sig.Time:O}|{sig.Entry:F6}";
+            _log.LogWarning("[DEMO-AUTO] IApprovedEntryReader missing — no entries");
+            return;
+        }
+
+        var entries = await _approved.LoadRecentAsync(TimeSpan.FromMinutes(45), ct);
+        if (entries.Count == 0) return;
+
+        var notBefore = _startedUtc.AddMinutes(-1);
+        foreach (var e in entries.Where(x => x.Utc >= notBefore).OrderByDescending(x => x.Utc))
+        {
+            var key = $"{e.Id}|{e.Symbol}|{e.Utc:o}";
+            if (!_seen.TryAdd(key, 0)) continue;
 
             foreach (var client in clients)
             {
-                var key = client.Id + "|" + keyBase;
-                if (!_seen.TryAdd(key, 0)) continue;
-
-                // Cap concurrent demo positions — always from disk/ledger (not only bound session)
                 try
                 {
+                    _demo.BindClient(client.Id);
+
                     int openN = _demo.GetOpenPositionCountForClient(client.Id);
-                    int maxDemo = GetMaxDemoPositions();
-                    if (openN >= maxDemo)
+                    if (openN >= GetMaxDemoPositions())
                     {
-                        _log.LogDebug("[DEMO-AUTO] {user} at max positions ({n}/{max})", client.Id, openN, maxDemo);
+                        _journal?.LogSignal(e.Symbol, "DEMO", "REJECT_DEMO",
+                            $"MAX_OPEN {openN}>={GetMaxDemoPositions()}");
                         continue;
                     }
-                    if (_demo.HasOpenSymbolForClient(client.Id, sym))
+
+                    string side = (e.Side ?? "").Contains("Sell", StringComparison.OrdinalIgnoreCase)
+                                  || (e.Side ?? "").Contains("SHORT", StringComparison.OrdinalIgnoreCase)
+                        ? "SHORT" : "LONG";
+
+                    if (_demo.HasOpenSymbolForClient(client.Id, e.Symbol))
                     {
-                        continue; // already in this symbol
-                    }
-                }
-                catch { /* non-fatal */ }
-
-                decimal price = sig.Entry;
-                // 1R equity sizing + HardCap USD — parity with Engine RiskManager.
-                // Was: marginFrac 8–10% × lev → $300–900 SL hits on alts.
-                // Now: risk $ = min(riskFrac×equity, hardCap); qty = risk$ / |entry−SL|.
-                bool major = sym is "BTCUSDT" or "ETHUSDT" or "BNBUSDT" or "SOLUSDT"
-                             || sym.StartsWith("BTC", StringComparison.Ordinal)
-                             || sym.StartsWith("ETH", StringComparison.Ordinal);
-                int lev = major ? 10 : 5;
-
-                decimal available = 10_000m;
-                try
-                {
-                    available = Math.Max(50m, _demo.GetAvailableForClient(client.Id));
-                }
-                catch { /* keep default */ }
-
-                var adj = _journal?.GetAdjustments(client.Id, sym)
-                    ?? new VertexAutoTradeBinance8.Services.Learning.SymbolAdjustments();
-                if (adj.SoftSkip || adj.SizeMult <= 0.20m)
-                {
-                    _log.LogInformation("[DEMO-AUTO] {user} SOFT_SKIP {sym} ({note})", client.Id, sym, adj.Note);
-                    continue;
-                }
-                lev = Math.Max(1, (int)Math.Round(lev * (adj.LevMult > 0 ? adj.LevMult : 1m)));
-
-                decimal slDist = (sig.StopLoss > 0) ? Math.Abs(price - sig.StopLoss) : 0m;
-                // If no SL on signal, use ~1.2% of price as proxy (must not blow size)
-                if (slDist <= 0) slDist = price * 0.012m;
-
-                decimal riskFrac = major ? 0.0075m : 0.0060m;
-                decimal riskBudget1R = available * riskFrac;
-                if (adj.SizeMult > 0m && adj.SizeMult < 1m)
-                    riskBudget1R *= adj.SizeMult;
-
-                // Hard USD cap — journal BR/CVC/CAP showed $300–800 single SL
-                decimal hardCapUsd = major
-                    ? Math.Min(150m, Math.Max(40m, available * 0.012m))
-                    : Math.Min(55m, Math.Max(18m, available * 0.0075m));
-                // Optional config override: Trading:HardCapUsdAlt / HardCapUsdMajor
-                try
-                {
-                    var cfgMajor = _cfg.GetValue<decimal?>("Trading:HardCapUsdMajor");
-                    var cfgAlt = _cfg.GetValue<decimal?>("Trading:HardCapUsdAlt");
-                    if (major && cfgMajor.HasValue && cfgMajor.Value > 0) hardCapUsd = cfgMajor.Value;
-                    if (!major && cfgAlt.HasValue && cfgAlt.Value > 0) hardCapUsd = cfgAlt.Value;
-                }
-                catch { }
-
-                if (riskBudget1R > hardCapUsd)
-                    riskBudget1R = hardCapUsd;
-
-                decimal qty = riskBudget1R / slDist;
-
-                // Notional / margin ceiling (same spirit as RiskManager)
-                decimal marginFrac = major ? 0.12m : 0.10m;
-                decimal maxNotional = available * marginFrac * lev;
-                decimal notional = qty * price;
-                if (notional > maxNotional && price > 0)
-                {
-                    qty = maxNotional / price;
-                    notional = qty * price;
-                }
-                // Floor min notional ~5 USDT for demo realism
-                if (notional < 5m && price > 0)
-                {
-                    qty = 5m / price;
-                    notional = 5m;
-                    // If min notional would risk >2.5× budget, skip
-                    if (qty * slDist > riskBudget1R * 2.5m)
-                    {
-                        _log.LogDebug("[DEMO-AUTO] {user} skip {sym}: minNotional exceeds risk budget", client.Id, sym);
+                        _journal?.LogSignal(e.Symbol, "DEMO", "REJECT_DEMO", "ALREADY_OPEN");
                         continue;
                     }
-                }
 
-                _log.LogInformation(
-                    "[DEMO-AUTO] 1R-SIZE {user} {sym} avail={a:F0} budget={b:F2} hardCap={c:F2} slDist={sd} qty={q} notional={n:F2}",
-                    client.Id, sym, available, riskBudget1R, hardCapUsd, slDist, qty, notional);
-
-                List<DemoTpLevel>? tps = null;
-                if (sig.TakeProfits != null && sig.TakeProfits.Count > 0)
-                {
-                    tps = sig.TakeProfits.Select((p, i) => new DemoTpLevel
+                    // Qty/SL/TP/Lev from Engine RiskManager — no local sizing
+                    decimal qty = e.Qty;
+                    if (qty <= 0)
                     {
-                        Price = p,
-                        Pct = i == 0 ? 50m : (i == 1 ? 30m : 20m)
-                    }).ToList();
-                }
+                        _journal?.LogSignal(e.Symbol, "DEMO", "REJECT_DEMO", "QTY_ZERO");
+                        continue;
+                    }
 
-                decimal? slUse = sig.StopLoss > 0 ? sig.StopLoss : null;
-                if (slUse.HasValue && adj.SlPadAtr > 0)
-                {
-                    decimal riskSl = Math.Abs(price - slUse.Value);
-                    decimal pad = riskSl * (adj.SlPadAtr / 1.5m);
-                    bool lng = side.Equals("LONG", StringComparison.OrdinalIgnoreCase);
-                    slUse = lng ? slUse.Value - pad : slUse.Value + pad;
-                }
-                if (tps != null && adj.TpScale > 0m && adj.TpScale < 0.999m)
-                {
-                    foreach (var t in tps)
-                        t.Price = price + (t.Price - price) * adj.TpScale;
-                }
-                var (ok, err) = _demo.OpenMarketPositionForClient(
-                    client.Id, sym, side, qty, lev, price,
-                    slUse, tps);
+                    var (ok, err) = _demo.OpenFromApproved(
+                        client.Id,
+                        e.Symbol,
+                        side,
+                        e.Entry,
+                        qty,
+                        (int)Math.Max(1, Math.Round(e.Leverage)),
+                        e.StopLoss,
+                        e.TakeProfits,
+                        e.InitialRiskPrice > 0 ? e.InitialRiskPrice : Math.Abs(e.Entry - e.StopLoss),
+                        e.Reason);
 
-                if (ok)
-                {
-                    SaveSeenKeys();
-                    _log.LogInformation("[DEMO-AUTO] {user} {side} {sym} @ {px} lev={lev}",
-                        client.Id, side, sym, price, lev);
+                    if (ok)
+                    {
+                        _log.LogInformation(
+                            "[DEMO-AUTO] OPEN (approved) {user} {side} {sym} qty={q} @ {px} lev={lev}",
+                            client.Id, side, e.Symbol, qty, e.Entry, e.Leverage);
+                        _journal?.LogSignal(e.Symbol, "DEMO", "EXECUTE",
+                            $"qty={qty} lev={e.Leverage} approvedId={e.Id}");
+                    }
+                    else
+                    {
+                        _log.LogDebug("[DEMO-AUTO] skip {sym}: {err}", e.Symbol, err);
+                        _journal?.LogSignal(e.Symbol, "DEMO", "REJECT_DEMO", err ?? "open failed");
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    _log.LogDebug("[DEMO-AUTO] {user} skip {sym}: {err}", client.Id, sym, err);
+                    _log.LogWarning(ex, "[DEMO-AUTO] client {id} {sym}", client.Id, e.Symbol);
                 }
             }
         }
 
+        SaveSeenKeys();
         if (_seen.Count > 5000)
         {
             foreach (var k in _seen.Keys.Take(2000))
                 _seen.TryRemove(k, out _);
         }
     }
+
     private void LoadSeenKeys()
     {
         try
         {
             if (string.IsNullOrEmpty(_seenFilePath) || !File.Exists(_seenFilePath)) return;
-            var json = File.ReadAllText(_seenFilePath);
-            var list = System.Text.Json.JsonSerializer.Deserialize<List<string>>(json);
+            var list = System.Text.Json.JsonSerializer.Deserialize<List<string>>(File.ReadAllText(_seenFilePath));
             if (list == null) return;
             foreach (var k in list.TakeLast(500))
                 _seen.TryAdd(k, 0);
         }
-        catch (Exception ex)
-        {
-            _log.LogDebug(ex, "[DEMO-AUTO] load seen keys failed");
-        }
+        catch { }
     }
 
     private void SaveSeenKeys()
@@ -312,11 +227,6 @@ public sealed class DemoAutoTradeService : BackgroundService
             File.WriteAllText(tmp, System.Text.Json.JsonSerializer.Serialize(list));
             File.Move(tmp, _seenFilePath, overwrite: true);
         }
-        catch (Exception ex)
-        {
-            _log.LogDebug(ex, "[DEMO-AUTO] save seen keys failed");
-        }
+        catch { }
     }
-
 }
-

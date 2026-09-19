@@ -47,6 +47,9 @@ if (builder.Environment.IsDevelopment())
 builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Services.Infra.SqliteJournalStore>();
+builder.Services.AddSingleton<VertexAutoTradeBinance8.Services.Entry.ApprovedEntryFileBus>();
+builder.Services.AddSingleton<VertexAutoTradeBinance8.Services.Entry.IApprovedEntryPublisher>(sp => sp.GetRequiredService<VertexAutoTradeBinance8.Services.Entry.ApprovedEntryFileBus>());
+builder.Services.AddSingleton<VertexAutoTradeBinance8.Services.Entry.IApprovedEntryReader>(sp => sp.GetRequiredService<VertexAutoTradeBinance8.Services.Entry.ApprovedEntryFileBus>());
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Services.Learning.TradeJournalService>();
 builder.Services.AddSingleton<WeatherForecastService>();
 

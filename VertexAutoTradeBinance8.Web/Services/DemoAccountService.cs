@@ -36,6 +36,11 @@ public sealed class DemoAccountService
 
     public event Action? Updated;
 
+    /// <summary>Binance USD-M Futures default taker fee (0.04%).</summary>
+    public const decimal TakerFeeRate = 0.0004m;
+    /// <summary>~1–2 ticks virtual slippage on market entry/exit.</summary>
+    public const decimal SlippageBps = 0.00015m; // 1.5 bps
+
     // Trade journal hook (set from Program / DI host) â€” does not replace demo-account.json
     public static Action<string /*clientId*/, DemoPosition, decimal /*exit*/, decimal /*closeQty*/, decimal /*pnl*/, string /*reason*/>? TradeJournalHook { get; set; }
 
@@ -540,6 +545,75 @@ public sealed class DemoAccountService
         return (true, "");
     }
 
+    /// <summary>
+    /// Open using Engine-approved qty/SL/TP (no local sizing). Applies entry slippage + fee on margin.
+    /// </summary>
+    public (bool ok, string error) OpenFromApproved(
+        string clientId,
+        string symbol,
+        string side,
+        decimal entry,
+        decimal qty,
+        int leverage,
+        decimal stopLoss,
+        List<decimal>? takeProfits,
+        decimal initialRiskPrice,
+        string reason)
+    {
+        if (string.IsNullOrWhiteSpace(clientId)) return (false, "no client");
+        BindClient(clientId);
+        if (qty <= 0 || entry <= 0) return (false, "Invalid qty/entry");
+
+        // Slippage: long pays higher, short sells lower
+        decimal slip = entry * SlippageBps;
+        decimal fill = side.Equals("LONG", StringComparison.OrdinalIgnoreCase)
+            ? entry + slip
+            : entry - slip;
+        if (fill <= 0) fill = entry;
+
+        var tps = new List<DemoTpLevel>();
+        if (takeProfits != null)
+        {
+            int i = 0;
+            foreach (var tp in takeProfits.Where(x => x > 0).Take(3))
+            {
+                i++;
+                tps.Add(new DemoTpLevel { Price = tp, Pct = i == 3 ? 34m : 33m });
+            }
+        }
+
+        var (ok, err) = OpenMarketPositionForClient(
+            clientId, symbol, side, qty, leverage, fill,
+            stopLoss > 0 ? stopLoss : null,
+            tps.Count > 0 ? tps : null);
+
+        if (ok)
+        {
+            // Entry taker fee (deduct from balance)
+            decimal notional = qty * fill;
+            decimal fee = notional * TakerFeeRate;
+            lock (_lock)
+            {
+                if (string.Equals(_clientId, clientId, StringComparison.OrdinalIgnoreCase))
+                {
+                    _state.Balance -= fee;
+                    var pos = _state.Positions.LastOrDefault(p => p.Symbol == symbol && p.Side == side);
+                    if (pos != null)
+                    {
+                        if (initialRiskPrice > 0) pos.InitialRiskPrice = initialRiskPrice;
+                        else if (stopLoss > 0) pos.InitialRiskPrice = Math.Abs(fill - stopLoss);
+                    }
+                    Save();
+                }
+            }
+            _logger.LogInformation(
+                "[DEMO] approved open {sym} {side} fill={f} fee={fee:F4} ({reason})",
+                symbol, side, fill, fee, reason);
+        }
+        return (ok, err);
+    }
+
+
     public bool CancelPendingOrder(string id)
     {
         lock (_lock)
@@ -676,7 +750,16 @@ public sealed class DemoAccountService
     {
         decimal closeQty = pctToClose >= 100m ? pos.Qty : pos.Qty * (pctToClose / 100m);
         decimal dir = pos.Side == "LONG" ? 1m : -1m;
-        decimal realizedPnl = (exitPrice - pos.EntryPrice) * dir * closeQty;
+        // Exit slippage
+        decimal exitSlip = exitPrice * SlippageBps;
+        decimal fillExit = pos.Side == "LONG" ? exitPrice - exitSlip : exitPrice + exitSlip;
+        if (fillExit <= 0) fillExit = exitPrice;
+        decimal gross = (fillExit - pos.EntryPrice) * dir * closeQty;
+        decimal exitFee = Math.Abs(fillExit * closeQty) * TakerFeeRate;
+        decimal entryFeeApprox = Math.Abs(pos.EntryPrice * closeQty) * TakerFeeRate; // proportional if partial
+        // Entry fee already taken at open for full size; on partial close only charge exit fee once
+        decimal realizedPnl = gross - exitFee;
+        exitPrice = fillExit; // journal sees fill
 
         _state.Balance += realizedPnl;
                 try
