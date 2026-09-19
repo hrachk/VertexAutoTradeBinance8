@@ -18,6 +18,11 @@ public sealed class TradeJournalEntry
     /// <summary>|Entry−SL| in price units at open (1R distance).</summary>
     public decimal InitialRiskPrice { get; set; }
     public string CloseReason { get; set; } = "";
+    /// <summary>Normalized SL tag: SL_STRATEGY_FAIL / SL_MARKET_CORRELATION / …</summary>
+    public string SlAttributionCode { get; set; } = "";
+    public decimal BtcDeltaPctAtClose { get; set; }
+    public decimal EthDeltaPctAtClose { get; set; }
+    public bool IsMemoryProbe { get; set; }
     public decimal SignalConf { get; set; }
     public DateTime OpenedAtUtc { get; set; }
     public DateTime ClosedAtUtc { get; set; } = DateTime.UtcNow;
@@ -41,6 +46,9 @@ public sealed class SymbolAdjustments
     public int RecentWins { get; set; }
     /// <summary>True when offline expectancy says skip new entries on this symbol.</summary>
     public bool SoftSkip { get; set; }
+    /// <summary>SoftSkip but high-confidence probe entry allowed at SizeMult=ProbeSize.</summary>
+    public bool AllowProbe { get; set; }
+    public decimal ProbeSizeMult { get; set; } = 0.25m;
     public string Note { get; set; } = "";
 }
 

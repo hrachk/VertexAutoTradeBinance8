@@ -272,10 +272,28 @@ namespace VertexAutoTradeBinance8.Services
                         {
                             if (adj.SoftSkip || adj.SizeMult <= 0.20m)
                             {
-                                LastRejectReason = "MEMORY_SOFT_SKIP: " + (adj.Note ?? "offline expectancy");
-                                _logger.LogWarning("[RISK-MEM] {sym} SOFT_SKIP size×{sm:F2} ({note})",
-                                    signal.Symbol, adj.SizeMult, adj.Note);
-                                return 0;
+                                // Phase 3: probe entry — high confidence only, tiny size
+                                decimal conf = signal.Confidence ?? 0m;
+                                if (conf > 1.5m) conf /= 100m;
+                                decimal probeMin = 0.72m;
+                                try { probeMin = _config?.GetValue("TradeMemory:ProbeMinConfidence", 0.72m) ?? 0.72m; } catch { }
+                                if (adj.AllowProbe && conf >= probeMin)
+                                {
+                                    decimal probe = adj.ProbeSizeMult > 0 ? adj.ProbeSizeMult : 0.25m;
+                                    qty1R = Math.Floor(qty1R * probe / step) * step;
+                                    if (qty1R < minQty) qty1R = minQty;
+                                    _logger.LogWarning(
+                                        "[RISK-MEM] {sym} PROBE entry size×{sm:F2} conf={c:F2} ({note})",
+                                        signal.Symbol, probe, conf, adj.Note);
+                                    // keep going — do not return 0
+                                }
+                                else
+                                {
+                                    LastRejectReason = "MEMORY_SOFT_SKIP: " + (adj.Note ?? "offline expectancy");
+                                    _logger.LogWarning("[RISK-MEM] {sym} SOFT_SKIP size×{sm:F2} ({note})",
+                                        signal.Symbol, adj.SizeMult, adj.Note);
+                                    return 0;
+                                }
                             }
                             if (adj.SizeMult > 0 && adj.SizeMult < 1m)
                             {

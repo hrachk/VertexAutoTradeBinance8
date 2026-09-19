@@ -9,6 +9,7 @@ using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
 using VertexAutoTradeBinance8.Services.Entry;
+using VertexAutoTradeBinance8.Services.Ml;
 using VertexAutoTradeBinance8.Services.Bootstrap;
 using VertexAutoTradeBinance8.Services.Engine;
 using VertexAutoTradeBinance8.Services.Formatting;
@@ -85,6 +86,7 @@ namespace VertexAutoTradeBinance8
         private readonly LiveSignalService _liveSig;
         private readonly VertexAutoTradeBinance8.Services.Learning.TradeJournalService? _tradeJournal;
         private readonly IApprovedEntryPublisher? _approvedEntries;
+        private readonly ShadowMlGatekeeper? _mlGate;
         private readonly SymbolInfoService _symbolInfo;
         private readonly FundingRateService _fundingRate;
         private readonly RealtimeMomentumDetector _momentum;
@@ -183,10 +185,12 @@ namespace VertexAutoTradeBinance8
             VertexAutoTradeBinance8.Services.Notify.TelegramNotificationService? tg = null,
             VertexAutoTradeBinance8.Services.Infra.EmergencyControlService? killCtrl = null,
             VertexAutoTradeBinance8.Services.Learning.TradeJournalService? tradeJournal = null,
-            IApprovedEntryPublisher? approvedEntries = null)
+            IApprovedEntryPublisher? approvedEntries = null,
+            ShadowMlGatekeeper? mlGate = null)
         {
             _tradeJournal = tradeJournal;
             _approvedEntries = approvedEntries;
+            _mlGate = mlGate;
             _logger = logger;
             _options = options.Value;
             _tradingMonitor = tradingMonitor;
@@ -915,6 +919,25 @@ namespace VertexAutoTradeBinance8
                         ct, extra: $"conf={sigConf:F2} < minExec={minExec:F2} — shown in UI only");
                     return;
                 }
+
+            try
+            {
+                if (_mlGate != null)
+                {
+                    var memAdj = _tradeJournal?.GetAdjustments("client_001", symbol);
+                    var pred = _mlGate.Evaluate(signal, memAdj);
+                    if (_mlGate.EnableMlSkipGate && pred.WouldSkip)
+                    {
+                        await RejectAsync(signal, symbol, tf, "ML", "REJECT_ML_LOW_PROBABILITY",
+                            ct, extra: $"P(Win)={pred.PWin:F3} E(R)={pred.ExpectedR:F2}");
+                        return;
+                    }
+                }
+            }
+            catch (Exception exMl)
+            {
+                _logger.LogDebug(exMl, "[ML-SHADOW] evaluate skipped");
+            }
 
             try
             {

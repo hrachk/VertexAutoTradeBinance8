@@ -14,6 +14,8 @@ public sealed class TradeJournalService
     private readonly IConfiguration _cfg;
     private readonly string _enginesRoot;
     private readonly int _windowDays;
+    private readonly double _halfLifeDays;
+    private readonly decimal _probeMinConf;
     private readonly SqliteJournalStore? _sqlite;
     private readonly DailyDrawdownGuard? _dailyDd;
     private readonly TelegramNotificationService? _tg;
@@ -31,6 +33,8 @@ public sealed class TradeJournalService
         _enginesRoot = cfg["SharedData:Root"]
             ?? Path.Combine(AppContext.BaseDirectory, "engines");
         _windowDays = Math.Clamp(cfg.GetValue("TradeMemory:WindowDays", 30), 7, 90);
+        _halfLifeDays = Math.Clamp(cfg.GetValue("TradeMemory:HalfLifeDays", 7.0), 1.0, 30.0);
+        _probeMinConf = cfg.GetValue("TradeMemory:ProbeMinConfidence", 0.72m);
     }
 
     private static object LockFor(string id) => Locks.GetOrAdd(id, _ => new object());
@@ -53,6 +57,16 @@ public sealed class TradeJournalService
         // Sanitize R: BE-trail partials used to store ±20 and poison memory
         if (e.RealizedR > 5m) e.RealizedR = 5m;
         if (e.RealizedR < -5m) e.RealizedR = -5m;
+        // Phase 1: contextual SL tag
+        if (string.IsNullOrWhiteSpace(e.SlAttributionCode))
+        {
+            e.SlAttributionCode = SlAttribution.Classify(
+                e.CloseReason, e.RealizedPnl, e.BtcDeltaPctAtClose, e.EthDeltaPctAtClose,
+                newsSpikeActive: false, e.InitialRiskPrice, e.EntryPrice, e.ExitPrice);
+            if (SlAttribution.IsStop(e.CloseReason, e.RealizedPnl) &&
+                (e.CloseReason ?? "").IndexOf("SL_", StringComparison.OrdinalIgnoreCase) < 0)
+                e.CloseReason = e.SlAttributionCode;
+        }
         try
         {
             Directory.CreateDirectory(ClientDir(e.ClientId));
@@ -85,7 +99,7 @@ public sealed class TradeJournalService
                     File.WriteAllText(path, JsonSerializer.Serialize(file, JsonOpt));
                     try {
                         var featPath = Path.Combine(ClientDir(e.ClientId), "trade-features.jsonl");
-                        var line = JsonSerializer.Serialize(new { e.Symbol, e.Side, e.Source, e.RealizedPnl, e.RealizedR, e.InitialRiskPrice, e.CloseReason, e.ClosedAtUtc, e.SignalConf });
+                        var line = JsonSerializer.Serialize(new { e.Symbol, e.Side, e.Source, e.RealizedPnl, e.RealizedR, e.InitialRiskPrice, e.CloseReason, e.SlAttributionCode, e.BtcDeltaPctAtClose, e.EthDeltaPctAtClose, e.IsMemoryProbe, e.ClosedAtUtc, e.OpenedAtUtc, e.SignalConf, e.Leverage });
                         File.AppendAllText(featPath, line + Environment.NewLine);
                     } catch { }
                 }
@@ -95,7 +109,7 @@ public sealed class TradeJournalService
                 // features still useful for offline skip model
                 try {
                     var featPath = Path.Combine(ClientDir(e.ClientId), "trade-features.jsonl");
-                    var line = JsonSerializer.Serialize(new { e.Symbol, e.Side, e.Source, e.RealizedPnl, e.RealizedR, e.InitialRiskPrice, e.CloseReason, e.ClosedAtUtc, e.SignalConf });
+                    var line = JsonSerializer.Serialize(new { e.Symbol, e.Side, e.Source, e.RealizedPnl, e.RealizedR, e.InitialRiskPrice, e.CloseReason, e.SlAttributionCode, e.BtcDeltaPctAtClose, e.EthDeltaPctAtClose, e.IsMemoryProbe, e.ClosedAtUtc, e.OpenedAtUtc, e.SignalConf, e.Leverage });
                     File.AppendAllText(featPath, line + Environment.NewLine);
                 } catch { }
             }
@@ -303,9 +317,10 @@ public sealed class TradeJournalService
     }
 
     /// <summary>
-    /// After SL on THIS symbol: wider SL + closer TPs next time. NEVER cuts confidence.
+    /// After SL on THIS symbol: contextual weights + time-decay + optional probe.
+    /// NEVER cuts confidence score on the signal itself.
     /// </summary>
-    private static SymbolAdjustments Compute(string symbol, List<TradeJournalEntry> trades)
+    private SymbolAdjustments Compute(string symbol, List<TradeJournalEntry> trades)
     {
         var valid = new List<TradeJournalEntry>();
         foreach (var t in trades)
@@ -319,57 +334,96 @@ public sealed class TradeJournalService
         if (valid.Count == 0)
             return new SymbolAdjustments { Symbol = symbol, Note = "neutral (no valid trades)" };
 
+        double halfLife = Math.Max(1.0, _halfLifeDays);
+        DateTime now = DateTime.UtcNow;
+        double W(TradeJournalEntry x)
+        {
+            double dt = Math.Max(0, (now - x.ClosedAtUtc).TotalDays);
+            return Math.Exp(-dt / halfLife);
+        }
+
+        decimal stopsW = 0, winsW = 0, totalW = 0;
         int stops = 0, wins = 0;
-        foreach (var t in valid)
+        var attrCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var tr in valid)
         {
-            bool isSl = t.CloseReason.IndexOf("SL", StringComparison.OrdinalIgnoreCase) >= 0 || t.RealizedPnl < 0;
-            if (isSl) stops++;
-            else if (t.RealizedPnl > 0) wins++;
+            double w = W(tr);
+            totalW += (decimal)w;
+            bool isSl = SlAttribution.IsStop(tr.CloseReason, tr.RealizedPnl);
+            if (isSl)
+            {
+                stops++;
+                var code = string.IsNullOrWhiteSpace(tr.SlAttributionCode)
+                    ? SlAttribution.Classify(tr.CloseReason, tr.RealizedPnl, tr.BtcDeltaPctAtClose, tr.EthDeltaPctAtClose, false, tr.InitialRiskPrice, tr.EntryPrice, tr.ExitPrice)
+                    : tr.SlAttributionCode;
+                decimal aw = SlAttribution.Weight(code);
+                stopsW += (decimal)w * aw;
+                attrCounts[code] = attrCounts.GetValueOrDefault(code) + 1;
+            }
+            else if (tr.RealizedPnl > 0)
+            {
+                wins++;
+                winsW += (decimal)w;
+            }
         }
 
+        // Weighted consecutive strategy-fail stops (full weight only)
+        decimal consecutiveStopsW = 0;
         int consecutiveStops = 0;
-        foreach (var t in valid.OrderByDescending(x => x.ClosedAtUtc))
+        foreach (var tr in valid.OrderByDescending(x => x.ClosedAtUtc))
         {
-            bool isSl = t.CloseReason.IndexOf("SL", StringComparison.OrdinalIgnoreCase) >= 0 || t.RealizedPnl < 0;
-            if (isSl) consecutiveStops++;
-            else break;
+            if (!SlAttribution.IsStop(tr.CloseReason, tr.RealizedPnl)) break;
+            var code = string.IsNullOrWhiteSpace(tr.SlAttributionCode) ? tr.CloseReason : tr.SlAttributionCode;
+            decimal aw = SlAttribution.Weight(code);
+            if (aw >= 0.99m)
+            {
+                consecutiveStops++;
+                consecutiveStopsW += aw;
+            }
+            else
+            {
+                // discounted external shock — does not extend consecutive strategy streak
+                break;
+            }
         }
 
-        var missScores = new List<decimal>();
-        var tightSlScores = new List<decimal>();
-        foreach (var t in valid)
+        var missScores = new List<(decimal v, double w)>();
+        var tightSlScores = new List<(decimal v, double w)>();
+        foreach (var tr in valid)
         {
-            bool isSl = t.CloseReason.IndexOf("SL", StringComparison.OrdinalIgnoreCase) >= 0 || t.RealizedPnl < 0;
-            if (!isSl) continue;
-
-            decimal risk = 0m;
-            if (t.StopLoss.HasValue && t.StopLoss.Value > 0)
-                risk = Math.Abs(t.EntryPrice - t.StopLoss.Value);
-            if (risk <= 0) risk = Math.Abs(t.EntryPrice - t.ExitPrice);
+            if (!SlAttribution.IsStop(tr.CloseReason, tr.RealizedPnl)) continue;
+            double w = W(tr);
+            decimal risk = tr.InitialRiskPrice > 0 ? tr.InitialRiskPrice
+                : (tr.StopLoss is > 0 ? Math.Abs(tr.EntryPrice - tr.StopLoss.Value) : Math.Abs(tr.EntryPrice - tr.ExitPrice));
             if (risk <= 0) continue;
-
-            decimal move = Math.Abs(t.EntryPrice - t.ExitPrice);
-            tightSlScores.Add(Math.Min(2m, move / risk));
-
+            decimal move = Math.Abs(tr.EntryPrice - tr.ExitPrice);
+            tightSlScores.Add((Math.Min(2m, move / risk), w));
             decimal tp1Dist = 0m;
-            if (t.TakeProfits != null && t.TakeProfits.Count > 0)
-                tp1Dist = Math.Abs(t.TakeProfits[0] - t.EntryPrice);
+            if (tr.TakeProfits != null && tr.TakeProfits.Count > 0)
+                tp1Dist = Math.Abs(tr.TakeProfits[0] - tr.EntryPrice);
             if (tp1Dist > 0)
             {
-                decimal prog = move / tp1Dist;
-                if (prog < 0m) prog = 0m;
-                if (prog > 1m) prog = 1m;
-                missScores.Add(1m - prog);
+                decimal prog = Math.Clamp(move / tp1Dist, 0m, 1m);
+                missScores.Add((1m - prog, w));
             }
-            else missScores.Add(0.7m);
+            else missScores.Add((0.7m, w));
         }
 
-        decimal avgMiss = missScores.Count > 0 ? missScores.Average() : 0m;
-        decimal avgTight = tightSlScores.Count > 0 ? tightSlScores.Average() : 1m;
-        decimal stopRate = (decimal)stops / valid.Count;
-        var rSamples = valid.Where(t => t.RealizedR != 0m && Math.Abs(t.RealizedR) <= 3.0m)
-            .Select(t => t.RealizedR).ToList();
-        decimal avgRealizedR = rSamples.Count > 0 ? rSamples.Average() : 0m;
+        decimal avgMiss = WeightedAvg(missScores);
+        decimal avgTight = WeightedAvg(tightSlScores);
+        decimal stopRate = totalW > 0 ? stopsW / totalW : 0m;
+
+        var rSamples = valid
+            .Where(tr => tr.RealizedR != 0m && Math.Abs(tr.RealizedR) <= 3.0m)
+            .Select(tr => ((decimal)W(tr), tr.RealizedR))
+            .ToList();
+        decimal avgRealizedR = 0m;
+        if (rSamples.Count > 0)
+        {
+            decimal sw = rSamples.Sum(x => x.Item1);
+            if (sw > 0) avgRealizedR = rSamples.Sum(x => x.Item1 * x.Item2) / sw;
+        }
         if (avgRealizedR <= -0.35m && rSamples.Count >= 2)
             stopRate = Math.Max(stopRate, 0.50m);
 
@@ -396,17 +450,18 @@ public sealed class TradeJournalService
                 : consecutiveStops == 2 ? 0.82m
                 : stopRate >= 0.55m ? 0.88m
                 : 0.93m;
-            // Offline expectancy from RealizedR (feature-store / journal)
             if (avgRealizedR <= -0.55m && rSamples.Count >= 3)
-                sizeMult = Math.Min(sizeMult, 0.15m); // soft-skip: near-zero size
+                sizeMult = Math.Min(sizeMult, 0.15m);
             else if (avgRealizedR <= -0.40m && rSamples.Count >= 3)
                 sizeMult = Math.Min(sizeMult, 0.40m);
             else if (avgRealizedR <= -0.25m && rSamples.Count >= 2)
                 sizeMult = Math.Min(sizeMult, 0.65m);
             levMult = consecutiveStops >= 3 ? 0.85m : 1.0m;
 
-            note = "smart SL/TP after SL history stopsInRow=" + consecutiveStops
-                + " missTp=" + avgMiss.ToString("F2") + " (conf untouched)";
+            note = "smart SL/TP stopsInRow=" + consecutiveStops
+                + " missTp=" + avgMiss.ToString("F2")
+                + " halfLife=" + halfLife.ToString("F0")
+                + " (conf untouched)";
         }
         else if (wins >= 2 && stops == 0)
         {
@@ -414,7 +469,6 @@ public sealed class TradeJournalService
             note = "win streak hold/slight ease (conf untouched)";
         }
 
-        // Standalone soft-skip even without stop-streak block
         bool softSkip = avgRealizedR <= -0.55m && rSamples.Count >= 3;
         if (softSkip)
         {
@@ -422,8 +476,15 @@ public sealed class TradeJournalService
             note = (note == "neutral" ? "offline soft-skip" : note) + " SOFT_SKIP";
         }
 
+        // Phase 3: probe entry allowed under SoftSkip for high-confidence recovery
+        bool allowProbe = softSkip;
+        decimal probeSize = 0.25m;
+
+        if (attrCounts.Count > 0)
+            note += " | attrs=" + string.Join(",", attrCounts.Select(kv => kv.Key + ":" + kv.Value));
         if (rSamples.Count > 0)
-            note = $"{note} | avgR={avgRealizedR:F2} nR={rSamples.Count}";
+            note = $"{note} | avgR={avgRealizedR:F2} nR={rSamples.Count} stopRateW={stopRate:F2}";
+
         return new SymbolAdjustments
         {
             Symbol = symbol,
@@ -436,9 +497,20 @@ public sealed class TradeJournalService
             RecentStops = stops,
             RecentWins = wins,
             SoftSkip = softSkip,
+            AllowProbe = allowProbe,
+            ProbeSizeMult = probeSize,
             Note = note
         };
     }
+
+    private static decimal WeightedAvg(List<(decimal v, double w)> xs)
+    {
+        if (xs == null || xs.Count == 0) return 0m;
+        double sw = xs.Sum(x => x.w);
+        if (sw <= 1e-9) return xs.Average(x => x.v);
+        return (decimal)(xs.Sum(x => (double)x.v * x.w) / sw);
+    }
+
 
     private static TradeJournalFile LoadJournal(string path)
     {
