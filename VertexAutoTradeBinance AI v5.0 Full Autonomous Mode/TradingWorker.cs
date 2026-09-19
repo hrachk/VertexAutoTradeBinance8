@@ -1201,17 +1201,37 @@ namespace VertexAutoTradeBinance8
             //}
 
 
-            var balance = await _risk.GetRealtimeBalanceAsync(ct);
-
-            if (balance <= 0)
+            // Live wallet (may be 0) — Demo equity is INDEPENDENT and must not block paper trading
+            decimal liveBalance = 0m;
+            try { liveBalance = await _risk.GetRealtimeBalanceAsync(ct); }
+            catch (Exception exBal)
             {
-                await RejectAsync(signal, symbol, tf, "NO_BALANCE", "Balance is zero", ct);
+                _logger.LogDebug(exBal, "[BALANCE] live read failed — Demo may still size");
+            }
+
+            decimal demoBalance = _risk.TryGetDemoEquity();
+
+            // Sizing for approved_entries / Demo: prefer Demo balance when present
+            // Live orders below use liveBalance separately when > 0
+            decimal sizingBalance = demoBalance > 0 ? demoBalance : liveBalance;
+
+            if (sizingBalance <= 0)
+            {
+                await RejectAsync(signal, symbol, tf, "NO_BALANCE",
+                    $"Balance is zero (live={liveBalance:F2} demo={demoBalance:F2})", ct);
                 return;
+            }
+
+            if (demoBalance > 0 && liveBalance <= 0)
+            {
+                _logger.LogInformation(
+                    "[BALANCE] Demo-independent sizing demo={d:F2} (live={l:F2}) {sym}",
+                    demoBalance, liveBalance, symbol);
             }
 
             var qty = _risk.GetPropDeskQtyFinal(
                 signal,
-                balance,
+                sizingBalance,
                 step,
                 minQty,
                 riskMult,
@@ -1225,6 +1245,18 @@ namespace VertexAutoTradeBinance8
                     $"QTY_ZERO: {_risk.LastRejectReason}",
                     ct);
                 return;
+            }
+
+            // Live path may use smaller qty if live equity is lower than demo
+            decimal qtyLive = qty;
+            if (liveBalance > 0 && demoBalance > 0 && liveBalance < demoBalance * 0.98m)
+            {
+                var q2 = _risk.GetPropDeskQtyFinal(signal, liveBalance, step, minQty, riskMult, trading);
+                if (q2 > 0) qtyLive = q2;
+            }
+            else if (liveBalance <= 0)
+            {
+                qtyLive = 0; // force DEMO-ONLY execution below
             }
             // =====================================================
             // 7) SL / TP — CORE keeps signal levels (1:1 with DEMO)
@@ -1337,7 +1369,7 @@ namespace VertexAutoTradeBinance8
 
             if (wantBinance)
             {
-                binanceResult = await _executor.ExecuteAsync(signal, qty, ct, leverage);
+                binanceResult = await _executor.ExecuteAsync(signal, qtyLive > 0 ? qtyLive : qty, ct, leverage);
                 if (!binanceResult.Success)
                     _logger.LogWarning("[EXEC] Binance failed {sym}: {err}", symbol, binanceResult.Error);
             }
@@ -1346,7 +1378,7 @@ namespace VertexAutoTradeBinance8
             {
                 try
                 {
-                    bybitResult = await _bybitExecutor.ExecuteAsync(signal, qty, leverage, ct);
+                    bybitResult = await _bybitExecutor.ExecuteAsync(signal, qtyLive > 0 ? qtyLive : qty, leverage, ct);
                     if (!bybitResult.Success)
                         _logger.LogWarning("[EXEC] Bybit failed {sym}: {err}", symbol, bybitResult.Error);
                 }
@@ -1358,8 +1390,20 @@ namespace VertexAutoTradeBinance8
             }
 
             bool ok =
-                (wantBinance && binanceResult?.Success == true)
-                || (wantBybit && bybitResult?.Success == true);
+                (wantBinance && qtyLive > 0 && binanceResult?.Success == true)
+                || (wantBybit && qtyLive > 0 && bybitResult?.Success == true);
+
+            // Live wallet empty but Demo sized → paper only
+            if ((wantBinance || wantBybit) && qtyLive <= 0 && qty > 0)
+            {
+                _logger.LogInformation(
+                    "[PROC][{symbol}] DEMO-ONLY (live balance empty, demo qty={q})",
+                    symbol, qty);
+                _tradeJournal?.LogSignal(symbol, "PROC", "EXECUTE_DEMO_ONLY", "live balance empty");
+                MarkTrade(symbol);
+                TrackSymbol(symbol, keepAlive: true);
+                return;
+            }
 
             // Nothing enabled → Demo-only: entry already published to approved_entries
             if (!wantBinance && !wantBybit)

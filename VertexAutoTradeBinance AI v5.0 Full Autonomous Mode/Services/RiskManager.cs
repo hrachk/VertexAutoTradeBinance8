@@ -909,8 +909,31 @@ namespace VertexAutoTradeBinance8.Services
 
 
     }
+        /// <summary>Demo equity from SharedData demo-account.json — independent of Binance.</summary>
+        public decimal TryGetDemoEquity()
+        {
+            try
+            {
+                var root = _config?["SharedData:Root"];
+                if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+                    return 0m;
+                foreach (var path in Directory.GetFiles(root, "demo-account.json", SearchOption.AllDirectories))
+                {
+                    try
+                    {
+                        var json = File.ReadAllText(path);
+                        using var doc = System.Text.Json.JsonDocument.Parse(json);
+                        var el = doc.RootElement;
+                        if (el.TryGetProperty("Balance", out var bal) && bal.TryGetDecimal(out var b) && b > 0)
+                            return b;
+                        if (el.TryGetProperty("balance", out var bal2) && bal2.TryGetDecimal(out var b2) && b2 > 0)
+                            return b2;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return 0m;
+        }
+
 }
-
-
-
-
