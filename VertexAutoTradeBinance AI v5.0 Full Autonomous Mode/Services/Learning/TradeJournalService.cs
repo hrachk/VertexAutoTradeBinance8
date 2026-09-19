@@ -236,19 +236,69 @@ public sealed class TradeJournalService
     {
         try
         {
-            var journal = LoadJournal(JournalPath(clientId));
             var cutoff = DateTime.UtcNow.AddDays(-_windowDays);
-            var recent = journal.Entries.Where(x => x.ClosedAtUtc >= cutoff).ToList();
+            List<TradeJournalEntry> recent;
+            if (_sqlite != null && (SqliteOnly || !File.Exists(JournalPath(clientId))))
+                recent = _sqlite.GetRecent(2000).Where(x => x.ClosedAtUtc >= cutoff).ToList();
+            else
+            {
+                var journal = LoadJournal(JournalPath(clientId));
+                recent = journal.Entries.Where(x => x.ClosedAtUtc >= cutoff).ToList();
+            }
             var mem = new SymbolMemoryFile { UpdatedUtc = DateTime.UtcNow };
             foreach (var g in recent.GroupBy(x => x.Symbol, StringComparer.OrdinalIgnoreCase))
                 mem.BySymbol[g.Key] = Compute(g.Key, g.ToList());
             Directory.CreateDirectory(ClientDir(clientId));
-            lock (LockFor(clientId))
-                File.WriteAllText(MemoryPath(clientId), JsonSerializer.Serialize(mem, JsonOpt));
+            if (!SqliteOnly)
+            {
+                lock (LockFor(clientId))
+                    File.WriteAllText(MemoryPath(clientId), JsonSerializer.Serialize(mem, JsonOpt));
+            }
+            // Always mirror into SQLite SymbolMemory
+            if (_sqlite != null)
+            {
+                foreach (var kv in mem.BySymbol)
+                {
+                    var a = kv.Value;
+                    decimal avgR = 0m;
+                    try
+                    {
+                        var samples = recent.Where(x => string.Equals(x.Symbol, kv.Key, StringComparison.OrdinalIgnoreCase)
+                            && Math.Abs(x.RealizedR) <= 3m && x.RealizedR != 0m).Select(x => x.RealizedR).ToList();
+                        if (samples.Count > 0) avgR = samples.Average();
+                    }
+                    catch { }
+                    decimal winRate = 0m;
+                    var symTrades = recent.Where(x => string.Equals(x.Symbol, kv.Key, StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (symTrades.Count > 0)
+                        winRate = (decimal)symTrades.Count(x => x.RealizedPnl > 0) / symTrades.Count;
+                    _sqlite.UpsertSymbolMemory(kv.Key, a.SizeMult, a.SoftSkip, avgR, winRate, a.Note ?? "");
+                }
+                _log.LogInformation("[SQLITE-TRACE] SymbolMemory synced {n} symbols client={c}", mem.BySymbol.Count, clientId);
+            }
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "[JOURNAL] rebuild failed {c}", clientId);
+        }
+    }
+
+    /// <summary>Write a signal decision row into SQLite SignalLogs (and log).</summary>
+    public void LogSignal(string symbol, string type, string action, string? blockReason = null)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(symbol)) return;
+            if (_sqlite == null)
+            {
+                _log.LogDebug("[SQLITE-TRACE] LogSignal skipped — no SqliteJournalStore ({s} {a})", symbol, action);
+                return;
+            }
+            _sqlite.LogSignal(symbol, type ?? "", action ?? "", blockReason);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "[SQLITE-TRACE] LogSignal failed {s}", symbol);
         }
     }
 

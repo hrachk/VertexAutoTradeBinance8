@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using VertexAutoTradeBinance8.Services.Learning;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services.Infra;
 
@@ -26,8 +27,11 @@ namespace VertexAutoTradeBinance8.Services
         private const int MaxMissedRecords = 500;
         private static readonly TimeSpan RecordTtl = TimeSpan.FromHours(2);
 
-        public LiveSignalService(IConfiguration cfg, ILogger<LiveSignalService> logger, ISignalBus? bus = null)
+        private readonly TradeJournalService? _journal;
+
+        public LiveSignalService(IConfiguration cfg, ILogger<LiveSignalService> logger, ISignalBus? bus = null, TradeJournalService? journal = null)
         {
+            _journal = journal;
             var root = cfg["SharedData:Root"] ?? @"C:\Vertex\Engines\client_001";
             _filePath = Path.Combine(root, "live_signals.json");
             _missedPath = Path.Combine(root, "missed_trades.json");
@@ -144,6 +148,11 @@ namespace VertexAutoTradeBinance8.Services
                         Note = "live_signal_mirror",
                     }, ct);
 
+                    _journal?.LogSignal(
+                            (string)(signal.Symbol ?? ""),
+                            "CORE",
+                            "EMIT",
+                            $"side={signal.Side} conf={conf}");
                     _logger.LogInformation(
                         "[LIVESIG] wrote {sym} {side} conf={c} → live+missed",
                         symbol, side, confPct);

@@ -82,6 +82,7 @@ namespace VertexAutoTradeBinance8
         private readonly VertexAutoTradeBinance8.Services.Notify.TelegramNotificationService? _tg;
         private readonly VertexAutoTradeBinance8.Services.Infra.EmergencyControlService? _killCtrl;
         private readonly LiveSignalService _liveSig;
+        private readonly VertexAutoTradeBinance8.Services.Learning.TradeJournalService? _tradeJournal;
         private readonly SymbolInfoService _symbolInfo;
         private readonly FundingRateService _fundingRate;
         private readonly RealtimeMomentumDetector _momentum;
@@ -178,8 +179,10 @@ namespace VertexAutoTradeBinance8
             VertexAutoTradeBinance8.Services.Risk.BtcVolatilityFilterService? btcVol = null,
             VertexAutoTradeBinance8.Services.Risk.DailyDrawdownGuard? dailyDd = null,
             VertexAutoTradeBinance8.Services.Notify.TelegramNotificationService? tg = null,
-            VertexAutoTradeBinance8.Services.Infra.EmergencyControlService? killCtrl = null)
+            VertexAutoTradeBinance8.Services.Infra.EmergencyControlService? killCtrl = null,
+            VertexAutoTradeBinance8.Services.Learning.TradeJournalService? tradeJournal = null)
         {
+            _tradeJournal = tradeJournal;
             _logger = logger;
             _options = options.Value;
             _tradingMonitor = tradingMonitor;
@@ -250,6 +253,12 @@ namespace VertexAutoTradeBinance8
                 symbol, tf, stage, reason,
                 extra != null ? $" | {extra}" : string.Empty
             );
+
+            try
+            {
+                _tradeJournal?.LogSignal(symbol, "PROC", "REJECT", $"stage={stage} reason={reason}");
+            }
+            catch { }
 
             if (signal != null)
             {

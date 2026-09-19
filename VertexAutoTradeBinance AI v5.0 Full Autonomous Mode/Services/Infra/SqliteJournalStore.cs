@@ -200,6 +200,48 @@ CREATE TABLE IF NOT EXISTS SignalLogs (
             }
             if (total > 0)
                 _log.LogWarning("[SQLITE-JOURNAL] migrated total {n} trades → {db}", total, _dbPath);
+
+            // Migrate symbol-memory.json → SymbolMemory table
+            int memN = 0;
+            var memCandidates = new List<string>();
+            var rootMem = Path.Combine(_sharedRoot, "symbol-memory.json");
+            if (File.Exists(rootMem)) memCandidates.Add(rootMem);
+            if (Directory.Exists(_sharedRoot))
+            {
+                foreach (var d in Directory.GetDirectories(_sharedRoot, "client_*"))
+                {
+                    var mp = Path.Combine(d, "symbol-memory.json");
+                    if (File.Exists(mp)) memCandidates.Add(mp);
+                }
+            }
+            foreach (var mp in memCandidates)
+            {
+                try
+                {
+                    var text = File.ReadAllText(mp);
+                    var mem = JsonSerializer.Deserialize<SymbolMemoryFile>(text);
+                    if (mem?.BySymbol == null) continue;
+                    foreach (var kv in mem.BySymbol)
+                    {
+                        var a = kv.Value;
+                        UpsertSymbolMemory(
+                            kv.Key,
+                            a.SizeMult <= 0 ? 1m : a.SizeMult,
+                            a.SoftSkip,
+                            0m,
+                            a.RecentTrades > 0 ? (decimal)a.RecentWins / a.RecentTrades : 0m,
+                            a.Note ?? "");
+                        memN++;
+                    }
+                    _log.LogInformation("[SQLITE-TRACE] migrated SymbolMemory {n} from {p}", mem.BySymbol.Count, mp);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "[SQLITE-TRACE] symbol-memory migrate failed {p}", mp);
+                }
+            }
+            if (memN > 0)
+                _log.LogWarning("[SQLITE-JOURNAL] migrated {n} SymbolMemory rows → {db}", memN, _dbPath);
         }
         catch (Exception ex)
         {
@@ -336,7 +378,7 @@ ON CONFLICT(Symbol) DO UPDATE SET
             cmd.Parameters.AddWithValue("$n", note ?? "");
             cmd.Parameters.AddWithValue("$u", DateTime.UtcNow.ToString("o"));
             cmd.ExecuteNonQuery();
-            _log.LogDebug("[SQLITE-TRACE] SymbolMemory upsert {s}", symbol);
+            _log.LogInformation("[SQLITE-TRACE] SymbolMemory upsert {s} size={sm} skip={sk}", symbol, sizeMult, softSkip);
         }
         catch (Exception ex)
         {
@@ -358,7 +400,7 @@ ON CONFLICT(Symbol) DO UPDATE SET
             cmd.Parameters.AddWithValue("$b", blockReason ?? "");
             cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
             cmd.ExecuteNonQuery();
-            _log.LogDebug("[SQLITE-TRACE] SignalLog {s} {a}", symbol, action);
+            _log.LogInformation("[SQLITE-TRACE] SignalLog {s} type={t} action={a}", symbol, type, action);
         }
         catch (Exception ex)
         {

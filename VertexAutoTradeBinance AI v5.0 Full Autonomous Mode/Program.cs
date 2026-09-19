@@ -518,6 +518,8 @@ try
                 ClosedAtUtc = DateTime.UtcNow
             });
         };
+    try { journal.RebuildMemory(liveClientId); }
+    catch (Exception rex) { Console.WriteLine("[SQLITE-TRACE] startup RebuildMemory: " + rex.Message); }
 }
 catch (Exception ex)
 {
