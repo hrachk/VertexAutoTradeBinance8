@@ -4009,8 +4009,7 @@ namespace VertexAutoTradeBinance8.Services
                             // -1021/-1022: one resync retry only
                             if (body.Contains("-1021") || body.Contains("-1022"))
                             {
-                                _lastTimeSync = DateTime.MinValue;
-                                await EnsureTimeSyncedAsync(ct);
+                                ForceClockResync();
                                 ts = await GetBinanceTimestampAsync(ct);
                                 q = new List<KeyValuePair<string, string>>
                                 {
