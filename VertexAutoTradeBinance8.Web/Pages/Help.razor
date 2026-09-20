@@ -1,0 +1,254 @@
+@page "/help"
+@page "/docs"
+
+<div class="help-root">
+    <aside class="help-nav">
+        <div class="help-brand">
+            <span class="help-logo">?</span>
+            <div>
+                <div class="help-title">User Manual</div>
+                <div class="help-sub">Vertex AutoTrade</div>
+            </div>
+        </div>
+        <input class="help-search" @bind="_query" @bind:event="oninput" placeholder="Search…" />
+        <nav class="help-toc">
+            @foreach (var item in FilteredToc)
+            {
+                <button type="button" class="help-toc-item @(_section == item.Id ? "active" : null)"
+                        @onclick="() => Go(item.Id)">
+                    <span>@item.Icon</span> <span>@item.Label</span>
+                </button>
+            }
+        </nav>
+        <div class="help-nav-foot">
+            <a href="/market">← Market</a>
+            <a href="/ai-dashboard">AI Dashboard</a>
+        </div>
+    </aside>
+
+    <main class="help-main">
+        <header class="help-header">
+            <h1>@CurrentTitle</h1>
+            <p class="help-lead">@CurrentLead</p>
+        </header>
+
+        @if (_section == "quick")
+        {
+            <section class="help-section">
+                <div class="help-card step"><div class="step-n">1</div>
+                    <h3>Config &amp; SharedData</h3>
+                    <p>Engine и Web должны указывать на один корень данных.</p>
+                    <pre class="help-code">C:\Vertex\Engines\
+├── vertex_system.db      ← пользователи / Demo $ (SQLite)
+├── vertex_journal.db     ← журнал сделок
+├── clients.json          ← dual-write (пока)
+└── client_001\           ← SharedData:Root
+    ├── live_signals.json
+    └── approved_entries.json</pre>
+                    <pre class="help-code">"SharedData": { "Root": "C:\\Vertex\\Engines\\client_001" }</pre>
+                    <p>Ключи API — user-secrets / UI, не в git.</p>
+                </div>
+                <div class="help-card step"><div class="step-n">2</div>
+                    <h3>Binance Futures + запуск</h3>
+                    <ul class="help-list">
+                        <li>USDT-M Futures API (Read + Trade, без Withdraw).</li>
+                        <li>Сначала <b>Engine</b>, потом <b>Web</b> (5101).</li>
+                    </ul>
+                    <pre class="help-code">dotnet run   # Engine
+dotnet run   # Web → http://127.0.0.1:5101</pre>
+                    <p>Логи: <code>[TIME-SYNC]</code>, <code>[SYSTEM-DB] Ready</code>, <code>[DEMO-AUTO]</code>.</p>
+                </div>
+                <div class="help-card step"><div class="step-n">3</div>
+                    <h3>Demo $10k (независимо от биржи)</h3>
+                    <p>Баланс в <code>DemoAccounts</code> (<code>vertex_system.db</code>). Parallel DEMO в профиле.</p>
+                    <div class="help-callout ok">Live balance = 0 → Demo всё равно торгует (DEMO-ONLY). Live &gt; 0 → Live sizing отдельно.</div>
+                </div>
+            </section>
+        }
+
+        @if (_section == "settings")
+        {
+            <section class="help-section">
+                <div class="help-card">
+                    <h3>RiskManager — 1R</h3>
+                    <pre class="help-code">riskBudget ≈ balance × riskFrac (0.6–0.75%)
+qty ≈ riskBudget / |entry − SL|
+HardCapUsd ограничивает $ риска на сделку</pre>
+                    <table class="help-table">
+                        <tr><th>Параметр</th><th>Смысл</th></tr>
+                        <tr><td>1R / riskFrac</td><td>% equity при срабатывании SL</td></tr>
+                        <tr><td>HardCapUsd</td><td>Потолок $ риска</td></tr>
+                        <tr><td>SizeMult / SoftSkip</td><td>SymbolMemory после серии SL</td></tr>
+                        <tr><td>Leverage</td><td>Профиль × AI floor (~70%)</td></tr>
+                    </table>
+                </div>
+                <div class="help-card">
+                    <h3>TradeMemory</h3>
+                    <p><code>WindowDays</code> ~30, <code>HalfLifeDays</code> 7, <code>ProbeMinConfidence</code> ~0.72 — probe 0.25× при SoftSkip.</p>
+                </div>
+                <div class="help-card">
+                    <h3>PositionSupervisor</h3>
+                    <p>TP1–3, trailing, breakeven, algo STOP_MARKET; ремонт отсутствующих SL/TP.</p>
+                </div>
+            </section>
+        }
+
+        @if (_section == "ml")
+        {
+            <section class="help-section">
+                <div class="help-card">
+                    <h3>Фаза A — Shadow</h3>
+                    <pre class="help-code">"EnableMlSkipGate": false</pre>
+                    <p>Только логи <code>[ML-SHADOW]</code> / KPI. Hard reject выключен.</p>
+                </div>
+                <div class="help-card">
+                    <h3>Фаза B — Обучение</h3>
+                    <pre class="help-code">python scripts/train_ml_skip_gate.py --input trade-features.jsonl --output ml_skip_model.json</pre>
+                </div>
+                <div class="help-card">
+                    <h3>Фаза C — Hard gate</h3>
+                    <pre class="help-code">"EnableMlSkipGate": true   // threshold ~0.42</pre>
+                    <div class="help-callout warn">Включать только после shadow-проверки на реальной истории.</div>
+                </div>
+            </section>
+        }
+
+        @if (_section == "arch")
+        {
+            <section class="help-section">
+                <div class="help-card">
+                    <h3>Поток</h3>
+                    <pre class="help-ascii">CORE → PROC filters → RiskManager 1R
+         → approved_entries → DemoAutoTrade
+         → OrderExecutor (если Live balance)</pre>
+                </div>
+                <div class="help-grid">
+                    <div class="help-card mock"><h4>/market</h4><div class="mock-ui"><div class="mock-bar">Chart · TP/SL</div><div class="mock-chart">Candles</div></div></div>
+                    <div class="help-card mock"><h4>/ai-dashboard</h4><div class="mock-ui"><div class="mock-bar">Shadow KPI</div><div class="mock-chart">Neurons</div></div></div>
+                    <div class="help-card mock"><h4>/missed-trades</h4><div class="mock-ui"><div class="mock-bar">Signals</div><div class="mock-chart">Thesis</div></div></div>
+                    <div class="help-card mock"><h4>Journal</h4><div class="mock-ui"><div class="mock-bar">SQLite</div><div class="mock-chart">Trades · R</div></div></div>
+                </div>
+            </section>
+        }
+
+        @if (_section == "logs")
+        {
+            <section class="help-section">
+                <div class="help-card">
+                    <table class="help-table">
+                        <tr><th>Причина</th><th>Действие</th></tr>
+                        <tr><td><code>QTY_ZERO / budget=0</code></td><td>Demo equity / Live margin</td></tr>
+                        <tr><td><code>BAD_1M_TIMING</code></td><td>Ждать лучший 1m</td></tr>
+                        <tr><td><code>429 / -1003</code></td><td>Cooldown algo API (уже в коде)</td></tr>
+                        <tr><td><code>-2019 margin</code></td><td>Пополнить Futures</td></tr>
+                        <tr><td><code>DEMO-ONLY</code></td><td>Норма без Live balance</td></tr>
+                    </table>
+                </div>
+            </section>
+        }
+
+        @if (_section == "twa")
+        {
+            <section class="help-section">
+                <div class="help-card">
+                    <h3>Telegram Mini App</h3>
+                    <pre class="help-code">"Telegram": {
+  "BotToken": "...", "ChatId": "...",
+  "MiniAppUrl": "https://TUNNEL/twa/dashboard"
+}</pre>
+                    <p>Команды: <code>/status</code> <code>/kill</code> <code>/resume</code> <code>/pause</code> <code>/dashboard</code>. См. <code>TELEGRAM_MINIAPP.md</code>.</p>
+                </div>
+            </section>
+        }
+
+        @if (_section == "db")
+        {
+            <section class="help-section">
+                <div class="help-card">
+                    <h3>vertex_system.db</h3>
+                    <p>Путь: <code>C:\Vertex\Engines\vertex_system.db</code></p>
+                    <ul class="help-list">
+                        <li><b>Users</b> — аккаунты</li>
+                        <li><b>UserSettings</b> — API keys (AES), risk</li>
+                        <li><b>DemoAccounts</b> — баланс Demo</li>
+                        <li><b>UserSessions</b> — refresh (заготовка)</li>
+                    </ul>
+                    <p>После Register в логе: <code>[SYSTEM-DB] Upsert user …</code></p>
+                    <pre class="help-code">SELECT * FROM Users;
+SELECT * FROM DemoAccounts;</pre>
+                </div>
+            </section>
+        }
+    </main>
+</div>
+
+<style>
+.help-root{display:grid;grid-template-columns:250px 1fr;min-height:calc(100vh - 56px);background:#0b0f14;color:#e6edf3;font-family:Inter,system-ui,sans-serif}
+.help-nav{border-right:1px solid rgba(255,255,255,.08);background:#0d1219;padding:14px 10px;display:flex;flex-direction:column;gap:10px;position:sticky;top:0;height:calc(100vh - 56px);overflow:auto}
+.help-brand{display:flex;gap:10px;align-items:center;padding:4px 6px 10px}
+.help-logo{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#00d4ff33,#00ff9c22);border:1px solid rgba(0,212,255,.35);display:grid;place-items:center;font-weight:700;color:#00d4ff}
+.help-title{font-weight:700;font-size:14px}.help-sub{font-size:11px;color:#8b9bb0}
+.help-search{width:100%;box-sizing:border-box;background:#121a24;border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:8px 10px;color:#e6edf3;font-size:13px}
+.help-toc{display:flex;flex-direction:column;gap:4px;flex:1}
+.help-toc-item{display:flex;gap:8px;align-items:center;background:transparent;border:1px solid transparent;color:#b6c2d0;border-radius:8px;padding:9px 10px;text-align:left;cursor:pointer;font-size:13px}
+.help-toc-item:hover{background:rgba(255,255,255,.04);color:#fff}
+.help-toc-item.active{background:rgba(0,212,255,.1);border-color:rgba(0,212,255,.35);color:#7fe9ff}
+.help-nav-foot{display:flex;gap:12px;font-size:12px;padding:8px 4px}
+.help-nav-foot a{color:#3b9eff;text-decoration:none}
+.help-main{padding:20px 28px 48px;max-width:920px;overflow:auto}
+.help-header h1{margin:0 0 6px;font-size:22px}.help-lead{margin:0 0 18px;color:#8b9bb0;font-size:14px;line-height:1.45}
+.help-section{display:flex;flex-direction:column;gap:14px}
+.help-card{background:rgba(18,26,36,.9);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:16px 18px}
+.help-card h3,.help-card h4{margin:0 0 10px;font-size:15px;color:#f0f6fc}
+.help-card p{margin:0 0 10px;font-size:13.5px;line-height:1.55;color:#c5d0dc}
+.help-card.step{position:relative;padding-left:52px}
+.step-n{position:absolute;left:14px;top:16px;width:28px;height:28px;border-radius:50%;background:#00d4ff22;border:1px solid #00d4ff66;color:#7fe9ff;display:grid;place-items:center;font-weight:700;font-size:13px}
+.help-code,.help-ascii{background:#0a0e14;border:1px solid rgba(255,255,255,.07);border-radius:8px;padding:12px 14px;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.45;color:#9fefc0;margin:8px 0 12px}
+.help-list{margin:0 0 10px;padding-left:18px;color:#c5d0dc;font-size:13.5px;line-height:1.55}
+.help-table{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0}
+.help-table th,.help-table td{border-bottom:1px solid rgba(255,255,255,.07);padding:8px 10px;text-align:left}
+.help-table th{color:#8b9bb0;font-size:11px;text-transform:uppercase}
+.help-callout{border-radius:8px;padding:10px 12px;font-size:13px;margin-top:8px}
+.help-callout.ok{background:rgba(0,255,156,.08);border:1px solid rgba(0,255,156,.25);color:#b6f5d4}
+.help-callout.warn{background:rgba(255,180,0,.08);border:1px solid rgba(255,180,0,.28);color:#ffe2a8}
+.help-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
+.mock-ui{border:1px solid rgba(0,212,255,.25);border-radius:8px;overflow:hidden;margin-bottom:8px;background:#070b10}
+.mock-bar{padding:6px 10px;font-size:11px;background:#121a24;color:#7fe9ff}
+.mock-chart{height:56px;display:grid;place-items:center;font-size:11px;color:#5a6a7e}
+code{background:rgba(255,255,255,.06);padding:1px 5px;border-radius:4px;font-size:12px}
+a{color:#3b9eff}
+@media (max-width:900px){.help-root{grid-template-columns:1fr}.help-nav{position:relative;height:auto}}
+</style>
+
+@code {
+    private string _section = "quick";
+    private string _query = "";
+
+    private sealed record TocItem(string Id, string Label, string Icon, string Title, string Lead, string[] Keywords);
+
+    private static readonly TocItem[] Toc =
+    {
+        new("quick", "Quick Start", "🚀", "Быстрый старт", "SharedData, Futures, Demo $10k.", new[]{"start","demo","shareddata","binance"}),
+        new("settings", "Settings & Risk", "⚙️", "Настройки и риск", "1R, HardCap, Memory, Supervisor.", new[]{"risk","1r","hardcap","memory","tp"}),
+        new("ml", "ML Gate & News", "🧠", "ML Gate", "Shadow → train → hard gate.", new[]{"ml","shadow","gate"}),
+        new("arch", "Architecture & UI", "🗺️", "Архитектура", "CORE → Demo/Live и экраны.", new[]{"architecture","market","ui"}),
+        new("logs", "Logs & Rejects", "📋", "Логи", "REJECT, 429, margin.", new[]{"reject","log","429"}),
+        new("db", "Users & SQLite", "🗄️", "Пользователи и БД", "vertex_system.db таблицы.", new[]{"sqlite","users","demoaccounts"}),
+        new("twa", "Telegram Mini App", "📱", "Telegram", "TWA, tunnel, /kill.", new[]{"telegram","twa","mini"}),
+    };
+
+    private IEnumerable<TocItem> FilteredToc
+    {
+        get
+        {
+            var q = (_query ?? "").Trim().ToLowerInvariant();
+            if (string.IsNullOrEmpty(q)) return Toc;
+            return Toc.Where(t => t.Label.Contains(q, StringComparison.OrdinalIgnoreCase)
+                || t.Keywords.Any(k => k.Contains(q, StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+
+    private string CurrentTitle => Toc.FirstOrDefault(t => t.Id == _section)?.Title ?? "Help";
+    private string CurrentLead => Toc.FirstOrDefault(t => t.Id == _section)?.Lead ?? "";
+    private void Go(string id) => _section = id;
+}
