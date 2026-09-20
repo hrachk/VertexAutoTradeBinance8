@@ -31,6 +31,7 @@ public sealed class DemoAccountService
     // differs (virtual buys here vs a real Binance order there).
     private readonly IOptionsMonitor<VertexAutoTradeBinance8.Configuration.DcaOptions> _dcaOptions;
     private readonly HistoricalDataReaderService _historicalData;
+    private readonly VertexAutoTradeBinance8.Web.Data.SystemDb? _systemDb;
     private DemoDcaState _dcaState = new();
     private Timer? _dcaTimer;
 
@@ -143,12 +144,14 @@ public sealed class DemoAccountService
     public DemoAccountService(
         MarketDataLiveState liveState, ILogger<DemoAccountService> logger, IConfiguration cfg,
         IOptionsMonitor<VertexAutoTradeBinance8.Configuration.DcaOptions> dcaOptions,
-        HistoricalDataReaderService historicalData)
+        HistoricalDataReaderService historicalData,
+        VertexAutoTradeBinance8.Web.Data.SystemDb? systemDb = null)
     {
         _liveState = liveState;
         _logger = logger;
         _dcaOptions = dcaOptions;
         _historicalData = historicalData;
+        _systemDb = systemDb;
 
         // Per-user demo state under engines root:
         //   {EnginesRoot}/client_{id}/demo-account.json
@@ -1156,6 +1159,19 @@ _state.History.Add(new DemoClosedTrade
             var tmp = _filePath + ".tmp";
             File.WriteAllText(tmp, json);
             File.Move(tmp, _filePath, overwrite: true);
+            if (_systemDb != null && !string.IsNullOrEmpty(_clientId))
+            {
+                try
+                {
+                    var posJson = JsonSerializer.Serialize(_state.Positions ?? new());
+                    var eq = _state.Balance;
+                    _ = _systemDb.UpsertDemoBalanceAsync(_clientId, _state.Balance, eq, posJson);
+                }
+                catch (Exception exDb)
+                {
+                    _logger.LogDebug(exDb, "[DEMO] SystemDb balance sync failed");
+                }
+            }
         }
         catch (Exception ex)
         {

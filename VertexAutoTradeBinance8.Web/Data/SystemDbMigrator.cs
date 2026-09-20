@@ -30,11 +30,16 @@ public sealed class SystemDbMigrator
 
         var clientsPath = Path.Combine(engines, "clients.json");
         var flag = Path.Combine(engines, "vertex_system.migrated");
-        if (File.Exists(flag))
+        int existing = 0;
+        try { existing = await _db.CountUsersAsync(ct); } catch { }
+        if (File.Exists(flag) && existing > 0)
         {
-            _log.LogDebug("[SYSTEM-DB] Migration already done ({flag})", flag);
+            _log.LogDebug("[SYSTEM-DB] Migration already done ({flag}) users={n}", flag, existing);
             return;
         }
+        if (existing == 0)
+            _log.LogInformation("[SYSTEM-DB] Users table empty — running migration/sync from clients.json");
+
 
         int users = 0, demos = 0;
         if (File.Exists(clientsPath))

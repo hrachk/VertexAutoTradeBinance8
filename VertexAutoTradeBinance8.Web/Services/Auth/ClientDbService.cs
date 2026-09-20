@@ -158,14 +158,22 @@ public sealed class ClientDbService
             {
                 if (_systemDb != null)
                 {
-                    await _systemDb.EnsureInitializedAsync();
-                    await _systemDb.UpsertDemoBalanceAsync(client.Id, 10_000m, 10_000m, "[]");
-                    // mirror user row via migrator-style SQL is heavy; demo row is enough for sizing
+                    await _systemDb.UpsertFullUserAsync(
+                        client.Id,
+                        client.Email,
+                        client.DisplayName,
+                        client.PasswordHash,
+                        client.IsActive,
+                        client.IsEmailVerified,
+                        client.ParallelDemoEnabled,
+                        client.BinanceApiKeyEnc,
+                        client.BinanceApiSecretEnc,
+                        10_000m);
                 }
             }
             catch (Exception exSys)
             {
-                _log.LogWarning(exSys, "[AUTH] SystemDb seed demo failed for {Id}", client.Id);
+                _log.LogWarning(exSys, "[AUTH] SystemDb upsert user failed for {Id}", client.Id);
             }
 
             return (true, "", client);
@@ -246,6 +254,15 @@ public sealed class ClientDbService
             var idx = all.FindIndex(c => c.Id == clientId);
             if (idx >= 0) all[idx] = client;
             WriteAll(all);
+            try
+            {
+                if (_systemDb != null)
+                    await _systemDb.SetApiKeysEncryptedAsync(clientId, client.BinanceApiKeyEnc, client.BinanceApiSecretEnc);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "[AUTH] SystemDb API keys sync failed");
+            }
         }
         finally { _lock.Release(); }
     }
@@ -261,6 +278,9 @@ public sealed class ClientDbService
             if (idx < 0) return (false, "Пользователь не найден.");
             all[idx].ParallelDemoEnabled = enabled;
             WriteAll(all);
+            try { if (_systemDb != null) await _systemDb.SetParallelDemoAsync(clientId, enabled); }
+            catch (Exception ex) { _log.LogWarning(ex, "[AUTH] SystemDb parallel demo"); }
+
             return (true, "");
         }
         finally { _lock.Release(); }

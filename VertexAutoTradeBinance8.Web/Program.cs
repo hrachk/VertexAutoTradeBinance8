@@ -57,9 +57,9 @@ builder.Services.AddSingleton<WeatherForecastService>();
 // ClientDbService: singleton — reads/writes clients.json thread-safely
 // AuthSessionService: scoped — one per Blazor circuit (per browser tab)
 // ClientDataService: scoped — resolves file paths per logged-in client
-builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Auth.ClientDbService>();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Data.SystemDb>();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Data.SystemDbMigrator>();
+builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Auth.ClientDbService>();
 
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Auth.VerificationCodeCache>();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Web.Services.Auth.EmailService>();

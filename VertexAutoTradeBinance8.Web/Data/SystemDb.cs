@@ -120,6 +120,166 @@ public sealed class SystemDb
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    /// <summary>Full user row + default settings + demo $10k (register / sync).</summary>
+    public async Task UpsertFullUserAsync(
+        string id,
+        string email,
+        string displayName,
+        string passwordHash,
+        bool isActive,
+        bool emailVerified,
+        bool parallelDemo,
+        string? apiKeyEnc = null,
+        string? apiSecretEnc = null,
+        decimal? demoBalance = null,
+        CancellationToken ct = default)
+    {
+        await EnsureInitializedAsync(ct);
+        await using var conn = OpenConnection();
+        await conn.OpenAsync(ct);
+        await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
+        try
+        {
+            var now = DateTime.UtcNow.ToString("o");
+            await using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    INSERT INTO Users (Id, Email, DisplayName, PasswordHash, Role, IsActive, EmailVerified, ParallelDemoEnabled, CreatedAt, UpdatedAt)
+                    VALUES ($id, $email, $name, $hash, 'user', $active, $ver, $demo, $now, $now)
+                    ON CONFLICT(Id) DO UPDATE SET
+                      Email=excluded.Email,
+                      DisplayName=excluded.DisplayName,
+                      PasswordHash=CASE WHEN excluded.PasswordHash='' THEN Users.PasswordHash ELSE excluded.PasswordHash END,
+                      IsActive=excluded.IsActive,
+                      EmailVerified=excluded.EmailVerified,
+                      ParallelDemoEnabled=excluded.ParallelDemoEnabled,
+                      UpdatedAt=excluded.UpdatedAt
+                    """;
+                cmd.Parameters.AddWithValue("$id", id);
+                cmd.Parameters.AddWithValue("$email", email ?? "");
+                cmd.Parameters.AddWithValue("$name", displayName ?? "");
+                cmd.Parameters.AddWithValue("$hash", passwordHash ?? "");
+                cmd.Parameters.AddWithValue("$active", isActive ? 1 : 0);
+                cmd.Parameters.AddWithValue("$ver", emailVerified ? 1 : 0);
+                cmd.Parameters.AddWithValue("$demo", parallelDemo ? 1 : 0);
+                cmd.Parameters.AddWithValue("$now", now);
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+
+            await using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    INSERT INTO UserSettings (UserId, ApiKeyEncrypted, ApiSecretEncrypted, RiskFrac, HardCapUsd, EnableMlSkipGate, DefaultLeverage, MaxOpenPositions, UpdatedAt)
+                    VALUES ($id, $key, $sec, 0.0075, 55, 0, 10, 5, $now)
+                    ON CONFLICT(UserId) DO UPDATE SET
+                      ApiKeyEncrypted=COALESCE(excluded.ApiKeyEncrypted, UserSettings.ApiKeyEncrypted),
+                      ApiSecretEncrypted=COALESCE(excluded.ApiSecretEncrypted, UserSettings.ApiSecretEncrypted),
+                      UpdatedAt=excluded.UpdatedAt
+                    """;
+                cmd.Parameters.AddWithValue("$id", id);
+                cmd.Parameters.AddWithValue("$key", (object?)apiKeyEnc ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$sec", (object?)apiSecretEnc ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$now", now);
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+
+            var bal = (demoBalance ?? 10_000m).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            await using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    INSERT INTO DemoAccounts (UserId, Balance, Equity, Currency, PositionsJson, UpdatedAt)
+                    VALUES ($id, $bal, $bal, 'USDT', '[]', $now)
+                    ON CONFLICT(UserId) DO UPDATE SET UpdatedAt=excluded.UpdatedAt
+                    """;
+                cmd.Parameters.AddWithValue("$id", id);
+                cmd.Parameters.AddWithValue("$bal", bal);
+                cmd.Parameters.AddWithValue("$now", now);
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+
+            await tx.CommitAsync(ct);
+            _log.LogInformation("[SYSTEM-DB] Upsert user {id} {email} parallelDemo={pd}", id, email, parallelDemo);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            throw;
+        }
+    }
+
+    public async Task SetParallelDemoAsync(string userId, bool enabled, CancellationToken ct = default)
+    {
+        await EnsureInitializedAsync(ct);
+        await using var conn = OpenConnection();
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE Users SET ParallelDemoEnabled=$v, UpdatedAt=$ts WHERE Id=$id";
+        cmd.Parameters.AddWithValue("$v", enabled ? 1 : 0);
+        cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
+        cmd.Parameters.AddWithValue("$id", userId);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task SetApiKeysEncryptedAsync(string userId, string? keyEnc, string? secretEnc, CancellationToken ct = default)
+    {
+        await EnsureInitializedAsync(ct);
+        await using var conn = OpenConnection();
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO UserSettings (UserId, ApiKeyEncrypted, ApiSecretEncrypted, RiskFrac, HardCapUsd, EnableMlSkipGate, DefaultLeverage, MaxOpenPositions, UpdatedAt)
+            VALUES ($id, $key, $sec, 0.0075, 55, 0, 10, 5, $ts)
+            ON CONFLICT(UserId) DO UPDATE SET
+              ApiKeyEncrypted=excluded.ApiKeyEncrypted,
+              ApiSecretEncrypted=excluded.ApiSecretEncrypted,
+              UpdatedAt=excluded.UpdatedAt
+            """;
+        cmd.Parameters.AddWithValue("$id", userId);
+        cmd.Parameters.AddWithValue("$key", (object?)keyEnc ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$sec", (object?)secretEnc ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task UpsertDemoBalanceAsync(string userId, decimal balance, decimal equity, string positionsJson, CancellationToken ct = default)
+    {
+        await EnsureInitializedAsync(ct);
+        await using var conn = OpenConnection();
+        await conn.OpenAsync(ct);
+        // Ensure parent user exists (FK) — minimal stub if missing
+        await using (var ensure = conn.CreateCommand())
+        {
+            ensure.CommandText = """
+                INSERT OR IGNORE INTO Users (Id, Email, DisplayName, PasswordHash, Role, IsActive, EmailVerified, ParallelDemoEnabled, CreatedAt, UpdatedAt)
+                VALUES ($id, $email, '', '', 'user', 1, 0, 1, $ts, $ts)
+                """;
+            ensure.Parameters.AddWithValue("$id", userId);
+            ensure.Parameters.AddWithValue("$email", userId + "@local.demo");
+            ensure.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
+            await ensure.ExecuteNonQueryAsync(ct);
+        }
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO DemoAccounts (UserId, Balance, Equity, Currency, PositionsJson, UpdatedAt)
+            VALUES ($id, $bal, $eq, 'USDT', $pos, $ts)
+            ON CONFLICT(UserId) DO UPDATE SET
+              Balance = excluded.Balance,
+              Equity = excluded.Equity,
+              PositionsJson = excluded.PositionsJson,
+              UpdatedAt = excluded.UpdatedAt
+            """;
+        cmd.Parameters.AddWithValue("$id", userId);
+        cmd.Parameters.AddWithValue("$bal", balance.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        cmd.Parameters.AddWithValue("$eq", equity.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        cmd.Parameters.AddWithValue("$pos", positionsJson ?? "[]");
+        cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     public async Task<decimal> GetMaxParallelDemoBalanceAsync(CancellationToken ct = default)
     {
         await EnsureInitializedAsync(ct);
@@ -142,26 +302,14 @@ public sealed class SystemDb
         return best;
     }
 
-    public async Task UpsertDemoBalanceAsync(string userId, decimal balance, decimal equity, string positionsJson, CancellationToken ct = default)
+    public async Task<int> CountUsersAsync(CancellationToken ct = default)
     {
         await EnsureInitializedAsync(ct);
         await using var conn = OpenConnection();
         await conn.OpenAsync(ct);
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            INSERT INTO DemoAccounts (UserId, Balance, Equity, Currency, PositionsJson, UpdatedAt)
-            VALUES ($id, $bal, $eq, 'USDT', $pos, $ts)
-            ON CONFLICT(UserId) DO UPDATE SET
-              Balance = excluded.Balance,
-              Equity = excluded.Equity,
-              PositionsJson = excluded.PositionsJson,
-              UpdatedAt = excluded.UpdatedAt
-            """;
-        cmd.Parameters.AddWithValue("$id", userId);
-        cmd.Parameters.AddWithValue("$bal", balance.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        cmd.Parameters.AddWithValue("$eq", equity.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        cmd.Parameters.AddWithValue("$pos", positionsJson ?? "[]");
-        cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
-        await cmd.ExecuteNonQueryAsync(ct);
+        cmd.CommandText = "SELECT COUNT(*) FROM Users";
+        var o = await cmd.ExecuteScalarAsync(ct);
+        return Convert.ToInt32(o);
     }
 }
