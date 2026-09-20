@@ -67,18 +67,13 @@ namespace VertexAutoTradeBinance8.Services
         private readonly SemaphoreSlim _timeSyncLock = new(1, 1);
         private static readonly TimeSpan TimeSyncInterval = TimeSpan.FromMinutes(5);
 
-        // ── GetOpenAlgoOrders 20-second cache (prevents Binance 429) ──────
-        // Binance rate-limits this endpoint aggressively; calling it on
-        // every PositionSupervisor tick (every ~5s per symbol) was the
-        // direct cause of the 429 bursts seen in production. A 20s TTL
-        // is short enough to catch newly-placed conditional orders within
-        // a reasonable window, but long enough to stay well inside the
-        // per-minute request budget even with 20 tracked symbols.
+        // ── GetOpenAlgoOrders GLOBAL cache (prevents IP 429 / soft-ban) ──
         private readonly SemaphoreSlim _algoOrdersCacheLock = new(1, 1);
-        private List<BinanceAlgoOrderInfo>? _algoOrdersCache;
-        private string? _algoOrdersCacheSymbol;
+        private List<BinanceAlgoOrderInfo>? _algoOrdersCacheAll;
         private DateTime _algoOrdersCacheExpiry = DateTime.MinValue;
-        private static readonly TimeSpan AlgoOrdersCacheTtl = TimeSpan.FromSeconds(20);
+        private DateTime _algoRateLimitUntil = DateTime.MinValue;
+        private static readonly TimeSpan AlgoOrdersCacheTtl = TimeSpan.FromSeconds(45);
+        private static readonly TimeSpan AlgoRateLimitCooldown = TimeSpan.FromMinutes(3);
 
         public BinanceAlgoOrderService(
             IConfiguration cfg,
@@ -266,7 +261,7 @@ namespace VertexAutoTradeBinance8.Services
                         "[ALGO-RAW] OK {symbol} {type} posSide={ps} trig={tp} body={body}",
                         symbol, type, positionSide, triggerPrice, body);
                     // Invalidate open-orders cache so Supervisor sees new algo orders
-                    _algoOrdersCache = null;
+                    _algoOrdersCacheAll = null;
                     _algoOrdersCacheExpiry = DateTime.MinValue;
                     return true;
                 }
@@ -282,32 +277,27 @@ namespace VertexAutoTradeBinance8.Services
 
         public async Task<List<BinanceAlgoOrderInfo>> GetOpenAlgoOrdersAsync(string? symbol, CancellationToken ct)
         {
-            var result = new List<BinanceAlgoOrderInfo>();
-            if (!TryResolveKeys(out var apiKey, out var apiSecret))
-            {
-                _logger.LogError("[ALGO-RAW] Missing API credentials (no LIVE user keys and no config fallback)");
-                return result;
-            }
-
-            // Fast path: return cached result if still fresh and for the same symbol.
+            // Global cache — never per-symbol REST (causes 429 at scale).
             var now = DateTime.UtcNow;
-            if (_algoOrdersCache != null &&
-                _algoOrdersCacheSymbol == symbol &&
-                now < _algoOrdersCacheExpiry)
-            {
-                return _algoOrdersCache;
-            }
+            if (now < _algoRateLimitUntil && _algoOrdersCacheAll != null)
+                return Filter(symbol, _algoOrdersCacheAll);
+            if (_algoOrdersCacheAll != null && now < _algoOrdersCacheExpiry)
+                return Filter(symbol, _algoOrdersCacheAll);
 
             await _algoOrdersCacheLock.WaitAsync(ct);
             try
             {
-                // Re-check inside the lock
                 now = DateTime.UtcNow;
-                if (_algoOrdersCache != null &&
-                    _algoOrdersCacheSymbol == symbol &&
-                    now < _algoOrdersCacheExpiry)
+                if (now < _algoRateLimitUntil && _algoOrdersCacheAll != null)
+                    return Filter(symbol, _algoOrdersCacheAll);
+                if (_algoOrdersCacheAll != null && now < _algoOrdersCacheExpiry)
+                    return Filter(symbol, _algoOrdersCacheAll);
+
+                var result = new List<BinanceAlgoOrderInfo>();
+                if (!TryResolveKeys(out var apiKey, out var apiSecret))
                 {
-                    return _algoOrdersCache;
+                    _logger.LogError("[ALGO-RAW] Missing API credentials (no LIVE user keys and no config fallback)");
+                    return result;
                 }
 
                 var ts = await GetBinanceTimestampAsync(ct);
@@ -316,79 +306,80 @@ namespace VertexAutoTradeBinance8.Services
                     new("timestamp",  ts.ToString(CultureInfo.InvariantCulture)),
                     new("recvWindow", "60000"),
                 };
-                if (!string.IsNullOrEmpty(symbol)) q.Add(new("symbol", symbol));
-
+                // omit symbol — one call for entire account
                 var (query, toSign) = BuildQuery(q);
                 var sig = Sign(toSign, apiSecret);
                 var url = $"{_baseUrl}/fapi/v1/openAlgoOrders?{query}&signature={sig}";
 
                 using var req = new HttpRequestMessage(HttpMethod.Get, url);
                 req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", apiKey);
-
                 try
                 {
                     using var resp = await _http.SendAsync(req, ct);
                     var body = await resp.Content.ReadAsStringAsync(ct);
+                    if ((int)resp.StatusCode == 429 || body.Contains("-1003"))
+                    {
+                        _algoRateLimitUntil = DateTime.UtcNow.Add(AlgoRateLimitCooldown);
+                        _algoOrdersCacheExpiry = _algoRateLimitUntil;
+                        _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders 429 — cooldown {s}s", (int)AlgoRateLimitCooldown.TotalSeconds);
+                        return Filter(symbol, _algoOrdersCacheAll ?? result);
+                    }
                     if (!resp.IsSuccessStatusCode)
                     {
-                        // -1021 clock drift — force re-sync, don't cache the error
-                        if (body.Contains("-1021"))
-                        {
-                            _lastTimeSync = DateTime.MinValue;
-                            _logger.LogWarning("[ALGO-RAW] -1021 on GetOpenAlgoOrders — clock drift detected, offset will be re-synced on next call. Current offset={off}ms", _timeOffsetMs);
-                        }
-                        else
-                        {
-                            _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
-                        }
-                        return result;
+                        _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
+                        _algoOrdersCacheExpiry = DateTime.UtcNow.Add(TimeSpan.FromSeconds(20));
+                        return Filter(symbol, _algoOrdersCacheAll ?? result);
                     }
-
-                    using var doc = JsonDocument.Parse(body);
-                    if (doc.RootElement.ValueKind != JsonValueKind.Array) return result;
-
-                    foreach (var o in doc.RootElement.EnumerateArray())
+                    using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "[]" : body);
+                    var root = doc.RootElement;
+                    if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("orders", out var oel))
+                        root = oel;
+                    if (root.ValueKind == JsonValueKind.Array)
                     {
-                        decimal GetDec(string name) =>
-                            o.TryGetProperty(name, out var v) && decimal.TryParse(v.GetString(), CultureInfo.InvariantCulture, out var d) ? d : 0m;
-                        string GetStr(string name) => o.TryGetProperty(name, out var v) ? (v.GetString() ?? "") : "";
-                        long GetLong(string name) =>
-                            o.TryGetProperty(name, out var v)
-                                ? (v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var l) ? l
-                                   : long.TryParse(v.GetString(), out var l2) ? l2 : 0L)
-                                : 0L;
-                        string? GetClientId(string name) => o.TryGetProperty(name, out var v) ? v.GetString() : null;
-
-                        result.Add(new BinanceAlgoOrderInfo
+                        foreach (var o in root.EnumerateArray())
                         {
-                            AlgoId = GetLong("algoId"),
-                            ClientAlgoId = GetClientId("clientAlgoId"),
-                            Symbol = GetStr("symbol"),
-                            Side = GetStr("side").Equals("BUY", StringComparison.OrdinalIgnoreCase) ? OrderSide.Buy : OrderSide.Sell,
-                            PositionSide = Enum.TryParse<PositionSide>(GetStr("positionSide"), true, out var ps) ? ps : PositionSide.Both,
-                            OrderType = GetStr("orderType"),
-                            TriggerPrice = GetDec("triggerPrice"),
-                            Quantity = GetDec("quantity"),
-                        });
+                            decimal GetDec(string name) =>
+                                o.TryGetProperty(name, out var v) && decimal.TryParse(v.ToString(), System.Globalization.NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? d : 0m;
+                            string GetStr(string name) => o.TryGetProperty(name, out var v) ? (v.GetString() ?? "") : "";
+                            long GetLong(string name) =>
+                                o.TryGetProperty(name, out var v)
+                                    ? (v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var l) ? l
+                                       : long.TryParse(v.GetString(), out var l2) ? l2 : 0L)
+                                    : 0L;
+                            string? GetClientId(string name) => o.TryGetProperty(name, out var v) ? v.GetString() : null;
+                            result.Add(new BinanceAlgoOrderInfo
+                            {
+                                AlgoId = GetLong("algoId"),
+                                ClientAlgoId = GetClientId("clientAlgoId"),
+                                Symbol = GetStr("symbol"),
+                                Side = GetStr("side").Equals("BUY", StringComparison.OrdinalIgnoreCase) ? OrderSide.Buy : OrderSide.Sell,
+                                PositionSide = Enum.TryParse<PositionSide>(GetStr("positionSide"), true, out var ps) ? ps : PositionSide.Both,
+                                OrderType = GetStr("orderType"),
+                                TriggerPrice = GetDec("triggerPrice"),
+                                Quantity = GetDec("quantity"),
+                            });
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "[ALGO-RAW] EX GetOpenAlgoOrdersAsync {symbol}", symbol);
+                    _logger.LogError(ex, "[ALGO-RAW] EX GetOpenAlgoOrdersAsync");
                 }
 
-                // Cache even an empty result to avoid hammering the endpoint
-                _algoOrdersCache = result;
-                _algoOrdersCacheSymbol = symbol;
+                _algoOrdersCacheAll = result;
                 _algoOrdersCacheExpiry = DateTime.UtcNow.Add(AlgoOrdersCacheTtl);
-                return result;
+                return Filter(symbol, result);
             }
-            finally
-            {
-                _algoOrdersCacheLock.Release();
-            }
+            finally { _algoOrdersCacheLock.Release(); }
         }
 
+        private static List<BinanceAlgoOrderInfo> Filter(string? symbol, List<BinanceAlgoOrderInfo> all)
+        {
+            if (string.IsNullOrEmpty(symbol)) return all;
+            return all.Where(x => string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+
+        
         public async Task<bool> CancelAlgoOrderAsync(long algoId, CancellationToken ct)
         {
             if (!TryResolveKeys(out var apiKey, out var apiSecret)) return false;

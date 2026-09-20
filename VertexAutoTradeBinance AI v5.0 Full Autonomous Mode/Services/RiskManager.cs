@@ -912,6 +912,44 @@ namespace VertexAutoTradeBinance8.Services
         /// <summary>Demo equity from SharedData demo-account.json — independent of Binance.</summary>
         public decimal TryGetDemoEquity()
         {
+            // 1) Prefer vertex_system.db (multi-tenant DemoAccounts)
+            try
+            {
+                var eng = _config?["SharedData:EnginesRoot"];
+                var root = _config?["SharedData:Root"];
+                var dir = !string.IsNullOrWhiteSpace(eng) ? eng
+                    : (!string.IsNullOrWhiteSpace(root)
+                        ? Path.GetDirectoryName(root!.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+                        : null);
+                if (!string.IsNullOrWhiteSpace(dir))
+                {
+                    var dbPath = Path.Combine(dir!, "vertex_system.db");
+                    if (File.Exists(dbPath))
+                    {
+                        using var conn = new Microsoft.Data.Sqlite.SqliteConnection(
+                            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath, Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly }.ToString());
+                        conn.Open();
+                        using var cmd = conn.CreateCommand();
+                        cmd.CommandText = @"SELECT d.Balance FROM DemoAccounts d
+INNER JOIN Users u ON u.Id = d.UserId
+WHERE u.IsActive = 1 AND u.ParallelDemoEnabled = 1";
+                        decimal best = 0m;
+                        using var r = cmd.ExecuteReader();
+                        while (r.Read())
+                        {
+                            if (decimal.TryParse(r.GetString(0), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var b) && b > best)
+                                best = b;
+                        }
+                        if (best > 0)
+                        {
+                            _logger.LogInformation("[BALANCE] Demo equity {b:F2} from vertex_system.db", best);
+                            return best;
+                        }
+                    }
+                }
+            }
+            catch { /* fall through to JSON scan */ }
+
             try
             {
                 var roots = new List<string>();

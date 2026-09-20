@@ -18,6 +18,7 @@ public sealed class ClientDbService
     private readonly string _aesKey;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly ILogger<ClientDbService> _log;
+    private readonly VertexAutoTradeBinance8.Web.Data.SystemDb? _systemDb;
 
     private static readonly JsonSerializerOptions _json = new()
     {
@@ -25,9 +26,10 @@ public sealed class ClientDbService
         PropertyNameCaseInsensitive = true,
     };
 
-    public ClientDbService(IConfiguration cfg, ILogger<ClientDbService> log)
+    public ClientDbService(IConfiguration cfg, ILogger<ClientDbService> log, VertexAutoTradeBinance8.Web.Data.SystemDb? systemDb = null)
     {
         _log = log;
+        _systemDb = systemDb;
 
         // FIX: use SharedData:Root directly (not its parent folder).
         // SharedData:Root = C:\Vertex\Engines\client_001 — this folder is
@@ -152,6 +154,20 @@ public sealed class ClientDbService
 
             EnsureClientDataFolder(client.Id);
             _log.LogInformation("[AUTH] Registered: {Id} {Email}", client.Id, client.Email);
+            try
+            {
+                if (_systemDb != null)
+                {
+                    await _systemDb.EnsureInitializedAsync();
+                    await _systemDb.UpsertDemoBalanceAsync(client.Id, 10_000m, 10_000m, "[]");
+                    // mirror user row via migrator-style SQL is heavy; demo row is enough for sizing
+                }
+            }
+            catch (Exception exSys)
+            {
+                _log.LogWarning(exSys, "[AUTH] SystemDb seed demo failed for {Id}", client.Id);
+            }
+
             return (true, "", client);
         }
         finally { _lock.Release(); }

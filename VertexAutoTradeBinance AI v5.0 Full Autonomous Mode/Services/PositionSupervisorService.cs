@@ -3752,12 +3752,15 @@ namespace VertexAutoTradeBinance8.Services
             private readonly SemaphoreSlim _timeSyncLock = new(1, 1);
             private static readonly TimeSpan TimeSyncInterval = TimeSpan.FromMinutes(10);
 
-            // ── GetOpenAlgoOrders 20-second cache (fixes HTTP 429) ────────────
+            // ── GetOpenAlgoOrders GLOBAL cache (prevents IP 429 / soft-ban) ──
+            // Per-symbol cache was wrong: N symbols × poll = N REST hits.
+            // Fetch ALL open algo orders once; filter client-side by symbol.
             private readonly SemaphoreSlim _cacheLock = new(1, 1);
-            private List<BinanceAlgoOrderInfo>? _cachedOrders;
-            private string?   _cacheSymbol;
+            private List<BinanceAlgoOrderInfo>? _cachedOrdersAll;
             private DateTime  _cacheExpiry = DateTime.MinValue;
-            private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(20);
+            private DateTime  _rateLimitUntil = DateTime.MinValue;
+            private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(45);
+            private static readonly TimeSpan RateLimitCooldown = TimeSpan.FromMinutes(3);
 
             public BinanceAlgoOrderRaw(
                 IConfiguration cfg,
@@ -3947,135 +3950,152 @@ namespace VertexAutoTradeBinance8.Services
             // has the exact same blind spot).
             public async Task<List<BinanceAlgoOrderInfo>> GetOpenAlgoOrdersAsync(string? symbol, CancellationToken ct)
             {
-                var result = new List<BinanceAlgoOrderInfo>();
-                if (!TryResolveKeys(out var apiKey, out var apiSecret))
-                {
-                    _logger.LogError("[ALGO-RAW] Missing API credentials for GetOpenAlgoOrders");
-                    return result;
-                }
-
-                // Fast path: return cached result (prevents 429)
+                // GLOBAL cache: one REST call for all symbols; filter in-memory.
+                // Per-symbol polling caused HTTP 429 (-1003) and IP soft-ban.
                 var now = DateTime.UtcNow;
-                if (_cachedOrders != null && _cacheSymbol == symbol && now < _cacheExpiry)
-                    return _cachedOrders;
+                if (now < _rateLimitUntil && _cachedOrdersAll != null)
+                    return FilterAlgo(_cachedOrdersAll, symbol);
+
+                if (_cachedOrdersAll != null && now < _cacheExpiry)
+                    return FilterAlgo(_cachedOrdersAll, symbol);
 
                 await _cacheLock.WaitAsync(ct);
                 try
                 {
                     now = DateTime.UtcNow;
-                    if (_cachedOrders != null && _cacheSymbol == symbol && now < _cacheExpiry)
-                        return _cachedOrders;
+                    if (now < _rateLimitUntil && _cachedOrdersAll != null)
+                        return FilterAlgo(_cachedOrdersAll, symbol);
+                    if (_cachedOrdersAll != null && now < _cacheExpiry)
+                        return FilterAlgo(_cachedOrdersAll, symbol);
 
-                var ts = await GetBinanceTimestampAsync(ct);
-                var q = new List<KeyValuePair<string, string>>
-                {
-                    new("timestamp",  ts.ToString(CultureInfo.InvariantCulture)),
-                    new("recvWindow", "60000"),
-                };
-                if (!string.IsNullOrEmpty(symbol)) q.Add(new("symbol", symbol));
-
-                var (query, rawQuery) = BuildQuery(q);
-                var sig = Sign(rawQuery, apiSecret);
-                var url = $"{_baseUrl}/fapi/v1/openAlgoOrders?{query}&signature={sig}";
-
-                using var req = new HttpRequestMessage(HttpMethod.Get, url);
-                req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", apiKey);
-
-                try
-                {
-                    using var resp = await _http.SendAsync(req, ct);
-                    var body = await resp.Content.ReadAsStringAsync(ct);
-                    if (!resp.IsSuccessStatusCode)
+                    if (!TryResolveKeys(out var apiKey, out var apiSecret))
                     {
-                        if (body.Contains("-1021") || body.Contains("-1022"))
-                            _lastTimeSync = DateTime.MinValue;
-                        if (body.Contains("-1022"))
+                        _logger.LogError("[ALGO-RAW] Missing API credentials for GetOpenAlgoOrders");
+                        return new List<BinanceAlgoOrderInfo>();
+                    }
+
+                    var result = new List<BinanceAlgoOrderInfo>();
+                    var ts = await GetBinanceTimestampAsync(ct);
+                    // NO symbol param — fetch all open algo orders once
+                    var q = new List<KeyValuePair<string, string>>
+                    {
+                        new("timestamp",  ts.ToString(CultureInfo.InvariantCulture)),
+                        new("recvWindow", "60000"),
+                    };
+                    var (query, rawQuery) = BuildQuery(q);
+                    var sig = Sign(rawQuery, apiSecret);
+                    var url = $"{_baseUrl}/fapi/v1/openAlgoOrders?{query}&signature={sig}";
+
+                    using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                    req.Headers.TryAddWithoutValidation("X-MBX-APIKEY", apiKey);
+
+                    try
+                    {
+                        using var resp = await _http.SendAsync(req, ct);
+                        var body = await resp.Content.ReadAsStringAsync(ct);
+
+                        if ((int)resp.StatusCode == 429 || body.Contains("\"code\":-1003") || body.Contains("-1003"))
                         {
-                            _logger.LogWarning("[ALGO-RAW] GetOpenAlgoOrders -1022 — resync + retry once (LIVE keys)");
-                            ForceClockResync();
-                            if (TryResolveKeys(out apiKey, out apiSecret))
+                            _rateLimitUntil = DateTime.UtcNow.Add(RateLimitCooldown);
+                            _cacheExpiry = _rateLimitUntil;
+                            _logger.LogError(
+                                "[ALGO-RAW] GetOpenAlgoOrders HTTP 429 — cooling down {sec}s (use WS, stop polling)",
+                                (int)RateLimitCooldown.TotalSeconds);
+                            return FilterAlgo(_cachedOrdersAll ?? result, symbol);
+                        }
+
+                        if (!resp.IsSuccessStatusCode)
+                        {
+                            // -1021/-1022: one resync retry only
+                            if (body.Contains("-1021") || body.Contains("-1022"))
                             {
-                                var ts2 = await GetBinanceTimestampAsync(ct);
-                                var q2 = new List<KeyValuePair<string, string>>
+                                _lastTimeSync = DateTime.MinValue;
+                                await EnsureTimeSyncedAsync(ct);
+                                ts = await GetBinanceTimestampAsync(ct);
+                                q = new List<KeyValuePair<string, string>>
                                 {
-                                    new("timestamp", ts2.ToString(CultureInfo.InvariantCulture)),
+                                    new("timestamp",  ts.ToString(CultureInfo.InvariantCulture)),
                                     new("recvWindow", "60000"),
                                 };
-                                if (!string.IsNullOrEmpty(symbol)) q2.Add(new("symbol", symbol));
-                                var (query2, raw2) = BuildQuery(q2);
-                                var sig2 = Sign(raw2, apiSecret);
-                                var url2 = $"{_baseUrl}/fapi/v1/openAlgoOrders?{query2}&signature={sig2}";
-                                using var req2 = new HttpRequestMessage(HttpMethod.Get, url2);
+                                (query, rawQuery) = BuildQuery(q);
+                                sig = Sign(rawQuery, apiSecret);
+                                url = $"{_baseUrl}/fapi/v1/openAlgoOrders?{query}&signature={sig}";
+                                using var req2 = new HttpRequestMessage(HttpMethod.Get, url);
                                 req2.Headers.TryAddWithoutValidation("X-MBX-APIKEY", apiKey);
                                 using var resp2 = await _http.SendAsync(req2, ct);
-                                var body2 = await resp2.Content.ReadAsStringAsync(ct);
-                                if (resp2.IsSuccessStatusCode)
+                                body = await resp2.Content.ReadAsStringAsync(ct);
+                                if ((int)resp2.StatusCode == 429 || body.Contains("-1003"))
                                 {
-                                    body = body2;
-                                    // continue parse with success path by not returning
+                                    _rateLimitUntil = DateTime.UtcNow.Add(RateLimitCooldown);
+                                    _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders 429 after retry — cooldown");
+                                    return FilterAlgo(_cachedOrdersAll ?? result, symbol);
                                 }
-                                else
+                                if (!resp2.IsSuccessStatusCode)
                                 {
-                                    _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp2.StatusCode, body2);
-                                    return result;
+                                    _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp2.StatusCode, body);
+                                    _cacheExpiry = DateTime.UtcNow.Add(TimeSpan.FromSeconds(15));
+                                    return FilterAlgo(_cachedOrdersAll ?? result, symbol);
                                 }
                             }
                             else
                             {
                                 _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
-                                return result;
+                                _cacheExpiry = DateTime.UtcNow.Add(TimeSpan.FromSeconds(15));
+                                return FilterAlgo(_cachedOrdersAll ?? result, symbol);
                             }
                         }
-                        else
+
+                        using var doc = System.Text.Json.JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "[]" : body);
+                        var root = doc.RootElement;
+                        if (root.ValueKind == System.Text.Json.JsonValueKind.Object && root.TryGetProperty("orders", out var ordersEl))
+                            root = ordersEl;
+                        if (root.ValueKind != System.Text.Json.JsonValueKind.Array)
                         {
-                            _logger.LogError("[ALGO-RAW] GetOpenAlgoOrders HTTP {code} body={body}", (int)resp.StatusCode, body);
-                            return result;
+                            _cachedOrdersAll = result;
+                            _cacheExpiry = DateTime.UtcNow.Add(CacheTtl);
+                            return FilterAlgo(result, symbol);
+                        }
+
+                        foreach (var o in root.EnumerateArray())
+                        {
+                            string GetStr(string name) => o.TryGetProperty(name, out var v) ? (v.GetString() ?? "") : "";
+                            decimal GetDec(string name) =>
+                                o.TryGetProperty(name, out var v) && decimal.TryParse(v.ToString(), System.Globalization.NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? d : 0m;
+                            long GetLong(string name) =>
+                                o.TryGetProperty(name, out var v)
+                                    ? (v.ValueKind == System.Text.Json.JsonValueKind.Number ? v.GetInt64() : (long.TryParse(v.GetString(), out var l2) ? l2 : 0L))
+                                    : 0L;
+                            string? GetClientId(string name) => o.TryGetProperty(name, out var v) ? v.GetString() : null;
+
+                            result.Add(new BinanceAlgoOrderInfo
+                            {
+                                AlgoId = GetLong("algoId"),
+                                ClientAlgoId = GetClientId("clientAlgoId"),
+                                Symbol = GetStr("symbol"),
+                                Side = GetStr("side").Equals("BUY", StringComparison.OrdinalIgnoreCase) ? OrderSide.Buy : OrderSide.Sell,
+                                PositionSide = Enum.TryParse<PositionSide>(GetStr("positionSide"), true, out var ps) ? ps : PositionSide.Both,
+                                OrderType = GetStr("orderType"),
+                                TriggerPrice = GetDec("triggerPrice"),
+                                Quantity = GetDec("quantity"),
+                            });
                         }
                     }
-
-                    // CONFIRMED real response shape via official Binance
-                    // docs: a plain top-level JSON array, not wrapped in
-                    // an "orders" property.
-                    using var doc = JsonDocument.Parse(body);
-                    if (doc.RootElement.ValueKind != JsonValueKind.Array) return result;
-
-                    foreach (var o in doc.RootElement.EnumerateArray())
+                    catch (Exception ex)
                     {
-                        decimal GetDec(string name) =>
-                            o.TryGetProperty(name, out var v) && decimal.TryParse(v.GetString(), CultureInfo.InvariantCulture, out var d) ? d : 0m;
-                        string GetStr(string name) => o.TryGetProperty(name, out var v) ? (v.GetString() ?? "") : "";
-                        long GetLong(string name) =>
-                            o.TryGetProperty(name, out var v)
-                                ? (v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var l) ? l
-                                   : long.TryParse(v.GetString(), out var l2) ? l2 : 0L)
-                                : 0L;
-                        string? GetClientId(string name) => o.TryGetProperty(name, out var v) ? v.GetString() : null;
-
-                        result.Add(new BinanceAlgoOrderInfo
-                        {
-                            AlgoId = GetLong("algoId"),
-                            ClientAlgoId = GetClientId("clientAlgoId"),
-                            Symbol = GetStr("symbol"),
-                            Side = GetStr("side").Equals("BUY", StringComparison.OrdinalIgnoreCase) ? OrderSide.Buy : OrderSide.Sell,
-                            PositionSide = Enum.TryParse<PositionSide>(GetStr("positionSide"), true, out var ps) ? ps : PositionSide.Both,
-                            OrderType = GetStr("orderType"), // "STOP" / "TAKE_PROFIT" / etc
-                            TriggerPrice = GetDec("triggerPrice"),
-                            Quantity = GetDec("quantity"),
-                        });
+                        _logger.LogError(ex, "[ALGO-RAW] EX GetOpenAlgoOrdersAsync");
                     }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "[ALGO-RAW] EX GetOpenAlgoOrdersAsync {symbol}", symbol);
-                }
 
-                // Cache even empty result to prevent 429 hammering
-                _cachedOrders = result;
-                _cacheSymbol  = symbol;
-                _cacheExpiry  = DateTime.UtcNow.Add(CacheTtl);
-                return result;
-                } // end cache lock try
+                    _cachedOrdersAll = result;
+                    _cacheExpiry = DateTime.UtcNow.Add(CacheTtl);
+                    return FilterAlgo(result, symbol);
+                }
                 finally { _cacheLock.Release(); }
+            }
+
+            private static List<BinanceAlgoOrderInfo> FilterAlgo(List<BinanceAlgoOrderInfo> all, string? symbol)
+            {
+                if (string.IsNullOrEmpty(symbol)) return all;
+                return all.Where(o => string.Equals(o.Symbol, symbol, StringComparison.OrdinalIgnoreCase)).ToList();
             }
 
             public async Task<bool> CancelAlgoOrderAsync(long algoId, CancellationToken ct)
