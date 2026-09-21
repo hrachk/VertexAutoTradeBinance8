@@ -591,66 +591,15 @@ namespace VertexAutoTradeBinance8.Services
                         "[SUPERVISOR][{sym}][{side}] Phase 2 — TP2 fired → BE now",
                         symbol, side);
                 }
-                else
+                                else
                 {
-                    // Phase 1: TP1 fired — two-tier BE logic:
-                    //
-                    // 1a. DANGER (price pulling back toward entry):
-                    //     If price drops below entry + 0.5×ATR (LONG) or
-                    //     rises above entry - 0.5×ATR (SHORT) → move to BE
-                    //     IMMEDIATELY for protection. TP1 hit but losing ground.
-                    //
-                    // 1b. TREND CONTINUING (price still above TP1 zone):
-                    //     If price > entry + 1.5×ATR AND EMA21 intact →
-                    //     move to BE as confirmation (trade is running well).
-                    //
-                    // 1c. NEUTRAL (between 0.5× and 1.5×ATR): wait, let breathe.
-                    //     Don't touch SL — normal post-TP1 consolidation.
-
-                    decimal ema21 = klines1m != null && klines1m.Count >= 21
-                        ? klines1m.Skip(klines1m.Count - 21).Average(k => (decimal)k.ClosePrice)
-                        : 0m;
-
-                    // Distance from entry in ATR units
-                    decimal distFromEntry = side == PositionSide.Long
-                        ? mark - entry   // positive = profitable
-                        : entry - mark;  // positive = profitable
-
-                    bool inDangerZone = distFromEntry < ATR * 0.5m;  // price nearly back at entry
-                    bool trendConfirmed = distFromEntry > ATR * 1.5m  // still above TP1 area
-                        && (ema21 <= 0m || (
-                            side == PositionSide.Long
-                                ? mark > ema21 * 0.998m
-                                : mark < ema21 * 1.002m));
-
-                    if (inDangerZone)
-                    {
-                        // 1a: Price pulling back fast — protect immediately
-                        beConditionMet = true;
-                        _logger.LogInformation(
-                            "[SUPERVISOR][{sym}][{side}] Phase 1a — TP1 fired + DANGER " +
-                            "(dist={d:F4} < 0.5×ATR={a:F4}) → BE now for protection",
-                            symbol, side, distFromEntry, ATR * 0.5m);
-                    }
-                    else if (trendConfirmed)
-                    {
-                        // 1b: Trend still running — move BE to lock in
-                        beConditionMet = true;
-                        _logger.LogInformation(
-                            "[SUPERVISOR][{sym}][{side}] Phase 1b — TP1 fired + trend " +
-                            "continuing (dist={d:F4} > 1.5×ATR={a:F4}) → BE confirmed",
-                            symbol, side, distFromEntry, ATR * 1.5m);
-                    }
-                    else
-                    {
-                        // 1c: Neutral zone — let position breathe
-                        beConditionMet = false;
-                        _logger.LogDebug(
-                            "[SUPERVISOR][{sym}][{side}] Phase 1c — TP1 fired, " +
-                            "neutral zone (dist={d:F4}, 0.5×ATR={lo:F4}, 1.5×ATR={hi:F4}) — wait",
-                            symbol, side, distFromEntry, ATR * 0.5m, ATR * 1.5m);
-                        return;
-                    }
+                    // Phase 1: TP1 fired → ALWAYS move SL to BE once (Demo parity).
+                    // Previously 1a/1b/1c left a "neutral" zone where Live never
+                    // moved SL while Demo moved immediately after first TP.
+                    beConditionMet = true;
+                    _logger.LogInformation(
+                        "[SUPERVISOR][{sym}][{side}] Phase 1 — TP1 fired → BE now (Live=Demo parity)",
+                        symbol, side);
                 }
 
                 if (!beConditionMet) return;
@@ -658,10 +607,14 @@ namespace VertexAutoTradeBinance8.Services
                 // =========================
                 // LEVEL CONTROL (анти-спам)
                 // =========================
+                // First BE after TP1 must never be blocked by ROI-level gate.
+                bool firstBeMove = !_beMoved.ContainsKey(keyProbe) || _beMoved[keyProbe] <= 0;
                 int level = (int)((roi - BE_TRIGGER) / STEP) + 1;
+                if (level < 1) level = 1;
                 int prevLevel = _beLevel.GetOrAdd(keyProbe, 0);
-                if (level <= prevLevel) return;  // не дергаем повторно
-                _beLevel[keyProbe] = level;
+                if (!firstBeMove && level <= prevLevel) return;
+                if (level > prevLevel) _beLevel[keyProbe] = level;
+                else if (firstBeMove) _beLevel[keyProbe] = Math.Max(prevLevel, 1);
 
                 // =========================
                 // PARTIAL CLOSE (раз в уровень)
