@@ -6614,6 +6614,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     // snapshot-diff redraw for 10s so the line doesn't
     // disappear between cancel-old-order and place-new-order.
     DateTime _tpSlDragFreezeUntil = DateTime.MinValue;
+    DateTime _lastUiRenderUtc = DateTime.MinValue;
+    const int UiRenderMinMs = 250; // throttle full Blazor re-render under live ticks
     bool IsTpSlDragFrozen => DateTime.UtcNow < _tpSlDragFreezeUntil;
 
     // ── Leverage editor ──────────────────────────────────────────────
@@ -6739,6 +6741,16 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     async Task ShowTpSlLinesAsync()
     {
         if (_selectedPosition == null) return;
+        // Re-bind drag callbacks every time lines are (re)drawn — init/re-render
+        // can wipe session handlers and leave lines non-draggable.
+        try
+        {
+            _dotNetRef ??= DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("marketChart.bindSlTpCallbacks",
+                $"chartContainer-{_chartInstanceId}", _dotNetRef);
+        }
+        catch { }
+
         var pos = _selectedPosition;
 
         // ── DEMO MODE: SL/TP are embedded in DemoPosition directly —

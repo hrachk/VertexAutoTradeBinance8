@@ -731,7 +731,7 @@
                 return vline;
             }
 
-            const NEAR_LINE_PX = 18; // wider grab zone — 10px was too tight
+            const NEAR_LINE_PX = 28; // wider grab zone — 10px was too tight
 
             function nearEntryLine(y) {
                 if (!session.entryPrice) return false;
@@ -798,6 +798,42 @@
                     // (which is still at the old price until we cancel it).
                     session.draggingLineOriginalPrice = nearby.line.options().price;
                     container.style.cursor = 'grabbing';
+                    e.preventDefault();
+                    // Capture mouse even outside chart (price scale / browser edge)
+                    if (!session._docDragBound) {
+                        session._docDragBound = true;
+                        const onDocMove = (ev) => {
+                            const sess = sessions.get(containerId);
+                            if (!sess || !sess.draggingLine) return;
+                            const rect = container.getBoundingClientRect();
+                            const y = ev.clientY - rect.top;
+                            const price = sess.candleSeries.coordinateToPrice(y);
+                            if (price == null) return;
+                            const kind = sess.draggingLineKind === 'sl' ? 'SL' :
+                                (sess.draggingLineKind === 'tp'
+                                    ? `TP${(sess.draggingLineIdx ?? 0) + 1}` : 'TP');
+                            try { sess.draggingLine.applyOptions({ price, title: `${kind} ${fmtPrice(price)}` }); } catch (err) {}
+                            if (sess.draggingLineKind === 'tp' && sess.tpLines) {
+                                const tp = sess.tpLines.find(x => x.index === sess.draggingLineIdx);
+                                if (tp) tp.price = price;
+                            }
+                            this.repositionAllPills(containerId, sess._lastPnlFor || null);
+                        };
+                        const onDocUp = (ev) => {
+                            document.removeEventListener('mousemove', onDocMove, true);
+                            document.removeEventListener('mouseup', onDocUp, true);
+                            const sess = sessions.get(containerId);
+                            if (sess) sess._docDragBound = false;
+                            // Re-dispatch logic by synthesizing mouseup on container
+                            try {
+                                container.dispatchEvent(new MouseEvent('mouseup', {
+                                    bubbles: true, clientX: ev.clientX, clientY: ev.clientY
+                                }));
+                            } catch (err) {}
+                        };
+                        document.addEventListener('mousemove', onDocMove, true);
+                        document.addEventListener('mouseup', onDocUp, true);
+                    }
                     e.preventDefault();
                     return;
                 }
@@ -890,29 +926,11 @@
                 box.textContent = `Expected ${isProfitSide ? 'Profit' : 'Loss'} ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)}`;
             }, listenerOpts);
 
-            // FIX: mouseleave while dragging = treat as mouseup
-            // Without this, dragging outside chart leaves line at wrong
-            // position with no callback fired → ghost line / no order update
+            // FIX: do NOT cancel drag on mouseleave.
+            // User often drags near the price axis / edge; canceling made SL/TP
+            // "not work". Document-level mouseup (below) commits the drag.
             container.addEventListener('mouseleave', (e) => {
-                const session = sessions.get(containerId) || {};
-                if (session.draggingLine) {
-                    // Snap back to original price — don't commit an accidental
-                    // drag-outside. Better UX than placing order at wrong price.
-                    const origPrice = session.draggingLineOriginalPrice;
-                    if (origPrice > 0) {
-                        try { session.draggingLine.applyOptions({ price: origPrice }); } catch(e) {}
-                        if (session.draggingLineKind === 'tp' && session.tpLines) {
-                            const tp = session.tpLines.find(t => t.index === session.draggingLineIdx);
-                            if (tp) tp.price = origPrice;
-                        }
-                    }
-                    session.draggingLine = null;
-                    session.draggingLineKind = null;
-                    session.draggingLineIdx = null;
-                    session.draggingLineOriginalPrice = null;
-                    container.style.cursor = 'crosshair';
-                    this.repositionAllPills(containerId, session._lastPnlFor || null);
-                }
+                /* intentionally empty while draggingLine — keep grab state */
             }, listenerOpts);
 
             container.addEventListener('mouseup', (e) => {
@@ -1865,6 +1883,9 @@
         showTpSlLines(containerId, entry, sl, tps, side) {
             const s = sessions.get(containerId);
             if (!s) return;
+            // Keep drag context alive: entryPrice must be set for mousedown handlers
+            if (entry > 0) s.entryPrice = entry;
+            if (side) s.side = side;
             // If user is actively dragging a line, defer this update
             // by stashing the args and applying them after mouseup.
             if (s.draggingLine) {
