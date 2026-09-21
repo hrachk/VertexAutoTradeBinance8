@@ -18,7 +18,7 @@ public sealed class ShadowKpiResult
     public PortfolioKpi Filtered { get; set; } = new();
     public decimal DeltaPf => Filtered.ProfitFactor - Actual.ProfitFactor;
     public decimal DeltaDd => Filtered.MaxDd - Actual.MaxDd; // more negative Actual MaxDd is worse; filtered maxDd smaller magnitude is better
-    public bool RecommendEnableGate => Actual.Trades >= 50 && DeltaPf >= 0.15m && DeltaDd >= 0m;
+    public bool RecommendEnableGate => Actual.Trades >= 50 && DeltaPf >= 0.15m && Filtered.MaxDd <= Actual.MaxDd;
 }
 
 /// <summary>
@@ -62,8 +62,10 @@ public sealed class ShadowKpiEvaluator
                 if (t.OpenedAtUtc >= b.start && t.OpenedAtUtc <= b.end)
                     return false;
             }
-            var reason = (t.CloseReason ?? "").ToUpperInvariant();
-            if (reason.Contains("NEWS") || reason.Contains("MACRO")) return false;
+            var reason = ((t.CloseReason ?? "") + " " + (t.Note ?? "") + " " + (t.SlAttributionCode ?? "")).ToUpperInvariant();
+            if (reason.Contains("NEWS") || reason.Contains("MACRO") || reason.Contains("REASON_MACRO")
+                || reason.Contains("REASON_SPREAD") || reason.Contains("REASON_LOW_DEPTH")
+                || reason.Contains("REASON_TOKEN")) return false;
             return true;
         }).ToList();
 

@@ -282,6 +282,7 @@ public class Program
 
                     // ===== AI / CORE =====
                     services.AddSingleton<AiSelfLearningService>();
+                    services.AddSingleton<VertexAutoTradeBinance8.Services.News.NewsMicrostructureGate>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.News.INewsCatalystService, VertexAutoTradeBinance8.Services.News.NewsCatalystService>();
                     services.AddHostedService<VertexAutoTradeBinance8.Services.News.NewsFeedIngestService>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.News.MacroCalendarService>();

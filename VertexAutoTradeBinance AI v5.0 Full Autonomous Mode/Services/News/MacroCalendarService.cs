@@ -118,8 +118,11 @@ public sealed class MacroCalendarService : BackgroundService
                             Headline = reason,
                             Credibility = 1.0m,
                             Impact = 0.95m,
-                            Vector = NewsVector.Neutral, // unknown direction; grade High
+                            Vector = NewsVector.Neutral,
                             Grade = NewsImpactGrade.High,
+                            Category = NewsEventCategory.MacroHigh,
+                            EventDurationMinutes = 45,
+                            ReasonCode = NewsReasonCodes.MacroHighImpact,
                             RelatedSymbols = new List<string>(),
                             Utc = DateTime.UtcNow
                         });
