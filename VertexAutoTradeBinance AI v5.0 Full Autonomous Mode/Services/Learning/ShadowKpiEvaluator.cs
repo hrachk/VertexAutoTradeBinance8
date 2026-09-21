@@ -62,10 +62,15 @@ public sealed class ShadowKpiEvaluator
                 if (t.OpenedAtUtc >= b.start && t.OpenedAtUtc <= b.end)
                     return false;
             }
-            var reason = ((t.CloseReason ?? "") + " " + (t.Note ?? "") + " " + (t.SlAttributionCode ?? "")).ToUpperInvariant();
-            if (reason.Contains("NEWS") || reason.Contains("MACRO") || reason.Contains("REASON_MACRO")
-                || reason.Contains("REASON_SPREAD") || reason.Contains("REASON_LOW_DEPTH")
-                || reason.Contains("REASON_TOKEN")) return false;
+            // TradeJournalEntry has CloseReason + SlAttributionCode (no Note field)
+            var tag = ((t.CloseReason ?? "") + " " + (t.SlAttributionCode ?? "")).ToUpperInvariant();
+            if (tag.Contains("NEWS", StringComparison.Ordinal)
+                || tag.Contains("MACRO", StringComparison.Ordinal)
+                || tag.Contains("REASON_MACRO", StringComparison.Ordinal)
+                || tag.Contains("REASON_SPREAD", StringComparison.Ordinal)
+                || tag.Contains("REASON_LOW_DEPTH", StringComparison.Ordinal)
+                || tag.Contains("REASON_TOKEN", StringComparison.Ordinal))
+                return false;
             return true;
         }).ToList();
 
