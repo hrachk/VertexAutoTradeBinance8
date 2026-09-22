@@ -344,8 +344,7 @@ public sealed class NewsCatalystService : INewsCatalystService
                 reasonCode = ev.ReasonCode ?? "",
                 shadow = ShadowMode
             };
-            File.AppendAllText(path, JsonSerializer.Serialize(row) + "
-");
+            File.AppendAllText(path, JsonSerializer.Serialize(row) + "\n");
             // Keep file bounded (~400 lines)
             try
             {
