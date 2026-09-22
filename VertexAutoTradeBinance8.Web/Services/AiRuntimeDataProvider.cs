@@ -15,7 +15,7 @@ public sealed class AiRuntimeDataProvider : IAsyncDisposable
     public AiRuntimeDataProvider(AiLearningFileService loader)
     {
         _loader = loader;
-        _timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(8));
         _ = Loop();
     }
 

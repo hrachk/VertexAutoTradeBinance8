@@ -3315,7 +3315,7 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
         // Positions: 30s (open positions don't change that fast)
         // Orders: 60s (only changes when user moves SL/TP)
         // Account info: 60s (balance changes only on trade close)
-        _timer = new PeriodicTimer(TimeSpan.FromSeconds(15)); // positions every 15s for faster updates 30ses GetOpenOrders weight 40 from 480/min to 160/min
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(20)); // positions/orders poll — 20s cuts REST+Blazor load vs 15s
         // InvokeAsync ensures the entire async tick (and all StateHasChanged()
         // calls inside LoadData/LoadAllOpenPositions/etc.) runs on the Blazor
         // SynchronizationContext, not the ThreadPool. Without this, calling
@@ -3329,8 +3329,8 @@ html,body{background:var(--bg)!important;color:var(--txt2);-webkit-font-smoothin
     DateTime _lastLiveRender = DateTime.MinValue;
     DateTime _lastDemoPnlRender = DateTime.MinValue;
     bool _onTickBusy;
-    static readonly TimeSpan LiveRenderThrottle  = TimeSpan.FromMilliseconds(200); // chart JS: 5fps
-    static readonly TimeSpan StateHasChangedThrottle = TimeSpan.FromMilliseconds(500); // Blazor diff: 2fps ~12fps chart updates, feels fluid without extra load
+    static readonly TimeSpan LiveRenderThrottle  = TimeSpan.FromMilliseconds(400); // chart JS ~2.5fps
+    static readonly TimeSpan StateHasChangedThrottle = TimeSpan.FromMilliseconds(800); // Blazor full-tree diff is expensive on /market
 
     int _liveTickCount = 0;
     int _liveKlineCount = 0;

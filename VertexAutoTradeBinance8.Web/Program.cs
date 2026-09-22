@@ -45,7 +45,13 @@ if (builder.Environment.IsDevelopment())
 
 // Add services to the container.
 builder.Services.AddRazorPages();
-builder.Services.AddServerSideBlazor();
+builder.Services.AddServerSideBlazor()
+    .AddCircuitOptions(o =>
+    {
+        o.DisconnectedCircuitRetentionPeriod = TimeSpan.FromMinutes(3);
+        o.DisconnectedCircuitMaxRetained = 10;
+        o.JSInteropDefaultCallTimeout = TimeSpan.FromSeconds(60);
+    });
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Services.Infra.SqliteJournalStore>();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Services.Entry.ApprovedEntryFileBus>();
 builder.Services.AddSingleton<VertexAutoTradeBinance8.Services.Entry.IApprovedEntryPublisher>(sp => sp.GetRequiredService<VertexAutoTradeBinance8.Services.Entry.ApprovedEntryFileBus>());
