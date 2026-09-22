@@ -49,6 +49,7 @@ public sealed class NewsCatalystService : INewsCatalystService
     {
         if (ev == null) return;
         ClassifyIfNeeded(ev);
+        AppendNewsTape(ev); // SharedData/news_tape.jsonl — UI лента на /ai-dashboard
 
         lock (_gate)
         {
@@ -319,6 +320,42 @@ public sealed class NewsCatalystService : INewsCatalystService
     {
         if (string.IsNullOrEmpty(s)) return "";
         return s.Length <= n ? s : s[..n] + "…";
+    }
+
+
+    /// <summary>Compact tape for Web UI (last events with headline context).</summary>
+    private void AppendNewsTape(NewsEvent ev)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(_sharedRoot)) return;
+            Directory.CreateDirectory(_sharedRoot);
+            var path = Path.Combine(_sharedRoot, "news_tape.jsonl");
+            var row = new
+            {
+                utc = ev.Utc == default ? DateTime.UtcNow : ev.Utc,
+                source = Trunc(ev.Source, 40),
+                headline = Trunc(ev.Headline, 180),
+                vector = ev.Vector.ToString(),
+                grade = ev.Grade.ToString(),
+                category = ev.Category.ToString(),
+                impact = Math.Round(ev.Impact, 2),
+                symbols = (ev.RelatedSymbols ?? new List<string>()).Take(6).ToArray(),
+                reasonCode = ev.ReasonCode ?? "",
+                shadow = ShadowMode
+            };
+            File.AppendAllText(path, JsonSerializer.Serialize(row) + "
+");
+            // Keep file bounded (~400 lines)
+            try
+            {
+                var lines = File.ReadAllLines(path);
+                if (lines.Length > 400)
+                    File.WriteAllLines(path, lines.AsSpan(lines.Length - 300).ToArray());
+            }
+            catch { }
+        }
+        catch { }
     }
 
     private void AppendDecisionLog(object row)
