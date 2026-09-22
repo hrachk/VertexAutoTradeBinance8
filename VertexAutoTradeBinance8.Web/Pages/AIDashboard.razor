@@ -171,7 +171,7 @@
             <div class="nf-tape">
                 <div class="nf-tape-hd">
                     <span>Лента важных событий</span>
-                    <span class="nf-tape-hint">короткий контекст из фильтра (Shadow) · обновляется с Engine</span>
+                    <span class="nf-tape-hint">UTC · impact · sentiment · источник · опрос ~15с</span>
                 </div>
                 @if (_newsTape.Count == 0)
                 {
@@ -186,13 +186,22 @@
                                 <div class="nf-tape-top">
                                     <span class="nf-tape-vec">@n.VecIcon</span>
                                     <span class="nf-tape-cat">@n.CategoryLabel</span>
-                                    <span class="nf-tape-time">@n.TimeAgo</span>
+                                    <span class="nf-tape-impact" title="Impact 1-5">⚡ @n.ImpactStars/5</span>
+                                    <span class="nf-tape-sent" title="Sentiment -1..+1">@n.SentimentLabel</span>
+                                    <span class="nf-tape-time" title="@n.UtcLabel">@n.TimeAgo</span>
                                     @if (!string.IsNullOrEmpty(n.Source))
                                     {
                                         <span class="nf-tape-src">@n.Source</span>
                                     }
                                 </div>
                                 <div class="nf-tape-hl">@n.Headline</div>
+                                <div class="nf-tape-meta">
+                                    <span>UTC @n.UtcLabel</span>
+                                    @if (!string.IsNullOrEmpty(n.Url))
+                                    {
+                                        <a class="nf-tape-link" href="@n.Url" target="_blank" rel="noopener">источник ↗</a>
+                                    }
+                                </div>
                                 @if (n.Symbols.Count > 0)
                                 {
                                     <div class="nf-tape-syms">
@@ -705,6 +714,13 @@ html,body { background:var(--bg)!important; color:var(--txt); }
 .nf-chip{font-size:10px;padding:2px 6px;border-radius:6px;background:rgba(255,255,255,.06);color:#a8b8c8;}
 .nf-tape-src{opacity:.85;}
 
+
+.nf-tape-impact{padding:1px 6px;border-radius:999px;background:rgba(251,191,36,.12);color:#fbbf24;font-weight:600;}
+.nf-tape-sent{font-variant-numeric:tabular-nums;color:#a8b8c8;}
+.nf-tape-meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:4px;font-size:11px;color:#7a8a9c;}
+.nf-tape-link{color:#38bdf8;text-decoration:none;}
+.nf-tape-link:hover{text-decoration:underline;}
+
 </style>
 
 @code {
@@ -946,6 +962,20 @@ html,body { background:var(--bg)!important; color:var(--txt); }
                     string css = vector.Contains("Bull", StringComparison.OrdinalIgnoreCase) ? "nf-bull"
                         : vector.Contains("Bear", StringComparison.OrdinalIgnoreCase) ? "nf-bear" : "nf-neu";
 
+                    int stars = 1;
+                    if (r.TryGetProperty("impactStars", out var st) && st.TryGetInt32(out var si)) stars = Math.Clamp(si, 1, 5);
+                    else if (r.TryGetProperty("impact", out var im) && im.TryGetDecimal(out var imp))
+                        stars = imp >= 0.85m ? 5 : imp >= 0.7m ? 4 : imp >= 0.5m ? 3 : imp >= 0.35m ? 2 : 1;
+
+                    decimal sent = 0;
+                    if (r.TryGetProperty("sentiment", out var se) && se.TryGetDecimal(out var sd)) sent = sd;
+                    string sentLabel = sent > 0.05m ? $"+{sent:F2}" : sent.ToString("F2");
+                    string url = r.TryGetProperty("url", out var ur) ? (ur.GetString() ?? "") : "";
+
+                    // Prefer MACRO label for Fear&Greed even if old tape said TokenSpecific
+                    if (hl.Contains("Fear", StringComparison.OrdinalIgnoreCase) && hl.Contains("Greed", StringComparison.OrdinalIgnoreCase))
+                        catLabel = "РЕЖИМ";
+
                     items.Add(new NewsTapeItem
                     {
                         Headline = hl.Length > 160 ? hl[..160] + "…" : hl,
@@ -953,6 +983,10 @@ html,body { background:var(--bg)!important; color:var(--txt); }
                         CategoryLabel = catLabel,
                         VecIcon = vecIcon,
                         TimeAgo = ago,
+                        UtcLabel = utc.ToString("dd MMM HH:mm") + "Z",
+                        ImpactStars = stars,
+                        SentimentLabel = sentLabel,
+                        Url = url,
                         Symbols = syms.Take(5).ToList(),
                         Css = css
                     });
@@ -974,6 +1008,10 @@ html,body { background:var(--bg)!important; color:var(--txt); }
         public string CategoryLabel { get; set; } = "";
         public string VecIcon { get; set; } = "";
         public string TimeAgo { get; set; } = "";
+        public string UtcLabel { get; set; } = "";
+        public int ImpactStars { get; set; } = 1;
+        public string SentimentLabel { get; set; } = "0";
+        public string Url { get; set; } = "";
         public List<string> Symbols { get; set; } = new();
         public string Css { get; set; } = "";
     }

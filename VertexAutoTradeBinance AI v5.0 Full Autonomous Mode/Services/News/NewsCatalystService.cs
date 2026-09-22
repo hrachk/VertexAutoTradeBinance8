@@ -294,6 +294,14 @@ public sealed class NewsCatalystService : INewsCatalystService
     {
         var h = (ev.Headline ?? "") + " " + (ev.Body ?? "");
         var u = h.ToUpperInvariant();
+        // Fear&Greed / regime → market-wide, never "TOKEN listing"
+        if (ContainsAny(u, "FEAR&GREED", "FEAR AND GREED", "FEAR GREED", "FNG"))
+        {
+            ev.Category = NewsEventCategory.MacroHigh;
+            if (ev.Impact < 0.35m) ev.Impact = 0.35m;
+            ev.ReasonCode ??= "REASON_MARKET_REGIME_FNG";
+            return;
+        }
         if (ContainsAny(u, "FOMC", "CPI", "NFP", "NON-FARM", "INTEREST RATE", "FED ", "ECB", "MACRO:"))
         {
             ev.Category = NewsEventCategory.MacroHigh;
@@ -331,17 +339,33 @@ public sealed class NewsCatalystService : INewsCatalystService
             if (string.IsNullOrEmpty(_sharedRoot)) return;
             Directory.CreateDirectory(_sharedRoot);
             var path = Path.Combine(_sharedRoot, "news_tape.jsonl");
+            // Sentiment proxy from vector × impact for UI (-1..+1)
+            decimal sentiment = ev.Vector switch
+            {
+                NewsVector.Bullish => Math.Min(1m, ev.Impact),
+                NewsVector.Bearish => -Math.Min(1m, ev.Impact),
+                _ => 0m
+            };
+            int impactStars = ev.Impact >= 0.85m ? 5
+                : ev.Impact >= 0.7m ? 4
+                : ev.Impact >= 0.5m ? 3
+                : ev.Impact >= 0.35m ? 2 : 1;
+
             var row = new
             {
                 utc = ev.Utc == default ? DateTime.UtcNow : ev.Utc,
-                source = Trunc(ev.Source, 40),
+                ingestedUtc = DateTime.UtcNow,
+                source = Trunc(ev.Source, 48),
                 headline = Trunc(ev.Headline, 180),
                 vector = ev.Vector.ToString(),
                 grade = ev.Grade.ToString(),
                 category = ev.Category.ToString(),
                 impact = Math.Round(ev.Impact, 2),
+                impactStars,
+                sentiment = Math.Round(sentiment, 2),
                 symbols = (ev.RelatedSymbols ?? new List<string>()).Take(6).ToArray(),
                 reasonCode = ev.ReasonCode ?? "",
+                url = Trunc(ev.OfficialSpeaker, 120),
                 shadow = ShadowMode
             };
             File.AppendAllText(path, JsonSerializer.Serialize(row) + "\n");
