@@ -70,52 +70,109 @@
         var Stats = State.Snapshot;
         var Trades = State.Trades;
 
-        <!-- ═══ SHADOW KPI (News filter impact) ═══════════════════ -->
-        <div class="ab-panel" style="margin:12px 16px;border:1px solid rgba(0,212,255,.25);background:rgba(0,20,40,.55);backdrop-filter:blur(8px);border-radius:12px;padding:14px 16px;">
-            <div class="ab-panel-hd" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                <span class="ab-panel-title">📰 NEWS FILTER ALPHA IMPACT</span>
-                <span style="font-size:12px;padding:3px 10px;border-radius:999px;background:@(_shadowRecommend ? "rgba(0,255,156,.15)" : "rgba(255,80,80,.12)");color:@(_shadowRecommend ? "#00ff9c" : "#ff6b6b");border:1px solid @(_shadowRecommend ? "rgba(0,255,156,.35)" : "rgba(255,80,80,.3)")">
-                    RecommendEnableGate @(_shadowRecommend ? "🟢" : "🔴")
-                </span>
-            </div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;font-size:13px;">
-                <div style="background:rgba(0,0,0,.25);border-radius:8px;padding:10px;">
-                    <div class="ab-dim" style="font-size:10px;letter-spacing:.06em;">ACTUAL PF</div>
-                    <div style="font-size:20px;font-weight:700;">@_shadowActualPf.ToString("F2")</div>
-                    <div class="ab-dim">n=@_shadowActualN · WR @_shadowActualWr.ToString("P0")</div>
+        <!-- ═══ NEWS FILTER — user-friendly KPI ═══════════════════ -->
+        <div class="ab-panel nf-panel">
+            <div class="nf-hd">
+                <div>
+                    <div class="nf-title">📰 Фильтр новостей — влияние на сделки</div>
+                    <div class="nf-sub">Сейчас режим <b>наблюдения</b>: бот <u>не блокирует</u> входы. Сравниваем «как было» и «как было бы без сделок в опасные новости».</div>
                 </div>
-                <div style="background:rgba(0,0,0,.25);border-radius:8px;padding:10px;">
-                    <div class="ab-dim" style="font-size:10px;letter-spacing:.06em;">FILTERED PF</div>
-                    <div style="font-size:20px;font-weight:700;color:#00d4ff;">@_shadowFiltPf.ToString("F2")</div>
-                    <div class="ab-dim">n=@_shadowFiltN · WR @_shadowFiltWr.ToString("P0")</div>
-                </div>
-                <div style="background:rgba(0,0,0,.25);border-radius:8px;padding:10px;">
-                    <div class="ab-dim" style="font-size:10px;letter-spacing:.06em;">Δ PF</div>
-                    <div style="font-size:20px;font-weight:700;color:@(_shadowDeltaPf>=0?"#00ff9c":"#ff6b6b");">@(_shadowDeltaPf>=0?"+":"")@_shadowDeltaPf.ToString("F2")</div>
-                    <div class="ab-dim">target ≥ +0.15</div>
-                </div>
-                <div style="background:rgba(0,0,0,.25);border-radius:8px;padding:10px;">
-                    <div class="ab-dim" style="font-size:10px;letter-spacing:.06em;">Δ DD ($)</div>
-                    <div style="font-size:20px;font-weight:700;color:@(_shadowDeltaDd<=0?"#00ff9c":"#ff6b6b");">@_shadowDeltaDd.ToString("F1")</div>
-                    <div class="ab-dim">Actual DD @_shadowActualDd.ToString("F1") → Filt @_shadowFiltDd.ToString("F1")</div>
+                <div class="nf-status @(_shadowRecommend ? "nf-ok" : "nf-wait")">
+                    @if (_shadowRecommend)
+                    {
+                        <span class="nf-dot">🟢</span>
+                        <div>
+                            <div class="nf-status-t">Можно усилить защиту</div>
+                            <div class="nf-status-d">Фильтр показал пользу — позже можно включить жёсткий режим</div>
+                        </div>
+                    }
+                    else if (_shadowActualN < 50)
+                    {
+                        <span class="nf-dot">🟡</span>
+                        <div>
+                            <div class="nf-status-t">Сбор статистики</div>
+                            <div class="nf-status-d">Нужно ≥50 сделок (сейчас @_shadowActualN). Пока рано решать</div>
+                        </div>
+                    }
+                    else
+                    {
+                        <span class="nf-dot">🔴</span>
+                        <div>
+                            <div class="nf-status-t">Пользы пока не видно</div>
+                            <div class="nf-status-d">«Без новостных сделок» не лучше факта. Жёсткий фильтр не включаем</div>
+                        </div>
+                    }
                 </div>
             </div>
-            <div style="margin-top:10px;height:48px;display:flex;align-items:flex-end;gap:2px;">
-                @foreach (var v in _equityActual.TakeLast(48))
-                {
-                    var h = Math.Max(2, (int)(Math.Abs(v) / Math.Max(1m, _equityScale) * 44));
-                    <div title="@v.ToString("F1")" style="flex:1;height:@(h)px;background:rgba(255,255,255,.35);border-radius:2px 2px 0 0;"></div>
-                }
+
+            <div class="nf-explain">
+                <div class="nf-exp-item"><b>Серые столбцы</b> — реальный результат всех сделок (как торговали на самом деле).</div>
+                <div class="nf-exp-item"><b>Голубые столбцы</b> — гипотеза: убрали бы сделки в окна сильных новостей (FOMC, CPI и т.п.).</div>
+                <div class="nf-exp-item">Если голубое <b>заметно лучше</b> серого — фильтр новостей помогает. Если линии почти одинаковые — новости почти не меняли исход.</div>
             </div>
-            <div style="margin-top:4px;height:48px;display:flex;align-items:flex-end;gap:2px;">
-                @foreach (var v in _equityFiltered.TakeLast(48))
-                {
-                    var h = Math.Max(2, (int)(Math.Abs(v) / Math.Max(1m, _equityScale) * 44));
-                    <div title="@v.ToString("F1")" style="flex:1;height:@(h)px;background:rgba(0,212,255,.55);border-radius:2px 2px 0 0;"></div>
-                }
+
+            <div class="nf-cards">
+                <div class="nf-card">
+                    <div class="nf-card-l">Как есть сейчас</div>
+                    <div class="nf-card-v">@_shadowActualPf.ToString("F2")</div>
+                    <div class="nf-card-h">качество сделок (PF)</div>
+                    <div class="nf-card-m">@_shadowActualN сделок · выигрышных @_shadowActualWr.ToString("P0")</div>
+                </div>
+                <div class="nf-card nf-card-cyan">
+                    <div class="nf-card-l">Если резать новости</div>
+                    <div class="nf-card-v">@_shadowFiltPf.ToString("F2")</div>
+                    <div class="nf-card-h">тот же PF без «новостных» входов</div>
+                    <div class="nf-card-m">@_shadowFiltN сделок · выигрышных @_shadowFiltWr.ToString("P0")</div>
+                </div>
+                <div class="nf-card">
+                    <div class="nf-card-l">Разница (польза фильтра)</div>
+                    <div class="nf-card-v" style="color:@(_shadowDeltaPf>=0.15m?"#00ff9c":_shadowDeltaPf>=0?"#e2e8f0":"#ff6b6b")">
+                        @(_shadowDeltaPf>=0?"+":"")@_shadowDeltaPf.ToString("F2")
+                    </div>
+                    <div class="nf-card-h">цель пользы: от +0.15</div>
+                    <div class="nf-card-m">
+                        @if (_shadowDeltaPf >= 0.15m)
+                        { <span>✅ Цель достигнута</span> }
+                        else if (_shadowDeltaPf > 0)
+                        { <span>Маленький плюс — ещё рано</span> }
+                        else
+                        { <span>Пока без выигрыша</span> }
+                    </div>
+                </div>
+                <div class="nf-card">
+                    <div class="nf-card-l">Просадка</div>
+                    <div class="nf-card-v">@_shadowActualDd.ToString("F0") → @_shadowFiltDd.ToString("F0")</div>
+                    <div class="nf-card-h">макс. «яма» в $ (факт → без новостей)</div>
+                    <div class="nf-card-m">
+                        @if (_shadowFiltDd < _shadowActualDd)
+                        { <span>Фильтр уменьшил бы просадку</span> }
+                        else if (_shadowFiltDd == _shadowActualDd)
+                        { <span>Просадка та же</span> }
+                        else
+                        { <span>Без новостных сделок просадка не лучше</span> }
+                    </div>
+                </div>
             </div>
-            <div class="ab-dim" style="font-size:10px;margin-top:6px;">Curves: white = Actual cumulative PnL · cyan = Filtered (ex NEWS/MACRO reasons). Shadow mode does not block live trades.</div>
+
+            @if (_shadowBars.Count > 0)
+            {
+                <div class="nf-bars" title="Серый = факт, голубой = без новостных окон">
+                    @foreach (var b in _shadowBars)
+                    {
+                        <div class="nf-bar-col">
+                            <div class="nf-bar nf-bar-a" style="height:@b.aH%"></div>
+                            <div class="nf-bar nf-bar-f" style="height:@b.fH%"></div>
+                        </div>
+                    }
+                </div>
+            }
+
+            <div class="nf-foot">
+                <span>Это <b>не прогноз</b> и не кнопка «вкл/выкл».</span>
+                <span>Пока красный/жёлтый статус — торгуйте как обычно; бот только копит данные.</span>
+            </div>
         </div>
+
 
 
         <div class="ab-body">
@@ -563,6 +620,33 @@ html,body { background:var(--bg)!important; color:var(--txt); }
 
 @@media(max-width:1100px){.ab-body{grid-template-columns:1fr;}.ab-neurons-grid{grid-template-columns:repeat(auto-fill,minmax(200px,1fr));}}
 @@media(max-width:700px){.ab-header{flex-direction:column;gap:12px;}.ab-header-right{flex-wrap:wrap;gap:12px;}}
+
+.nf-panel{margin:12px 16px;border:1px solid rgba(0,212,255,.28);background:rgba(0,16,32,.65);backdrop-filter:blur(10px);border-radius:14px;padding:16px 18px;}
+.nf-hd{display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;align-items:flex-start;margin-bottom:12px;}
+.nf-title{font-size:15px;font-weight:700;color:#e8f4ff;}
+.nf-sub{margin-top:6px;font-size:12.5px;line-height:1.45;color:#9bb0c4;max-width:560px;}
+.nf-status{display:flex;gap:10px;align-items:flex-start;max-width:320px;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.1);}
+.nf-status.nf-ok{background:rgba(0,255,156,.08);border-color:rgba(0,255,156,.35);}
+.nf-status.nf-wait{background:rgba(255,180,0,.06);border-color:rgba(255,180,0,.25);}
+.nf-dot{font-size:16px;}
+.nf-status-t{font-size:13px;font-weight:700;color:#f0f6fc;}
+.nf-status-d{font-size:11.5px;color:#9bb0c4;margin-top:3px;line-height:1.35;}
+.nf-explain{display:grid;gap:6px;margin-bottom:12px;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.06);}
+.nf-exp-item{font-size:12.5px;color:#c5d0dc;line-height:1.4;}
+.nf-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px;}
+.nf-card{background:rgba(0,0,0,.28);border-radius:10px;padding:12px;border:1px solid rgba(255,255,255,.06);}
+.nf-card-cyan{border-color:rgba(0,212,255,.25);}
+.nf-card-l{font-size:11px;color:#8b9bb0;}
+.nf-card-v{font-size:22px;font-weight:800;margin:4px 0;color:#f0f6fc;}
+.nf-card-h{font-size:11px;color:#7a8a9c;}
+.nf-card-m{font-size:11.5px;color:#a8b8c8;margin-top:6px;}
+.nf-bars{display:flex;align-items:flex-end;gap:2px;height:56px;margin:4px 0 10px;}
+.nf-bar-col{flex:1;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;min-width:0;height:100%;}
+.nf-bar{width:100%;border-radius:2px 2px 0 0;min-height:2px;}
+.nf-bar-a{background:rgba(148,163,184,.55);}
+.nf-bar-f{background:rgba(0,212,255,.75);}
+.nf-foot{display:flex;flex-wrap:wrap;gap:12px;font-size:11.5px;color:#8b9bb0;border-top:1px solid rgba(255,255,255,.06);padding-top:10px;}
+
 </style>
 
 @code {
@@ -583,6 +667,7 @@ html,body { background:var(--bg)!important; color:var(--txt); }
     decimal _shadowActualWr, _shadowFiltWr;
     int _shadowActualN, _shadowFiltN;
     bool _shadowRecommend;
+    List<(int aH, int fH)> _shadowBars = new();
     List<decimal> _equityActual = new();
     List<decimal> _equityFiltered = new();
     decimal _equityScale = 1m;
@@ -706,7 +791,21 @@ html,body { background:var(--bg)!important; color:var(--txt); }
                 actual.curve.DefaultIfEmpty(1).Select(Math.Abs).DefaultIfEmpty(1m).Max(),
                 filt.curve.DefaultIfEmpty(1).Select(Math.Abs).DefaultIfEmpty(1m).Max());
             if (_equityScale < 1) _equityScale = 1;
-            _shadowRecommend = actual.n >= 50 && _shadowDeltaPf >= 0.15m && _shadowDeltaDd <= 0m;
+            _shadowBars = new List<(int aH, int fH)>();
+            int nPts = Math.Max(_equityActual.Count, _equityFiltered.Count);
+            if (nPts > 0)
+            {
+                int step = Math.Max(1, nPts / 48);
+                for (int i = 0; i < nPts; i += step)
+                {
+                    decimal a = i < _equityActual.Count ? _equityActual[i] : 0m;
+                    decimal f = i < _equityFiltered.Count ? _equityFiltered[i] : 0m;
+                    int aH = (int)Math.Clamp((double)(Math.Abs(a) / _equityScale * 90m) + 4, 4, 100);
+                    int fH = (int)Math.Clamp((double)(Math.Abs(f) / _equityScale * 90m) + 4, 4, 100);
+                    _shadowBars.Add((aH, fH));
+                }
+            }
+            _shadowRecommend = actual.n >= 50 && _shadowDeltaPf >= 0.15m && _shadowFiltDd <= _shadowActualDd;
         }
         catch
         {
