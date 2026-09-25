@@ -83,12 +83,47 @@ HardCapUsd ограничивает $ риска на сделку</pre>
                     </table>
                 </div>
                 <div class="help-card">
+                    <h3>Institutional gates (Hard Risk + Anti-Tilt)</h3>
+                    <p>Шлюз <b>перед</b> ордером. SL не расширяется — только skip или уменьшение размера.</p>
+                    <table class="help-table">
+                        <tr><th>Слой</th><th>Поведение</th></tr>
+                        <tr><td>HardRisk</td><td>Max daily −3R / −3% equity, max 3 позиций → block ~24h</td></tr>
+                        <tr><td>AntiTilt</td><td>3× <code>SL_STRATEGY_FAIL</code> → cool-off 4h; weak avg R → risk ×0.5</td></tr>
+                        <tr><td>Regime / BTC</td><td>Chop → reject; спайк BTC → пауза альтов</td></tr>
+                        <tr><td>Macro calendar</td><td>Окно FOMC/CPI/NFP → пауза новых входов</td></tr>
+                    </table>
+                    <p class="help-muted">Логи reject: <code>INST_HardRisk</code>, <code>INST_Regime</code>, <code>INST_NewsMacro</code>, <code>INST_MlClassifier</code>…</p>
+                </div>
+                <div class="help-card">
+                    <h3>ML / News Hard — где включать</h3>
+                    <p><b>Settings → Risk → «Institutional gates (ML / News hard mode)»</b></p>
+                    <table class="help-table">
+                        <tr><th>Переключатель</th><th>Ключ</th><th>Default</th></tr>
+                        <tr><td>ML Hard Reject</td><td><code>Institutional:EnableMlHardReject</code></td><td>off</td></tr>
+                        <tr><td>News Hard Mode</td><td><code>Institutional:EnableNewsHardMode</code></td><td>off</td></tr>
+                        <tr><td>ML Skip / Probe</td><td><code>MlSkipThreshold</code> / <code>MlProbeThreshold</code></td><td>0.42 / 0.55</td></tr>
+                        <tr><td>Legacy ML gate</td><td><code>MlGate:EnableMlSkipGate</code></td><td>off</td></tr>
+                        <tr><td>News Shadow</td><td><code>News:ShadowMode</code></td><td>on</td></tr>
+                    </table>
+                    <pre class="help-code">// appsettings.json + appsettings.runtime.json
+"Institutional": {
+  "EnableMlHardReject": false,
+  "EnableNewsHardMode": false,
+  "MlSkipThreshold": 0.42,
+  "MlProbeThreshold": 0.55
+}</pre>
+                    <div class="help-callout warn">
+                        UI пишет в <code>appsettings.runtime.json</code> (SharedData). Engine подхватывает с reload.
+                        Hard включайте только после Shadow KPI (ΔPF / отфильтрованные убытки).
+                    </div>
+                </div>
+                <div class="help-card">
                     <h3>TradeMemory</h3>
                     <p><code>WindowDays</code> ~30, <code>HalfLifeDays</code> 7, <code>ProbeMinConfidence</code> ~0.72 — probe 0.25× при SoftSkip.</p>
                 </div>
                 <div class="help-card">
                     <h3>PositionSupervisor</h3>
-                    <p>TP1–3, trailing, breakeven, algo STOP_MARKET; ремонт отсутствующих SL/TP.</p>
+                    <p>TP1–3, trailing, breakeven после TP1 (Live+Demo), algo STOP_MARKET; ремонт отсутствующих SL/TP.</p>
                 </div>
             </section>
         }
@@ -97,18 +132,40 @@ HardCapUsd ограничивает $ риска на сделку</pre>
         {
             <section class="help-section">
                 <div class="help-card">
-                    <h3>Фаза A — Shadow</h3>
-                    <pre class="help-code">"EnableMlSkipGate": false</pre>
-                    <p>Только логи <code>[ML-SHADOW]</code> / KPI. Hard reject выключен.</p>
+                    <h3>Фаза A — Shadow (по умолчанию)</h3>
+                    <pre class="help-code">"Institutional": { "EnableMlHardReject": false }
+"MlGate": { "EnableMlSkipGate": false }
+"News": { "ShadowMode": true }</pre>
+                    <p>ML и новости <b>не блокируют</b> входы. Считается P(win), size× probe, логи Shadow KPI / лента новостей.</p>
+                    <p>Смотрите <code>/ai-dashboard</code> — Actual vs Filtered, ΔPF. Цель для hard: ΔPF ≥ +0.15 на достаточной выборке.</p>
                 </div>
                 <div class="help-card">
                     <h3>Фаза B — Обучение</h3>
-                    <pre class="help-code">python scripts/train_ml_skip_gate.py --input trade-features.jsonl --output ml_skip_model.json</pre>
+                    <pre class="help-code">python scripts/train_ml_skip_gate.py --input trade-features.jsonl --output SharedData/ml_skip_model.json</pre>
+                    <p>Фичи: conf, regime, ATR%, funding, hour, news impact… Модель подхватывается классификатором при наличии JSON.</p>
                 </div>
                 <div class="help-card">
                     <h3>Фаза C — Hard gate</h3>
-                    <pre class="help-code">"EnableMlSkipGate": true   // threshold ~0.42</pre>
-                    <div class="help-callout warn">Включать только после shadow-проверки на реальной истории.</div>
+                    <p><b>Settings → Risk → Institutional gates</b> или runtime JSON:</p>
+                    <pre class="help-code">"Institutional": {
+  "EnableMlHardReject": true,   // P(win) &lt; SkipThreshold → INST_MlClassifier
+  "EnableNewsHardMode": true,   // critical bearish → block (если ShadowMode=false)
+  "MlSkipThreshold": 0.42,
+  "MlProbeThreshold": 0.55
+}
+"News": { "ShadowMode": false }</pre>
+                    <table class="help-table">
+                        <tr><th>P(win)</th><th>Действие</th></tr>
+                        <tr><td>&lt; Skip (0.42)</td><td>Hard: reject / Shadow: только лог</td></tr>
+                        <tr><td>Skip…Probe (0.55)</td><td>Probe size ×0.25</td></tr>
+                        <tr><td>≥ Probe</td><td>Полный размер (после прочих фильтров)</td></tr>
+                    </table>
+                    <div class="help-callout warn">Не включайте hard на «пустой» истории. Сначала 50–100+ сделок в Shadow.</div>
+                </div>
+                <div class="help-card">
+                    <h3>Новости — роль</h3>
+                    <p>Не генератор сигналов. Защита: календарь (pause), high-impact → size↓, hard — только critical + Hard Mode.</p>
+                    <p>Poll ~15с (<code>News:PollSeconds</code>). Лента на <code>/ai-dashboard</code>.</p>
                 </div>
             </section>
         }
@@ -118,9 +175,12 @@ HardCapUsd ограничивает $ риска на сделку</pre>
             <section class="help-section">
                 <div class="help-card">
                     <h3>Поток</h3>
-                    <pre class="help-ascii">CORE → PROC filters → RiskManager 1R
-         → approved_entries → DemoAutoTrade
-         → OrderExecutor (если Live balance)</pre>
+                                        <pre class="help-ascii">CORE signal
+  → Institutional pipeline
+      HardRisk → AntiTilt → Macro → News → Regime → BTC → OI/Funding → ML → Sizer
+  → RiskManager 1R / Demo=Live exec
+  → Supervisor TP/SL / Journal / Memory
+</pre>
                 </div>
                 <div class="help-grid">
                     <div class="help-card mock"><h4>/market</h4><div class="mock-ui"><div class="mock-bar">Chart · TP/SL</div><div class="mock-chart">Candles</div></div></div>
@@ -218,6 +278,7 @@ SELECT * FROM DemoAccounts;</pre>
 code{background:rgba(255,255,255,.06);padding:1px 5px;border-radius:4px;font-size:12px}
 a{color:#3b9eff}
 @@media (max-width:900px){.help-root{grid-template-columns:1fr}.help-nav{position:relative;height:auto}}
+.help-muted{opacity:.75;font-size:13px;margin-top:8px}
 </style>
 
 @code {
@@ -229,10 +290,10 @@ a{color:#3b9eff}
     private static readonly TocItem[] Toc =
     {
         new("quick", "Quick Start", "🚀", "Быстрый старт", "SharedData, Futures, Demo $10k.", new[]{"start","demo","shareddata","binance"}),
-        new("settings", "Settings & Risk", "⚙️", "Настройки и риск", "1R, HardCap, Memory, Supervisor.", new[]{"risk","1r","hardcap","memory","tp"}),
-        new("ml", "ML Gate & News", "🧠", "ML Gate", "Shadow → train → hard gate.", new[]{"ml","shadow","gate"}),
+        new("settings", "Settings & Risk", "⚙️", "Настройки и риск", "1R, Institutional gates, HardCap, Memory.", new[]{"risk","1r","hardcap","institutional","ml hard","news hard","settings"}),
+        new("ml", "ML Gate & News", "🧠", "ML & News", "Shadow → train → Institutional hard.", new[]{"ml","shadow","gate","news","institutional","hard reject"}),
         new("arch", "Architecture & UI", "🗺️", "Архитектура", "CORE → Demo/Live и экраны.", new[]{"architecture","market","ui"}),
-        new("logs", "Logs & Rejects", "📋", "Логи", "REJECT, 429, margin.", new[]{"reject","log","429"}),
+        new("logs", "Logs & Rejects", "📋", "Логи", "REJECT, INST_*, 429, margin.", new[]{"reject","inst","log","429"}),
         new("db", "Users & SQLite", "🗄️", "Пользователи и БД", "vertex_system.db таблицы.", new[]{"sqlite","users","demoaccounts"}),
         new("twa", "Telegram Mini App", "📱", "Telegram", "TWA, tunnel, /kill.", new[]{"telegram","twa","mini"}),
     };
