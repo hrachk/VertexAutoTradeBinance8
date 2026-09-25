@@ -288,6 +288,16 @@ public class Program
                     services.AddSingleton<VertexAutoTradeBinance8.Services.News.MacroCalendarService>();
                     // Institutional RiskEngine phases 1–5 (HardRisk, Regime, NewsMacro, ML, OI)
                     VertexAutoTrade.RiskEngine.ServiceCollectionExtensions.AddVertexRiskEngine(services);
+                    services.Configure<VertexAutoTrade.RiskEngine.Options.InstitutionalGateOptions>(
+                        ctx.Configuration.GetSection(VertexAutoTrade.RiskEngine.Options.InstitutionalGateOptions.SectionName));
+                    // Back-compat: MlGate:EnableMlSkipGate also drives hard reject if Institutional missing
+                    services.PostConfigure<VertexAutoTrade.RiskEngine.Options.InstitutionalGateOptions>(o =>
+                    {
+                        if (!o.EnableMlHardReject && ctx.Configuration.GetValue("MlGate:EnableMlSkipGate", false))
+                            o.EnableMlHardReject = true;
+                        if (ctx.Configuration.GetValue<decimal?>("MlGate:SkipThreshold") is decimal thr)
+                            o.MlSkipThreshold = thr;
+                    });
 
                     services.AddHostedService(sp => sp.GetRequiredService<VertexAutoTradeBinance8.Services.News.MacroCalendarService>());
                     

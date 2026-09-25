@@ -1253,7 +1253,7 @@ namespace VertexAutoTradeBinance8
                         OpenPositionCount = 0, // optional: wire live count
                         SignalConfidence = conf,
                         UtcNow = DateTime.UtcNow,
-                        NewsHardMode = false,
+                        NewsHardMode = false, // overridden by Institutional:EnableNewsHardMode in pipeline
                         MinQty = minQty,
                         StepSize = step
                     });

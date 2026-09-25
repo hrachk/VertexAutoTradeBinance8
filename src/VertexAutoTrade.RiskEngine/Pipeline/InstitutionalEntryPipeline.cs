@@ -4,7 +4,9 @@ using VertexAutoTrade.Execution;
 using VertexAutoTrade.MLEngine;
 using VertexAutoTrade.NewsMacro;
 using VertexAutoTrade.Regime;
+using Microsoft.Extensions.Options;
 using VertexAutoTrade.RiskEngine.Abstractions;
+using VertexAutoTrade.RiskEngine.Options;
 using VertexAutoTrade.RiskEngine.Sizing;
 
 namespace VertexAutoTrade.RiskEngine.Pipeline;
@@ -62,6 +64,7 @@ public sealed class InstitutionalEntryPipeline
     private readonly NewsSentimentGate _news;
     private readonly OiFundingTracker _oi;
     private readonly MlSetupClassifier _ml;
+    private readonly IOptionsMonitor<InstitutionalGateOptions>? _gateOpts;
 
     public InstitutionalEntryPipeline(
         IHardRiskGuard hard,
@@ -72,7 +75,8 @@ public sealed class InstitutionalEntryPipeline
         CalendarMacroGuard? macro = null,
         NewsSentimentGate? news = null,
         OiFundingTracker? oi = null,
-        MlSetupClassifier? ml = null)
+        MlSetupClassifier? ml = null,
+        IOptionsMonitor<InstitutionalGateOptions>? gateOpts = null)
     {
         _hard = hard;
         _tilt = tilt;
@@ -83,6 +87,7 @@ public sealed class InstitutionalEntryPipeline
         _news = news ?? new NewsSentimentGate();
         _oi = oi ?? new OiFundingTracker();
         _ml = ml ?? new MlSetupClassifier(hardReject: false);
+        _gateOpts = gateOpts;
     }
 
     public InstitutionalEntryResult Evaluate(InstitutionalEntryContext ctx)
@@ -106,7 +111,9 @@ public sealed class InstitutionalEntryPipeline
             return Fail("NewsMacro", macro.Code, macro.Message);
         sizeMult *= _macro.SizeMultNearWindow(ctx.UtcNow);
 
-        var news = _news.Evaluate(ctx.ActiveNews, ctx.NewsHardMode);
+        var gate = _gateOpts?.CurrentValue ?? new InstitutionalGateOptions();
+        bool newsHard = ctx.NewsHardMode || gate.EnableNewsHardMode;
+        var news = _news.Evaluate(ctx.ActiveNews, newsHard);
         if (!news.Allowed)
             return Fail("NewsMacro", news.Code, news.Message);
         sizeMult *= news.SizeMult;
@@ -142,8 +149,13 @@ public sealed class InstitutionalEntryPipeline
             SideSign = ctx.IsLong ? 1 : -1,
             NewsImpact = ctx.ActiveNews is null ? 0m : (decimal)(int)ctx.ActiveNews.Impact / 4m
         };
-        var pWin = _ml.PredictPWin(features);
-        var ml = _ml.Evaluate(features);
+        // Live thresholds / hard-reject from config (reloadable via runtime json)
+        var mlLive = new MlSetupClassifier(
+            gate.MlSkipThreshold,
+            gate.MlProbeThreshold,
+            gate.EnableMlHardReject);
+        var pWin = mlLive.PredictPWin(features);
+        var ml = mlLive.Evaluate(features);
         if (!ml.Allowed)
             return Fail("MlClassifier", ml.Code, ml.Message, regimeKind, pWin);
         sizeMult *= ml.SizeMult;

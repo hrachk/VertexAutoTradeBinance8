@@ -562,12 +562,70 @@
             </div>
         </div>
 
+        <div class="st-card">
+            <div class="st-card-head">
+                <div class="st-card-title">Institutional gates (ML / News hard mode)</div>
+                <span class="st-live-pill">● runtime</span>
+            </div>
+            <p class="st-field-hint" style="margin:0 0 12px;opacity:.85">
+                Shadow = only log / size cut. Hard = can block new entries.
+                Enable only after Shadow KPI shows edge (ΔPF / filtered losses).
+                Written to <code>appsettings.runtime.json</code> → Engine reloads on change.
+            </p>
+            <div class="st-field" style="display:flex;align-items:center;gap:10px">
+                <input type="checkbox" class="st-checkbox"
+                       checked="@GetBool("Institutional:EnableMlHardReject", false)"
+                       @onchange="OnInstMlHardToggle" />
+                <label>ML Hard Reject <span class="st-field-hint">P(win) below threshold → skip entry (INST_MlClassifier)</span></label>
+            </div>
+            <div class="st-field" style="display:flex;align-items:center;gap:10px">
+                <input type="checkbox" class="st-checkbox"
+                       checked="@GetBool("Institutional:EnableNewsHardMode", false)"
+                       @onchange="OnInstNewsHardToggle" />
+                <label>News Hard Mode <span class="st-field-hint">critical bearish news can block new entries</span></label>
+            </div>
+            <div class="st-field-row">
+                <div class="st-field">
+                    <label>ML Skip threshold</label>
+                    <input class="st-input" type="number" step="0.01" min="0.05" max="0.95"
+                           value="@GetDecimal("Institutional:MlSkipThreshold", 0.42m)"
+                           @onchange="OnInstMlSkipChanged" />
+                </div>
+                <div class="st-field">
+                    <label>ML Probe threshold</label>
+                    <input class="st-input" type="number" step="0.01" min="0.05" max="0.95"
+                           value="@GetDecimal("Institutional:MlProbeThreshold", 0.55m)"
+                           @onchange="OnInstMlProbeChanged" />
+                </div>
+            </div>
+            <div class="st-field" style="display:flex;align-items:center;gap:10px;margin-top:8px">
+                <input type="checkbox" class="st-checkbox"
+                       checked="@GetBool("MlGate:EnableMlSkipGate", false)"
+                       @onchange="OnLegacyMlGateToggle" />
+                <label>Legacy MlGate:EnableMlSkipGate <span class="st-field-hint">also maps to hard reject if Institutional off</span></label>
+            </div>
+            <div class="st-field" style="display:flex;align-items:center;gap:10px">
+                <input type="checkbox" class="st-checkbox"
+                       checked="@GetBool("News:ShadowMode", true)"
+                       @onchange="OnNewsShadowToggle" />
+                <label>News Shadow Mode <span class="st-field-hint">on = observe only; off = allow hard news path when News Hard Mode is on</span></label>
+            </div>
+        </div>
+
     </div>;
 
     private Task OnLeverageChanged(string profileKey, ChangeEventArgs e) => SetAsync($"{profileKey}:Leverage", ParseIntOr(e.Value, 10));
     private Task OnRiskPerTradeChanged(string profileKey, ChangeEventArgs e) => SetAsync($"{profileKey}:RiskPerTrade", ParseDecimalOr(e.Value, 0.03m));
     private Task OnMinNotionalChanged(string profileKey, ChangeEventArgs e) => SetAsync($"{profileKey}:MinNotional", ParseDecimalOr(e.Value, 10m));
     private Task OnCooldownSecondsChanged(string profileKey, ChangeEventArgs e) => SetAsync($"{profileKey}:CooldownSeconds", ParseIntOr(e.Value, 90));
+
+    
+    private Task OnInstMlHardToggle(ChangeEventArgs e) => SetAsync("Institutional:EnableMlHardReject", (bool)(e.Value ?? false));
+    private Task OnInstNewsHardToggle(ChangeEventArgs e) => SetAsync("Institutional:EnableNewsHardMode", (bool)(e.Value ?? false));
+    private Task OnInstMlSkipChanged(ChangeEventArgs e) => SetAsync("Institutional:MlSkipThreshold", ParseDecimalOr(e.Value, 0.42m));
+    private Task OnInstMlProbeChanged(ChangeEventArgs e) => SetAsync("Institutional:MlProbeThreshold", ParseDecimalOr(e.Value, 0.55m));
+    private Task OnLegacyMlGateToggle(ChangeEventArgs e) => SetAsync("MlGate:EnableMlSkipGate", (bool)(e.Value ?? false));
+    private Task OnNewsShadowToggle(ChangeEventArgs e) => SetAsync("News:ShadowMode", (bool)(e.Value ?? false));
 
     private Task OnBaseRiskPercentChanged(ChangeEventArgs e) => SetAsync("Trading:BaseRiskPercent", ParseDecimalOr(e.Value, 0m));
     private Task OnMinNotionalGuardPercentChanged(ChangeEventArgs e) => SetAsync("Trading:MinNotionalGuardPercent", ParseDecimalOr(e.Value, 0m));

@@ -18,6 +18,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<HardRiskOptions>();
         services.AddOptions<AntiTiltOptions>();
         services.AddOptions<RegimeOptions>();
+        services.AddOptions<InstitutionalGateOptions>();
 
         services.AddSingleton<IHardRiskGuard, HardRiskGuard>();
         services.AddSingleton<IAntiTiltCircuitBreaker, AntiTiltCircuitBreaker>();
@@ -33,7 +34,20 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<NewsSentimentGate>();
         services.AddSingleton<OiFundingTracker>();
         services.AddSingleton<MlSetupClassifier>(_ => new MlSetupClassifier(hardReject: false));
-        services.AddSingleton<InstitutionalEntryPipeline>();
+        services.AddSingleton<InstitutionalEntryPipeline>(sp =>
+        {
+            return new InstitutionalEntryPipeline(
+                sp.GetRequiredService<IHardRiskGuard>(),
+                sp.GetRequiredService<IAntiTiltCircuitBreaker>(),
+                sp.GetRequiredService<IPositionSizer>(),
+                sp.GetService<MarketRegimeAnalyzer>(),
+                sp.GetService<BtcCorrelationGuard>(),
+                sp.GetService<CalendarMacroGuard>(),
+                sp.GetService<NewsSentimentGate>(),
+                sp.GetService<OiFundingTracker>(),
+                sp.GetService<MlSetupClassifier>(),
+                sp.GetService<Microsoft.Extensions.Options.IOptionsMonitor<InstitutionalGateOptions>>());
+        });
         return services;
     }
 }
