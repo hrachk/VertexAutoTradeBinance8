@@ -26,9 +26,13 @@ public sealed class OiFundingTracker
 
     public void Update(OiFundingSnapshot snap)
     {
-        _last.AddOrUpdate(snap.Symbol, snap, (_, prev) => snap with
+        _last.AddOrUpdate(snap.Symbol, snap, (_, prev) => new OiFundingSnapshot
         {
-            PrevOpenInterest = prev.OpenInterest
+            Symbol = snap.Symbol,
+            FundingRate = snap.FundingRate,
+            OpenInterest = snap.OpenInterest,
+            PrevOpenInterest = prev.OpenInterest,
+            Utc = snap.Utc
         });
     }
 
