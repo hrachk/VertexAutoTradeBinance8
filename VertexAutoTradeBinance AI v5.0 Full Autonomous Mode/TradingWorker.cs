@@ -16,6 +16,8 @@ using VertexAutoTradeBinance8.Services.Formatting;
 using VertexAutoTradeBinance8.Strategy;
 using static VertexAutoTradeBinance8.Services.AiTimeframeSelectorService;
 
+using VertexAutoTrade.RiskEngine.Pipeline;
+using VertexAutoTrade.RiskEngine.Abstractions;
 namespace VertexAutoTradeBinance8
 {
 
@@ -87,6 +89,7 @@ namespace VertexAutoTradeBinance8
         private readonly VertexAutoTradeBinance8.Services.Learning.TradeJournalService? _tradeJournal;
         private readonly IApprovedEntryPublisher? _approvedEntries;
         private readonly ShadowMlGatekeeper? _mlGate;
+        private readonly InstitutionalEntryPipeline? _instPipe;
         private readonly SymbolInfoService _symbolInfo;
         private readonly FundingRateService _fundingRate;
         private readonly RealtimeMomentumDetector _momentum;
@@ -186,11 +189,13 @@ namespace VertexAutoTradeBinance8
             VertexAutoTradeBinance8.Services.Infra.EmergencyControlService? killCtrl = null,
             VertexAutoTradeBinance8.Services.Learning.TradeJournalService? tradeJournal = null,
             IApprovedEntryPublisher? approvedEntries = null,
-            ShadowMlGatekeeper? mlGate = null)
+            ShadowMlGatekeeper? mlGate = null,
+            InstitutionalEntryPipeline? institutionalPipeline = null)
         {
             _tradeJournal = tradeJournal;
             _approvedEntries = approvedEntries;
             _mlGate = mlGate;
+            _instPipe = institutionalPipeline;
             _logger = logger;
             _options = options.Value;
             _tradingMonitor = tradingMonitor;
@@ -1227,6 +1232,47 @@ namespace VertexAutoTradeBinance8
                 _logger.LogInformation(
                     "[BALANCE] Demo-independent sizing demo={d:F2} (live={l:F2}) {sym}",
                     demoBalance, liveBalance, symbol);
+            }
+
+            // ── Institutional pipeline (Phases 1–5) before sizing ──
+            if (_instPipe != null)
+            {
+                try
+                {
+                    var isLong = signal.Side == SignalSide.Buy;
+                    var confRaw = signal.Confidence ?? 0m;
+                    var conf = confRaw > 1.5m ? confRaw / 100m : (confRaw > 0 ? confRaw : 0.55m);
+                    var inst = _instPipe.Evaluate(new InstitutionalEntryContext
+                    {
+                        Symbol = symbol,
+                        IsLong = isLong,
+                        EquityUsd = sizingBalance,
+                        EntryPrice = signal.EntryPrice,
+                        StopLossPrice = signal.StopLoss,
+                        ConfiguredRiskFraction = 0.01m,
+                        OpenPositionCount = 0, // optional: wire live count
+                        SignalConfidence = conf,
+                        UtcNow = DateTime.UtcNow,
+                        NewsHardMode = false,
+                        MinQty = minQty,
+                        StepSize = step
+                    });
+                    if (!inst.Allowed)
+                    {
+                        await RejectAsync(signal, symbol, tf, "INST_" + inst.RejectLayer,
+                            $"{inst.RejectCode}: {inst.Message}", ct);
+                        return;
+                    }
+                    if (inst.SizeMult > 0m && inst.SizeMult < 1m)
+                        signal.SizeMultiplier = Math.Clamp(signal.SizeMultiplier * inst.SizeMult, 0.15m, 1m);
+                    if (inst.MlPWin is decimal pw)
+                        _logger.LogInformation("[INST] {sym} regime={r} P(win)={p:F2} size×{m:F2}",
+                            symbol, inst.Regime, pw, inst.SizeMult);
+                }
+                catch (Exception exInst)
+                {
+                    _logger.LogWarning(exInst, "[INST] pipeline skipped {sym}", symbol);
+                }
             }
 
             var qty = _risk.GetPropDeskQtyFinal(

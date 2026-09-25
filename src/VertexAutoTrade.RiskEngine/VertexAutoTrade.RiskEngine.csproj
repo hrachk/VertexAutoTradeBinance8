@@ -5,11 +5,17 @@
     <Nullable>enable</Nullable>
     <LangVersion>12</LangVersion>
     <RootNamespace>VertexAutoTrade.RiskEngine</RootNamespace>
-    <Description>Institutional hard risk, anti-tilt, and position sizing for Vertex AutoTrade</Description>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Options" Version="8.0.2" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\VertexAutoTrade.Core\VertexAutoTrade.Core.csproj" />
+    <ProjectReference Include="..\VertexAutoTrade.Regime\VertexAutoTrade.Regime.csproj" />
+    <ProjectReference Include="..\VertexAutoTrade.NewsMacro\VertexAutoTrade.NewsMacro.csproj" />
+    <ProjectReference Include="..\VertexAutoTrade.MLEngine\VertexAutoTrade.MLEngine.csproj" />
+    <ProjectReference Include="..\VertexAutoTrade.Execution\VertexAutoTrade.Execution.csproj" />
   </ItemGroup>
 </Project>

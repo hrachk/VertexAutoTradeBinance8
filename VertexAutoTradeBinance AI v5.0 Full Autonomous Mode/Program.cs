@@ -286,6 +286,9 @@ public class Program
                     services.AddSingleton<VertexAutoTradeBinance8.Services.News.INewsCatalystService, VertexAutoTradeBinance8.Services.News.NewsCatalystService>();
                     services.AddHostedService<VertexAutoTradeBinance8.Services.News.NewsFeedIngestService>();
                     services.AddSingleton<VertexAutoTradeBinance8.Services.News.MacroCalendarService>();
+                    // Institutional RiskEngine phases 1–5 (HardRisk, Regime, NewsMacro, ML, OI)
+                    VertexAutoTrade.RiskEngine.ServiceCollectionExtensions.AddVertexRiskEngine(services);
+
                     services.AddHostedService(sp => sp.GetRequiredService<VertexAutoTradeBinance8.Services.News.MacroCalendarService>());
                     
                     services.AddSingleton<VertexAutoTradeBinance8.Services.Infra.ISignalBus, VertexAutoTradeBinance8.Services.Infra.InProcessSignalBus>();

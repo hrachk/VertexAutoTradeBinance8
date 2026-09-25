@@ -46,4 +46,12 @@
     </EmbeddedResource>
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\src\VertexAutoTrade.Core\VertexAutoTrade.Core.csproj" />
+    <ProjectReference Include="..\src\VertexAutoTrade.RiskEngine\VertexAutoTrade.RiskEngine.csproj" />
+    <ProjectReference Include="..\src\VertexAutoTrade.Regime\VertexAutoTrade.Regime.csproj" />
+    <ProjectReference Include="..\src\VertexAutoTrade.NewsMacro\VertexAutoTrade.NewsMacro.csproj" />
+    <ProjectReference Include="..\src\VertexAutoTrade.MLEngine\VertexAutoTrade.MLEngine.csproj" />
+    <ProjectReference Include="..\src\VertexAutoTrade.Execution\VertexAutoTrade.Execution.csproj" />
+  </ItemGroup>
 </Project>
