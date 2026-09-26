@@ -83,6 +83,10 @@
                             <span class="mn-badge">@ImpactLabel(n.ImpactStars)</span>
                             <span class="mn-vec">@n.VecLabel</span>
                             <span class="mn-ago">@n.TimeAgo</span>
+                            @if (n.IsFresh)
+                            {
+                                <span class="mn-fresh">@T("fresh")</span>
+                            }
                             <span class="mn-src" title="@n.Source">@n.Source</span>
                         </div>
                         <h3 class="mn-hl">@HeadlineFor(n)</h3>
@@ -216,6 +220,7 @@
 .mn-cat{padding:2px 8px;border-radius:999px;background:rgba(0,229,255,.1);color:#7dd3fc;font-weight:600}
 .mn-sym{padding:2px 7px;border-radius:6px;background:#15202e;color:#cbd5e1;font-weight:600}
 .mn-meta a{color:var(--cyan);text-decoration:none;font-weight:600}
+.mn-fresh{padding:2px 7px;border-radius:999px;font-weight:800;font-size:10px;background:rgba(34,197,94,.2);color:#4ade80;letter-spacing:.04em}
 .mn-src{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.9}
 .mn-side{display:flex;flex-direction:column;gap:12px}
 .mn-side-card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px}
@@ -281,6 +286,7 @@
         ["ticker_ph"] = ("Ticker…", "Тикер…"),
         ["live_feed"] = ("Live news feed", "Лента новостей"),
         ["updated"] = ("Live", "Онлайн"),
+        ["fresh"] = ("FRESH", "СВЕЖЕЕ"),
         ["stories"] = ("stories", "записей"),
         ["sources"] = ("sources", "источников"),
         ["empty"] = ("Empty tape — Engine must run with SharedData and NewsFeedIngest.", "Лента пуста — нужен запущенный Engine + SharedData + NewsFeed."),
@@ -385,14 +391,19 @@
                     bool isFg = hl.Contains("Fear", StringComparison.OrdinalIgnoreCase)
                                 && hl.Contains("Greed", StringComparison.OrdinalIgnoreCase);
 
-                    // Dedup: keep only latest F&G (and collapse identical headlines)
-                    var fp = isFg ? "FNG" : Regex.Replace(hl, @"\s+", " ").Trim().ToLowerInvariant();
-                    if (!seenFp.Add(fp)) continue;
-
                     var utc = DateTime.UtcNow;
                     if (r.TryGetProperty("utc", out var u) && u.ValueKind == JsonValueKind.String
                         && DateTime.TryParse(u.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
                         utc = parsed.ToUniversalTime();
+
+                    // Operational feed: hide stale archive noise (F&G always allowed once)
+                    var maxAgeH = Math.Clamp(Cfg.GetValue("News:MaxAgeHours", 6), 1, 48);
+                    if (!isFg && (DateTime.UtcNow - utc).TotalHours > maxAgeH)
+                        continue;
+
+                    // Dedup: keep only latest F&G (and collapse identical headlines)
+                    var fp = isFg ? "FNG" : Regex.Replace(hl, @"\s+", " ").Trim().ToLowerInvariant();
+                    if (!seenFp.Add(fp)) continue;
 
                     var vector = r.TryGetProperty("vector", out var v) ? (v.GetString() ?? "") : "";
                     var cat = r.TryGetProperty("category", out var c) ? (c.GetString() ?? "") : "";
@@ -429,12 +440,12 @@
                     }
 
                     string body = "";
-                    if (isFg)
+                    if (r.TryGetProperty("body", out var bodyEl))
+                        body = bodyEl.GetString() ?? "";
+                    if (isFg && string.IsNullOrWhiteSpace(body))
                         body = _lang == "ru"
                             ? "Индикатор режима рынка (не новость по монете). Обновляется при смене значения."
                             : "Market regime indicator (not token news). Written when the index value changes.";
-                    else if (r.TryGetProperty("reasonCode", out var rc))
-                        body = rc.GetString() ?? "";
 
                     list.Add(new Item
                     {
@@ -450,12 +461,13 @@
                         Url = r.TryGetProperty("url", out var ur) ? (ur.GetString() ?? "") : "",
                         TimeAgo = Ago(utc),
                         IsFg = isFg,
+                        IsFresh = (DateTime.UtcNow - utc).TotalMinutes <= 45,
                         Utc = utc
                     });
                 }
                 catch { }
             }
-            _items = list;
+            _items = list.OrderByDescending(x => x.Utc).ToList();
             _sourceCount = sources.Count;
             _mostlyFg = list.Count > 0 && fgCount >= Math.Max(1, list.Count * 2 / 3);
             var tot = Math.Max(1, bull + bear);
@@ -584,6 +596,7 @@
         public string Url { get; set; } = "";
         public string TimeAgo { get; set; } = "";
         public bool IsFg { get; set; }
+        public bool IsFresh { get; set; }
         public DateTime Utc { get; set; }
     }
 }

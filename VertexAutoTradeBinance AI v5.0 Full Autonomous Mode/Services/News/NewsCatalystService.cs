@@ -356,7 +356,8 @@ public sealed class NewsCatalystService : INewsCatalystService
                 utc = ev.Utc == default ? DateTime.UtcNow : ev.Utc,
                 ingestedUtc = DateTime.UtcNow,
                 source = Trunc(ev.Source, 48),
-                headline = Trunc(ev.Headline, 180),
+                headline = Trunc(ev.Headline, 220),
+                body = Trunc(ev.Body, 320),
                 vector = ev.Vector.ToString(),
                 grade = ev.Grade.ToString(),
                 category = ev.Category.ToString(),
@@ -365,7 +366,7 @@ public sealed class NewsCatalystService : INewsCatalystService
                 sentiment = Math.Round(sentiment, 2),
                 symbols = (ev.RelatedSymbols ?? new List<string>()).Take(6).ToArray(),
                 reasonCode = ev.ReasonCode ?? "",
-                url = Trunc(ev.OfficialSpeaker, 120),
+                url = Trunc(ev.OfficialSpeaker, 240),
                 shadow = ShadowMode
             };
             File.AppendAllText(path, JsonSerializer.Serialize(row) + "\n");

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Xml.Linq;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -20,6 +21,14 @@ public sealed class NewsFeedIngestService : BackgroundService
     private readonly HashSet<string> _seen = new(StringComparer.OrdinalIgnoreCase);
     private DateTime _lastFearGreedPull = DateTime.MinValue;
     private int? _lastFgValue;
+    private static readonly TimeSpan DefaultMaxAge = TimeSpan.FromHours(6);
+    private static readonly (string Name, string Url)[] RssFeeds =
+    {
+        ("Cointelegraph", "https://cointelegraph.com/rss"),
+        ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+        ("Decrypt", "https://decrypt.co/feed"),
+        ("BitcoinMagazine", "https://bitcoinmagazine.com/.rss/full/"),
+    };
 
     private static readonly string[] BullishKw =
     {
@@ -67,6 +76,7 @@ public sealed class NewsFeedIngestService : BackgroundService
             try
             {
                 await PullCryptoCompareAsync(stoppingToken);
+                await PullRssFeedsAsync(stoppingToken);
                 await PullFearGreedAsync(stoppingToken);
             }
             catch (Exception ex)
@@ -120,6 +130,9 @@ public sealed class NewsFeedIngestService : BackgroundService
             {
                 published = DateTimeOffset.FromUnixTimeSeconds(unix).UtcDateTime;
             }
+            // Skip stale headlines (operational feed — not a 1d archive)
+            var maxAge = TimeSpan.FromHours(Math.Clamp(_cfg.GetValue("News:MaxAgeHours", 6), 1, 48));
+            if (DateTime.UtcNow - published > maxAge) continue;
 
             var text = (title + " " + (body ?? "")).ToLowerInvariant();
             var vector = Classify(text);
@@ -173,6 +186,102 @@ public sealed class NewsFeedIngestService : BackgroundService
 
         if (ingested > 0)
             _log.LogInformation("[NEWS-FEED] ingested {n} headlines (poll)", ingested);
+    }
+
+
+    private async Task PullRssFeedsAsync(CancellationToken ct)
+    {
+        var maxAge = TimeSpan.FromHours(Math.Clamp(_cfg.GetValue("News:MaxAgeHours", 6), 1, 48));
+        int total = 0;
+        foreach (var (name, feedUrl) in RssFeeds)
+        {
+            try
+            {
+                using var resp = await _http.GetAsync(feedUrl, ct);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    _log.LogDebug("[NEWS-FEED] RSS {src} HTTP {code}", name, (int)resp.StatusCode);
+                    continue;
+                }
+                var xml = await resp.Content.ReadAsStringAsync(ct);
+                if (string.IsNullOrWhiteSpace(xml)) continue;
+                XDocument doc;
+                try { doc = XDocument.Parse(xml); }
+                catch { continue; }
+
+                var items = doc.Descendants("item").Take(12)
+                    .Concat(doc.Descendants().Where(e => e.Name.LocalName == "entry").Take(12));
+
+                int n = 0;
+                foreach (var item in items)
+                {
+                    var title = (string?)item.Element("title")
+                        ?? (string?)item.Elements().FirstOrDefault(e => e.Name.LocalName == "title");
+                    if (string.IsNullOrWhiteSpace(title)) continue;
+
+                    var linkEl = item.Element("link")
+                        ?? item.Elements().FirstOrDefault(e => e.Name.LocalName == "link");
+                    var link = linkEl?.Attribute("href")?.Value ?? (string?)linkEl;
+
+                    var desc = (string?)item.Element("description")
+                        ?? (string?)item.Elements().FirstOrDefault(e => e.Name.LocalName == "summary")
+                        ?? (string?)item.Elements().FirstOrDefault(e => e.Name.LocalName == "content");
+                    if (!string.IsNullOrEmpty(desc))
+                        desc = System.Text.RegularExpressions.Regex.Replace(desc, "<[^>]+>", " ").Trim();
+
+                    DateTime published = DateTime.UtcNow;
+                    var pubStr = (string?)item.Element("pubDate")
+                        ?? (string?)item.Elements().FirstOrDefault(e => e.Name.LocalName == "published")
+                        ?? (string?)item.Elements().FirstOrDefault(e => e.Name.LocalName == "updated");
+                    if (!string.IsNullOrEmpty(pubStr) && DateTimeOffset.TryParse(pubStr, out var dto))
+                        published = dto.UtcDateTime;
+
+                    if (DateTime.UtcNow - published > maxAge) continue;
+
+                    var key = $"rss:{name}:{title}";
+                    if (!_seen.Add(key)) continue;
+                    if (_seen.Count > 2000) { _seen.Clear(); _seen.Add(key); }
+
+                    var text = (title + " " + (desc ?? "")).ToLowerInvariant();
+                    var vector = Classify(text);
+                    bool macroHint = text.Contains("fomc") || text.Contains("cpi") || text.Contains("nfp")
+                                     || text.Contains("federal reserve") || text.Contains("interest rate")
+                                     || text.Contains("ecb") || text.Contains("powell");
+                    var symbols = ResolveSymbols(text);
+                    decimal impact = symbols.Count > 0 ? 0.52m : 0.40m;
+                    if (vector == NewsVector.Neutral && !macroHint) impact = 0.30m;
+                    if (macroHint) impact = Math.Max(impact, 0.80m);
+                    if (text.Contains("hack") || text.Contains("exploit") || text.Contains("sec "))
+                        impact = Math.Min(0.92m, impact + 0.2m);
+
+                    _news.Ingest(new NewsEvent
+                    {
+                        Source = name,
+                        Headline = title!.Trim(),
+                        Body = desc != null && desc.Length > 280 ? desc[..280] : desc,
+                        Credibility = 0.72m,
+                        Impact = impact,
+                        Vector = vector,
+                        Grade = impact >= 0.75m ? NewsImpactGrade.High
+                            : impact >= 0.5m ? NewsImpactGrade.Medium : NewsImpactGrade.Low,
+                        Category = macroHint ? NewsEventCategory.MacroHigh : NewsEventCategory.TokenSpecific,
+                        RelatedSymbols = symbols,
+                        Utc = published,
+                        ReasonCode = macroHint ? NewsReasonCodes.MacroHighImpact : "RSS",
+                        OfficialSpeaker = link
+                    });
+                    n++;
+                    total++;
+                    if (n >= 8) break;
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.LogDebug(ex, "[NEWS-FEED] RSS {src} failed", name);
+            }
+        }
+        if (total > 0)
+            _log.LogInformation("[NEWS-FEED] RSS ingested {n} fresh items", total);
     }
 
     private async Task PullFearGreedAsync(CancellationToken ct)
