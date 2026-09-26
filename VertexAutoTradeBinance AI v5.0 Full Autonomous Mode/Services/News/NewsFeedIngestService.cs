@@ -42,15 +42,88 @@ public sealed class NewsFeedIngestService : BackgroundService
         "bankruptcy", "collapse", "fraud", "delist", "investigation", "rate hike",
         "liquidation", "crash", "plunge", "bearish", "sell-off", "sec sues"
     };
+    // Longer tokens first — ResolveSymbols sorts by length desc.
     private static readonly (string token, string symbol)[] SymMap =
     {
+        // Majors
         ("bitcoin", "BTCUSDT"), ("btc", "BTCUSDT"),
-        ("ethereum", "ETHUSDT"), ("eth", "ETHUSDT"),
-        ("solana", "SOLUSDT"), ("sol ", "SOLUSDT"),
-        ("xrp", "XRPUSDT"), ("ripple", "XRPUSDT"),
-        ("bnb", "BNBUSDT"), ("dogecoin", "DOGEUSDT"), ("doge", "DOGEUSDT"),
+        ("ethereum", "ETHUSDT"), ("ether", "ETHUSDT"), ("eth", "ETHUSDT"),
+        ("solana", "SOLUSDT"), (" sol ", "SOLUSDT"),
+        ("binance coin", "BNBUSDT"), ("bnb", "BNBUSDT"),
+        ("ripple", "XRPUSDT"), ("xrp", "XRPUSDT"),
+        ("dogecoin", "DOGEUSDT"), ("doge", "DOGEUSDT"),
         ("cardano", "ADAUSDT"), ("ada", "ADAUSDT"),
-        ("near", "NEARUSDT"), ("avax", "AVAXUSDT"), ("link", "LINKUSDT"),
+        ("avalanche", "AVAXUSDT"), ("avax", "AVAXUSDT"),
+        ("chainlink", "LINKUSDT"), ("link", "LINKUSDT"),
+        ("polkadot", "DOTUSDT"), ("dot", "DOTUSDT"),
+        ("polygon", "MATICUSDT"), ("matic", "MATICUSDT"), ("pol ", "POLUSDT"),
+        ("litecoin", "LTCUSDT"), ("ltc", "LTCUSDT"),
+        ("tron", "TRXUSDT"), ("trx", "TRXUSDT"),
+        ("toncoin", "TONUSDT"), ("ton ", "TONUSDT"),
+        ("shiba", "1000SHIBUSDT"), ("shib", "1000SHIBUSDT"),
+        ("pepe", "1000PEPEUSDT"),
+        ("near protocol", "NEARUSDT"), ("near", "NEARUSDT"),
+        ("cosmos", "ATOMUSDT"), ("atom", "ATOMUSDT"),
+        ("uniswap", "UNIUSDT"), (" uni ", "UNIUSDT"),
+        ("aave", "AAVEUSDT"),
+        ("sui ", "SUIUSDT"), ("sui.", "SUIUSDT"),
+        ("aptos", "APTUSDT"), ("apt", "APTUSDT"),
+        ("arbitrum", "ARBUSDT"), ("arb ", "ARBUSDT"),
+        ("optimism", "OPUSDT"),
+        ("render", "RENDERUSDT"), ("rndr", "RENDERUSDT"),
+        ("fetch.ai", "FETUSDT"), ("fetch", "FETUSDT"), ("fet", "FETUSDT"),
+        ("injective", "INJUSDT"), ("inj", "INJUSDT"),
+        ("filecoin", "FILUSDT"), ("fil", "FILUSDT"),
+        ("internet computer", "ICPUSDT"), ("icp", "ICPUSDT"),
+        ("hedera", "HBARUSDT"), ("hbar", "HBARUSDT"),
+        ("stellar", "XLMUSDT"), ("xlm", "XLMUSDT"),
+        ("algorand", "ALGOUSDT"), ("algo", "ALGOUSDT"),
+        ("vechain", "VETUSDT"), ("vet", "VETUSDT"),
+        ("eos", "EOSUSDT"),
+        ("sandbox", "SANDUSDT"), ("sand", "SANDUSDT"),
+        ("axie", "AXSUSDT"), ("axs", "AXSUSDT"),
+        ("decentraland", "MANAUSDT"), ("mana", "MANAUSDT"),
+        ("worldcoin", "WLDUSDT"), ("wld", "WLDUSDT"),
+        ("ondo", "ONDOUSDT"),
+        ("sui", "SUIUSDT"),
+        ("sei ", "SEIUSDT"),
+        ("celestia", "TIAUSDT"), ("tia", "TIAUSDT"),
+        ("pyth", "PYTHUSDT"),
+        ("jup", "JUPUSDT"), ("jupiter", "JUPUSDT"),
+        ("wif", "WIFUSDT"),
+        ("bonk", "1000BONKUSDT"),
+        ("floki", "1000FLOKIUSDT"),
+        ("trump", "TRUMPUSDT"),
+        ("hype", "HYPEUSDT"),
+        ("pendle", "PENDLEUSDT"),
+        ("ethena", "ENAUSDT"), ("ena", "ENAUSDT"),
+        ("eigen", "EIGENUSDT"),
+        ("manta", "MANTAUSDT"),
+        ("starknet", "STRKUSDT"), ("strk", "STRKUSDT"),
+        ("zksync", "ZKUSDT"),
+        ("blur", "BLURUSDT"),
+        ("gala", "GALAUSDT"),
+        ("chiliz", "CHZUSDT"), ("chz", "CHZUSDT"),
+        ("flow", "FLOWUSDT"),
+        ("theta", "THETAUSDT"),
+        ("kaspa", "KASUSDT"), ("kas", "KASUSDT"),
+        ("bittensor", "TAOUSDT"), ("tao", "TAOUSDT"),
+        // TradFi / stock-named perps (Binance-style USDT symbols where common)
+        ("tesla", "TSLAUSDT"), ("tsla", "TSLAUSDT"),
+        ("nvidia", "NVDAUSDT"), ("nvda", "NVDAUSDT"),
+        ("apple", "AAPLUSDT"), ("aapl", "AAPLUSDT"),
+        ("microsoft", "MSFTUSDT"), ("msft", "MSFTUSDT"),
+        ("amazon", "AMZNUSDT"), ("amzn", "AMZNUSDT"),
+        ("meta ", "METAUSDT"), ("facebook", "METAUSDT"),
+        ("google", "GOOGUSDT"), ("alphabet", "GOOGUSDT"), ("googl", "GOOGUSDT"),
+        ("netflix", "NFLXUSDT"), ("nflx", "NFLXUSDT"),
+        ("microstrategy", "MSTRUSDT"), ("mstr", "MSTRUSDT"),
+        ("coinbase", "COINUSDT"), ("coin ", "COINUSDT"),
+        ("gold", "XAUUSDT"), ("xau", "XAUUSDT"),
+        ("silver", "XAGUSDT"), ("xag", "XAGUSDT"),
+        ("crude", "CLUSDT"), ("wti", "CLUSDT"), ("oil ", "CLUSDT"),
+        ("spx", "SPXUSDT"), ("s&p", "SPXUSDT"), ("s&amp;p", "SPXUSDT"),
+        ("nasdaq", "NDXUSDT"),
     };
 
     public NewsFeedIngestService(
@@ -329,7 +402,7 @@ public sealed class NewsFeedIngestService : BackgroundService
                 Vector = vector,
                 Grade = impact >= 0.5m ? NewsImpactGrade.Medium : NewsImpactGrade.Low,
                 Category = NewsEventCategory.MacroHigh, // regime / market-wide
-                RelatedSymbols = new List<string> { "BTCUSDT", "ETHUSDT" },
+                RelatedSymbols = new List<string> { "MARKET", "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT" },
                 Utc = ts,
                 ReasonCode = "REASON_MARKET_REGIME_FNG",
                 OfficialSpeaker = "https://alternative.me/crypto/fear-and-greed-index/"
@@ -354,12 +427,15 @@ public sealed class NewsFeedIngestService : BackgroundService
 
     private static List<string> ResolveSymbols(string text)
     {
+        // Pad so tokens like " sol " / " uni " match word-ish boundaries
+        var hay = " " + text.ToLowerInvariant() + " ";
         var list = new List<string>();
-        foreach (var (token, symbol) in SymMap)
+        foreach (var (token, symbol) in SymMap.OrderByDescending(x => x.token.Length))
         {
-            if (text.Contains(token) && !list.Contains(symbol))
+            var tok = token.ToLowerInvariant();
+            if (hay.Contains(tok, StringComparison.Ordinal))
                 list.Add(symbol);
         }
-        return list;
+        return list.Distinct(StringComparer.OrdinalIgnoreCase).Take(8).ToList();
     }
 }
