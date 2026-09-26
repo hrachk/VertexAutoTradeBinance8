@@ -8,100 +8,119 @@
 @inject TradeJournalService Journal
 @implements IDisposable
 
-<div class="mn-root" lang="@_lang">
-    <header class="mn-header">
-        <div class="mn-brand">
-            <span class="mn-logo">V</span>
+<div class="vnh">
+    <!-- HEADER -->
+    <header class="vnh-hd">
+        <div class="vnh-brand">
+            <div class="vnh-mark">V</div>
             <div>
-                <div class="mn-title">VERTEX <span class="mn-accent">MACRO NEWS</span></div>
-                <div class="mn-path">@T("subtitle")</div>
+                <div class="vnh-name">VERTEX <span>MACRO NEWS HUB</span></div>
+                <div class="vnh-sub">@T("sub") · /macro-news</div>
             </div>
         </div>
-        <div class="mn-header-right">
-            <div class="mn-lang">
-                <button type="button" class="@(_lang=="en"?"on":null)" @onclick='() => SetLang("en")'>EN</button>
-                <button type="button" class="@(_lang=="ru"?"on":null)" @onclick='() => SetLang("ru")'>RU</button>
+        <div class="vnh-hd-r">
+            <div class="vnh-lang">
+                <button class="@(_lang=="en"?"on":"")" @onclick='()=>SetLang("en")'>EN</button>
+                <button class="@(_lang=="ru"?"on":"")" @onclick='()=>SetLang("ru")'>RU</button>
             </div>
-            <div class="mn-shield @(_hardMode?"hard":"shadow")">
-                <span class="mn-dot"></span>
-                @T("shield"): @(_hardMode ? "HARD" : "SHADOW")
+            <div class="vnh-pill @(_hard?"hard":"")">
+                <i></i> @T("shield"): @(_hard?"HARD":"SHADOW")
             </div>
         </div>
     </header>
 
-    <section class="mn-top">
-        <div class="mn-card">
-            <div class="mn-k">@T("next_event")</div>
-            <div class="mn-v cyan">@(_nextName ?? "—")</div>
-            <div class="mn-s">@(_nextCd ?? T("no_cal"))</div>
+    <!-- TOP METRICS -->
+    <section class="vnh-metrics">
+        <div class="vnh-m">
+            <div class="vnh-m-k">@T("next") <span class="dim">COUNTDOWN</span></div>
+            <div class="vnh-m-v cyan">@(_nextCd ?? "—")</div>
+            <div class="vnh-m-s">@(_nextName ?? T("nocal"))@(_nextWhen!=null ? $" · {_nextWhen}" : "")</div>
         </div>
-        <div class="mn-card">
-            <div class="mn-k">Fear &amp; Greed</div>
-            <div class="mn-v purple">@(_fg?.ToString() ?? "—") <span class="mn-sm">@_fgLabel</span></div>
-            <div class="mn-meter"><i style="width:@(_fg ?? 0)%"></i></div>
+        <div class="vnh-m">
+            <div class="vnh-m-k">FEAR &amp; GREED</div>
+            <div class="vnh-fg-row">
+                <div class="vnh-m-v purple">@(_fg?.ToString() ?? "—")</div>
+                <div class="vnh-fg-lab">@(_fgLabel.ToUpperInvariant())</div>
+            </div>
+            <svg class="vnh-spark" viewBox="0 0 120 28" preserveAspectRatio="none">
+                <polyline fill="none" stroke="#c084fc" stroke-width="2" points="@_sparkPts"/>
+            </svg>
         </div>
-        <div class="mn-card">
-            <div class="mn-k">@T("tape_mood")</div>
-            <div class="mn-v @_moodCss">@_moodLabel</div>
-            <div class="mn-s">@_moodHint</div>
+        <div class="vnh-m">
+            <div class="vnh-m-k">@T("sent24")</div>
+            <div class="vnh-m-v @_sentCss">
+                @if (_sentPct >= 55) { <span class="bull-ico">▲</span> }
+                else if (_sentPct <= 45) { <span class="bear-ico">▼</span> }
+                @_sentLabel @_sentPct%
+            </div>
+            <div class="vnh-bar"><span style="width:@_sentPct%"></span></div>
         </div>
-        <div class="mn-card">
-            <div class="mn-k">@T("ai_bias")</div>
-            <div class="mn-v @_biasCss">@_biasLabel</div>
-            <div class="mn-s">@T("bias_hint")</div>
+        <div class="vnh-m @(_biasHot?"hot":"")">
+            <div class="vnh-m-k">AI MACRO BIAS</div>
+            <div class="vnh-m-v @_biasCss">
+                @_biasText
+                @if (_biasHot) { <span class="warn-ico">!</span> }
+            </div>
+            <div class="vnh-m-s">@T("bias_note")</div>
         </div>
     </section>
 
-    <div class="mn-filters">
-        @foreach (var f in _filters)
+    <!-- FILTERS -->
+    <div class="vnh-filters">
+        <span class="vnh-fk">@T("filters")</span>
+        @foreach (var f in new[]{("all",T("all")),("macro",T("macro")),("crypto",T("crypto")),("high",T("high"))})
         {
-            <button type="button" class="mn-chip @(_filter==f?"on":null)" @onclick="() => SetFilter(f)">@T(f)</button>
+            <button type="button" class="vnh-chip @(_filter==f.Item1?"on":"")" @onclick="()=>_filter=f.Item1">@f.Item2</button>
         }
-        <input class="mn-search" placeholder="@T("search")" @bind="_q" @bind:event="oninput" />
+        <div class="vnh-search">
+            <input placeholder="@T("search")" @bind="_q" @bind:event="oninput" />
+        </div>
     </div>
 
-    <div class="mn-grid">
-        <section class="mn-feed">
-            <div class="mn-feed-hd">
-                <span class="mn-live"><i></i> @T("feed")</span>
-                <span class="mn-meta-hd">@_items.Count @T("stories") · @_srcCount @T("sources") · max @_maxAgeH h</span>
+    <div class="vnh-body">
+        <!-- FEED -->
+        <section class="vnh-feed">
+            <div class="vnh-feed-hd">
+                <span class="live"><i></i> @T("live")</span>
+                <span class="upd">@T("showing") @_viewCount @T("of") @_totalRaw · @T("updated") @_lastUpd</span>
             </div>
 
-            @if (_items.Count == 0)
+            @if (!_view.Any())
             {
-                <div class="mn-empty">
-                    <strong>@T("empty_t")</strong>
-                    <p>@T("empty_b")</p>
-                </div>
+                <div class="vnh-empty">@T("empty")</div>
             }
             else
             {
-                @foreach (var n in View)
+                @foreach (var n in _view)
                 {
-                    <article class="mn-row impact-@n.Stars @n.Vec">
-                        <div class="mn-row-top">
-                            <span class="mn-imp">@ImpactTxt(n.Stars)</span>
-                            <span class="mn-src">@n.Source</span>
-                            <span class="mn-time">@n.Ago</span>
-                            @if (n.Fresh) { <span class="mn-fresh">@T("fresh")</span> }
+                    <article class="vnh-item imp-@n.Stars">
+                        <div class="vnh-item-l">
+                            <span class="badge b-@n.Stars">
+                                @if (n.Stars >= 4) { <text>⚠ </text> }
+                                else if (n.Stars == 3) { <text>⚠ </text> }
+                                @ImpactLabel(n.Stars)
+                            </span>
                         </div>
-                        <h3 class="mn-hl">@n.Headline</h3>
-                        @if (!string.IsNullOrWhiteSpace(n.Body))
-                        {
-                            <p class="mn-body">@n.Body</p>
-                        }
-                        <div class="mn-tags">
-                            @if (!string.IsNullOrEmpty(n.Cat))
+                        <div class="vnh-item-m">
+                            <h3>@n.Title</h3>
+                            @if (!string.IsNullOrEmpty(n.Summary))
                             {
-                                <span class="mn-tag cat">@n.Cat</span>
+                                <p>@n.Summary</p>
                             }
-                            @foreach (var s in n.Syms.Take(6))
-                            {
-                                <span class="mn-tag sym">@s</span>
-                            }
+                            <div class="vnh-item-tags">
+                                <span class="cat">@n.CatDisplay</span>
+                                @foreach (var s in n.Syms.Take(4))
+                                {
+                                    <span class="sym">@s</span>
+                                }
+                            </div>
+                        </div>
+                        <div class="vnh-item-r">
+                            <span class="ago">@n.Ago</span>
+                            <span class="src">@n.Source</span>
                             @if (!string.IsNullOrEmpty(n.Url))
                             {
-                                <a class="mn-tag link" href="@n.Url" target="_blank" rel="noopener">@T("open")</a>
+                                <a href="@n.Url" target="_blank" rel="noopener">↗</a>
                             }
                         </div>
                     </article>
@@ -109,257 +128,263 @@
             }
         </section>
 
-        <aside class="mn-side">
-            <div class="mn-panel">
-                <div class="mn-panel-t">@T("kpi_t")</div>
-                <div class="mn-kpi">
-                    <div>
-                        <span>@T("pf_act")</span>
-                        <b>@_pfA.ToString("0.00")</b>
-                        <small>@_nA @T("trades") · WR @_wrA.ToString("0")%</small>
-                    </div>
-                    <div>
-                        <span>@T("pf_fil")</span>
-                        <b>@_pfF.ToString("0.00")</b>
-                        <small>@_nF @T("trades") · WR @_wrF.ToString("0")%</small>
-                    </div>
+        <!-- SIDE -->
+        <aside class="vnh-side">
+            <div class="vnh-card">
+                <div class="vnh-card-hd">
+                    <span>◎ SHADOW KPI</span>
+                    <span class="dim">@T("kpi_upd")</span>
                 </div>
-                <div class="mn-delta @(_dPf >= 0.15m ? "ok" : "")">
-                    ΔPF @(_dPf >= 0 ? "+" : "")@_dPf.ToString("0.00")
-                    <span>@T("kpi_goal")</span>
+                <div class="vnh-kpi-title">ACTUAL PF VS FILTERED PF</div>
+                <div class="vnh-legend">
+                    <span><i class="c1"></i> ACTUAL PF</span>
+                    <span><i class="c2"></i> FILTERED PF (SHADOW)</span>
                 </div>
-                <div class="mn-status @(_recommend ? "go" : "wait")">
-                    @(_recommend ? T("kpi_go") : T("kpi_wait"))
+                <div class="vnh-chart">
+                    @if (_bars.Count == 0)
+                    {
+                        <div class="vnh-chart-empty">@T("no_chart")</div>
+                    }
+                    else
+                    {
+                        <svg viewBox="0 0 300 120" preserveAspectRatio="none" class="vnh-svg">
+                            <polyline fill="none" stroke="#22d3ee" stroke-width="2" points="@_lineActual"/>
+                            <polyline fill="none" stroke="#c084fc" stroke-width="2" stroke-dasharray="4 3" points="@_lineFilt"/>
+                            @if (_bars.Count > 0)
+                            {
+                                <circle cx="@_endX" cy="@_endYa" r="4" fill="#22d3ee"/>
+                                <circle cx="@_endX" cy="@_endYf" r="4" fill="#c084fc"/>
+                            }
+                        </svg>
+                        <div class="vnh-y">100<br/>50<br/>0</div>
+                    }
                 </div>
-                <p class="mn-note">@T("kpi_note")</p>
+                <div class="vnh-kpi-nums">
+                    <div><span>Actual</span><b>@_pfA.ToString("0.00")</b></div>
+                    <div><span>Filtered</span><b>@_pfF.ToString("0.00")</b></div>
+                    <div><span>ΔPF</span><b class="@(_dPf>=0.15m?"ok":"")">@(_dPf>=0?"+":"")@_dPf.ToString("0.00")</b></div>
+                </div>
+                <div class="vnh-kpi-meta">@_nA @T("trades") · WR @_wrA.ToString("0")% · DD @_ddA.ToString("0.0")</div>
             </div>
 
-            <div class="mn-panel">
-                <div class="mn-panel-t">@T("how_t")</div>
-                <ul class="mn-list">
-                    <li>@T("how1")</li>
-                    <li>@T("how2")</li>
-                    <li>@T("how3")</li>
-                </ul>
-            </div>
-
-            <div class="mn-panel muted">
-                <div class="mn-panel-t">@T("leg_t")</div>
-                <div class="mn-leg"><span class="r"></span> Impact 4–5</div>
-                <div class="mn-leg"><span class="a"></span> Impact 3</div>
-                <div class="mn-leg"><span class="g"></span> Impact 1–2</div>
+            <div class="vnh-card pol">
+                <div class="vnh-card-hd">POLICY SHADOW</div>
+                <div class="vnh-pol-row">
+                    <div class="vnh-status">
+                        <span class="shield">🛡</span>
+                        <div>
+                            <div class="st">STATUS</div>
+                            <div class="sv">@(_hard ? "HARD" : "ON")</div>
+                        </div>
+                    </div>
+                    <div class="vnh-toggle">
+                        <span class="@(!_hard?"on":"")">SHADOW</span>
+                        <span class="sep">/</span>
+                        <span class="@(_hard?"on hard":"")">HARD</span>
+                    </div>
+                </div>
+                <div class="vnh-pol-note">
+                    @(_recommend ? T("rec_yes") : T("rec_no"))
+                </div>
+                <div class="vnh-pol-hint">@T("pol_hint")</div>
             </div>
         </aside>
     </div>
+
+    <footer class="vnh-ft">
+        <span>@T("term") @DateTime.Now.ToString("HH:mm:ss")</span>
+        <span class="ok">● LIVE DATA</span>
+        <span>CryptoCompare · Cointelegraph · CoinDesk · F&amp;G</span>
+        <span>poll ~15s · UI refresh 3s</span>
+    </footer>
 </div>
 
 <style>
-.mn-root{--bg:#070b12;--card:#0d141e;--line:rgba(255,255,255,.08);--cyan:#22d3ee;--purple:#c084fc;--green:#34d399;--red:#f87171;--amber:#fbbf24;--text:#e8eef7;--muted:#8b9cb3;padding:16px 18px 28px;color:var(--text);background:radial-gradient(800px 400px at 10% -10%,rgba(34,211,238,.07),transparent 50%),var(--bg);min-height:calc(100vh - 48px);font-family:Inter,system-ui,sans-serif}
-.mn-header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
-.mn-brand{display:flex;gap:12px;align-items:center}
-.mn-logo{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,#22d3ee,#7c3aed);display:grid;place-items:center;font-weight:900;color:#041018}
-.mn-title{font-weight:800;font-size:14px;letter-spacing:.04em}
-.mn-accent{color:var(--cyan)}
-.mn-path{font-size:11px;color:var(--muted);margin-top:2px}
-.mn-header-right{display:flex;gap:8px;align-items:center}
-.mn-lang{display:flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;background:#0a1018}
-.mn-lang button{border:0;background:0;color:var(--muted);padding:6px 12px;cursor:pointer;font-size:11px;font-weight:700}
-.mn-lang button.on{background:rgba(34,211,238,.15);color:var(--cyan)}
-.mn-shield{display:flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;border:1px solid var(--line);font-size:11px;font-weight:700;background:#0a1018}
-.mn-shield.shadow{color:#7dd3fc}.mn-shield.hard{color:#fca5a5;border-color:rgba(248,113,113,.4)}
-.mn-dot{width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 8px currentColor}
-.mn-top{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
-@@media(max-width:1100px){.mn-top{grid-template-columns:1fr 1fr}}
-@@media(max-width:560px){.mn-top{grid-template-columns:1fr}}
-.mn-card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
-.mn-k{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:700;margin-bottom:6px}
-.mn-v{font-size:22px;font-weight:800;line-height:1.15;letter-spacing:-.02em}
-.mn-v.cyan{color:var(--cyan)}.mn-v.purple{color:var(--purple)}.mn-v.green{color:var(--green)}
-.mn-v.warn{color:var(--amber)}.mn-v.danger{color:var(--red)}.mn-v.neu{color:#cbd5e1}
-.mn-s{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.35}
-.mn-sm{font-size:12px;font-weight:600;opacity:.85}
-.mn-meter{height:6px;background:#15202e;border-radius:99px;margin-top:10px;overflow:hidden}
-.mn-meter>i{display:block;height:100%;background:linear-gradient(90deg,#a855f7,#22d3ee);border-radius:99px}
-.mn-filters{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-bottom:12px}
-.mn-chip{border:1px solid var(--line);background:#0a1018;color:var(--muted);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer}
-.mn-chip.on{border-color:var(--cyan);color:var(--cyan);background:rgba(34,211,238,.1)}
-.mn-search{margin-left:auto;background:#0a1018;border:1px solid var(--line);border-radius:10px;padding:7px 12px;color:var(--text);font-size:12px;min-width:140px}
-.mn-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(280px,.65fr);gap:12px}
-@@media(max-width:960px){.mn-grid{grid-template-columns:1fr}}
-.mn-feed{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px;min-height:420px}
-.mn-feed-hd{display:flex;justify-content:space-between;align-items:center;padding:4px 6px 12px;border-bottom:1px solid var(--line);margin-bottom:10px}
-.mn-live{display:flex;align-items:center;gap:8px;font-weight:800;font-size:13px}
-.mn-live i{width:7px;height:7px;border-radius:50%;background:#f87171;box-shadow:0 0 10px #f87171;display:inline-block}
-.mn-meta-hd{font-size:11px;color:var(--muted)}
-.mn-empty{padding:28px 12px;color:var(--muted);font-size:13px;line-height:1.5}
-.mn-empty strong{color:var(--text);display:block;margin-bottom:6px}
-.mn-row{padding:12px 12px;border-radius:12px;border:1px solid var(--line);background:rgba(0,0,0,.22);margin-bottom:8px;border-left:3px solid #475569}
-.mn-row.bull{border-left-color:var(--green)}.mn-row.bear{border-left-color:var(--red)}
-.mn-row.impact-4,.mn-row.impact-5{background:rgba(248,113,113,.06);border-color:rgba(248,113,113,.18)}
-.mn-row-top{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:11px;color:var(--muted);margin-bottom:6px}
-.mn-imp{padding:2px 8px;border-radius:999px;font-weight:800;font-size:10px;background:rgba(148,163,184,.15);color:#94a3b8}
-.impact-3 .mn-imp{background:rgba(251,191,36,.15);color:var(--amber)}
-.impact-4 .mn-imp,.impact-5 .mn-imp{background:rgba(248,113,113,.2);color:#fca5a5}
-.mn-fresh{padding:2px 7px;border-radius:999px;font-weight:800;font-size:10px;background:rgba(52,211,153,.18);color:#6ee7b7}
-.mn-hl{margin:0;font-size:14.5px;line-height:1.4;font-weight:650;color:#f1f5f9}
-.mn-body{margin:6px 0 0;font-size:12.5px;color:var(--muted);line-height:1.45}
-.mn-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px;align-items:center}
-.mn-tag{padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;background:#15202e;color:#cbd5e1}
-.mn-tag.cat{background:rgba(34,211,238,.1);color:#67e8f9}
-.mn-tag.link{color:var(--cyan);text-decoration:none;background:transparent;border:1px solid rgba(34,211,238,.25)}
-.mn-side{display:flex;flex-direction:column;gap:10px}
-.mn-panel{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}
-.mn-panel.muted{opacity:.95}
-.mn-panel-t{font-weight:800;font-size:12px;margin-bottom:10px;letter-spacing:.03em}
-.mn-kpi{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.mn-kpi span{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-.mn-kpi b{display:block;font-size:22px;margin:2px 0}
-.mn-kpi small{font-size:11px;color:var(--muted)}
-.mn-delta{margin-top:12px;font-weight:800;font-size:16px;color:var(--muted);display:flex;flex-direction:column;gap:2px}
-.mn-delta span{font-size:11px;font-weight:600}
-.mn-delta.ok{color:var(--green)}
-.mn-status{margin-top:10px;padding:8px 10px;border-radius:10px;font-size:12px;font-weight:700}
-.mn-status.wait{background:rgba(251,191,36,.08);color:#fcd34d;border:1px solid rgba(251,191,36,.2)}
-.mn-status.go{background:rgba(52,211,153,.1);color:#6ee7b7;border:1px solid rgba(52,211,153,.25)}
-.mn-note{font-size:11.5px;color:var(--muted);margin:10px 0 0;line-height:1.4}
-.mn-list{margin:0;padding-left:16px;font-size:12.5px;color:var(--muted);line-height:1.55}
-.mn-leg{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:6px}
-.mn-leg span{width:9px;height:9px;border-radius:3px;display:inline-block}
-.mn-leg .r{background:#f87171}.mn-leg .a{background:#fbbf24}.mn-leg .g{background:#64748b}
+.vnh{--bg:#0a0e17;--panel:#111827;--line:rgba(148,163,184,.12);--cyan:#22d3ee;--purple:#c084fc;--green:#34d399;--red:#f87171;--amber:#fbbf24;--text:#e2e8f0;--muted:#64748b;
+padding:18px 20px 24px;background:radial-gradient(900px 500px at 15% -5%,rgba(34,211,238,.06),transparent 55%),radial-gradient(700px 400px at 95% 0,rgba(168,85,247,.05),transparent 50%),var(--bg);
+color:var(--text);min-height:calc(100vh - 52px);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+.vnh-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;gap:12px;flex-wrap:wrap}
+.vnh-brand{display:flex;gap:12px;align-items:center}
+.vnh-mark{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#22d3ee 0%,#7c3aed 100%);display:grid;place-items:center;font-weight:900;font-size:18px;color:#0a0e17;box-shadow:0 0 28px rgba(34,211,238,.25)}
+.vnh-name{font-weight:800;font-size:15px;letter-spacing:.06em}
+.vnh-name span{color:var(--cyan);font-weight:700}
+.vnh-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.vnh-hd-r{display:flex;gap:10px;align-items:center}
+.vnh-lang{display:flex;background:#0c1220;border:1px solid var(--line);border-radius:999px;overflow:hidden}
+.vnh-lang button{border:0;background:0;color:var(--muted);padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer}
+.vnh-lang button.on{background:rgba(34,211,238,.15);color:var(--cyan)}
+.vnh-pill{display:flex;align-items:center;gap:8px;padding:7px 14px;border-radius:999px;border:1px solid var(--line);font-size:11px;font-weight:700;color:#7dd3fc;background:#0c1220}
+.vnh-pill.hard{color:#fca5a5;border-color:rgba(248,113,113,.35)}
+.vnh-pill i{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 10px currentColor;animation:vnhp 1.5s infinite}
+@@keyframes vnhp{50%{opacity:.35}}
+
+.vnh-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+@@media(max-width:1100px){.vnh-metrics{grid-template-columns:1fr 1fr}}
+@@media(max-width:560px){.vnh-metrics{grid-template-columns:1fr}}
+.vnh-m{background:linear-gradient(180deg,rgba(255,255,255,.03),transparent),var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px 18px;position:relative;overflow:hidden}
+.vnh-m.hot{box-shadow:inset 0 0 0 1px rgba(248,113,113,.2)}
+.vnh-m-k{font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--muted);margin-bottom:8px}
+.vnh-m-k .dim{opacity:.6;font-weight:600}
+.vnh-m-v{font-size:26px;font-weight:800;letter-spacing:-.03em;line-height:1.1}
+.vnh-m-v.cyan{color:var(--cyan)}.vnh-m-v.purple{color:var(--purple)}.vnh-m-v.green{color:var(--green)}
+.vnh-m-v.danger{color:var(--red)}.vnh-m-v.warn{color:var(--amber)}.vnh-m-v.neu{color:#cbd5e1}
+.vnh-m-s{font-size:11px;color:var(--muted);margin-top:8px}
+.vnh-fg-row{display:flex;align-items:baseline;gap:10px}
+.vnh-fg-lab{font-size:11px;font-weight:700;color:var(--purple);letter-spacing:.04em}
+.vnh-spark{width:100%;height:28px;margin-top:8px;opacity:.9}
+.vnh-bar{height:8px;background:#1e293b;border-radius:99px;margin-top:12px;overflow:hidden}
+.vnh-bar>span{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#34d399,#22d3ee,#a855f7)}
+.bull-ico{color:var(--green);margin-right:4px}.bear-ico{color:var(--red);margin-right:4px}
+.warn-ico{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:6px;background:rgba(248,113,113,.15);color:var(--red);font-weight:900;font-size:14px;margin-left:8px;vertical-align:middle}
+
+.vnh-filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+.vnh-fk{font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--muted);margin-right:4px}
+.vnh-chip{border:1px solid var(--line);background:#0c1220;color:var(--muted);border-radius:999px;padding:7px 16px;font-size:12px;font-weight:600;cursor:pointer;transition:.15s}
+.vnh-chip.on{background:rgba(34,211,238,.12);border-color:var(--cyan);color:var(--cyan);box-shadow:0 0 16px rgba(34,211,238,.12)}
+.vnh-search{margin-left:auto}
+.vnh-search input{background:#0c1220;border:1px solid var(--line);border-radius:10px;padding:8px 12px;color:var(--text);font-size:12px;min-width:160px}
+
+.vnh-body{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(300px,.7fr);gap:14px}
+@@media(max-width:980px){.vnh-body{grid-template-columns:1fr}}
+.vnh-feed{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;min-height:480px}
+.vnh-feed-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.live{display:flex;align-items:center;gap:8px;font-weight:800;font-size:13px;letter-spacing:.03em}
+.live i{width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 12px var(--red);display:inline-block}
+.upd{font-size:11px;color:var(--muted)}
+.vnh-empty{padding:40px 16px;color:var(--muted);font-size:13px;line-height:1.5}
+
+.vnh-item{display:grid;grid-template-columns:110px 1fr 88px;gap:12px;padding:14px 12px;border-radius:12px;border:1px solid var(--line);background:rgba(0,0,0,.25);margin-bottom:8px;align-items:start}
+@@media(max-width:700px){.vnh-item{grid-template-columns:1fr}}
+.vnh-item.imp-4,.vnh-item.imp-5{background:rgba(248,113,113,.06);border-color:rgba(248,113,113,.2)}
+.vnh-item.imp-3{background:rgba(251,191,36,.04);border-color:rgba(251,191,36,.15)}
+.badge{display:inline-block;padding:5px 10px;border-radius:8px;font-size:10px;font-weight:800;letter-spacing:.04em;white-space:nowrap}
+.b-5,.b-4{background:rgba(248,113,113,.18);color:#fca5a5}
+.b-3{background:rgba(251,191,36,.15);color:#fcd34d}
+.b-2,.b-1{background:rgba(100,116,139,.2);color:#94a3b8}
+.vnh-item-m h3{margin:0;font-size:14.5px;font-weight:650;line-height:1.35;color:#f8fafc}
+.vnh-item-m p{margin:6px 0 0;font-size:12.5px;color:var(--muted);line-height:1.45}
+.vnh-item-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.vnh-item-tags .cat{font-size:10px;font-weight:700;letter-spacing:.05em;color:#67e8f9;background:rgba(34,211,238,.1);padding:3px 8px;border-radius:6px}
+.vnh-item-tags .sym{font-size:10px;font-weight:600;color:#cbd5e1;background:#1e293b;padding:3px 7px;border-radius:6px}
+.vnh-item-r{text-align:right;font-size:11px;color:var(--muted);display:flex;flex-direction:column;gap:4px;align-items:flex-end}
+.vnh-item-r a{color:var(--cyan);text-decoration:none;font-weight:700}
+.vnh-item-r .src{max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.vnh-side{display:flex;flex-direction:column;gap:12px}
+.vnh-card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px}
+.vnh-card-hd{display:flex;justify-content:space-between;font-weight:800;font-size:12px;letter-spacing:.04em;margin-bottom:12px}
+.vnh-card-hd .dim{font-weight:600;color:var(--muted);font-size:11px}
+.vnh-kpi-title{font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--muted);margin-bottom:8px}
+.vnh-legend{display:flex;gap:14px;font-size:10px;color:var(--muted);margin-bottom:8px}
+.vnh-legend i{display:inline-block;width:10px;height:3px;border-radius:2px;margin-right:4px;vertical-align:middle}
+.vnh-legend .c1{background:var(--cyan)}.vnh-legend .c2{background:var(--purple)}
+.vnh-chart{position:relative;height:130px;background:#0c1220;border-radius:12px;border:1px solid var(--line);padding:8px 8px 8px 28px}
+.vnh-svg{width:100%;height:100%}
+.vnh-y{position:absolute;left:6px;top:8px;bottom:8px;font-size:9px;color:var(--muted);display:flex;flex-direction:column;justify-content:space-between;line-height:1}
+.vnh-chart-empty{height:100%;display:grid;place-items:center;color:var(--muted);font-size:12px}
+.vnh-kpi-nums{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+.vnh-kpi-nums span{display:block;font-size:10px;color:var(--muted)}
+.vnh-kpi-nums b{font-size:18px}
+.vnh-kpi-nums b.ok{color:var(--green)}
+.vnh-kpi-meta{font-size:11px;color:var(--muted);margin-top:8px}
+
+.vnh-pol-row{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}
+.vnh-status{display:flex;gap:10px;align-items:center}
+.vnh-status .shield{font-size:22px}
+.vnh-status .st{font-size:10px;color:var(--muted);font-weight:700}
+.vnh-status .sv{font-size:16px;font-weight:800;color:var(--green)}
+.vnh-toggle{display:flex;gap:6px;align-items:center;font-size:11px;font-weight:800;color:var(--muted)}
+.vnh-toggle .on{color:var(--cyan)}.vnh-toggle .on.hard{color:var(--red)}
+.vnh-pol-note{font-size:12px;font-weight:600;color:#fcd34d;padding:8px 10px;border-radius:10px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.2)}
+.vnh-pol-hint{font-size:11px;color:var(--muted);margin-top:10px;line-height:1.4}
+
+.vnh-ft{display:flex;flex-wrap:wrap;gap:16px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line);font-size:10px;color:var(--muted);letter-spacing:.03em}
+.vnh-ft .ok{color:var(--green)}
 </style>
 
 @code {
-    string _lang = "ru";
-    string _filter = "all";
-    string _q = "";
-    bool _hardMode, _recommend;
+    string _lang = "ru", _filter = "all", _q = "";
+    bool _hard, _recommend, _biasHot;
     int? _fg;
-    string _fgLabel = "";
-    string _moodLabel = "—", _moodCss = "neu", _moodHint = "";
-    string _biasLabel = "—", _biasCss = "neu";
-    string? _nextName, _nextCd;
-    decimal _pfA, _pfF, _dPf, _wrA, _wrF;
-    int _nA, _nF, _srcCount, _maxAgeH = 6;
-    List<Row> _items = new();
+    string _fgLabel = "", _nextCd = "—", _nextName = "", _nextWhen = "";
+    string _sentLabel = "NEUT", _sentCss = "neu", _biasText = "—", _biasCss = "neu";
+    int _sentPct = 50, _viewCount, _totalRaw;
+    string _lastUpd = "—", _sparkPts = "0,20 20,18 40,22 60,14 80,16 100,10 120,8";
+    decimal _pfA, _pfF, _dPf, _wrA, _ddA;
+    int _nA;
+    string _lineActual = "", _lineFilt = "";
+    double _endX, _endYa, _endYf;
+    List<(int a, int f)> _bars = new();
+    List<Item> _all = new();
+    List<Item> _view = new();
     System.Threading.Timer? _timer;
 
-    readonly string[] _filters = { "all", "macro", "crypto", "high" };
-
-    static readonly Dictionary<string, (string en, string ru)> L = new()
+    static readonly Dictionary<string,(string en,string ru)> L = new()
     {
-        ["subtitle"] = ("Operational macro & crypto tape", "Оперативная лента макро и крипто"),
-        ["shield"] = ("Shield", "Щит"),
-        ["next_event"] = ("Next macro", "След. макро"),
-        ["no_cal"] = ("No event in config", "Нет в календаре конфига"),
-        ["tape_mood"] = ("Tape mood", "Настроение ленты"),
-        ["ai_bias"] = ("Context bias", "Контекст"),
-        ["bias_hint"] = ("Not a trade signal", "Не торговый сигнал"),
-        ["all"] = ("All", "Все"),
-        ["macro"] = ("Macro", "Макро"),
-        ["crypto"] = ("Crypto", "Крипто"),
-        ["high"] = ("Impact ≥3", "Impact ≥3"),
-        ["search"] = ("Search…", "Поиск…"),
-        ["feed"] = ("News feed", "Лента новостей"),
-        ["stories"] = ("items", "записей"),
-        ["sources"] = ("sources", "источников"),
-        ["empty_t"] = ("No fresh items", "Нет свежих записей"),
-        ["empty_b"] = ("Engine must be running; tape fills every ~15s from Cointelegraph, CoinDesk, CryptoCompare.", "Нужен запущенный Engine; лента обновляется ~15с (Cointelegraph, CoinDesk, CryptoCompare)."),
-        ["fresh"] = ("FRESH", "СВЕЖЕЕ"),
-        ["open"] = ("open ↗", "открыть ↗"),
-        ["kpi_t"] = ("News filter effect (same as AI Dashboard)", "Эффект фильтра (как на AI Dashboard)"),
-        ["pf_act"] = ("Actual PF", "Факт PF"),
-        ["pf_fil"] = ("If skip “news” closes", "Без «news»-закрытий"),
-        ["trades"] = ("trades", "сделок"),
-        ["kpi_goal"] = ("Hard only if ΔPF ≥ +0.15", "Hard только при ΔPF ≥ +0.15"),
-        ["kpi_go"] = ("Metrics support enabling Hard gate", "Метрики допускают включение Hard"),
-        ["kpi_wait"] = ("No proven edge yet — keep SHADOW", "Пользы пока нет — оставьте SHADOW"),
-        ["kpi_note"] = ("PF here matches AI Dashboard journal math. News does not open positions.", "PF считается из журнала, как на AI Dashboard. Новости не открывают позиции."),
-        ["how_t"] = ("How this links to trading", "Связь с торговлей"),
-        ["how1"] = ("CORE still generates entries.", "Входы по-прежнему от CORE."),
-        ["how2"] = ("SHADOW = observe only (current).", "SHADOW = только наблюдение (сейчас)."),
-        ["how3"] = ("HARD = optional block of NEW entries (Settings → Risk).", "HARD = опциональный блок НОВЫХ входов (Settings → Risk)."),
-        ["leg_t"] = ("Legend", "Легенда"),
-        ["imp_hi"] = ("HIGH", "ВЫСОКИЙ"),
-        ["imp_md"] = ("MED", "СРЕДНИЙ"),
-        ["imp_lo"] = ("LOW", "НИЗКИЙ"),
-        ["mood_neu"] = ("NEUTRAL", "НЕЙТРАЛЬНО"),
-        ["mood_bull"] = ("RISK-ON", "RISK-ON"),
-        ["mood_bear"] = ("RISK-OFF", "RISK-OFF"),
-        ["mood_mixed"] = ("MIXED", "СМЕШАННО"),
-        ["bias_calm"] = ("CALM / GREED", "СПОКОЙНО / ЖАДНОСТЬ"),
-        ["bias_heat"] = ("ELEVATED RISK", "ПОВЫШЕННЫЙ РИСК"),
-        ["bias_fear"] = ("FEAR REGIME", "РЕЖИМ СТРАХА"),
+        ["sub"]=("Operational terminal","Оперативный терминал"),
+        ["shield"]=("Shield","Щит"),
+        ["next"]=("NEXT MACRO","СЛЕД. МАКРО"),
+        ["nocal"]=("No calendar event","Нет события в календаре"),
+        ["sent24"]=("24H SENTIMENT","СЕНТИМЕНТ 24Ч"),
+        ["bias_note"]=("Context only — not an entry signal","Только контекст, не сигнал входа"),
+        ["filters"]=("FILTERS","ФИЛЬТРЫ"),
+        ["all"]=("ALL","ВСЕ"),
+        ["macro"]=("MACRO","МАКРО"),
+        ["crypto"]=("CRYPTO","КРИПТО"),
+        ["high"]=("HIGH IMPACT","HIGH IMPACT"),
+        ["search"]=("Search…","Поиск…"),
+        ["live"]=("LIVE NEWS FEED","ЛЕНТА НОВОСТЕЙ"),
+        ["showing"]=("showing","показано"),
+        ["of"]=("of","из"),
+        ["updated"]=("upd","обн."),
+        ["empty"]=("Waiting for Engine tape (CryptoCompare / RSS / F&G)…","Ждём ленту Engine (CryptoCompare / RSS / F&G)…"),
+        ["kpi_upd"]=("journal live","журнал"),
+        ["no_chart"]=("Need closed trades in journal","Нужны закрытые сделки в журнале"),
+        ["trades"]=("trades","сделок"),
+        ["rec_yes"]=("ΔPF supports enabling HARD in Settings → Risk","ΔPF допускает HARD в Settings → Risk"),
+        ["rec_no"]=("ENHANCED FILTERING · SHADOW MODE ACTIVE","ФИЛЬТР В SHADOW · HARD НЕ ВКЛЮЧЁН"),
+        ["pol_hint"]=("Toggle Hard only after ΔPF ≥ +0.15 on enough trades. Does not open positions.","Hard только при ΔPF ≥ +0.15. Новости не открывают позиции."),
+        ["term"]=("TERMINAL","ТЕРМИНАЛ"),
+        ["hi"]=("HIGH IMPACT","ВЫСОКИЙ"),
+        ["md"]=("MEDIUM IMPACT","СРЕДНИЙ"),
+        ["lo"]=("LOW IMPACT","НИЗКИЙ"),
     };
-
-    string T(string k) => L.TryGetValue(k, out var v) ? (_lang == "ru" ? v.ru : v.en) : k;
-    string ImpactTxt(int s) => s >= 4 ? T("imp_hi") : s >= 3 ? T("imp_md") : T("imp_lo");
-
-    IEnumerable<Row> View
-    {
-        get
-        {
-            IEnumerable<Row> q = _items;
-            q = _filter switch
-            {
-                "macro" => q.Where(x => x.IsMacro),
-                "crypto" => q.Where(x => !x.IsFg),
-                "high" => q.Where(x => x.Stars >= 3),
-                _ => q
-            };
-            if (!string.IsNullOrWhiteSpace(_q))
-            {
-                var s = _q.Trim();
-                q = q.Where(x =>
-                    x.Headline.Contains(s, StringComparison.OrdinalIgnoreCase)
-                    || x.Body.Contains(s, StringComparison.OrdinalIgnoreCase)
-                    || x.Syms.Any(z => z.Contains(s, StringComparison.OrdinalIgnoreCase))
-                    || x.Source.Contains(s, StringComparison.OrdinalIgnoreCase));
-            }
-            return q;
-        }
-    }
+    string T(string k)=>L.TryGetValue(k,out var v)?(_lang=="ru"?v.ru:v.en):k;
+    string ImpactLabel(int s)=>s>=4?T("hi"):s>=3?T("md"):T("lo");
 
     protected override void OnInitialized()
     {
         Reload();
-        _timer = new System.Threading.Timer(_ =>
-        {
-            try { Reload(); InvokeAsync(StateHasChanged); } catch { }
-        }, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+        _timer = new System.Threading.Timer(_ => { try { Reload(); InvokeAsync(StateHasChanged); } catch { } },
+            null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
     }
-
-    void SetLang(string l) { _lang = l; ApplyMoodBias(); }
-    void SetFilter(string f) => _filter = f;
+    void SetLang(string l){ _lang=l; BuildView(); ApplySentimentBias(); }
 
     void Reload()
     {
-        var root = Cfg["SharedData:Root"] ?? "";
-        _hardMode = string.Equals(Cfg["Institutional:EnableNewsHardMode"], "true", StringComparison.OrdinalIgnoreCase);
-        _maxAgeH = Math.Clamp(Cfg.GetValue("News:MaxAgeHours", 6), 1, 48);
-        LoadTape(root);
-        LoadKpiFromJournal();
+        _hard = string.Equals(Cfg["Institutional:EnableNewsHardMode"],"true",StringComparison.OrdinalIgnoreCase);
+        LoadTape();
+        LoadKpi();
         LoadCalendar();
-        ApplyMoodBias();
+        ApplySentimentBias();
+        BuildView();
+        _lastUpd = DateTime.Now.ToString("HH:mm:ss");
     }
 
-    void LoadTape(string root)
+    void LoadTape()
     {
-        _items = new();
-        _srcCount = 0;
-        _fg = null;
-        _fgLabel = "";
+        _all = new(); _totalRaw = 0; _fg = null; _fgLabel = "";
+        var root = Cfg["SharedData:Root"] ?? "";
         if (string.IsNullOrWhiteSpace(root)) return;
         var path = Path.Combine(root, "news_tape.jsonl");
         if (!File.Exists(path)) return;
-
+        int maxAge = Math.Clamp(Cfg.GetValue("News:MaxAgeHours", 12), 1, 72);
         try
         {
             var lines = File.ReadAllLines(path);
-            var list = new List<Row>();
+            _totalRaw = lines.Count(l => !string.IsNullOrWhiteSpace(l));
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var sources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            for (int i = lines.Length - 1; i >= 0 && list.Count < 40; i--)
+            for (int i = lines.Length - 1; i >= 0 && _all.Count < 40; i--)
             {
                 var line = lines[i];
                 if (string.IsNullOrWhiteSpace(line)) continue;
@@ -367,274 +392,222 @@
                 {
                     using var doc = JsonDocument.Parse(line);
                     var r = doc.RootElement;
-                    if (r.TryGetProperty("type", out var ty) && ty.GetString() == "entry_eval") continue;
-                    if (!r.TryGetProperty("headline", out var hlEl)) continue;
-                    var hl = (hlEl.GetString() ?? "").Trim();
-                    if (hl.Length == 0) continue;
-
-                    bool isFg = hl.Contains("Fear", StringComparison.OrdinalIgnoreCase)
-                                && hl.Contains("Greed", StringComparison.OrdinalIgnoreCase);
-
+                    if (r.TryGetProperty("type", out var ty) && ty.GetString()=="entry_eval") continue;
+                    if (!r.TryGetProperty("headline", out var hEl)) continue;
+                    var hl = (hEl.GetString()??"").Trim();
+                    if (hl.Length==0) continue;
+                    bool isFg = hl.Contains("Fear",StringComparison.OrdinalIgnoreCase)&&hl.Contains("Greed",StringComparison.OrdinalIgnoreCase);
                     var utc = DateTime.UtcNow;
-                    if (r.TryGetProperty("utc", out var u) && u.ValueKind == JsonValueKind.String
-                        && DateTime.TryParse(u.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var p))
+                    if (r.TryGetProperty("utc", out var u) && DateTime.TryParse(u.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var p))
                         utc = p.ToUniversalTime();
-
-                    if (!isFg && (DateTime.UtcNow - utc).TotalHours > _maxAgeH) continue;
-
-                    var fp = isFg ? "FNG" : Regex.Replace(hl, @"\s+", " ").ToLowerInvariant();
+                    if (!isFg && (DateTime.UtcNow-utc).TotalHours > maxAge) continue;
+                    var fp = isFg ? "FNG" : Regex.Replace(hl,@"\s+"," ").ToLowerInvariant();
                     if (!seen.Add(fp)) continue;
 
-                    var src = r.TryGetProperty("source", out var sEl) ? (sEl.GetString() ?? "") : "";
-                    if (string.IsNullOrEmpty(src) && isFg) src = "alternative.me/fng";
-                    sources.Add(src);
-
                     int stars = 1;
-                    if (r.TryGetProperty("impactStars", out var st) && st.TryGetInt32(out var si))
-                        stars = Math.Clamp(si, 1, 5);
-                    else if (r.TryGetProperty("impact", out var im) && im.TryGetDecimal(out var imp))
-                        stars = imp >= 0.85m ? 5 : imp >= 0.7m ? 4 : imp >= 0.5m ? 3 : imp >= 0.35m ? 2 : 1;
-
-                    // Bump regulatory headlines for display clarity
-                    if (hl.Contains("SEC", StringComparison.OrdinalIgnoreCase)
-                        || hl.Contains("CFTC", StringComparison.OrdinalIgnoreCase)
-                        || hl.Contains("FOMC", StringComparison.OrdinalIgnoreCase)
-                        || hl.Contains("CPI", StringComparison.OrdinalIgnoreCase))
+                    if (r.TryGetProperty("impactStars", out var st)&&st.TryGetInt32(out var si)) stars=Math.Clamp(si,1,5);
+                    else if (r.TryGetProperty("impact", out var im)&&im.TryGetDecimal(out var imp))
+                        stars = imp>=.85m?5:imp>=.7m?4:imp>=.5m?3:imp>=.35m?2:1;
+                    if (Regex.IsMatch(hl, @"\b(SEC|CFTC|FOMC|CPI|NFP|Fed)\b", RegexOptions.IgnoreCase))
                         stars = Math.Max(stars, 3);
+                    if (hl.Contains("hack",StringComparison.OrdinalIgnoreCase)||hl.Contains("exploit",StringComparison.OrdinalIgnoreCase))
+                        stars = Math.Max(stars, 4);
 
-                    var vector = r.TryGetProperty("vector", out var vEl) ? (vEl.GetString() ?? "") : "";
-                    var vec = vector.Contains("Bull", StringComparison.OrdinalIgnoreCase) ? "bull"
-                        : vector.Contains("Bear", StringComparison.OrdinalIgnoreCase) ? "bear" : "neu";
-
-                    var cat = r.TryGetProperty("category", out var cEl) ? (cEl.GetString() ?? "") : "";
-                    var body = r.TryGetProperty("body", out var bEl) ? (bEl.GetString() ?? "") : "";
-                    if (isFg && string.IsNullOrWhiteSpace(body))
-                        body = _lang == "ru"
-                            ? "Индикатор режима рынка (не новость по одной монете)."
-                            : "Market regime indicator (not a single-token story).";
-
+                    var vector = r.TryGetProperty("vector",out var vEl)?(vEl.GetString()??""):"";
+                    var cat = r.TryGetProperty("category",out var cEl)?(cEl.GetString()??""):"";
+                    var body = r.TryGetProperty("body",out var bEl)?(bEl.GetString()??""):"";
+                    var src = r.TryGetProperty("source",out var sEl)?(sEl.GetString()??""):"";
+                    if (string.IsNullOrEmpty(src)&&isFg) src="alternative.me/fng";
+                    var url = r.TryGetProperty("url",out var uEl)?(uEl.GetString()??""):"";
                     var syms = new List<string>();
-                    if (r.TryGetProperty("symbols", out var sy) && sy.ValueKind == JsonValueKind.Array)
-                        foreach (var el in sy.EnumerateArray())
-                        {
-                            var ss = el.GetString();
-                            if (!string.IsNullOrEmpty(ss)) syms.Add(ss);
-                        }
+                    if (r.TryGetProperty("symbols",out var sy)&&sy.ValueKind==JsonValueKind.Array)
+                        foreach (var e in sy.EnumerateArray()){ var s=e.GetString(); if(!string.IsNullOrEmpty(s)) syms.Add(s); }
 
                     if (isFg)
                     {
-                        var m = Regex.Match(hl, @"(\d{1,3})");
-                        if (m.Success && int.TryParse(m.Groups[1].Value, out var fg) && fg is >= 0 and <= 100)
-                        {
-                            _fg = fg;
-                            _fgLabel = FgLabel(fg);
-                        }
-                        // Prefer human age for daily regime index
-                        if ((DateTime.UtcNow - utc).TotalHours > 6)
-                            utc = DateTime.UtcNow; // display as current regime snapshot
+                        var m = Regex.Match(hl,@"(\d{1,3})");
+                        if (m.Success && int.TryParse(m.Groups[1].Value,out var fg)) { _fg=fg; _fgLabel=FgClass(fg); }
                     }
 
-                    // Optional RU soft title for F&G only
-                    var title = isFg && _lang == "ru"
-                        ? Regex.Replace(hl, @"Crypto Fear&Greed (\d+) \(([^)]+)\)",
-                            mm => $"Индекс страха и жадности {mm.Groups[1].Value} ({FgLabelRu(mm.Groups[2].Value)})",
-                            RegexOptions.IgnoreCase)
-                        : hl;
+                    string catDisp = isFg ? "MACRO · REGIME"
+                        : cat.Contains("Macro",StringComparison.OrdinalIgnoreCase) ? "MACRO"
+                        : hl.Contains("SEC",StringComparison.OrdinalIgnoreCase)||hl.Contains("CFTC",StringComparison.OrdinalIgnoreCase) ? "MACRO · REGULATION"
+                        : "CRYPTO · MARKETS";
 
-                    list.Add(new Row
-                    {
-                        Headline = title.Length > 200 ? title[..200] + "…" : title,
-                        Body = body.Length > 280 ? body[..280] + "…" : body,
-                        Source = src,
-                        Cat = string.IsNullOrEmpty(cat) ? "" : cat.ToUpperInvariant(),
-                        Stars = stars,
-                        Vec = vec,
-                        Syms = syms,
-                        Url = r.TryGetProperty("url", out var ur) ? (ur.GetString() ?? "") : "",
-                        Ago = isFg && (DateTime.UtcNow - utc).TotalHours < 1 ? (_lang == "ru" ? "режим" : "regime") : Ago(utc),
-                        Fresh = !isFg && (DateTime.UtcNow - utc).TotalMinutes <= 45,
-                        IsFg = isFg,
-                        IsMacro = isFg || cat.Contains("Macro", StringComparison.OrdinalIgnoreCase)
-                                  || hl.Contains("SEC", StringComparison.OrdinalIgnoreCase)
-                                  || hl.Contains("FOMC", StringComparison.OrdinalIgnoreCase)
-                                  || hl.Contains("CFTC", StringComparison.OrdinalIgnoreCase),
-                        Utc = utc
+                    _all.Add(new Item {
+                        Title = hl.Length>180?hl[..180]+"…":hl,
+                        Summary = string.IsNullOrWhiteSpace(body)?"":(body.Length>200?body[..200]+"…":body),
+                        Source = src, Url = url, Stars = stars,
+                        Vec = vector.Contains("Bull",StringComparison.OrdinalIgnoreCase)?"bull"
+                            :vector.Contains("Bear",StringComparison.OrdinalIgnoreCase)?"bear":"neu",
+                        Syms = syms, CatDisplay = catDisp,
+                        IsFg = isFg, IsMacro = isFg||catDisp.StartsWith("MACRO"),
+                        Ago = Rel(utc), Utc = utc
                     });
                 }
                 catch { }
             }
-
-            _items = list.OrderByDescending(x => x.Utc).ToList();
-            _srcCount = sources.Count;
+            _all = _all.OrderByDescending(x=>x.Utc).ToList();
+            // spark from fg
+            if (_fg is int fgv)
+            {
+                var pts = new List<string>();
+                for (int i=0;i<8;i++)
+                {
+                    double y = 26 - (fgv/100.0*20) + Math.Sin(i*0.9)*3;
+                    pts.Add($"{i*17},{y:0.#}");
+                }
+                _sparkPts = string.Join(" ", pts);
+            }
         }
         catch { }
     }
 
-    void LoadKpiFromJournal()
+    void BuildView()
     {
-        _pfA = _pfF = _dPf = 0; _wrA = _wrF = 0; _nA = _nF = 0; _recommend = false;
+        IEnumerable<Item> q = _all;
+        q = _filter switch
+        {
+            "macro" => q.Where(x=>x.IsMacro),
+            "crypto" => q.Where(x=>!x.IsFg),
+            "high" => q.Where(x=>x.Stars>=3),
+            _ => q
+        };
+        if (!string.IsNullOrWhiteSpace(_q))
+        {
+            var s=_q.Trim();
+            q = q.Where(x=>x.Title.Contains(s,StringComparison.OrdinalIgnoreCase)
+                ||x.Summary.Contains(s,StringComparison.OrdinalIgnoreCase)
+                ||x.Source.Contains(s,StringComparison.OrdinalIgnoreCase)
+                ||x.Syms.Any(z=>z.Contains(s,StringComparison.OrdinalIgnoreCase)));
+        }
+        _view = q.Take(25).ToList();
+        _viewCount = _view.Count;
+    }
+
+    void LoadKpi()
+    {
+        _pfA=_pfF=_dPf=_wrA=_ddA=0; _nA=0; _recommend=false; _bars=new(); _lineActual=_lineFilt="";
         try
         {
             var clientId = Cfg["SharedData:DefaultClientId"] ?? "client_001";
-            var trades = Journal.GetRecentEntries(clientId, null, 500)?.ToList() ?? new List<TradeJournalEntry>();
-            var ordered = trades.OrderBy(x => x.ClosedAtUtc).ToList();
-
-            (decimal pf, decimal wr, decimal dd, int n) Compute(List<TradeJournalEntry> list)
+            var trades = Journal.GetRecentEntries(clientId,null,500)?.OrderBy(x=>x.ClosedAtUtc).ToList() ?? new();
+            (decimal pf, decimal wr, decimal dd, int n, List<decimal> curve) Comp(List<TradeJournalEntry> list)
             {
-                decimal gw = 0, gl = 0, eq = 0, peak = 0, maxDd = 0;
-                int wins = 0;
+                decimal gw=0,gl=0,eq=0,peak=0,maxDd=0; int wins=0;
+                var curve=new List<decimal>();
                 foreach (var tr in list)
                 {
-                    var p = tr.RealizedPnl;
-                    if (p > 0) { gw += p; wins++; } else gl += Math.Abs(p);
-                    eq += p;
-                    if (eq > peak) peak = eq;
-                    var d = peak - eq;
-                    if (d > maxDd) maxDd = d;
+                    var p=tr.RealizedPnl;
+                    if (p>0){gw+=p;wins++;} else gl+=Math.Abs(p);
+                    eq+=p; if(eq>peak) peak=eq; var d=peak-eq; if(d>maxDd) maxDd=d;
+                    curve.Add(eq);
                 }
-                decimal pf = gl > 0 ? gw / gl : (gw > 0 ? 99m : 0m);
-                decimal wr = list.Count > 0 ? 100m * wins / list.Count : 0m;
-                return (pf, wr, maxDd, list.Count);
+                decimal pf = gl>0 ? gw/gl : (gw>0?99m:0m);
+                decimal wr = list.Count>0 ? 100m*wins/list.Count : 0m;
+                return (pf,wr,maxDd,list.Count,curve);
             }
-
-            var actual = Compute(ordered);
-            var filtered = ordered.Where(tr =>
-            {
-                var r = (tr.CloseReason ?? "").ToUpperInvariant();
-                return !(r.Contains("NEWS") || r.Contains("MACRO") || r.Contains("CATALYST"));
+            var a = Comp(trades);
+            var filtList = trades.Where(tr=>{
+                var r=(tr.CloseReason??"").ToUpperInvariant();
+                return !(r.Contains("NEWS")||r.Contains("MACRO")||r.Contains("CATALYST"));
             }).ToList();
-            var filt = Compute(filtered);
+            var f = Comp(filtList);
+            _pfA=a.pf; _pfF=f.pf; _dPf=f.pf-a.pf; _wrA=a.wr; _ddA=a.dd; _nA=a.n;
+            _recommend = a.n>=50 && _dPf>=0.15m && f.dd<=a.dd;
 
-            _pfA = actual.pf; _pfF = filt.pf; _dPf = filt.pf - actual.pf;
-            _wrA = actual.wr; _wrF = filt.wr;
-            _nA = actual.n; _nF = filt.n;
-            _recommend = actual.n >= 50 && _dPf >= 0.15m && filt.dd <= actual.dd;
+            var scale = Math.Max(1m, Math.Max(
+                a.curve.DefaultIfEmpty(0).Select(Math.Abs).DefaultIfEmpty(1).Max(),
+                f.curve.DefaultIfEmpty(0).Select(Math.Abs).DefaultIfEmpty(1).Max()));
+            int n = Math.Max(a.curve.Count, f.curve.Count);
+            if (n > 1)
+            {
+                int step = Math.Max(1, n / 40);
+                var pa = new List<string>(); var pf = new List<string>();
+                int idx=0;
+                for (int i=0;i<n;i+=step)
+                {
+                    decimal av = i<a.curve.Count?a.curve[i]:0;
+                    decimal fv = i<f.curve.Count?f.curve[i]:0;
+                    double x = 300.0 * idx / Math.Max(1, n/step);
+                    double ya = 110 - (double)(Math.Abs(av)/scale*95);
+                    double yf = 110 - (double)(Math.Abs(fv)/scale*95);
+                    pa.Add($"{x:0.#},{ya:0.#}"); pf.Add($"{x:0.#},{yf:0.#}");
+                    _endX=x; _endYa=ya; _endYf=yf;
+                    idx++;
+                }
+                _lineActual=string.Join(" ",pa); _lineFilt=string.Join(" ",pf);
+                _bars.Add((1,1));
+            }
         }
         catch { }
     }
 
     void LoadCalendar()
     {
-        _nextName = null; _nextCd = null;
+        _nextCd="—"; _nextName=""; _nextWhen="";
         try
         {
-            DateTime? best = null; string? name = null;
-            foreach (var child in Cfg.GetSection("News:MacroEvents").GetChildren())
+            DateTime? best=null; string? name=null;
+            foreach (var c in Cfg.GetSection("News:MacroEvents").GetChildren())
             {
-                var n = child["Name"] ?? "Event";
-                var utc = child["Utc"];
-                if (utc == null || !DateTime.TryParse(utc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var dt))
-                    continue;
-                dt = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
-                if (dt < DateTime.UtcNow.AddHours(-2)) continue;
-                if (best == null || dt < best) { best = dt; name = n; }
+                var n=c["Name"]??"Event"; var utc=c["Utc"];
+                if (utc==null||!DateTime.TryParse(utc,CultureInfo.InvariantCulture,DateTimeStyles.RoundtripKind,out var dt)) continue;
+                dt=DateTime.SpecifyKind(dt,DateTimeKind.Utc);
+                if (dt<DateTime.UtcNow.AddHours(-2)) continue;
+                if (best==null||dt<best){best=dt;name=n;}
             }
-            if (best != null && name != null)
+            if (best!=null&&name!=null)
             {
-                _nextName = name;
-                var left = best.Value - DateTime.UtcNow;
-                _nextCd = left.TotalSeconds < 0 ? "—" : $"{(int)left.TotalDays}d {left.Hours:00}h {left.Minutes:00}m";
+                _nextName=name;
+                var left=best.Value-DateTime.UtcNow;
+                _nextCd=$"{(int)left.TotalDays}D {left.Hours:00}H {left.Minutes:00}M";
+                _nextWhen=best.Value.ToString("MMM dd · HH:mm")+" UTC";
             }
         }
         catch { }
     }
 
-    void ApplyMoodBias()
+    void ApplySentimentBias()
     {
-        int bull = _items.Count(x => x.Vec == "bull");
-        int bear = _items.Count(x => x.Vec == "bear");
-        int hiBear = _items.Count(x => x.Stars >= 4 && x.Vec == "bear");
-        int hiBull = _items.Count(x => x.Stars >= 4 && x.Vec == "bull");
+        int bull=_all.Count(x=>x.Vec=="bull"), bear=_all.Count(x=>x.Vec=="bear");
+        int tot=Math.Max(1,bull+bear);
+        // blend with F&G so neutral tape doesn't force 0%
+        int fromTape = (int)Math.Round(100.0*bull/tot);
+        int fromFg = _fg is int g ? g : 50;
+        if (bull+bear==0) _sentPct = fromFg;
+        else _sentPct = (int)Math.Round(0.55*fromTape + 0.45*fromFg);
 
-        if (bull == 0 && bear == 0)
-        {
-            _moodLabel = T("mood_neu");
-            _moodCss = "neu";
-            _moodHint = _lang == "ru" ? "В ленте нет явного bull/bear" : "No clear bull/bear in tape";
-        }
-        else if (bull > bear * 1.5)
-        {
-            _moodLabel = T("mood_bull");
-            _moodCss = "green";
-            _moodHint = $"{bull} bull / {bear} bear";
-        }
-        else if (bear > bull * 1.5)
-        {
-            _moodLabel = T("mood_bear");
-            _moodCss = "danger";
-            _moodHint = $"{bull} bull / {bear} bear";
-        }
-        else
-        {
-            _moodLabel = T("mood_mixed");
-            _moodCss = "warn";
-            _moodHint = $"{bull} bull / {bear} bear";
-        }
+        if (_sentPct>=58){ _sentLabel="BULL"; _sentCss="green"; }
+        else if (_sentPct<=42){ _sentLabel="BEAR"; _sentCss="danger"; }
+        else { _sentLabel="MIXED"; _sentCss="neu"; }
 
-        // Bias: F&G + high-impact first (do not scream BEARISH on neutral tape + greed)
-        if (hiBear >= 2 || (_fg is <= 25))
-        {
-            _biasLabel = T("bias_fear");
-            _biasCss = "danger";
-        }
-        else if (hiBull >= 2)
-        {
-            _biasLabel = T("mood_bull");
-            _biasCss = "green";
-        }
-        else if (_fg is >= 55)
-        {
-            _biasLabel = T("bias_calm");
-            _biasCss = "purple";
-        }
-        else if (_fg is <= 40)
-        {
-            _biasLabel = T("bias_heat");
-            _biasCss = "warn";
-        }
-        else
-        {
-            _biasLabel = T("mood_neu");
-            _biasCss = "neu";
-        }
+        int hiB=_all.Count(x=>x.Stars>=4&&x.Vec=="bear");
+        int hiU=_all.Count(x=>x.Stars>=4&&x.Vec=="bull");
+        _biasHot=false;
+        if (hiB>=1 || _fg is <=25){ _biasText="HIGH VOL RISK"; _biasCss="danger"; _biasHot=true; }
+        else if (hiU>=2){ _biasText="RISK-ON"; _biasCss="green"; }
+        else if (_fg is >=75){ _biasText="EXTREME GREED"; _biasCss="purple"; }
+        else if (_fg is >=55){ _biasText="GREED BIAS"; _biasCss="purple"; }
+        else if (_fg is <=40){ _biasText="CAUTION"; _biasCss="warn"; }
+        else { _biasText="NEUTRAL"; _biasCss="neu"; }
     }
 
-    static string FgLabel(int fg) => fg >= 75 ? "Extreme Greed" : fg >= 55 ? "Greed" : fg >= 45 ? "Neutral" : fg >= 25 ? "Fear" : "Extreme Fear";
-    static string FgLabelRu(string s) => s.ToLowerInvariant() switch
+    static string FgClass(int fg)=>fg>=75?"Extreme Greed":fg>=55?"Greed":fg>=45?"Neutral":fg>=25?"Fear":"Extreme Fear";
+    static string Rel(DateTime utc)
     {
-        "extreme greed" => "экстр. жадность",
-        "greed" => "жадность",
-        "neutral" => "нейтрально",
-        "fear" => "страх",
-        "extreme fear" => "экстр. страх",
-        _ => s
-    };
-
-    static string Ago(DateTime utc)
-    {
-        var d = DateTime.UtcNow - utc;
-        if (d.TotalMinutes < 1) return "now";
-        if (d.TotalMinutes < 60) return $"{(int)d.TotalMinutes}m";
-        if (d.TotalHours < 48) return $"{(int)d.TotalHours}h";
-        return $"{(int)d.TotalDays}d";
+        var d=DateTime.UtcNow-utc;
+        if (d.TotalMinutes<1) return "now";
+        if (d.TotalMinutes<60) return $"{(int)d.TotalMinutes}m ago";
+        if (d.TotalHours<48) return $"{(int)d.TotalHours}h ago";
+        return $"{(int)d.TotalDays}d ago";
     }
 
-    public void Dispose() => _timer?.Dispose();
+    public void Dispose()=>_timer?.Dispose();
 
-    sealed class Row
+    sealed class Item
     {
-        public string Headline { get; set; } = "";
-        public string Body { get; set; } = "";
-        public string Source { get; set; } = "";
-        public string Cat { get; set; } = "";
-        public int Stars { get; set; }
-        public string Vec { get; set; } = "neu";
-        public List<string> Syms { get; set; } = new();
-        public string Url { get; set; } = "";
-        public string Ago { get; set; } = "";
-        public bool Fresh { get; set; }
-        public bool IsFg { get; set; }
-        public bool IsMacro { get; set; }
-        public DateTime Utc { get; set; }
+        public string Title="", Summary="", Source="", Url="", CatDisplay="", Vec="neu", Ago="";
+        public int Stars; public List<string> Syms=new(); public bool IsFg, IsMacro; public DateTime Utc;
     }
 }
