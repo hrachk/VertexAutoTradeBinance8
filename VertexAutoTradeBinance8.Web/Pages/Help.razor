@@ -165,7 +165,84 @@ HardCapUsd ограничивает $ риска на сделку</pre>
                 <div class="help-card">
                     <h3>Новости — роль</h3>
                     <p>Не генератор сигналов. Защита: календарь (pause), high-impact → size↓, hard — только critical + Hard Mode.</p>
-                    <p>Poll ~15с (<code>News:PollSeconds</code>). Лента на <code>/ai-dashboard</code>.</p>
+                    <p>Poll ~15с (<code>News:PollSeconds</code>). Лента на <code>/ai-dashboard</code>. Полный хаб — раздел <b>Macro News Hub</b> / будущая страница <code>/macro-news</code>.</p>
+                </div>
+            </section>
+        }
+
+
+        @if (_section == "macro")
+        {
+            <section class="help-section">
+                <div class="help-card">
+                    <h3>Макет страницы /macro-news</h3>
+                    <pre class="help-ascii">┌──────────────────────────────────────────────────────────────────────────┐
+│ VERTEX  /macro-news                          News shield: SHADOW ●       │
+├──────────────────────────────────────────────────────────────────────────┤
+│ TOP BAR                                                                  │
+│  ┌─────────────┐ ┌──────────────┐ ┌─────────────┐ ┌────────────────────┐ │
+│  │ Next: CPI   │ │ Fear&Greed   │ │ 24h Sent.   │ │ AI Macro Bias      │ │
+│  │ 02d 14h 22m │ │ 78 Extreme   │ │ Bull 62%    │ │ HIGH VOL RISK  ⚠   │ │
+│  │             │ │ ▁▂▃▅▇ spark  │ │ Bear 38%    │ │                     │ │
+│  └─────────────┘ └──────────────┘ └─────────────┘ └────────────────────┘ │
+├──────────────────────────────────────────────────────────────────────────┤
+│ FILTERS: [All] [Macro] [Crypto] [Bull] [Bear] [Impact≥4]  Ticker: ____   │
+├───────────────────────────────┬──────────────────────────────────────────┤
+│ LIVE FEED (SignalR push)      │  SHADOW KPI / IMPACT                     │
+│ ┌───────────────────────────┐ │  Actual PF 1.11  │ Filtered 1.11         │
+│ │ 🔴 5/5  BEAR  12:40Z      │ │  ΔPF +0.00 (цель ≥ +0.15 для Hard)      │
+│ │ FOMC hold — USD spike     │ │                                          │
+│ │ BTC ETH  size×0.5 pause?  │ │  Policy: Shadow ON · Hard OFF            │
+│ │ TL;DR: rates unchanged…   │ │                                          │
+│ └───────────────────────────┘ │  Legend:                                 │
+│ ┌───────────────────────────┐ │  🔴 Impact 5 Critical                    │
+│ │ 🟡 3/5  NEUT  12:38Z      │ │  🟡 Impact 3–4 Medium/High               │
+│ │ SOL listing rumor         │ │  ⚪ Impact 1–2 Noise                     │
+│ │ SOLUSDT  tape only        │ │                                          │
+│ └───────────────────────────┘ │                                          │
+│ ┌───────────────────────────┐ │                                          │
+│ │ ⚪ 2/5  BULL  12:35Z      │ │                                          │
+│ │ Fear&Greed 78 (regime)    │ │                                          │
+│ └───────────────────────────┘ │                                          │
+└───────────────────────────────┴──────────────────────────────────────────┘</pre>
+                </div>
+
+                <div class="help-card">
+                    <h3>Как это работает (поток)</h3>
+                    <pre class="help-ascii">Источники (CryptoCompare, F&amp;G, RSS, календарь)
+        │  poll ~15s
+        ▼
+  Dedup + Score (Impact 1–5, Sentiment, Tickers, TL;DR)
+        │
+        ├─► news_events / news_tape  ──► UI /macro-news + /ai-dashboard
+        │
+        └─► NewsCatalyst + Institutional pipeline
+                 │
+                 ├─ Shadow (default): только KPI / size hint, входы НЕ режутся hard
+                 ├─ Macro calendar: pause новых входов в окне FOMC/CPI/NFP
+                 └─ Hard Mode (Settings): Impact≥4–5 может блокировать НОВЫЕ входы
+        CORE / стратегия по-прежнему единственный генератор сигналов</pre>
+                </div>
+
+                <div class="help-card">
+                    <h3>Связь с торговлей</h3>
+                    <table class="help-table">
+                        <tr><th>Impact</th><th>Shadow (сейчас)</th><th>Hard (Settings)</th></tr>
+                        <tr><td>1–2</td><td>Лента</td><td>Лента</td></tr>
+                        <tr><td>3</td><td>size× hint</td><td>size×</td></tr>
+                        <tr><td>4</td><td>KPI «would pause»</td><td>Pause новых входов</td></tr>
+                        <tr><td>5</td><td>KPI</td><td>Pause + opt-in BE (если включите)</td></tr>
+                    </table>
+                    <p class="help-muted">Включать Hard: <b>Settings → Risk → Institutional gates</b>. Пока ΔPF≈0 и мало макро-событий — оставить Shadow.</p>
+                </div>
+
+                <div class="help-card">
+                    <h3>Где смотреть</h3>
+                    <ul>
+                        <li><code>/macro-news</code> — полный хаб (лента + макро-бар + KPI)</li>
+                        <li><code>/ai-dashboard</code> — компактная лента и фильтр PF</li>
+                        <li><code>/help</code> → этот раздел</li>
+                    </ul>
                 </div>
             </section>
         }
@@ -292,6 +369,7 @@ a{color:#3b9eff}
         new("quick", "Quick Start", "🚀", "Быстрый старт", "SharedData, Futures, Demo $10k.", new[]{"start","demo","shareddata","binance"}),
         new("settings", "Settings & Risk", "⚙️", "Настройки и риск", "1R, Institutional gates, HardCap, Memory.", new[]{"risk","1r","hardcap","institutional","ml hard","news hard","settings"}),
         new("ml", "ML Gate & News", "🧠", "ML & News", "Shadow → train → Institutional hard.", new[]{"ml","shadow","gate","news","institutional","hard reject"}),
+        new("macro", "Macro News Hub", "📰", "Macro & Live News", "Лента, Impact, Shadow/Hard, KPI.", new[]{"macro","news","fomc","cpi","fear","greed","impact","/macro-news"}),
         new("arch", "Architecture & UI", "🗺️", "Архитектура", "CORE → Demo/Live и экраны.", new[]{"architecture","market","ui"}),
         new("logs", "Logs & Rejects", "📋", "Логи", "REJECT, INST_*, 429, margin.", new[]{"reject","inst","log","429"}),
         new("db", "Users & SQLite", "🗄️", "Пользователи и БД", "vertex_system.db таблицы.", new[]{"sqlite","users","demoaccounts"}),
