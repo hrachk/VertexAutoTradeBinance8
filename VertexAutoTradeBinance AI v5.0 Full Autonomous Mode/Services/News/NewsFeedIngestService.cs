@@ -19,6 +19,7 @@ public sealed class NewsFeedIngestService : BackgroundService
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(12) };
     private readonly HashSet<string> _seen = new(StringComparer.OrdinalIgnoreCase);
     private DateTime _lastFearGreedPull = DateTime.MinValue;
+    private int? _lastFgValue;
 
     private static readonly string[] BullishKw =
     {
@@ -122,13 +123,16 @@ public sealed class NewsFeedIngestService : BackgroundService
 
             var text = (title + " " + (body ?? "")).ToLowerInvariant();
             var vector = Classify(text);
-            // Still ingest neutral high-impact macro keywords for tape transparency
             bool macroHint = text.Contains("fomc") || text.Contains("cpi") || text.Contains("nfp")
-                             || text.Contains("federal reserve") || text.Contains("interest rate");
-            if (vector == NewsVector.Neutral && !macroHint) continue;
+                             || text.Contains("federal reserve") || text.Contains("interest rate")
+                             || text.Contains("nonfarm") || text.Contains("ecb") || text.Contains("powell");
+            // Keep neutral headlines on the tape (was: skip → only F&G visible)
+            // Trading hard-path still ignores low Impact via catalyst grades.
 
             var symbols = ResolveSymbols(text);
             decimal impact = symbols.Count > 0 ? 0.55m : 0.42m;
+            if (vector == NewsVector.Neutral && !macroHint)
+                impact = 0.28m; // low — UI only / weak size hint
             if (macroHint) impact = Math.Max(impact, 0.80m);
             if (text.Contains("sec ") || text.Contains("etf")) impact = Math.Min(0.85m, impact + 0.15m);
             if (text.Contains("hack") || text.Contains("exploit")) impact = Math.Min(0.92m, impact + 0.25m);
@@ -200,8 +204,11 @@ public sealed class NewsFeedIngestService : BackgroundService
             decimal impact = fg >= 80 || fg <= 20 ? 0.55m : 0.35m;
             decimal sentiment = (fg - 50) / 50m; // -1..+1
 
-            var key = $"FNG:{fg}:{ts:yyyyMMddHH}";
+            // One tape row per distinct F&G value (no hourly spam)
+            if (_lastFgValue == fg) return;
+            var key = $"FNG:{fg}:{ts:yyyyMMdd}";
             if (!_seen.Add(key)) return;
+            _lastFgValue = fg;
 
             _news.Ingest(new NewsEvent
             {
