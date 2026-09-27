@@ -8,6 +8,7 @@ using System.Threading.Channels;
 using VertexAutoTradeBinance8.Configuration;
 using VertexAutoTradeBinance8.Models;
 using VertexAutoTradeBinance8.Services;
+using VertexAutoTrade.Core.Risk;
 using VertexAutoTradeBinance8.Services.Entry;
 using VertexAutoTradeBinance8.Services.Ml;
 using VertexAutoTradeBinance8.Services.Bootstrap;
@@ -1079,21 +1080,59 @@ namespace VertexAutoTradeBinance8
 
                         if (mode.Equals("DynamicCorrelation", StringComparison.OrdinalIgnoreCase))
                         {
-                            // v1: treat additional same-side alts as high BTC-beta exposure when
-                            // same-side book already at MaxSameSide (default floor 2 if unset).
-                            int dynCap = maxSame > 0 ? maxSame : 2;
-                            bool isBtc = symbol.StartsWith("BTC", StringComparison.OrdinalIgnoreCase);
-                            if (!isBtc && sameSide >= dynCap)
+                            // Full Pearson R on 1H log-returns vs each open same-side symbol
+                            var openSyms = await _supervisor.GetSameSideOpenSymbolsAsync(wantLong, ct).ConfigureAwait(false);
+                            if (openSyms.Count > 0)
                             {
-                                _logger.LogWarning(
-                                    "[RiskEngine] Order REJECTED for {sym} ({side}). Reason: HIGH_CORRELATION_EXPOSURE vs open same-side book (Active: {n} / Cap: {m}). Mode=DynamicCorrelation. Configurable via Trading:MaxSameSidePositions.",
-                                    symbol, sideLabel, sameSide, dynCap);
-                                await RejectAsync(
-                                    signal, symbol, tf,
-                                    "RISK",
-                                    $"HIGH_CORRELATION_EXPOSURE:{sameSide}>={dynCap}",
-                                    ct);
-                                return;
+                                decimal maxR = to.MaxAllowedCorrelation;
+                                if (maxR <= 0 || maxR > 1) maxR = 0.85m;
+
+                                IReadOnlyList<BinanceFuturesUsdtKline>? selfKl = null;
+                                try
+                                {
+                                    selfKl = await _marketDataFacade
+                                        .GetKlinesAsync(symbol, KlineInterval.OneHour, 48, ct)
+                                        .ConfigureAwait(false);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogWarning(ex, "[CORR] self klines failed {sym}", symbol);
+                                }
+
+                                if (selfKl != null && selfKl.Count >= 12)
+                                {
+                                    var selfCloses = selfKl.Select(k => k.ClosePrice).ToList();
+                                    foreach (var other in openSyms)
+                                    {
+                                        if (string.Equals(other, symbol, StringComparison.OrdinalIgnoreCase))
+                                            continue;
+                                        try
+                                        {
+                                            var otherKl = await _marketDataFacade
+                                                .GetKlinesAsync(other, KlineInterval.OneHour, 48, ct)
+                                                .ConfigureAwait(false);
+                                            if (otherKl == null || otherKl.Count < 12) continue;
+                                            var otherCloses = otherKl.Select(k => k.ClosePrice).ToList();
+                                            var r = CorrelationMath.PearsonLogReturns(selfCloses, otherCloses, 48);
+                                            if (r is double rr && rr > (double)maxR)
+                                            {
+                                                _logger.LogWarning(
+                                                    "[RiskEngine] Order REJECTED for {sym} ({side}). High correlation with open position {other} (R = {r:F2} > Max {max:F2})",
+                                                    symbol, sideLabel, other, rr, maxR);
+                                                await RejectAsync(
+                                                    signal, symbol, tf,
+                                                    "RISK",
+                                                    $"HIGH_CORRELATION:{other}:R={rr:F2}",
+                                                    ct);
+                                                return;
+                                            }
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            _logger.LogDebug(ex, "[CORR] skip pair {a}/{b}", symbol, other);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1138,6 +1177,44 @@ namespace VertexAutoTradeBinance8
                     $"LIQUIDITY_{liq.Reason}",
                     ct);
                 return;
+            }
+
+            // Dynamic liquidity sizing: SOFT LOW VOLUME → cut SizeMultiplier (not full skip)
+            {
+                var toLiq = _tradingMonitor?.CurrentValue ?? _options;
+                bool dynLiq = toLiq.DynamicLiquiditySizing;
+                if (dynLiq && liq.SoftWarning && liq.Reason == LiquidityGuardReason.LowVolume)
+                {
+                    decimal score = liq.Score;
+                    if (score < 0.10m)
+                    {
+                        _logger.LogWarning(
+                            "[LiquidityGuard] REJECT EXTREME_LOW_LIQUIDITY {sym} score={sc:F2}",
+                            symbol, score);
+                        await RejectAsync(
+                            signal, symbol, tf,
+                            "LIQUIDITY",
+                            "EXTREME_LOW_LIQUIDITY",
+                            ct,
+                            extra: $"score={score:F2}");
+                        return;
+                    }
+
+                    decimal mult = 1.0m;
+                    if (score < 0.20m) mult = 0.50m;
+                    else if (score < 0.30m) mult = 0.70m;
+                    // score >= 0.30 soft warning still mild — optional 0.85
+                    else if (score < 0.40m) mult = 0.85m;
+
+                    if (mult < 1.0m)
+                    {
+                        decimal before = signal.SizeMultiplier;
+                        signal.SizeMultiplier = Math.Clamp(before * mult, 0.25m, 1.0m);
+                        _logger.LogInformation(
+                            "[LiquidityGuard] Sizing reduced for {sym}: SizeMult {before:F2} → {after:F2} (Volume Score: {sc:F2}, factor={f:F2})",
+                            symbol, before, signal.SizeMultiplier, score, mult);
+                    }
+                }
             }
 
             // =====================================================

@@ -599,6 +599,25 @@
                     </select>
                     <span class="st-field-hint">Disabled = до MaxOpenPositions LONG/SHORT без хардкода 2</span>
                 </div>
+
+                <div class="st-field">
+                    <label>Max Allowed Correlation (R)</label>
+                    <input class="st-input" type="number" step="0.01" min="0.5" max="1.0"
+                           value="@GetDecimal("Trading:MaxAllowedCorrelation", 0.85m)"
+                           @onchange="OnMaxAllowedCorrelationChanged" />
+                    <span class="st-field-hint">DynamicCorrelation: reject if Pearson R vs open same-side &gt; this</span>
+                </div>
+                <div class="st-field" style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px">
+                    <input type="checkbox" class="st-checkbox"
+                           checked="@GetBool("Trading:DynamicLiquiditySizing", true)"
+                           @onchange="OnDynamicLiquiditySizingToggle" />
+                    <label>
+                        <b>Dynamic Liquidity Sizing</b>
+                        <span class="st-field-hint" style="display:block;margin-top:2px">
+                            SOFT LOW VOLUME → size ×0.7/0.5; score &lt; 0.1 → reject (не полный игнор soft)
+                        </span>
+                    </label>
+                </div>
             </div>
 
             <div class="st-field" style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px">

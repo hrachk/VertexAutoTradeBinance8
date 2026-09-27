@@ -2343,19 +2343,28 @@ namespace VertexAutoTradeBinance8.Services
         /// </summary>
         public async Task<int> GetSameSideOpenCountAsync(bool isLong, CancellationToken ct = default)
         {
+            var syms = await GetSameSideOpenSymbolsAsync(isLong, ct).ConfigureAwait(false);
+            return syms.Count;
+        }
+
+        public async Task<IReadOnlyList<string>> GetSameSideOpenSymbolsAsync(bool isLong, CancellationToken ct = default)
+        {
             using var client = _factory.CreateRestClient();
             try
             {
                 var result = await client.UsdFuturesApi.Trading.GetPositionsAsync(ct: ct).ConfigureAwait(false);
-                if (!result.Success || result.Data == null) return 0;
-                return result.Data.Count(p =>
-                    p.PositionAmt != 0 &&
-                    (isLong ? p.PositionAmt > 0 : p.PositionAmt < 0));
+                if (!result.Success || result.Data == null) return Array.Empty<string>();
+                return result.Data
+                    .Where(p => p.PositionAmt != 0 && (isLong ? p.PositionAmt > 0 : p.PositionAmt < 0))
+                    .Select(p => p.Symbol)
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "[DIR-CORR] same-side count failed");
-                return 0;
+                _logger.LogWarning(ex, "[DIR-CORR] same-side symbols failed");
+                return Array.Empty<string>();
             }
         }
 

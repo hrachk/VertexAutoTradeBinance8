@@ -124,10 +124,10 @@ public sealed class LiquidityGuardService
         // Soft-warning → разрешаем быстрый вход/выход
         if (softLowVolume)
         {
-            // decimal score = Math.Clamp((volRatio - 0.10m) / (0.35m - 0.10m), 0.15m, 0.80m);
-            decimal score = Math.Clamp(volRatio, 0.1m, 1.0m);
+            // Map volRatio → score bands for dynamic sizing (0.1 / 0.2 / 0.3)
+            decimal score = Math.Clamp(volRatio, 0.05m, 0.99m);
             return SetDanger(false, LiquidityGuardReason.LowVolume, false,
-                $"SOFT LOW VOLUME {symbol} {interval}", score, true);
+                $"SOFT LOW VOLUME {symbol} {interval} | Score={score:F2}", score, true);
         }
 
         // Extreme low volume → HARD block

@@ -64,6 +64,12 @@ public class TradingOptions
     public decimal MaxAllowedCorrelation { get; set; } = 0.85m;
 
     /// <summary>
+    /// When true, SOFT LOW VOLUME scales SizeMultiplier instead of full-size entry.
+    /// Extreme score &lt; 0.1 still rejects.
+    /// </summary>
+    public bool DynamicLiquiditySizing { get; set; } = true;
+
+    /// <summary>
     /// Maximum margin as a fraction of balance that a single position may consume.
     /// Default 0.12 = 12%. Previously hardcoded as const decimal in RiskManager.
     /// </summary>
