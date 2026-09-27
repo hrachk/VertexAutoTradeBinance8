@@ -577,7 +577,7 @@
                 <div class="st-field">
                     <label title="Макс. число одновременных открытых позиций (Live + учитывается в Engine)">Max Open Positions</label>
                     <input class="st-input" type="number" min="1" max="50" step="1"
-                           value="@GetInt("Trading:MaxOpenPositions", 5)"
+                           value="@GetInt("Trading:MaxOpenPositions", 4)"
                            @onchange="OnMaxOpenPositionsChanged" />
                     <span class="st-field-hint">Trading:MaxOpenPositions — лимит одновременных позиций</span>
                 </div>
@@ -585,13 +585,13 @@
                 <div class="st-field">
                     <label>Max Same-Side Positions</label>
                     <input class="st-input" type="number" min="0" max="50" step="1"
-                           value="@GetInt("Trading:MaxSameSidePositions", 0)"
+                           value="@GetInt("Trading:MaxSameSidePositions", 2)"
                            @onchange="OnMaxSameSidePositionsChanged" />
                     <span class="st-field-hint">0 = без лимита по стороне. Работает только если режим ≠ Disabled</span>
                 </div>
                 <div class="st-field">
                     <label>Correlation Filter Mode</label>
-                    <select class="st-input" value="@GetStr("Trading:CorrelationFilterMode", "Disabled")"
+                    <select class="st-input" value="@GetStr("Trading:CorrelationFilterMode", "StaticLimit")"
                             @onchange="OnCorrelationFilterModeChanged">
                         <option value="Disabled">Disabled — только MaxOpenPositions</option>
                         <option value="StaticLimit">StaticLimit — жёсткий лимит по стороне</option>
@@ -690,7 +690,7 @@
                 <div class="st-field">
                     <label title="Минимальный CompositeScore 50–95">Min Quality Threshold %</label>
                     <input class="st-input" type="number" min="50" max="95" step="1"
-                           value="@GetDecimal("SignalQuality:MinQualityThreshold", 70m)"
+                           value="@GetDecimal("SignalQuality:MinQualityThreshold", 78m)"
                            @onchange="OnSqMinQualityChanged" />
                 </div>
                 <div class="st-field">
@@ -778,7 +778,7 @@
     private Task OnInstMlProbeChanged(ChangeEventArgs e) => SetAsync("Institutional:MlProbeThreshold", ParseDecimalOr(e.Value, 0.68m));
     private Task OnLegacyMlGateToggle(ChangeEventArgs e) => SetAsync("MlGate:EnableMlSkipGate", ParseCheck(e));
     private Task OnNewsShadowToggle(ChangeEventArgs e) => SetAsync("News:ShadowMode", ParseCheck(e));
-    private Task OnMaxOpenPositionsChanged(ChangeEventArgs e) => SetAsync("Trading:MaxOpenPositions", Math.Clamp(ParseIntOr(e.Value, 5) ?? 5, 1, 50));
+    private Task OnMaxOpenPositionsChanged(ChangeEventArgs e) => SetAsync("Trading:MaxOpenPositions", Math.Clamp(ParseIntOr(e.Value, 4) ?? 4, 1, 50));
     private Task OnMaxSameSidePositionsChanged(ChangeEventArgs e) => SetAsync("Trading:MaxSameSidePositions", Math.Clamp(ParseIntOr(e.Value, 0) ?? 0, 0, 50));
     private Task OnCorrelationFilterModeChanged(ChangeEventArgs e)
     {
@@ -795,7 +795,7 @@
         SetAsync("Trading:DynamicLiquiditySizing", ParseCheck(e));
 
     private Task OnSqMinQualityChanged(ChangeEventArgs e) =>
-        SetAsync("SignalQuality:MinQualityThreshold", Math.Clamp(ParseDecimalOr(e.Value, 70m) ?? 70m, 50m, 95m));
+        SetAsync("SignalQuality:MinQualityThreshold", Math.Clamp(ParseDecimalOr(e.Value, 78m) ?? 78m, 50m, 95m));
 
     private Task OnSqStrategyChanged(ChangeEventArgs e)
     {

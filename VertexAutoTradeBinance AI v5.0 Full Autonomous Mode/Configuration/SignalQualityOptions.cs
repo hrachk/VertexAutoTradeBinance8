@@ -6,7 +6,7 @@ public sealed class SignalQualityOptions
     public const string SectionName = "SignalQuality";
 
     /// <summary>Minimum CompositeScore 0..100. Below → REJECT BELOW_QUALITY_THRESHOLD.</summary>
-    public decimal MinQualityThreshold { get; set; } = 70m;
+    public decimal MinQualityThreshold { get; set; } = 78m;
 
     /// <summary>BestScoreAuction | FirstComeFirstServed</summary>
     public string SignalSelectionStrategy { get; set; } = "BestScoreAuction";

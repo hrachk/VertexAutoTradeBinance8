@@ -85,7 +85,7 @@ public sealed class DemoAutoTradeService : BackgroundService
 
     private int GetMaxDemoPositions()
     {
-        int n = _cfg.GetValue("Trading:MaxOpenPositions", 5);
+        int n = _cfg.GetValue("Trading:MaxOpenPositions", 4);
         return n > 0 ? n : 5;
     }
 
@@ -241,7 +241,7 @@ public sealed class DemoAutoTradeService : BackgroundService
                 ? "SHORT" : "LONG";
             // User-configurable directional limit (Trading:*)
             string corrMode = _cfg.GetValue("Trading:CorrelationFilterMode", "Disabled") ?? "Disabled";
-            int maxSameSide = _cfg.GetValue("Trading:MaxSameSidePositions", 0);
+            int maxSameSide = _cfg.GetValue("Trading:MaxSameSidePositions", 2);
             if (!corrMode.Equals("Disabled", StringComparison.OrdinalIgnoreCase))
             {
                 int sameSide = _demo.GetSameSideOpenCountForClient(clientId, side);

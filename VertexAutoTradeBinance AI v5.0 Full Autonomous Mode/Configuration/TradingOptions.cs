@@ -45,23 +45,23 @@ public class TradingOptions
     /// Max concurrent open positions (LIVE TradingWorker + Demo auto).
     /// From Trading:MaxOpenPositions. Default 5. Values <= 0 fall back to 5.
     /// </summary>
-    public int MaxOpenPositions { get; set; } = 5;
+    public int MaxOpenPositions { get; set; } = 4;
 
     /// <summary>
     /// Max concurrent positions in the same direction (LONG or SHORT).
     /// 0 = unlimited (only MaxOpenPositions applies). Configurable from UI.
     /// </summary>
-    public int MaxSameSidePositions { get; set; } = 0;
+    public int MaxSameSidePositions { get; set; } = 2;
 
     /// <summary>
     /// Disabled | StaticLimit | DynamicCorrelation
     /// Disabled: ignore same-side counts. StaticLimit: MaxSameSidePositions.
     /// DynamicCorrelation: reject high co-movement vs open same-side books (v1: BTC-led).
     /// </summary>
-    public string CorrelationFilterMode { get; set; } = "Disabled";
+    public string CorrelationFilterMode { get; set; } = "StaticLimit";
 
     /// <summary>Used when CorrelationFilterMode = DynamicCorrelation (0..1).</summary>
-    public decimal MaxAllowedCorrelation { get; set; } = 0.85m;
+    public decimal MaxAllowedCorrelation { get; set; } = 0.80m;
 
     /// <summary>
     /// When true, SOFT LOW VOLUME scales SizeMultiplier instead of full-size entry.
