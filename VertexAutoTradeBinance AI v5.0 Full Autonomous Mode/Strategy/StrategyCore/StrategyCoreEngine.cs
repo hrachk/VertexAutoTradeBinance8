@@ -53,9 +53,9 @@ public sealed class StrategyCoreEngine
     private const decimal MinAtrPct = 0.0015m;
     private const decimal MaxAtrPct = 0.060m;
     // ATR is clamp / pad / noise-floor — never the sole SL formula.
-    private const decimal MinRiskAtr = 1.40m;   // widen if structure tighter than this
+    private const decimal MinRiskAtr = 1.85m;   // noise floor — fewer SL_STRATEGY_FAIL wicks
     private const decimal MaxRiskAtr = 3.80m;
-    private const decimal StructurePadAtr = 0.50m; // buffer beyond swing (was 0.20)
+    private const decimal StructurePadAtr = 0.85m; // buffer beyond swing (noise + spread)
     private const decimal MaxExtensionAtr = 2.20m; // no late chase past structure
     private const int EmaFast = 21;
     private const int EmaSlow = 50;
@@ -263,10 +263,16 @@ public sealed class StrategyCoreEngine
         if (!EnforceMinRr(signal)) return (true, false, "rr");
 
         _cooldown[symbol] = DateTime.UtcNow;
-        _log.LogInformation(
-            "[CORE][{sym}] SIGNAL {side} e={e:F6} sl={sl:F6} tp1={tp:F6} conf={c:F2} {r}",
-            symbol, signal.Side, signal.EntryPrice, signal.StopLoss,
-            signal.TakeProfits.FirstOrDefault(), signal.Confidence, signal.Reason);
+        {
+            var e0 = signal.EntryPrice;
+            var sl0 = signal.StopLoss;
+            var riskPx = Math.Abs(e0 - sl0);
+            var riskPct = e0 > 0 ? riskPx / e0 * 100m : 0m;
+            _log.LogInformation(
+                "[CORE][{sym}] SIGNAL {side} e={e:F6} sl={sl:F6} tp1={tp:F6} conf={c:F2} risk={risk:F6} ({rp:F3}%) {r}",
+                symbol, signal.Side, e0, sl0,
+                signal.TakeProfits.FirstOrDefault(), signal.Confidence, riskPx, riskPct, signal.Reason);
+        }
 
         OnSignalGenerated?.Invoke(signal);
         return (true, true, "ok");
@@ -598,8 +604,8 @@ public sealed class StrategyCoreEngine
     private static bool RiskOk(decimal risk, decimal atr)
     {
         if (risk <= 0 || atr <= 0) return false;
-        if (risk < atr * 0.45m) return false; // absurdly tight
-        // [0.45, MinRisk) widened in Make via EnforceMinRiskSl
+        if (risk < atr * 0.90m) return false; // reject micro structure risk
+        // [0.90, MinRisk) widened in Make via EnforceMinRiskSl
         if (risk > atr * MaxRiskAtr) return false; // too wide — R:R / size broken
         return true;
     }

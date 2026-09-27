@@ -562,27 +562,59 @@
             </div>
         </div>
 
-        <div class="st-card">
+                <div class="st-card st-card-wide">
             <div class="st-card-head">
-                <div class="st-card-title">Institutional gates (ML / News hard mode)</div>
+                <div class="st-card-title">Institutional gates · News · Position limit</div>
                 <span class="st-live-pill">● runtime</span>
             </div>
-            <p class="st-field-hint" style="margin:0 0 12px;opacity:.85">
-                Shadow = only log / size cut. Hard = can block new entries.
-                Enable only after Shadow KPI shows edge (ΔPF / filtered losses).
-                Written to <code>appsettings.runtime.json</code> → Engine reloads on change.
+            <p class="st-field-hint" style="margin:0 0 14px;line-height:1.45;opacity:.9">
+                <b>SHADOW</b> = только наблюдение / уменьшение size (News page KPI).<br/>
+                <b>HARD</b> = может <u>блокировать новые входы</u> при critical bearish news / low ML P(win).<br/>
+                Включайте Hard только когда на News/AI Dashboard ΔPF ≥ +0.15. Пишется в <code>appsettings.runtime.json</code> → Engine подхватывает без рестарта.
             </p>
-            <div class="st-field" style="display:flex;align-items:center;gap:10px">
-                <input type="checkbox" class="st-checkbox"
-                       checked="@GetBool("Institutional:EnableMlHardReject", false)"
-                       @onchange="OnInstMlHardToggle" />
-                <label>ML Hard Reject <span class="st-field-hint">P(win) below threshold → skip entry (INST_MlClassifier)</span></label>
+
+            <div class="st-field-row" style="margin-bottom:12px">
+                <div class="st-field">
+                    <label title="Макс. число одновременных открытых позиций (Live + учитывается в Engine)">Max Open Positions</label>
+                    <input class="st-input" type="number" min="1" max="50" step="1"
+                           value="@GetInt("Trading:MaxOpenPositions", 5)"
+                           @onchange="OnMaxOpenPositionsChanged" />
+                    <span class="st-field-hint">Trading:MaxOpenPositions — лимит одновременных позиций</span>
+                </div>
             </div>
-            <div class="st-field" style="display:flex;align-items:center;gap:10px">
+
+            <div class="st-field" style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px">
                 <input type="checkbox" class="st-checkbox"
                        checked="@GetBool("Institutional:EnableNewsHardMode", false)"
                        @onchange="OnInstNewsHardToggle" />
-                <label>News Hard Mode <span class="st-field-hint">critical bearish news can block new entries</span></label>
+                <label>
+                    <b>News Hard Mode</b>
+                    <span class="st-field-hint" style="display:block;margin-top:2px">
+                        Critical bearish / high-impact → блок новых входов. На странице News щит станет HARD.
+                    </span>
+                </label>
+            </div>
+            <div class="st-field" style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px">
+                <input type="checkbox" class="st-checkbox"
+                       checked="@GetBool("News:ShadowMode", true)"
+                       @onchange="OnNewsShadowToggle" />
+                <label>
+                    <b>News Shadow Mode</b>
+                    <span class="st-field-hint" style="display:block;margin-top:2px">
+                        Вкл = только лог/size×. Выкл + News Hard = полный блок по новостям.
+                    </span>
+                </label>
+            </div>
+            <div class="st-field" style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px">
+                <input type="checkbox" class="st-checkbox"
+                       checked="@GetBool("Institutional:EnableMlHardReject", false)"
+                       @onchange="OnInstMlHardToggle" />
+                <label>
+                    <b>ML Hard Reject</b>
+                    <span class="st-field-hint" style="display:block;margin-top:2px">
+                        P(win) ниже порога → пропуск входа (INST_MlClassifier).
+                    </span>
+                </label>
             </div>
             <div class="st-field-row">
                 <div class="st-field">
@@ -598,17 +630,14 @@
                            @onchange="OnInstMlProbeChanged" />
                 </div>
             </div>
-            <div class="st-field" style="display:flex;align-items:center;gap:10px;margin-top:8px">
+            <div class="st-field" style="display:flex;align-items:flex-start;gap:10px;margin-top:10px">
                 <input type="checkbox" class="st-checkbox"
                        checked="@GetBool("MlGate:EnableMlSkipGate", false)"
                        @onchange="OnLegacyMlGateToggle" />
-                <label>Legacy MlGate:EnableMlSkipGate <span class="st-field-hint">also maps to hard reject if Institutional off</span></label>
-            </div>
-            <div class="st-field" style="display:flex;align-items:center;gap:10px">
-                <input type="checkbox" class="st-checkbox"
-                       checked="@GetBool("News:ShadowMode", true)"
-                       @onchange="OnNewsShadowToggle" />
-                <label>News Shadow Mode <span class="st-field-hint">on = observe only; off = allow hard news path when News Hard Mode is on</span></label>
+                <label>
+                    Legacy MlGate:EnableMlSkipGate
+                    <span class="st-field-hint" style="display:block">дублирует hard reject если Institutional ML off</span>
+                </label>
             </div>
         </div>
 
@@ -620,12 +649,27 @@
     private Task OnCooldownSecondsChanged(string profileKey, ChangeEventArgs e) => SetAsync($"{profileKey}:CooldownSeconds", ParseIntOr(e.Value, 90));
 
     
-    private Task OnInstMlHardToggle(ChangeEventArgs e) => SetAsync("Institutional:EnableMlHardReject", (bool)(e.Value ?? false));
-    private Task OnInstNewsHardToggle(ChangeEventArgs e) => SetAsync("Institutional:EnableNewsHardMode", (bool)(e.Value ?? false));
+    private static bool ParseCheck(ChangeEventArgs e)
+    {
+        var v = e.Value;
+        if (v is bool b) return b;
+        if (v is string s) return s == "true" || s == "on" || s == "True";
+        return false;
+    }
+
+    private Task OnInstMlHardToggle(ChangeEventArgs e) => SetAsync("Institutional:EnableMlHardReject", ParseCheck(e));
+    private async Task OnInstNewsHardToggle(ChangeEventArgs e)
+    {
+        var on = ParseCheck(e);
+        await SetAsync("Institutional:EnableNewsHardMode", on);
+        // Keep News catalyst path consistent with UI shield on /macro-news
+        if (on) await SetAsync("News:ShadowMode", false);
+    }
     private Task OnInstMlSkipChanged(ChangeEventArgs e) => SetAsync("Institutional:MlSkipThreshold", ParseDecimalOr(e.Value, 0.42m));
     private Task OnInstMlProbeChanged(ChangeEventArgs e) => SetAsync("Institutional:MlProbeThreshold", ParseDecimalOr(e.Value, 0.55m));
-    private Task OnLegacyMlGateToggle(ChangeEventArgs e) => SetAsync("MlGate:EnableMlSkipGate", (bool)(e.Value ?? false));
-    private Task OnNewsShadowToggle(ChangeEventArgs e) => SetAsync("News:ShadowMode", (bool)(e.Value ?? false));
+    private Task OnLegacyMlGateToggle(ChangeEventArgs e) => SetAsync("MlGate:EnableMlSkipGate", ParseCheck(e));
+    private Task OnNewsShadowToggle(ChangeEventArgs e) => SetAsync("News:ShadowMode", ParseCheck(e));
+    private Task OnMaxOpenPositionsChanged(ChangeEventArgs e) => SetAsync("Trading:MaxOpenPositions", Math.Clamp(ParseIntOr(e.Value, 5), 1, 50));
 
     private Task OnBaseRiskPercentChanged(ChangeEventArgs e) => SetAsync("Trading:BaseRiskPercent", ParseDecimalOr(e.Value, 0m));
     private Task OnMinNotionalGuardPercentChanged(ChangeEventArgs e) => SetAsync("Trading:MinNotionalGuardPercent", ParseDecimalOr(e.Value, 0m));

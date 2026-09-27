@@ -23,16 +23,22 @@ public sealed class NewsSentimentGate
         if (active is null)
             return GateDecision.Ok(GateLayer.NewsMacro, "no active news");
 
+        // hardMode comes from Institutional:EnableNewsHardMode (Settings UI).
+        // When true, critical bearish news hard-blocks NEW entries (regardless of event ShadowMode flag).
         if (active.Impact >= NewsImpactLevel.Critical && active.Sentiment <= -0.5m)
         {
-            if (hardMode && !active.ShadowMode)
+            if (hardMode)
                 return GateDecision.Reject(GateLayer.NewsMacro, "NEWS_CRITICAL_BEAR",
                     active.Headline, active.WindowEndUtc);
             return GateDecision.Ok(GateLayer.NewsMacro, "NEWS_SHADOW size×0.5", sizeMult: 0.5m);
         }
 
         if (active.Impact >= NewsImpactLevel.High)
+        {
+            if (hardMode && active.Sentiment <= -0.35m)
+                return GateDecision.Ok(GateLayer.NewsMacro, "NEWS_HIGH_HARD size×0.4", sizeMult: 0.4m);
             return GateDecision.Ok(GateLayer.NewsMacro, "NEWS_HIGH size×0.7", sizeMult: 0.7m);
+        }
 
         return GateDecision.Ok(GateLayer.NewsMacro, sizeMult: 1m);
     }
