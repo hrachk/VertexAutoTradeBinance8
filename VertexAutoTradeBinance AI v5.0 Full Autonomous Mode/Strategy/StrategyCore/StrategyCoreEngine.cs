@@ -46,17 +46,22 @@ public sealed class StrategyCoreEngine
     // Soft ATR caps prevent "forever" targets on quiet pairs and
     // prevent micro-TPs on explosive ATR prints.
     // Professional R ladder (structure risk first — like discretionary desks)
-    private const decimal Tp1Rr = 1.00m;
-    private const decimal Tp2Rr = 2.00m;
-    private const decimal Tp3Rr = 3.00m;
-    private const decimal MinRr = Tp1Rr;
+    // Institutional R ladder: TP1 must clear fees + edge → min 1.5R
+    private const decimal Tp1Rr = 1.50m;
+    private const decimal Tp2Rr = 2.50m;
+    private const decimal Tp3Rr = 3.50m;
+    private const decimal MinRr = 1.50m;       // reject if TP1/risk < 1.5
     private const decimal MinAtrPct = 0.0015m;
     private const decimal MaxAtrPct = 0.060m;
-    // ATR is clamp / pad / noise-floor — never the sole SL formula.
-    private const decimal MinRiskAtr = 1.85m;   // noise floor — fewer SL_STRATEGY_FAIL wicks
-    private const decimal MaxRiskAtr = 3.80m;
-    private const decimal StructurePadAtr = 0.85m; // buffer beyond swing (noise + spread)
-    private const decimal MaxExtensionAtr = 2.20m; // no late chase past structure
+    // Structure SL: swing ± pad; hard caps prevent 4%+ "lottery" stops
+    private const decimal MinRiskAtr = 1.20m;   // noise floor (was 1.85 — too wide vs TP)
+    private const decimal MaxRiskAtr = 2.60m;   // reject if SL farther than ~2.6 ATR
+    private const decimal MaxRiskPct = 0.022m;  // reject if |entry-SL|/entry > 2.2%
+    private const decimal StructurePadAtr = 0.50m; // SwingLow/High ± 0.5 ATR (desk style)
+    private const decimal MaxExtensionAtr = 1.80m; // no FOMO chase past structure
+    private const decimal RsiLongMax = 65m;     // no LONG if RSI15 > 65
+    private const decimal RsiShortMin = 35m;    // no SHORT if RSI15 < 35
+    private const int RsiPeriod = 14;
     private const int EmaFast = 21;
     private const int EmaSlow = 50;
     private const int SwingLookback = 40; // wider window for real swings
@@ -260,7 +265,30 @@ public sealed class StrategyCoreEngine
         _lastSignalBarMs[symbol] = barKey;
 
         if (signal == null) return (true, false, "no_setup");
-        if (!EnforceMinRr(signal)) return (true, false, "rr");
+
+        // FOMO / exhaustion guard (15m RSI)
+        if (!PassRsiGuard(slice, signal, out var rsiReason))
+        {
+            _log.LogInformation("[CORE][{sym}] REJECT {r}", symbol, rsiReason);
+            return (true, false, "rsi_fomo");
+        }
+
+        if (!PassRiskGeometry(signal, atr, out var geoReason))
+        {
+            _log.LogInformation("[CORE][{sym}] REJECT {r}", symbol, geoReason);
+            return (true, false, "risk_geo");
+        }
+
+        if (!EnforceMinRr(signal))
+        {
+            decimal risk = Math.Abs(signal.EntryPrice - signal.StopLoss);
+            decimal tp1 = signal.TakeProfits is { Count: > 0 } ? signal.TakeProfits[0] : 0;
+            decimal rr = risk > 0 ? Math.Abs(tp1 - signal.EntryPrice) / risk : 0;
+            _log.LogInformation(
+                "[CORE][{sym}] REJECT R:R too low rr={rr:F2} < {min:F2} (TP1 geometry)",
+                symbol, rr, MinRr);
+            return (true, false, "rr");
+        }
 
         _cooldown[symbol] = DateTime.UtcNow;
         {
@@ -597,6 +625,9 @@ public sealed class StrategyCoreEngine
         if (entry <= 0 || atr <= 0) return sl;
         decimal risk = Math.Abs(entry - sl);
         decimal minRisk = atr * MinRiskAtr;
+        // Never force SL beyond portfolio geometry cap
+        decimal maxRisk = entry * MaxRiskPct;
+        if (maxRisk > 0) minRisk = Math.Min(minRisk, maxRisk);
         if (risk >= minRisk) return sl;
         return isLong ? entry - minRisk : entry + minRisk;
     }
@@ -604,10 +635,70 @@ public sealed class StrategyCoreEngine
     private static bool RiskOk(decimal risk, decimal atr)
     {
         if (risk <= 0 || atr <= 0) return false;
-        if (risk < atr * 0.90m) return false; // reject micro structure risk
-        // [0.90, MinRisk) widened in Make via EnforceMinRiskSl
-        if (risk > atr * MaxRiskAtr) return false; // too wide — R:R / size broken
+        if (risk < atr * 0.70m) return false; // micro noise SL
+        if (risk > atr * MaxRiskAtr) return false; // too wide vs ATR
         return true;
+    }
+
+    private static bool PassRiskGeometry(TradeSignal s, decimal atr, out string reason)
+    {
+        reason = "";
+        decimal entry = s.EntryPrice;
+        decimal risk = Math.Abs(entry - s.StopLoss);
+        if (entry <= 0 || risk <= 0)
+        {
+            reason = "bad entry/SL";
+            return false;
+        }
+        decimal riskPct = risk / entry;
+        if (riskPct > MaxRiskPct)
+        {
+            reason = $"SL too far riskPct={riskPct:P2} > {MaxRiskPct:P1} (cap FOMO-wide stops)";
+            return false;
+        }
+        if (atr > 0 && risk > atr * MaxRiskAtr)
+        {
+            reason = $"SL > {MaxRiskAtr:F1}×ATR";
+            return false;
+        }
+        return true;
+    }
+
+    private static bool PassRsiGuard(List<BinanceFuturesUsdtKline> k, TradeSignal s, out string reason)
+    {
+        reason = "";
+        decimal rsi = CalcRsi(k, RsiPeriod);
+        if (rsi <= 0) return true; // no data → do not block
+        bool isLong = s.Side == SignalSide.Buy;
+        if (isLong && rsi > RsiLongMax)
+        {
+            reason = $"RSI Overbought ({rsi:F1}) > {RsiLongMax} — no FOMO LONG";
+            return false;
+        }
+        if (!isLong && rsi < RsiShortMin)
+        {
+            reason = $"RSI Oversold ({rsi:F1}) < {RsiShortMin} — no FOMO SHORT";
+            return false;
+        }
+        return true;
+    }
+
+    private static decimal CalcRsi(List<BinanceFuturesUsdtKline> k, int period)
+    {
+        if (k == null || k.Count < period + 2) return 0;
+        decimal gain = 0, loss = 0;
+        int start = k.Count - period - 1;
+        if (start < 1) start = 1;
+        for (int i = start; i < k.Count; i++)
+        {
+            decimal d = k[i].ClosePrice - k[i - 1].ClosePrice;
+            if (d >= 0) gain += d;
+            else loss -= d;
+        }
+        if (loss <= 0) return 100m;
+        if (gain <= 0) return 0m;
+        decimal rs = gain / loss;
+        return 100m - (100m / (1m + rs));
     }
 
     private TradeSignal Make(
@@ -701,10 +792,10 @@ public sealed class StrategyCoreEngine
         d2 = Math.Min(d2, Math.Max(d1 * 1.5m, atr * 3.0m));
         d3 = Math.Min(d3, Math.Max(d2 * 1.25m, atr * 4.5m));
 
-        // Floors stay R-based
-        d1 = Math.Max(d1, risk * 1.00m);
-        d2 = Math.Max(d2, risk * 1.80m);
-        d3 = Math.Max(d3, risk * 2.50m);
+        // Floors stay R-based (institutional min 1.5R to TP1)
+        d1 = Math.Max(d1, risk * Tp1Rr);
+        d2 = Math.Max(d2, risk * Tp2Rr);
+        d3 = Math.Max(d3, risk * Tp3Rr);
 
         if (isLong)
             return new[] { entry + d1, entry + d2, entry + d3 };
@@ -716,7 +807,7 @@ public sealed class StrategyCoreEngine
         if (s.TakeProfits == null || s.TakeProfits.Count == 0) return false;
         decimal risk = Math.Abs(s.EntryPrice - s.StopLoss);
         if (risk <= 0) return false;
-        return Math.Abs(s.TakeProfits[0] - s.EntryPrice) / risk >= MinRr * 0.98m;
+        return Math.Abs(s.TakeProfits[0] - s.EntryPrice) / risk >= MinRr * 0.999m;
     }
 
     private static decimal Atr(List<BinanceFuturesUsdtKline> k, int period)
